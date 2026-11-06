@@ -244,9 +244,13 @@ const handlers = {
   memory_sync_status: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const service = yield* MemorySyncService.MemorySyncService;
-      // Agents read the JSON directly, so they always get the generation hold.
+      // Agents read the JSON directly, so they always get the generation hold and failures.
       return yield* service.syncStatus(
-        { ...(yield* decodeSyncStatus(input)), includeGenerationHold: true },
+        {
+          ...(yield* decodeSyncStatus(input)),
+          includeGenerationHold: true,
+          includeGenerationFailure: true,
+        },
         yield* invocationPermit("read"),
       );
     }).pipe(Effect.catch(memoryFailure("memory_sync_status"))),

@@ -34,6 +34,7 @@ import { makeHubMembership } from "./store/HubMembership.ts";
 import { makeHubUsage } from "./store/HubUsage.ts";
 import { makeHubLedger } from "./store/HubLedger.ts";
 import { makeHubAdmin } from "./store/HubAdmin.ts";
+import { makeGenerationFailures } from "./store/GenerationFailures.ts";
 import { makeSourceReads } from "./store/SourceReads.ts";
 import { makeHubWrite } from "./store/HubWrite.ts";
 
@@ -331,6 +332,7 @@ const make = Effect.gen(function* () {
     retireFrozenClaimTx,
     advanceBootstrapTx,
   } = hubAdmin;
+  const { readGenerationFailure } = makeGenerationFailures(kernel);
   const sourceReads = makeSourceReads(
     kernel,
     coreReads,
@@ -405,6 +407,7 @@ const make = Effect.gen(function* () {
     readActivatedHubAdminTx,
     readProcessing,
     readLocalProcessingStatus,
+    readGenerationFailure,
     readBootstrap,
     discardBootstrapTx,
     retireFrozenClaimTx,

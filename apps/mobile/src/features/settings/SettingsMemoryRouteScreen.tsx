@@ -32,6 +32,7 @@ import {
   presentMemoryStorage,
   memoryHoldRefreshDelayMs,
   presentMemoryProcessing,
+  presentMemoryProcessingLabels,
   isMemoryReportRetryCandidate,
   presentMemoryReportReset,
   memoryReportTarget,
@@ -1744,14 +1745,7 @@ function MemoryStatusRows({ status }: { status: MemorySyncStatus }) {
         storage.label,
         storage.searchLabel,
         ...storage.reasons,
-        processing.pausedLabel,
-        processing.checkingLabel,
-        processing.heldLabel,
-        processing.waitingLabel,
-        processing.cleanupLabel,
-        processing.receiveLabel,
-        processing.reportLabel,
-        processing.admissionLabel,
+        ...presentMemoryProcessingLabels(status),
       ]
         .filter(Boolean)
         .map((label) => (

@@ -486,6 +486,48 @@ export function presentMemoryProcessing(
   };
 }
 
+/**
+ * Why conversations were not summarized, with an action only where one helps. Failures that will
+ * be tried again say so; a hold explains its own pause.
+ */
+export function presentMemoryGenerationFailure(failure: MemorySyncStatus["generationFailure"]) {
+  if (!failure) return null;
+  const subject =
+    failure.threads === 1
+      ? "1 conversation was not summarized"
+      : `${failure.threads} conversations were not summarized`;
+  if (failure.retrying) return `${subject} yet; GOAT is trying again`;
+  switch (failure.failureCode) {
+    case "generation_failed":
+    case "invalid_output":
+      return `${subject}: the memory model failed on every try. Choose another Memory model if this keeps happening`;
+    case "generation_input_too_large":
+      return `${subject}: too long to summarize`;
+    case "secret_detected":
+      return `${subject}: it looked like it contained a secret`;
+    default:
+      return subject;
+  }
+}
+
+/** Processing labels in display order, for Settings on every client. */
+export function presentMemoryProcessingLabels(
+  status: Pick<MemorySyncStatus, "processing" | "generationHold" | "generationFailure">,
+) {
+  const processing = presentMemoryProcessing(status.processing, status.generationHold);
+  return [
+    processing.pausedLabel,
+    presentMemoryGenerationFailure(status.generationFailure),
+    processing.checkingLabel,
+    processing.heldLabel,
+    processing.waitingLabel,
+    processing.cleanupLabel,
+    processing.receiveLabel,
+    processing.reportLabel,
+    processing.admissionLabel,
+  ].filter((label) => label !== null);
+}
+
 /** A receipt describes admission; exposure independently determines whether content can be shown. */
 export function presentMemoryReceipt(
   receipt: MemoryMutationReceipt,

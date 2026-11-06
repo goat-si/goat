@@ -46,6 +46,7 @@ import {
   presentMemoryStorage,
   memoryHoldRefreshDelayMs,
   presentMemoryProcessing,
+  presentMemoryProcessingLabels,
 } from "@goat/client-runtime/memory-presentation";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
@@ -1667,16 +1668,7 @@ function MemorySourcePage({
 function MemoryStatusRows({ sync }: { sync: MemorySyncStatus }) {
   const storage = presentMemoryStorage(sync.storage);
   const processing = presentMemoryProcessing(sync.processing, sync.generationHold);
-  const labels = [
-    processing.pausedLabel,
-    processing.checkingLabel,
-    processing.heldLabel,
-    processing.waitingLabel,
-    processing.cleanupLabel,
-    processing.receiveLabel,
-    processing.reportLabel,
-    processing.admissionLabel,
-  ].filter(Boolean);
+  const labels = presentMemoryProcessingLabels(sync);
   return (
     <SettingsSection title="Memory status">
       <SettingsRow title="Hub" description={presentMemorySync(sync).label} />

@@ -30,7 +30,7 @@ import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./Memo
 import { selectContinuationCandidates } from "./memoryContinuationScan.ts";
 import * as SourceScan from "./memorySourceScan.ts";
 import { catchUpWakes, terminalRunStatuses as terminal } from "./memoryCatchUpWakes.ts";
-import { MemoryWorkerError, safeCode } from "./MemoryWorkerError.ts";
+import { logGenerationFailure, MemoryWorkerError, safeCode } from "./MemoryWorkerError.ts";
 import { generateSummaryChunks, type SummaryPromotions } from "./memorySummaryChunks.ts";
 import { resolveThreadProject } from "./MemorySummaryCommit.ts";
 export { MemoryWorkerError };
@@ -773,21 +773,23 @@ const make = Effect.gen(function* () {
               return;
             }
             if (work.metadata.kind === "summary") {
+              const retryAt =
+                [
+                  "generation_failed",
+                  "unavailable",
+                  "route_unavailable",
+                  "storage_failed",
+                ].includes(code) &&
+                !(code === "generation_failed" && work.attempt >= MEMORY_GENERATION_MAX_ATTEMPTS)
+                  ? now + memoryRetryDelay(work.attempt)
+                  : null;
+              yield* logGenerationFailure({ work, code, retrying: retryAt !== null, error });
               const recorded = yield* store.failGenerationAttempt({
                 work: owned,
                 environmentId,
                 failureCode: code,
                 now,
-                retryAt:
-                  [
-                    "generation_failed",
-                    "unavailable",
-                    "route_unavailable",
-                    "storage_failed",
-                  ].includes(code) &&
-                  !(code === "generation_failed" && work.attempt >= MEMORY_GENERATION_MAX_ATTEMPTS)
-                    ? now + memoryRetryDelay(work.attempt)
-                    : null,
+                retryAt,
               });
               // A lapsed claim cannot record a report, but while no one reclaimed the row it
               // still gets a backoff instead of being picked up again immediately.

@@ -262,10 +262,12 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
       const {
         includeRetainedLocalSpaceId: _retained,
         includeGenerationHold: _hold,
+        includeGenerationFailure: _failure,
         ...legacyInput
       } = input as {
         readonly includeRetainedLocalSpaceId?: true;
         readonly includeGenerationHold?: true;
+        readonly includeGenerationFailure?: true;
       };
       const memory = config.environment.capabilities.memory;
       dispatchInput = {
@@ -274,6 +276,7 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
           ? { includeRetainedLocalSpaceId: true as const }
           : {}),
         ...(memory?.generationHold === true ? { includeGenerationHold: true as const } : {}),
+        ...(memory?.generationFailure === true ? { includeGenerationFailure: true as const } : {}),
       } as EnvironmentRpcInput<TTag>;
     }
     if (

@@ -9,6 +9,7 @@ import {
   presentMemoryCoverage,
   presentMemoryStorage,
   presentMemoryProcessing,
+  presentMemoryProcessingLabels,
   memoryHoldRefreshDelayMs,
   presentMemoryReceipt,
   presentMemoryAvailability,
@@ -722,6 +723,25 @@ describe("shared memory progress presentation", () => {
         throw new Error("No retry time should be formatted without a hold");
       }).pausedLabel,
     ).toBeNull();
+  });
+  it.each([
+    [true, "generation_failed", "2 conversations were not summarized yet; GOAT is trying again"],
+    [
+      false,
+      "generation_failed",
+      "2 conversations were not summarized: the memory model failed on every try. Choose another Memory model if this keeps happening",
+    ],
+    [
+      false,
+      "generation_input_too_large",
+      "2 conversations were not summarized: too long to summarize",
+    ],
+    // No action is offered where none would help.
+    [false, "identity_mismatch", "2 conversations were not summarized"],
+  ] as const)("explains failed summaries (retrying %s, %s)", (retrying, failureCode, label) => {
+    const generationFailure = { threads: 2, failureCode, retrying };
+    expect(presentMemoryProcessingLabels({ processing, generationFailure })).toContain(label);
+    expect(presentMemoryProcessingLabels({ processing })).not.toContain(label);
   });
   it("reads a paused status again just after its next try", () => {
     const hold = {

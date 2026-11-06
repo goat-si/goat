@@ -597,6 +597,7 @@ describe("staged memory RPC", () => {
                           resolutionInputs: supported,
                           retainedLocalSpace: supported,
                           generationHold: supported,
+                          generationFailure: supported,
                         }),
                   },
                 },
@@ -612,14 +613,12 @@ describe("staged memory RPC", () => {
         yield* requestGuarded(WS_METHODS.memorySyncStatus, {
           includeRetainedLocalSpaceId: true,
         }).pipe(provide, permit);
-        expect(inputs).toEqual([
-          {
-            method: "sync",
-            input: supported
-              ? { includeRetainedLocalSpaceId: true, includeGenerationHold: true }
-              : {},
-          },
-        ]);
+        const optIns = {
+          includeRetainedLocalSpaceId: true,
+          includeGenerationHold: true,
+          includeGenerationFailure: true,
+        };
+        expect(inputs).toEqual([{ method: "sync", input: supported ? optIns : {} }]);
         const result = yield* requestGuarded(WS_METHODS.memoryHistory, {
           memorySpaceId,
           memoryId,

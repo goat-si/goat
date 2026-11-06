@@ -1197,6 +1197,10 @@ export const MemorySyncStatus = struct({
   processing: MemoryProcessingStatus,
   /** Present only when the request opted in with includeGenerationHold. */
   generationHold: Schema.optionalKey(MemoryGenerationHold),
+  /** Opt-in: threads whose newest summary failed and no later one replaced. */
+  generationFailure: Schema.optionalKey(
+    struct({ threads: PositiveInt, failureCode: MemoryFailureCode, retrying: Schema.Boolean }),
+  ),
 }).check(Schema.makeFilter((v) => v.lastHubSequence === v.processing.lastReceivedHubSequence));
 export type MemorySyncStatus = typeof MemorySyncStatus.Type;
 
@@ -1650,18 +1654,14 @@ export type MemoryHistoryInput = typeof MemoryHistoryInput.Type;
 
 /**
  * Each opt-in is sent only when its capability (memory.retainedLocalSpace,
- * memory.generationHold) is advertised: a strict legacy decoder rejects fields it does not know,
- * so legacy requests remain empty.
+ * memory.generationHold, memory.generationFailure) is advertised: a strict legacy decoder rejects
+ * fields it does not know, so legacy requests remain empty.
  */
-export const MemorySyncStatusInput = Schema.Union([
-  struct({}),
-  struct({ includeRetainedLocalSpaceId: Schema.Literal(true) }),
-  struct({ includeGenerationHold: Schema.Literal(true) }),
-  struct({
-    includeRetainedLocalSpaceId: Schema.Literal(true),
-    includeGenerationHold: Schema.Literal(true),
-  }),
-]);
+export const MemorySyncStatusInput = struct({
+  includeRetainedLocalSpaceId: Schema.optionalKey(Schema.Literal(true)),
+  includeGenerationHold: Schema.optionalKey(Schema.Literal(true)),
+  includeGenerationFailure: Schema.optionalKey(Schema.Literal(true)),
+});
 export type MemorySyncStatusInput = typeof MemorySyncStatusInput.Type;
 
 export const MemoryUpsertInput = struct({

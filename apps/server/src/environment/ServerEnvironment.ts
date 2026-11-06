@@ -258,6 +258,7 @@ export const make = Effect.gen(function* () {
         resolutionInputs: true,
         retainedLocalSpace: true,
         generationHold: true,
+        generationFailure: true,
         hubDiagnostics: true,
         siteNotes: true,
         ...(importRuntime._tag === "Some"

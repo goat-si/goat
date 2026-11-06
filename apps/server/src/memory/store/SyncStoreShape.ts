@@ -274,6 +274,10 @@ export interface SyncStoreShape {
     },
     MemoryStorageError
   >;
+  readonly readGenerationFailure: (input: {
+    environmentId: M.EnvironmentId;
+    memorySpaceId: M.MemorySpaceId | null;
+  }) => Effect.Effect<M.MemorySyncStatus["generationFailure"], MemoryStorageError>;
   readonly readBootstrap: (input: {
     memorySpaceId: M.MemorySpaceId;
     hubEnvironmentId: M.EnvironmentId;

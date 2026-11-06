@@ -29,6 +29,7 @@ import * as Quota from "./MemoryQuotaService.ts";
 import { memoryOperationDigest } from "./MemoryDecider.ts";
 import { redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 import { failureCode, holdClass, transient } from "./MemorySyncErrors.ts";
+import { readSyncStatusOptIns } from "./MemorySyncStatusOptIns.ts";
 import * as OwnerSource from "./MemoryOwnerSourceReader.ts";
 
 type Error = Hub.MemoryHubServiceError;
@@ -2298,6 +2299,12 @@ const make = Effect.gen(function* () {
         const bootstrap = space ? (yield* runtime.readBootstrap(space, hubId)).state : "unbound";
         if (bootstrap === "ready") yield* rememberReadySpace({ space, settings: s });
         const persisted = yield* runtime.readProcessing(space, space ? hubId : null);
+        const optIns = yield* readSyncStatusOptIns({
+          request: input,
+          settings: s,
+          hold,
+          failures: store.readGenerationFailure({ environmentId: local, memorySpaceId: space }),
+        });
         const storage = space
           ? yield* quota.readStorageStatus({ memorySpaceId: space, environmentId: local })
           : yield* runtime.readUnboundStorage;
@@ -2307,17 +2314,6 @@ const make = Effect.gen(function* () {
           return yield* new M.MemoryHubError({ code: "fenced" });
         const failure = lastFailure?.epoch === epoch ? lastFailure.code : undefined;
         const success = lastSuccess?.epoch === epoch ? lastSuccess.at : null;
-        const selected = memorySelection(current);
-        const memoryModel =
-          selected === null
-            ? Option.none<M.MemoryModelSelection>()
-            : yield* decodeMemorySelection(selected).pipe(Effect.option);
-        const generationHold =
-          "includeGenerationHold" in input &&
-          input.includeGenerationHold &&
-          Option.isSome(memoryModel)
-            ? yield* hold.status(yield* hold.keyFor(memoryModel.value))
-            : undefined;
         return {
           memorySpaceId: space,
           ...(includeRetained
@@ -2339,7 +2335,7 @@ const make = Effect.gen(function* () {
           storage,
           processing: persisted.processing,
           ...(failure ? { failureCode: failure } : {}),
-          ...(generationHold ? { generationHold } : {}),
+          ...optIns,
         };
       }),
     readSource: (validated, permit) =>
