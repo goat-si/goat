@@ -285,7 +285,8 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       displayName:
         hubEmail &&
         displayName?.toLowerCase() === PROVIDER_DISPLAY_NAMES[previous.driver]?.toLowerCase()
-          ? null
+          ? ([previous, next].find((account) => account.environments.length === 0 && account.email)
+              ?.displayName ?? null)
           : displayName,
       plan: planSources.get(key)?.plan ?? previous.plan ?? next.plan,
       accentColor: previous.accentColor ?? next.accentColor,
