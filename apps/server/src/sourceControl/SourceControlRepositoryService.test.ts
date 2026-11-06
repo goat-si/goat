@@ -658,7 +658,7 @@ it.effect("switches an auto-selected remote to HTTPS when the SSH push is refuse
     const result = yield* service.publishRepository({
       cwd: "/workspace",
       provider: SourceControlProviderKind.make("github"),
-      repository: "octocat/t3code",
+      repository: "octocat/goat",
       visibility: "private",
     });
 
