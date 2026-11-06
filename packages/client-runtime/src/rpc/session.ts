@@ -261,7 +261,15 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     );
     const layerProtocol = Layer.effect(
       RpcClient.Protocol,
-      makeWsRpcSocketProtocol(Ref.set(pingTimedOut, true), silenceTimeout, options.drainIo),
+      makeWsRpcSocketProtocol(Ref.set(pingTimedOut, true), silenceTimeout, options.drainIo).pipe(
+        Effect.map((protocol) => ({
+          ...protocol,
+          send: (clientId, request, transferables) =>
+            request._tag !== "Request" && Deferred.isDoneUnsafe(disconnected)
+              ? Effect.void
+              : protocol.send(clientId, request, transferables),
+        })),
+      ),
     ).pipe(
       Layer.provide(
         Layer.mergeAll(
