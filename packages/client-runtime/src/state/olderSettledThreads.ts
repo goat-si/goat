@@ -31,6 +31,7 @@ export interface OlderSettled {
   readonly before: string;
   readonly beforeMs: number;
   readonly counts: ReadonlyMap<ProjectId, number>;
+  readonly excludesSideChats?: boolean;
 }
 
 /** The scope's projects in one environment, or null for all of them. */
@@ -179,7 +180,8 @@ export function unloadedOlderSettledCount(input: {
       if (
         thread.environmentId === scope.environmentId &&
         (scope.projectIds === null || scope.projectIds.includes(thread.source.projectId)) &&
-        isOlderSettledThreadShell(thread.source, older.beforeMs)
+        isOlderSettledThreadShell(thread.source, older.beforeMs) &&
+        (!older.excludesSideChats || thread.source.sideChatOf == null)
       ) {
         unloaded -= 1;
       }
@@ -269,7 +271,16 @@ export function createOlderSettledThreadAtoms<R, ER, E>(
 
   const countsOf = (source: {
     readonly counts: OrchestrationV2OlderSettledThreadsPage["counts"];
-  }) => new Map(source.counts.map(({ projectId, count }) => [projectId, count] as const));
+    readonly sideChatCounts?: OrchestrationV2OlderSettledThreadsPage["sideChatCounts"];
+  }) => {
+    const counts = new Map(
+      source.counts.map(({ projectId, count }) => [projectId, count] as const),
+    );
+    for (const { projectId, count } of source.sideChatCounts ?? []) {
+      counts.set(projectId, Math.max(0, (counts.get(projectId) ?? 0) - count));
+    }
+    return { counts, excludesSideChats: source.sideChatCounts !== undefined };
+  };
 
   const olderSettledAtom = Atom.family((environmentId: EnvironmentId) => {
     let generation = -1;
@@ -289,7 +300,7 @@ export function createOlderSettledThreadAtoms<R, ER, E>(
         fromSnapshot = {
           before: cut.before,
           beforeMs: DateTime.toEpochMillis(DateTime.makeUnsafe(cut.before)),
-          counts: countsOf(cut),
+          ...countsOf(cut),
         };
       }
       // Most shell updates move only the cursor; the key needs new rows or removals.
@@ -314,7 +325,7 @@ export function createOlderSettledThreadAtoms<R, ER, E>(
       );
       if (read !== null && read !== lastReadPage) {
         lastReadPage = read;
-        lastRead = { ...fromSnapshot, counts: countsOf(read) };
+        lastRead = { ...fromSnapshot, ...countsOf(read) };
       }
       return lastRead ?? fromSnapshot;
     }).pipe(Atom.withLabel(`environment-older-settled:${environmentId}`));

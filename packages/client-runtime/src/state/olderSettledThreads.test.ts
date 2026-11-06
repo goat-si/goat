@@ -185,6 +185,13 @@ it("counts older threads the client does not hold, once", () => {
       threads: local,
     }),
   ).toBe(0);
+  expect(
+    unloadedOlderSettledCount({
+      olderSettled: () => ({ ...older, counts: new Map([[project, 2]]), excludesSideChats: true }),
+      scopes: [{ environmentId, projectIds: null }],
+      threads: [local[0]!, local[3]!],
+    }),
+  ).toBe(1);
   // Two projects in one environment: each subtracts only its own loaded rows.
   const other = ProjectId.make("project-b");
   const twoProjects = (): OlderSettled => ({
@@ -372,6 +379,7 @@ const shellSnapshot = (input: {
   readonly sequence: number;
   readonly asOfSequence: number;
   readonly count: number;
+  readonly sideChatCount?: number;
 }) =>
   Option.some({
     schemaVersion: 1,
@@ -383,10 +391,44 @@ const shellSnapshot = (input: {
       before,
       asOfSequence: input.asOfSequence,
       counts: [{ projectId: project, count: input.count }],
+      ...(input.sideChatCount === undefined
+        ? {}
+        : { sideChatCounts: [{ projectId: project, count: input.sideChatCount }] }),
     },
   } as unknown as OrchestrationV2ShellSnapshot);
 
 describe("createOlderSettledThreadAtoms", () => {
+  it.effect("subtracts side chat counts from both snapshot and refreshed totals", () =>
+    Effect.gen(function* () {
+      const { replies, atoms, registry, setShell, until } = yield* makeAtoms();
+      const olderAtom = atoms.olderSettledAtom(environmentId);
+      registry.mount(olderAtom);
+      setShell({
+        snapshot: shellSnapshot({ sequence: 3, asOfSequence: 3, count: 5, sideChatCount: 2 }),
+        generation: 1,
+      });
+      expect(registry.get(olderAtom)?.counts.get(project)).toBe(3);
+      yield* Queue.offer(
+        replies,
+        Effect.succeed({
+          snapshotSequence: 4,
+          threads: [],
+          counts: [{ projectId: project, count: 6 }],
+          sideChatCounts: [{ projectId: project, count: 4 }],
+        }),
+      );
+      setShell({
+        snapshot: shellSnapshot({ sequence: 4, asOfSequence: 3, count: 5, sideChatCount: 2 }),
+        generation: 1,
+        removedAt: new Map([[ThreadId.make("gone"), 4]]),
+      });
+      yield* TestClock.adjust("500 millis");
+      expect(
+        (yield* until(olderAtom, (value) => value?.counts.get(project) === 2))?.excludesSideChats,
+      ).toBe(true);
+    }),
+  );
+
   it.effect("keeps counts current: the snapshot's own, then one read after changes settle", () =>
     Effect.gen(function* () {
       const { replies, requests, atoms, registry, setShell, until } = yield* makeAtoms();

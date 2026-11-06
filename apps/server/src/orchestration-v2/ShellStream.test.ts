@@ -396,14 +396,20 @@ describe("omitOlderSettledShells", () => {
     });
   });
 
-  it("retains older side chats while keeping the legacy settled count", () => {
-    const result = omit([
-      ...newest,
-      row("old", 30),
-      row("side", 40, { sideChatOf: ThreadId.make("old") }),
+  it("bounds hidden side chats without displacing the newest listed threads", () => {
+    const hidden = Array.from({ length: 1100 }, (_, index) =>
+      row(`side-${index}`, index < 100 ? 0 : 40, { sideChatOf: ThreadId.make("old") }),
+    );
+    const result = omit([...newest, row("old", 30), ...hidden]);
+    expect(result.threads.map((thread) => thread.id)).toEqual([
+      ...newest.map((thread) => thread.id),
+      ...hidden.slice(0, 100).map((thread) => thread.id),
     ]);
-    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 2 }]);
-    expect(result.threads.map((thread) => thread.id)).toContain("side");
+    expect(result.olderSettled.before).toBe(
+      DateTime.formatIso(DateTime.makeUnsafe(100 * DAY - 2.4 * DAY)),
+    );
+    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 1001 }]);
+    expect(result.olderSettled.sideChatCounts).toEqual([{ projectId: "project-a", count: 1000 }]);
   });
 
   it("keeps threads tied with the 25th newest", () => {
