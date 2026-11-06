@@ -31,6 +31,7 @@ import {
   absolute,
   execute,
   safe,
+  skippedEntry,
   validateStateBoundary,
 } from "./MemoryImportReaderSupport.ts";
 
@@ -455,9 +456,7 @@ const nodeSnapshot = (config: MemoryImportReaderConfig, input: SnapshotOperation
                 const obj = selector === "objects" || selector.startsWith("objects/");
                 const path = NodePath.join(parent, name);
                 const s = await stat(path);
-                // Aside reads only regular pages directly in the selected directory. Links,
-                // subdirectories and non-page files are skipped without being opened or followed.
-                if (aside && (s.isSymbolicLink() || !s.isFile())) continue;
+                if (skippedEntry(input.format, selector, s)) continue;
                 if (++count > (git ? 4096 : 512) || (obj && ++objectsCount > 3584) || depth > 8)
                   throw error("limit_exceeded");
                 await child(parent, name, s.isDirectory(), true, s);

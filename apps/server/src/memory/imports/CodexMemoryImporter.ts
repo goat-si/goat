@@ -3,7 +3,11 @@ import * as NodeCrypto from "node:crypto";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { scanMemoryValue } from "../MemorySecretScanner.ts";
-import type { ImportParsedItem, MemoryImportParser } from "./MemoryImportTypes.ts";
+import {
+  withoutByteOrderMark,
+  type ImportParsedItem,
+  type MemoryImportParser,
+} from "./MemoryImportTypes.ts";
 
 const FILE_MAX_BYTES = 256 * 1024;
 const TITLE_MAX_CODE_POINTS = 256;
@@ -140,7 +144,7 @@ export const parseCodexMemory: MemoryImportParser = (input) =>
                 [group.scope ?? "", group.routing ?? ""],
                 group.malformed || !group.scope,
               );
-        for (const line of file.text.replace(/\r\n/g, "\n").split("\n")) {
+        for (const line of withoutByteOrderMark(file.text).replace(/\r\n/g, "\n").split("\n")) {
           const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
           if (fence) {
             if (group && !omitSection) group.body.push(line);
