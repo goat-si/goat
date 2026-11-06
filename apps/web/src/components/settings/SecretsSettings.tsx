@@ -156,6 +156,7 @@ function EnvironmentSecretProviders({
                       ) : null}
                       <RemoveSecretProviderButton
                         label={config.label}
+                        id={id}
                         onConfirm={() => updateSettings({ secretProviders: { [id]: null } })}
                       />
                     </div>
@@ -181,9 +182,11 @@ function EnvironmentSecretProviders({
 
 function RemoveSecretProviderButton({
   label,
+  id,
   onConfirm,
 }: {
   readonly label: string;
+  readonly id: SecretProviderId;
   readonly onConfirm: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -197,8 +200,9 @@ function RemoveSecretProviderButton({
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {label}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Provider variables that read from {label} stop resolving until a provider with the
-              same name is added again. The secrets themselves are untouched.
+              Settings that read from {label} keep their references but stop resolving until a
+              provider with ID {id} is added again or another source is selected. The secrets
+              themselves are untouched.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

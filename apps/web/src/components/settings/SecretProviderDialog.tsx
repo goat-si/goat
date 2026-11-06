@@ -47,6 +47,7 @@ export function SecretProviderDialog({
   );
   const issues = Result.isFailure(result) ? result.failure : {};
   const nameError = submitted ? issues.name : undefined;
+  const idError = submitted ? issues.id : undefined;
   const accountError = submitted ? issues.account : undefined;
 
   const update = (patch: Partial<SecretProviderDraft>) => setDraft({ ...draft, ...patch });
@@ -107,6 +108,28 @@ export function SecretProviderDialog({
                 </p>
               ) : null}
             </div>
+            {!existing ? (
+              <div className="grid gap-1.5">
+                <Label htmlFor="secret-provider-id">Provider ID (optional)</Label>
+                <Input
+                  id="secret-provider-id"
+                  value={draft.id ?? ""}
+                  onChange={(event) => update({ id: event.target.value })}
+                  maxLength={64}
+                  aria-invalid={idError !== undefined}
+                  aria-describedby={idError === undefined ? undefined : "secret-provider-id-error"}
+                />
+                {idError !== undefined ? (
+                  <p id="secret-provider-id-error" role="alert">
+                    {idError}
+                  </p>
+                ) : null}
+                <p className="text-xs text-muted-foreground">
+                  Leave blank to derive it from the name. To restore references, enter their
+                  original provider ID.
+                </p>
+              </div>
+            ) : null}
             <div className="grid gap-1.5">
               <Label htmlFor="secret-provider-account">Account</Label>
               <Input

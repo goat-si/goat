@@ -26,7 +26,6 @@ export function classifySecretProvider(provider: SecretProviderConfig): Classifi
     : { kind: "unsupported" };
 }
 
-/** Stable and readable in settings.json, so re-adding a provider under the same name restores its variables. */
 function secretProviderIdFromName(name: string): SecretProviderId | null {
   const slug = name
     .toLowerCase()
@@ -40,6 +39,7 @@ function secretProviderIdFromName(name: string): SecretProviderId | null {
 export interface SecretProviderDraft {
   readonly name: string;
   readonly account: string;
+  readonly id?: string;
 }
 
 export function draftFromSecretProvider(provider: SecretProviderConfig): SecretProviderDraft {
@@ -86,23 +86,36 @@ export function secretProviderFromDraft(
 
   let id: SecretProviderId | null = null;
   let nameIssue: string | undefined;
+  let idIssue: string | undefined;
   if (Result.isFailure(label)) {
     nameIssue = label.failure;
   } else {
-    id = target.mode === "edit" ? target.id : secretProviderIdFromName(label.success);
-    if (id === null) nameIssue = "The name needs at least one letter or digit.";
-    else if (target.mode === "add" && existingIds.has(id))
-      nameIssue = "A secret provider with this name exists.";
+    id =
+      target.mode === "edit"
+        ? target.id
+        : draft.id?.trim()
+          ? Option.getOrNull(decodeSecretProviderId(draft.id.trim()))
+          : secretProviderIdFromName(label.success);
+    if (id === null) {
+      if (draft.id?.trim())
+        idIssue = "Use letters, digits, underscores or hyphens, starting with a letter or digit.";
+      else nameIssue = "The name needs at least one letter or digit.";
+    } else if (target.mode === "add" && existingIds.has(id)) {
+      if (draft.id?.trim()) idIssue = "A secret provider with this ID exists.";
+      else nameIssue = "A secret provider with this ID exists.";
+    }
   }
 
   if (
     id === null ||
     nameIssue !== undefined ||
+    idIssue !== undefined ||
     Result.isFailure(label) ||
     Result.isFailure(account)
   ) {
     return Result.fail({
       ...(nameIssue === undefined ? {} : { name: nameIssue }),
+      ...(idIssue === undefined ? {} : { id: idIssue }),
       ...(Result.isFailure(account) ? { account: account.failure } : {}),
     });
   }
