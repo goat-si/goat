@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  EnvironmentId,
   EventId,
   MessageId,
   NodeId,
@@ -207,6 +208,119 @@ it.effect.each([["sql", layerSql]] as const)(
       yield* assertPending(approval.id, false);
       yield* setRequest({ ...approval, status: "resolved", resolvedAt: now });
       yield* assertPending(question.id, true);
+    }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect.each([
+  ["sql", layerSql],
+  ["memory", ProjectionStore.layerMemory],
+] as const)(
+  "%s: newer waiting handoffs wake a snooze with an older waiting secret",
+  ([, testLayer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = yield* createThread("handoff-after-secret", {
+        snoozedAt: now,
+        snoozedUntil: DateTime.add(now, { days: 1 }),
+      });
+      const runId = yield* createRun(threadId, "running");
+      const nodeId = NodeId.make("node:waiting-input");
+      const common = {
+        threadId,
+        runId,
+        nodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        status: "waiting" as const,
+        title: null,
+        completedAt: null,
+      };
+      const secretAt = DateTime.subtract(now, { minutes: 1 });
+      const handoffAt = DateTime.add(now, { minutes: 1 });
+      yield* store.apply({
+        id: EventId.make("event:waiting-secret"),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        occurredAt: secretAt,
+        payload: {
+          ...common,
+          id: TurnItemId.make("waiting-secret"),
+          ordinal: 1,
+          startedAt: secretAt,
+          updatedAt: secretAt,
+          type: "secret_request",
+          label: "Credential",
+          reason: "Needed",
+          secretStatus: "pending",
+        },
+      });
+      const handoffId = TurnItemId.make("waiting-handoff");
+      yield* store.apply({
+        id: EventId.make("event:waiting-handoff"),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        occurredAt: handoffAt,
+        payload: {
+          ...common,
+          id: handoffId,
+          ordinal: 2,
+          startedAt: handoffAt,
+          updatedAt: handoffAt,
+          type: "human_handoff",
+          handoff: {
+            handoffId,
+            kind: "approval",
+            title: "Approve",
+            reason: "Needed",
+            requestedBy: { threadId, providerInstanceId, path: "handoff.create" },
+            target: { environmentId: EnvironmentId.make("test"), path: "example.approve" },
+            dedupeKey: "test",
+            state: "pending",
+            expiresAt: null,
+            createdAt: handoffAt,
+            actor: { type: "agent", threadId },
+          },
+        },
+      });
+      const assertSelected = (expectedId: string) =>
+        Effect.gen(function* () {
+          const shell = (yield* store.getShellSnapshot()).threads.find(
+            (entry) => entry.id === threadId,
+          );
+          const projection = yield* store.getThreadProjection(threadId);
+          for (const candidate of [shell, ProjectionStore.threadShellFromProjection(projection)]) {
+            assert.equal(candidate?.pendingRuntimeRequest?.id, expectedId);
+            if (expectedId === handoffId)
+              assert.isFalse(
+                isSnoozed(candidate!, DateTime.toEpochMillis(DateTime.add(now, { minutes: 2 }))),
+              );
+          }
+        });
+      yield* assertSelected(handoffId);
+      const latestSecretAt = DateTime.add(now, { minutes: 2 });
+      yield* store.apply({
+        id: EventId.make("event:waiting-secret-updated"),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        occurredAt: latestSecretAt,
+        payload: {
+          ...common,
+          id: TurnItemId.make("waiting-secret"),
+          ordinal: 1,
+          startedAt: secretAt,
+          updatedAt: latestSecretAt,
+          type: "secret_request",
+          label: "Credential",
+          reason: "Needed",
+          secretStatus: "pending",
+        },
+      });
+      yield* assertSelected("waiting-secret");
     }).pipe(Effect.provide(testLayer)),
 );
 
