@@ -155,6 +155,8 @@ const ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT = 72;
 // rows that are already built instead of rows still being rebuilt.
 const THREAD_LIST_V2_DRAW_DISTANCE = 1_000;
 
+const NO_THREADS_DETAIL = "Start a thread and an agent gets to work on one of your machines.";
+
 function deriveEmptyState(props: {
   readonly catalogState: WorkspaceState;
   readonly projectCount: number;
@@ -217,7 +219,7 @@ function deriveEmptyState(props: {
 
   return {
     title: "No threads yet",
-    detail: "Start a thread and an agent gets to work in a connected environment.",
+    detail: NO_THREADS_DETAIL,
     loading: false,
   };
 }
@@ -840,26 +842,22 @@ export function HomeScreen(props: HomeScreenProps) {
       <EmptyState
         title="No results"
         detail={`No threads matching "${props.searchQuery}".`}
-        variant={Platform.OS === "android" ? "plain" : undefined}
+        variant="plain"
       />
     ) : v2ScopedProjectGroup !== null ? (
       <EmptyState
         title={`No threads in ${v2ScopedProjectGroup.title}`}
         detail="Choose another project or create a new task."
-        variant={Platform.OS === "android" ? "plain" : undefined}
+        variant="plain"
       />
     ) : selectedEnvironmentLabel ? (
       <EmptyState
         title={`No threads in ${selectedEnvironmentLabel}`}
         detail="Choose another environment or create a new task."
-        variant={Platform.OS === "android" ? "plain" : undefined}
+        variant="plain"
       />
     ) : (
-      <EmptyState
-        title="No threads yet"
-        detail="Start one and an agent gets to work on one of your machines."
-        variant={Platform.OS === "android" ? "plain" : undefined}
-      />
+      <EmptyState title="No threads yet" detail={NO_THREADS_DETAIL} variant="plain" />
     );
 
   if (Platform.OS === "android" && threadListV2Items.length === 0) {

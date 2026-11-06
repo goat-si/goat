@@ -8,10 +8,9 @@ import { AppText as Text } from "./ui/AppText";
 import { GoatWordmark } from "./GoatWordmark";
 import { BrandChannelPill } from "./BrandChannelPill";
 import { IPAD_HOME_TITLE_OFFSET } from "../lib/layoutMetrics";
+import { MOBILE_CHROME_MAX_FONT_SCALE } from "../lib/typography";
 import { resolveMobileBrandChannel } from "../lib/mobileBranding";
 import { useAndroidControlSizing } from "./ui/useAndroidControlSizing";
-
-const BRAND_MAX_FONT_SCALE = 1.4;
 
 export function brandTitleOffset(): number {
   if (Platform.OS !== "ios") return 0;
@@ -54,7 +53,7 @@ export function CompactBrandTitle(
       <GoatWordmark colorClassName="accent-foreground" height={Math.round(15 * scale)} />
       <Text
         allowFontScaling={props.allowFontScaling}
-        maxFontSizeMultiplier={BRAND_MAX_FONT_SCALE}
+        maxFontSizeMultiplier={MOBILE_CHROME_MAX_FONT_SCALE}
         className="font-goat-bold text-foreground"
         style={{ fontSize: 18 * scale, letterSpacing: 0.04 * 18 * scale }}
       >
@@ -64,7 +63,7 @@ export function CompactBrandTitle(
         <BrandChannelPill
           channel={channel}
           allowFontScaling={props.allowFontScaling}
-          maxFontSizeMultiplier={BRAND_MAX_FONT_SCALE}
+          maxFontSizeMultiplier={MOBILE_CHROME_MAX_FONT_SCALE}
         />
       ) : null}
     </View>

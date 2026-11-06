@@ -23,6 +23,7 @@ export function Chip(props: {
   readonly onPress?: () => void;
   readonly accessibilityLabel?: string;
   readonly disabled?: boolean;
+  readonly maxFontSizeMultiplier?: number;
 }) {
   const small = props.size === "small";
   const layout = cn(
@@ -38,6 +39,7 @@ export function Chip(props: {
       <AppText
         textRole={small ? "caption" : "footnote"}
         numberOfLines={small ? undefined : 1}
+        maxFontSizeMultiplier={props.maxFontSizeMultiplier}
         className={cn(
           "shrink",
           !small && "max-w-[180px]",
