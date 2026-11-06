@@ -13,7 +13,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
 import { CheckIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "~/components/solar";
-import { useId, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -176,10 +176,7 @@ function PendingSecretRequestForm(props: {
                 </label>
                 <Input
                   id={id}
-                  type="text"
-                  style={
-                    key === "cvc" ? ({ WebkitTextSecurity: "disc" } as CSSProperties) : undefined
-                  }
+                  type={key === "cvc" ? "password" : "text"}
                   autoComplete="off"
                   autoCorrect="off"
                   autoCapitalize="off"
@@ -229,9 +226,7 @@ function PendingSecretRequestForm(props: {
           </label>
           <Input
             id={passwordId}
-            // A password field would offer to save this login under GOAT's own site.
-            type="text"
-            className="[-webkit-text-security:disc]"
+            type="password"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -250,8 +245,7 @@ function PendingSecretRequestForm(props: {
           </label>
           <Input
             id={setupKeyId}
-            type="text"
-            style={{ WebkitTextSecurity: "disc" } as CSSProperties}
+            type="password"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -277,9 +271,7 @@ function PendingSecretRequestForm(props: {
           <div className="min-w-0 flex-1">
             <Input
               id={inputId}
-              // Password fields prompt to save credentials; this secret is not a login.
-              type="text"
-              className="[-webkit-text-security:disc]"
+              type="password"
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"

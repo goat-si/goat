@@ -40,9 +40,8 @@ it("requires a username and masked password before saving a login", async () => 
     await expect.element(field).toHaveAttribute("data-lpignore", "true");
     await expect.element(field).toHaveAttribute("data-bwignore");
   }
-  await expect.element(password).toHaveAttribute("type", "text");
-  await expect.element(setupKey).toHaveAttribute("type", "text");
-  await expect.element(setupKey).toHaveAttribute("style", "-webkit-text-security: disc;");
+  await expect.element(password).toHaveAttribute("type", "password");
+  await expect.element(setupKey).toHaveAttribute("type", "password");
   await expect.element(save).toBeDisabled();
   await user.fill("test-user");
   await expect.element(save).toBeDisabled();
@@ -80,6 +79,7 @@ it("keeps the existing single-secret form", async () => {
   );
   const secret = screen.getByLabelText("API secret");
   const save = screen.getByRole("button", { name: "Save securely" });
+  await expect.element(secret).toHaveAttribute("type", "password");
   await expect.element(secret).toBeVisible();
   await expect.element(save).toBeDisabled();
   await secret.fill("test-secret");
@@ -118,9 +118,8 @@ it("validates the card, suppresses password managers, and saves a normalized ans
     await expect.element(field).toHaveAttribute("data-1p-ignore");
     await expect.element(field).toHaveAttribute("data-lpignore", "true");
     await expect.element(field).toHaveAttribute("data-bwignore");
-    await expect.element(field).toHaveAttribute("type", "text");
   }
-  await expect.element(fields[3]!).toHaveAttribute("style", "-webkit-text-security: disc;");
+  await expect.element(fields[3]!).toHaveAttribute("type", "password");
   await expect.element(save).toBeDisabled();
   await fields[0]!.fill("4242 4242-4242 4242");
   await fields[1]!.fill("01");
