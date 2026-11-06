@@ -72,7 +72,7 @@ export function memoryImportIssueReason(
   }
 }
 
-export const memoryCapacityLabels: Record<MemoryCapacityDimension, string> = {
+const memoryCapacityLabels: Record<MemoryCapacityDimension, string> = {
   body: "Memory text size limit reached",
   user_items: "User memory count limit reached",
   project_items: "Project memory count limit reached",
@@ -113,7 +113,7 @@ const capacityNextStep =
   "Forget memories you no longer need in Settings → Memory to free space, then preview again";
 
 /** What is full and how to free it, from a capacity refusal. */
-export function memoryImportCapacityMessage(capacity: MemoryCapacityExceeded): string {
+function memoryImportCapacityMessage(capacity: MemoryCapacityExceeded): string {
   return `Memory storage is full: ${memoryCapacityLabels[capacity.dimension]} (${capacity.current} of ${capacity.limit}). ${capacityNextStep}.`;
 }
 
