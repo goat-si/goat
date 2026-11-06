@@ -1,3 +1,4 @@
+import { mergeSourceControlHostSettings } from "./sourceControlHostSettings.ts";
 import type { ModelPreferences } from "@goat/contracts/settings";
 import {
   goatBotHomeClaimSupersedes,
@@ -619,7 +620,7 @@ export function applyServerSettingsPatch(
             ...Object.fromEntries(
               Object.entries(sourceControlHostsPatch).map(([kind, fields]) => [
                 kind,
-                { ...current.sourceControlHosts[kind], ...fields },
+                mergeSourceControlHostSettings(current.sourceControlHosts[kind], fields),
               ]),
             ),
           },
