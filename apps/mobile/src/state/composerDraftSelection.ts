@@ -53,3 +53,20 @@ export function useComposerDraftSelection(
   );
   return draftKey === null ? null : matchingComposerDraftSelection(selection, text);
 }
+
+let lastComposerDraftReset = 0;
+const composerDraftResetAtom = Atom.family((_draftKey: string) =>
+  Atom.make(0).pipe(Atom.withLabel("mobile:composer-draft-reset")),
+);
+const NO_COMPOSER_DRAFT_RESET_ATOM = Atom.make(0);
+
+export function markComposerDraftReset(draftKey: string): void {
+  lastComposerDraftReset += 1;
+  appAtomRegistry.set(composerDraftResetAtom(draftKey), lastComposerDraftReset);
+}
+
+export function useComposerDraftResetGeneration(draftKey: string | null): () => number {
+  const atom = draftKey === null ? NO_COMPOSER_DRAFT_RESET_ATOM : composerDraftResetAtom(draftKey);
+  useAtomValue(atom);
+  return () => appAtomRegistry.get(atom);
+}
