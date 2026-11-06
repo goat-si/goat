@@ -167,7 +167,7 @@ export function useSideChatCommand() {
     }
     busy.current = true;
     let startingKey: string | undefined;
-    try {
+    return (async () => {
       let targetId =
         findSideChat(
           appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
@@ -258,9 +258,9 @@ export function useSideChatCommand() {
         clearComposerDraftContent(input.threadKey);
       open({ environmentId: thread.environmentId, threadId: targetId });
       return true;
-    } finally {
+    })().finally(() => {
       if (startingKey !== undefined) startingSideChats.delete(startingKey);
       busy.current = false;
-    }
+    });
   };
 }
