@@ -8,6 +8,8 @@ const reactTests = [
   "src/features/settings/ClaudeAccountControls.test.tsx",
   "src/features/threads/CustomAnswerInput.test.tsx",
   "src/features/devices/device-stream.browser.test.ts",
+  "src/features/notes/live-editor/note-editor-images.dom.test.ts",
+  "src/features/notes/useNoteFiles.test.tsx",
   "src/features/settings/WorktreeCleanupSection.test.tsx",
   "src/features/threads/ThreadWorkspaceBanner.test.tsx",
   "src/features/threads/SecretRequestCard.test.tsx",

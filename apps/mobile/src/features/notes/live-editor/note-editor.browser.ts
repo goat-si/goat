@@ -9,7 +9,8 @@ import type {
   NoteEditorInit,
   NoteEditorOutbound,
 } from "./note-editor-protocol";
-import { liveTapHandlers, livePreview } from "./note-editor-live-preview";
+import { liveTapHandlers, livePreview, noteImageStore } from "./note-editor-live-preview";
+import { createNoteImageStore, imagesAfterComposition, imagesChanged } from "./note-editor-images";
 import {
   checkboxChange,
   noteEditorChanges,
@@ -107,6 +108,7 @@ function boot(init: NoteEditorInit) {
   const { lineBreak } = init;
   const accessCompartment = new Compartment();
   const previewCompartment = new Compartment();
+  const images = createNoteImageStore(post);
   applyTheme(init.config);
   const view = new EditorView({
     parent,
@@ -116,6 +118,8 @@ function boot(init: NoteEditorInit) {
         noteEditorExtensions(lineBreak),
         accessCompartment.of(access(init.config)),
         previewCompartment.of(livePreview),
+        noteImageStore.of(images),
+        imagesAfterComposition,
         liveTapHandlers((href) => post({ type: "link", href })),
         syntaxHighlighting(codeHighlight),
         EditorView.lineWrapping,
@@ -210,6 +214,10 @@ function boot(init: NoteEditorInit) {
       case "requestDoc":
         deferredRequest = message.id;
         if (!view.composing) applyDeferred();
+        return;
+      case "imageUrls":
+        if (images.receive(message.urls, message.missing))
+          view.dispatch({ effects: imagesChanged.of(null) });
         return;
       case "command":
         switch (message.command) {

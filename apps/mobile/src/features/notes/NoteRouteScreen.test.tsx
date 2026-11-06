@@ -168,7 +168,10 @@ vi.mock("../../native/SelectableMarkdownText", () => ({
     );
   },
 }));
-vi.mock("../../lib/openExternalUrl", () => ({ tryOpenExternalUrl: vi.fn() }));
+vi.mock("./useNoteFiles", () => ({
+  useNoteImageSource: () => async () => null,
+  useOpenNoteLink: () => () => {},
+}));
 vi.mock("../files/FileMarkdownPreview", () => ({ useMarkdownPreviewStyles: () => ({}) }));
 vi.mock("../../components/ui/Button", () => ({
   Button: (props: { label: string; disabled?: boolean; onPress: () => void }) => (
