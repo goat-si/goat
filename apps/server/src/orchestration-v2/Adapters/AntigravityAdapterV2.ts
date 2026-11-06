@@ -268,6 +268,7 @@ export function makeAntigravityAcpAdapterFlavor(
     // ACP has no native compact operation for this flavor.
     supportsCompaction: false,
     requiresSignIn: isAntigravitySignInRequiredError,
+    promptInactivityTimeout: "15 minutes",
     // 1.4.5 returns the root trajectory's Gemini usageMetadata delta; 1.4.1 returns none.
     reportsPerTurnPromptUsage: true,
     geminiPromptUsage: true,

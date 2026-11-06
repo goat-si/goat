@@ -2094,7 +2094,7 @@ describe("structural supervisor ownership", () => {
       yield* harness.closeLatestSession();
       const failed = yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
       expect(failed.attempt).toBe(1);
-      expect(failed.retryAt! - (yield* Clock.currentTimeMillis)).toBe(2_000);
+      expect(failed.retryAt! - (yield* Clock.currentTimeMillis)).toBe(250);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
@@ -2542,13 +2542,13 @@ describe("suspend recovery review regressions", () => {
         expect(yield* SubscriptionRef.get(supervisor.state)).toMatchObject({
           phase: "backoff",
           attempt: 1,
-          retryAt: 1_250,
+          retryAt: transition === "connected" ? 156 : 1_250,
         });
-        yield* TestClock.adjust(1_250);
+        yield* TestClock.adjust(transition === "connected" ? 156 : 1_250);
         expect(yield* SubscriptionRef.get(supervisor.state)).toMatchObject({
           phase: "backoff",
           attempt: 2,
-          retryAt: 3_750,
+          retryAt: transition === "connected" ? 2_656 : 3_750,
         });
       }).pipe(Effect.provide(TestClock.layer())),
   );

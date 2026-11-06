@@ -64,6 +64,8 @@ const SETTINGS_SEARCH_TERMS = {
     "default branch",
     "automatically pull",
     "worktrees",
+    "clone into host folders",
+    "ghq",
     "start from remote",
   ],
   SettingsEnvironmentAgentBehavior: ["response streaming", "preview browser", "browser access"],

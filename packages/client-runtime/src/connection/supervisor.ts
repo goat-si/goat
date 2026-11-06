@@ -1329,7 +1329,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         error.retryAfterMillis ?? 0,
         inWakeWindow
           ? WAKE_RETRY_DELAY_MS
-          : retryDelayMs(failureCount, yield* Random.next, loopback),
+          : retryDelayMs(failureCount, yield* Random.next, loopback, outcome.established),
       );
       if (!inWakeWindow) failureCount += 1;
       pendingRetry = Option.map(attemptSpan, (previousAttempt) => ({

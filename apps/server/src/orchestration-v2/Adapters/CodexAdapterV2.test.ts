@@ -7,7 +7,6 @@ import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as Exit from "effect/Exit";
 import * as M from "@goat/contracts";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
-
 import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -36,7 +35,6 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
-
 import { toolOutputImages } from "@goat/shared/toolOutput";
 
 import * as CodexClient from "effect-codex-app-server/client";
@@ -8568,7 +8566,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       code: "other",
       details: "subscription_sharing_workplace_individual_usage_limit_exceeded",
       notification: true,
-      expectedClass: "provider_error",
+      expectedClass: "usage_limit",
     },
   ] as const)("classifies Codex terminal failures from $name evidence", (scenario) =>
     Effect.scoped(
@@ -8755,6 +8753,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         if (scenario.name === "retry") assert.equal(terminal.retry?.attempt, 1);
         if (scenario.name === "chatgpt-workspace-limit") {
           assert.equal(terminal.failure.code, scenario.details);
+          assert.isNull(terminal.failure.resetAt);
           assert.include(terminal.failure.message, "workspace admin");
         }
       }).pipe(Effect.provide(layerAdapterTest)),

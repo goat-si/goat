@@ -1,3 +1,4 @@
+import { providerConfigSecret, providerSecretReferences } from "./providerConfigSecrets.ts";
 import {
   providerInstanceConfigEnabledFlag,
   ProviderInstanceId,
@@ -51,15 +52,18 @@ interface LiveEntry {
 const providerConfigsFor = (
   entry: ProviderInstanceConfig,
   providers: ServerSettings["secretProviders"] | undefined,
-) =>
-  (entry.environment ?? []).flatMap((variable) =>
-    variable.secret ? [providers?.[variable.secret.provider]] : [],
-  );
+) => providerSecretReferences(entry).map((reference) => providers?.[reference.provider]);
 
 interface RegistryState {
   readonly entries: Ref.Ref<ReadonlyMap<ProviderInstanceId, LiveEntry>>;
   readonly unavailable: Ref.Ref<ReadonlyMap<ProviderInstanceId, ServerProvider>>;
   readonly changes: PubSub.PubSub<void>;
+  readonly unreadable: Ref.Ref<
+    ReadonlyMap<
+      ProviderInstanceId,
+      { entry: ProviderInstanceConfig; providerConfigs: ReadonlyArray<unknown> }
+    >
+  >;
 }
 
 const entryEqual = (a: ProviderInstanceConfig, b: ProviderInstanceConfig): boolean =>
@@ -98,7 +102,11 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
   readonly deferSecrets: boolean;
 }): Effect.fn.Return<
   | { readonly kind: "live"; readonly live: LiveEntry }
-  | { readonly kind: "unavailable"; readonly snapshot: ServerProvider },
+  | {
+      readonly kind: "unavailable";
+      readonly snapshot: ServerProvider;
+      readonly secretsUnreadable?: true;
+    },
   never,
   R
 > {
@@ -141,7 +149,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
 
   const typedConfig = decodeResult.success;
   const enabled = resolveEntryEnabled(entry, typedConfig);
-  if (enabled && input.deferSecrets && entry.environment?.some((variable) => variable.secret)) {
+  if (enabled && input.deferSecrets && providerSecretReferences(entry).length > 0) {
     return {
       kind: "unavailable" as const,
       snapshot: yield* buildUnavailableProviderSnapshot({
@@ -153,10 +161,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
       }),
     };
   }
-  if (
-    enabled &&
-    (entry.environment ?? []).filter((variable) => variable.secret !== undefined).length > 32
-  ) {
+  if (enabled && providerSecretReferences(entry).length > 32) {
     return {
       kind: "unavailable" as const,
       snapshot: yield* buildUnavailableProviderSnapshot({
@@ -179,12 +184,24 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
       }
       if (!enabled) continue;
       const value = resolveSecret ? yield* resolveSecret(secret).pipe(Effect.option) : undefined;
-      if (value === undefined || value._tag === "None")
+      if (value === undefined || value._tag === "None" || !value.value.trim())
         return { kind: "unreadable" as const, name: variable.name };
       environment.push({ ...plain, value: value.value, sensitive: true });
       resolvedSecrets.push(value.value);
     }
-    return { kind: "resolved" as const, environment, resolvedSecrets };
+    const configSecret = providerConfigSecret(entry);
+    let config = typedConfig;
+    if (!enabled && configSecret) config = { ...typedConfig, [configSecret.field]: "" };
+    if (enabled && configSecret) {
+      const value = resolveSecret
+        ? yield* resolveSecret(configSecret.reference).pipe(Effect.option)
+        : undefined;
+      if (value === undefined || value._tag === "None" || !value.value.trim())
+        return { kind: "unreadable" as const, name: configSecret.field };
+      config = { ...typedConfig, [configSecret.field]: value.value };
+      resolvedSecrets.push(value.value);
+    }
+    return { kind: "resolved" as const, environment, resolvedSecrets, config };
   }).pipe(Effect.timeoutOption("45 seconds"));
   if (result._tag === "None" || result.value.kind === "unreadable") {
     const reason =
@@ -193,6 +210,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
         : `Could not read ${result.value.name} from its secret provider.`;
     return {
       kind: "unavailable" as const,
+      secretsUnreadable: true as const,
       snapshot: yield* buildUnavailableProviderSnapshot({
         driverKind: entry.driver,
         instanceId,
@@ -202,7 +220,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
       }),
     };
   }
-  const { environment, resolvedSecrets } = result.value;
+  const { environment, resolvedSecrets, config } = result.value;
   const childScope = yield* Scope.fork(parentScope);
 
   const createResult = yield* driver
@@ -212,13 +230,14 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
       accentColor: entry.accentColor,
       environment,
       enabled,
-      config: typedConfig,
+      config,
     })
     .pipe(Effect.provideService(Scope.Scope, childScope), Effect.result);
   if (createResult._tag === "Failure") {
-    const detail = entry.environment?.some((variable) => variable.secret !== undefined)
-      ? "Provider initialization failed."
-      : createResult.failure.detail;
+    const detail =
+      providerSecretReferences(entry).length > 0
+        ? "Provider initialization failed."
+        : createResult.failure.detail;
     yield* Effect.logError("Failed to create provider instance", {
       instanceId: rawInstanceId,
       driver: entry.driver,
@@ -266,6 +285,7 @@ const makeReconcile = <R>(input: {
     Effect.gen(function* () {
       const previousEntries = yield* Ref.get(state.entries);
       const previousUnavailable = yield* Ref.get(state.unavailable);
+      const previousUnreadable = yield* Ref.get(state.unreadable);
       const nextRaw = Object.entries(configMap);
       const nextKeys = new Set<ProviderInstanceId>(
         nextRaw.map(([raw]) => ProviderInstanceId.make(raw)),
@@ -307,6 +327,10 @@ const makeReconcile = <R>(input: {
 
       const builtEntries = new Map<ProviderInstanceId, LiveEntry>();
       const builtUnavailable = new Map<ProviderInstanceId, ServerProvider>();
+      const builtUnreadable = new Map<
+        ProviderInstanceId,
+        { entry: ProviderInstanceConfig; providerConfigs: ReadonlyArray<unknown> }
+      >();
       let orderChanged = false;
       const previousOrder = [...previousEntries.keys()];
       const nextOrder: Array<ProviderInstanceId> = [];
@@ -321,8 +345,24 @@ const makeReconcile = <R>(input: {
           continue;
         }
         const previousFailure = previousUnavailable.get(instanceId);
+        const parked = previousUnreadable.get(instanceId);
+        if (
+          previousFailure &&
+          parked &&
+          !rebuild?.has(instanceId) &&
+          entryEqual(parked.entry, entry) &&
+          NodeUtil.isDeepStrictEqual(
+            parked.providerConfigs,
+            providerConfigsFor(entry, secretProviders),
+          )
+        ) {
+          builtUnavailable.set(instanceId, previousFailure);
+          builtUnreadable.set(instanceId, parked);
+          continue;
+        }
         if (rebuild !== undefined && !rebuild.has(instanceId) && previousFailure !== undefined) {
           builtUnavailable.set(instanceId, previousFailure);
+          if (parked) builtUnreadable.set(instanceId, parked);
           continue;
         }
 
@@ -342,6 +382,11 @@ const makeReconcile = <R>(input: {
           builtEntries.set(instanceId, result.live);
         } else {
           builtUnavailable.set(instanceId, result.snapshot);
+          if (result.secretsUnreadable)
+            builtUnreadable.set(instanceId, {
+              entry,
+              providerConfigs: providerConfigsFor(entry, secretProviders),
+            });
         }
       }
 
@@ -371,6 +416,7 @@ const makeReconcile = <R>(input: {
 
       yield* Ref.set(state.entries, builtEntries);
       yield* Ref.set(state.unavailable, builtUnavailable);
+      yield* Ref.set(state.unreadable, builtUnreadable);
 
       if (entriesChanged || unavailableChanged) {
         yield* PubSub.publish(state.changes, undefined);
@@ -412,7 +458,13 @@ export const makeProviderInstanceRegistry = Effect.fn(
   const changes = yield* PubSub.unbounded<void>();
   yield* Effect.addFinalizer(() => PubSub.shutdown(changes));
 
-  const state: RegistryState = { entries, unavailable, changes };
+  const unreadable = yield* Ref.make<
+    ReadonlyMap<
+      ProviderInstanceId,
+      { entry: ProviderInstanceConfig; providerConfigs: ReadonlyArray<unknown> }
+    >
+  >(new Map());
+  const state: RegistryState = { entries, unavailable, unreadable, changes };
   const reconcileSemaphore = yield* Semaphore.make(1);
   const latest = yield* Ref.make({
     configMap: input.configMap,
@@ -427,10 +479,24 @@ export const makeProviderInstanceRegistry = Effect.fn(
   const reconcile: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape["reconcile"] =
     (configMap, secretProviders, deferSecrets) =>
       reconcileSemaphore.withPermits(1)(
-        Ref.set(latest, { configMap, secretProviders }).pipe(
-          Effect.andThen(reconcileWithR(configMap, secretProviders, undefined, deferSecrets)),
-          Effect.provideContext(driverContext),
-        ),
+        Effect.gen(function* () {
+          const previous = yield* Ref.get(latest);
+          const changed = Object.entries(configMap).some(([id, entry]) => {
+            if (providerSecretReferences(entry).length === 0) return false;
+            const old = previous.configMap[ProviderInstanceId.make(id)];
+            return (
+              old !== undefined &&
+              (!entryEqual(old, entry) ||
+                !NodeUtil.isDeepStrictEqual(
+                  providerConfigsFor(old, previous.secretProviders),
+                  providerConfigsFor(entry, secretProviders),
+                ))
+            );
+          });
+          if (changed) input.invalidateSecrets?.();
+          yield* Ref.set(latest, { configMap, secretProviders });
+          yield* reconcileWithR(configMap, secretProviders, undefined, deferSecrets);
+        }).pipe(Effect.provideContext(driverContext)),
       );
 
   yield* reconcile(input.configMap, input.secretProviders, input.deferSecrets);
@@ -451,9 +517,7 @@ export const makeProviderInstanceRegistry = Effect.fn(
         }> = [];
         for (const [rawId, entry] of Object.entries(snapshot.configMap)) {
           if (instanceId !== undefined && rawId !== instanceId) continue;
-          const references = (entry.environment ?? []).flatMap((variable) =>
-            variable.secret ? [variable.secret] : [],
-          );
+          const references = providerSecretReferences(entry);
           if (references.length === 0) continue;
           const id = ProviderInstanceId.make(rawId);
           const live = liveEntries.get(id);

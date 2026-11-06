@@ -1,3 +1,11 @@
+import {
+  OrchestrationV2Actor,
+  OrchestrationV2CreationSource,
+  OrchestrationV2ThreadHistoryOrigin,
+} from "./orchestrationV2Attribution.ts";
+export * from "./orchestrationV2Attribution.ts";
+import { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
+export { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
@@ -120,21 +128,6 @@ import {
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 
 export * from "./providerReplay.ts";
-export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
-export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
-
-export const OrchestrationV2CreationSource = Schema.Literals([
-  "web",
-  "mobile",
-  "mcp",
-  "provider",
-  "server",
-]);
-export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource.Type;
-
-export const OrchestrationV2ThreadHistoryOrigin = Schema.Literals(["native", "v1_import"]);
-export type OrchestrationV2ThreadHistoryOrigin = typeof OrchestrationV2ThreadHistoryOrigin.Type;
-
 const OrchestrationV2CreationFields = {
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
@@ -757,6 +750,8 @@ export const OrchestrationV2Run = Schema.Struct({
   ),
   delegatedCompletion: Schema.optional(OrchestrationV2DelegatedCompletionCohort),
   workspacePreparation: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
+  /** Starts a new provider conversation; earlier runs stay visible but never reach the provider. */
+  freshContext: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
@@ -1685,6 +1680,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
+    freshContext: OrchestrationV2Run.fields.freshContext,
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     /** Same as the text of message `messageId`. */
@@ -2269,7 +2265,6 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2ThreadShell = typeof OrchestrationV2ThreadShell.Type;
-
 const LIVE_SHELL_STATUSES: ReadonlySet<OrchestrationV2ShellThreadStatus> = new Set([
   "queued",
   "preparing",
@@ -2277,7 +2272,6 @@ const LIVE_SHELL_STATUSES: ReadonlySet<OrchestrationV2ShellThreadStatus> = new S
   "running",
   "waiting",
 ]);
-
 /**
  * A subagent child that can still need the user or hold its parent. Shells that omit idle children
  * keep these, so every reader of live child rows (pending requests, working parents, background
@@ -2296,7 +2290,6 @@ export function isLiveSubagentShell(
     (thread.pendingBackgroundTasks?.length ?? 0) > 0
   );
 }
-
 /**
  * A settled top-level thread settled before `beforeMs`. Shells that omit older settled threads
  * count every such thread, so the server and clients share this one rule.
@@ -2328,6 +2321,7 @@ export const OrchestrationV2OlderSettledThreads = Schema.Struct({
   before: IsoDateTime,
   asOfSequence: NonNegativeInt,
   counts: Schema.Array(OrchestrationV2OlderSettledCount),
+  sideChatCounts: Schema.optionalKey(Schema.Array(OrchestrationV2OlderSettledCount)),
 });
 export type OrchestrationV2OlderSettledThreads = typeof OrchestrationV2OlderSettledThreads.Type;
 
@@ -2574,6 +2568,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
+    freshContext: OrchestrationV2Run.fields.freshContext,
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     context: Schema.optional(OrchestrationMessageContext),
@@ -3316,6 +3311,7 @@ export const OrchestrationV2Command = Schema.Union([
     /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
     senderRunId: Schema.optional(RunId),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
+    freshContext: Schema.optional(Schema.Boolean),
     commandId: CommandId,
     threadId: ThreadId,
     messageId: MessageId,
@@ -3898,11 +3894,6 @@ export const OrchestrationV2SubscribeShellInput = Schema.Struct({
 });
 export type OrchestrationV2SubscribeShellInput = typeof OrchestrationV2SubscribeShellInput.Type;
 
-export const OrchestrationV2GetThreadFamilyInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type OrchestrationV2GetThreadFamilyInput = typeof OrchestrationV2GetThreadFamilyInput.Type;
-
 /**
  * The active threads that share the requested thread's `lineage.rootThreadId`: the root, its
  * forks, and their whole subagent trees, in any run state. An unknown thread has an empty family;
@@ -3911,6 +3902,7 @@ export type OrchestrationV2GetThreadFamilyInput = typeof OrchestrationV2GetThrea
 export const OrchestrationV2ThreadFamily = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   threads: Schema.Array(OrchestrationV2ThreadShell),
+  lookupTitles: Schema.optionalKey(Schema.Record(ThreadId, Schema.String)),
 });
 export type OrchestrationV2ThreadFamily = typeof OrchestrationV2ThreadFamily.Type;
 
@@ -3970,6 +3962,7 @@ export const OrchestrationV2OlderSettledThreadsPage = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   threads: Schema.Array(OrchestrationV2ThreadShell),
   counts: Schema.Array(OrchestrationV2OlderSettledCount),
+  sideChatCounts: Schema.optionalKey(Schema.Array(OrchestrationV2OlderSettledCount)),
 });
 export type OrchestrationV2OlderSettledThreadsPage =
   typeof OrchestrationV2OlderSettledThreadsPage.Type;

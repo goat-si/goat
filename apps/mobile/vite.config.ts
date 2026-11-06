@@ -4,6 +4,10 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/features/keyboard/keyboardControllerState.test.tsx",
+  "src/features/settings/ClaudeAccountControls.test.tsx",
+  "src/features/threads/CustomAnswerInput.test.tsx",
+  "src/features/devices/device-stream.browser.test.ts",
   "src/features/settings/WorktreeCleanupSection.test.tsx",
   "src/features/threads/ThreadWorkspaceBanner.test.tsx",
   "src/features/threads/SecretRequestCard.test.tsx",
@@ -55,6 +59,7 @@ const reactTests = [
   "src/features/threads/ThreadHeader.memory.test.tsx",
   "src/features/threads/thread-settings-sheet-state.test.ts",
   "src/features/threads/ThreadMarkdownImage.test.tsx",
+  "src/features/threads/useSideChatCommand.test.tsx",
   "src/lib/visible-animations.test.tsx",
 
   "src/components/ui/Dialog.android.test.tsx",
@@ -82,10 +87,8 @@ const reactTests = [
   "src/native/V5StackHeader.ios.test.tsx",
   "src/features/diagnostics/ThreadStreamsSection.test.tsx",
   "src/native/GoatComposerEditor.ios.test.tsx",
-  "src/native/useRestingTopOffset.test.tsx",
   "src/native/useRetryingImageSource.test.tsx",
   "src/state/queries.debounce.test.tsx",
-  "src/state/use-selected-thread-git-actions.test.tsx",
   "src/state/use-selected-thread-git-state.test.tsx",
   "src/features/terminal/useTerminalExitNavigation.test.tsx",
   "src/features/workspace/useSearchScrollRestoration.test.tsx",

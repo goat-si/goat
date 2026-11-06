@@ -1,3 +1,4 @@
+import { CLONE_SETTINGS_SEARCH_ITEMS } from "./settingsSearchCloneItems";
 import { GOAT_BOT_ROUTING_SEARCH_ITEMS } from "./settingsSearchGoatBotItems";
 import { UPDATES_SETTINGS_SEARCH_ITEMS } from "./settingsSearchUpdatesItems";
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
@@ -634,13 +635,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "project-defaults",
     searchTerms: ["new worktrees start remote origin latest fetched branch local"],
   },
-  {
-    id: "add-project-starts-in",
-    title: "Add project starts in",
-    to: "/settings/general",
-    scope: "environment-defaults",
-    searchTerms: ["base directory folder browser path home"],
-  },
+  ...CLONE_SETTINGS_SEARCH_ITEMS,
   {
     id: "unpin-confirmation",
     title: "Unpin confirmation",
@@ -1350,7 +1345,6 @@ export function searchSettings(
   const normalizedQuery = normalizeSearchText(query);
   if (normalizedQuery.length === 0) return [];
   const queryTokens = normalizedQuery.split(" ");
-
   return settingsForThisPlatform(items)
     .flatMap((item, index) => {
       const title = normalizeSearchText(item.title);
@@ -1360,7 +1354,6 @@ export function searchSettings(
         ...(item.searchTerms ?? []).map(normalizeSearchText),
       ];
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];
-
       const exactPhraseField = fields.findIndex((field) => field.includes(normalizedQuery));
       const rank =
         title === normalizedQuery

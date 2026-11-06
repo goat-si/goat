@@ -12,6 +12,7 @@ import {
   type VcsStatusResult,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
@@ -68,6 +69,7 @@ vi.mock("~/hooks/useTheme", () => ({ useRenderedAppearance: () => "dark" }));
 vi.mock("~/state/queries", () => ({
   useCheckpointDiff: () => ({ data: null, error: null, isPending: false }),
   useTurnItemDetail: () => ({ data: null, error: null, isPending: false }),
+  useDebouncedValue: <A,>(value: A) => value,
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => async () => {} }));
 vi.mock("~/editorPreferences", () => ({ useOpenInPreferredEditor: () => async () => {} }));
@@ -207,3 +209,25 @@ it.each([
     });
   },
 );
+
+it("does not claim there are no changes when an incomplete preview fails", async () => {
+  using context = setup("origin/orphan");
+  const incomplete = { ...preview(), incomplete: true };
+  state.previews.set(
+    "origin/orphan",
+    Atom.make(
+      AsyncResult.fail(new Error("Untracked discovery failed"), {
+        previousSuccess: Option.some(AsyncResult.success(incomplete)),
+      }),
+    ),
+  );
+  await using screen = await render(
+    <RegistryContext.Provider value={context.registry}>
+      <DiffPanel composerDraftTarget={context.threadRef} workspaceMutationId={null} visible />
+    </RegistryContext.Provider>,
+  );
+  await expect.element(screen.getByText("Could not load untracked changes.")).toBeVisible();
+  await expect
+    .element(screen.getByText("No net changes in this selection."))
+    .not.toBeInTheDocument();
+});

@@ -1,4 +1,9 @@
 import {
+  BUNDLED_CLAUDE_MODEL_CATALOG,
+  type ClaudeModelCatalog,
+} from "../../provider/ClaudeModelCatalog.ts";
+import { assertPinnedHead, makeTurnsAcrossSilent } from "./ClaudeFork.testkit.ts";
+import {
   CLAUDE_TEST_MODEL_SELECTION,
   CLAUDE_TEST_RUNTIME_POLICY,
   makeClaudeTestTurnInput,
@@ -15,10 +20,8 @@ import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
-
 import * as NodePath from "node:path";
 import * as NodeStream from "node:stream";
-
 import type {
   ElicitationRequest,
   Query as ClaudeQuery,
@@ -55,7 +58,6 @@ import {
   type ProviderInstanceEnvironment,
   ProviderDriverKind,
   type ProviderReplayTranscript,
-  type ProviderApprovalDecision,
   ProviderSessionId,
   ProviderTurnId,
   RunAttemptId,
@@ -64,7 +66,6 @@ import {
 } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
-
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -78,7 +79,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -87,7 +87,6 @@ import { formatClaudeResumeCompactionQuestion } from "@goat/shared/claudeCompact
 import * as HostProcess from "@goat/shared/HostProcess";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
-
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
 import * as ServerConfig from "../../config.ts";
@@ -132,10 +131,8 @@ import {
   materializeFixtureInput,
   projectionFor,
 } from "../testkit/fixtures/shared.ts";
-
 // Only collectors opt into queue capture. A FIFO marker then acknowledges all
 // provider events offered before it, after their collector callbacks finish.
-
 vi.mock("effect/Queue", async (importOriginal) => {
   const actual = await importOriginal<typeof Queue>();
   return {
@@ -154,7 +151,6 @@ vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
   ...(await importOriginal<typeof ClaudeSdk>()),
   resolveSettings: vi.fn(),
 }));
-
 beforeEach(() => {
   vi.mocked(ClaudeSdk.resolveSettings).mockReset().mockResolvedValue({
     effective: {},
@@ -168,7 +164,6 @@ const layerAdapterTest = Layer.mergeAll(
   McpProviderSessions.layer,
   NodeServices.layer,
 );
-
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const AUTO_COMPACT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
   autoCompactWindow: "300000",
@@ -200,7 +195,6 @@ const CLAUDE_TEST_RESTART_MODEL_SELECTION = {
   model: "claude-haiku-4-5-20251001",
   options: [{ id: "thinking", value: false }],
 } satisfies ModelSelection;
-
 describe("ClaudeAdapterV2 runtime query policy", () => {
   it("appends the development discipline without GOAT MCP and leaves out orchestration", () => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
@@ -213,7 +207,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.include(append, GOAT_DEVELOPMENT_INSTRUCTIONS);
     assert.notInclude(append, "Use `goat_task_create`");
   });
-
   it.each([
     "-- --thinking-display omitted",
     "--thinking-display summarized -- --thinking-display omitted",
@@ -228,7 +221,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.deepEqual(options.thinking, { type: "adaptive", display: "summarized" });
     assert.equal(options.extraArgs?.["thinking-display"], "summarized");
   });
-
   it.each([
     ["--permission-mode acceptEdits", "acceptEdits"],
     ["--dangerously-skip-permissions", "bypassPermissions"],
@@ -246,7 +238,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.isUndefined(options.extraArgs?.["permission-mode"]);
     assert.isUndefined(options.extraArgs?.["dangerously-skip-permissions"]);
   });
-
   it("passes every --add-dir launch directory to Claude", () => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,
@@ -268,7 +259,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     ]);
     assert.isUndefined(options.extraArgs?.["add-dir"]);
   });
-
   it("gives delegated children Claude's subagent prompt cache TTL", () => {
     const lineage = (relationshipToParent: "fork" | "subagent" | null) => ({
       lineage: {
@@ -290,7 +280,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       env,
     );
   });
-
   it("pins Claude's auto tool search on through flag settings", () => {
     const override = ClaudeAdapterV2.claudeToolSearchOverride;
     for (const value of ["auto", "auto:10", "auto:99.5", "auto:x", "auto:Infinity"]) {
@@ -310,7 +299,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     ]) {
       assert.isUndefined(override(value), String(value));
     }
-
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,
       nativeThreadId: "native-tool-search",
@@ -324,7 +312,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       ENABLE_TOOL_SEARCH: "true",
     });
   });
-
   it("projects AskUserQuestion input with question text as the answer key", () => {
     const preview = "\n  **Proposed change**\n\n```ts\n\tconst enabled = true;\n```\n  ";
     assert.deepEqual(
@@ -367,7 +354,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       ClaudeAdapterV2.ClaudeProviderCapabilitiesV2.planning.supportsStructuredQuestions,
     );
   });
-
   it("maps canonical read-only never policy to Claude dontAsk with read-only tools", () => {
     const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
       ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -382,7 +368,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
         },
       }),
     );
-
     assert.deepEqual(queryPolicy, {
       permissionMode: "dontAsk",
       tools: ClaudeAdapterV2.CLAUDE_READ_ONLY_ALLOWED_TOOLS,
@@ -390,7 +375,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       installPermissionCallback: false,
     });
   });
-
   it("does not auto-allow reads for canonical restricted read-only never policy", () => {
     const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
       ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -409,14 +393,12 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
         },
       }),
     );
-
     assert.deepEqual(queryPolicy, {
       permissionMode: "dontAsk",
       tools: ClaudeAdapterV2.CLAUDE_READ_ONLY_ALLOWED_TOOLS,
       installPermissionCallback: false,
     });
   });
-
   it("maps default full-access policy to Claude bypass permissions", () => {
     const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
       ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -425,7 +407,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
         cwd: "/workspace",
       }),
     );
-
     assert.deepEqual(queryPolicy, {
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
@@ -439,7 +420,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       cwd: "/workspace",
       approvalPolicy: "never",
     });
-
     assert.deepEqual(
       ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(runtimePolicy, {
         bypassDisabled: true,
@@ -455,7 +435,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       { permissionMode: "default", installPermissionCallback: true },
     );
   });
-
   it("keeps approval-required mode interactive with danger-full-access sandboxing", () => {
     const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
       ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -467,14 +446,12 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
         },
       }),
     );
-
     assert.deepEqual(queryPolicy, {
       permissionMode: "default",
       installPermissionCallback: true,
     });
   });
 });
-
 describe("ClaudeAdapterV2 MCP query overrides", () => {
   const GOAT_MCP_SERVERS = {
     goat: {
@@ -487,7 +464,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     },
   } as const;
   const GOAT_MCP_ENVIRONMENT = { NO_PROXY: "127.0.0.1" } as const;
-
   const mcpSessionFor = (
     threadId: ThreadId,
     authorizationHeader = "Bearer secret-claude-token",
@@ -500,11 +476,9 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     authorizationHeader,
     browserToolsAvailable: true,
   });
-
   it("keeps the goat endpoint off any configured proxy without dropping existing exemptions", () => {
     const bypass = ClaudeAdapterV2.claudeMcpProxyBypassEnvironment;
     const endpoint = "http://127.0.0.1:43123/mcp";
-
     assert.deepEqual(bypass(endpoint, {}), { NO_PROXY: "127.0.0.1" });
     assert.deepEqual(bypass(endpoint, { NO_PROXY: "corp.internal, .example.com" }), {
       NO_PROXY: "corp.internal,.example.com,127.0.0.1",
@@ -516,7 +490,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     assert.deepEqual(bypass(endpoint, { NO_PROXY: "localhost,127.0.0.1" }), {});
     assert.deepEqual(bypass(endpoint, { NO_PROXY: "*" }), {});
     assert.deepEqual(bypass("http://[::1]:43123/mcp", {}), { NO_PROXY: "::1" });
-
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
       mcpSession: mcpSessionFor(ThreadId.make("thread-claude-mcp-proxy-bypass")),
       readOnlySandbox: false,
@@ -524,7 +497,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     });
     assert.deepEqual(overrides.mcpEnvironment, { NO_PROXY: "corp.internal,127.0.0.1" });
   });
-
   it("pre-approves all goat tools when attaching an MCP session without an allowlist", () => {
     const threadId = ThreadId.make("thread-claude-mcp-no-allowlist");
     const mcpSession = mcpSessionFor(threadId);
@@ -532,14 +504,12 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       mcpSession,
       readOnlySandbox: false,
     });
-
     assert.deepEqual(overrides, {
       allowedTools: [ClaudeAdapterV2.CLAUDE_GOAT_MCP_TOOL_WILDCARD],
       mcpServers: GOAT_MCP_SERVERS,
       mcpEnvironment: GOAT_MCP_ENVIRONMENT,
     });
   });
-
   it("takes the cua-driver name for an unattended turn without a lease, approving nothing", () => {
     const mcpSession = {
       ...mcpSessionFor(ThreadId.make("thread-claude-cua-blocked")),
@@ -558,7 +528,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       ClaudeAdapterV2.CLAUDE_GOAT_MCP_TOOL_WILDCARD,
     ]);
   });
-
   it("routes a leased turn's cua-driver name to GOAT's proxy", () => {
     const proxy: M.CuaDriverMcpConfiguration = {
       command: "/goat/node",
@@ -850,23 +819,6 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
   });
 });
 
-describe("ClaudeAdapterV2 context usage", () => {
-  it("dates cache expiry from the request start, not the response end", () => {
-    const usage = ClaudeAdapterV2.claudeProviderTurnTokenUsage(
-      {
-        input_tokens: 1,
-        output_tokens: 1,
-        cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 300 },
-      },
-      CLAUDE_TEST_MODEL_SELECTION,
-      "2026-08-29T00:03:00.000Z",
-      "",
-      DateTime.makeUnsafe("2026-08-29T00:00:00.000Z"),
-    );
-    assert.strictEqual(usage.promptCacheExpiresAt, "2026-08-29T00:05:00.000Z");
-  });
-});
-
 describe("ClaudeAdapterV2 Auto-accept edits", () => {
   it.effect("asks before a command instead of allowing it", () =>
     Effect.scoped(
@@ -985,23 +937,6 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
     ),
   );
 });
-describe("ClaudeAdapterV2 approval cancellation", () => {
-  it.effect("observes an approval signal that was already aborted", () =>
-    Effect.gen(function* () {
-      const decision = yield* Deferred.make<{
-        decision: ProviderApprovalDecision;
-        feedback?: string;
-      }>();
-      const result = yield* ClaudeAdapterV2.awaitClaudeApprovalDecision(
-        decision,
-        AbortSignal.abort(),
-      );
-
-      assert.deepEqual(result, { decision: "cancel" });
-    }),
-  );
-});
-
 describe("ClaudeAdapterV2 MCP elicitation acceptance", () => {
   const form = (
     properties: Record<string, unknown>,
@@ -1706,7 +1641,7 @@ describe("ClaudeAdapterV2 attachments", () => {
             yield* deliver;
             const retried = offeredMessages.at(-1)!.message.content;
             assert.notInclude(JSON.stringify(retried), '"type":"document"');
-            assert.include(JSON.stringify(retried), documentPath);
+            assert.include(JSON.stringify(retried), JSON.stringify(documentPath).slice(1, -1));
             assert.isBelow(Buffer.byteLength(JSON.stringify(offeredMessages)), 32_000_000);
             return;
           }
@@ -1755,7 +1690,7 @@ describe("ClaudeAdapterV2 attachments", () => {
                 typeof sent === "string" ? [] : sent.filter((block) => block.type === "image"),
                 budget === "partial-images" ? 1 : 0,
               );
-              assert.include(JSON.stringify(sent), imagePath);
+              assert.include(JSON.stringify(sent), JSON.stringify(imagePath).slice(1, -1));
               yield* runtime.steerTurn({
                 threadId,
                 runId: RunId.make("run-claude-attachments"),
@@ -1774,7 +1709,7 @@ describe("ClaudeAdapterV2 attachments", () => {
                   : steered.filter((block) => block.type === "image"),
                 0,
               );
-              assert.include(JSON.stringify(steered), imagePath);
+              assert.include(JSON.stringify(steered), JSON.stringify(imagePath).slice(1, -1));
               assert.isBelow(
                 Buffer.byteLength(
                   JSON.stringify(offeredMessages.map((message) => message.message)),
@@ -1836,7 +1771,7 @@ describe("ClaudeAdapterV2 attachments", () => {
               0,
               budget,
             );
-            assert.include(JSON.stringify(sent), documentPath);
+            assert.include(JSON.stringify(sent), JSON.stringify(documentPath).slice(1, -1));
             return;
           }
           if (!resumed) {
@@ -2049,7 +1984,7 @@ describe("ClaudeAdapterV2 attachments", () => {
             );
             if (scenario === "text-only")
               assert.equal(sent, ultrathink ? "Ultrathink:\nContinue." : "Continue.");
-            else assert.include(JSON.stringify(sent), documentPath);
+            else assert.include(JSON.stringify(sent), JSON.stringify(documentPath).slice(1, -1));
           }
         }).pipe(Effect.provide(layerAdapterTest)),
       ),
@@ -2718,6 +2653,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly subagentLaunchToolUseId?: string;
     readonly nativeSessionId?: string;
     readonly settings?: ClaudeSettings;
+    readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
     readonly freshQueueOnReopen?: boolean;
     readonly setPermissionMode?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["setPermissionMode"];
     readonly forkSession?: ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerShape["forkSession"];
@@ -2769,6 +2705,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
         instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
         settings: options?.settings ?? DEFAULT_CLAUDE_SETTINGS,
+        ...(options?.modelCatalog ? { modelCatalog: options.modelCatalog } : {}),
         environment: options?.environment ?? {},
         attachmentsDir,
         fileSystem,
@@ -4075,8 +4012,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.isUndefined(yield* openedToolSearch('{"env":{"ENABLE_TOOL_SEARCH":"false"}}'));
       assert.isUndefined(yield* openedToolSearch("{}"));
 
-      // Claude Code keeps the local file at the repository root, the main checkout's root in a
-      // worktree, and that file beats the user's settings.
+      // Local settings resolve from the repository root on POSIX, and cwd on Windows.
       const repo = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-repo-" });
       const worktree = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-wt-" });
       const worktreeGitDir = path.join(repo, ".git", "worktrees", "wt");
@@ -4091,11 +4027,21 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           `{"env":{"ENABLE_TOOL_SEARCH":"${value}"}}`,
         );
       const userAuto = '{"env":{"ENABLE_TOOL_SEARCH":"auto"}}';
+      const platform = yield* HostProcess.Platform;
       yield* rootLocal("auto");
-      assert.equal(yield* openedToolSearch("{}", worktree), "true");
+      assert.equal(
+        yield* openedToolSearch("{}", worktree),
+        platform === "win32" ? undefined : "true",
+      );
       yield* rootLocal("false");
-      assert.isUndefined(yield* openedToolSearch(userAuto, worktree));
-      assert.isUndefined(yield* openedToolSearch(userAuto, path.join(repo, "packages", "app")));
+      assert.equal(
+        yield* openedToolSearch(userAuto, worktree),
+        platform === "win32" ? "true" : undefined,
+      );
+      assert.equal(
+        yield* openedToolSearch(userAuto, path.join(repo, "packages", "app")),
+        platform === "win32" ? "true" : undefined,
+      );
 
       // Project settings beat user settings, and the process env applies only when no file sets it.
       const project = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-project-" });
@@ -4659,7 +4605,28 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const harness = yield* makeWakeHarness;
+          let catalog: ClaudeModelCatalog = {
+            models: BUNDLED_CLAUDE_MODEL_CATALOG.models.map((entry) =>
+              entry.model.slug !== "claude-opus-5-5"
+                ? entry
+                : {
+                    ...entry,
+                    model: {
+                      ...entry.model,
+                      capabilities: {
+                        ...entry.model.capabilities,
+                        optionDescriptors:
+                          entry.model.capabilities?.optionDescriptors?.filter(
+                            (option) => option.id !== "ultracode",
+                          ) ?? [],
+                      },
+                    },
+                  },
+            ),
+          };
+          const harness = yield* makeWakeHarnessWithOptions({
+            modelCatalog: Effect.sync(() => catalog),
+          });
           const now = yield* DateTime.now;
           const normal = {
             instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
@@ -4693,11 +4660,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           yield* settle;
           assert.deepEqual(harness.liveSelectionChanges, []);
 
+          catalog = BUNDLED_CLAUDE_MODEL_CATALOG;
           yield* harness.runtime.startTurn(
             turn(3, {
               ...normal,
               options: [
-                { id: "effort", value: "ultracode" },
+                { id: "effort", value: "high" },
+                { id: "ultracode", value: true },
                 { id: "fastMode", value: true },
               ],
             }),
@@ -4706,7 +4675,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           yield* harness.runtime.startTurn(turn(4, { ...normal, model: "claude-sonnet-4-6" }));
           yield* settle;
           assert.deepEqual(harness.liveSelectionChanges, [
-            { effortLevel: "xhigh", fastMode: true, ultracode: true },
+            { effortLevel: "high", fastMode: true, ultracode: true },
             { model: "claude-sonnet-4-6" },
             { effortLevel: "high", fastMode: null, ultracode: null },
           ]);
@@ -5588,9 +5557,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
   it.effect("never records a subagent uuid for a turn with no main-thread assistant message", () =>
     Effect.gen(function* () {
+      const forkCalls: Array<ClaudeAdapterV2.ClaudeAgentSdkSessionForkInput> = [];
       const harness = yield* makeWakeHarnessWithOptions({
         close: (sdkMessages) => Queue.shutdown(sdkMessages),
         freshQueueOnReopen: true,
+        forkSession: (input) =>
+          Effect.sync(() => {
+            forkCalls.push(input);
+            return { sessionId: "forked-after-compact-rollback" };
+          }),
       });
       const now = yield* DateTime.now;
       const subagentUuid = "00000000-0000-4000-8000-000000000644";
@@ -5646,31 +5621,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.instanceOf(error, ProviderAdapter.ProviderAdapterRollbackThreadError);
       assert.include(String(error.cause), "no SDK assistant message cursor");
       const earlierCursor = "00000000-0000-4000-8000-000000000648";
-      const turnsAcrossSilent = [
-        {
-          ...providerTurn,
-          id: ProviderTurnId.make("provider-turn-claude-cursor-earlier"),
-          ordinal: providerTurn.ordinal - 1,
-          nativeTurnRef: {
-            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-            nativeId: earlierCursor,
-            strength: "weak",
-          },
-        },
+      const turnsAcrossSilent = makeTurnsAcrossSilent(
         providerTurn,
-        {
-          ...providerTurn,
-          id: ProviderTurnId.make("provider-turn-claude-cursor-next"),
-          ordinal: providerTurn.ordinal + 1,
-        },
-      ] satisfies ReadonlyArray<typeof providerTurn>;
+        earlierCursor,
+        ClaudeAdapterV2.CLAUDE_PROVIDER,
+      );
       const semanticError = yield* rollbackTo(turnsAcrossSilent).pipe(Effect.flip);
       assert.instanceOf(semanticError, ProviderAdapter.ProviderAdapterRollbackThreadError);
       const pastSilentTurn = yield* rollbackTo(turnsAcrossSilent, "/compact");
-      assert.equal(
-        pastSilentTurn.providerThread.nativeConversationHeadRef?.nativeId,
-        earlierCursor,
-      );
+      assertPinnedHead(pastSilentTurn.providerThread, earlierCursor);
+      // Forks omit rolled-back turns, which Claude's transcript still holds past the pinned head.
+      yield* harness.runtime.forkThread({
+        sourceProviderThread: pastSilentTurn.providerThread,
+        sourceProviderTurns: turnsAcrossSilent.slice(0, 2),
+        providerTurnId: providerTurn.id,
+        targetThreadId: ThreadId.make("thread-claude-fork-after-compact-rollback"),
+      });
+      assert.equal(forkCalls[0]?.options.upToMessageId, earlierCursor);
       const interruptedBeforeCompact = yield* rollbackTo(
         [
           {
@@ -6400,6 +6367,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           providerThread: harness.providerThread,
           now: yield* DateTime.now,
           attemptId: RunAttemptId.make("attempt-zero-start-usage"),
+          modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "gateway-model" },
           text: "Continue.",
           attachments: [],
         }),
@@ -6436,12 +6404,33 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           delta: { stop_reason: "end_turn", stop_sequence: null },
           usage: { input_tokens: null, output_tokens: 12 },
         }),
-        makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000673", result: "Done." }),
+        usageStreamFrame({
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { input_tokens: 37_939, output_tokens: 12 },
+        }),
+        claudeSdkFrame({
+          ...makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000673", result: "Done." }),
+          modelUsage: { "gateway-model": { contextWindow: 1_048_576 } },
+        }),
       ];
       for (const frame of frames) yield* Queue.offer(harness.sdkMessages, frame);
       const terminal = yield* Queue.take(harness.terminalReceipts);
       assert.equal(terminal.status, "completed");
-      assert.deepEqual(reportedContextTokens(harness.events), [38_123]);
+      assert.deepEqual(reportedContextTokens(harness.events), [38_123, 37_951, 37_951]);
+      assert.equal(
+        harness.runtime.getModelContextWindow?.({
+          ...CLAUDE_TEST_MODEL_SELECTION,
+          model: "gateway-model",
+        }),
+        1_048_576,
+      );
+      const updates = harness.events.flatMap((event) =>
+        event.type === "provider_turn.updated" && event.providerTurn.tokenUsage
+          ? [event.providerTurn.tokenUsage.maxTokens]
+          : [],
+      );
+      assert.deepEqual(updates, [null, null, 1_048_576]);
     }).pipe(Effect.provide(layerAdapterTest)),
   );
 

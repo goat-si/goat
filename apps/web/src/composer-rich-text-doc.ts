@@ -1,3 +1,4 @@
+import { styledEdge, touchesMarkdownSource } from "./composerMarkdownSourceHelpers";
 import { joinTextblockBackward, joinTextblockForward } from "@tiptap/pm/commands";
 import {
   Fragment,
@@ -90,6 +91,7 @@ function codePairCaretPlugin(type: MarkType) {
         if (view.composing || from !== to || text !== "`") return false;
         const $from = view.state.doc.resolve(from);
         if (!$from.parent.isTextblock || $from.parent.type.spec.code) return false;
+        if (touchesMarkdownSource(view.state, from, to)) return false;
         const before = $from.nodeBefore?.text ?? "";
         if (closesBacktickPair($from)) {
           view.dispatch(insert().setMeta(codePairKey, { from: from - 1, to: from + 1 }));
@@ -218,7 +220,10 @@ export const ComposerCodeExtension = Code.extend({
           find: rule.find,
           undoable: rule.undoable,
           handler: (props) => {
-            if (literalBackticksBefore(props.state.doc.resolve(props.range.from)) % 2 === 1) {
+            if (
+              literalBackticksBefore(props.state.doc.resolve(props.range.from)) % 2 === 1 ||
+              touchesMarkdownSource(props.state, props.range.from, props.range.to)
+            ) {
               return null;
             }
 
@@ -257,6 +262,7 @@ function markInputRuleOutsideCode(find: RegExp, type: MarkType) {
       const content = match[match.length - 1] ?? "";
       const textStart = range.from + match[0].indexOf(content);
       const textEnd = textStart + content.length;
+      if (touchesMarkdownSource(state, range.from, range.to)) return null;
       if (
         code &&
         (state.doc.rangeHasMark(range.from + match[0].search(/\S/), textStart, code) ||
@@ -1206,7 +1212,8 @@ function renumberFollowingItems(
   });
 }
 
-export function splitOrLiftListItem(editor: Editor): boolean {
+/** `prepare` runs first in the same transaction, which the split then reads. */
+export function splitOrLiftListItem(editor: Editor, prepare: Command): boolean {
   const $from = editor.state.selection.$from;
   const itemType = listItemTypeAt($from);
   if (!itemType) return false;
@@ -1221,7 +1228,7 @@ export function splitOrLiftListItem(editor: Editor): boolean {
     if (moved) alignListItemWithSiblings(tr, itemType);
     return moved;
   };
-  return editor.can().command(move) && editor.chain().command(move).run();
+  return editor.can().command(move) && editor.chain().command(prepare).command(move).run();
 }
 
 export function convertBulletItemToTask(
@@ -1638,17 +1645,6 @@ export function pmToFlat(map: RichDocMap, pmPos: number): number {
 }
 
 // Styled boundaries need two caret stops at one position, one for each side's marks.
-
-function styledEdge(state: EditorState) {
-  const { selection } = state;
-  if (!selection.empty) return null;
-  const { $from } = selection;
-  if (!$from.parent.inlineContent) return null;
-  const before = $from.nodeBefore?.marks ?? Mark.none;
-  const after = $from.nodeAfter?.marks ?? Mark.none;
-  if (Mark.sameSet(before, after)) return null;
-  return { before, after, current: state.storedMarks ?? $from.marks() };
-}
 
 export function caretTakesMarksBefore(state: EditorState): boolean {
   const edge = styledEdge(state);

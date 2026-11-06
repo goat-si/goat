@@ -35,6 +35,7 @@ const forkCases = (
   [
     ["codex", "interrupted"],
     ["claudeAgent", "failed"],
+    ["codex", "completed"],
   ] as const
 ).map(([driverName, status]) => {
   const driver = ProviderDriverKind.make(driverName);
@@ -427,6 +428,7 @@ it.effect.each(forkCases)(
         sourceThreadId,
         targetThreadId,
         sourcePoint: { type: "run", runId: sourceRunId },
+        ...(status === "completed" ? { sideChat: true } : {}),
         createdBy: "user",
         creationSource: "web",
       });
@@ -437,12 +439,19 @@ it.effect.each(forkCases)(
         messageId: MessageId.make("continue-fork"),
         text: "Continue from the selected source run",
         attachments: [],
-        modelSelection,
+        modelSelection:
+          status === "completed" ? { ...modelSelection, model: "other-model" } : modelSelection,
         dispatchMode: { type: "start_immediately" },
         createdBy: "user",
         creationSource: "web",
       });
       const target = yield* orchestrator.getThreadProjection(targetThreadId);
+      if (status === "completed") {
+        assert.isFalse(
+          target.turnItems.some((item) => item.type === "user_message" && item.modelSwitch),
+        );
+        return;
+      }
       assert.equal(target.contextTransfers[0]?.resolution?.strategy, "portable_context");
       assert.lengthOf(target.contextHandoffs, 1);
       const handoff = target.contextHandoffs[0]!;

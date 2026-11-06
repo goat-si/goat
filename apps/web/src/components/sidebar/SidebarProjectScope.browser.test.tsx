@@ -1,5 +1,5 @@
 import { EnvironmentId, ProjectId, ProviderInstanceId } from "@goat/contracts";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -37,11 +37,10 @@ const groups = buildSidebarProjectSnapshots({
 
 function ScopeFixture({ projectGroups = groups }: { projectGroups?: typeof groups }) {
   const [keys, setKeys] = useState<readonly string[]>([]);
-  const anchor = useRef<HTMLDivElement>(null);
   return (
     <TooltipProvider>
       <SidebarProvider>
-        <div ref={anchor}>
+        <div>
           <SidebarProjectScope
             projectGroups={projectGroups}
             scopedProjectGroups={projectGroups.filter((group) => keys.includes(group.projectKey))}
@@ -51,7 +50,6 @@ function ScopeFixture({ projectGroups = groups }: { projectGroups?: typeof group
             showProjectEnvironments={false}
             primaryEnvironmentId={environmentId}
             environmentMachineById={new Map()}
-            headerSearchRef={anchor}
           />
         </div>
       </SidebarProvider>

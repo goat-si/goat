@@ -66,7 +66,7 @@ export function makeConnectedLeaseMonitor<
   };
   const checkReplacement = Effect.fn("EnvironmentSupervisor.checkReplacement")(function* (
     lease: ConnectionDriver.EnvironmentConnectionLease,
-    event: { readonly at: bigint; readonly frames: number },
+    event: { readonly at: bigint; readonly frames: number; readonly longResume: boolean },
   ) {
     return yield* Effect.scoped(
       Effect.gen(function* () {
@@ -76,7 +76,8 @@ export function makeConnectedLeaseMonitor<
         const answered = yield* Effect.exit(opened.value.probe.pipe(Effect.timeout("15 seconds")));
         if (Exit.isFailure(answered)) return false;
         const rtt = (yield* Clock.monotonicTimeNanos) - sentAt;
-        const quiet = rtt * 2n > 5_000_000_000n ? rtt * 2n : 5_000_000_000n;
+        const minimumQuiet = event.longResume ? 1_500_000_000n : 5_000_000_000n;
+        const quiet = rtt * 2n > minimumQuiet ? rtt * 2n : minimumQuiet;
         const remaining = event.at + quiet - (yield* Clock.monotonicTimeNanos);
         if (remaining > 0n) yield* Effect.sleep(Duration.nanos(remaining));
         yield* opened.value.drainIo;
@@ -142,7 +143,13 @@ export function makeConnectedLeaseMonitor<
         if (replacement) yield* Fiber.interrupt(replacement);
         const at = yield* Clock.monotonicTimeNanos;
         const frames = yield* lease.session.inboundFrames;
-        replacement = yield* Effect.forkChild(checkReplacement(lease, { at, frames }));
+        replacement = yield* Effect.forkChild(
+          checkReplacement(lease, {
+            at,
+            frames,
+            longResume: next._tag === "Wakeup" && next.reason === "application-active-long",
+          }),
+        );
       }
       const timeout = probeTimeoutFor(next, routeKind);
       if (timeout !== undefined) {

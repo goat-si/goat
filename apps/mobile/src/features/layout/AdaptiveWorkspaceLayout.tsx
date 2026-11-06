@@ -47,6 +47,7 @@ import type { ThreadListFilters } from "../../persistence/mobile-preferences";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useProjects } from "../../state/entities";
 import { environmentThreadShells } from "../../state/threads";
+import { withKnownPullRequestSummary } from "../../state/use-thread-pr";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import {
   DEFAULT_MOBILE_PROJECT_GROUPING_SETTINGS,
@@ -489,6 +490,7 @@ function AdaptiveWorkspaceLayoutContent(
         columns: Platform.OS === "ios" && (options?.columns ?? layout.usesSplitView),
         check: workspaceSelectionCheck,
         overlays,
+        seedPullRequest: withKnownPullRequestSummary,
       },
     );
     if (layout.primarySidebarOverlaysContent) {

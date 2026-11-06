@@ -81,6 +81,15 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
             <NativeHeader
               backgroundColor="rgba(0,0,0,0)"
               tintColorClassName="accent-foreground"
+              headerRightBarButtonItems={[
+                {
+                  type: "button",
+                  icon: { name: "xmark", type: "sfSymbol" },
+                  accessibilityLabel: "Close background work",
+                  identifier: "thread-background-work-close",
+                  onPress: () => navigation.goBack(),
+                },
+              ]}
               hideBackButton
               hideShadow={false}
               title="Background work"

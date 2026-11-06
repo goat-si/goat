@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 
 export const SecretProviderSlug = TrimmedNonEmptyString.check(
   Schema.isMaxLength(64),
@@ -19,3 +19,10 @@ const ONE_PASSWORD_REFERENCE = new RegExp(
 );
 export const isOnePasswordReference = (value: string): boolean =>
   value.length <= 1024 && ONE_PASSWORD_REFERENCE.test(value);
+
+export const SettingsSecretValue = Schema.Union([TrimmedString, SecretReference]);
+export type SettingsSecretValue = typeof SettingsSecretValue.Type;
+export function settingsSecretLiteral(value: SettingsSecretValue): string {
+  if (typeof value !== "string") throw new Error("Secret reference has not been resolved");
+  return value;
+}

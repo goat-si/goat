@@ -1,3 +1,4 @@
+import { createClaudeReportedContext } from "../../provider/ClaudeReportedContext.ts";
 import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
 import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
 import { makeClaudeAssistantTextProjector } from "./ClaudeAssistantText.ts";
@@ -55,7 +56,6 @@ import {
   mergeClaudeWorkflowProgress,
   parseClaudeWorkflowRunHandles,
 } from "./claudeWorkflowProgress.ts";
-
 import { isWorkspaceImagePreviewPath } from "@goat/shared/filePreview";
 import { mcpToolResultWithRawImages } from "@goat/shared/toolOutput";
 import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
@@ -142,7 +142,6 @@ import {
   type ThreadId,
   resolveIdleCompaction,
 } from "@goat/contracts";
-
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -165,7 +164,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import {
@@ -249,30 +247,24 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
-
 export { claudeApprovalPresentation, permissionResultFromDecision };
-
 export const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const;
-
 function claudeContextWindow(modelSelection: ModelSelection): number | null {
   return (
     resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, modelSelection) ?? null
   );
 }
-
 // Claude caps the window at the model's context, so a setting at or above it never applies.
 // Below that, Claude compacts 33,000 tokens short of the window: Claude Code 2.1.305's
 // getContextUsage reports a 150,000 window as a 117,000 threshold, for every catalog model.
 const CLAUDE_AUTO_COMPACT_RESERVE_TOKENS = 33_000;
-
 function claudeAutoCompactThreshold(autoCompactWindow: string, maxTokens: number | null) {
   const windowTokens = Number(autoCompactWindow);
   return windowTokens > 0 && (maxTokens === null || windowTokens < maxTokens)
     ? { autoCompactThreshold: windowTokens - CLAUDE_AUTO_COMPACT_RESERVE_TOKENS }
     : {};
 }
-
 function claudeMessageInputTokens(usage: {
   readonly input_tokens: number;
   readonly cache_creation_input_tokens?: number | null;
@@ -284,7 +276,6 @@ function claudeMessageInputTokens(usage: {
     (usage.cache_read_input_tokens ?? 0)
   );
 }
-
 export function claudeProviderTurnTokenUsage(
   usage: {
     readonly input_tokens: number;
@@ -297,11 +288,12 @@ export function claudeProviderTurnTokenUsage(
   updatedAt: string,
   autoCompactWindow = "",
   requestedAt?: DateTime.Utc,
+  reportedMaxTokens?: number | null,
 ) {
   const inputTokens = claudeMessageInputTokens(usage);
   const outputTokens = usage.output_tokens;
   const promptCacheTtlMs = claudePromptCacheTtlMs(usage.cache_creation);
-  const maxTokens = claudeContextWindow(modelSelection);
+  const maxTokens = reportedMaxTokens ?? claudeContextWindow(modelSelection) ?? null;
   // The cache lifetime starts with the request, not when its response ends.
   const promptCacheExpiresAt =
     promptCacheTtlMs === undefined || requestedAt === undefined
@@ -320,9 +312,7 @@ export function claudeProviderTurnTokenUsage(
     updatedAt,
   };
 }
-
 type ClaudeMessageUsage = Parameters<typeof claudeProviderTurnTokenUsage>[0];
-
 // message_delta usage is per-message cumulative; null or absent fields retain message_start values and zeros replace them.
 function mergeClaudeStreamUsage(
   current: ClaudeMessageUsage,
@@ -362,7 +352,6 @@ const BACKGROUND_MOVE_TIMEOUT_MS = 5_000;
 const CLAUDE_STOP_CONFIRM_TIMEOUT_MS = 10_000;
 const CLAUDE_ROOT_REFUSAL =
   "--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons";
-
 export const ClaudeProviderCapabilitiesV2 = {
   sessions: {
     supportsMultipleProviderThreadsPerSession: false,
@@ -457,21 +446,17 @@ export const ClaudeProviderCapabilitiesV2 = {
     enforcement: "native",
   },
 } satisfies OrchestrationV2ProviderCapabilities;
-
 const CLAUDE_CODE_PRESET_TOOLS = {
   type: "preset",
   preset: "claude_code",
 } satisfies NonNullable<ClaudeQueryOptions["tools"]>;
-
 export type ClaudeAgentSdkQueryToolList = ReadonlyArray<string>;
 export interface ClaudeAgentSdkQueryPresetTools {
   readonly type: "preset";
   readonly preset: "claude_code";
 }
 export type ClaudeAgentSdkQueryTools = ClaudeAgentSdkQueryToolList | ClaudeAgentSdkQueryPresetTools;
-
 export const CLAUDE_READ_ONLY_ALLOWED_TOOLS = ["Read", "Glob", "Grep"] as const;
-
 function claudeAgentSdkQueryToolsForSdk(
   tools: ClaudeAgentSdkQueryTools,
 ): NonNullable<ClaudeQueryOptions["tools"]> {
@@ -480,13 +465,11 @@ function claudeAgentSdkQueryToolsForSdk(
   }
   return { type: tools.type, preset: tools.preset };
 }
-
 function isClaudeAgentSdkQueryToolList(
   tools: ClaudeAgentSdkQueryTools,
 ): tools is ClaudeAgentSdkQueryToolList {
   return Array.isArray(tools);
 }
-
 type ClaudeAgentSdkThreadIdentity =
   | {
       readonly sessionId: string;
@@ -496,7 +479,6 @@ type ClaudeAgentSdkThreadIdentity =
       readonly sessionId?: never;
       readonly resume: string;
     };
-
 export type ClaudeAgentSdkQueryOptions = Omit<
   ClaudeQueryOptions,
   "maxTurns" | "model" | "permissionMode" | "resume" | "sessionId" | "tools"
@@ -1438,6 +1420,7 @@ function parseClaudeInteger(text: string): number {
 
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
+  readonly modelCatalog?: ClaudeModelCatalog;
   readonly nativeThreadId: string;
   readonly title?: string;
   readonly resume: boolean;
@@ -1464,7 +1447,7 @@ export function makeClaudeQueryOptions(input: {
   readonly flagEnvironment?: Readonly<Record<string, string>>;
   readonly toolSearchOverride?: "true";
 }): ClaudeAgentSdkQueryOptions {
-  const compiledSelection = compileClaudeModelSelection(input.modelSelection);
+  const compiledSelection = compileClaudeModelSelection(input.modelSelection, input.modelCatalog);
   const {
     // claudeLaunchArgDirectories reads every --add-dir into additionalDirectories.
     "add-dir": _launchArgAddDir,
@@ -1982,7 +1965,7 @@ const resolveClaudeForkUpToMessageId = Effect.fn("ClaudeAdapterV2.resolveForkUpT
       .slice(boundaryIndex + 1)
       .filter(isTerminalProviderTurn);
     if (terminalTurnsAfterBoundary.length === 0) {
-      return undefined;
+      return yield* getNativeConversationHeadId(input.sourceProviderThread);
     }
 
     return yield* new ProviderAdapter.ProviderAdapterForkThreadError({
@@ -4340,6 +4323,7 @@ export interface ClaudeAdapterV2Options {
   }>;
   readonly instanceId: ProviderInstanceId;
   readonly settings: ClaudeSettings;
+  readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
   readonly environment: NodeJS.ProcessEnv;
   /** The Claude CLI's version; read from the configured binary when absent. */
   readonly claudeCliVersion?: Effect.Effect<string | undefined>;
@@ -4393,10 +4377,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
   const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const { attachmentsDir, fileSystem, path, crypto, idAllocator, queryRunner } = adapterOptions;
-  const subagentModelCatalog = scopeClaudeModelCatalog(
-    BUNDLED_CLAUDE_MODEL_CATALOG,
-    adapterOptions.settings.customModels,
+  const loadModelCatalog = (
+    adapterOptions.modelCatalog ?? Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG)
+  ).pipe(
+    Effect.map((catalog) => scopeClaudeModelCatalog(catalog, adapterOptions.settings.customModels)),
   );
+  let modelCatalog = yield* loadModelCatalog;
+  const reportedContext = createClaudeReportedContext();
+  const resolveContextWindow = (selection: ModelSelection) =>
+    resolveClaudeCatalogContextWindowTokens(modelCatalog, selection) ??
+    reportedContext.get(compileClaudeModelSelection(selection, modelCatalog).apiModelId) ??
+    null;
   const continuationRequests = adapterOptions.continuationRequests ?? {
     offer: () => Effect.void,
   };
@@ -4956,24 +4947,42 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
         });
 
+        const lastContextUsage = new WeakMap<
+          ActiveClaudeTurnContext,
+          ClaudeMessageUsage | number
+        >();
         // Usage without input is a placeholder, not a context measurement.
         const emitContextUsage = Effect.fnUntraced(function* (
           context: ActiveClaudeTurnContext,
-          usage: ClaudeMessageUsage,
+          usage: ClaudeMessageUsage | number,
           requestStarted = false,
         ) {
           const now = yield* DateTime.now;
           // Only message_start marks the request start; an assistant snapshot
           // arrives after generation, so it leaves the cache expiry unknown.
           if (requestStarted && context.streamUsage !== null) context.streamUsage.requestedAt = now;
-          const tokenUsage = claudeProviderTurnTokenUsage(
-            usage,
-            context.input.modelSelection,
-            DateTime.formatIso(now),
-            adapterOptions.settings.autoCompactWindow,
-            context.streamUsage?.requestedAt,
-          );
-          if (tokenUsage.inputTokens <= 0) return;
+          const maxTokens = resolveContextWindow(context.input.modelSelection);
+          const tokenUsage =
+            typeof usage === "number"
+              ? {
+                  usedTokens: usage,
+                  maxTokens,
+                  ...claudeAutoCompactThreshold(
+                    adapterOptions.settings.autoCompactWindow,
+                    maxTokens,
+                  ),
+                  updatedAt: DateTime.formatIso(now),
+                }
+              : claudeProviderTurnTokenUsage(
+                  usage,
+                  context.input.modelSelection,
+                  DateTime.formatIso(now),
+                  adapterOptions.settings.autoCompactWindow,
+                  context.streamUsage?.requestedAt,
+                  maxTokens,
+                );
+          if (typeof usage !== "number" && claudeMessageInputTokens(usage) <= 0) return;
+          lastContextUsage.set(context, usage);
           yield* emitProviderEvent({
             type: "provider_turn.updated",
             driver: CLAUDE_PROVIDER,
@@ -6339,7 +6348,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             existingSubagent === undefined
               ? (input.effort ??
                 input.owner?.effort ??
-                compileClaudeModelSelection(input.context.input.modelSelection).effort)
+                compileClaudeModelSelection(input.context.input.modelSelection, modelCatalog)
+                  .effort)
               : existingSubagent.effort;
           const model = input.model ?? priorTask?.model ?? null;
           const task = {
@@ -6377,7 +6387,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...(existingSubagent === undefined || existingSubagent.task.modelSelection !== undefined
               ? {
                   modelSelection: claudeSubagentModelSelection(
-                    subagentModelCatalog,
+                    modelCatalog,
                     input.context.input.modelSelection.instanceId,
                     model || input.context.input.modelSelection.model,
                     effort,
@@ -8393,6 +8403,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const event = message.event;
             const reasoning = context.reasoning;
             if (event.type === "message_start") {
+              lastContextUsage.delete(context);
               reasoning.messageId = event.message.id;
               reasoning.streamBlocks.clear();
               const usage: ClaudeMessageUsage | undefined = event.message.usage;
@@ -8640,43 +8651,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               yield* persistAttachmentBudget(context.nativeThreadId);
             }
             if (context.streamUsage !== null) context.streamUsage.usage = null;
+            lastContextUsage.delete(context);
             const postTokens = message.compact_metadata.post_tokens;
             const afterTokenCount =
               typeof postTokens === "number" && Number.isFinite(postTokens) && postTokens > 0
                 ? Math.round(postTokens)
                 : undefined;
-            if (afterTokenCount !== undefined) {
-              const maxTokens = claudeContextWindow(context.input.modelSelection);
-              yield* emitProviderEvent({
-                type: "provider_turn.updated",
-                driver: CLAUDE_PROVIDER,
-                threadId: context.input.threadId,
-                providerTurn: {
-                  id: context.providerTurnId,
-                  providerThreadId: context.input.providerThread.id,
-                  nodeId: context.input.rootNodeId,
-                  runAttemptId: context.input.attemptId,
-                  nativeTurnRef: {
-                    driver: CLAUDE_PROVIDER,
-                    nativeId: context.nativeTurnId,
-                    strength: "strong",
-                  },
-                  ordinal: context.providerTurnOrdinal,
-                  status: "running",
-                  startedAt: context.startedAt,
-                  completedAt: null,
-                  tokenUsage: {
-                    usedTokens: afterTokenCount,
-                    maxTokens,
-                    ...claudeAutoCompactThreshold(
-                      adapterOptions.settings.autoCompactWindow,
-                      maxTokens,
-                    ),
-                    updatedAt: DateTime.formatIso(now),
-                  },
-                },
-              });
-            }
+            if (afterTokenCount !== undefined) yield* emitContextUsage(context, afterTokenCount);
             yield* emitProviderEvent({
               type: "turn_item.updated",
               driver: CLAUDE_PROVIDER,
@@ -8792,6 +8773,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const snapshotUsage = message.message.usage;
               const stream = context.streamUsage;
               if (stream === null || stream.messageId !== message.message.id) {
+                lastContextUsage.delete(context);
                 context.streamUsage = { messageId: message.message.id, usage: snapshotUsage };
                 yield* emitContextUsage(context, snapshotUsage);
               } else if (
@@ -8813,7 +8795,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const model =
               snapshotModel.length === 0 || snapshotModel === "<synthetic>"
                 ? undefined
-                : canonicalClaudeSubagentModel(subagentModelCatalog, snapshotModel);
+                : canonicalClaudeSubagentModel(modelCatalog, snapshotModel);
             if (parentToolUseId !== null && model !== undefined) {
               const subagent = yield* resolveSubagentByToolUseId(context, parentToolUseId);
               if (subagent === undefined) {
@@ -9135,7 +9117,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const nativeToolInput = claudeNativeToolInputFromUnknown(toolUse.input);
             if (toolUse.name === "Agent") {
               rememberClaudeSubagentLaunch(
-                subagentModelCatalog,
+                modelCatalog,
                 context,
                 pendingSubagentLaunchesByToolUseId,
                 toolUse.id,
@@ -9419,6 +9401,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           if (message.type === "result") {
+            if (reportedContext.record(message.modelUsage)) {
+              const usage = lastContextUsage.get(context);
+              if (usage !== undefined) yield* emitContextUsage(context, usage);
+            }
             const completedAt = yield* DateTime.now;
             const interrupted = (yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
             const wasSteered = (yield* Ref.get(steeredTurns)).has(context.providerTurnId);
@@ -9756,7 +9742,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const startToolCall = toolName !== "Agent" && options?.startToolCall !== false;
           if (toolName === "Agent") {
             rememberClaudeSubagentLaunch(
-              subagentModelCatalog,
+              modelCatalog,
               context,
               pendingSubagentLaunchesByToolUseId,
               nativeRequestId,
@@ -10259,7 +10245,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             : McpProviderSession.cuaDriverKey(
                 cuaServer === undefined ? undefined : mcpSession?.cuaDriver,
               );
-          const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
+          const compiledSelection = compileClaudeModelSelection(
+            turnInput.modelSelection,
+            modelCatalog,
+          );
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
           const existing = yield* Ref.get(queryContext);
           // Continuations drain existing output without prompting; retain the live process regardless of selection.
@@ -10394,6 +10383,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               : subagentPolicy;
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
+            modelCatalog,
             nativeThreadId,
             title: turnInput.appThread.title,
             resume: shouldResume,
@@ -10600,6 +10590,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
         const startTurn = Effect.fn("ClaudeAdapterV2.startTurn")(
           function* (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput, nativeControl = false) {
+            modelCatalog = yield* loadModelCatalog;
             const startedAt = yield* DateTime.now;
             const nativeThreadId = yield* getNativeThreadId(turnInput.providerThread);
             const nativeTurnId = `turn:${turnInput.attemptId}`;
@@ -10658,7 +10649,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 : yield* makeClaudeUserMessageWithAttachments({
                     text: applyClaudePromptEffortPrefix(
                       turnInput.message.text,
-                      compileClaudeModelSelection(turnInput.modelSelection).promptEffort,
+                      compileClaudeModelSelection(turnInput.modelSelection, modelCatalog)
+                        .promptEffort,
                     ),
                     attachments: turnInput.message.attachments,
                     attachmentsDir,
@@ -11096,6 +11088,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
         const steerTurn = Effect.fn("ClaudeAdapterV2.steerTurn")(
           function* (turnInput: ProviderAdapter.ProviderAdapterV2SteerInput) {
+            modelCatalog = yield* loadModelCatalog;
             // Measured from the request, not from when the moves are forked:
             // building the message and the moves can take clock time a timer
             // started later would not count, and the steer would wait past it.
@@ -11126,7 +11119,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const userMessage = yield* makeClaudeUserMessageWithAttachments({
               text: applyClaudePromptEffortPrefix(
                 turnInput.message.text,
-                compileClaudeModelSelection(currentTurn.input.modelSelection).promptEffort,
+                compileClaudeModelSelection(currentTurn.input.modelSelection, modelCatalog)
+                  .promptEffort,
               ),
               attachments: turnInput.message.attachments,
               priority: "now",
@@ -11300,8 +11294,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           driver: CLAUDE_PROVIDER,
           providerSessionId: input.providerSessionId,
           providerSession: session,
-          getModelContextWindow: (selection) =>
-            resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, selection),
+          getModelContextWindow: (selection) => resolveContextWindow(selection) ?? undefined,
           events: Stream.fromEffectRepeat(Queue.take(events)),
           backgroundTasksEndWithProcess: true,
           hasPendingBackgroundWork: Effect.gen(function* () {
@@ -11801,7 +11794,10 @@ export type ClaudeAdapterV2DriverEnv =
 export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
   function* (
     input: ProviderAdapterDriverCreateInput<ClaudeSettings>,
-    hooks: Pick<ClaudeAdapterV2Options, "scopedLimitNames" | "onUsageLimits"> = {},
+    hooks: Pick<
+      ClaudeAdapterV2Options,
+      "scopedLimitNames" | "onUsageLimits" | "modelCatalog" | "mcpCredentialRotations"
+    > = {},
   ) {
     const { instanceId, environment, enabled, config } = input;
     const fileSystem = yield* FileSystem.FileSystem;

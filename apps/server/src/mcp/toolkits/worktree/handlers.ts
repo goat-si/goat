@@ -7,7 +7,6 @@ import {
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as GitWorkflow from "../../../git/GitWorkflowService.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import { readThread, unavailable } from "../../threadAccess.ts";
 import * as Effect from "effect/Effect";
@@ -120,9 +119,13 @@ const handlers = {
           code: "invalid_request",
           message: "The project was not found.",
         });
-      const git = yield* GitWorkflow.GitWorkflowService;
-      return yield* git
-        .listRefs({ ...refs, cwd: thread.worktreePath ?? project.value.workspaceRoot })
+      const service = yield* WorktreeMcpService.WorktreeMcpService;
+      return yield* service
+        .listRefs({
+          ...refs,
+          worktreePath: thread.worktreePath,
+          workspaceRoot: project.value.workspaceRoot,
+        })
         .pipe(Effect.mapError(unavailable));
     }),
   ),

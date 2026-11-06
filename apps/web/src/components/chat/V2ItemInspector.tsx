@@ -196,8 +196,8 @@ interface ToolOutputState {
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }
 
-function ToolOutput(props: ToolOutputState) {
-  const images = props.images.map((resource) => (
+function ToolOutputImages(props: ToolOutputState) {
+  return props.images.map((resource) => (
     <ChatMarkdownAssetImage
       key={resource.index}
       environmentId={props.environmentId}
@@ -207,6 +207,9 @@ function ToolOutput(props: ToolOutputState) {
       onImageExpand={props.onImageExpand}
     />
   ));
+}
+
+function ToolOutput(props: ToolOutputState & { readonly hideImages?: boolean }) {
   const links =
     props.links.length > 0 ? (
       <ul className="space-y-0.5">
@@ -246,12 +249,12 @@ function ToolOutput(props: ToolOutputState) {
     <div className="text-muted-foreground italic">Loading output…</div>
   ) : props.error ? (
     <div className="text-destructive">Couldn&apos;t load output: {props.error}</div>
-  ) : props.empty && images.length === 0 && links === null ? (
+  ) : props.empty && props.images.length === 0 && links === null ? (
     <div className="text-muted-foreground italic">No output.</div>
   ) : null;
   return (
     <>
-      {images}
+      {props.hideImages ? null : <ToolOutputImages {...props} />}
       {links}
       {text}
     </>
@@ -295,6 +298,7 @@ function ToolCallBody(
       footer={failedExit ? `Exit code ${props.exitCode}` : null}
     >
       <div className={cn("space-y-1.5", monoClassName)}>
+        <ToolOutputImages {...props} />
         {command !== null ? (
           <CopyRegion text={commandDisplayText(command)} label="Copy command">
             <ShellCommandLine command={command} />
@@ -321,7 +325,7 @@ function ToolCallBody(
             </div>
           </CopyRegion>
         ) : null}
-        {props.outputSlot ?? <ToolOutput {...props} compact />}
+        {props.outputSlot ?? <ToolOutput {...props} compact hideImages />}
       </div>
     </ToolCallCard>
   );

@@ -1,3 +1,4 @@
+import { piExtensionDisplayName } from "./extensionDisplayName.ts";
 import { contentText } from "./piContentText.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { AgentScope } from "@goat/shared/AgentScope";
@@ -3100,13 +3101,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                     target: { type: "provider_turn", providerTurn: target },
                     providerThreadTurns: sourceTurns,
                   });
-            // CLI --fork uses Pi's own session format and sets the destination cwd. RPC
-            // switch_session/clone alone would retain the source cwd.
+            // CLI --fork sets the destination cwd; RPC switch_session/clone would retain the source cwd.
             const forkLaunch = buildPiRpcLaunch({
               launchArgs: resolvedLaunchArgs.args,
               environment: options.environment,
               mcpSession: undefined,
               extensionPath: undefined,
+              shortLived: true,
               disableExtensions: true,
               disableTools: true,
             });
@@ -3375,13 +3376,6 @@ function piSubagentOutput(result: unknown): string {
     if (text.length > 0) return text;
   }
   return "";
-}
-
-function piExtensionDisplayName(extensionPath: string | undefined): string {
-  if (extensionPath === undefined) return "Pi extension";
-  const normalized = extensionPath.replace(/\\/g, "/").replace(/\/+$/, "");
-  const name = normalized.slice(normalized.lastIndexOf("/") + 1).replace(/\.[^.]+$/, "");
-  return name.length === 0 ? "Pi extension" : name;
 }
 
 function piThreadSnapshot(

@@ -1,3 +1,6 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- hash the unchanged fixture with Node crypto.
+import * as NodeCrypto from "node:crypto";
+import { seedV1Database } from "./LegacyV1Cutover.fixture.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -13,7 +16,6 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -26,16 +28,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { runMigrations } from "../../persistence/Migrations.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
-import Migration0042 from "../../persistence/Migrations/042_ProjectionThreadLinkedPullRequest.ts";
-import Migration0043 from "../../persistence/Migrations/043_ProjectionThreadsUnsettledAt.ts";
-import Migration0044 from "../../persistence/Migrations/044_ClearAutomaticProjectModelDefaults.ts";
-import Migration0045 from "../../persistence/Migrations/045_ProjectionProjectsAutoPull.ts";
-import Migration0046 from "../../persistence/Migrations/046_RepairAutomaticSettlementTimestamps.ts";
-import Migration0047 from "../../persistence/Migrations/047_ProjectionProjectIcon.ts";
-import Migration0048 from "../../persistence/Migrations/048_ProjectionThreadBranchPullRequest.ts";
-import Migration0049 from "../../persistence/Migrations/049_ProjectionThreadsActiveOrderKey.ts";
 import { CodexProviderCapabilitiesV2 } from "../Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "../EffectWorker.ts";
 import * as EventSink from "../EventSink.ts";
@@ -49,7 +42,6 @@ import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
-const PROJECT_ID = "project:cutover";
 const ACTIVE_THREAD = "thread:cutover:active";
 const ARCHIVED_THREAD = "thread:cutover:archived";
 const PINNED_THREAD = "thread:cutover:pinned";
@@ -74,334 +66,10 @@ const CONTINUATION_RESPONSE = "codex continuation response";
 
 const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
-const modelSelectionJson = '{"instanceId":"codex","model":"gpt-5.4"}';
 const codexModelSelection = {
   instanceId,
   model: "gpt-5.4",
 };
-
-/** Slot 41 models site-local migrations sharing production ids; the V2 runner applies only ids above the recorded maximum. */
-const seedV1Database = (fixturePath: string, workspace: string) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`PRAGMA busy_timeout = 5000;`;
-      yield* sql`PRAGMA foreign_keys = ON;`;
-      yield* sql`PRAGMA journal_mode = WAL;`;
-      yield* runMigrations({ toMigrationInclusive: 40 });
-      yield* sql`
-        INSERT INTO effect_sql_migrations (migration_id, name)
-        VALUES (41, 'ThreadSummaryTimeline')
-      `;
-      yield* sql`
-        CREATE TABLE thread_summary_timeline_entries (
-          entry_id TEXT PRIMARY KEY,
-          thread_id TEXT NOT NULL,
-          payload_json TEXT NOT NULL
-        )
-      `;
-      const tailMigrations = [
-        [42, "ProjectionThreadLinkedPullRequest", Migration0042],
-        [43, "ProjectionThreadsUnsettledAt", Migration0043],
-        [44, "ClearAutomaticProjectModelDefaults", Migration0044],
-        [45, "ProjectionProjectsAutoPull", Migration0045],
-        [46, "RepairAutomaticSettlementTimestamps", Migration0046],
-        [47, "ProjectionProjectIcon", Migration0047],
-        [48, "ProjectionThreadBranchPullRequest", Migration0048],
-        [49, "ProjectionThreadsActiveOrderKey", Migration0049],
-      ] as const;
-      for (const [id, name, migration] of tailMigrations) {
-        yield* migration;
-        yield* sql`
-          INSERT INTO effect_sql_migrations (migration_id, name)
-          VALUES (${id}, ${name})
-        `;
-      }
-
-      yield* sql`
-        INSERT INTO projection_projects (
-          project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
-        ) VALUES (
-          ${PROJECT_ID},
-          'Cutover project',
-          ${workspace},
-          '[]',
-          '2026-01-01T00:00:00.000Z',
-          '2026-01-10T00:00:00.000Z',
-          NULL
-        )
-      `;
-
-      const insertThread = (input: {
-        readonly threadId: string;
-        readonly title: string;
-        readonly createdAt: string;
-        readonly updatedAt: string;
-        readonly archivedAt?: string;
-        readonly snoozedAt?: string;
-        readonly snoozedUntil?: string;
-        readonly pinnedAt?: string;
-        readonly pinOrderKey?: string;
-        readonly deletedAt?: string;
-        readonly worktreePath?: string;
-        readonly linkedPullRequestJson?: string;
-      }) =>
-        sql`
-          INSERT INTO projection_threads (
-            thread_id, project_id, title, model_selection_json, runtime_mode,
-            interaction_mode, branch, worktree_path, latest_turn_id,
-            created_at, updated_at, archived_at, settled_override, settled_at,
-            unsettled_at, snoozed_until, snoozed_at, pinned_at, pin_order_key,
-            linked_pull_request_json, deleted_at
-          ) VALUES (
-            ${input.threadId},
-            ${PROJECT_ID},
-            ${input.title},
-            ${modelSelectionJson},
-            'full-access',
-            'default',
-            'main',
-            ${input.worktreePath ?? null},
-            NULL,
-            ${input.createdAt},
-            ${input.updatedAt},
-            ${input.archivedAt ?? null},
-            NULL,
-            NULL,
-            NULL,
-            ${input.snoozedUntil ?? null},
-            ${input.snoozedAt ?? null},
-            ${input.pinnedAt ?? null},
-            ${input.pinOrderKey ?? null},
-            ${input.linkedPullRequestJson ?? null},
-            ${input.deletedAt ?? null}
-          )
-        `;
-
-      const insertMessage = (input: {
-        readonly messageId: string;
-        readonly threadId: string;
-        readonly role: "user" | "assistant";
-        readonly text: string;
-        readonly createdAt: string;
-        readonly isStreaming?: boolean;
-        readonly attachmentsJson?: string;
-      }) =>
-        sql`
-          INSERT INTO projection_thread_messages (
-            message_id, thread_id, turn_id, role, text, attachments_json,
-            is_streaming, created_at, updated_at
-          ) VALUES (
-            ${input.messageId},
-            ${input.threadId},
-            NULL,
-            ${input.role},
-            ${input.text},
-            ${input.attachmentsJson ?? "[]"},
-            ${input.isStreaming === true ? 1 : 0},
-            ${input.createdAt},
-            ${input.createdAt}
-          )
-        `;
-
-      yield* insertThread({
-        threadId: ACTIVE_THREAD,
-        title: "Active conversation",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-05T00:00:00.000Z",
-        linkedPullRequestJson:
-          '{"projectId":"project:cutover","repository":"goat-si/goat","number":9100,"url":"https://github.com/goat-si/goat/pull/9100"}',
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:active:1",
-        threadId: ACTIVE_THREAD,
-        role: "user",
-        text: "First question",
-        createdAt: "2026-01-01T01:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:active:2",
-        threadId: ACTIVE_THREAD,
-        role: "assistant",
-        text: "First answer",
-        createdAt: "2026-01-02T01:00:00.000Z",
-        attachmentsJson:
-          '[{"type":"image","id":"att-1","name":"shot.png","mimeType":"image/png","sizeBytes":1234}]',
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:active:3",
-        threadId: ACTIVE_THREAD,
-        role: "user",
-        text: "Follow-up question",
-        createdAt: "2026-01-03T01:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:active:4",
-        threadId: ACTIVE_THREAD,
-        role: "assistant",
-        text: "Final answer",
-        createdAt: "2026-01-05T01:00:00.000Z",
-      });
-
-      yield* insertThread({
-        threadId: ARCHIVED_THREAD,
-        title: "Archived conversation",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-06T00:00:00.000Z",
-        archivedAt: "2026-01-06T00:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:archived:1",
-        threadId: ARCHIVED_THREAD,
-        role: "user",
-        text: "Archived question",
-        createdAt: "2026-01-01T02:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:archived:2",
-        threadId: ARCHIVED_THREAD,
-        role: "assistant",
-        text: "Archived answer",
-        createdAt: "2026-01-02T02:00:00.000Z",
-      });
-
-      yield* insertThread({
-        threadId: PINNED_THREAD,
-        title: "Pinned conversation",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-07T00:00:00.000Z",
-        pinnedAt: "2026-01-03T00:00:00.000Z",
-        pinOrderKey: "a0",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:pinned:1",
-        threadId: PINNED_THREAD,
-        role: "user",
-        text: "Pinned question",
-        createdAt: "2026-01-01T03:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:pinned:2",
-        threadId: PINNED_THREAD,
-        role: "assistant",
-        text: "Pinned answer",
-        createdAt: "2026-01-02T03:00:00.000Z",
-      });
-
-      yield* insertThread({
-        threadId: SNOOZED_THREAD,
-        title: "Snoozed conversation",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-08T00:00:00.000Z",
-        snoozedAt: "2026-01-08T00:00:00.000Z",
-        snoozedUntil: "2026-02-01T00:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:snoozed:1",
-        threadId: SNOOZED_THREAD,
-        role: "user",
-        text: "Snoozed question",
-        createdAt: "2026-01-01T04:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:snoozed:2",
-        threadId: SNOOZED_THREAD,
-        role: "assistant",
-        text: "Snoozed answer part one",
-        createdAt: "2026-01-02T04:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:snoozed:3",
-        threadId: SNOOZED_THREAD,
-        role: "assistant",
-        text: "Snoozed answer part two",
-        createdAt: "2026-01-03T04:00:00.000Z",
-      });
-
-      yield* insertThread({
-        threadId: DELETED_THREAD,
-        title: "Deleted conversation",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-09T00:00:00.000Z",
-        deletedAt: "2026-01-09T00:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:deleted:1",
-        threadId: DELETED_THREAD,
-        role: "user",
-        text: "Deleted question",
-        createdAt: "2026-01-01T05:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:deleted:2",
-        threadId: DELETED_THREAD,
-        role: "assistant",
-        text: "Deleted answer",
-        createdAt: "2026-01-02T05:00:00.000Z",
-      });
-
-      yield* insertThread({
-        threadId: INTERRUPTED_THREAD,
-        title: "Interrupted conversation",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-09T01:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:interrupted:1",
-        threadId: INTERRUPTED_THREAD,
-        role: "user",
-        text: "Interrupted question",
-        createdAt: "2026-01-01T06:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:interrupted:2",
-        threadId: INTERRUPTED_THREAD,
-        role: "assistant",
-        text: "Partial answer",
-        createdAt: "2026-01-02T06:00:00.000Z",
-        isStreaming: true,
-      });
-
-      yield* insertThread({
-        threadId: LONG_THREAD,
-        title: "Long conversation",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-10T00:00:00.000Z",
-        worktreePath: workspace,
-      });
-      const filler = "history detail ".repeat(800);
-      yield* insertMessage({
-        messageId: "message:cutover:long:1",
-        threadId: LONG_THREAD,
-        role: "user",
-        text: `${EARLIEST_MARKER} ${filler}`,
-        createdAt: "2026-01-01T07:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:long:2",
-        threadId: LONG_THREAD,
-        role: "assistant",
-        text: `${filler} middle answer`,
-        createdAt: "2026-01-02T07:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:long:3",
-        threadId: LONG_THREAD,
-        role: "user",
-        text: `${filler} middle question`,
-        createdAt: "2026-01-03T07:00:00.000Z",
-      });
-      yield* insertMessage({
-        messageId: "message:cutover:long:4",
-        threadId: LONG_THREAD,
-        role: "assistant",
-        text: `${filler} ${LATEST_MARKER}`,
-        createdAt: "2026-01-04T07:00:00.000Z",
-      });
-
-      yield* sql`PRAGMA wal_checkpoint(TRUNCATE);`;
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: fixturePath }))),
-  );
 
 interface CapturedTurn {
   readonly threadId: ThreadId;
@@ -551,32 +219,57 @@ const makeCodexAdapter = (capturedTurns: Ref.Ref<ReadonlyArray<CapturedTurn>>) =
       }),
   }) satisfies ProviderAdapter.ProviderAdapterV2["Service"];
 
-const waitForIdle = Effect.fn("LegacyV1Cutover.waitForIdle")(function* (threadId: ThreadId) {
-  const orchestrator = yield* Orchestrator.OrchestratorV2;
-  const eventSink = yield* EventSink.EventSinkV2;
-  const isIdle = (projection: OrchestrationV2ThreadProjection) =>
-    projection.runs.every(
-      (run) => !["queued", "starting", "running", "waiting"].includes(run.status),
+// Await the dispatched run's terminal event on the persisted domain-event stream
+// instead of polling the projection, then drain remaining outbox effects.
+const dispatchMessageAwaitingRun = Effect.fn("LegacyV1Cutover.dispatchMessageAwaitingRun")(
+  function* (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: string;
+    readonly commandId: string;
+    readonly text: string;
+  }) {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const messageId = MessageId.make(input.messageId);
+    // Capture the cursor before dispatch so even a late subscriber replays
+    // the terminal event instead of starting its live tail after completion.
+    const afterSequence = yield* eventSink.latestSequence();
+    const terminal = eventSink.stream({ afterSequence }).pipe(
+      Stream.map((stored) => stored.event),
+      Stream.filter((event) => event.type === "run.updated"),
+      Stream.filter(
+        (event) =>
+          ["completed", "failed", "interrupted", "cancelled", "rolled_back"].includes(
+            event.payload.status,
+          ) &&
+          event.payload.threadId === input.threadId &&
+          event.payload.userMessageId === messageId,
+      ),
+      Stream.take(1),
+      Stream.runForEach((event) =>
+        Effect.sync(() =>
+          assert.equal(event.payload.status, "completed", `Run for ${messageId} did not complete`),
+        ),
+      ),
     );
-  const afterSequence = yield* eventSink.latestSequence();
-  const current = yield* orchestrator.getThreadProjection(threadId);
-  if (isIdle(current)) {
-    return current;
-  }
-  // Projections commit with their events, so each later event is the only time to re-read.
-  const [idle] = yield* eventSink.stream({ afterSequence }).pipe(
-    Stream.mapEffect(() => orchestrator.getThreadProjection(threadId)),
-    Stream.filter(isIdle),
-    Stream.take(1),
-    Stream.runCollect,
-  );
-  if (idle === undefined) {
-    return yield* Effect.die(
-      new Error("Cutover test event stream ended before the thread went idle"),
-    );
-  }
-  return idle;
-});
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      createdBy: "user",
+      creationSource: "web",
+      commandId: CommandId.make(input.commandId),
+      threadId: input.threadId,
+      messageId,
+      text: input.text,
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+    });
+    yield* worker.drain();
+    yield* terminal;
+    yield* worker.drain();
+    return yield* orchestrator.getThreadProjection(input.threadId);
+  },
+);
 
 const layerBoot = (input: {
   readonly name: string;
@@ -641,6 +334,25 @@ const makeCapturingLogger = (logs: CapturedLog[]) =>
     });
   });
 
+const sha256File = Effect.fn("LegacyV1Cutover.sha256File")(function* (filePath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  return NodeCrypto.createHash("sha256")
+    .update(yield* fs.readFile(filePath))
+    .digest("hex");
+});
+
+interface LegacyTableSnapshot {
+  readonly columns: ReadonlyArray<string>;
+  readonly rows: ReadonlyArray<Record<string, unknown>>;
+}
+
+// Migrations legitimately append columns; preservation means the columns the
+// v1 schema already had keep their exact values.
+const restrictToSnapshotColumns = (
+  rows: ReadonlyArray<Record<string, unknown>>,
+  snapshot: LegacyTableSnapshot,
+) => rows.map((row) => Object.fromEntries(snapshot.columns.map((column) => [column, row[column]])));
+
 const messageOrdinals = (projection: OrchestrationV2ThreadProjection) =>
   projection.turnItems
     .filter(
@@ -665,7 +377,8 @@ describe("orchestration v2 legacy v1 cutover", () => {
           const copyPath = path.join(stateDir, "userdata", "state.sqlite");
           yield* fs.makeDirectory(path.join(stateDir, "userdata"), { recursive: true });
 
-          yield* seedV1Database(fixturePath, workspace);
+          const v1Snapshot = yield* seedV1Database(fixturePath, workspace);
+          const fixtureHashBefore = yield* sha256File(fixturePath);
           yield* fs.copyFile(fixturePath, copyPath);
 
           const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
@@ -678,8 +391,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
               const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
               const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
               const projections = yield* ProjectionStore.ProjectionStoreV2;
-              const orchestrator = yield* Orchestrator.OrchestratorV2;
-
               assert.equal(yield* importer.pendingThreadCount, ALL_THREADS.length);
               const shellImport = yield* importer.reconcileShells;
               assert.deepStrictEqual(shellImport, {
@@ -810,6 +521,22 @@ describe("orchestration v2 legacy v1 cutover", () => {
             `;
               assert.isNull(snoozedImportRow[0]?.transcript_imported_at);
 
+              // A failed hydration leaves the legacy rows and pending marker
+              // available for retry in a fresh runtime after restart.
+              yield* sql`
+                CREATE TRIGGER fail_snoozed_hydration
+                BEFORE INSERT ON orchestration_events
+                WHEN NEW.event_id = 'migration:v1:message:message:cutover:snoozed:2'
+                BEGIN
+                  SELECT RAISE(ABORT, 'injected cutover hydration failure');
+                END
+              `;
+              const hydrationError = yield* importer
+                .ensureTranscript(ThreadId.make(SNOOZED_THREAD))
+                .pipe(Effect.flip);
+              assert.equal(hydrationError._tag, "LegacyV1ThreadImportError");
+              assert.equal(yield* importer.pendingThreadCount, 1);
+
               const interrupted = yield* projections.getThreadProjection(
                 ThreadId.make(INTERRUPTED_THREAD),
               );
@@ -818,18 +545,12 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 ["message:cutover:interrupted:2", 2, "interrupted"],
               ]);
 
-              yield* orchestrator.dispatch({
-                type: "message.dispatch",
-                createdBy: "user",
-                creationSource: "web",
-                commandId: CommandId.make("command:cutover:continue"),
+              const continued = yield* dispatchMessageAwaitingRun({
                 threadId: longThreadId,
-                messageId: MessageId.make("message:cutover:long:continuation"),
+                messageId: "message:cutover:long:continuation",
+                commandId: "command:cutover:continue",
                 text: CONTINUATION_PROMPT,
-                attachments: [],
-                dispatchMode: { type: "start_immediately" },
               });
-              const continued = yield* waitForIdle(longThreadId);
 
               const runs = continued.runs.filter((run) => run.ordinal >= 1);
               assert.equal(runs.at(-1)?.status, "completed");
@@ -846,18 +567,12 @@ describe("orchestration v2 legacy v1 cutover", () => {
               assert.include(turns[0]!.text, "Context handoff (manual_context):");
               assert.include(turns[0]!.text, `User message:\n${CONTINUATION_PROMPT}`);
 
-              yield* orchestrator.dispatch({
-                type: "message.dispatch",
-                createdBy: "user",
-                creationSource: "web",
-                commandId: CommandId.make("command:cutover:continue:again"),
+              const continuedAgain = yield* dispatchMessageAwaitingRun({
                 threadId: longThreadId,
-                messageId: MessageId.make("message:cutover:long:continuation:2"),
+                messageId: "message:cutover:long:continuation:2",
+                commandId: "command:cutover:continue:again",
                 text: "One more.",
-                attachments: [],
-                dispatchMode: { type: "start_immediately" },
               });
-              const continuedAgain = yield* waitForIdle(longThreadId);
               assert.equal(continuedAgain.contextHandoffs.length, 1);
               assert.equal((yield* Ref.get(capturedTurns)).length, 2);
 
@@ -878,11 +593,14 @@ describe("orchestration v2 legacy v1 cutover", () => {
               FROM orchestration_v2_legacy_imports
               ORDER BY thread_id
             `;
-              const legacyMessageCount = yield* sql<{ readonly count: number }>`
-              SELECT COUNT(*) AS count FROM projection_thread_messages
+              const legacyProjects = yield* sql<Record<string, unknown>>`
+              SELECT * FROM projection_projects ORDER BY project_id
             `;
-              const legacyThreadCount = yield* sql<{ readonly count: number }>`
-              SELECT COUNT(*) AS count FROM projection_threads
+              const legacyThreads = yield* sql<Record<string, unknown>>`
+              SELECT * FROM projection_threads ORDER BY thread_id
+            `;
+              const legacyMessages = yield* sql<Record<string, unknown>>`
+              SELECT * FROM projection_thread_messages ORDER BY message_id
             `;
               const recordedMigration41 = yield* sql<{ readonly name: string }>`
               SELECT name FROM effect_sql_migrations WHERE migration_id = 41
@@ -893,8 +611,9 @@ describe("orchestration v2 legacy v1 cutover", () => {
               return {
                 migrationEventCount: migrationEventCount[0]?.count ?? 0,
                 importRows,
-                legacyMessageCount: legacyMessageCount[0]?.count ?? 0,
-                legacyThreadCount: legacyThreadCount[0]?.count ?? 0,
+                legacyProjects,
+                legacyThreads,
+                legacyMessages,
                 longProjection: continuedAgain,
                 migration41Name: recordedMigration41[0]?.name ?? null,
                 authSessionColumnNames: authSessionColumns.map((column) => column.name),
@@ -926,6 +645,21 @@ describe("orchestration v2 legacy v1 cutover", () => {
           assert.notInclude(firstBoot.authSessionColumnNames, "client_surface");
           assert.notInclude(firstBoot.authSessionColumnNames, "client_app_version");
 
+          // Full row contents of the legacy recovery tables survive migration
+          // and continuation unchanged, not just their counts.
+          assert.deepStrictEqual(
+            restrictToSnapshotColumns(firstBoot.legacyProjects, v1Snapshot.projects),
+            v1Snapshot.projects.rows,
+          );
+          assert.deepStrictEqual(
+            restrictToSnapshotColumns(firstBoot.legacyThreads, v1Snapshot.threads),
+            v1Snapshot.threads.rows,
+          );
+          assert.deepStrictEqual(
+            restrictToSnapshotColumns(firstBoot.legacyMessages, v1Snapshot.messages),
+            v1Snapshot.messages.rows,
+          );
+
           assert.equal(firstBoot.importRows.length, ALL_THREADS.length);
           const unhydratedRows = firstBoot.importRows.filter(
             (row) => row.transcript_imported_at === null,
@@ -947,6 +681,7 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 importedThreadCount: 0,
                 importedMessageCount: 0,
               });
+              yield* sql`DROP TRIGGER fail_snoozed_hydration`;
               assert.deepStrictEqual(
                 yield* importer.ensureTranscript(ThreadId.make(SNOOZED_THREAD)),
                 { importedThreadCount: 1, importedMessageCount: 1 },
@@ -985,14 +720,33 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 firstBoot.longProjection.runs.map((run) => run.status),
               );
 
-              const legacyMessageCount = yield* sql<{ readonly count: number }>`
-              SELECT COUNT(*) AS count FROM projection_thread_messages
-            `;
-              const legacyThreadCount = yield* sql<{ readonly count: number }>`
-              SELECT COUNT(*) AS count FROM projection_threads
-            `;
-              assert.equal(legacyMessageCount[0]?.count, firstBoot.legacyMessageCount);
-              assert.equal(legacyThreadCount[0]?.count, firstBoot.legacyThreadCount);
+              assert.deepStrictEqual(
+                restrictToSnapshotColumns(
+                  yield* sql<Record<string, unknown>>`
+                    SELECT * FROM projection_projects ORDER BY project_id
+                  `,
+                  v1Snapshot.projects,
+                ),
+                v1Snapshot.projects.rows,
+              );
+              assert.deepStrictEqual(
+                restrictToSnapshotColumns(
+                  yield* sql<Record<string, unknown>>`
+                    SELECT * FROM projection_threads ORDER BY thread_id
+                  `,
+                  v1Snapshot.threads,
+                ),
+                v1Snapshot.threads.rows,
+              );
+              assert.deepStrictEqual(
+                restrictToSnapshotColumns(
+                  yield* sql<Record<string, unknown>>`
+                    SELECT * FROM projection_thread_messages ORDER BY message_id
+                  `,
+                  v1Snapshot.messages,
+                ),
+                v1Snapshot.messages.rows,
+              );
               const quickCheck = yield* sql<{ readonly quick_check: string }>`
               PRAGMA quick_check
             `;
@@ -1019,6 +773,10 @@ describe("orchestration v2 legacy v1 cutover", () => {
           assert.isTrue(
             boot2Logs.some((log) => String(log.message).includes("migration history diverges")),
           );
+
+          // The seeded source file is the untouched recovery copy: migration
+          // only ever ran against the file copied out of it.
+          assert.equal(yield* sha256File(fixturePath), fixtureHashBefore);
         }).pipe(Effect.provide(NodeServices.layer)),
       ),
   );

@@ -86,6 +86,8 @@ import {
   deriveThreadActivityRun,
   deriveLatestThreadRun,
   deriveThreadStructureRuntime,
+  limitRecoveryHoldsSnooze,
+  limitRecoveryRunFor,
 } from "@goat/client-runtime/state/thread-execution";
 import {
   resolveWorkflowOpening,
@@ -168,7 +170,7 @@ import {
 import { isPreviewSupportedInRuntime, useThreadPreviewState } from "../previewStateStore";
 import { previewRuntimeTabId } from "../browser/previewRuntimeTabId";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
-import { usePreviewSession } from "./preview/usePreviewSession";
+import { PreviewSessionSync } from "./preview/PreviewSessionSync";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 
 import {
@@ -1005,11 +1007,10 @@ export default function ChatView(props: ChatViewProps) {
     if (!sideChatAvailable || activeThreadRef === null) return;
     useRightPanelStore.getState().toggle(activeThreadRef, "side-chat");
   };
+  const limitRecoveryRun = limitRecoveryRunFor(activeThreadShell, serverRuntime);
+  const recoveryHoldsSnooze = limitRecoveryHoldsSnooze(activeThreadShell, serverRuntime);
   const timelineThreadError =
-    serverRuntime?.status === "failed" &&
-    serverRuntime.lastErrorClass === "usage_limit" &&
-    activeThreadShell?.latestRun &&
-    visibleThreadError === serverRuntime.lastError
+    limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError
       ? null
       : visibleThreadError;
 
@@ -1724,7 +1725,6 @@ export default function ChatView(props: ChatViewProps) {
     serverVisibleTurnItems,
     turnDiffSummaries.at(-1)?.completedAt ?? null,
   );
-
   const gitCwd = activeProject
     ? projectScriptCwd({
         project: { cwd: activeProject.workspaceRoot },
@@ -2213,7 +2213,6 @@ export default function ChatView(props: ChatViewProps) {
     if (!serverThread) {
       return AsyncResult.success(undefined);
     }
-
     let result: AtomCommandResult<void, unknown> = AsyncResult.success(undefined);
     const metadataUpdate = resolveThreadMetadataUpdateForNextTurn({
       currentModelSelection: serverThread.modelSelection,
@@ -2620,6 +2619,7 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadKey,
     activeThreadShell,
     activeLatestRun,
+    limitRecoveryHoldsSnooze: recoveryHoldsSnooze,
     activeProjectCwd,
     serverConfig,
     runtimeMode,
@@ -2740,13 +2740,14 @@ export default function ChatView(props: ChatViewProps) {
     return item ? [item] : [];
   });
   const limitRecoveryBanner =
-    serverRuntime?.status === "failed" &&
-    serverRuntime.lastErrorClass === "usage_limit" &&
-    activeThreadShell?.latestRun
+    limitRecoveryRun !== null && activeThreadShell !== null
       ? usageLimitRecoveryBannerItem({
-          runId: activeThreadShell.latestRun.runId,
-          resetAt: serverRuntime.usageLimitResetAt ?? null,
-          stoppedAt: activeThreadShell.latestRun.completedAt ?? activeThreadShell.updatedAt,
+          runId: limitRecoveryRun.runId,
+          errorCode: serverRuntime?.lastErrorCode ?? null,
+          resetAt: serverRuntime?.usageLimitResetAt ?? null,
+          stoppedAt: limitRecoveryRun.completedAt ?? activeThreadShell.updatedAt,
+          settled: activeThreadShell.settledOverride === "settled",
+          requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
           recovery: activeThreadShell.limitRecovery ?? null,
           snoozedUntil: activeThreadShell.snoozedUntil,
           timestampFormat,
@@ -3521,6 +3522,7 @@ export default function ChatView(props: ChatViewProps) {
             <ThreadFind onClose={focusComposerStable} />
             {isWorkspaceFileDragActive ? <WorkspaceFileDropOverlay /> : null}
             <ChatBannerLane
+              environmentId={activeThread.environmentId}
               providerStatus={visibleProviderStatus}
               providerStatusBannerKey={providerStatusBannerKey}
               setDismissedProviderStatusBannerKey={setDismissedProviderStatusBannerKey}
@@ -4256,8 +4258,4 @@ export default function ChatView(props: ChatViewProps) {
       {content}
     </FileMetadataThreadProvider>
   );
-}
-function PreviewSessionSync(props: { readonly threadRef: ScopedThreadRef }) {
-  usePreviewSession(props.threadRef);
-  return null;
 }

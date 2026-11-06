@@ -335,6 +335,14 @@
       "types": "./src/state/projects.ts",
       "default": "./src/state/projects.ts"
     },
+    "./provider-instance-ids": {
+      "types": "./src/providerInstanceIds.ts",
+      "default": "./src/providerInstanceIds.ts"
+    },
+    "./state/context-window": {
+      "types": "./src/state/contextWindow.ts",
+      "default": "./src/state/contextWindow.ts"
+    },
     "./state/provider-instance-display": {
       "types": "./src/state/providerInstanceDisplay.ts",
       "default": "./src/state/providerInstanceDisplay.ts"
@@ -494,6 +502,10 @@
     "./state/thread-checkpoints": {
       "types": "./src/state/threadCheckpoints.ts",
       "default": "./src/state/threadCheckpoints.ts"
+    },
+    "./state/thread-lineage-lookup": {
+      "types": "./src/state/threadLineageLookup.ts",
+      "default": "./src/state/threadLineageLookup.ts"
     },
     "./state/thread-execution": {
       "types": "./src/state/threadExecution.ts",
@@ -690,6 +702,10 @@
     "./pull-request-reactions": {
       "types": "./src/pullRequestReactions.ts",
       "default": "./src/pullRequestReactions.ts"
+    },
+    "./pull-request-reply": {
+      "types": "./src/pullRequestReply.ts",
+      "default": "./src/pullRequestReply.ts"
     },
     "./pull-request-query": {
       "types": "./src/pullRequestQuery.ts",

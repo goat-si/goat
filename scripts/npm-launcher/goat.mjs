@@ -105,6 +105,25 @@ async function install(dir, key) {
     });
     if (extract.status !== 0) throw new Error(`could not extract ${archive}`);
     fs.rmSync(file);
+    const validation = spawnSync(
+      path.join(staging, process.platform === "win32" ? "goat.exe" : "goat"),
+      ["--version"],
+      {
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+        timeout: 30_000,
+        killSignal: "SIGKILL",
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    if (validation.status !== 0) {
+      throw executableError(
+        key,
+        validation.error?.message ||
+          validation.stderr?.trim() ||
+          `--version exited with ${validation.signal || validation.status}`,
+      );
+    }
     fs.writeFileSync(path.join(staging, ".install-complete"), `${version}\n`);
     publish(staging, dir);
   } finally {
@@ -193,9 +212,18 @@ async function main() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => (ipc || signal !== "SIGINT") && child.kill(signal));
   }
-  child.on("error", (error) => fail(error));
+  child.on("error", (error) => fail(executableError(key, error.message)));
   child.on("exit", (code, signal) =>
     process.exit(code ?? 128 + (os.constants.signals[signal] || 1)),
+  );
+}
+
+function executableError(key, detail) {
+  return new Error(
+    `could not run GOAT ${version} for ${key}: ${detail}` +
+      (process.platform === "linux"
+        ? "\nThe Linux release requires glibc; musl-based systems such as Alpine are not supported."
+        : ""),
   );
 }
 

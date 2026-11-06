@@ -1,4 +1,4 @@
-import type { EnvironmentId, UnifiedSettings } from "@goat/contracts";
+import type { EnvironmentId, UnifiedSettings, UsageLimitSourceConfig } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { PlusIcon } from "~/components/solar";
 import { useState } from "react";
@@ -18,6 +18,8 @@ import {
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { AddUsageLimitSourceDialog } from "./AddUsageLimitSourceDialog";
+import { SecretReferencePicker } from "./SecretReferencePicker";
+import { SecretInput } from "./SecretInput";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -102,6 +104,16 @@ export function UsageProviderSettings({
                     {label !== source.url ? ` · ${source.url}` : ""}
                   </span>
                 }
+                status={
+                  source.managementKeyReference != null ? (
+                    <UsageSourceReference
+                      environmentId={environmentId}
+                      source={source}
+                      readOnly={readOnly}
+                      onSave={(next) => updateSettings({ usageLimitSources: { [id]: next } })}
+                    />
+                  ) : null
+                }
                 control={
                   !readOnly ? (
                     <RemoveUsageProviderButton
@@ -125,6 +137,67 @@ export function UsageProviderSettings({
         />
       ) : null}
     </>
+  );
+}
+
+function UsageSourceReference({
+  environmentId,
+  source,
+  readOnly,
+  onSave,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly source: UsageLimitSourceConfig;
+  readonly readOnly: boolean;
+  readonly onSave: (source: UsageLimitSourceConfig) => void;
+}) {
+  const [stored, setStored] = useState(false);
+  const [key, setKey] = useState("");
+  return (
+    <div>
+      <SecretReferencePicker
+        environmentId={environmentId}
+        value={source.managementKeyReference ?? undefined}
+        disabled={readOnly}
+        onChange={(reference) => {
+          if (reference === undefined) setStored(true);
+          else {
+            setStored(false);
+            onSave({ ...source, managementKey: "", managementKeyReference: reference });
+          }
+        }}
+      />
+      {stored && !readOnly ? (
+        <div>
+          <SecretInput
+            aria-label="Replacement management key"
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+          />
+          <Button
+            size="xs"
+            disabled={!key.trim()}
+            onClick={() => {
+              onSave({ ...source, managementKey: key.trim(), managementKeyReference: null });
+              setStored(false);
+              setKey("");
+            }}
+          >
+            Save key
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => {
+              setStored(false);
+              setKey("");
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

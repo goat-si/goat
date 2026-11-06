@@ -397,6 +397,7 @@ export const make = Effect.gen(function* () {
           routes,
           (route) =>
             Effect.gen(function* () {
+              let linkedLabel: string | undefined;
               const result = yield* Effect.gen(function* () {
                 const target = route.target;
                 if (target.kind === "linked") {
@@ -419,10 +420,9 @@ export const make = Effect.gen(function* () {
                       reason: "host_unavailable",
                       detail: "The linked host did not answer its environment descriptor.",
                     });
-                  return yield* response.json.pipe(
-                    Effect.flatMap(decodeDescriptor),
-                    Effect.map((descriptor) => descriptor.environmentId),
-                  );
+                  const descriptor = yield* response.json.pipe(Effect.flatMap(decodeDescriptor));
+                  linkedLabel = descriptor.label;
+                  return descriptor.environmentId;
                 }
                 if (target.kind === "cloud") {
                   const machine =
@@ -453,6 +453,22 @@ export const make = Effect.gen(function* () {
               const at = yield* now;
               const previous = states.get(route.routeId);
               const target = route.target;
+              if (
+                target.kind === "linked" &&
+                result._tag === "Success" &&
+                result.success !== null &&
+                result.success === identities.get(route.routeId) &&
+                linkedLabel !== undefined
+              ) {
+                yield* linked
+                  .refreshLabel({
+                    name: target.name,
+                    baseUrl: target.baseUrl,
+                    environmentId: result.success,
+                    label: linkedLabel,
+                  })
+                  .pipe(Effect.mapError(mapLinkedError));
+              }
               yield* Effect.gen(function* () {
                 if (
                   target.kind === "cloud" &&

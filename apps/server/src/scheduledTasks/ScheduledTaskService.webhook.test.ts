@@ -4,6 +4,8 @@ import {
   webhookTaskInput,
   requestFor,
   pullRequestBody,
+  pullRequestFilterInput,
+  githubEvent,
 } from "./ScheduledRunFixture.testkit.ts";
 import * as EffectScheduler from "effect/Scheduler";
 import { withWebhookService as withService } from "./ScheduledRunFixture.testkit.ts";
@@ -1125,6 +1127,10 @@ it.effect("start failures release both replay keys and relay claims for redelive
           "ScheduledTaskService.runWebhookDelivery",
         );
         yield* Queue.take(launches);
+        assert.equal(
+          (yield* service.list()).tasks[0]!.lastRunError,
+          "Synthetic pre-command failure.",
+        );
         assert.equal((yield* sql`SELECT * FROM scheduled_task_webhook_replay_keys`).length, 0);
         assert.equal((yield* sql`SELECT * FROM scheduled_task_webhook_relay_deliveries`).length, 0);
         const retry = yield* waitForSpan(
@@ -1763,17 +1769,6 @@ it.effect("checks filters after the signature and max age, and runs only matchin
     }),
   ),
 );
-
-const pullRequestFilterInput = () =>
-  webhookTaskInput({
-    schedule: {
-      type: "webhook",
-      filters: [{ path: "headers.x-github-event", op: "equals", value: "pull_request" }],
-    },
-  });
-const githubEvent = (event: string) => ({
-  headers: { "content-type": "application/json", "x-github-event": event },
-});
 
 it.effect("a filtered relay delivery releases its claim, so a redelivery is evaluated again", () =>
   withService(({ service, launches }) =>

@@ -1,9 +1,15 @@
 import {
   normalizeCardDetails,
+  isSecretReference,
+  isOnePasswordReference,
+  type SecretReference,
+  SecretProviderId,
+  type ServerSettings,
   type CardDetails,
   type OrchestrationV2TurnItem,
   type SecretRequestAnswerInput,
 } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 
 export type SecretRequestItem = Extract<
   OrchestrationV2TurnItem,
@@ -75,10 +81,18 @@ export function secretRequestDisplay(
   }
 }
 
+export function secretRequestProviders(providers: ServerSettings["secretProviders"] | undefined) {
+  const isProviderId = Schema.is(SecretProviderId);
+  return Object.entries(providers ?? {}).flatMap(([id, provider]) =>
+    isProviderId(id) && provider.kind === "one_password" ? [{ id, label: provider.label }] : [],
+  );
+}
+
 export function secretRequestAnswerInput(
   item: Pick<SecretRequestItem, "id" | "threadId">,
   answer:
     | { readonly type: "save"; readonly secret: string }
+    | { readonly type: "reference"; readonly reference: SecretReference }
     | {
         readonly type: "save_login";
         readonly username: string;
@@ -90,6 +104,12 @@ export function secretRequestAnswerInput(
 ): SecretRequestAnswerInput | null {
   if (answer.type === "decline") {
     return { threadId: item.threadId, turnItemId: item.id, answer: { type: "decline" } };
+  }
+  if (answer.type === "reference") {
+    const reference = { ...answer.reference, reference: answer.reference.reference.trim() };
+    return isSecretReference(reference) && isOnePasswordReference(reference.reference)
+      ? { threadId: item.threadId, turnItemId: item.id, answer: { type: "reference", reference } }
+      : null;
   }
   if (answer.type === "save_login") {
     const username = answer.username.trim();

@@ -10,7 +10,7 @@ import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import { ALIAS, ID, makeWorld } from "../cloudMachines/CloudMachineService.testkit.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
-import migration from "../persistence/Migrations/105_HubNodes.ts";
+import migration from "../persistence/Migrations/106_HubNodes.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";
@@ -55,6 +55,7 @@ it.effect("learns a running cloud machine's identity on the check that prepares 
             list: Effect.succeed([]),
             names: Effect.succeed([]),
             find: () => Effect.succeedNone,
+            refreshLabel: () => Effect.void,
             link: unused,
             unlink: unused,
           }),

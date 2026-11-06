@@ -1,4 +1,4 @@
-import { SecretRequestError } from "@goat/contracts";
+import { SecretProviderId, SecretRequestError } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -130,5 +130,26 @@ it("validates and normalizes a card answer without altering name or CVC", () => 
     threadId: "thread:card",
     turnItemId: "item:card",
     answer: { ...answer, number: "4242424242424242", expiryYear: "2029" },
+  });
+});
+
+it("validates a provider reference before building an answer", () => {
+  const item = { id: "turn-item:secret", threadId: "thread:secret" } as never;
+  const provider = SecretProviderId.make("vault");
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "reference",
+      reference: { provider, reference: "not a reference" },
+    }),
+  ).toBeNull();
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "reference",
+      reference: { provider, reference: " op://vault/item/password " },
+    }),
+  ).toEqual({
+    threadId: "thread:secret",
+    turnItemId: "turn-item:secret",
+    answer: { type: "reference", reference: { provider, reference: "op://vault/item/password" } },
   });
 });

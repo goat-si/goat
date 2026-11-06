@@ -1,3 +1,4 @@
+import { settingsSecretLiteral } from "@goat/contracts";
 import type {
   Event as OpenCodeEvent,
   Message as OpenCodeMessage,
@@ -20,7 +21,6 @@ import {
   type OpenCodePermissionRequestKind,
 } from "./permissionRules.ts";
 import { recordString, recordValue } from "./records.ts";
-
 export {
   openCodeChildPermissionRules,
   openCodePermissionRequestKind,
@@ -67,7 +67,6 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
@@ -98,6 +97,7 @@ import {
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
 import {
+  openCodeToolStatus,
   openCodeToolOutputWithImages,
   openCodeToolStateResult,
   openCodeToolTurnItem,
@@ -472,7 +472,7 @@ export function makeOpenCodeProtocolLogger(input: {
 }): (event: OpenCodeProtocolLogEvent) => Effect.Effect<void, never> {
   return (event) =>
     Effect.gen(function* () {
-      if (!input.nativeEventLogger) return;
+      if (!input.nativeEventLogger || event.method === "message.part.delta") return;
       const observedAt = DateTime.formatIso(yield* DateTime.now);
       const method = structuralProtocolMethod(event.method);
       yield* input.nativeEventLogger.write(
@@ -552,22 +552,6 @@ export function openCodeBoundaryAfterProviderTurn(
     .toSorted((left, right) => left.ordinal - right.ordinal)
     .map((turn) => turn.nativeTurnRef?.nativeId)
     .find((nativeId): nativeId is string => nativeId !== null && nativeId !== undefined);
-}
-
-function toolStatus(part: ToolPart): {
-  readonly node: OrchestrationV2ExecutionNode["status"];
-  readonly item: OrchestrationV2TurnItem["status"];
-} {
-  switch (part.state.status) {
-    case "pending":
-      return { node: "pending", item: "pending" };
-    case "running":
-      return { node: "running", item: "running" };
-    case "completed":
-      return { node: "completed", item: "completed" };
-    case "error":
-      return { node: "failed", item: "failed" };
-  }
 }
 
 function toolInput(part: ToolPart): Record<string, unknown> {
@@ -762,7 +746,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           directory: cwd,
           serverUrl: options.settings.serverUrl,
           ...(options.settings.serverPassword
-            ? { serverPassword: options.settings.serverPassword }
+            ? { serverPassword: settingsSecretLiteral(options.settings.serverPassword) }
             : {}),
           environment: options.environment,
         });
@@ -1280,7 +1264,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           }
           const { output } = openCodeToolStateResult(part.state);
           if (part.state.status === "completed" && output !== undefined) context.result = output;
-          const status = toolStatus(part);
+          const status = openCodeToolStatus(part);
           const completedAt = toolCompletedAt(part, now);
           const subagentStatus: OrchestrationV2Subagent["status"] =
             status.item === "failed"
@@ -1379,7 +1363,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           }
           if (normalizedTool === "question") return;
           const now = yield* DateTime.now;
-          const status = toolStatus(part);
+          const status = openCodeToolStatus(part);
           const startedAt = toolStartedAt(part, now);
           const completedAt = toolCompletedAt(part, now);
           const nativeItemRef = providerRef(part.id);
@@ -2842,7 +2826,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             .map((part) => part.text)
             .join("\n")
             .trim();
-          const match = text?.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/);
+          const match = text?.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
           const command = match
             ? (yield* OpenCodeRuntime.loadOpenCodeCommands(client).pipe(
                 Effect.timeout("10 seconds"),

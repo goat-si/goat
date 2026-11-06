@@ -48,4 +48,24 @@ describe("secretProviderFromDraft", () => {
       },
     });
   });
+
+  it("restores references after a renamed provider is removed and re-added by ID", () => {
+    const id = SecretProviderId.make("personal");
+    const renamed = secretProviderFromDraft({ name: "Team", account: "team" }, new Set([id]), {
+      mode: "edit",
+      id,
+    });
+    expect(Result.isSuccess(renamed) && renamed.success.id).toBe(id);
+    const restored = secretProviderFromDraft({ name: "Team", id, account: "team" }, new Set(), {
+      mode: "add",
+    });
+    expect(Result.isSuccess(restored) && restored.success.id).toBe(id);
+    expect(
+      Result.isFailure(
+        secretProviderFromDraft({ name: "Team", id, account: "team" }, new Set([id]), {
+          mode: "add",
+        }),
+      ),
+    ).toBe(true);
+  });
 });

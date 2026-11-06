@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
@@ -357,7 +358,9 @@ const layerProviderContinuationWorkerProvided = ProviderContinuationService.laye
 );
 const layerThreadTitleRegenerationProvided = ThreadTitleRegenerationService.layer.pipe(
   Layer.provide(
-    Layer.mergeAll(layerThreadManagementProvided, ProjectStore.layer, TextGeneration.layer),
+    Layer.mergeAll(layerThreadManagementProvided, ProjectStore.layer, TextGeneration.layer).pipe(
+      Layer.provideMerge(NodeServices.layer),
+    ),
   ),
 );
 const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(

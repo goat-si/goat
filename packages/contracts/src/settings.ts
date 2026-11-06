@@ -115,10 +115,14 @@ import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings
 import { SnoozeSettingsFields, SnoozeSettingsPatchFields } from "./snoozePresets.ts";
 import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
 import * as BlockedBrowser from "./blockedBrowserHosts.ts";
-import { SecretProviderId, SecretProviderSlug } from "./secretReference.ts";
+import {
+  SecretProviderId,
+  SecretProviderSlug,
+  SecretReference,
+  SettingsSecretValue,
+} from "./secretReference.ts";
 export { SecretProviderId } from "./secretReference.ts";
 import * as Restart from "./codexTurnSurvival.ts";
-
 export * from "./settingsFontSizes.ts";
 export {
   CODEX_APP_SERVER_ISOLATION_DEFAULT,
@@ -131,7 +135,6 @@ const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 export const DiffLayout = Schema.Literals(["stacked", "split"]);
 export type DiffLayout = typeof DiffLayout.Type;
 const DEFAULT_DIFF_LAYOUT: DiffLayout = "stacked";
-
 export const SnapShotKeyChord = KeybindingShortcut.check(
   Schema.makeFilter(
     (shortcut) =>
@@ -156,21 +159,17 @@ export type SnapShotShortcut = typeof SnapShotShortcut.Type;
 export const SnapShotSound = Schema.Literals(["soft-pop", "camera-shutter"]);
 export type SnapShotSound = typeof SnapShotSound.Type;
 const DEFAULT_SNAP_SHOT_SOUND: SnapShotSound = "soft-pop";
-
 export type SnapShotModifierPairShortcut = Extract<SnapShotShortcut, { readonly kind: string }>;
-
 export function isModifierPairShortcut(
   shortcut: SnapShotShortcut,
 ): shortcut is SnapShotModifierPairShortcut {
   return "kind" in shortcut;
 }
-
 export function snapShotShortcutModifierPair(
   shortcut: SnapShotModifierPairShortcut,
 ): SnapShotModifier {
   return shortcut.kind === "both-shift-keys" ? "shift" : shortcut.modifier;
 }
-
 const APPLE_MODIFIER_LABELS: Record<SnapShotModifier, string> = {
   shift: "Shift",
   meta: "Command",
@@ -362,19 +361,15 @@ export const ClientSettingsSchema = Schema.Struct({
   browserCustomSearchUrl: BrowserCustomSearchUrl.pipe(
     Schema.withDecodingDefault(Effect.succeed("")),
   ),
-
   browserAutoShowFloatingPreview: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW)),
   ),
-
   browserProfiles: Schema.Array(BrowserProfile).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
-
   browserDefaultProfileId: BrowserProfileId.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_PROFILE_ID)),
   ),
-
   confirmQuit: QuitConfirmationModeSetting.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_QUIT_CONFIRMATION_MODE)),
   ),
@@ -794,7 +789,7 @@ export const AntigravitySettings = makeProviderSettingsSchema(
         },
       }),
     ),
-    apiKey: TrimmedString.pipe(
+    apiKey: SettingsSecretValue.pipe(
       secretSetting,
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
@@ -846,6 +841,7 @@ export const UsageLimitSourceConfig = Schema.Struct({
   label: Schema.optional(TrimmedNonEmptyString),
   url: TrimmedNonEmptyString,
   managementKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("")), secretSetting),
+  managementKeyReference: Schema.optionalKey(Schema.NullOr(SecretReference)),
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
@@ -1430,6 +1426,8 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  /** Clones default to `<addProjectBaseDirectory>/<host>/<owner>/<repo>`, like ghq. */
+  ghqCloneLayout: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
@@ -1854,6 +1852,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   worktreeSubmodules: Schema.optionalKey(Schema.NullOr(WorktreeSubmodules)),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
+  ghqCloneLayout: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   threadTitleInstructions: Schema.optionalKey(TrimmedString),
   branchNamingMode: Schema.optionalKey(BranchNamingMode),
@@ -1892,7 +1891,7 @@ const ServerSettingsPatchFields = Schema.Struct({
       otlpLogsUrl: Schema.optionalKey(TrimmedString),
     }),
   ),
-  /** Merges per host, replacing patched fields whole; redaction markers retain secrets, empty or omitted secrets remove them. */
+  /** Merges per host; redaction markers retain secrets. Non-empty token maps preserve omitted hosts, and empty maps clear all tokens. */
   sourceControlHosts: Schema.optionalKey(Schema.Record(Schema.String, SourceControlHostSettings)),
   /**
    * An empty secret clears it; an omitted one keeps what the server has. `targets` merges per

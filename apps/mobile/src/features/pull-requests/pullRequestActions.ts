@@ -170,6 +170,16 @@ export function canPerformPullRequestAction(pr: ActionDetail, action: PullReques
   }
 }
 
+export function pullRequestStateAction(
+  pr: ActionDetail | null,
+  canWrite: boolean,
+  busy: boolean,
+): "close" | "reopen" | null {
+  if (!pr || !canWrite || busy) return null;
+  if (canPerformPullRequestAction(pr, "close")) return "close";
+  return canPerformPullRequestAction(pr, "reopen") ? "reopen" : null;
+}
+
 export function mergeUnavailableReason(
   pr: ActionDetail,
   connectionAllowsWrites: boolean,

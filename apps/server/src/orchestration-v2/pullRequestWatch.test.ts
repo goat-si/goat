@@ -78,6 +78,21 @@ const remark = (
 
 const noRemarks: ReadonlyArray<PullRequestComment> = [];
 
+it("does not split an emoji in a long PR watch comment", () => {
+  const report = evaluate(watch(), detail(), [
+    remark("reviewer", "2026-10-02T12:06:00Z", `${"x".repeat(196)}🚀 and more`),
+  ]);
+  const wake = pullRequestWatchOutcome({
+    number: 1,
+    url: "https://github.com/o/r/pull/1",
+    baseBranch: "main",
+    report,
+  }).wake;
+  assert.isDefined(wake);
+  assert.isTrue(wake!.text.isWellFormed());
+  assert.include(wake!.text, `"${"x".repeat(196)}..."`);
+});
+
 const DEFAULT_POLICY = Schema.decodeSync(PullRequestWatchPolicy)({});
 /** Everything wakes, so the comparison rules are tested apart from the policy. */
 const REACT_ALL: PullRequestWatchPolicy = {
@@ -354,6 +369,15 @@ describe("evaluatePullRequestWatch", () => {
     const conflicting = detail({ mergeability: "conflicting" });
     const first = evaluate(watch(), conflicting, noRemarks);
     assert.deepEqual(first.changes, [{ kind: "conflicting" }]);
+    const { headSha: _unreadHead, ...headUnread } = conflicting;
+    const unread = evaluate(first.next, headUnread, noRemarks);
+    assert.deepEqual(evaluate(unread.next, conflicting, noRemarks).changes, []);
+    const pushed = detail({ headSha: "bbbbbbbbbb", mergeability: "unknown" });
+    const recomputed = evaluate(first.next, pushed, noRemarks);
+    assert.deepEqual(
+      evaluate(recomputed.next, { ...pushed, mergeability: "conflicting" }, noRemarks).changes,
+      [{ kind: "conflicting" }],
+    );
     // GitHub answers "unknown" while it recomputes after a push; that is not a resolution.
     const recomputing = evaluate(first.next, detail({ mergeability: "unknown" }), noRemarks);
     assert.deepEqual(evaluate(recomputing.next, conflicting, noRemarks).changes, []);

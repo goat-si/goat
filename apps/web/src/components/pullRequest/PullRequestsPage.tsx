@@ -1,3 +1,5 @@
+import { PullRequestFiltersMenuInSidebarOrder } from "./PullRequestFiltersMenuInSidebarOrder";
+import { getShortcutContext } from "./pullRequestShortcutContext";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { applyPullRequestDraftFilterChange } from "@goat/client-runtime/pull-request-query";
 import { Spinner } from "~/components/ui/spinner";
@@ -5,7 +7,6 @@ import type { PullRequestSpeedActionResult } from "~/components/pullRequest/Pull
 import { usePullRequestCloseBatch } from "~/components/pullRequest/usePullRequestActions";
 import { SidebarPointerSensor } from "~/components/Sidebar.pointer";
 import { resolveSidebarSweepKeys } from "~/components/Sidebar.logic";
-import { sortProjectsByGroupOrder } from "@goat/client-runtime/state/project-grouping";
 import { resolveEnvironmentMachineKind } from "@goat/contracts";
 import type {
   EnvironmentId,
@@ -16,11 +17,12 @@ import type {
   PullRequestListInput,
   PullRequestListResult,
   PullRequestListState,
+  PullRequestSummary,
 } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowDownUpIcon, LayersIcon, PlugIcon as Plug2Icon } from "~/components/solar";
-import { useEffect, useEffectEvent, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   collectPullRequestListFacets,
@@ -54,7 +56,6 @@ import {
 import { environmentMachineIcon } from "../EnvironmentMachineIcon";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import {
-  PullRequestFiltersMenu,
   PullRequestSearchInput,
   pullRequestHostLabel,
   pullRequestProjectKey,
@@ -64,6 +65,7 @@ import { PullRequestCompactFilterMenu } from "./PullRequestCompactFilterMenu";
 import { INVOLVEMENT_TABS, SORT_OPTIONS, STATE_TABS } from "./pullRequestListOptions";
 import { PullRequestsColumn } from "./PullRequestsColumn";
 import { PullRequestListGroups } from "./PullRequestListGroups";
+import * as pullRequestPrefetch from "./usePullRequestIntentPrefetch";
 import {
   usePullRequestDisplayGroups,
   usePullRequestQueryFilters,
@@ -77,9 +79,7 @@ import { type PullRequestRowTarget } from "./PullRequestRow";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { RightPanelTabs } from "../RightPanelTabs";
 import { isCommandPaletteOpen } from "~/commandPaletteBus";
-import { isElectron } from "~/env";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
-import { isTerminalFocused } from "~/lib/terminalFocus";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "../chat/PanelLayoutControls";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
@@ -97,7 +97,6 @@ import {
   useRightPanelStore,
   type PullRequestSurface,
 } from "~/rightPanelStore";
-import { useSidebarProjectGroups } from "~/hooks/useSidebarProjectGroups";
 import {
   pullRequestEnvironment,
   usePullRequestList,
@@ -111,18 +110,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
-
-function getShortcutContext() {
-  return {
-    terminalFocus: isTerminalFocused(),
-    terminalOpen: false,
-    previewFocus: false,
-    previewOpen: false,
-    modelPickerOpen: false,
-    isWeb: !isElectron,
-    isDesktop: isElectron,
-  };
-}
 
 /**
  * One whole page from the host and no more: every provider asks for one row beyond the page as
@@ -414,9 +401,10 @@ export function PullRequestsPage() {
   const overrideEntry = (
     entry: EnvironmentPullRequestEntry,
     action: PullRequestAction,
+    reply?: PullRequestSummary,
   ): number | null => {
     const token = ++overrideToken.current;
-    const override = pullRequestOverrideAfterAction(entry, action, new Date(), token);
+    const override = pullRequestOverrideAfterAction(entry, action, new Date(), token, reply);
     if (override === null) return null;
     setOverrides((current) => new Map(current).set(pullRequestEntryKey(entry), override));
     return token;
@@ -431,13 +419,17 @@ export function PullRequestsPage() {
     });
   };
   const detailOverrideTokens = useRef(new Map<string, number | null>());
-  const onSpeedAction = useStableCallback(({ entry, action }: PullRequestSpeedActionResult) => {
-    // Some hosts accept a merge before it completes. Let the next host read declare it merged.
-    if (action !== "merge") overrideEntry(entry, action);
-  });
-  const onBatchClosed = useStableCallback((entry: EnvironmentPullRequestEntry) => {
-    onSpeedAction({ entry, action: "close" });
-  });
+  const onSpeedAction = useStableCallback(
+    ({ entry, action, reply }: PullRequestSpeedActionResult) => {
+      // Some hosts accept a merge before it completes. Without a reply, let the next read say so.
+      if (reply !== undefined || action !== "merge") overrideEntry(entry, action, reply);
+    },
+  );
+  const onBatchClosed = useStableCallback(
+    (entry: EnvironmentPullRequestEntry, reply: PullRequestSummary | undefined) => {
+      onSpeedAction({ entry, action: "close", reply });
+    },
+  );
   const { close: closeBatch, closingKeys } = usePullRequestCloseBatch(onBatchClosed);
   const [snapshotEnvironmentKey, setSnapshotEnvironmentKey] = useState("");
   if (environmentKey.length > 0 && snapshotEnvironmentKey !== environmentKey) {
@@ -1056,6 +1048,9 @@ export function PullRequestsPage() {
     ),
   );
 
+  const prefetchEntry = pullRequestPrefetch.usePullRequestIntentPrefetch((entry) =>
+    listedPullRequestsBySurface.has(pullRequestListEntryId(entry)),
+  );
   const selectEntry = (entry: PullRequestRowTarget) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().openPullRequest(rightPanelRef, entry);
@@ -1160,6 +1155,7 @@ export function PullRequestsPage() {
           showProvider={showProvider}
           statsRef={registerStatsRow}
           onSelect={selectEntry}
+          onIntent={prefetchEntry}
           hostActionsOf={hostActionsOf}
           onActed={onSpeedAction}
           closingKeys={closingKeys}
@@ -1507,14 +1503,10 @@ export function PullRequestsPage() {
                   selectedEnvironmentId: panelEnvironmentId,
                 });
               }}
-              reference={{
+              reference={pullRequestPrefetch.pullRequestPanelReference({
+                ...renderedPullRequestSurface,
                 projectId: renderedPullRequestSurface.projectId as ProjectId,
-                repository: renderedPullRequestSurface.repository,
-                number: renderedPullRequestSurface.number,
-                ...(renderedPullRequestSurface.host
-                  ? { host: renderedPullRequestSurface.host }
-                  : {}),
-              }}
+              })}
               listEntry={
                 listedPullRequestsBySurface.get(
                   pullRequestListEntryId(renderedPullRequestSurface),
@@ -1522,12 +1514,19 @@ export function PullRequestsPage() {
               }
               refreshToken={detailRefreshToken}
               tabOnPage
-              onActed={(action, phase = "done") => {
+              onActed={(action, phase = "done", reply) => {
                 // From every row held, not the ones on screen: a pull request closed from an open
                 // list has left the screen, and reopening it has to find it anyway.
                 const acted = heldPullRequestsBySurface.get(
                   pullRequestListEntryId(renderedPullRequestSurface),
                 );
+                if (reply !== undefined) {
+                  if (acted !== undefined) {
+                    if (action !== undefined) overrideEntry(acted, action, reply);
+                    detailOverrideTokens.current.delete(pullRequestEntryKey(acted));
+                  }
+                  return;
+                }
                 const stateOnly =
                   action !== undefined &&
                   acted !== undefined &&
@@ -1555,12 +1554,4 @@ export function PullRequestsPage() {
       </div>
     </SidebarInset>
   );
-}
-
-function PullRequestFiltersMenuInSidebarOrder(
-  props: ComponentProps<typeof PullRequestFiltersMenu>,
-) {
-  const sidebarProjectGroups = useSidebarProjectGroups();
-  const projects = sortProjectsByGroupOrder(props.projects, sidebarProjectGroups);
-  return <PullRequestFiltersMenu {...props} projects={projects} />;
 }

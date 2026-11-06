@@ -1,15 +1,12 @@
 import { createMigratingDatabaseOpener } from "../lib/indexedDbMigration";
-import {
-  computeDpopAccessTokenHash,
-  computeDpopJwkThumbprint,
-  DpopPublicJwk,
-} from "@goat/shared/dpop";
+import { computeDpopJwkThumbprint, DpopPublicJwk } from "@goat/shared/dpop";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { importJWK, SignJWT, type JWK } from "jose";
+import { importJWK, type JWK } from "jose";
+import { DpopProof } from "@goat/client-runtime/relay";
 
 export interface BrowserDpopKey {
   readonly privateKey: CryptoKey;
@@ -151,32 +148,24 @@ export const createBrowserDpopProof = Effect.fn("dpop.createBrowserDpopProof")(f
   BrowserDpopError,
   Crypto.Crypto
 > {
-  const normalizedUrl = yield* Effect.try({
-    try: () => new URL(input.url),
-    catch: (cause) => dpopError("Could not normalize DPoP proof URL.", cause),
-  });
-  normalizedUrl.search = "";
-  normalizedUrl.hash = "";
-  const jti = yield* Crypto.Crypto.pipe(
-    Effect.flatMap((crypto) => crypto.randomUUIDv4()),
-    Effect.mapError((cause) => dpopError("Could not generate DPoP proof identifier.", cause)),
-  );
-  const proof = yield* Effect.tryPromise({
-    try: () =>
-      new SignJWT({
-        htm: input.method.toUpperCase(),
-        htu: normalizedUrl.toString(),
-        jti,
-        ...(input.accessToken ? { ath: computeDpopAccessTokenHash(input.accessToken) } : {}),
-      })
-        .setProtectedHeader({
-          typ: "dpop+jwt",
-          alg: "ES256",
-          jwk: input.proofKey.publicJwk,
-        })
-        .setIssuedAt()
-        .sign(input.proofKey.privateKey),
-    catch: (cause) => dpopError("Could not sign DPoP proof.", cause),
+  const proof = yield* DpopProof.createProof({
+    method: input.method,
+    url: input.url,
+    accessToken: input.accessToken,
+    publicJwk: input.proofKey.publicJwk,
+    error: dpopError,
+    sign: (bytes) =>
+      Effect.tryPromise({
+        try: async () =>
+          new Uint8Array(
+            await crypto.subtle.sign(
+              { name: "ECDSA", hash: "SHA-256" },
+              input.proofKey.privateKey,
+              new Uint8Array(bytes),
+            ),
+          ),
+        catch: (cause) => dpopError("Could not sign DPoP proof.", cause),
+      }),
   });
   return { proof, thumbprint: input.proofKey.thumbprint };
 });

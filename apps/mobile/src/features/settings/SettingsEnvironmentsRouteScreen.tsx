@@ -134,6 +134,16 @@ export function SettingsEnvironmentsRouteScreen() {
         ) : undefined
       }
       actions={[
+        ...(Platform.OS === "ios" && relaySession
+          ? [
+              {
+                accessibilityLabel: "Refresh cloud environments",
+                icon: "arrow.clockwise" as const,
+                disabled: isRefreshingCloud,
+                onPress: () => void refreshCloudEnvironments(),
+              },
+            ]
+          : []),
         {
           accessibilityLabel: "Add environment",
           icon: "plus",

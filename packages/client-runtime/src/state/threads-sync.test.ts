@@ -45,7 +45,7 @@ import {
 import * as RpcSession from "../rpc/session.ts";
 import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
 import {
-  PENDING_QUESTION,
+  questionProjection,
   assistantMessage,
   assistantReply,
   awaitThreadState,
@@ -89,7 +89,6 @@ const BASE_PROJECTION: OrchestrationV2ThreadProjection = {
   ...v2Projection,
   thread: { ...v2Projection.thread, title: "Cached thread" },
 };
-
 type TestThreadInput = OrchestrationV2ThreadStreamItem | Error;
 
 const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (options?: {
@@ -482,7 +481,7 @@ describe("EnvironmentThreads", () => {
         Scope.close(scope, Exit.void),
       );
       const old = yield* makeHarness({
-        cached: { ...BASE_PROJECTION, runtimeRequests: [PENDING_QUESTION] },
+        cached: questionProjection(BASE_PROJECTION),
         resumeCache,
       }).pipe(Effect.provideService(Scope.Scope, oldScope));
       yield* awaitThreadState(old.observed, (value) => value.status === "live");
@@ -2135,7 +2134,7 @@ describe("EnvironmentThreads", () => {
         (unsubscribe) => Effect.sync(unsubscribe),
       );
       const harness = yield* makeHarness({
-        cached: { ...BASE_PROJECTION, runtimeRequests: [PENDING_QUESTION] },
+        cached: questionProjection(BASE_PROJECTION),
         completionMarker: true,
       });
       yield* awaitThreadState(

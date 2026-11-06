@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({ answer: vi.fn() }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: (atom: unknown) => atom }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
@@ -41,7 +41,12 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 vi.mock("../../state/server", () => ({
-  serverEnvironment: { openHandoff: {}, answerSecretRequest: { permissionAtom: () => null } },
+  serverEnvironment: {
+    openHandoff: {},
+    answerSecretRequest: { permissionAtom: () => true },
+    settingsValueAtom: () => null,
+    configValueAtom: () => null,
+  },
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.answer }));
 import { SecretRequestCard } from "./SecretRequestCard";

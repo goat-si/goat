@@ -65,3 +65,15 @@ export const questionAlreadyAnswered = (
     status: request.status,
     resolvedAt: request.resolvedAt,
   });
+
+// Validate before resolving the request: adapters may otherwise coerce unusable answers.
+export const decodeUserInputAnswers = Schema.decodeUnknownEffect(
+  Schema.Record(
+    Schema.String,
+    Schema.Union([
+      Schema.String,
+      Schema.Array(Schema.String),
+      Schema.Struct({ answers: Schema.Array(Schema.String) }),
+    ]),
+  ),
+);

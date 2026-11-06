@@ -9,6 +9,7 @@ import { tryOpenExternalUrl } from "../lib/openExternalUrl";
 import { tryOpenEnvironmentUrl } from "../lib/openEnvironmentUrl";
 import { appAtomRegistry } from "../state/atom-registry";
 import { environmentServerConfigsAtom } from "../state/server";
+import { withKnownPullRequestSummary } from "../state/use-thread-pr";
 
 type PullRequestContext = { readonly environmentId: string; readonly projectId: string };
 
@@ -22,18 +23,19 @@ export function useNavigateToPullRequest(options?: { readonly replace?: boolean 
     async (url: string, context: PullRequestContext | null, sourceEnvironmentId?: string) => {
       // Read at press time so a capability push does not hand every link a new handler.
       const serverConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
-      const params = nativePullRequestDestination(
+      const destination = nativePullRequestDestination(
         url,
         context,
         projects,
         (environmentId) => serverConfigs.get(environmentId)?.environment.capabilities,
       );
-      if (!params) {
+      if (!destination) {
         const environmentId = sourceEnvironmentId ?? context?.environmentId;
         return environmentId
           ? tryOpenEnvironmentUrl(EnvironmentId.make(environmentId), url, "pull-request")
           : tryOpenExternalUrl(url, "pull-request");
       }
+      const params = withKnownPullRequestSummary(destination);
       // Android shows one page at a time; iOS opens it over the current page, so Back returns.
       if (Platform.OS === "android") selectDetail({ name: "PullRequest", params });
       else if (replace) navigation.dispatch(StackActions.replace("PullRequest", params));

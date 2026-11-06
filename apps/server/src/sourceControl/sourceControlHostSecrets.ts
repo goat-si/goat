@@ -53,13 +53,20 @@ export function writeSecretFieldValues(
     original !== null && typeof original === "object" && !Array.isArray(original)
       ? Object.entries(original).flatMap(([host, value]) =>
           isSecretReference(value)
-            ? [[host, { provider: value.provider, reference: value.reference }] as const]
+            ? [
+                [
+                  host.trim().toLowerCase(),
+                  { provider: value.provider, reference: value.reference },
+                ] as const,
+              ]
             : [],
         )
       : [];
   return Object.fromEntries([
     ...references,
-    ...values.map(([serverHost, value]) => [serverHost ?? "", value] as const),
+    ...values.map(
+      ([serverHost, value]) => [serverHost?.trim().toLowerCase() ?? "", value] as const,
+    ),
   ]);
 }
 
@@ -72,17 +79,22 @@ export async function resolveHostSecrets(
   const original = settings.sourceControlHosts[kind];
   if (!original) return settings;
   const fields = { ...original };
+  const readRequired = async (reference: SecretReference) => {
+    const value = await read(reference);
+    if (value.trim() === "") throw new Error("Empty source control credential");
+    return value;
+  };
   try {
     for (const name of SOURCE_CONTROL_HOST_SECRET_FIELDS.get(kind) ?? []) {
       const value = fields[name];
       if (isSecretReference(value)) {
-        fields[name] = await read(value);
+        fields[name] = await readRequired(value);
       } else if (value && typeof value === "object" && !Array.isArray(value)) {
         const entries: Record<string, unknown> = {};
         for (const [key, entry] of Object.entries(value)) {
           entries[key] = isSecretReference(entry)
             ? host !== undefined && key.toLowerCase() === host.toLowerCase()
-              ? await read(entry)
+              ? await readRequired(entry)
               : ""
             : entry;
         }

@@ -1,4 +1,3 @@
-import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
 import { copyThreadReference } from "~/lib/copyThreadReference";
@@ -109,11 +108,12 @@ import {
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useStartChatNew } from "../hooks/useStartChatNew";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
-import { startNewThreadFromContext, startNewThreadFromLastWork } from "../lib/chatThreadActions";
+import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -121,13 +121,11 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
-  useEnvironmentConnectionSummaries,
   useEnvironmentMachines,
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
   readThreadShell,
-  readThreadShells,
   useAllEnvironmentProjectSnapshotsReady,
   useProjects,
   useServerConfigs,
@@ -203,7 +201,6 @@ import {
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
   searchSidebarThreads,
-  shouldCreateNewThreadInCurrentProject,
   shouldNavigateAfterThreadPark,
   sidebarListItemId,
   sidebarThreadKeyAtY,
@@ -213,7 +210,6 @@ import {
   type SidebarListItem,
   type SidebarSection,
   resolveSidebarRowThreadId,
-  isSidebarEnvironmentDisconnected,
 } from "./Sidebar.logic";
 import {
   createSidebarCollisionDetection,
@@ -386,18 +382,6 @@ function useSidebarThreads(input: {
   const [acknowledgedWakes, setAcknowledgedWakes] = useState<ReadonlySet<string>>(() => new Set());
   const [priorityReleases, setPriorityReleases] = useState<ReadonlySet<string>>(() => new Set());
   const workingShelfEnabled = useClientSettings((setting) => setting.sidebarWorkingShelfEnabled);
-  const environmentConnections = useEnvironmentConnectionSummaries();
-  const liveShellEnvironmentIds = useAtomValue(liveShellEnvironmentIdsAtom);
-  const disconnectedEnvironmentIds = new Set(
-    environmentConnections
-      .filter((environment) =>
-        isSidebarEnvironmentDisconnected(
-          environment.connectionState,
-          liveShellEnvironmentIds.has(environment.environmentId),
-        ),
-      )
-      .map((environment) => environment.environmentId),
-  );
   const inboxReturnsVersion = useSyncExternalStore(
     inboxReturns.subscribe,
     inboxReturns.getSnapshot,
@@ -445,7 +429,6 @@ function useSidebarThreads(input: {
     acknowledgedWakes,
     priorityReleases,
     workingShelfEnabled,
-    disconnectedEnvironmentIds,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
     hiddenBotThreadKeys: botThreads.hidden,
   });
@@ -853,6 +836,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const newThreadContext = useHandleNewThread();
+  const startChatNew = useStartChatNew();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -877,7 +861,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const setPersistedProjectScopeKeys = useUiStateStore((store) => store.setSidebarProjectScopeKeys);
   const allProjectSnapshotsReady = useAllEnvironmentProjectSnapshotsReady();
   const allProjectConfigsReady = useAtomValue(environmentProjects.projectConfigsReadyAtom);
-  const headerSearchRef = useRef<HTMLDivElement | null>(null);
   // Hold dropped rows until server placement is confirmed; block another pickup from replacing the hold.
   const [optimisticDrop, setOptimisticDrop] = useState<SidebarOptimisticDrop | null>(null);
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -2801,8 +2784,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const showJumpHints = useThreadJumpHintsVisible(shouldShowJumpHintsNow);
 
-  // Plain compose opens a draft in the last project and workspace mode the
-  // user wrote in. Shift+click keeps the current-project action.
+  // Shift+click keeps the current-project action.
   const handleNewThreadClick = (event?: ReactMouseEvent) => {
     if (isMobile) setOpenMobile(false);
     if (event?.shiftKey) {
@@ -2816,39 +2798,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       });
       return;
     }
-    void (async () => {
-      if (
-        await startNewThreadFromLastWork({
-          threads: readThreadShells(),
-          projects,
-          handleNewThread: newThreadContext.handleNewThread,
-        })
-      ) {
-        return;
-      }
-      if (
-        shouldCreateNewThreadInCurrentProject(
-          false,
-          projectGroups.filter((group) => !group.archived).length,
-          projectGroups.length,
-        )
-      ) {
-        const started = await startNewThreadFromContext({
-          activeDraftThread: newThreadContext.activeDraftThread,
-          activeThread: newThreadContext.activeThread ?? undefined,
-          defaultProjectRef: newThreadContext.defaultProjectRef,
-          handleNewThread: newThreadContext.handleNewThread,
-        });
-        if (!started) openCommandPalette({ open: "new-thread-in" });
-      } else {
-        openCommandPalette({ open: "new-thread-in" });
-      }
-    })();
+    void startChatNew();
   };
 
-  // The button mirrors chat.new. With no last work, multi-project setups
-  // chat.newLocal remains the shortcut for the contextual action, even with
-  // one project, where its workspace mode can differ from last work.
+  // The button mirrors chat.new; chat.newLocal keeps the contextual action.
   const newThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.new");
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
@@ -2866,7 +2819,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             <GoatBotSidebarTabs />
             <SidebarGroup hidden={botSelected} className="z-[1]">
               <SidebarThreadHeader
-                searchFieldRef={headerSearchRef}
                 hasProjects={projectGroups.length > 0}
                 projectScope={
                   <SidebarProjectScope
@@ -2878,7 +2830,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     showProjectEnvironments={showProjectEnvironments}
                     primaryEnvironmentId={primaryEnvironmentId}
                     environmentMachineById={environmentMachineById}
-                    headerSearchRef={headerSearchRef}
                   />
                 }
                 onNewProject={openAddProjectCommandPalette}
@@ -3022,6 +2973,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       "relative flex flex-col gap-px",
                       sidebarListItems.length > 0 && "flex-1",
                       actionSweep !== null && "**:pointer-events-none",
+                      dragState !== null &&
+                        "after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-30 after:h-px after:content-['']",
                     )}
                   >
                     {(() => {

@@ -1,3 +1,4 @@
+import { fromSecret } from "../auth/PayloadSigner.ts";
 import type { AssetResource } from "@goat/contracts";
 import {
   AssetAttachmentNotFoundError,
@@ -48,12 +49,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import {
-  base64UrlDecodeUtf8,
-  base64UrlEncode,
-  signPayload,
-  timingSafeEqualBase64Url,
-} from "../auth/utils.ts";
+import { base64UrlDecodeUtf8, base64UrlEncode } from "../auth/utils.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
@@ -178,6 +174,7 @@ const AssetClaimsSchema = Schema.Union([
     /** A host's `fetchUrl`, narrowed at mint time; the signature is what keeps it there. */
     url: Schema.String,
     cwd: Schema.String,
+    repository: Schema.optionalKey(Schema.String),
     expiresAt: Schema.Number,
   }),
 ]);
@@ -206,6 +203,7 @@ export type ResolvedAsset =
       readonly kind: "source-control-media";
       readonly url: string;
       readonly cwd: string;
+      readonly repository?: string;
       readonly expiresAt: number;
     };
 
@@ -874,11 +872,12 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       if (media === null) {
         return yield* new AssetSourceControlMediaUrlValidationError({});
       }
+      const { _tag, ...resource } = input.resource;
       claims = {
         version: 1,
         kind: SOURCE_CONTROL_MEDIA_ASSET,
+        ...resource,
         url: media.fetchUrl,
-        cwd: input.resource.cwd,
         expiresAt,
       };
       fileName = media.fileName;
@@ -910,7 +909,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
     claims = { ...claims, expiresAt };
   }
   const encodedPayload = base64UrlEncode(encodeAssetClaims(claims));
-  const token = `${encodedPayload}.${signPayload(encodedPayload, signingSecret)}`;
+  const token = `${encodedPayload}.${fromSecret(signingSecret).sign(encodedPayload)}`;
   return {
     relativeUrl: `${ASSET_ROUTE_PREFIX}/${token}/${encodeURIComponent(fileName)}`,
     expiresAt,
@@ -933,7 +932,7 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
     Effect.orElseSucceed(() => null),
   );
   if (!signingSecret) return null;
-  if (!timingSafeEqualBase64Url(signature, signPayload(encodedPayload, signingSecret))) return null;
+  if (!fromSecret(signingSecret).verify(encodedPayload, signature)) return null;
 
   const claims = decodeClaims(encodedPayload);
   if (!claims || claims.expiresAt <= (yield* Clock.currentTimeMillis)) return null;
@@ -991,12 +990,8 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
   }
 
   if (claims.kind === SOURCE_CONTROL_MEDIA_ASSET) {
-    return {
-      kind: "source-control-media",
-      url: claims.url,
-      cwd: claims.cwd,
-      expiresAt: claims.expiresAt,
-    } satisfies ResolvedAsset;
+    const { version: _version, ...media } = claims;
+    return { ...media, kind: "source-control-media" } satisfies ResolvedAsset;
   }
 
   if (claims.kind === "tool-output-image") {

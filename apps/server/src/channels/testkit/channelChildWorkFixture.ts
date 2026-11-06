@@ -116,6 +116,7 @@ const threadsLayer = (
       listLaunchEdges: unused,
       getThreadShell: unused,
       getShellSnapshot: unused,
+      getAgentAwarenessSnapshot: unused,
       readShellSnapshot: unused,
       ensureLegacyTranscript: unused,
       dispatch: ((command: {

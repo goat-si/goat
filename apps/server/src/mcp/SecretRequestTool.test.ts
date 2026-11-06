@@ -12,6 +12,8 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as Worker from "../orchestration-v2/EffectWorker.ts";
@@ -206,6 +208,32 @@ it.effect("refuses wait:false without a clientRequestId, which the next call wou
   ),
 );
 
+it.effect("a declined secret tells the agent not to ask another way", () =>
+  withRunningTurn(({ orchestrator, requestSecret }) =>
+    Effect.gen(function* () {
+      yield* requestSecret(scope, input);
+      const card = (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
+        (item) => item.type === "secret_request",
+      )!;
+      yield* orchestrator.dispatch({
+        type: "secret_request.record",
+        commandId: CommandId.make("secret-declined"),
+        threadId,
+        runId: card.runId!,
+        nodeId: card.nodeId!,
+        turnItemId: card.id,
+        label: input.label,
+        reason: input.reason,
+        secretStatus: "declined",
+      });
+      expect(yield* requestSecret(scope, input)).toMatchObject({
+        status: "declined",
+        note: "The user declined. Do not ask in chat or another way; explain what is blocked and continue without it.",
+      });
+    }),
+  ),
+);
+
 it.effect("closes a card nobody collects once its run ends", () =>
   withRunningTurn(({ orchestrator, worker, handoffs, requestSecret }) =>
     Effect.gen(function* () {
@@ -221,6 +249,47 @@ it.effect("closes a card nobody collects once its run ends", () =>
         (item) => item.type === "secret_request",
       );
       expect(cards).toMatchObject([{ secretStatus: "cancelled", handoff: { state: "expired" } }]);
+    }),
+  ),
+);
+
+it.effect("a cancelled request explains when to ask again", () =>
+  withRunningTurn(({ orchestrator, requestSecret }) =>
+    Effect.gen(function* () {
+      yield* requestSecret(scope, input);
+      const card = (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
+        (item) => item.type === "secret_request",
+      )!;
+      yield* orchestrator.dispatch({
+        type: "secret_request.record",
+        commandId: CommandId.make("secret-cancelled"),
+        threadId,
+        runId: card.runId!,
+        nodeId: card.nodeId!,
+        turnItemId: card.id,
+        label: input.label,
+        reason: input.reason,
+        secretStatus: "cancelled",
+      });
+      expect(yield* requestSecret(scope, input)).toMatchObject({
+        status: "cancelled",
+        note: "The card closed with the run. Ask again with a new clientRequestId only if the secret is still needed.",
+      });
+    }),
+  ),
+);
+
+it.effect("a timed-out request tells the agent to keep secrets out of chat", () =>
+  withRunningTurn(({ requestSecret }) =>
+    Effect.gen(function* () {
+      const request = yield* requestSecret(scope, { ...input, wait: true, timeoutMs: 1000 }).pipe(
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("1 second");
+      expect(yield* Fiber.join(request)).toMatchObject({
+        status: "timed_out",
+        note: "No answer in time. Do not ask in chat; ask again with a new clientRequestId only if the secret is still needed.",
+      });
     }),
   ),
 );

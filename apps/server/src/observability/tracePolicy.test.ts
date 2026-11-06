@@ -200,7 +200,7 @@ it("keeps every span that carries evidence", () => {
     "an unlisted name": span("ProviderTurnStartService.start"),
     "a slow hot span": span("SqliteWriter.send", { endNanos: 10_000_000n }),
     "a failed hot span": span("SqliteWriter.send", { exit: Exit.fail("fixture") }),
-    "an interrupted hot span": span("ThreadLiveEventCoalescer.offerAll", {
+    "an interrupted hot span": span("SqliteWriter.send", {
       exit: Exit.interrupt(),
     }),
     "a root hot span": span("SqliteWriter.send", { root: true }),

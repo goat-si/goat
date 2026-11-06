@@ -6,10 +6,8 @@ import { AsyncResult } from "effect/reactivity";
 import {
   archiveSelectedThreadEntries,
   deleteSelectedThreadEntries,
-  getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   belongsInSidebarWorkingShelf,
-  isSidebarEnvironmentDisconnected,
   resolveSidebarRowThreadId,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
@@ -652,38 +650,6 @@ function makeThread(overrides: ThreadFixtureOverrides = {}): Thread {
   });
 }
 
-describe("getFallbackThreadIdAfterDelete", () => {
-  it("skips other threads being deleted in the same action", () => {
-    const fallbackThreadId = getFallbackThreadIdAfterDelete({
-      threads: [
-        makeThread({
-          id: ThreadId.make("thread-active"),
-          projectId: ProjectId.make("project-1"),
-          createdAt: "2026-03-09T10:05:00.000Z",
-          messages: [],
-        }),
-        makeThread({
-          id: ThreadId.make("thread-newest"),
-          projectId: ProjectId.make("project-1"),
-          createdAt: "2026-03-09T10:10:00.000Z",
-          messages: [],
-        }),
-        makeThread({
-          id: ThreadId.make("thread-next"),
-          projectId: ProjectId.make("project-1"),
-          createdAt: "2026-03-09T10:07:00.000Z",
-          messages: [],
-        }),
-      ],
-      deletedThreadId: ThreadId.make("thread-active"),
-      deletedThreadIds: new Set([ThreadId.make("thread-active"), ThreadId.make("thread-newest")]),
-      sortOrder: "created_at",
-    });
-
-    expect(fallbackThreadId).toBe(ThreadId.make("thread-next"));
-  });
-});
-
 describe("sortProjectsForSidebar", () => {
   it("sorts projects by the most recent user message across their threads", () => {
     const projects = [
@@ -1065,25 +1031,20 @@ describe("Working shelf (beta)", () => {
     pendingBackgroundTasks: [backgroundTask],
   };
 
-  it("moves running threads out of Working when their environment disconnects (#26195)", () => {
+  it("keeps cached working threads in Working when their environment disconnects", () => {
     const thread = { ...idle, runtime, environmentId: localEnvironmentId };
     expect(
       belongsInSidebarWorkingShelf(thread, {
         enabled: true,
-        disconnectedEnvironmentIds: new Set(),
         isWorking: isSidebarThreadWorking,
       }),
     ).toBe(true);
     expect(
       belongsInSidebarWorkingShelf(thread, {
-        enabled: true,
-        disconnectedEnvironmentIds: new Set([localEnvironmentId]),
+        enabled: false,
         isWorking: isSidebarThreadWorking,
       }),
     ).toBe(false);
-    expect(isSidebarEnvironmentDisconnected("connecting", false)).toBe(false);
-    expect(isSidebarEnvironmentDisconnected("connected", false)).toBe(true);
-    expect(isSidebarEnvironmentDisconnected("reconnecting", false)).toBe(true);
   });
 
   it("folds away running threads and threads waiting on background work only", () => {

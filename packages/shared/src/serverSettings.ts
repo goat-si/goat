@@ -1,3 +1,4 @@
+import { mergeSourceControlHostSettings } from "./sourceControlHostSettings.ts";
 import type { ModelPreferences } from "@goat/contracts/settings";
 import {
   goatBotHomeClaimSupersedes,
@@ -21,6 +22,7 @@ import {
   type ServerProvider,
   ServerSettings,
   type ServerSettingsPatch,
+  UsageLimitSourceId,
   withIdleCompaction,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
@@ -35,8 +37,13 @@ import {
   resolveBackgroundActivitySettings,
 } from "./backgroundActivitySettings.ts";
 
-const ServerSettingsJson = fromLenientJson(ServerSettings);
-const decodeServerSettingsJson = Schema.decodeUnknownOption(ServerSettingsJson);
+// Only observability: a value the server migrates on load elsewhere in the file must not drop it.
+const ServerObservabilitySettingsJson = fromLenientJson(
+  Schema.Struct({ observability: ServerSettings.fields.observability }),
+);
+const decodeServerObservabilitySettingsJson = Schema.decodeUnknownOption(
+  ServerObservabilitySettingsJson,
+);
 
 export function resolveProjectAgentBrowserAccess(
   settings: Pick<
@@ -223,7 +230,7 @@ function extractPersistedServerObservabilitySettings(input: {
 export function parsePersistedServerObservabilitySettings(
   raw: string,
 ): PersistedServerObservabilitySettings {
-  const decoded = decodeServerSettingsJson(raw);
+  const decoded = decodeServerObservabilitySettingsJson(raw);
   if (Option.isSome(decoded)) {
     return extractPersistedServerObservabilitySettings(decoded.value);
   }
@@ -267,6 +274,29 @@ function mergeSettingsEntries<Value>(
     }
   }
   return Object.fromEntries(next);
+}
+
+function mergeUsageLimitSources(
+  current: ServerSettings["usageLimitSources"],
+  patch: NonNullable<ServerSettingsPatch["usageLimitSources"]>,
+) {
+  return mergeSettingsEntries(
+    current,
+    Object.fromEntries(
+      Object.entries(patch).map(([id, next]) => {
+        const previous = current[UsageLimitSourceId.make(id)];
+        return [
+          id,
+          next !== null &&
+          next.managementKeyReference === undefined &&
+          (next.managementKey === "" || next.managementKey === "••••••") &&
+          previous?.managementKeyReference != null
+            ? { ...next, managementKeyReference: previous.managementKeyReference }
+            : next,
+        ];
+      }),
+    ),
+  );
 }
 
 /** Top-level fields replace; each named target merges its patched fields, and `null` removes it. */
@@ -444,6 +474,7 @@ export function applyServerSettingsPatch(
     worktreeCleanup: worktreeCleanupPatch,
     // Merged per entry below; its `null` removals must not reach deepMerge.
     usageLimitSources: usageLimitSourcesPatch,
+    easDeviceHosts: easDeviceHostsPatch,
     secretProviders: secretProvidersPatch,
     sourceControlHosts: sourceControlHostsPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
@@ -619,7 +650,7 @@ export function applyServerSettingsPatch(
             ...Object.fromEntries(
               Object.entries(sourceControlHostsPatch).map(([kind, fields]) => [
                 kind,
-                { ...current.sourceControlHosts[kind], ...fields },
+                mergeSourceControlHostSettings(current.sourceControlHosts[kind], fields),
               ]),
             ),
           },
@@ -648,12 +679,24 @@ export function applyServerSettingsPatch(
       : {}),
     ...(usageLimitSourcesPatch !== undefined
       ? {
-          usageLimitSources: mergeSettingsEntries(
+          usageLimitSources: mergeUsageLimitSources(
             current.usageLimitSources,
             usageLimitSourcesPatch,
           ),
         }
       : {}),
+    ...(easDeviceHostsPatch === undefined
+      ? {}
+      : {
+          easDeviceHosts: easDeviceHostsPatch.map((host) => {
+            const previous = current.easDeviceHosts.find((candidate) => candidate.id === host.id);
+            return host.accessTokenReference === undefined &&
+              (host.accessToken === "" || host.accessToken === "••••••") &&
+              previous?.accessTokenReference != null
+              ? { ...host, accessTokenReference: previous.accessTokenReference }
+              : host;
+          }),
+        }),
     ...(secretProvidersPatch !== undefined
       ? { secretProviders: mergeSettingsEntries(current.secretProviders, secretProvidersPatch) }
       : {}),
@@ -784,3 +827,5 @@ export function resolveGoatBotModelSelection(settings: ServerSettings): ModelSel
     settings.textGenerationModelSelection
   );
 }
+
+export { sourceControlTokenPatch } from "./sourceControlHostSettings.ts";

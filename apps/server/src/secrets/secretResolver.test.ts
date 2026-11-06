@@ -135,3 +135,35 @@ it("fails closed at capacity without evicting earlier reads", async () => {
   expect(await resolve(settings.secretProviders, ref(0))).toBe("fixture");
   expect(read).toHaveBeenCalledTimes(128);
 });
+
+it("queues uncached reads after eight and releases a permit on failure", async () => {
+  const { withSecretReadAdmission } = await import("./secretResolver.ts");
+  const gates = Array.from({ length: 9 }, () => Promise.withResolvers<string>());
+  let started = 0;
+  const reads = gates.map((gate) =>
+    withSecretReadAdmission(() => {
+      started++;
+      return gate.promise;
+    }),
+  );
+  expect(started).toBe(8);
+  gates[0]!.reject(new Error("locked"));
+  await expect(reads[0]).rejects.toThrow("locked");
+  expect(started).toBe(9);
+  for (const gate of gates.slice(1)) gate.resolve("fresh");
+  expect(await Promise.all(reads.slice(1))).toEqual(Array(8).fill("fresh"));
+});
+
+it("removes a cancelled queued read without starting it", async () => {
+  const { withSecretReadAdmission } = await import("./secretResolver.ts");
+  const gate = Promise.withResolvers<string>();
+  const reads = Array.from({ length: 8 }, () => withSecretReadAdmission(() => gate.promise));
+  const controller = new AbortController();
+  const read = vi.fn(async () => "should not run");
+  const queued = withSecretReadAdmission(read, controller.signal);
+  controller.abort();
+  await expect(queued).rejects.toThrow("cancelled");
+  gate.resolve("done");
+  await Promise.all(reads);
+  expect(read).not.toHaveBeenCalled();
+});

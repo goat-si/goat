@@ -13,11 +13,8 @@ import {
 import { AsyncResult, Atom } from "effect/reactivity";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
-import { parseThreadKey, threadKey } from "@goat/client-runtime/state/entities";
-import { createThreadVisitTracker } from "@goat/client-runtime/state/thread-visits";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
-import { ChatGptUsageLimitNotice } from "./ChatGptUsageLimitNotice";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
   effectiveSnoozed,
@@ -70,6 +67,7 @@ import {
   BACKGROUND_WORK_STOP_RETRY_AFTER_MS,
   type BackgroundWorkStopRequest,
   isBackgroundWorkStopPending,
+  limitRecoveryHoldsSnooze,
   presentPendingBackgroundWork,
   presentProviderGoal,
 } from "@goat/client-runtime/state/thread-execution";
@@ -159,11 +157,7 @@ import {
   clearThreadComposerError,
   threadComposerErrorsAtom,
 } from "../../state/thread-composer-error";
-import {
-  environmentThreadDetails,
-  environmentThreadShells,
-  threadEnvironment,
-} from "../../state/threads";
+import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadStreamHaptics } from "./threadStreamHaptics";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -213,6 +207,7 @@ import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
 import { useOfflineSnapshotAge } from "../connection/useOfflineSnapshotAge";
+import { threadVisitTracker } from "./threadVisitTracker";
 export interface ThreadDetailScreenProps {
   readonly cloudState: CloudTaskState;
   readonly cloudRun?: CloudRunCard | null;
@@ -331,31 +326,6 @@ const USER_INPUT_TOGGLE_TIMING = {
   duration: USER_INPUT_TOGGLE_DURATION_MS,
   easing: Easing.out(Easing.cubic),
 };
-// A scheduled wake can happen without a newer server update, so the tracker
-// is told when one takes effect. The shell's updatedAt ticks while a run
-// streams; the tracker follows it outside React.
-const wakeAwareVisitShell = Atom.family((key: string) => {
-  const ref = parseThreadKey(key);
-  return Atom.make((get) => {
-    const shell = get(environmentThreadShells.threadShellAtom(ref));
-    if (shell === null) return null;
-    const nowMs = Date.now();
-    const wokeAt = threadWokeAt(shell, { now: new Date(nowMs).toISOString() });
-    const wakeAtMs = shell.snoozedUntil == null ? NaN : Date.parse(shell.snoozedUntil);
-    if (wokeAt === null && wakeAtMs > nowMs) {
-      const timer = setTimeout(
-        () => get.refreshSelf(),
-        Math.min(wakeAtMs - nowMs + 50, 2_147_483_647),
-      );
-      get.addFinalizer(() => clearTimeout(timer));
-    }
-    return { ...shell, wokeAt };
-  }).pipe(Atom.withLabel(`mobile-thread-visit-shell:${key}`));
-});
-const threadVisitTracker = createThreadVisitTracker({
-  threadShellAtom: (ref) => wakeAwareVisitShell(threadKey(ref)),
-  visit: threadEnvironment.visit,
-});
 const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
   Atom.withLabel("mobile-thread-run-stop:empty"),
 );
@@ -634,6 +604,8 @@ function ThreadDetailBody(
     return () => clearTimeout(timer);
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Re-arm if timer clamping fires before the wake time.
   }, [snoozed, snoozedUntil, lifecycleNow]);
+  const snoozeShown =
+    snoozed && !limitRecoveryHoldsSnooze(props.selectedThread, props.selectedThread.runtime);
   const settled =
     props.serverConfig?.environment.capabilities.threadSettlement === true &&
     props.selectedThread.settledOverride === "settled";
@@ -806,22 +778,22 @@ function ThreadDetailBody(
         },
       };
     }
-    if (contentPresentationKind === "ready" && (snoozed || settled || woke)) {
-      const state = snoozed ? "snoozed" : settled ? "settled" : "woke";
+    if (contentPresentationKind === "ready" && (snoozeShown || settled || woke)) {
+      const state = snoozeShown ? "snoozed" : settled ? "settled" : "woke";
       const label =
-        snoozed && snoozedUntil !== null
+        snoozeShown && snoozedUntil !== null
           ? `Snoozed, wakes in ${snoozeWakeLabel(snoozedUntil, { now: lifecycleNow })}`
           : settled
             ? "Settled"
             : "Woke from snooze";
-      const actionLabel = snoozed ? "Wake now" : settled ? "Un-settle" : "Dismiss";
+      const actionLabel = snoozeShown ? "Wake now" : settled ? "Un-settle" : "Dismiss";
       return {
         kind: "lifecycle",
         state,
         label,
         action: {
           label: statusPending
-            ? snoozed
+            ? snoozeShown
               ? "Waking..."
               : settled
                 ? "Un-settling..."
@@ -829,7 +801,8 @@ function ThreadDetailBody(
             : actionLabel,
           accessibilityLabel: actionLabel,
           disabled: !props.canOperateThread || statusPending,
-          onPress: () => void runStatusAction(snoozed ? "wake" : settled ? "unsettle" : "dismiss"),
+          onPress: () =>
+            void runStatusAction(snoozeShown ? "wake" : settled ? "unsettle" : "dismiss"),
         },
       };
     }
@@ -1003,6 +976,15 @@ function ThreadDetailBody(
       composerOverlapHeight: composerBottomInset,
     }),
   );
+  const approvalHeightStyle = useAnimatedStyle(() => ({
+    maxHeight: derivePendingUserInputMaxHeight({
+      windowHeight: screenAreaHeight,
+      keyboardHeight: keyboardStickyEnabled ? -keyboardTranslation.value : 0,
+      navigationHeaderHeight,
+      composerOverlapHeight,
+    }),
+    flexGrow: 0,
+  }));
   // The usage panel stacks with the composer and any approval card, so it gets
   // whatever room they leave below the header. Measured only while it is open
   // so typing in the composer does not re-render the screen.
@@ -1617,10 +1599,6 @@ function ThreadDetailBody(
                     thread={props.selectedThread}
                     environmentId={props.environmentId}
                   />
-                  <ChatGptUsageLimitNotice
-                    key={`chatgpt-limit:${props.selectedThread.latestRun?.runId}`}
-                    thread={props.selectedThread}
-                  />
                   <ThreadGuestShareBar
                     threadRef={props.selectedThreadDetailRef}
                     canOperateThread={props.canOperateThread}
@@ -1685,12 +1663,19 @@ function ThreadDetailBody(
                       exiting={FadeOut.duration(140)}
                     >
                       {props.activePendingApproval ? (
-                        <PendingApprovalCard
-                          canOperateThread={props.canOperateThread}
-                          approval={props.activePendingApproval}
-                          respondingApprovalId={props.respondingApprovalId}
-                          onRespond={props.onRespondToApproval}
-                        />
+                        <Animated.ScrollView
+                          key={props.activePendingApproval.requestId}
+                          style={approvalHeightStyle}
+                          keyboardShouldPersistTaps="handled"
+                          nestedScrollEnabled
+                        >
+                          <PendingApprovalCard
+                            canOperateThread={props.canOperateThread}
+                            approval={props.activePendingApproval}
+                            respondingApprovalId={props.respondingApprovalId}
+                            onRespond={props.onRespondToApproval}
+                          />
+                        </Animated.ScrollView>
                       ) : null}
                       {props.activePendingUserInput ? (
                         <PendingUserInputCard

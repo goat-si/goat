@@ -158,9 +158,12 @@ export function omitOlderSettledShells(input: {
     ancestorIds.add(thread.lineage.rootThreadId);
   }
   const counts = new Map<ProjectId, number>();
+  const sideChatCounts = new Map<ProjectId, number>();
   const threads = input.threads.filter((thread) => {
     if (!isOlderSettledThreadShell(thread, beforeMs)) return true;
     counts.set(thread.projectId, (counts.get(thread.projectId) ?? 0) + 1);
+    if (thread.sideChatOf != null)
+      sideChatCounts.set(thread.projectId, (sideChatCounts.get(thread.projectId) ?? 0) + 1);
     return (
       thread.pinnedAt != null ||
       (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) ||
@@ -174,6 +177,7 @@ export function omitOlderSettledShells(input: {
       before: DateTime.formatIso(DateTime.makeUnsafe(beforeMs)),
       asOfSequence: input.snapshotSequence,
       counts: Array.from(counts, ([projectId, count]) => ({ projectId, count })),
+      sideChatCounts: Array.from(sideChatCounts, ([projectId, count]) => ({ projectId, count })),
     },
   };
 }
@@ -259,6 +263,7 @@ export const loadOlderSettledThreadsPage = Effect.fn("ShellStream.loadOlderSettl
       {
         readonly threadIds: ReadonlyArray<ThreadId>;
         readonly counts: ReadonlyArray<OrchestrationV2OlderSettledCount>;
+        readonly sideChatCounts?: ReadonlyArray<OrchestrationV2OlderSettledCount>;
       },
       E1
     >;
@@ -286,6 +291,7 @@ export const loadOlderSettledThreadsPage = Effect.fn("ShellStream.loadOlderSettl
       snapshotSequence: read.snapshotSequence,
       threads: threads.toSorted((left, right) => order.get(left.id)! - order.get(right.id)!),
       counts: read.listed.counts,
+      ...(read.listed.sideChatCounts ? { sideChatCounts: read.listed.sideChatCounts } : {}),
     };
   },
 );

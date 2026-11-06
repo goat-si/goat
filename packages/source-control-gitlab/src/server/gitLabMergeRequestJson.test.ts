@@ -1,3 +1,4 @@
+import { decodeMergeMessagesJson } from "./gitLabMergeMessages.ts";
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -12,7 +13,6 @@ import {
   decodeMergeRequestStatsJson,
   decodeNotesJson,
   decodeOwnAwardIdJson,
-  decodeReviewDecisionsJson,
   decodeTriggerJobChecksJson,
 } from "./gitLabMergeRequestJson.ts";
 
@@ -176,6 +176,21 @@ describe("decodeMergeRequestDetailJson", () => {
     expect(headSha({})).toBeUndefined();
     expect(headSha({ sha: null })).toBeUndefined();
     expect(headSha({ sha: "  " })).toBeUndefined();
+  });
+
+  it("reads the diff refs threads are placed against", () => {
+    const diffRefs = (entry: Record<string, unknown>) =>
+      expectSuccess(decodeMergeRequestDetailJson(detailJson(entry))).diffRefs;
+
+    expect(diffRefs({ diff_refs: { base_sha: "b", start_sha: "s", head_sha: "h" } })).toEqual({
+      baseSha: "b",
+      startSha: "s",
+      headSha: "h",
+    });
+    expect(diffRefs({ diff_refs: null })).toBeUndefined();
+    expect(
+      diffRefs({ diff_refs: { base_sha: null, start_sha: "s", head_sha: "h" } }),
+    ).toBeUndefined();
   });
 
   it("reads either auto-merge field, and says nothing where GitLab named neither", () => {
@@ -372,6 +387,7 @@ describe("decodeMergeRequestDiffsJson", () => {
     expect(result.patch).toBe(
       [
         String.raw`diff --git "a/ old\\name.ts " "b/ new\\name.ts "`,
+        "similarity index 100%",
         String.raw`rename from " old\\name.ts "`,
         String.raw`rename to " new\\name.ts "`,
         String.raw`--- "a/ old\\name.ts "`,
@@ -494,7 +510,7 @@ describe("merge request viewer fields", () => {
 });
 
 describe("decodeAwardEmojiJson", () => {
-  it("reads MR-level awards, keys per-note awards by the REST id inside their gid, and ignores an award outside the eight", () => {
+  it("reads MR-level awards, keys per-note awards by the REST id inside their gid, ignores an award outside the eight, and collects bot note authors", () => {
     const result = expectSuccess(
       decodeAwardEmojiJson(
         JSON.stringify({
@@ -513,10 +529,12 @@ describe("decodeAwardEmojiJson", () => {
                   nodes: [
                     {
                       id: "gid://gitlab/DiffNote/42",
+                      author: { username: "alex", bot: false },
                       awardEmoji: { nodes: [{ name: "heart", user: { username: "alex" } }] },
                     },
                     {
                       id: "gid://gitlab/Note/7",
+                      author: { username: "project_278964_bot_89f97e2c", bot: true },
                       awardEmoji: {
                         nodes: [{ name: "partyparrot", user: { username: "bilal" } }],
                       },
@@ -536,7 +554,50 @@ describe("decodeAwardEmojiJson", () => {
     expect([...result.reactionsByNoteId]).toEqual([
       ["42", [{ content: "heart", count: 1, actors: ["alex"], viewerHasReacted: false }]],
     ]);
+    expect([...result.botLogins]).toEqual(["project_278964_bot_89f97e2c"]);
     expect(result.nextCursor).toBeNull();
+  });
+
+  it("dates a note's edit only when someone edited its text, not when its thread was resolved", () => {
+    const result = expectSuccess(
+      decodeAwardEmojiJson(
+        JSON.stringify({
+          data: {
+            currentUser: { username: "bilal" },
+            project: {
+              mergeRequest: {
+                awardEmoji: { nodes: [] },
+                notes: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      id: "gid://gitlab/Note/1",
+                      lastEditedAt: "2026-07-02T00:00:00Z",
+                      lastEditedBy: { username: "alex" },
+                      resolved: false,
+                    },
+                    {
+                      id: "gid://gitlab/Note/2",
+                      lastEditedAt: "2026-07-01T00:00:00Z",
+                      lastEditedBy: null,
+                      resolved: false,
+                    },
+                    {
+                      id: "gid://gitlab/DiscussionNote/3",
+                      lastEditedAt: "2026-07-03T00:00:00Z",
+                      lastEditedBy: { username: "alex" },
+                      resolved: true,
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect([...result.editedAtByNoteId]).toEqual([["1", "2026-07-02T00:00:00Z"]]);
   });
 
   it("matches the viewer's username case-insensitively, since GitLab is not consistent about case", () => {
@@ -661,80 +722,6 @@ describe("decodeRepositoryBlobsJson", () => {
   });
 });
 
-describe("decodeReviewDecisionsJson", () => {
-  const decisionsOf = (enterprise: boolean | null, nodes: ReadonlyArray<unknown>) =>
-    expectSuccess(
-      decodeReviewDecisionsJson(
-        JSON.stringify({
-          data: {
-            metadata: enterprise === null ? null : { enterprise },
-            project: { mergeRequests: { nodes } },
-          },
-        }),
-      ),
-    );
-  const approvedBy = (...usernames: ReadonlyArray<string>) => ({
-    nodes: usernames.map((username) => ({ username })),
-  });
-
-  it.each([
-    {
-      reading: "an approval short of Enterprise approval rules",
-      enterprise: true,
-      approval: { approved: false, approvedBy: approvedBy("GitLabDuo") },
-      decision: "review-required",
-    },
-    {
-      reading: "Enterprise approval rules no one has approved against",
-      enterprise: true,
-      approval: { approved: false, approvedBy: approvedBy() },
-      decision: "review-required",
-    },
-    {
-      reading: "Enterprise approval rules met",
-      enterprise: true,
-      approval: { approved: true, approvedBy: approvedBy("julius") },
-      decision: "approved",
-    },
-    {
-      reading: "Enterprise without approval rules or approvals",
-      enterprise: true,
-      approval: { approved: true, approvedBy: approvedBy() },
-      decision: null,
-    },
-    {
-      reading: "Community Edition with an approval",
-      enterprise: false,
-      approval: { approved: true, approvedBy: approvedBy("julius") },
-      decision: "approved",
-    },
-    {
-      reading: "Community Edition without approvals",
-      enterprise: false,
-      approval: { approved: false, approvedBy: approvedBy() },
-      decision: null,
-    },
-  ])("reads $reading as $decision", ({ enterprise, approval, decision }) => {
-    expect([...decisionsOf(enterprise, [{ iid: "7", ...approval }])]).toEqual([[7, decision]]);
-  });
-
-  it("leaves out a merge request it cannot key, and a project the reader cannot see", () => {
-    expect([...decisionsOf(true, [null, { iid: "x", approved: true }])]).toEqual([]);
-    expect([
-      ...decisionsOf(null, [{ iid: "7", approved: false, approvedBy: approvedBy() }]),
-    ]).toEqual([]);
-    expect([
-      ...decisionsOf(true, [
-        { iid: "7", approved: null, approvedBy: approvedBy("julius") },
-        { iid: "8", approved: true, approvedBy: null },
-      ]),
-    ]).toEqual([]);
-    expect(
-      expectSuccess(decodeReviewDecisionsJson(JSON.stringify({ data: { project: null } }))),
-    ).toEqual(new Map());
-  });
-});
-
 describe("decodeMergeRequestStatsJson", () => {
   it("keys the counts by merge request number", () => {
     const stats = expectSuccess(
@@ -788,5 +775,20 @@ describe("decodeMergeRequestStatsJson", () => {
       truncated: false,
     });
     expect(read(2).truncated).toBe(true);
+  });
+});
+
+describe("decodeMergeMessagesJson", () => {
+  it("fails a partial response instead of reading errored fields as absent templates", () => {
+    const decoded = decodeMergeMessagesJson(
+      JSON.stringify({
+        errors: [{ message: "Internal server error", path: ["project", "mergeRequest"] }],
+        data: {
+          project: { mergeRequest: { title: "Add thing", defaultMergeCommitMessage: null } },
+        },
+      }),
+    );
+
+    expect(Result.isFailure(decoded)).toBe(true);
   });
 });

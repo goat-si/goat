@@ -1,8 +1,14 @@
+import {
+  actionFailureLabels,
+  actionFailureHints,
+  UPDATE_BRANCH_REBASE_FAILURE_HINT,
+} from "./pullRequestActionFailures";
+import { addPullRequestCommentToComposer } from "./pullRequestChatHandoff";
 import { projectChangeRequestUrl } from "@goat/client-runtime/change-request-links";
 import { normalizeThreadPullRequestKey } from "@goat/client-runtime/thread-pull-requests";
 import { useAtomValue } from "@effect/atom-react";
 import { usePullRequestStack } from "~/state/usePullRequestStack";
-import { scopedThreadKey, scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -18,6 +24,7 @@ import {
   type PullRequestUpdateMethod,
   type PullRequestRef,
   type PullRequestReviewGuideStop,
+  type PullRequestSummary,
   resolveEnvironmentMachineKind,
   type ScopedThreadRef,
 } from "@goat/contracts";
@@ -39,7 +46,6 @@ import {
   useRef,
   useState,
 } from "react";
-
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { type PullRequestDetailTab, useRightPanelStore } from "~/rightPanelStore";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
@@ -48,7 +54,10 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { isCommandPaletteOpen } from "~/commandPaletteBus";
 import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
 import { primaryServerKeybindingsAtom } from "~/state/server";
-import { usePullRequestDefaultMergeMethodResolver } from "./usePullRequestActions";
+import {
+  usePullRequestDefaultMergeMethodResolver,
+  writeHandoffToComposer,
+} from "./usePullRequestActions";
 import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
 import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
 import { cn } from "~/lib/utils";
@@ -62,6 +71,7 @@ import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { pullRequestEnvironment, usePullRequestTurnRefresh } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { PullRequestStackMenu } from "./PullRequestStackMenu";
+import { pullRequestMentionScope } from "./PullRequestMarkdownTextarea";
 import { PullRequestChangeBreakdownStat } from "./PullRequestChangeBreakdownStat";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { PullRequestThreadLinks } from "./PullRequestThreadLinks";
@@ -97,7 +107,7 @@ import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
 import { openOnHostLabel } from "./pullRequestLinkContextMenu";
 import { PullRequestMarkdownContext } from "./PullRequestMarkdown";
-import { pullRequestAutolinkPlugins } from "./pullRequestMarkdown.logic";
+import { pullRequestMarkdownPlugins } from "./pullRequestMarkdown.logic";
 import { PullRequestComposer } from "./PullRequestComposer";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
@@ -109,8 +119,6 @@ import {
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
   buildResolveConflictsPrompt,
-  handoffPrompt,
-  handoffReviewComments,
   latestPullRequestReviewOutcomes,
   loadingPullRequestCheckoutCommand,
   isPullRequestNotFound,
@@ -128,9 +136,9 @@ import {
   canDeletePullRequestBranch,
   resolveBaseFreshness,
   resolvePullRequestMergeMethod,
+  type PullRequestChatSubject,
   type PullRequestFinding,
   shouldRefreshPullRequestActivity,
-  stripPullRequestHandoffReferences,
 } from "./pullRequestDetail.logic";
 import { resolvePickableEnvironments } from "./pullRequestProjectAssignment.logic";
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
@@ -148,44 +156,6 @@ import { PullRequestGuideTab } from "./PullRequestGuideTab";
 import { guideRunKey, useGuideRunStore } from "./guide/guideRunStore";
 import { useReviewGuideWriter } from "./guide/useReviewGuideWriter";
 
-const actionFailureLabels = (term: string): Record<PullRequestAction, string> => ({
-  merge: `Could not merge this ${term}`,
-  ready: "Could not mark this ready for review",
-  draft: "Could not convert this to a draft",
-  close: `Could not close this ${term}`,
-  reopen: `Could not reopen this ${term}`,
-  "update-branch": "Could not update this branch",
-  "enable-auto-merge": "Could not turn on auto-merge",
-  "disable-auto-merge": "Could not turn off auto-merge",
-  revert: `Could not open a revert ${term}`,
-  "delete-branch": "Could not delete this branch",
-  "approve-workflows": "Could not approve workflows",
-});
-
-const actionFailureHints = (term: string): Record<PullRequestAction, string> => ({
-  merge:
-    "The host refused the merge. Check that you have write access, that the checks it requires have passed, and that the branch is not conflicting.",
-  ready: "The host refused it. Check that you have write access to this repository.",
-  draft: "The host refused it. Check that you have write access to this repository.",
-  close: "The host refused it. Check that you have write access, or that you opened it.",
-  reopen:
-    "The host refused it. Check that you have write access, and that the branch still exists.",
-  "update-branch":
-    "The host refused it. Check that you have write access to the branch (a fork branch also needs its author to allow edits from maintainers), and that it does not conflict with the base.",
-  "enable-auto-merge":
-    "The host refused it. Check that this repository allows auto-merge, that you have write access, and that there is something left for it to wait on.",
-  "disable-auto-merge":
-    "The host refused it. Check that you have write access, and that the merge has not already happened.",
-  revert: `The host refused it. Check that you have write access and that this ${term} was merged on the host.`,
-  "delete-branch":
-    "The host refused it. Check that you have write access to the source repository and that the branch has not moved since this page loaded.",
-  "approve-workflows":
-    "The host refused it. Check that you have Actions write access and that these workflow runs are still awaiting approval.",
-});
-
-const UPDATE_BRANCH_REBASE_FAILURE_HINT =
-  "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.";
-
 const TABS: ReadonlyArray<{ value: PullRequestDetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
   { value: "guide", label: "Guide" },
@@ -196,12 +166,6 @@ const TABS: ReadonlyArray<{ value: PullRequestDetailTab; label: string }> = [
 // Defer the diff viewer's worker pool until Code is approached.
 const loadCodeTab = () => import("./PullRequestCodeTab");
 const PullRequestCodeTab = lazy(loadCodeTab);
-
-// Persist handoffs across unmounts; replace only unchanged contributions to preserve user edits.
-const lastHandoffPromptByDraft = new Map<string, string>();
-
-const composerTargetKey = (target: ScopedThreadRef | DraftId): string =>
-  typeof target === "string" ? target : scopedThreadKey(target);
 
 function reportCheckoutCommandError(error: Error) {
   toastManager.add({
@@ -226,13 +190,14 @@ function resolvePullRequestReference(
 }
 
 function pullRequestMarkdownContext(
-  detail: Pick<PullRequestDetail, "provider" | "url"> | null,
+  detail: Pick<PullRequestDetail, "provider" | "url" | "repository"> | null,
   threadRef: ScopedThreadRef | null,
 ) {
   return {
-    remarkPlugins: pullRequestAutolinkPlugins(detail),
+    remarkPlugins: pullRequestMarkdownPlugins(detail),
     lineBreaks: sourceControlClients.find(detail?.provider ?? "")?.hardLineBreaks ?? false,
     threadRef,
+    repository: detail?.repository ?? null,
   };
 }
 
@@ -281,7 +246,11 @@ export function PullRequestDetailPanel({
    * notification can switch it.
    */
   tabOnPage?: boolean;
-  onActed?: (action?: PullRequestAction, phase?: "sent" | "done" | "failed") => void;
+  onActed?: (
+    action?: PullRequestAction,
+    phase?: "sent" | "done" | "failed",
+    reply?: PullRequestSummary,
+  ) => void;
   onClose?: () => void;
   context?: "page" | "thread";
   composerDraftTarget?: ScopedThreadRef | DraftId;
@@ -685,9 +654,11 @@ export function PullRequestDetailPanel({
     if (pullRequestActionNeedsHostRefresh(action)) {
       void refreshFromHost();
     } else {
-      refreshDetail();
+      // The action command already showed the reply in the detail or re-read it.
+      activityQuery.refresh();
+      nativeStackQuery.refresh();
     }
-    onActed?.(action, "done");
+    onActed?.(action, "done", result.value);
     return true;
   };
 
@@ -738,43 +709,6 @@ export function PullRequestDetailPanel({
     if (guideWriter.data?.guide == null) selectTab("guide");
   };
 
-  const writeTaskToComposer = (target: ScopedThreadRef | DraftId, task: ThreadTask) => {
-    const store = useComposerDraftStore.getState();
-    const draft = store.getComposerDraft(target);
-    const key = composerTargetKey(target);
-    const previousCommentIds = new Set((draft?.reviewComments ?? []).map((comment) => comment.id));
-    const repeatedCommentIds = new Set(
-      (task.reviewComments ?? [])
-        .filter((comment) => previousCommentIds.has(comment.id))
-        .map((comment) => comment.id),
-    );
-    const promptWithoutPreviousHandoff = stripPullRequestHandoffReferences(
-      draft?.prompt ?? "",
-      draft?.reviewComments ?? [],
-      repeatedCommentIds,
-    );
-    const prompt = handoffPrompt(
-      {
-        prompt: promptWithoutPreviousHandoff,
-        lastHandoffPrompt: lastHandoffPromptByDraft.get(key),
-      },
-      task.prompt,
-    );
-    lastHandoffPromptByDraft.set(key, task.prompt);
-    store.setPrompt(target, prompt);
-    store.setReviewComments(
-      target,
-      handoffReviewComments(draft?.reviewComments ?? [], task.reviewComments ?? []),
-    );
-    for (const comment of task.reviewComments ?? []) {
-      if (!repeatedCommentIds.has(comment.id)) continue;
-      store.addReviewComment(target, comment, {
-        allowDuplicateReference: true,
-        insertAtCaret: false,
-      });
-    }
-  };
-
   const openThreadWithTask = async (
     projectRef: ReturnType<typeof scopeProjectRef>,
     task: ThreadTask | null,
@@ -788,7 +722,7 @@ export function PullRequestDetailPanel({
       ));
     if (session === null) return null;
     if (task === null) return session;
-    writeTaskToComposer(session.draftId, task);
+    writeHandoffToComposer(session.draftId, task);
     return session;
   };
 
@@ -799,7 +733,7 @@ export function PullRequestDetailPanel({
   ) => {
     if (!detail || handoff !== null) return;
     if (attachTarget !== null) {
-      writeTaskToComposer(attachTarget, task);
+      writeHandoffToComposer(attachTarget, task);
       toastManager.add({
         type: "success",
         title: "Added to the composer",
@@ -855,7 +789,7 @@ export function PullRequestDetailPanel({
   ) => {
     if (!handoffSummary || handoff !== null) return;
     if (attachTarget !== null && task !== null) {
-      writeTaskToComposer(attachTarget, task);
+      writeHandoffToComposer(attachTarget, task);
       toastManager.add({
         type: "success",
         title: "Added to the composer",
@@ -1038,6 +972,16 @@ export function PullRequestDetailPanel({
       }),
       options,
     );
+  };
+
+  const addCommentToChat = (subject: PullRequestChatSubject) => {
+    if (
+      detail &&
+      attachTarget !== null &&
+      addPullRequestCommentToComposer(detail, attachTarget, subject)
+    ) {
+      toastManager.add({ type: "success", title: "Added to the composer" });
+    }
   };
 
   const startCheckout = (mode: "worktree" | "local") => {
@@ -1735,6 +1679,7 @@ export function PullRequestDetailPanel({
                   fixFindingLabel={handoffLabels.fixFinding}
                   fixCheckLabel={handoffLabels.fixCheck}
                   {...(canFixFindings ? { onFixFinding: startFixFinding } : {})}
+                  {...(attachTarget === null ? {} : { onAddToChat: addCommentToChat })}
                   onRefresh={refreshDetail}
                   onRefreshChecks={refreshFromHost}
                 />
@@ -1756,6 +1701,7 @@ export function PullRequestDetailPanel({
                     detail.capabilities.review.inlineComment && detail.viewerPermissions.comment
                   }
                   rangeComments={detail.capabilities.review.rangeComment === true}
+                  mentionScope={pullRequestMentionScope(detail, environmentId, reference)}
                   onAskAboutLines={(comment, request) =>
                     addSelectionToAgent({ comment, request }, { keepGuide: true })
                   }
@@ -1791,6 +1737,7 @@ export function PullRequestDetailPanel({
                     reference={reference}
                     order={timelineOrder}
                     onOpenCommit={openCommit}
+                    {...(attachTarget === null ? {} : { onAddToChat: addCommentToChat })}
                     onRefresh={refreshDetail}
                   />
                 )}
@@ -1814,6 +1761,7 @@ export function PullRequestDetailPanel({
                     pendingFinding={handoff}
                     fixFindingLabel={handoffLabels.fixFinding}
                     {...(canFixFindings ? { onFixFinding: startFixFinding } : {})}
+                    {...(attachTarget === null ? {} : { onAddToChat: addCommentToChat })}
                     onRefresh={refreshDetail}
                     refreshToken={refreshToken}
                     backgroundRefreshToken={turnRefresh ?? 0}

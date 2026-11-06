@@ -1,3 +1,4 @@
+import { capabilitySettingsLayer } from "./ProviderConstraints.testFixture.ts";
 import { scheduledTaskFixture } from "../scheduledTasks/ScheduledTaskFixture.testkit.ts";
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
@@ -76,7 +77,6 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import type { ProjectionRecordFilter } from "../orchestration-v2/ProjectionStore.ts";
-
 const isJson = Schema.is(Schema.Json);
 
 const decodeTarget = Schema.decodeUnknownEffect(OrchestratorMcpTarget);
@@ -2081,7 +2081,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getThreadRecords: () => Effect.succeed(parentProjection([])),
           }),
-          ServerSettings.layerTest(),
+          capabilitySettingsLayer(),
           Layer.mock(ProviderRegistry.ProviderRegistry)({
             getProviders: Effect.sync(() => providers),
           }),

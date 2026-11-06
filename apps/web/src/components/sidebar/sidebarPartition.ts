@@ -55,7 +55,6 @@ export interface SidebarThreadPartitionInput {
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
-  readonly disconnectedEnvironmentIds: ReadonlySet<EnvironmentId>;
   // Clock and inbox expiry revisions repartition second-precise wake and work states.
   readonly clockKey: string;
   readonly globalAgentRef: ReturnType<typeof useGlobalAgentStore.getState>["ref"];
@@ -130,7 +129,6 @@ export function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const inbox = (thread: EnvironmentThreadShell, manuallyMoved = false) =>
     belongsInSidebarWorkingShelf(thread, {
       enabled: workingShelfEnabled,
-      disconnectedEnvironmentIds: input.disconnectedEnvironmentIds,
       isWorking: manuallyMoved ? isThreadWorking : inboxObservation.isWorking,
     })
       ? working

@@ -97,7 +97,7 @@ describe("RpcSessionFactory", () => {
       const readyFiber = yield* Effect.forkChild(session.ready);
       const socket = yield* awaitSocket(sockets);
 
-      expect(socket.url).toBe(PREPARED.socketUrl);
+      expect(socket.url).toBe(`${PREPARED.socketUrl}&frameParts=1`);
       socket.open();
       yield* completeInitialConfig(socket);
       yield* Fiber.join(readyFiber);

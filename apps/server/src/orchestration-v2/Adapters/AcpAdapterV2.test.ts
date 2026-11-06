@@ -3,6 +3,7 @@ import { makeAcpRegistryAdapterV2 } from "@goat/provider-acp-registry/testing";
 import { AcpRegistrySettings } from "@goat/provider-acp-registry/settings";
 import { AcpRegistryCatalog } from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import {
+  acpMcpAuthorization,
   decodeAcpReplayTranscript,
   makeAcpReplayRuntime,
   makeTurnInput,
@@ -4037,16 +4038,26 @@ describe("AcpAdapterV2", () => {
         browserToolsAvailable: false,
       });
       const runtimeInputs: Array<AcpAdapterV2RuntimeInput> = [];
+      const nativeRuntimes: Array<AcpSessionRuntime.AcpSessionRuntime["Service"]> = [];
+      let sessionEventCount = 0;
       const makeRuntime = makeMockRuntime({
         childProcessSpawner,
         mockAgentPath,
         environment: { GOAT_ACP_PROMPT_DELAY_MS: "100" },
+        wrapRuntime: (nativeRuntime) => {
+          nativeRuntimes.push(nativeRuntime);
+          return nativeRuntime;
+        },
       });
       const adapter = yield* makeAcpAdapterV2({
         instanceId,
         flavor: {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
+          onSessionEvent: () =>
+            Effect.sync(() => {
+              sessionEventCount++;
+            }),
           makeRuntime: (runtimeInput) =>
             Effect.sync(() => runtimeInputs.push(runtimeInput)).pipe(
               Effect.andThen(makeRuntime(runtimeInput)),
@@ -4112,7 +4123,6 @@ describe("AcpAdapterV2", () => {
         if (event.type === "turn.terminal" && event.providerTurnId === firstProviderTurnId) break;
       }
       const snapshotBeforeRollback = yield* runtime.readThreadSnapshot({ providerThread });
-
       const rolledBack = yield* runtime.rollbackThread({
         providerThread: { ...providerThread, appThreadId: rollbackThreadId },
         providerThreadTurns: snapshotBeforeRollback.providerTurns,
@@ -4128,25 +4138,13 @@ describe("AcpAdapterV2", () => {
         runtimeInputs[1]?.processEnvironment?.GOAT_ACP_MCP_AUTHORIZATION,
         "Bearer rollback-target-token",
       );
-      const replacementMcpServer = runtimeInputs[1]?.mcpServers[0];
-      const replacementMcpEnvironment =
-        replacementMcpServer !== undefined &&
-        "env" in replacementMcpServer &&
-        Array.isArray(replacementMcpServer.env)
-          ? replacementMcpServer.env
-          : undefined;
-      assert.equal(
-        replacementMcpEnvironment?.find(
-          (variable) => variable.name === "GOAT_ACP_MCP_AUTHORIZATION",
-        )?.value,
-        "Bearer rollback-target-token",
-      );
+      assert.equal(acpMcpAuthorization(runtimeInputs[1]), "Bearer rollback-target-token");
       const snapshotAfterRollback = yield* runtime.readThreadSnapshot({
         providerThread: rolledBack.providerThread,
       });
       assert.deepEqual(snapshotAfterRollback.providerTurns, []);
       assert.deepEqual(snapshotAfterRollback.messages, []);
-
+      const sessionEventsBeforeSecondTurn = sessionEventCount;
       yield* runtime.startTurn(
         makeTurnInput({
           threadId: rollbackThreadId,
@@ -4172,6 +4170,8 @@ describe("AcpAdapterV2", () => {
         }
       }
       assert.equal(secondStatus, "completed");
+      yield* nativeRuntimes[1]!.drainEvents;
+      assert.isAbove(sessionEventCount, sessionEventsBeforeSecondTurn);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

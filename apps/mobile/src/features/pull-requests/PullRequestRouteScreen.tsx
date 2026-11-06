@@ -5,11 +5,7 @@ import { restorePullRequestTabScroll } from "./pullRequestTabScroll";
 import { guideFocusedRows, type GuideDiffFocus } from "./guide/guideDiffFocus";
 import { PullRequestGuideContent } from "./guide/PullRequestGuideScreen";
 import { useReviewGuidesEnabled } from "./guide/useReviewGuide";
-import {
-  filterPullRequestActivity,
-  DEFAULT_ACTIVITY_FILTER,
-  type ActivityFilter,
-} from "./pullRequestActivityFilter";
+import { DEFAULT_ACTIVITY_FILTER, type ActivityFilter } from "./pullRequestActivityFilter";
 import { PullRequestActivityFilters } from "./PullRequestActivityFilters";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
@@ -25,6 +21,7 @@ import {
   openOnProviderLabel,
   PR_ACTION_ICONS,
   pullRequestActionLabel,
+  pullRequestStateAction,
 } from "./pullRequestActions";
 import * as Clipboard from "expo-clipboard";
 import { Menu } from "../../components/ui/Menu";
@@ -33,6 +30,7 @@ import { Button } from "../../components/ui/Button";
 import { usePullRequestReviewDraft } from "./usePullRequestReviewDraft";
 import { usePullRequestFilesViewed } from "./usePullRequestFilesViewed";
 import { usePullRequestPermissions } from "./usePullRequestPermissions";
+import { usePullRequestDescription } from "./usePullRequestDescription";
 import { usePullRequestAction } from "./usePullRequestAction";
 import { annotatePullRequestDiff, reviewPosition } from "./pullRequestDiffComments";
 import { usePullRequestFileFilter } from "./usePullRequestFileFilter";
@@ -46,22 +44,17 @@ import { useFocusEffect, useNavigation, type StaticScreenProps } from "@react-na
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RegistryContext, useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { pullRequestReviewKey } from "./pullRequestReviewDrafts";
-import { type PullRequestDetail, type PullRequestListEntry } from "@goat/contracts";
+import {
+  type PullRequestDetail,
+  type PullRequestListEntry,
+  type PullRequestSummary,
+} from "@goat/contracts";
 import { PullRequestOverviewLoading } from "./PullRequestOverviewLoading";
 import { copyPullRequestLink, sharePullRequestLink } from "./pullRequestLink";
 import { pullRequestStatus } from "./pullRequestStatus";
 import { use, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Linking,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  type ScrollViewProps,
-  StyleSheet,
-  View,
-} from "react-native";
-import { NativeScrollViewMarker as ScrollViewMarker } from "../../native/NativeScrollViewMarker";
+import { Linking, Platform, Pressable, RefreshControl, StyleSheet, View } from "react-native";
+import { PullRequestTabScrollView } from "./PullRequestTabScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -95,7 +88,7 @@ import {
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCodeSurface";
 import { useNativeReviewDiffBridge } from "../review/useNativeReviewDiffBridge";
-import { pullRequestTimelineRows } from "./PullRequestTimeline";
+import { usePullRequestActivityRows } from "./usePullRequestActivityRows";
 import { PullRequestActionToolbar, PullRequestCardGroup } from "./PullRequestControls";
 import {
   pullRequestTarget as requestTarget,
@@ -128,57 +121,12 @@ import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/sourc
 
 const EMPTY_IDS: readonly string[] = [];
 
-function PullRequestTabScrollView(props: ScrollViewProps) {
-  return (
-    <ScrollViewMarker style={{ flex: 1 }}>
-      <ScrollView {...props} />
-    </ScrollViewMarker>
-  );
-}
-
-function usePullRequestActivityRows(params: PullRequestParams, filter: ActivityFilter) {
-  const navigation = useNavigation();
-  const result = useEnvironmentQuery(composerPullRequests.activity(requestTarget(params)));
-  const detail = useEnvironmentQuery(composerPullRequests.detail(requestTarget(params)));
-  const permissions = usePullRequestPermissions(params, detail.data);
-  const filtered = result.data ? filterPullRequestActivity(result.data, filter) : null;
-  const rows = (() => {
-    if (!filtered) return [];
-    const rows = pullRequestTimelineRows(filtered.activity, params, navigation, {
-      permissions,
-      onChanged: result.refresh,
-    });
-    if (filter.newestFirst) {
-      const notice = rows.at(-1)?.key === "truncated" ? rows.pop() : undefined;
-      rows.reverse();
-      if (notice) rows.push(notice);
-    }
-    if (!rows.length)
-      rows.push({
-        key: "empty",
-        date: "",
-        content: (
-          <Text className="py-6 text-sm text-foreground-muted">
-            No activity matches these filters.
-          </Text>
-        ),
-      });
-    return rows;
-  })();
-  return {
-    rows,
-    hiddenCount: filtered?.hiddenCount ?? 0,
-    pending: result.isPending && !result.data,
-    error: result.error,
-  };
-}
-
 function PullRequestIdentity(props: {
-  readonly pr: PullRequestDetail | PullRequestListEntry;
+  readonly pr: PullRequestDetail | PullRequestListEntry | PullRequestSummary;
   readonly params: PullRequestParams;
 }) {
   const { pr } = props;
-  const status = pullRequestStatus(pr);
+  const status = pullRequestStatus({ state: pr.state, isDraft: pr.isDraft === true });
   return (
     <View className="gap-3">
       <View className="flex-row flex-wrap items-center gap-2">
@@ -190,8 +138,8 @@ function PullRequestIdentity(props: {
             <Text className={`text-xs font-goat-medium ${status.text}`}>{status.label}</Text>
           </View>
         )}
-        <PullRequestDiffStats additions={pr.additions} deletions={pr.deletions} compact />
-        {"changedFiles" in pr ? (
+        <PullRequestDiffStats additions={pr.additions ?? 0} deletions={pr.deletions ?? 0} compact />
+        {"changedFiles" in pr && pr.changedFiles !== undefined ? (
           <Text className="text-2xs text-foreground-muted">
             {pr.changedFiles} {pr.changedFiles === 1 ? "file" : "files"}
           </Text>
@@ -203,7 +151,7 @@ function PullRequestIdentity(props: {
         {pr.title}
       </Text>
       <View className="flex-row items-center gap-2">
-        <PullRequestAvatar actor={pr.author} size={20} />
+        <PullRequestAvatar actor={pr.author ?? null} size={20} />
         <Text className="min-w-0 flex-1 text-xs font-goat-medium" numberOfLines={1}>
           {pr.author?.login ?? "Unknown author"}
         </Text>
@@ -288,6 +236,7 @@ function PullRequestLabels(props: {
 
 function PullRequestOverview(props: {
   readonly pr: PullRequestDetail;
+  readonly description: ReturnType<typeof usePullRequestDescription>;
   readonly params: PullRequestParams;
   readonly stack: PullRequestStackState;
   readonly onDescriptionLayout: (y: number) => void;
@@ -315,7 +264,8 @@ function PullRequestOverview(props: {
         onLayout={(event) => props.onDescriptionLayout(event.nativeEvent.layout.y)}
       >
         <PullRequestDescription
-          markdown={pr.body}
+          markdown={props.description.body}
+          onTaskListChange={props.description.toggleTask}
           onCollapse={props.onDescriptionCollapse}
           expanded={props.descriptionExpanded}
           onExpandedChange={props.onDescriptionExpandedChange}
@@ -405,6 +355,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const identity = pr ?? summary;
   const terminology = sourceControlClients.get(identity?.provider).changeRequest;
   const permissions = usePullRequestPermissions(params, pr);
+  const description = usePullRequestDescription(params, pr, permissions.canEditChangeRequest);
   const action = usePullRequestAction(params, pr);
   const maintainerEdits = usePullRequestMaintainerEdits(
     params,
@@ -412,6 +363,15 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
     permissions.canEditMaintainerEdits,
   );
   const showsDeleteBranch = pr !== null && canPerformPullRequestAction(pr, "delete-branch");
+  const stateAction = pullRequestStateAction(pr, permissions.canWrite, action.busy);
+  const runStateAction = () =>
+    stateAction === "close"
+      ? action.confirmClose()
+      : action.confirm(
+          "reopen",
+          pullRequestActionLabel("reopen", terminology),
+          `Reopen this ${terminology.singular}?`,
+        );
   const confirmDeleteBranch = () =>
     pr &&
     action.confirm(
@@ -506,6 +466,8 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                     {
                       accessibilityLabel: "Edit description",
                       icon: "doc.text" as const,
+                      disabled: description.pending,
+                      subtitle: description.pending ? "Saving…" : undefined,
                       overflowOnly: true,
                       onPress: () =>
                         navigation.navigate("PullRequestEdit", { ...params, field: "body" }),
@@ -543,6 +505,17 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                       icon: "square.and.arrow.up" as const,
                       overflowOnly: true,
                       onPress: () => sharePullRequestLink(identity),
+                    },
+                  ]
+                : []),
+              ...(stateAction
+                ? [
+                    {
+                      accessibilityLabel: pullRequestActionLabel(stateAction, terminology),
+                      icon: PR_ACTION_ICONS[stateAction],
+                      destructive: stateAction === "close",
+                      overflowOnly: true,
+                      onPress: runStateAction,
                     },
                   ]
                 : []),
@@ -600,6 +573,8 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
             {permissions.canEditChangeRequest ? (
               <Toolbar.MenuAction
                 icon="doc.text"
+                disabled={description.pending}
+                subtitle={description.pending ? "Saving…" : undefined}
                 onPress={() => navigation.navigate("PullRequestEdit", { ...params, field: "body" })}
               >
                 <Toolbar.Label>Edit description</Toolbar.Label>
@@ -635,6 +610,15 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                 onPress={() => sharePullRequestLink(identity)}
               >
                 <Toolbar.Label>Share…</Toolbar.Label>
+              </Toolbar.MenuAction>
+            ) : null}
+            {stateAction ? (
+              <Toolbar.MenuAction
+                icon={PR_ACTION_ICONS[stateAction]}
+                destructive={stateAction === "close"}
+                onPress={runStateAction}
+              >
+                <Toolbar.Label>{pullRequestActionLabel(stateAction, terminology)}</Toolbar.Label>
               </Toolbar.MenuAction>
             ) : null}
             {showsDeleteBranch ? (
@@ -739,6 +723,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                               {pr ? (
                                 <PullRequestOverview
                                   pr={pr}
+                                  description={description}
                                   params={params}
                                   stack={stack}
                                   descriptionExpanded={descriptionExpanded}
@@ -1088,6 +1073,9 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
     filter.toggle();
   };
   const title = commit ? "Commit changes" : "Changes";
+  const lineCommentLabel = route.params.replacingDraftId
+    ? "Move draft to this line"
+    : "Add review comment";
   const seekingFile = !targetFile && result.nextCursor !== null;
   const loadingDiff = (result.isPending && !data.rows.length) || (seekingFile && !result.error);
   return (
@@ -1126,7 +1114,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
                   : []),
                 ...(selectedRow && selectedFile
                   ? [
-                      ...(canCommentOnDiff ? [{ id: "comment", title: "Add review comment" }] : []),
+                      ...(canCommentOnDiff ? [{ id: "comment", title: lineCommentLabel }] : []),
                       { id: "copy", title: "Copy line" },
                     ]
                   : []),
@@ -1191,9 +1179,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
           </Toolbar.MenuAction>
           {selectedRow && selectedFile && canCommentOnDiff ? (
             <Toolbar.MenuAction icon="bubble.left" onPress={() => commentOnLine()}>
-              <Toolbar.Label>
-                {route.params.replacingDraftId ? "Move draft to this line" : "Add review comment"}
-              </Toolbar.Label>
+              <Toolbar.Label>{lineCommentLabel}</Toolbar.Label>
             </Toolbar.MenuAction>
           ) : null}
           {selectedRow && selectedFile ? (

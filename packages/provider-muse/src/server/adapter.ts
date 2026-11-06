@@ -36,7 +36,6 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -392,6 +391,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         status: OrchestrationV2ProviderSession["status"],
         lastError: string | null = null,
       ) {
+        lastError = lastError === null ? null : makeProviderFailure({ message: lastError }).message;
         session = { ...session, status, lastError, updatedAt: yield* DateTime.now };
         yield* emit({
           type: "provider_session.updated",

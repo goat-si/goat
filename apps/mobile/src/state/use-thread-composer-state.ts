@@ -1,3 +1,4 @@
+import { shouldCompactBeforeSend } from "@goat/client-runtime/state/context-window";
 import { restoreAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 import {
   cloudRetryAllowed,
@@ -60,7 +61,10 @@ import {
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildThreadFeed, createThreadFeedCache } from "../lib/threadActivity";
-import { acknowledgedThreadMessagesAtom } from "./acknowledged-thread-messages";
+import {
+  acknowledgedThreadMessagesAtom,
+  pruneCaughtUpAcknowledgedThreadMessages,
+} from "./acknowledged-thread-messages";
 import {
   appendPendingThreadMessages,
   selectPendingAcknowledgedMessages,
@@ -122,6 +126,7 @@ import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import { dispatchingQueuedMessageIdAtom, useThreadOutboxMessages } from "./use-thread-outbox";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
+import { useSideChatCommand } from "../features/threads/useSideChatCommand";
 
 const EMPTY_QUEUE_WORKFLOW_ATOM = Atom.make<null>(null).pipe(
   Atom.withLabel("mobile-thread-queue-workflow:empty"),
@@ -186,6 +191,7 @@ export function useThreadDraftForThread(input: {
 }
 
 export function useThreadComposerState() {
+  const sideChatCommand = useSideChatCommand();
   const {
     selectedThread: selectedThreadShell,
     selectedThreadCreation,
@@ -296,16 +302,12 @@ export function useThreadComposerState() {
     );
   })();
   useEffect(() => {
-    const echoedIds = new Set(selectedThreadMessages?.map((message) => message.id));
-    if (acknowledgedMessages.some((message) => echoedIds.has(message.messageId))) {
-      appAtomRegistry.set(
-        acknowledgedThreadMessagesAtom,
-        appAtomRegistry
-          .get(acknowledgedThreadMessagesAtom)
-          .filter((message) => !echoedIds.has(message.messageId)),
-      );
-    }
-  }, [acknowledgedMessages, selectedThreadMessages]);
+    if (selectedThreadKey === null || acknowledgedMessages.length === 0) return;
+    pruneCaughtUpAcknowledgedThreadMessages(selectedThreadKey, {
+      sequence: selectedThreadSequence,
+      messages: selectedThreadMessages,
+    });
+  }, [acknowledgedMessages, selectedThreadKey, selectedThreadSequence, selectedThreadMessages]);
 
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const followUpBehavior = AsyncResult.isSuccess(preferencesResult)
@@ -583,6 +585,17 @@ export function useThreadComposerState() {
     if (text.length === 0 && attachments.length === 0) {
       return null;
     }
+    if (
+      beforeDispatch === undefined &&
+      (await sideChatCommand({
+        thread,
+        threadKey,
+        text: draft.text,
+        hasAttachmentsOrContext: attachments.length > 0 || (draft.context?.records.length ?? 0) > 0,
+        connected: selectedEnvironmentRuntime?.connectionState === "connected",
+      }))
+    )
+      return null;
     // Recovery preserves over-cap attachments; require trimming or outbox delivery would reject indefinitely.
     if (attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
       Dialog.alert(
@@ -702,6 +715,26 @@ export function useThreadComposerState() {
           : "auto";
 
     const metadata = makeQueuedMessageMetadata();
+    const compactBeforeSend =
+      followUpDispatchMode === null &&
+      beforeDispatch === undefined &&
+      selectedEnvironmentRuntime?.connectionState === "connected" &&
+      selectedThreadProjection !== null &&
+      serverConfig != null &&
+      shouldCompactBeforeSend({
+        projection: selectedThreadProjection.projection,
+        visibleTurnItems: selectedThreadVisibleTurnItems,
+        selection: modelSelection,
+        providers: serverConfig.providers,
+        settings: serverConfig.settings,
+        text,
+        threadIdle:
+          !activeThreadBusy &&
+          !runlessWorkActive &&
+          !isCompacting &&
+          selectedThreadQueuedMessages.length === 0,
+        now: metadata.createdAt,
+      });
     const messageId = MessageId.make(metadata.messageId);
     onWillEnqueue?.();
     clearThreadComposerError(threadKey);
@@ -719,7 +752,11 @@ export function useThreadComposerState() {
         provider,
         draft.interactionMode ?? thread.interactionMode,
       ),
-      ...(followUpDispatchMode === null ? {} : { dispatchMode: followUpDispatchMode }),
+      ...(compactBeforeSend
+        ? { compactBeforeSend, dispatchMode: "queue" as const }
+        : followUpDispatchMode === null
+          ? {}
+          : { dispatchMode: followUpDispatchMode }),
       createdAt: metadata.createdAt,
     });
     clearComposerDraftContent(threadKey, { deferAttachmentCleanup: true });

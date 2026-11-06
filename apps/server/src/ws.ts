@@ -1,3 +1,5 @@
+import * as AccessRpc from "./auth/AccessRpc.ts";
+import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
 import * as ChannelBotThreads from "./channels/ChannelBotThreads.ts";
 import * as Fiber from "effect/Fiber";
 import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
@@ -158,6 +160,8 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
+import { withSocketFrameParts, WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
+export { WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotProfiles from "./channels/ChannelBotProfiles.ts";
@@ -332,7 +336,6 @@ const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
 function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>): ServerProvider[] {
   return providers.map(({ workspaceSnapshots: _workspaceSnapshots, ...provider }) => provider);
 }
-
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
 }
@@ -468,6 +471,7 @@ function filesystemBrowseFailureContext(error: WorkspaceEntries.WorkspaceEntries
   readonly failure: FilesystemBrowseFailure;
   readonly parentPath?: string;
   readonly platform?: string;
+  readonly pathMissing?: boolean;
 } {
   switch (error._tag) {
     case "WorkspaceEntriesWindowsPathUnsupportedError":
@@ -475,7 +479,11 @@ function filesystemBrowseFailureContext(error: WorkspaceEntries.WorkspaceEntries
     case "WorkspaceEntriesCurrentProjectRequiredError":
       return { failure: "current_project_required" };
     case "WorkspaceEntriesReadDirectoryError":
-      return { failure: "read_directory_failed", parentPath: error.parentPath };
+      return {
+        failure: "read_directory_failed",
+        parentPath: error.parentPath,
+        ...(error.pathMissing ? { pathMissing: true } : {}),
+      };
     default:
       return unexpectedCompatibilityError(error);
   }
@@ -688,7 +696,6 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
   if (Option.isNone(url)) {
     return {};
   }
-
   const surface = url.value.searchParams.get("clientSurface");
   const appVersion = url.value.searchParams.get("clientAppVersion")?.trim() ?? "";
   const deviceType = url.value.searchParams.get("clientDeviceType");
@@ -704,7 +711,6 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
     isMobile && rawOsMajorVersion !== "" && Number.isInteger(osMajorVersion) && osMajorVersion > 0;
   const hasDeviceModel =
     isMobile && deviceModel !== "" && deviceModel.length <= MAX_CLIENT_DEVICE_MODEL_LENGTH;
-
   return {
     ...(isClientSurface(surface) ? { surface } : {}),
     ...(appVersion !== "" && appVersion.length <= MAX_CLIENT_APP_VERSION_LENGTH
@@ -755,7 +761,6 @@ const canReplayPersistedRange = Effect.fnUntraced(function* (
   maxGap: number,
 ) {
   const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
-
   const replayGap = headSequence - afterSequence;
   if (replayGap < 0 || replayGap > maxGap) {
     return false;
@@ -821,7 +826,6 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     const dedupeBodies = input.acceptDedupedBodies === true;
     const withLiveDedupe = withLiveWireTransforms(input);
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
-
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.thread_id": input.threadId,
     });
@@ -835,7 +839,6 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           }),
       ),
     );
-
     const eventStreamFrom = (afterSequence: number) =>
       threadManagement
         .streamStoredEventsFrom({
@@ -858,7 +861,6 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
               }),
           ),
         );
-
     const loadReplayThrough = (afterSequence: number, throughSequence: number) =>
       applicationEvents
         .readAgentEvents({
@@ -1453,6 +1455,7 @@ export const layerWsRpc = (
         ),
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const accessRpc = yield* AccessRpc.make(currentSession);
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
       const sourceControlRepositories =
@@ -1849,6 +1852,9 @@ export const layerWsRpc = (
           threadFindProgressive: true,
           secretProviderSettings: true,
           secretReferences: true,
+          secretRequestReferences: true,
+          usageLimitSecretReferences: true,
+          easSecretReferences: true,
           ...Option.match(scratchWorkspaceRoot, {
             onNone: () => ({}),
             onSome: (root) => ({ scratchWorkspaceRoot: root }),
@@ -1893,25 +1899,11 @@ export const layerWsRpc = (
         ),
       );
 
-      // Rows the shell can omit, read with the same snapshot sequence the shell uses.
-      const readOmittableShellRows = Effect.fn("ws.orchestrationV2.readOmittableShellRows")(
-        function* (
-          options: { readonly familyOf: ThreadId } | { readonly worktreePath: string },
-          message: string,
-        ) {
-          const { threads, snapshotSequence } = yield* loadShellSnapshotParts({
-            sql,
-            readThreads: threadManagement.readShellSnapshot({ location: "active", ...options }),
-            listProjects: Effect.succeed([]),
-            latestSequence: applicationEvents.latestApplicationSequence,
-          }).pipe(
-            Effect.mapError(
-              (cause) => new OrchestrationV2GetShellSnapshotError({ message, cause }),
-            ),
-          );
-          return { snapshotSequence, threads: threads.threads };
-        },
-      );
+      const { readOmittableShellRows, readThreadFamily } = makeOmittableShellReaders({
+        sql,
+        threadManagement,
+        latestSequence: applicationEvents.latestApplicationSequence,
+      });
 
       const subscribeOrchestrationV2ArchivedShell = Effect.fn(
         "ws.orchestrationV2.subscribeArchivedShell",
@@ -2141,8 +2133,7 @@ export const layerWsRpc = (
           ),
         [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: (_input) =>
           getOrchestrationV2ArchivedShellSnapshot,
-        [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: (input) =>
-          readOmittableShellRows({ familyOf: input.threadId }, "Failed to load the thread family"),
+        [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: readThreadFamily,
         [ORCHESTRATION_V2_WS_METHODS.getOlderSettledThreads]: (input) =>
           loadOlderSettledThreadsPage({
             sql,
@@ -2520,7 +2511,6 @@ export const layerWsRpc = (
             if (input.instanceId === undefined) {
               // A vendor CLI installed after startup is picked up on the next full refresh.
               yield* cloudAutoSetup.apply.pipe(Effect.ignore);
-              yield* usageLimitSources.refresh;
             }
             let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
               ? providerRegistry.refreshWorkspaceSnapshot({
@@ -2533,6 +2523,7 @@ export const layerWsRpc = (
                 : input.instanceId !== undefined
                   ? providerRegistry.refreshInstance(input.instanceId)
                   : providerRegistry.refresh();
+            if (input.instanceId === undefined) yield* usageLimitSources.refresh;
             if (input.refreshModels) {
               const instances = yield* providerInstances.listInstances;
               for (const instance of instances) {
@@ -3534,6 +3525,7 @@ export const layerWsRpc = (
           lifecycleEvents.stream.pipe(
             Stream.filter((event) => event.type !== "runtimeDrain" || input.runtimeDrain === true),
           ),
+        ...accessRpc,
         [WS_METHODS.subscribeAuthAccess]: (_input) =>
           Stream.unwrap(
             Effect.gen(function* () {
@@ -3598,12 +3590,6 @@ export const layerWsRpc = (
       );
     }),
   ).pipe(Layer.provide(AcpSessionService.layer));
-
-// Default socket-level Defect frames end every pending client request.
-export const WS_RPC_SERVER_OPTIONS = {
-  disableTracing: true,
-  disableFatalDefects: true,
-} as const;
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
@@ -3743,7 +3729,7 @@ export const layer = Layer.unwrap(
             ),
           ),
         );
-        return yield* rpcWebSocketHttpEffect;
+        return yield* withSocketFrameParts(request, rpcWebSocketHttpEffect);
       }),
     );
   }),

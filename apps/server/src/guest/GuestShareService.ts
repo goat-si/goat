@@ -1,3 +1,4 @@
+import { fromSecret } from "../auth/PayloadSigner.ts";
 import {
   type ChatAttachment,
   ChatAttachmentId,
@@ -31,12 +32,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import {
-  base64UrlDecodeUtf8,
-  base64UrlEncode,
-  signPayload,
-  timingSafeEqualBase64Url,
-} from "../auth/utils.ts";
+import { base64UrlDecodeUtf8, base64UrlEncode, timingSafeEqualBase64Url } from "../auth/utils.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
   attachmentFileExtension,
@@ -136,7 +132,7 @@ const decodeSessionClaims = Schema.decodeUnknownOption(Schema.fromJsonString(Ses
 /** A truncated HMAC keeps invite links short. 128 bits is still far beyond guessing range. */
 const inviteSignature = (shareId: string, key: Uint8Array) =>
   base64UrlEncode(
-    Buffer.from(signPayload(`guest-invite:${shareId}`, key), "base64url").subarray(
+    Buffer.from(fromSecret(key).sign(`guest-invite:${shareId}`), "base64url").subarray(
       0,
       INVITE_SIGNATURE_BYTES,
     ),
@@ -231,7 +227,7 @@ const make = Effect.gen(function* () {
   const signSession = (claims: SessionClaims) =>
     Effect.map(signingKey, (key) => {
       const payload = base64UrlEncode(JSON.stringify(claims));
-      return `${payload}.${signPayload(payload, key)}`;
+      return `${payload}.${fromSecret(key).sign(payload)}`;
     });
   const splitToken = (token: string) => {
     const [payload, signature, extra] = token.split(".");
@@ -256,7 +252,7 @@ const make = Effect.gen(function* () {
     Effect.map(signingKey, (key) => {
       const parts = splitToken(token);
       if (parts === null) return Option.none<SessionClaims>();
-      if (!timingSafeEqualBase64Url(parts.signature, signPayload(parts.payload, key))) {
+      if (!fromSecret(key).verify(parts.payload, parts.signature)) {
         return Option.none<SessionClaims>();
       }
       return decodeSessionClaims(base64UrlDecodeUtf8(parts.payload));
@@ -626,7 +622,17 @@ const make = Effect.gen(function* () {
             .find((candidate) => candidate.id === attachmentId),
         ),
         Effect.mapError(() => unavailable),
-      ));
+      )) ??
+      (thread.forkedFrom == null
+        ? undefined
+        : yield* orchestrator.getTimelinePage(thread.id, { attachmentId, limit: 1 }).pipe(
+            Effect.map(({ items }) =>
+              items
+                .flatMap(({ item }) => (item.type === "user_message" ? item.attachments : []))
+                .find((candidate) => candidate.id === attachmentId),
+            ),
+            Effect.mapError(() => unavailable),
+          ));
     const path =
       found === undefined ? null : resolveAttachmentPath({ attachmentsDir, attachment: found });
     if (found === undefined || path === null) return yield* unavailable;

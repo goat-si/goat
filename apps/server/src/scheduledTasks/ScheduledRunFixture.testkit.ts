@@ -363,3 +363,14 @@ export const requestFor = (
   bodyText: new TextDecoder().decode(pullRequestBody),
   ...overrides,
 });
+
+export const pullRequestFilterInput = () =>
+  webhookTaskInput({
+    schedule: {
+      type: "webhook",
+      filters: [{ path: "headers.x-github-event", op: "equals", value: "pull_request" }],
+    },
+  });
+export const githubEvent = (event: string) => ({
+  headers: { "content-type": "application/json", "x-github-event": event },
+});

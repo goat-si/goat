@@ -2,9 +2,7 @@ import {
   openCodexRouteSummary,
   resolveProviderInstanceDisplayName,
 } from "@goat/client-runtime/state/provider-instance-display";
-
 import { Spinner } from "~/components/ui/spinner";
-
 import {
   TriangleAlertIcon as AlertTriangleIcon,
   CheckIcon,
@@ -1225,6 +1223,7 @@ export function ProviderInstanceCard({
   const runtimeFields = driverOption ? (
     <ProviderSettingsForm
       definition={driverOption}
+      environmentId={environmentId}
       value={instance.config}
       idPrefix={`provider-instance-${instanceId}`}
       variant="settings"

@@ -31,6 +31,16 @@ describe("browser DPoP proofs", () => {
           nowEpochSeconds: issuedAt!,
         }),
       ).toMatchObject({ ok: true });
+      expect(
+        verifyDpopProof({
+          proof: proof.proof,
+          method: "POST",
+          url: "https://relay.example.test/v1/environments/env-1/connect",
+          expectedThumbprint: proof.thumbprint,
+          expectedAccessToken: "different-token",
+          nowEpochSeconds: issuedAt!,
+        }).ok,
+      ).toBe(false);
     }),
   );
 });

@@ -15,8 +15,6 @@ import { fromYaml } from "@goat/shared/schemaYaml";
 
 import { referenceRepos, type ReferenceRepo } from "./lib/reference-repos.ts";
 
-export type ReferenceRepoSyncAction = "add" | "pull";
-
 export interface ReferenceRepoSyncOptions {
   readonly rootDir?: string | undefined;
   readonly repoId?: string | undefined;
@@ -26,9 +24,9 @@ export interface ReferenceRepoSyncOptions {
 
 export interface ReferenceRepoSyncPlan {
   readonly repo: ReferenceRepo;
-  readonly action: ReferenceRepoSyncAction;
   readonly ref: string;
-  readonly args: ReadonlyArray<string>;
+  /** `git clone` arguments, without the destination directory. */
+  readonly cloneArgs: ReadonlyArray<string>;
 }
 
 export class ReferenceRepoSelectionError extends Schema.TaggedError<ReferenceRepoSelectionError>()(
@@ -70,24 +68,36 @@ export class ReferenceRepoVersionResolutionError extends Schema.TaggedError<Refe
   }
 }
 
-export class ReferenceRepoGitSubtreeError extends Schema.TaggedError<ReferenceRepoGitSubtreeError>()(
-  "ReferenceRepoGitSubtreeError",
+export class ReferenceRepoGitError extends Schema.TaggedError<ReferenceRepoGitError>()(
+  "ReferenceRepoGitError",
   {
     operation: Schema.Literals(["spawn", "communicate", "exit"]),
     repoId: Schema.String,
-    action: Schema.Literals(["add", "pull"]),
-    repository: Schema.String,
+    command: Schema.String,
     ref: Schema.String,
-    rootDir: Schema.String,
-    argumentCount: Schema.Number,
+    cwd: Schema.String,
     exitCode: Schema.optional(Schema.Number),
-    stdoutLength: Schema.optional(Schema.Number),
-    stderrLength: Schema.optional(Schema.Number),
+    stderr: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Git subtree ${this.action} for reference repo "${this.repoId}" failed during "${this.operation}".`;
+    const detail = this.stderr ? `: ${this.stderr.trim()}` : "";
+    return `git ${this.command} for reference repo "${this.repoId}" at ${this.ref} failed during "${this.operation}"${detail}`;
+  }
+}
+
+export class ReferenceRepoFileSystemError extends Schema.TaggedError<ReferenceRepoFileSystemError>()(
+  "ReferenceRepoFileSystemError",
+  {
+    repoId: Schema.String,
+    prefix: Schema.String,
+    cause: Schema.Defect(),
+    reason: Schema.optionalKey(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `Replacing ${this.prefix} for reference repo "${this.repoId}" failed.${this.reason ? ` ${this.reason}` : ""}`;
   }
 }
 
@@ -95,7 +105,8 @@ export type ReferenceRepoSyncError =
   | ReferenceRepoSelectionError
   | ReferenceRepoVersionSourceError
   | ReferenceRepoVersionResolutionError
-  | ReferenceRepoGitSubtreeError;
+  | ReferenceRepoGitError
+  | ReferenceRepoFileSystemError;
 
 const decodeJsonSource = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeYamlSource = Schema.decodeEffect(fromYaml(Schema.Unknown));
@@ -105,7 +116,7 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     Stream.decodeText(),
     Stream.runFold(
       () => "",
-      (acc, chunk) => acc + chunk,
+      (acc, chunk) => (acc + chunk).slice(0, 1024 * 1024),
     ),
   );
 
@@ -197,46 +208,48 @@ export const resolveReferenceRepoRef = Effect.fn("resolveReferenceRepoRef")(func
   return `${repo.versionTagPrefix}${version}`;
 });
 
+// Do not fetch upstream into this repository: its tags and shallow boundaries contaminate it.
 export const planReferenceRepoSync = Effect.fn("planReferenceRepoSync")(function* (
   repo: ReferenceRepo,
   rootDir: string,
   latest: boolean,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const action: ReferenceRepoSyncAction = (yield* fs.exists(path.join(rootDir, repo.prefix)))
-    ? "pull"
-    : "add";
   const ref = yield* resolveReferenceRepoRef(repo, rootDir, latest);
 
   return {
     repo,
-    action,
     ref,
-    args: ["subtree", action, `--prefix=${repo.prefix}`, repo.repository, ref, "--squash"],
+    cloneArgs: [
+      "clone",
+      "--quiet",
+      "--depth=1",
+      "--no-tags",
+      "--single-branch",
+      `--branch=${ref}`,
+      repo.repository,
+    ],
   } satisfies ReferenceRepoSyncPlan;
 });
 
-const runGit = Effect.fn("runGit")(function* (rootDir: string, plan: ReferenceRepoSyncPlan) {
+const runGit = Effect.fn("runGit")(function* (
+  plan: ReferenceRepoSyncPlan,
+  cwd: string,
+  args: ReadonlyArray<string>,
+) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const errorContext = {
     repoId: plan.repo.id,
-    action: plan.action,
-    repository: plan.repo.repository,
+    command: args[0] ?? "",
     ref: plan.ref,
-    rootDir,
-    argumentCount: plan.args.length,
+    cwd,
   } as const;
-  const child = yield* spawner.spawn(ChildProcess.make("git", plan.args, { cwd: rootDir })).pipe(
-    Effect.mapError(
-      (cause) =>
-        new ReferenceRepoGitSubtreeError({
-          ...errorContext,
-          operation: "spawn",
-          cause,
-        }),
-    ),
-  );
+  const child = yield* spawner
+    .spawn(ChildProcess.make("git", [...args], { cwd }))
+    .pipe(
+      Effect.mapError(
+        (cause) => new ReferenceRepoGitError({ ...errorContext, operation: "spawn", cause }),
+      ),
+    );
   const [stdout, stderr, exitCode] = yield* Effect.all(
     [
       collectStreamAsString(child.stdout),
@@ -246,33 +259,119 @@ const runGit = Effect.fn("runGit")(function* (rootDir: string, plan: ReferenceRe
     { concurrency: "unbounded" },
   ).pipe(
     Effect.mapError(
-      (cause) =>
-        new ReferenceRepoGitSubtreeError({
-          ...errorContext,
-          operation: "communicate",
-          cause,
-        }),
+      (cause) => new ReferenceRepoGitError({ ...errorContext, operation: "communicate", cause }),
     ),
   );
 
   if (exitCode !== 0) {
-    return yield* new ReferenceRepoGitSubtreeError({
+    return yield* new ReferenceRepoGitError({
       ...errorContext,
       operation: "exit",
       exitCode,
-      stdoutLength: stdout.length,
-      stderrLength: stderr.length,
+      stderr,
     });
   }
 
-  if (stdout.trim().length > 0) {
-    yield* Console.log(stdout.trim());
+  return stdout;
+});
+
+export const applyReferenceRepoSync = Effect.fn("applyReferenceRepoSync")(function* (
+  rootDir: string,
+  plan: ReferenceRepoSyncPlan,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { repo } = plan;
+  const target = path.join(rootDir, repo.prefix);
+  const backup = `${target}.sync-backup`;
+  const mapFsError = Effect.mapError(
+    (cause: unknown) =>
+      new ReferenceRepoFileSystemError({ repoId: repo.id, prefix: repo.prefix, cause }),
+  );
+
+  const assertClean = Effect.fn("referenceRepo.assertClean")(function* () {
+    const dirty = yield* runGit(plan, rootDir, [
+      "status",
+      "--porcelain",
+      "--untracked-files=all",
+      "--",
+      repo.prefix,
+    ]);
+    const ignored = yield* runGit(plan, rootDir, [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--directory",
+      "--",
+      repo.prefix,
+    ]);
+    if (dirty !== "" || ignored !== "") {
+      return yield* new ReferenceRepoFileSystemError({
+        repoId: repo.id,
+        prefix: repo.prefix,
+        reason:
+          "The reference directory contains changes, untracked files, or ignored files. Move or commit them before syncing.",
+        cause: new Error("Reference directory is not clean"),
+      });
+    }
+    if (yield* fs.exists(backup).pipe(mapFsError)) {
+      return yield* new ReferenceRepoFileSystemError({
+        repoId: repo.id,
+        prefix: repo.prefix,
+        reason: `A sync backup already exists at ${backup}; inspect it before syncing.`,
+        cause: new Error("Reference sync backup exists"),
+      });
+    }
+  });
+  yield* assertClean();
+
+  // Clone next to the target so a rename moves it into place: same filesystem, and
+  // relative symlinks stay relative (`fs.copy` rewrites them to absolute temp paths).
+  yield* fs.makeDirectory(path.dirname(target), { recursive: true }).pipe(mapFsError);
+  const tempDir = yield* fs
+    .makeTempDirectoryScoped({ directory: path.dirname(target), prefix: `.sync-${repo.id}-` })
+    .pipe(mapFsError);
+  const checkout = path.join(tempDir, "checkout");
+  yield* runGit(plan, rootDir, [...plan.cloneArgs, checkout]);
+  const commit = (yield* runGit(plan, checkout, ["rev-parse", "HEAD"])).trim();
+
+  yield* fs.remove(path.join(checkout, ".git"), { recursive: true }).pipe(mapFsError);
+  yield* assertClean();
+  const hadTarget = yield* fs.exists(target).pipe(mapFsError);
+  if (hadTarget) yield* fs.rename(target, backup).pipe(mapFsError);
+  yield* fs.rename(checkout, target).pipe(
+    Effect.catch((cause) =>
+      (hadTarget ? fs.rename(backup, target) : Effect.void).pipe(
+        Effect.andThen(Effect.fail(cause)),
+      ),
+    ),
+    mapFsError,
+  );
+
+  yield* runGit(plan, rootDir, ["add", "--force", "--all", "--", repo.prefix]);
+  if (hadTarget) yield* fs.remove(backup, { recursive: true }).pipe(mapFsError);
+  const status = yield* runGit(plan, rootDir, ["status", "--porcelain", "--", repo.prefix]);
+  if (status.trim().length === 0) {
+    yield* Console.log(`${repo.id} is already at ${plan.ref}.`);
+    return;
   }
+  yield* runGit(plan, rootDir, [
+    "commit",
+    "--quiet",
+    "--message",
+    `chore(repos): sync ${repo.id} to ${plan.ref}`,
+    "--message",
+    `Upstream: ${repo.repository} ${commit}`,
+    "--",
+    repo.prefix,
+  ]);
+  yield* Console.log(`Committed ${repo.prefix} at ${plan.ref} (${commit.slice(0, 12)}).`);
 });
 
 /**
  * Thread worktrees leave .repos/ out through sparse checkout (worktreeSparseExclude in
- * goat.json), and git subtree needs those files, so a sync restores the full checkout first.
+ * goat.json), so a sync restores the full checkout before staging reference files.
  */
 const expandSparseCheckout = Effect.fn("expandSparseCheckout")(function* (rootDir: string) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -309,9 +408,9 @@ export const syncReferenceRepos = Effect.fn("syncReferenceRepos")(function* (
   for (const repo of repos) {
     const plan = yield* planReferenceRepoSync(repo, rootDir, options.latest ?? false);
     plans.push(plan);
-    yield* Console.log(`Syncing ${repo.id} from ${plan.ref} with git subtree ${plan.action}.`);
+    yield* Console.log(`Syncing ${repo.id} from ${plan.ref} (shallow clone, no history).`);
     if (!(options.dryRun ?? false)) {
-      yield* runGit(rootDir, plan).pipe(Effect.scoped);
+      yield* applyReferenceRepoSync(rootDir, plan).pipe(Effect.scoped);
     }
   }
 
@@ -332,11 +431,11 @@ export const syncReferenceReposCommand = Command.make(
       Flag.withDefault(false),
     ),
     root: Flag.String("root").pipe(
-      Flag.withDescription("Workspace root used to resolve versions and subtree prefixes."),
+      Flag.withDescription("Workspace root used to resolve versions and .repos/ prefixes."),
       Flag.optional,
     ),
     dryRun: Flag.Boolean("dry-run").pipe(
-      Flag.withDescription("Print planned subtree operations without running git."),
+      Flag.withDescription("Print the planned syncs without cloning or committing."),
       Flag.withDefault(false),
     ),
   },

@@ -208,6 +208,7 @@ it.effect("starts the backend while Linux registration is stalled and cancels it
             detach: () => {
               throw new Error("unexpected detach");
             },
+            setShown: () => {},
             humanStartedDownload: () => false,
             placeDownload: () => false,
           }),

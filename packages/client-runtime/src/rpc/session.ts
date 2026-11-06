@@ -4,6 +4,10 @@ import {
   WsSubscribeServerConfigRpc,
   WS_METHODS,
 } from "@goat/contracts";
+import {
+  joinSocketFrameParts,
+  SOCKET_FRAME_PARTS_QUERY_PARAM,
+} from "@goat/shared/socketFrameParts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -254,14 +258,28 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       });
       return socket;
     };
-    const layerSocket = Socket.layerWebSocket(connection.socketUrl, {
-      openTimeout: SOCKET_OPEN_TIMEOUT,
-    }).pipe(
+    const socketUrl = new URL(connection.socketUrl);
+    socketUrl.searchParams.set(SOCKET_FRAME_PARTS_QUERY_PARAM, "1");
+    const layerSocket = Layer.effect(
+      Socket.Socket,
+      Effect.map(Effect.service(Socket.Socket), joinSocketFrameParts),
+    ).pipe(
+      Layer.provide(
+        Socket.layerWebSocket(socketUrl.toString(), { openTimeout: SOCKET_OPEN_TIMEOUT }),
+      ),
       Layer.provide(Layer.succeed(Socket.WebSocketConstructor, countingWebSocketConstructor)),
     );
     const layerProtocol = Layer.effect(
       RpcClient.Protocol,
-      makeWsRpcSocketProtocol(Ref.set(pingTimedOut, true), silenceTimeout, options.drainIo),
+      makeWsRpcSocketProtocol(Ref.set(pingTimedOut, true), silenceTimeout, options.drainIo).pipe(
+        Effect.map((protocol) => ({
+          ...protocol,
+          send: (clientId, request, transferables) =>
+            request._tag !== "Request" && Deferred.isDoneUnsafe(disconnected)
+              ? Effect.void
+              : protocol.send(clientId, request, transferables),
+        })),
+      ),
     ).pipe(
       Layer.provide(
         Layer.mergeAll(

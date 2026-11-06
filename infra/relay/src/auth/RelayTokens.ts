@@ -17,19 +17,14 @@ import {
   type RelayEnvironmentLinkChallengeRequest,
 } from "@goat/contracts/relay";
 import { encodeOAuthScope, parseAllowedOAuthScope } from "@goat/shared/oauthScope";
-import {
-  normalizeRelayIssuer,
-  RelayJwtError,
-  signRelayJwt,
-  verifyRelayJwt,
-} from "@goat/shared/relayJwt";
+import { normalizeRelayIssuer, RelayJwtError } from "@goat/shared/relayJwt";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 import * as RelayConfiguration from "../Config.ts";
+import * as CloudMintSigner from "./CloudMintSigner.ts";
 
 const LINK_CHALLENGE_TYP = "goat-link-challenge+jwt";
 const ACCESS_TOKEN_TYP = "goat-relay-dpop-access+jwt";
@@ -143,6 +138,7 @@ const make = Effect.gen(function* () {
   const access = yield* AccountAccess.AccountAccess;
   const rates = yield* RelayRateLimits.RelayRateLimits;
   const config = yield* RelayConfiguration.RelayConfiguration;
+  const mintSigner = CloudMintSigner.make(config);
   const issuer = normalizeRelayIssuer(config.relayIssuer);
 
   const issueLinkChallenge: RelayTokens["Service"]["issueLinkChallenge"] = Effect.fn(
@@ -152,8 +148,7 @@ const make = Effect.gen(function* () {
     const admitted = yield* access.admit(input.userId);
     yield* rates.charge({ userId: input.userId, operation: "link_challenge" });
     yield* access.requireAllowed(admitted);
-    return yield* signRelayJwt({
-      privateKey: Redacted.value(config.cloudMintPrivateKey),
+    return yield* mintSigner.sign({
       typ: LINK_CHALLENGE_TYP,
       payload: {
         kind: LINK_CHALLENGE_KIND,
@@ -180,32 +175,33 @@ const make = Effect.gen(function* () {
   const verifyLinkChallenge: RelayTokens["Service"]["verifyLinkChallenge"] = Effect.fn(
     "relay.tokens.verify_link_challenge",
   )((input) =>
-    verifyRelayJwt({
-      publicKey: config.cloudMintPublicKey,
-      token: input.token,
-      typ: LINK_CHALLENGE_TYP,
-      issuer,
-      audience: issuer,
-      nowEpochSeconds: input.nowEpochSeconds,
-    }).pipe(
-      Effect.flatMap(decodeLinkChallengeClaims),
-      Effect.map((claims) => {
-        if (
-          claims.exp <= input.nowEpochSeconds ||
-          claims.iat > input.nowEpochSeconds ||
-          claims.sub !== input.userId ||
-          claims.assurance.userId !== input.userId ||
-          !isConnectAssuranceFresh(claims.assurance, input.nowEpochSeconds) ||
-          (input.request.notificationsEnabled && claims.notificationsEnabled !== true) ||
-          (input.request.liveActivitiesEnabled && claims.liveActivitiesEnabled !== true) ||
-          (input.request.managedTunnelsEnabled && claims.managedTunnelsEnabled !== true)
-        ) {
-          return null;
-        }
-        return claims;
-      }),
-      Effect.orElseSucceed(() => null),
-    ),
+    mintSigner
+      .verify({
+        token: input.token,
+        typ: LINK_CHALLENGE_TYP,
+        issuer,
+        audience: issuer,
+        nowEpochSeconds: input.nowEpochSeconds,
+      })
+      .pipe(
+        Effect.flatMap(decodeLinkChallengeClaims),
+        Effect.map((claims) => {
+          if (
+            claims.exp <= input.nowEpochSeconds ||
+            claims.iat > input.nowEpochSeconds ||
+            claims.sub !== input.userId ||
+            claims.assurance.userId !== input.userId ||
+            !isConnectAssuranceFresh(claims.assurance, input.nowEpochSeconds) ||
+            (input.request.notificationsEnabled && claims.notificationsEnabled !== true) ||
+            (input.request.liveActivitiesEnabled && claims.liveActivitiesEnabled !== true) ||
+            (input.request.managedTunnelsEnabled && claims.managedTunnelsEnabled !== true)
+          ) {
+            return null;
+          }
+          return claims;
+        }),
+        Effect.orElseSucceed(() => null),
+      ),
   );
 
   const issueDpopAccessToken: RelayTokens["Service"]["issueDpopAccessToken"] = Effect.fn(
@@ -215,8 +211,7 @@ const make = Effect.gen(function* () {
     const admitted = yield* access.admit(input.userId);
     yield* rates.charge({ userId: input.userId, operation: "dpop_token" });
     yield* access.requireAllowed(admitted);
-    return yield* signRelayJwt({
-      privateKey: Redacted.value(config.cloudMintPrivateKey),
+    return yield* mintSigner.sign({
       typ: ACCESS_TOKEN_TYP,
       payload: {
         iss: issuer,
@@ -239,35 +234,36 @@ const make = Effect.gen(function* () {
   const verifyDpopAccessToken: RelayTokens["Service"]["verifyDpopAccessToken"] = Effect.fn(
     "relay.tokens.verify_dpop_access_token",
   )((input) =>
-    verifyRelayJwt({
-      publicKey: config.cloudMintPublicKey,
-      token: input.token,
-      typ: ACCESS_TOKEN_TYP,
-      issuer,
-      audience: issuer,
-      nowEpochSeconds: input.nowEpochSeconds,
-      maxTokenAge: RELAY_DPOP_ACCESS_TOKEN_TTL,
-    }).pipe(
-      Effect.tapError((error) =>
-        Effect.annotateCurrentSpan(
-          "relay.tokens.verification_failure",
-          RelayJwtError.diagnosticCode(error),
+    mintSigner
+      .verify({
+        token: input.token,
+        typ: ACCESS_TOKEN_TYP,
+        issuer,
+        audience: issuer,
+        nowEpochSeconds: input.nowEpochSeconds,
+        maxTokenAge: RELAY_DPOP_ACCESS_TOKEN_TTL,
+      })
+      .pipe(
+        Effect.tapError((error) =>
+          Effect.annotateCurrentSpan(
+            "relay.tokens.verification_failure",
+            RelayJwtError.diagnosticCode(error),
+          ),
         ),
+        Effect.flatMap(decodeDpopAccessTokenClaims),
+        Effect.map((claims): RelayDpopAccessTokenClaims | null => {
+          const scopes = resolveDpopAccessTokenScopes({
+            clientId: claims.client_id,
+            scope: claims.scope,
+          });
+          return scopes === null ||
+            claims.assurance.userId !== claims.sub ||
+            claims.assurance.checkedAt > input.nowEpochSeconds
+            ? null
+            : { ...claims, scope: scopes };
+        }),
+        Effect.orElseSucceed(() => null),
       ),
-      Effect.flatMap(decodeDpopAccessTokenClaims),
-      Effect.map((claims): RelayDpopAccessTokenClaims | null => {
-        const scopes = resolveDpopAccessTokenScopes({
-          clientId: claims.client_id,
-          scope: claims.scope,
-        });
-        return scopes === null ||
-          claims.assurance.userId !== claims.sub ||
-          claims.assurance.checkedAt > input.nowEpochSeconds
-          ? null
-          : { ...claims, scope: scopes };
-      }),
-      Effect.orElseSucceed(() => null),
-    ),
   );
 
   return RelayTokens.of({

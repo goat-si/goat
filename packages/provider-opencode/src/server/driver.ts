@@ -1,3 +1,4 @@
+import { settingsSecretLiteral } from "@goat/contracts";
 import { ProviderDriverKind, TextGenerationError } from "@goat/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Crypto from "effect/Crypto";
@@ -19,6 +20,8 @@ import {
 } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as OpenCodeAdapterV2 from "./adapter.ts";
 import * as OpenCode2AdapterV2 from "./v2/adapter.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -243,7 +246,12 @@ export const OpenCodeDriver: ProviderDriver<
       accentColor,
       continuationGroupKey: continuationIdentity.continuationKey,
     });
-    const effectiveConfig = { ...config, enabled } satisfies OpenCodeSettings;
+    const effectiveConfig = {
+      ...config,
+      enabled,
+      serverPassword: settingsSecretLiteral(config.serverPassword),
+      binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
+    } satisfies OpenCodeSettings;
     const runtimeProbe = yield* makeOpenCodeRuntimeProbe(
       probeOpenCodeRuntime(effectiveConfig, processEnv).pipe(
         Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -288,7 +296,7 @@ export const OpenCodeDriver: ProviderDriver<
       accentColor,
       environment,
       enabled,
-      config,
+      config: effectiveConfig,
     }).pipe(
       Effect.mapError(
         (cause) =>

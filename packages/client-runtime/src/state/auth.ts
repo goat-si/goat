@@ -9,7 +9,7 @@ import { Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { subscribe } from "../rpc/client.ts";
-import { createEnvironmentSubscriptionAtomFamily } from "./runtime.ts";
+import { createEnvironmentRpcCommand, createEnvironmentSubscriptionAtomFamily } from "./runtime.ts";
 
 export const EMPTY_AUTH_ACCESS_SNAPSHOT: AuthAccessSnapshot = {
   pairingLinks: [],
@@ -79,6 +79,18 @@ export function createAuthEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   return {
+    createPairing: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:auth:create-pairing",
+      tag: WS_METHODS.authAccessCreatePairing,
+    }),
+    revokePairing: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:auth:revoke-pairing",
+      tag: WS_METHODS.authAccessRevokePairing,
+    }),
+    revokeClient: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:auth:revoke-client",
+      tag: WS_METHODS.authAccessRevokeClient,
+    }),
     accessChanges: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:auth-access-changes",
       subscribe: (_input: null) =>

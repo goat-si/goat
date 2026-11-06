@@ -1,3 +1,4 @@
+import { codexResumeError, forkCodexThread } from "./CodexResumeError.ts";
 import { makeSurvivorSettlement } from "./CodexSurvivorSettlement.ts";
 import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
 import * as Survivor from "./CodexSurvivorContinuation.ts";
@@ -37,7 +38,7 @@ import {
 } from "../../provider/CodexTurnTokenUsage.ts";
 import type { ManagedServerProvider } from "@goat/provider-core/server/snapshot";
 import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
-import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts";
+import { withCodexManagedFailure, failureResetAt } from "../../provider/CodexManagedFailure.ts";
 import {
   buildCodexInitializeParams,
   codexDefaultReasoningEffortOverride,
@@ -45,7 +46,6 @@ import {
 import {
   codexRateLimitsToUpdate,
   mergeCodexRateLimits,
-  codexUsageLimitResetAt,
   type CodexRateLimitSnapshot,
 } from "../../provider/codexUsageLimits.ts";
 import {
@@ -1115,20 +1115,6 @@ function codexErrorInfoCode(value: unknown): string | null {
 }
 
 type CodexErrorInfo = CodexSchema.ServerNotification__CodexErrorInfo;
-
-/**
- * ChatGPT sharing reports its own reason inside Codex's generic turn error, so
- * the code it names replaces Codex's, and clients pick a recovery from it.
- */
-function withCodexManagedFailure(
-  failure: OrchestrationV2ProviderFailure,
-  nativeError: unknown,
-): OrchestrationV2ProviderFailure {
-  const managed = classifyCodexManagedError(nativeError);
-  return managed === undefined
-    ? failure
-    : { ...failure, message: managed.message, code: managed.code };
-}
 
 interface ActiveCodexTurnContext {
   hookStopReason?: string;
@@ -4608,8 +4594,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const previous = yield* Ref.getAndUpdate(rateLimitSnapshot, (previous) =>
               mergeCodexRateLimits(previous, payload.rateLimits),
             );
-            const resetAt = codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot));
+            const snapshot = yield* Ref.get(rateLimitSnapshot);
             for (const item of (yield* Ref.get(limitedTurnItems)).values()) {
+              const resetAt = failureResetAt(item.failure, snapshot);
               if (resetAt === null || item.failure.resetAt != null) continue;
               const updated = {
                 ...item,
@@ -6039,7 +6026,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   failure.class === "usage_limit"
                     ? {
                         ...failure,
-                        resetAt: codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot)),
+                        resetAt: failureResetAt(failure, yield* Ref.get(rateLimitSnapshot)),
                       }
                     : settledCodexFailure(failure),
                 ...(input.providerRetry === undefined
@@ -6079,7 +6066,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     ...event.failure,
                     resetAt:
                       event.failure.resetAt ??
-                      codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot)),
+                      failureResetAt(event.failure, yield* Ref.get(rateLimitSnapshot)),
                   },
                 }
               : event;
@@ -7435,14 +7422,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             },
             (effect, threadInput) =>
               effect.pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderAdapter.ProviderAdapterResumeThreadError({
-                      driver: CODEX_PROVIDER,
-                      providerSessionId: input.providerSessionId,
-                      providerThreadId: threadInput.providerThread.id,
-                      cause: normalizeCodexCause(cause),
-                    }),
+                Effect.mapError((cause) =>
+                  codexResumeError(
+                    cause,
+                    input.providerSessionId,
+                    threadInput.providerThread.id,
+                    normalizeCodexCause(cause),
+                  ),
                 ),
               ),
           ),
@@ -8329,7 +8315,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(
-                  client.request("thread/fork", {
+                  forkCodexThread(client, {
                     threadId,
                     ...(boundary.lastTurnId === undefined
                       ? {}

@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./socketFrameParts": {
+      "types": "./src/socketFrameParts.ts",
+      "import": "./src/socketFrameParts.ts"
+    },
     "./timedShutdownPhase": {
       "types": "./src/timedShutdownPhase.ts",
       "import": "./src/timedShutdownPhase.ts"
@@ -375,6 +379,10 @@
       "types": "./src/composerTrigger.ts",
       "import": "./src/composerTrigger.ts"
     },
+    "./pullRequestComposerTrigger": {
+      "types": "./src/pullRequestComposerTrigger.ts",
+      "import": "./src/pullRequestComposerTrigger.ts"
+    },
     "./composerInlineTokens": {
       "types": "./src/composerInlineTokens.ts",
       "import": "./src/composerInlineTokens.ts"
@@ -634,6 +642,10 @@
     "./markdownFrontmatter": {
       "types": "./src/markdownFrontmatter.ts",
       "import": "./src/markdownFrontmatter.ts"
+    },
+    "./markdownTaskList": {
+      "types": "./src/markdownTaskList.ts",
+      "import": "./src/markdownTaskList.ts"
     },
     "./markdownListIndentation": {
       "types": "./src/markdownListIndentation.ts",

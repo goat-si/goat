@@ -1,3 +1,4 @@
+import { toPullRequestSummary, matchesFilterRepository } from "./pullRequestSummary.ts";
 import { ACTION_ACCESS_REFUSALS, pinnedAutoMergeRefusal } from "./pullRequestActionPolicy.ts";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
 import { parseDiffFilePaths } from "@goat/source-control-core/server/diffFileRevisions";
@@ -94,9 +95,11 @@ import type { SourceControlProviderContext } from "@goat/source-control-core/ser
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import {
   type ProviderChangeRequest,
+  type ProviderChangeRequestDetail,
   type ProviderDiffFilePaths,
   type ProviderFilterOptionPage,
   type ProviderListCursor,
+  type ProviderChangeRequestSummary,
   type ProviderChangeRequestWatchFingerprint,
   type PullRequestProviderApi,
   PullRequestProviderError,
@@ -267,7 +270,9 @@ export class PullRequestService extends Context.Service<
     readonly changeBreakdown: (
       input: PullRequestRef,
     ) => Effect.Effect<PullRequestChangeBreakdown, PullRequestError>;
-    readonly runAction: (input: PullRequestActionInput) => Effect.Effect<void, PullRequestError>;
+    readonly runAction: (
+      input: PullRequestActionInput,
+    ) => Effect.Effect<PullRequestSummary | undefined, PullRequestError>;
     readonly update: (input: PullRequestUpdateInput) => Effect.Effect<void, PullRequestError>;
     readonly comment: (input: PullRequestCommentInput) => Effect.Effect<void, PullRequestError>;
     readonly updateComment: (
@@ -1193,7 +1198,6 @@ export const make = Effect.gen(function* () {
       { concurrency: REPOSITORY_CONCURRENCY },
     );
 
-  // Only the host can filter checks; listed rows have no check state.
   const matchesRowFilters = (
     item: ProviderChangeRequest,
     filters: PullRequestListFilters | undefined,
@@ -1209,6 +1213,9 @@ export const make = Effect.gen(function* () {
         (filters.review === "none"
           ? item.reviewDecision === null
           : item.reviewDecision === filters.review)) &&
+      (filters.checks === undefined ||
+        item.checksState === undefined ||
+        item.checksState === filters.checks) &&
       (filters.labels === undefined || filters.labels.every((group) => group.some(holds))) &&
       (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
       (filters.author === undefined ||
@@ -1656,49 +1663,17 @@ export const make = Effect.gen(function* () {
           host: project.host,
           number: input.number,
         };
-        const read =
+        const read: Effect.Effect<
+          ProviderChangeRequestSummary | ProviderChangeRequestDetail,
+          PullRequestProviderError
+        > =
           project.api.getChangeRequestSummary === undefined
             ? project.api.getChangeRequest(providerInput)
             : project.api.getChangeRequestSummary(providerInput);
         return read.pipe(
           Effect.mapError(toPullRequestError("summary")),
           observeRead,
-          Effect.map(({ value: changeRequest, observedAt }): PullRequestSummary => ({
-            provider: project.api.kind,
-            projectId: project.project.id,
-            repository: project.repository,
-            number: changeRequest.number,
-            title: changeRequest.title,
-            url: changeRequest.url,
-            state: changeRequest.state,
-            headBranch: changeRequest.headBranch,
-            baseBranch: changeRequest.baseBranch,
-            closedAt: changeRequest.closedAt ?? null,
-            mergedAt: changeRequest.mergedAt ?? null,
-            updatedAt: changeRequest.updatedAt,
-            observedAt,
-            ...(changeRequest.isDraft === undefined ? {} : { isDraft: changeRequest.isDraft }),
-            ...(changeRequest.author === undefined ? {} : { author: changeRequest.author }),
-            ...(changeRequest.additions === undefined
-              ? {}
-              : { additions: changeRequest.additions }),
-            ...(changeRequest.deletions === undefined
-              ? {}
-              : { deletions: changeRequest.deletions }),
-            ...(changeRequest.changedFiles === undefined
-              ? {}
-              : { changedFiles: changeRequest.changedFiles }),
-            ...(changeRequest.reviewDecision === undefined
-              ? {}
-              : { reviewDecision: changeRequest.reviewDecision }),
-            ...(changeRequest.checksState === undefined
-              ? {}
-              : { checksState: changeRequest.checksState }),
-            ...(changeRequest.mergeability === undefined
-              ? {}
-              : { mergeability: changeRequest.mergeability }),
-            ...(changeRequest.stack === undefined ? {} : { stack: changeRequest.stack }),
-          })),
+          Effect.map(({ value, observedAt }) => toPullRequestSummary(project, value, observedAt)),
         );
       }),
     );
@@ -1972,9 +1947,15 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const runAction = (input: PullRequestActionInput): Effect.Effect<string, PullRequestError> =>
+  type ActionOutcome = {
+    readonly repository: string;
+    readonly summary: PullRequestSummary | undefined;
+  };
+  const runAction = (
+    input: PullRequestActionInput,
+  ): Effect.Effect<ActionOutcome, PullRequestError> =>
     requireProject(input).pipe(
-      Effect.flatMap((project): Effect.Effect<string, PullRequestError> => {
+      Effect.flatMap((project): Effect.Effect<ActionOutcome, PullRequestError> => {
         const pinnedAutoRefusal = pinnedAutoMergeRefusal(input);
         if (pinnedAutoRefusal !== undefined) return Effect.fail(pinnedAutoRefusal);
         if (
@@ -2052,7 +2033,7 @@ export const make = Effect.gen(function* () {
           "runAction",
           input.action === "update-branch",
         ).pipe(
-          Effect.flatMap((viewer): Effect.Effect<string, PullRequestError> => {
+          Effect.flatMap((viewer): Effect.Effect<ActionOutcome, PullRequestError> => {
             const stackRebase = input.stackNumber !== undefined && input.action === "update-branch";
             if (
               stackRebase ? viewer.stackRebase !== true : !viewer.actions.includes(input.action)
@@ -2167,9 +2148,17 @@ export const make = Effect.gen(function* () {
                         : refreshAfterTurn(project.project.id),
                     ),
                     Effect.mapError(toPullRequestError("runAction")),
-                    Effect.as(
-                      project.repositoryKey !== null ? input.repository.trim() : project.repository,
-                    ),
+                    observeRead,
+                    Effect.map(({ value, observedAt }) => ({
+                      repository:
+                        project.repositoryKey !== null
+                          ? input.repository.trim()
+                          : project.repository,
+                      summary:
+                        value === undefined || input.stackNumber !== undefined
+                          ? undefined
+                          : toPullRequestSummary(project, value, observedAt, true),
+                    })),
                   ),
               ),
             );
@@ -2548,7 +2537,7 @@ export const make = Effect.gen(function* () {
     "PullRequestService.filterOptions",
   )(function* (input) {
     const { supported } = yield* listWorkspaceProjects(input);
-    const listed = supported.filter((item) => input.includeUpstream || !item.upstream);
+    const listed = supported.filter((item) => matchesFilterRepository(item, input));
     // Worktrees of one checkout are separate projects over the same repository.
     const repositories = [
       ...new Map(listed.map((project) => [project.cursorKey, project])).values(),
@@ -3622,7 +3611,7 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     const ref = yield* canonicalRef(input);
     yield* readCache.invalidate(refScope(ref));
-    const repository = yield* runAction(input).pipe(
+    const { repository, summary } = yield* runAction(input).pipe(
       Effect.ensuring(readCache.invalidate(refScope(ref))),
     );
     bumpRefEpoch({ ...ref, repository });
@@ -3630,21 +3619,28 @@ export const make = Effect.gen(function* () {
     yield* SubscriptionRef.set(pullRequestRefreshes, listingsEpoch);
     if (input.action === "merge") {
       // A successful merge action can merely enqueue the PR or enable auto-merge.
-      const confirmed = yield* summaryUncached({ ...input, repository }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("failed to confirm pull request merge", { error }).pipe(
-            Effect.as(null),
-          ),
-        ),
-      );
-      if (confirmed?.state !== "merged") return;
-      yield* PubSub.publish(mergedPullRequests, {
-        projectId: input.projectId,
-        repository,
-        number: input.number,
-        mergedAt: DateTime.formatIso(yield* DateTime.now),
-      });
+      const merged = summary?.state === "merged" ? summary : null;
+      const confirmed =
+        merged?.mergedAt != null
+          ? merged
+          : yield* summaryUncached({ ...input, repository }).pipe(
+              Effect.map((reread) => (reread.state === "merged" ? reread : merged)),
+              Effect.catch((error) =>
+                Effect.logWarning("failed to confirm pull request merge", { error }).pipe(
+                  Effect.as(merged),
+                ),
+              ),
+            );
+      if (confirmed?.state === "merged") {
+        yield* PubSub.publish(mergedPullRequests, {
+          projectId: input.projectId,
+          repository,
+          number: input.number,
+          mergedAt: confirmed.mergedAt ?? DateTime.formatIso(yield* DateTime.now),
+        });
+      }
     }
+    return input.replyWithSummary === true ? summary : undefined;
   });
 
   const credentialCached =

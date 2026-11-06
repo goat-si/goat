@@ -816,7 +816,21 @@ function normalizeGoatMcpToolLabel(value: string): string {
 }
 
 // Provider prefixes vary; only names in the GOAT inventory reach a tool renderer.
+const toolNameCache = new Map<string, string | null>();
+const TOOL_NAME_CACHE_LIMIT = 10_000;
+const TOOL_NAME_CACHE_MAX_KEY_LENGTH = 256;
+
 function resolveGoatMcpToolName(value: string): string | null {
+  if (value.length > TOOL_NAME_CACHE_MAX_KEY_LENGTH) return parseGoatMcpToolName(value);
+  const cached = toolNameCache.get(value);
+  if (cached !== undefined) return cached;
+  const name = parseGoatMcpToolName(value);
+  if (toolNameCache.size >= TOOL_NAME_CACHE_LIMIT) toolNameCache.clear();
+  toolNameCache.set(value, name);
+  return name;
+}
+
+function parseGoatMcpToolName(value: string): string | null {
   const label = normalizeGoatMcpToolLabel(value);
   // Bare goat_* ids are tools themselves, before goat_ is read as a namespace.
   if (GOAT_MCP_TOOL_NAMES.has(label)) return label;

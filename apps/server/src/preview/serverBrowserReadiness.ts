@@ -5,7 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { resolveRootCliCommand } from "../cli/invocation.ts";
+import * as ServerConfig from "../config.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 
@@ -90,8 +90,9 @@ export const readServerBrowserReadiness = Effect.fn("ServerBrowserReadiness.read
   const optedOut = PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment);
   const rootSandboxed = !optedOut && (yield* HostProcess.UserId) === 0;
   const sandboxBlocked = !optedOut && (yield* PreviewBrowserHost.sandboxBlocked);
+  const config = yield* ServerConfig.ServerConfig;
   const setupCommand = sandboxBlocked
-    ? yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND)
+    ? yield* PreviewBrowserHost.setupCommand(config.baseDir)
     : PreviewBrowserHost.SETUP_SUBCOMMAND;
   return describeServerBrowserReadiness({ status, setupCommand, rootSandboxed, sandboxBlocked });
 });
@@ -109,13 +110,20 @@ export const optionalReadiness = Effect.gen(function* () {
   const browser = yield* Effect.serviceOption(PreviewBrowser.PreviewBrowser);
   const fileSystem = yield* Effect.serviceOption(FileSystem.FileSystem);
   const path = yield* Effect.serviceOption(Path.Path);
-  if (Option.isNone(browser) || Option.isNone(fileSystem) || Option.isNone(path))
+  const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  if (
+    Option.isNone(browser) ||
+    Option.isNone(fileSystem) ||
+    Option.isNone(path) ||
+    Option.isNone(config)
+  )
     return Option.none<Effect.Effect<ServerBrowserReadiness>>();
   return Option.some(
     readServerBrowserReadiness().pipe(
       Effect.provideService(PreviewBrowser.PreviewBrowser, browser.value),
       Effect.provideService(FileSystem.FileSystem, fileSystem.value),
       Effect.provideService(Path.Path, path.value),
+      Effect.provideService(ServerConfig.ServerConfig, config.value),
     ),
   );
 });

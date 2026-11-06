@@ -50,6 +50,7 @@ const run = Effect.fn("test.run")(function* (
 const serveFakeRelease = Effect.fn("test.serveFakeRelease")(function* (
   root: string,
   version = VERSION,
+  executable = '#!/bin/sh\nif [ "$1" = "--version" ] && [ -z "$GOAT_NPM_LAUNCHER_PATH" ]; then exit 0; fi\necho "stub $* launcher=$GOAT_NPM_LAUNCHER_PATH"\nexit 7\n',
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -59,10 +60,7 @@ const serveFakeRelease = Effect.fn("test.serveFakeRelease")(function* (
   yield* fs.makeDirectory(path.join(root, "release", stem, "node_modules/native"), {
     recursive: true,
   });
-  yield* fs.writeFileString(
-    path.join(root, "release", stem, "goat"),
-    '#!/bin/sh\necho "stub $* launcher=$GOAT_NPM_LAUNCHER_PATH"\nexit 7\n',
-  );
+  yield* fs.writeFileString(path.join(root, "release", stem, "goat"), executable);
   yield* fs.chmod(path.join(root, "release", stem, "goat"), 0o755);
   const tar = yield* run("tar", ["-czf", archiveName, stem], {
     cwd: path.join(root, "release"),
@@ -103,6 +101,43 @@ const serveFakeRelease = Effect.fn("test.serveFakeRelease")(function* (
 });
 
 it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "does not publish an unusable runtime",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-npm-invalid-" });
+        const output = yield* buildNpmLauncher({
+          version: VERSION,
+          outputDir: path.join(root, "out"),
+        });
+        const release = yield* serveFakeRelease(
+          root,
+          VERSION,
+          '#!/bin/sh\necho "broken runtime" >&2\nexit 42\n',
+        );
+        const home = path.join(root, "home");
+        const result = yield* run(
+          process.execPath,
+          [path.join(output.packageDir, "bin/goat.mjs"), "serve"],
+          {
+            cwd: root,
+            env: {
+              PATH: process.env.PATH,
+              GOAT_HOME: home,
+              GOAT_RELEASE_BASE_URL: release.baseUrl,
+            },
+          },
+        );
+        assert.equal(result.exitCode, 1);
+        assert.include(result.stderr, "broken runtime");
+        assert.deepStrictEqual(
+          yield* fs.readDirectory(path.join(home, "runtime/goat/versions")),
+          [],
+        );
+      }),
+  );
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "npm installs and updates both GOAT commands in the original isolated prefix without a registry",
     () =>

@@ -51,6 +51,27 @@ function normalizePem(value: string): string {
   return value.replace(/\\n/gu, "\n").trim();
 }
 
+export function makeRelayJwtSigner(privateKey: string) {
+  let key: ReturnType<typeof importPKCS8> | undefined;
+  return (input: {
+    readonly typ: string;
+    readonly payload: JWTPayload;
+  }): Effect.Effect<string, RelayJwtError> =>
+    Effect.tryPromise({
+      try: async () => {
+        key ??= importPKCS8(normalizePem(privateKey), "EdDSA");
+        const parsed = await key.catch((cause) => {
+          key = undefined;
+          throw cause;
+        });
+        return new SignJWT(input.payload)
+          .setProtectedHeader({ alg: "EdDSA", typ: input.typ })
+          .sign(parsed);
+      },
+      catch: (cause) => new RelayJwtError({ operation: "sign", typ: input.typ, cause }),
+    });
+}
+
 export function signRelayJwt(input: {
   readonly privateKey: string;
   readonly typ: string;
@@ -99,4 +120,38 @@ export function verifyRelayJwt(input: {
         cause,
       }),
   });
+}
+
+export function makeRelayJwtVerifier(publicKey: string) {
+  let key: ReturnType<typeof importSPKI> | undefined;
+  return (
+    input: Omit<Parameters<typeof verifyRelayJwt>[0], "publicKey">,
+  ): Effect.Effect<JWTPayload, RelayJwtError> =>
+    Effect.tryPromise({
+      try: async () => {
+        key ??= importSPKI(normalizePem(publicKey), "EdDSA");
+        const parsed = await key.catch((cause) => {
+          key = undefined;
+          throw cause;
+        });
+        const verified = await jwtVerify(input.token, parsed, {
+          algorithms: ["EdDSA"],
+          typ: input.typ,
+          issuer: input.issuer,
+          audience: input.audience,
+          maxTokenAge: input.maxTokenAge ?? "5 minutes",
+          clockTolerance: 60,
+          currentDate: DateTime.toDate(DateTime.makeUnsafe(input.nowEpochSeconds * 1_000)),
+        });
+        return verified.payload;
+      },
+      catch: (cause) =>
+        new RelayJwtError({
+          operation: "verify",
+          typ: input.typ,
+          issuer: input.issuer,
+          audience: input.audience,
+          cause,
+        }),
+    });
 }

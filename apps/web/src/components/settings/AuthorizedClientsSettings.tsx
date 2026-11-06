@@ -12,6 +12,7 @@ import {
   type AuthGrantScope,
   type AuthPairingCredentialResult,
   type AdvertisedEndpoint,
+  type EnvironmentId,
 } from "@goat/contracts";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
@@ -93,6 +94,8 @@ function endpointRowClassName(presentation: AccessSectionPresentation, isAvailab
 type PairingLinkListRowProps = {
   pairingLink: ServerPairingLinkRecord;
   credential: string | undefined;
+  defaultShareOpen: boolean;
+  servedByEnvironment: boolean;
   endpointUrl: string | null | undefined;
   endpoints: ReadonlyArray<AdvertisedEndpoint>;
   defaultEndpointKey: string | null;
@@ -105,6 +108,8 @@ type PairingLinkListRowProps = {
 const PairingLinkListRow = memo(function PairingLinkListRow({
   pairingLink,
   credential,
+  defaultShareOpen,
+  servedByEnvironment,
   endpointUrl,
   endpoints,
   defaultEndpointKey,
@@ -116,7 +121,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
   const nowMs = useNowSecond();
   const expiresAtMs = new Date(pairingLink.expiresAt).getTime();
   const [isRevealDialogOpen, setIsRevealDialogOpen] = useState(false);
-  const [isQrPanelOpen, setIsQrPanelOpen] = useState(false);
+  const [isQrPanelOpen, setIsQrPanelOpen] = useState(defaultShareOpen);
   const [qrEndpointId, setQrEndpointId] = useState<string | null>(null);
   const qrPanelId = useId();
 
@@ -161,7 +166,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
     endpointPairingUrl ??
     (credential && endpointUrl != null && endpointUrl !== ""
       ? (hostedPairingUrl ?? resolveDesktopPairingUrl(endpointUrl, credential))
-      : isLoopbackHostname(window.location.hostname)
+      : !servedByEnvironment || isLoopbackHostname(window.location.hostname)
         ? null
         : currentOriginPairingUrl);
   const [failedCopyValue, setFailedCopyValue] = useState<string | null>(null);
@@ -541,6 +546,12 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
 });
 
 type AuthorizedClientsHeaderActionProps = {
+  environmentId?: EnvironmentId;
+  createPairingCredential?: (input: {
+    label?: string;
+    scopes: ReadonlyArray<AuthGrantScope>;
+  }) => Promise<AuthPairingCredentialResult>;
+  showRevokeOthers?: boolean;
   onPairingLinkCreated: (result: AuthPairingCredentialResult) => void;
   clientSessions: ReadonlyArray<ServerClientSessionRecord> | null;
   isRevokingOtherClients: boolean;
@@ -550,6 +561,9 @@ type AuthorizedClientsHeaderActionProps = {
 };
 
 export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderAction({
+  environmentId,
+  createPairingCredential = createServerPairingCredential,
+  showRevokeOthers = true,
   onPairingLinkCreated,
   clientSessions,
   isRevokingOtherClients,
@@ -558,6 +572,7 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
   connectFlow,
 }: AuthorizedClientsHeaderActionProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const targetEnvironmentId = environmentId ?? primaryEnvironmentId;
   const [dialogOpen, setDialogOpen] = useState(connectFlow?.resume ?? false);
   const [pairingLabel, setPairingLabel] = useState("");
   const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthGrantScope>>([
@@ -568,17 +583,17 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
 
   const handleCreatePairingLink = async () => {
     if (
-      primaryEnvironmentId === null ||
+      targetEnvironmentId === null ||
       selectedScopes.length === 0 ||
-      !readEnvironmentScope(primaryEnvironmentId, AuthAccessWriteScope) ||
+      !readEnvironmentScope(targetEnvironmentId, AuthAccessWriteScope) ||
       !selectedScopes.every((scope) =>
-        heldOrGranted(scope, (held) => readEnvironmentScope(primaryEnvironmentId, held)),
+        heldOrGranted(scope, (held) => readEnvironmentScope(targetEnvironmentId, held)),
       )
     )
       return;
     setIsCreatingPairingLink(true);
     const settled = await settlePromise(async () => {
-      const created = await createServerPairingCredential({
+      const created = await createPairingCredential({
         label: pairingLabel,
         scopes: selectedScopes,
       });
@@ -609,14 +624,16 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
 
   return (
     <div className="flex items-center gap-2">
-      <Button
-        size="xs"
-        variant="destructive-outline"
-        disabled={isRevokingOtherClients || !canRevokeOtherClients(clientSessions)}
-        onClick={() => void onRevokeOtherClients()}
-      >
-        {isRevokingOtherClients ? "Revoking…" : "Revoke others"}
-      </Button>
+      {showRevokeOthers ? (
+        <Button
+          size="xs"
+          variant="destructive-outline"
+          disabled={isRevokingOtherClients || !canRevokeOtherClients(clientSessions)}
+          onClick={() => void onRevokeOtherClients()}
+        >
+          {isRevokingOtherClients ? "Revoking…" : "Revoke others"}
+        </Button>
+      ) : null}
       <Dialog
         open={dialogOpen}
         onOpenChange={(open) => {
@@ -656,6 +673,7 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
                 value={pairingLabel}
                 onChange={(event) => setPairingLabel(event.target.value)}
                 placeholder="e.g. Living room iPad"
+                maxLength={environmentId === undefined ? undefined : 256}
                 disabled={isCreatingPairingLink}
                 autoFocus
               />
@@ -755,6 +773,7 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
 });
 
 type PairingClientsListProps = {
+  servedByEnvironment?: boolean;
   endpointUrl: string | null | undefined;
   endpoints: ReadonlyArray<AdvertisedEndpoint>;
   defaultEndpointKey: string | null;
@@ -762,6 +781,7 @@ type PairingClientsListProps = {
   isLoading: boolean;
   pairingLinks: ReadonlyArray<ServerPairingLinkRecord>;
   createdPairingCredentials: ReadonlyMap<string, string>;
+  sharedPairingLinkId: string | null;
   clientSessions: ReadonlyArray<ServerClientSessionRecord>;
   revokingPairingLinkId: string | null;
   revokingClientSessionId: string | null;
@@ -771,6 +791,7 @@ type PairingClientsListProps = {
 };
 
 export const PairingClientsList = memo(function PairingClientsList({
+  servedByEnvironment = true,
   endpointUrl,
   endpoints,
   defaultEndpointKey,
@@ -778,6 +799,7 @@ export const PairingClientsList = memo(function PairingClientsList({
   isLoading,
   pairingLinks,
   createdPairingCredentials,
+  sharedPairingLinkId,
   clientSessions,
   revokingPairingLinkId,
   revokingClientSessionId,
@@ -792,6 +814,8 @@ export const PairingClientsList = memo(function PairingClientsList({
           key={pairingLink.id}
           pairingLink={pairingLink}
           credential={createdPairingCredentials.get(pairingLink.id)}
+          defaultShareOpen={pairingLink.id === sharedPairingLinkId}
+          servedByEnvironment={servedByEnvironment}
           endpointUrl={endpointUrl}
           endpoints={endpoints}
           defaultEndpointKey={defaultEndpointKey}

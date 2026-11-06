@@ -900,8 +900,8 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         .request("x/test", { hello: "world" })
         .pipe(Effect.flip, Effect.orDie, Effect.forkScoped);
       yield* Queue.take(output);
+      yield* Queue.offer(input, encoder.encode('{"jsonrpc":"2.0","id":1,"result":'));
       yield* Queue.end(input);
-
       const error = yield* Deferred.await(termination);
       assert.instanceOf(error, AcpError.AcpInputStreamEndedError);
       assert.strictEqual(yield* Fiber.join(pending), error);

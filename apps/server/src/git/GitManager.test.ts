@@ -1,16 +1,13 @@
+import { signatureOutputRegression } from "./testkit/signatureOutputRegression.ts";
 import { makeTempDir, removePath, makeDirectory } from "./testkit/fileFixtures.ts";
 import { runGit, initRepo } from "./testkit/gitRepository.ts";
 import { makeSetupHookFixture } from "../project/testkit/SetupHookFixture.ts";
-import { SourceControlProviderKind } from "@goat/contracts";
-import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-import * as NodeChildProcess from "node:child_process";
 
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -19,22 +16,14 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { expect } from "vite-plus/test";
-import type {
-  ChangeRequest,
-  GitActionProgressEvent,
-  GitPreparePullRequestThreadInput,
-  ModelSelection,
-} from "@goat/contracts";
+import type { GitActionProgressEvent, ModelSelection } from "@goat/contracts";
 
 import {
   DEFAULT_SERVER_SETTINGS,
   EventId,
-  GitCommandError,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -53,590 +42,28 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "../vcs/VcsProjectConfig.ts";
 import * as GitWorkflowService from "./GitWorkflowService.ts";
-import type { SourceControlProvider } from "@goat/source-control-core/server/SourceControlProvider";
-import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
-import * as ServerConfig from "../config.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
-import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import * as GitManager from "./GitManager.ts";
-import { gitSpawnObserverLayer, type GitSpawnGate } from "./testkit/gitSpawnObserver.ts";
 import * as TestClock from "effect/testing/TestClock";
 
-/** A change request the fake host reports. Omitted fields read as an open, undated request. */
-type FakeChangeRequest = Omit<ChangeRequest, "provider" | "state" | "updatedAt"> & {
-  readonly state?: ChangeRequest["state"];
-  readonly updatedAt?: string;
-};
-
-interface FakeProviderScenario {
-  prListGate?: {
-    readonly started: Deferred.Deferred<void>;
-    readonly release: Deferred.Deferred<void>;
-  };
-  /** The kind the fake host reports itself as. */
-  kind?: string;
-  /** Answers to successive change request listings, whatever their head selector. */
-  prListSequence?: ReadonlyArray<ReadonlyArray<FakeChangeRequest>>;
-  prListByHeadSelector?: Record<string, ReadonlyArray<FakeChangeRequest>>;
-  prListSequenceByHeadSelector?: Record<string, ReadonlyArray<ReadonlyArray<FakeChangeRequest>>>;
-  /** The answer to every listing the other lists leave unanswered. */
-  prListOtherwise?: ReadonlyArray<FakeChangeRequest>;
-  defaultBranch?: string;
-  pullRequest?: FakeChangeRequest;
-  repositoryCloneUrls?: Record<string, { url: string; sshUrl: string }>;
-  failWith?: string;
-  failCause?: unknown;
-  failAfterCalls?: number;
-  /** Check out the pull request head from its pull ref: fast-forward only unless forced. */
-  syncCheckoutWithPullHead?: boolean;
-  /**
-   * The host's `headBranchProbe`. By default the fake probes only bare branch names, a hundred
-   * at a time, so tests see GitManager defer to the hook; null leaves the probe to GitManager.
-   */
-  headBranchProbe?: SourceControlProvider["Service"]["headBranchProbe"] | null;
-}
-
-type FakeProviderCall =
-  | {
-      readonly operation: "listChangeRequests";
-      readonly headSelector: string;
-      readonly state: string;
-      readonly limit: number | undefined;
-    }
-  | {
-      readonly operation: "createChangeRequest";
-      readonly baseRefName: string;
-      readonly headSelector: string;
-      readonly title: string;
-    }
-  | { readonly operation: "getChangeRequest"; readonly reference: string }
-  | {
-      readonly operation: "checkoutChangeRequest";
-      readonly reference: string;
-      readonly force: boolean;
-    }
-  | { readonly operation: "getRepositoryCloneUrls"; readonly repository: string }
-  | { readonly operation: "getDefaultBranch" };
-
-const listed = (calls: ReadonlyArray<FakeProviderCall>) =>
-  calls.flatMap((call) => (call.operation === "listChangeRequests" ? [call] : []));
-
-const listedSelectors = (calls: ReadonlyArray<FakeProviderCall>) =>
-  listed(calls).map((call) => call.headSelector);
-
-const created = (calls: ReadonlyArray<FakeProviderCall>) =>
-  calls.flatMap((call) =>
-    call.operation === "createChangeRequest"
-      ? [{ baseRefName: call.baseRefName, headSelector: call.headSelector }]
-      : [],
-  );
-
-type FakeGitTextGeneration = TextGeneration.TextGeneration["Service"];
-
-function runGitSyncForFakeCheckout(cwd: string, args: readonly string[]): void {
-  const result = NodeChildProcess.spawnSync("git", args, {
-    cwd,
-    env: isolatedGitEnv(),
-    encoding: "utf8",
-  });
-  if (result.status === 0) {
-    return;
-  }
-  throw new Error(
-    `Failed to simulate a host checkout with git ${args.join(" ")}: ${result.stderr?.trim() || "unknown error"}`,
-  );
-}
-
-function createBareRemote(): Effect.Effect<
-  string,
-  PlatformError.PlatformError | GitCommandError,
-  FileSystem.FileSystem | Scope.Scope | GitVcsDriver.GitVcsDriver
-> {
-  return Effect.gen(function* () {
-    const remoteDir = yield* makeTempDir("goat-git-remote-");
-    yield* runGit(remoteDir, ["init", "--bare"]);
-    return remoteDir;
-  });
-}
-
-function configureRemote(
-  cwd: string,
-  remoteName: string,
-  remotePath: string,
-  fetchNamespace: string,
-): Effect.Effect<void, GitCommandError, GitVcsDriver.GitVcsDriver> {
-  return Effect.gen(function* () {
-    yield* runGit(cwd, ["config", `remote.${remoteName}.url`, remotePath]);
-    yield* runGit(cwd, [
-      "config",
-      "--replace-all",
-      `remote.${remoteName}.fetch`,
-      `+refs/heads/*:refs/remotes/${fetchNamespace}/*`,
-    ]);
-  });
-}
-
-function configureVisibleRemoteUrlWithLocalRewrite(
-  cwd: string,
-  remoteName: string,
-  visibleUrl: string,
-  localRemotePath: string,
-): Effect.Effect<void, GitCommandError, GitVcsDriver.GitVcsDriver> {
-  return Effect.gen(function* () {
-    yield* runGit(cwd, ["config", `remote.${remoteName}.url`, visibleUrl]);
-    yield* runGit(cwd, ["config", `url.${localRemotePath}.insteadOf`, visibleUrl]);
-  });
-}
-
-function createTextGeneration(
-  overrides: Partial<FakeGitTextGeneration> = {},
-): TextGeneration.TextGeneration["Service"] {
-  const implementation: FakeGitTextGeneration = {
-    generateCommitMessage: (input) =>
-      Effect.succeed({
-        subject: "Implement stacked git actions",
-        body: "",
-        ...(input.includeBranch ? { branch: "feature/implement-stacked-git-actions" } : {}),
-      }),
-    generatePrContent: () =>
-      Effect.succeed({
-        title: "Add stacked git actions",
-        body: "## Summary\n- Add stacked git workflow\n\n## Testing\n- Not run",
-      }),
-    generateBranchName: () =>
-      Effect.succeed({
-        branch: "update-workflow",
-      }),
-    generateThreadTitle: () =>
-      Effect.succeed({
-        title: "Update workflow",
-      }),
-    generateReviewGuide: () => Effect.succeed({ stops: [] }),
-    ...overrides,
-  };
-
-  return {
-    generateCommitMessage: (input) =>
-      implementation.generateCommitMessage(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generateCommitMessage",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    generatePrContent: (input) =>
-      implementation.generatePrContent(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generatePrContent",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    generateBranchName: (input) =>
-      implementation.generateBranchName(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generateBranchName",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    generateThreadTitle: (input) =>
-      implementation.generateThreadTitle(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generateThreadTitle",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    generateReviewGuide: (input) => implementation.generateReviewGuide(input),
-  };
-}
-
-/**
- * A host that answers from the scenario and records what it was asked, so tests assert on the
- * selectors GitManager chose rather than on any host's wire format.
- */
-function createFakeSourceControlProvider(scenario: FakeProviderScenario = {}): {
-  service: SourceControlProvider["Service"];
-  calls: FakeProviderCall[];
-} {
-  const kind = SourceControlProviderKind.make(scenario.kind ?? "github");
-  const prListQueue = [...(scenario.prListSequence ?? [])];
-  const prListQueueByHeadSelector = new Map(
-    Object.entries(scenario.prListSequenceByHeadSelector ?? {}).map(([headSelector, values]) => [
-      headSelector,
-      [...values],
-    ]),
-  );
-  const calls: FakeProviderCall[] = [];
-
-  const record = (cwd: string, call: FakeProviderCall) =>
-    Effect.suspend(() => {
-      calls.push(call);
-      return scenario.failWith && calls.length > (scenario.failAfterCalls ?? 0)
-        ? Effect.fail(
-            new SourceControlProviderFailure({
-              provider: kind,
-              operation: call.operation,
-              cwd,
-              detail: scenario.failWith,
-              cause: scenario.failCause,
-            }),
-          )
-        : Effect.void;
-    });
-
-  const toChangeRequest = (summary: FakeChangeRequest): ChangeRequest => ({
-    ...summary,
-    provider: kind,
-    state: summary.state ?? "open",
-    closedAt: summary.closedAt ?? null,
-    mergedAt: summary.mergedAt ?? null,
-    updatedAt:
-      summary.updatedAt === undefined
-        ? Option.none()
-        : Option.some(DateTime.makeUnsafe(summary.updatedAt)),
-  });
-
-  const pullRequest = (): FakeChangeRequest =>
-    scenario.pullRequest ?? {
-      number: 101,
-      title: "Pull request",
-      url: "https://github.com/pingdotgg/codething-mvp/pull/101",
-      baseRefName: "main",
-      headRefName: "feature/pull-request",
-      state: "open",
-    };
-
-  const checkout = (cwd: string, force: boolean) => {
-    const headBranch = scenario.pullRequest?.headRefName;
-    if (!headBranch) return;
-    const existingBranch = NodeChildProcess.spawnSync(
-      "git",
-      ["show-ref", "--verify", "--quiet", `refs/heads/${headBranch}`],
-      { cwd },
-    );
-    if (scenario.syncCheckoutWithPullHead) {
-      runGitSyncForFakeCheckout(cwd, [
-        "fetch",
-        "origin",
-        `refs/pull/${scenario.pullRequest?.number}/head`,
-      ]);
-      if (existingBranch.status === 0) {
-        runGitSyncForFakeCheckout(cwd, ["checkout", headBranch]);
-        runGitSyncForFakeCheckout(
-          cwd,
-          force ? ["reset", "--hard", "FETCH_HEAD"] : ["merge", "--ff-only", "FETCH_HEAD"],
-        );
-      } else {
-        runGitSyncForFakeCheckout(cwd, ["checkout", "-b", headBranch, "FETCH_HEAD"]);
-      }
-    } else if (existingBranch.status === 0) {
-      runGitSyncForFakeCheckout(cwd, ["checkout", headBranch]);
-    } else {
-      runGitSyncForFakeCheckout(cwd, ["checkout", "-b", headBranch]);
-    }
-  };
-
-  const headBranchProbe =
-    scenario.headBranchProbe === null
-      ? {}
-      : {
-          headBranchProbe:
-            scenario.headBranchProbe ??
-            (({ headSelectors }: { readonly headSelectors: ReadonlyArray<string> }) => ({
-              headSelectors: headSelectors.filter((selector) => !selector.includes(":")),
-              limit: 100,
-            })),
-        };
-
-  return {
-    service: {
-      kind,
-      ...headBranchProbe,
-      listChangeRequests: (input) =>
-        record(input.cwd, {
-          operation: "listChangeRequests",
-          headSelector: input.headSelector,
-          state: input.state,
-          limit: input.limit,
-        }).pipe(
-          Effect.map(() =>
-            (
-              prListQueueByHeadSelector.get(input.headSelector)?.shift() ??
-              scenario.prListByHeadSelector?.[input.headSelector] ??
-              prListQueue.shift() ??
-              scenario.prListOtherwise ??
-              []
-            ).map(toChangeRequest),
-          ),
-          Effect.tap(() =>
-            scenario.prListGate
-              ? Deferred.succeed(scenario.prListGate.started, undefined).pipe(
-                  Effect.andThen(Deferred.await(scenario.prListGate.release)),
-                )
-              : Effect.void,
-          ),
-        ),
-      createChangeRequest: (input) =>
-        record(input.cwd, {
-          operation: "createChangeRequest",
-          baseRefName: input.baseRefName,
-          headSelector: input.headSelector,
-          title: input.title,
-        }),
-      getDefaultBranch: (input) =>
-        record(input.cwd, { operation: "getDefaultBranch" }).pipe(
-          Effect.map(() => {
-            const value = (scenario.defaultBranch ?? "main").trim();
-            return value.length > 0 ? value : null;
-          }),
-        ),
-      getChangeRequest: (input) =>
-        record(input.cwd, { operation: "getChangeRequest", reference: input.reference }).pipe(
-          Effect.map(() => toChangeRequest(pullRequest())),
-        ),
-      getRepositoryCloneUrls: (input) =>
-        record(input.cwd, {
-          operation: "getRepositoryCloneUrls",
-          repository: input.repository,
-        }).pipe(
-          Effect.flatMap(() => {
-            const repository = input.host ? `${input.host}/${input.repository}` : input.repository;
-            const cloneUrls =
-              scenario.repositoryCloneUrls?.[repository] ??
-              (input.host === "github.com"
-                ? scenario.repositoryCloneUrls?.[input.repository]
-                : undefined);
-            return cloneUrls
-              ? Effect.succeed({ nameWithOwner: input.repository, ...cloneUrls })
-              : Effect.fail(
-                  new SourceControlProviderFailure({
-                    provider: kind,
-                    operation: "getRepositoryCloneUrls",
-                    cwd: input.cwd,
-                    detail: `Unexpected repository lookup: ${input.repository}`,
-                  }),
-                );
-          }),
-        ),
-      createRepository: (input) =>
-        Effect.fail(
-          new SourceControlProviderFailure({
-            provider: kind,
-            operation: "createRepository",
-            cwd: input.cwd,
-            detail: `Unexpected repository create: ${input.repository}`,
-          }),
-        ),
-      checkoutChangeRequest: (input) =>
-        record(input.cwd, {
-          operation: "checkoutChangeRequest",
-          reference: input.reference,
-          force: input.force ?? false,
-        }).pipe(
-          Effect.flatMap(() =>
-            Effect.try({
-              try: () => checkout(input.cwd, input.force ?? false),
-              catch: (cause) =>
-                new SourceControlProviderFailure({
-                  provider: kind,
-                  operation: "checkoutChangeRequest",
-                  cwd: input.cwd,
-                  detail: "Host checkout failed.",
-                  cause,
-                }),
-            }),
-          ),
-        ),
-    },
-    calls,
-  };
-}
-
-/**
- * Reads a template from the base tree the way a host would, without any host's own lookup
- * rules, so tests see which tree GitManager reads it from.
- */
-const readFakeChangeRequestTemplate = Effect.fnUntraced(function* (input: {
-  readonly cwd: string;
-  readonly treeish: string;
-}) {
-  const git = yield* GitVcsDriver.GitVcsDriver;
-  const result = yield* git
-    .execute({
-      operation: "GitManager.test.readTemplate",
-      cwd: input.cwd,
-      args: ["show", `${input.treeish}:.github/pull_request_template.md`],
-      allowNonZeroExit: true,
-    })
-    .pipe(Effect.orDie);
-  const template = result.stdout.trim();
-  return result.exitCode === 0 && template.length > 0 ? Option.some(template) : Option.none();
-});
-function runStackedAction(
-  manager: GitManager.GitManager["Service"],
-  input: {
-    cwd: string;
-    action: "commit" | "push" | "create_pr" | "commit_push" | "commit_push_pr";
-    actionId?: string;
-    commitMessage?: string;
-    featureBranch?: boolean;
-    filePaths?: readonly string[];
-  },
-  options?: Parameters<GitManager.GitManager["Service"]["runStackedAction"]>[1],
-) {
-  return manager.runStackedAction(
-    {
-      ...input,
-      actionId: input.actionId ?? "test-action-id",
-    },
-    options,
-  );
-}
-
-function preparePullRequestThread(
-  manager: GitManager.GitManager["Service"],
-  input: GitPreparePullRequestThreadInput,
-) {
-  return manager.preparePullRequestThread(input);
-}
-
-function makeManager(input?: {
-  providerScenario?: FakeProviderScenario;
-  sourceControlProvider?: SourceControlProvider["Service"];
-  textGeneration?: Partial<FakeGitTextGeneration>;
-  serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
-  setupScriptRunner?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
-  gitConfigReads?: string[];
-  gitCommands?: string[];
-  environment?: NodeJS.ProcessEnv;
-  gitSpawnGate?: GitSpawnGate;
-  seed?: Effect.Effect<
-    void,
-    ProjectionStore.ProjectionStoreV2Error | ProjectStore.ProjectStoreV2Error,
-    ProjectionStore.ProjectionStoreV2 | ProjectStore.ProjectStoreV2
-  >;
-}) {
-  const { service: fakeProvider, calls: providerCalls } = createFakeSourceControlProvider(
-    input?.providerScenario,
-  );
-  const textGeneration = createTextGeneration(input?.textGeneration);
-  const layerServerConfig = ServerConfig.layerTest(process.cwd(), {
-    prefix: "goat-git-manager-test-",
-  });
-
-  const layerServerSettings = ServerSettings.ServerSettingsService.layerTest(input?.serverSettings);
-
-  const gitCommands = input?.gitCommands;
-  const gitSpawnGate = input?.gitSpawnGate;
-  const watchesGitSpawns = gitCommands !== undefined || gitSpawnGate !== undefined;
-  const layerGitDriverSpawner = watchesGitSpawns
-    ? gitSpawnObserverLayer(gitCommands, gitSpawnGate)
-    : Layer.empty;
-  const gitVcsDriver = input?.gitConfigReads
-    ? Layer.effect(
-        GitVcsDriver.GitVcsDriver,
-        GitVcsDriver.make.pipe(
-          Effect.map((service) =>
-            GitVcsDriver.GitVcsDriver.of({
-              ...service,
-              readConfigValue: (cwd, key) =>
-                Effect.sync(() => input.gitConfigReads?.push(key)).pipe(
-                  Effect.andThen(service.readConfigValue(cwd, key)),
-                ),
-            }),
-          ),
-        ),
-      )
-    : GitVcsDriver.layer;
-  const layerVcsDriver = (watchesGitSpawns ? Layer.fresh(gitVcsDriver) : gitVcsDriver).pipe(
-    Layer.provide(layerGitDriverSpawner),
-    Layer.provideMerge(VcsProcess.layer),
-    Layer.provideMerge(NodeServices.layer),
-    Layer.provideMerge(layerServerConfig),
-  );
-  const layerSourceControlRegistry = Layer.effect(
-    SourceControlProviderRegistry.SourceControlProviderRegistry,
-    Effect.gen(function* () {
-      const context = yield* Effect.context<GitVcsDriver.GitVcsDriver>();
-      return (
-        input?.sourceControlProvider ?? {
-          ...fakeProvider,
-          readChangeRequestTemplate: (template: { cwd: string; treeish: string }) =>
-            readFakeChangeRequestTemplate(template).pipe(Effect.provideContext(context)),
-        }
-      );
-    }).pipe(
-      Effect.map((provider) =>
-        SourceControlProviderRegistry.SourceControlProviderRegistry.of({
-          resolveLink: (input) => provider.resolveLink?.(input),
-          get: () => Effect.succeed(provider),
-          resolveHandle: () => Effect.succeed({ provider, context: null }),
-          resolve: () => Effect.succeed(provider),
-          discover: Effect.succeed([]),
-        }),
-      ),
-    ),
-  );
-
-  const layerManager = Layer.mergeAll(
-    Layer.succeed(TextGeneration.TextGeneration, textGeneration),
-    Layer.mock(ProviderRegistry.ProviderRegistry)({
-      getProviders: Effect.succeed([]),
-    }),
-    Layer.succeed(
-      ProjectSetupScriptRunner.ProjectSetupScriptRunner,
-      input?.setupScriptRunner ?? {
-        runForThread: () => Effect.succeed({ status: "no-script" as const }),
-      },
-    ),
-    layerServerSettings,
-  ).pipe(
-    Layer.provideMerge(layerSourceControlRegistry),
-    Layer.provideMerge(layerVcsDriver),
-    Layer.provideMerge(NodeServices.layer),
-  );
-  const layerStores = Layer.merge(ProjectionStore.layer, ProjectStore.layer).pipe(
-    Layer.provideMerge(SqlitePersistence.layerMemory),
-  );
-
-  return Effect.gen(function* () {
-    const stores = yield* Layer.build(layerStores);
-    if (input?.seed !== undefined) {
-      yield* input.seed.pipe(Effect.provideContext(stores), Effect.orDie);
-    }
-    const manager = yield* GitManager.make.pipe(
-      Effect.provide(layerManager),
-      Effect.provideContext(stores),
-    );
-    return { manager, providerCalls };
-  });
-}
-
-const asThreadId = (threadId: string) => threadId as ThreadId;
-
-const layerGitManagerTest = GitVcsDriver.layer.pipe(
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-git-manager-test-" })),
-  Layer.provideMerge(VcsProcess.layer),
-  Layer.provideMerge(NodeServices.layer),
-);
+import {
+  type FakeChangeRequest,
+  type FakeProviderScenario,
+  listed,
+  listedSelectors,
+  created,
+  createBareRemote,
+  configureRemote,
+  configureVisibleRemoteUrlWithLocalRewrite,
+  createFakeSourceControlProvider,
+  runStackedAction,
+  preparePullRequestThread,
+  makeManager,
+  asThreadId,
+  layerGitManagerTest,
+} from "./GitManagerTestHarness.ts";
 
 it.layer(layerGitManagerTest)("GitManager", (it) => {
   it.effect(
@@ -1768,6 +1195,244 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  function squashMergeIntoRemoteMain(repoDir: string, branch: string) {
+    return Effect.gen(function* () {
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      yield* runGit(repoDir, ["checkout", "-b", branch]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "squash.txt"), "one\ntwo\n");
+      yield* runGit(repoDir, ["add", "squash.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Feature work"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", branch]);
+      // The host squash-merges: a new commit on main with the branch's tree, not the branch's commit.
+      const squash = yield* runGit(repoDir, [
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        "origin/main",
+        "-m",
+        "Feature work (#217)",
+      ]);
+      yield* runGit(repoDir, ["push", "origin", `${squash.stdout.trim()}:refs/heads/main`]);
+      return (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+    });
+  }
+
+  const squashMergedPr = (branch: string, headSha: string): FakeChangeRequest => ({
+    number: 217,
+    title: "Feature work",
+    url: "https://github.com/goat-si/goat/pull/217",
+    baseRefName: "main",
+    headRefName: branch,
+    headSha,
+    state: "merged",
+    mergedAt: "2026-04-02T15:00:00Z",
+    updatedAt: "2026-04-02T15:00:00Z",
+  });
+
+  it.effect("status reports nothing to ship after a squash merge deleted the remote branch", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("goat-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      const branch = "feature/squash-deleted";
+      const headSha = yield* squashMergeIntoRemoteMain(repoDir, branch);
+      yield* runGit(repoDir, ["push", "origin", "--delete", branch]);
+      yield* runGit(repoDir, ["fetch", "--prune", "origin"]);
+
+      const { manager } = yield* makeManager({
+        providerScenario: { prListSequence: [[squashMergedPr(branch, headSha)]] },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.pr?.state).toBe("merged");
+      expect(status.hasUpstream).toBe(false);
+      expect({
+        aheadCount: status.aheadCount,
+        aheadOfDefaultCount: status.aheadOfDefaultCount,
+      }).toEqual({ aheadCount: 0, aheadOfDefaultCount: 0 });
+    }),
+  );
+
+  it.effect("status reports nothing to ship after a squash merge kept the remote branch", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("goat-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      const branch = "feature/squash-kept";
+      const headSha = yield* squashMergeIntoRemoteMain(repoDir, branch);
+      yield* runGit(repoDir, ["fetch", "--prune", "origin"]);
+
+      const { manager } = yield* makeManager({
+        providerScenario: { prListSequence: [[squashMergedPr(branch, headSha)]] },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.pr?.state).toBe("merged");
+      expect(status.hasUpstream).toBe(true);
+      expect({
+        aheadCount: status.aheadCount,
+        aheadOfDefaultCount: status.aheadOfDefaultCount,
+      }).toEqual({ aheadCount: 0, aheadOfDefaultCount: 0 });
+    }),
+  );
+
+  it.effect("status still reports work to ship for a commit added after a squash merge", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("goat-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      const branch = "feature/squash-follow-up";
+      const headSha = yield* squashMergeIntoRemoteMain(repoDir, branch);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "follow-up.txt"), "after merge\n");
+      yield* runGit(repoDir, ["add", "follow-up.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Follow-up work"]);
+      yield* runGit(repoDir, ["fetch", "--prune", "origin"]);
+
+      const { manager } = yield* makeManager({
+        providerScenario: { prListSequence: [[squashMergedPr(branch, headSha)]] },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.pr?.state).toBe("merged");
+      expect(status.aheadCount).toBe(1);
+      expect(status.aheadOfDefaultCount).toBe(2);
+    }),
+  );
+
+  it.effect("status still reports work against main after a merge into another base", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("goat-git-manager-");
+      yield* initRepo(repoDir);
+      const initialSha = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      const branch = "feature/release-only";
+      const headSha = yield* squashMergeIntoRemoteMain(repoDir, branch);
+      // Move the merge to release and leave main without it.
+      const squashSha = (yield* runGit(repoDir, ["rev-parse", "origin/main"])).stdout.trim();
+      yield* runGit(repoDir, ["push", "origin", `${squashSha}:refs/heads/release`]);
+      yield* runGit(repoDir, ["push", "--force", "origin", `${initialSha}:refs/heads/main`]);
+      yield* runGit(repoDir, ["fetch", "origin"]);
+
+      const { manager } = yield* makeManager({
+        providerScenario: {
+          prListSequence: [[{ ...squashMergedPr(branch, headSha), baseRefName: "release" }]],
+        },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.pr?.state).toBe("merged");
+      expect(status.aheadOfDefaultCount).toBe(1);
+    }),
+  );
+
+  it.effect("status keeps a squash-merged branch shipped when a later PR lookup fails", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("goat-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      const branch = "feature/squash-lookup-fails";
+      const headSha = yield* squashMergeIntoRemoteMain(repoDir, branch);
+      yield* runGit(repoDir, ["push", "origin", "--delete", branch]);
+      yield* runGit(repoDir, ["fetch", "--prune", "origin"]);
+
+      const { manager } = yield* makeManager({
+        providerScenario: {
+          prListSequence: [[squashMergedPr(branch, headSha)]],
+          failWith: "Rate limited",
+          failAfterCalls: 1,
+        },
+      });
+
+      const first = yield* manager.status({ cwd: repoDir });
+      yield* manager.invalidateStatus(repoDir);
+      const second = yield* manager.status({ cwd: repoDir });
+
+      expect(first.aheadOfDefaultCount).toBe(0);
+      expect(second.pr?.state).toBe("merged");
+      expect({
+        aheadCount: second.aheadCount,
+        aheadOfDefaultCount: second.aheadOfDefaultCount,
+      }).toEqual({ aheadCount: 0, aheadOfDefaultCount: 0 });
+    }),
+  );
+
+  it.effect("status keeps real divergence for a squash-merged branch that tracks its base", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("goat-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      const branch = "feature/squash-tracks-main";
+      const headSha = yield* squashMergeIntoRemoteMain(repoDir, branch);
+      yield* runGit(repoDir, ["fetch", "origin"]);
+      yield* runGit(repoDir, ["branch", "--set-upstream-to", "origin/main"]);
+
+      const { manager } = yield* makeManager({
+        providerScenario: { prListSequence: [[squashMergedPr(branch, headSha)]] },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.pr?.state).toBe("merged");
+      expect({ aheadCount: status.aheadCount, behindCount: status.behindCount }).toEqual({
+        aheadCount: 1,
+        behindCount: 1,
+      });
+    }),
+  );
+
+  it.effect("status reports nothing to ship after a squash merge into a non-origin default", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("goat-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["branch", "-m", "develop"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "upstream", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "upstream", "develop"]);
+      yield* runGit(repoDir, ["remote", "set-head", "upstream", "develop"]);
+      const branch = "feature/squash-develop";
+      yield* runGit(repoDir, ["checkout", "-b", branch]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "squash.txt"), "one\ntwo\n");
+      yield* runGit(repoDir, ["add", "squash.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Feature work"]);
+      yield* runGit(repoDir, ["push", "-u", "upstream", branch]);
+      const headSha = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+      const squash = yield* runGit(repoDir, [
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        "upstream/develop",
+        "-m",
+        "Feature work (#217)",
+      ]);
+      yield* runGit(repoDir, ["push", "upstream", `${squash.stdout.trim()}:refs/heads/develop`]);
+      yield* runGit(repoDir, ["fetch", "upstream"]);
+
+      const { manager } = yield* makeManager({
+        providerScenario: {
+          prListSequence: [[{ ...squashMergedPr(branch, headSha), baseRefName: "develop" }]],
+        },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.pr?.state).toBe("merged");
+      expect({
+        aheadCount: status.aheadCount,
+        aheadOfDefaultCount: status.aheadOfDefaultCount,
+      }).toEqual({ aheadCount: 0, aheadOfDefaultCount: 0 });
+    }),
+  );
+
   it.each([
     [
       "https://github.example.com/team/repository/pull/42?tab=files",
@@ -2379,7 +2044,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           ],
         },
       });
-
       const status = yield* manager.status({ cwd: repoDir });
       expect(status.refName).toBe("feature/status-open-over-merged");
       expect(status.pr).toEqual({
@@ -2393,7 +2057,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       });
     }),
   );
-
   it.effect("status keeps the last known PR when a later lookup fails", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
@@ -2402,7 +2065,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-sticky"]);
-
       const existingPr = {
         number: 214,
         title: "Sticky PR",
@@ -2417,16 +2079,13 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           failAfterCalls: 1,
         },
       });
-
       const first = yield* manager.status({ cwd: repoDir });
       expect(first.pr?.number).toBe(214);
-
       yield* manager.invalidateStatus(repoDir);
       const second = yield* manager.status({ cwd: repoDir });
       expect(second.pr?.number).toBe(214);
     }),
   );
-
   it.effect(
     "status does not reuse a stale PR after the branch is retargeted to a different upstream",
     () =>
@@ -2434,11 +2093,9 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         const repoDir = yield* makeTempDir("goat-git-manager-");
         yield* initRepo(repoDir);
         yield* runGit(repoDir, ["checkout", "-b", "feature/pr-retarget"]);
-
         const originRemote = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "origin", originRemote]);
         yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-retarget"]);
-
         const existingPr = {
           number: 214,
           title: "Sticky PR",
@@ -2453,10 +2110,8 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
             failAfterCalls: 1,
           },
         });
-
         const first = yield* manager.status({ cwd: repoDir });
         expect(first.pr?.number).toBe(214);
-
         const forkRemote = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "fork", forkRemote]);
         yield* runGit(repoDir, ["push", "fork", "feature/pr-retarget"]);
@@ -2465,20 +2120,17 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           "--set-upstream-to=fork/feature/pr-retarget",
           "feature/pr-retarget",
         ]);
-
         yield* manager.invalidateStatus(repoDir);
         const second = yield* manager.status({ cwd: repoDir });
         expect(second.pr).toBeNull();
       }),
   );
-
   it.effect("creates a commit when working tree is dirty", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\nworld\n");
       let generatedPolicy: TextGeneration.CommitMessageGenerationInput["policy"] = undefined;
-
       const { manager } = yield* makeManager({
         serverSettings: {
           sourceControlWritingStyle: {
@@ -2497,7 +2149,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         cwd: repoDir,
         action: "commit",
       });
-
       expect(result.branch.status).toBe("skipped_not_requested");
       expect(result.commit.status).toBe("created");
       expect(result.push.status).toBe("skipped_not_requested");
@@ -2521,7 +2172,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       ).toBe("Implement stacked git actions");
     }),
   );
-
   it.effect("includes CLAUDE.md for Claude writers only when it differs from AGENTS.md", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
@@ -2530,7 +2180,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       NodeFS.copyFileSync(NodePath.join(repoDir, "AGENTS.md"), NodePath.join(repoDir, "CLAUDE.md"));
       NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\n");
       const commitInstructions: Array<string | undefined> = [];
-
       const { manager } = yield* makeManager({
         serverSettings: {
           textGenerationModelSelection: {
@@ -2545,7 +2194,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           },
         },
       });
-
       yield* runStackedAction(manager, { cwd: repoDir, action: "commit" });
 
       NodeFS.writeFileSync(NodePath.join(repoDir, "CLAUDE.md"), "Mention the Claude provider.\n");
@@ -2556,6 +2204,22 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       expect(commitInstructions[0]).not.toContain("Local CLAUDE.md:");
       expect(commitInstructions[1]).toContain("Local CLAUDE.md:\nMention the Claude provider.");
     }),
+  );
+
+  it.effect("keeps signature output out of recent commit subjects", () =>
+    signatureOutputRegression((repoDir, capture) =>
+      Effect.gen(function* () {
+        const { manager } = yield* makeManager({
+          textGeneration: {
+            generateCommitMessage: (input) => {
+              capture(input.policy?.commitInstructions);
+              return Effect.succeed({ subject: "Update readme", body: "" });
+            },
+          },
+        });
+        yield* runStackedAction(manager, { cwd: repoDir, action: "commit" });
+      }),
+    ),
   );
 
   it.effect("falls back when the dedicated source control writer is unavailable", () =>

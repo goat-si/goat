@@ -23,7 +23,13 @@ export const cancelledItem = (
             }
           : {}),
       }
-    : { ...item, status: "cancelled", completedAt: now, updatedAt: now };
+    : {
+        ...item,
+        ...("streaming" in item ? { streaming: false } : {}),
+        status: "cancelled",
+        completedAt: now,
+        updatedAt: now,
+      };
 
 export function isBackgroundCapableTurnItemType(type: string): boolean {
   return type === "command_execution" || type === "dynamic_tool" || type === "subagent";

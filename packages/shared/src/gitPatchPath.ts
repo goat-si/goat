@@ -106,3 +106,18 @@ export function unquoteGitPatchPath(token: string): string {
   }
   return unescapeBody(token);
 }
+
+// Hosting APIs do not report a similarity score; the diff parser requires one for renames.
+export function gitRenameHeaders(
+  enabled: boolean,
+  oldPath: string,
+  newPath: string,
+  changed: boolean,
+): string[] {
+  if (!enabled) return [];
+  return [
+    `similarity index ${changed ? 0 : 100}%`,
+    `rename from ${quoteGitPatchPath(oldPath)}`,
+    `rename to ${quoteGitPatchPath(newPath)}`,
+  ];
+}

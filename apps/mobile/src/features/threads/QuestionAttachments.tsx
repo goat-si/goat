@@ -2,7 +2,7 @@ import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/st
 import { AsyncResult } from "effect/reactivity";
 import * as Dialog from "../../components/ui/Dialog";
 import { TextInputWrapper } from "expo-paste-input";
-import { AppTextInput as TextInput } from "../../components/ui/AppText";
+import { CustomAnswerInput } from "./CustomAnswerInput";
 import { useNativePaste } from "../../lib/useNativePaste";
 import { convertPastedImagesToAttachments } from "../../lib/composerImages";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS, type UserInputQuestion } from "@goat/contracts";
@@ -201,11 +201,10 @@ export function QuestionAttachments(props: {
       <FilePreviewModal source={previewFile} onRequestClose={() => setPreviewFile(null)} />
       <VideoPreviewModal source={previewVideo} onRequestClose={() => setPreviewVideo(null)} />
       <TextInputWrapper onPaste={paste}>
-        <TextInput
+        <CustomAnswerInput
           value={props.value}
           multiline={props.question.initialAnswer !== undefined}
-          submitBehavior={props.question.initialAnswer !== undefined ? "newline" : undefined}
-          editable={!props.disabled}
+          disabled={props.disabled}
           onChangeText={props.onChangeText}
           onFocus={() => {
             focusedRef.current = true;
@@ -215,8 +214,6 @@ export function QuestionAttachments(props: {
             focusedRef.current = false;
             onInputFocusChange?.(false);
           }}
-          placeholder="Or type a custom answer"
-          className="min-h-[54px] rounded-2xl border border-input-border bg-input px-3.5 py-3 font-sans text-base text-foreground"
         />
       </TextInputWrapper>
     </View>

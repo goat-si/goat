@@ -1,3 +1,4 @@
+import { assertRedactedMuseFailure } from "./testFailureAssertion.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Mock native realpath to exercise macOS case correction on every platform.
 import * as NodeFSP from "node:fs/promises";
 import { vi } from "vite-plus/test";
@@ -18,7 +19,6 @@ import * as Option from "effect/Option";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import type { MuseItem, MuseSubscriptionUsage } from "./protocol.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -617,12 +617,12 @@ describe("MuseAdapterV2", () => {
       yield* fake.emit("turn/completed", {
         turnId: nativeId,
         terminal: "failed",
-        error: { message: "Provider rejected this turn" },
+        error: { message: "Provider rejected this turn: api_key=abc123" },
       });
       const terminal = yield* harness.takeEvent("turn.terminal");
       assert.strictEqual(terminal.status, "failed");
       assert.strictEqual(terminal.threadDisposition, "reusable");
-      assert.isNotNull(terminal.failure);
+      assertRedactedMuseFailure(terminal.failure?.message, harness.allEvents);
       assert.isTrue(
         harness.allEvents.some(
           (event) =>

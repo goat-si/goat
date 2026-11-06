@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
 import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { GOAT_PROJECT_FILE_NAME, type GitCommandError } from "@goat/contracts";
+import { GOAT_PROJECT_FILE_NAME } from "@goat/contracts";
 import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -9,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -17,6 +18,32 @@ import { readWorktreeRoot } from "./worktreeCheckout.ts";
 const layerTest = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-submodule-worktree-test-" })),
   Layer.provideMerge(NodeServices.layer),
+);
+
+const oldGitSpawner = Layer.effect(
+  ChildProcessSpawner.ChildProcessSpawner,
+  Effect.gen(function* () {
+    const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+    return ChildProcessSpawner.make((command) =>
+      delegate.spawn(command).pipe(
+        Effect.map((handle) =>
+          ChildProcess.isStandardCommand(command) &&
+          command.args.includes("hook") &&
+          command.args.includes("--ignore-missing")
+            ? ChildProcessSpawner.makeHandle({
+                ...handle,
+                exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+              })
+            : handle,
+        ),
+      ),
+    );
+  }),
+).pipe(Layer.provideMerge(NodeServices.layer));
+
+const oldGitLayer = GitVcsDriver.layer.pipe(
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-old-git-worktree-test-" })),
+  Layer.provideMerge(oldGitSpawner),
 );
 
 const git = Effect.fn("test.git")(function* (cwd: string, args: ReadonlyArray<string>) {
@@ -91,13 +118,18 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
   // A setup hook would install dependencies into whatever root it sees. Like this
   // repository's, the hooks directory is relative, generated and untracked.
   const hookLog = path.join(root, "post-checkout-roots");
+  const hookArgs = path.join(root, "post-checkout-args");
   const hook = path.join(checkout, ".hooks", "post-checkout");
   yield* git(checkout, ["config", "core.hooksPath", ".hooks"]);
   yield* fileSystem.writeFileString(path.join(gitDir, "info", "exclude"), ".hooks/\n");
   yield* fileSystem.makeDirectory(path.dirname(hook), { recursive: true });
   yield* fileSystem.writeFileString(
     hook,
-    "#!/bin/sh\ngit rev-parse --show-toplevel >> '" + hookLog.replaceAll("\\", "/") + "'\n",
+    "#!/bin/sh\ngit rev-parse --show-toplevel >> '" +
+      hookLog.replaceAll("\\", "/") +
+      '\'\nprintf \'%s %s %s\\n\' "$1" "$2" "$3" >> \'' +
+      hookArgs.replaceAll("\\", "/") +
+      "'\n",
   );
   yield* fileSystem.chmod(hook, 0o755);
   const hookRoots = () =>
@@ -139,6 +171,8 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
     readConfig,
     sharedRoot,
     hookRoots,
+    hookArgs,
+    head,
     returnedPaths,
   };
 });
@@ -155,6 +189,37 @@ const assertCheckedOutInPlace = Effect.fn("test.assertCheckedOutInPlace")(functi
   assert.equal(yield* git(worktreePath, ["status", "--porcelain"]), "");
   // Nothing was checked out into the git dir.
   assert.isFalse(yield* fileSystem.exists(path.join(input.gitDir, "src")));
+});
+
+it.layer(oldGitLayer)("worktrees without git hook run", (it) => {
+  it.effect("checks out in the right root and runs the source hook", () =>
+    Effect.gen(function* () {
+      const repo = yield* makeSubmoduleCheckout(true);
+      yield* git(repo.checkout, ["config", "extensions.worktreeConfig", "true"]);
+      const worktree = yield* repo.createWorktree("old-git");
+      yield* assertCheckedOutInPlace(worktree, { gitDir: repo.gitDir, sparse: false });
+      assertSamePaths(yield* repo.hookRoots(), [worktree]);
+      const fs = yield* FileSystem.FileSystem;
+      assert.equal(
+        (yield* fs.readFileString(repo.hookArgs)).trim(),
+        `${"0".repeat(repo.head.length)} ${repo.head} 1`,
+      );
+    }),
+  );
+  it.effect.each(["missing", "not executable"] as const)("skips a %s source hook", (state) =>
+    Effect.gen(function* () {
+      const repo = yield* makeSubmoduleCheckout(true);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const hook = path.join(repo.checkout, ".hooks", "post-checkout");
+      yield* git(repo.checkout, ["config", "extensions.worktreeConfig", "true"]);
+      if (state === "missing") yield* fs.remove(hook);
+      else yield* fs.chmod(hook, 0o644);
+      const worktree = yield* repo.createWorktree("no-hook");
+      yield* assertCheckedOutInPlace(worktree, { gitDir: repo.gitDir, sparse: false });
+      assert.deepStrictEqual(yield* repo.hookRoots(), []);
+    }),
+  );
 });
 
 it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
@@ -253,16 +318,15 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
         const path = yield* Path.Path;
         const driver = yield* GitVcsDriver.GitVcsDriver;
         const repo = yield* makeSubmoduleCheckout(false);
-        const decide = (cwd: string, hookRunSupported: boolean) =>
+        const decide = (cwd: string) =>
           readWorktreeRoot(
             (operation, gitCwd, args, options) =>
               driver.execute({ operation, cwd: gitCwd, args, ...options }),
             path,
             cwd,
-            Effect.succeed(hookRunSupported),
           );
         // Linked worktrees ignore the shared root while extensions.worktreeConfig is off.
-        assert.deepStrictEqual(yield* decide(repo.checkout, false), {
+        assert.deepStrictEqual(yield* decide(repo.checkout), {
           pin: true,
           checkoutApart: false,
         });
@@ -280,16 +344,14 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
         yield* git(linked, ["sparse-checkout", "set", "--no-cone", "/*"]);
         assert.equal(yield* repo.sharedRoot().pipe(Effect.orElseSucceed(() => "")), "");
         for (const cwd of [repo.checkout, linked]) {
-          assert.deepStrictEqual(yield* decide(cwd, false), { pin: true, checkoutApart: false });
+          assert.deepStrictEqual(yield* decide(cwd), { pin: true, checkoutApart: false });
         }
         // git submodule update wrote it back, so a plain add would inherit it.
         yield* repo.updateSubmodule();
-        assert.deepStrictEqual(yield* decide(repo.checkout, true), {
+        assert.deepStrictEqual(yield* decide(repo.checkout), {
           pin: true,
           checkoutApart: true,
         });
-        const refused: GitCommandError = yield* Effect.flip(decide(repo.checkout, false));
-        assert.include(refused.detail, "Git 2.36");
       }),
   );
 });

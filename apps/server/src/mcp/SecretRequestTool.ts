@@ -151,7 +151,17 @@ export const makeRequestSecret = (deps: {
     ) {
       yield* Effect.annotateCurrentSpan({ "secret_request.status": status });
       yield* Metrics.increment(Metrics.secretRequestsTotal, { status });
-      if (status !== "saved") return { status };
+      if (status !== "saved") {
+        const note = {
+          declined:
+            "The user declined. Do not ask in chat or another way; explain what is blocked and continue without it.",
+          cancelled:
+            "The card closed with the run. Ask again with a new clientRequestId only if the secret is still needed.",
+          timed_out:
+            "No answer in time. Do not ask in chat; ask again with a new clientRequestId only if the secret is still needed.",
+        }[status];
+        return { status, note };
+      }
       if (input.delivery === "file") {
         const file = yield* secretRequests
           .saveToFile({ threadId, turnItemId })

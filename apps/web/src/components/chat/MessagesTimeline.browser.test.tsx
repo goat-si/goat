@@ -83,7 +83,7 @@ describe("MessagesTimeline work rows", () => {
     const props = baseProps();
     const runId = RunId.make("completed-run");
     const container = document.createElement("div");
-    container.style.cssText = "height: 600px; width: 900px; display: flex; flex-direction: column;";
+    container.style.cssText = "height:min(600px,100vh);width:900px;display:flex;flex-flow:column";
     await using screen = await render(
       <MessagesTimeline
         {...props}

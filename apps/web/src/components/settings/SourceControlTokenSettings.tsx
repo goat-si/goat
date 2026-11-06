@@ -1,3 +1,4 @@
+import { sourceControlTokenPatch } from "@goat/shared/serverSettings";
 import { isSecretReference, type EnvironmentId, type SecretReference } from "@goat/contracts";
 import { ExternalLinkIcon } from "~/components/solar";
 import { useState } from "react";
@@ -48,11 +49,8 @@ export function SourceControlTokenSettings({
     setSaving(true);
     const result = await updateSettings({
       environmentId,
-      // Send the whole map; other tokens' redaction markers preserve their values.
       input: {
-        patch: {
-          sourceControlHosts: { [definition.kind]: { tokens: { ...tokens, [target]: token } } },
-        },
+        patch: sourceControlTokenPatch(definition.kind, target, token),
       },
     });
     setSaving(false);

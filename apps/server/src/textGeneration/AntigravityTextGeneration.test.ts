@@ -14,7 +14,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
-import { type AcpError } from "effect-acp/errors";
+import { type AcpError, AcpRequestError } from "effect-acp/errors";
 import type * as AcpSchema from "effect-acp/compat";
 import { expect } from "vite-plus/test";
 
@@ -815,7 +815,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         const path = yield* Path.Path;
         const target =
           kind === "symlink"
-            ? yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-link-test-" })
+            ? yield* fs.makeTempDirectoryScoped({ prefix: "goat-antigravity-link-test-" })
             : undefined;
         const fixture = yield* makeFixture({
           startupSkills: true,
@@ -907,14 +907,25 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("does not launch during sign-out or before sign-in", () =>
+  it.effect.each([
+    { code: undefined, detail: "Sign in before starting Antigravity." },
+    { code: -32000, detail: "Sign in to Antigravity in Settings before you continue." },
+    { code: -32603, detail: "Antigravity text generation failed." },
+  ])("reports setup and sign-in failure $code safely", ({ code, detail }) =>
     Effect.gen(function* () {
-      const fixture = yield* makeFixture({ rejectAdmission: true });
+      const fixture = yield* makeFixture(
+        code === undefined
+          ? { rejectAdmission: true }
+          : {
+              prompt: () =>
+                Effect.fail(new AcpRequestError({ code, errorMessage: "raw provider text" })),
+            },
+      );
       const error = yield* fixture.textGeneration
         .generateThreadTitle(fixture.titleInput)
         .pipe(Effect.flip);
-      expect(error._tag).toBe("TextGenerationError");
-      expect(fixture.state.workspaces).toEqual([]);
+      expect(error.detail).toBe(detail);
+      if (code === undefined) expect(fixture.state.workspaces).toEqual([]);
       yield* fixture.assertCleaned;
     }).pipe(Effect.scoped),
   );

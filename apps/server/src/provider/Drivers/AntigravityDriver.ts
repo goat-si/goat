@@ -3,7 +3,12 @@ import {
   withAgentDeviceEnvironment,
 } from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import { AntigravitySettings, ProviderDriverKind, ProviderSetupError } from "@goat/contracts";
+import {
+  AntigravitySettings,
+  ProviderDriverKind,
+  ProviderSetupError,
+  settingsSecretLiteral,
+} from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
 import {
@@ -122,7 +127,7 @@ export const AntigravityDriver: ProviderDriver<
     const settings = { ...config, enabled } satisfies AntigravitySettings;
     const auth: AntigravityAuthConfig = {
       authMethod: settings.authMethod,
-      apiKey: settings.apiKey,
+      apiKey: settingsSecretLiteral(settings.apiKey),
       gcpProject: settings.gcpProject,
       gcpLocation: settings.gcpLocation,
     };

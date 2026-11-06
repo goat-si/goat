@@ -72,6 +72,9 @@ vi.mock("react", () => ({
 vi.mock("expo-crypto", () => ({ randomUUID: () => "uuid" }));
 vi.mock("../lib/attachmentUpload", () => ({ prepareTurnAttachments: vi.fn() }));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid" }));
+vi.mock("../features/threads/useSideChatCommand", () => ({
+  useSideChatCommand: () => async () => false,
+}));
 vi.mock("./queued-run-edit", () => ({
   useQueuedRunEdit: () => null,
   getQueuedRunEdit: () => null,
@@ -348,6 +351,7 @@ describe("mobile handoff preview and submission", () => {
       auth: { status: "authenticated" as const },
       availability: "available" as "available" | "unavailable",
       models: [{ slug: selection.model }],
+      slashCommands: [],
     };
     const projectOverride = { enabled: false };
     state.serverConfig = {
