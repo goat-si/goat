@@ -72,7 +72,13 @@ function xml(source: string, odfSpaces = false, htmlEntities = false): XmlNode {
       parent.children.pop();
       return;
     }
-    if (!node.hasText) return;
+    if (
+      !node.hasText ||
+      HIDDEN.has(node.name) ||
+      ["tab", "cell", "br", "line-break", "cr"].includes(node.name) ||
+      node.spaceCount !== undefined
+    )
+      return;
     parent.hasText = true;
     if (node.name === "Choice") parent.hasTextChoice = true;
   });

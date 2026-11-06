@@ -18,6 +18,16 @@ export const documentAlternateContentFixtures = [
     },
     expected: ["Chart caption"],
   },
+  {
+    ext: "docx",
+    bounded: true,
+    parts: {
+      "word/document.xml":
+        '<w:document xmlns:w="urn:w" xmlns:mc="urn:mc"><w:body><w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:del><w:r><w:delText>Deleted text</w:delText></w:r></w:del><w:r><w:instrText>HIDDEN FIELD</w:instrText></w:r></mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>Visible fallback caption</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p></w:body></w:document>',
+    },
+    expected: ["Visible fallback caption"],
+    absent: ["Deleted text", "HIDDEN FIELD"],
+  },
 ] as const;
 
 export const documentHiddenTextFixtures = [
