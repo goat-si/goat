@@ -4,9 +4,11 @@ import type { ScopedThreadRef } from "@goat/contracts";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { cn } from "~/lib/utils";
+import { useThreadShell } from "~/state/entities";
 
 import { GoatWordmark } from "../GoatWordmark";
 import { GoatBotFace } from "./GoatBotFace";
+import { useGoatBotPreferred } from "./GoatBotModeButton";
 import { useGoatBotSessionFace } from "./useGoatBotFace";
 import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 
@@ -56,21 +58,31 @@ export function GoatBotSessionAvatar({
   readonly threadRef: ScopedThreadRef;
   readonly size?: keyof typeof CIRCLE;
 }) {
-  return <GoatBotAvatar size={size} state={useGoatBotSessionFace(threadRef, 0, null)} />;
+  return <GoatBotAvatar size={size} state={useGoatBotSessionFace(threadRef, 0, null, false)} />;
 }
 
-/** The main GOAT Bot's face: its session shell, its waiting count and, in its chat, its activity. */
+/** The main GOAT Bot's face: its conversation, its waiting count and, in its chat, its activity. */
 export function GoatBotMainAvatar({
   size,
   activity = null,
+  chatOpen = false,
 }: {
   readonly size?: keyof typeof CIRCLE;
   readonly activity?: { readonly state: "reading" | "working" } | null;
+  /** The caller shows the bot's conversation, so its items are already loaded. */
+  readonly chatOpen?: boolean;
 }) {
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const waitingCount = useGoatBotWaitingCount() ?? 0;
   const threadRef = botRef === null ? null : scopeThreadRef(botRef.environmentId, botRef.threadId);
+  const shell = useThreadShell(threadRef);
+  // The bot-mode sidebar row loads the conversation exactly when the server tracks visits
+  // (GoatBotSidebarRow), so reading it then adds no load.
+  const sidebarHolds = useGoatBotPreferred() && shell?.lastVisitedAt !== undefined;
   return (
-    <GoatBotAvatar size={size} state={useGoatBotSessionFace(threadRef, waitingCount, activity)} />
+    <GoatBotAvatar
+      size={size}
+      state={useGoatBotSessionFace(threadRef, waitingCount, activity, chatOpen || sidebarHolds)}
+    />
   );
 }

@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
   active: false,
   detailCalls: vi.fn(),
   shellVisitedAt: "2026-10-12T12:00:00.000Z" as string | null | undefined,
+  waiting: 2,
 }));
 const listeners = new Set<() => void>();
 let version = 0;
@@ -64,7 +65,7 @@ vi.mock("./GoatBotModeButton", () => ({
 }));
 vi.mock("./useGoatBotHome", () => ({ useGoatBotHome: () => undefined }));
 vi.mock("./useGoatBotWaitingCount", () => ({
-  useGoatBotWaitingCount: () => 2,
+  useGoatBotWaitingCount: () => state.waiting,
   useMarkGoatBotRead: () => null,
 }));
 vi.mock("./goatBotChannelPort", async () => {
@@ -142,6 +143,7 @@ beforeEach(() => {
   state.preferred = true;
   state.active = false;
   state.shellVisitedAt = "2026-10-12T12:00:00.000Z";
+  state.waiting = 2;
   state.detailCalls.mockClear();
   container = document.createElement("div");
   document.body.append(container);
@@ -155,7 +157,7 @@ afterEach(async () => {
 
 it("subscribes only with a supported bot and updates preview and unread dot as messages arrive", async () => {
   await act(() => root.render(<GoatBotSidebarRow />));
-  expect(state.detailCalls).not.toHaveBeenCalled();
+  expect(state.detailCalls).not.toHaveBeenCalledWith(expect.anything());
   expect(container.textContent).toContain("GOAT Bot");
   await act(() => {
     state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
@@ -181,7 +183,7 @@ it("skips detail on old servers and unmounts the row when bot mode is off", asyn
   state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
   state.shellVisitedAt = undefined;
   await act(() => root.render(<GoatBotSidebarRow />));
-  expect(state.detailCalls).not.toHaveBeenCalled();
+  expect(state.detailCalls).not.toHaveBeenCalledWith(expect.anything());
   expect(container.querySelector('[data-slot="goat-bot-relative-time"]')).not.toBeNull();
   await act(() => {
     state.preferred = false;
@@ -204,4 +206,36 @@ it("shows the waiting face on the row while tasks wait for the person", async ()
   state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
   await act(() => root.render(<GoatBotSidebarRow />));
   expect(container.querySelector('[role="img"][aria-label="Waiting for you"]')).not.toBeNull();
+});
+
+it("shows the working face while a task in the conversation runs", async () => {
+  state.waiting = 0;
+  state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
+  const card = projectedBot("card", "2026-10-12T12:01:00.000Z", "");
+  state.items = [
+    {
+      ...card,
+      item: {
+        ...card.item,
+        type: "notification",
+        source: { kind: "background_task" },
+        outcome: "updated",
+        summary: "Work updated",
+        ledgerTask: {
+          taskId: "task-1",
+          conversationId: "conv-1",
+          taskVersion: 1,
+          title: "Check the disks",
+          status: "running",
+          originKind: "goat",
+          requesterLabel: "Jun",
+          createdAt: "2026-10-12T12:01:00.000Z",
+          updatedAt: "2026-10-12T12:01:00.000Z",
+          openQuestionCount: 0,
+        },
+      } as unknown as OrchestrationV2TurnItem,
+    },
+  ];
+  await act(() => root.render(<GoatBotSidebarRow />));
+  expect(container.querySelector('[role="img"][aria-label="Working"]')).not.toBeNull();
 });

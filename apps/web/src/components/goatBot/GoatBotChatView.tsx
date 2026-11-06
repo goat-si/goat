@@ -140,6 +140,7 @@ export function GoatBotChatView({
           <div className="flex max-w-[60%] min-w-0 items-center gap-2">
             <GoatBotMainAvatar
               size="md"
+              chatOpen
               activity={reading ? { state: "reading" } : removed ? null : working}
             />
             <div className="flex min-w-0 items-center gap-2">
