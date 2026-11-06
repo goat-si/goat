@@ -9,9 +9,10 @@ const isFailureCode = Schema.is(M.MemoryFailureCode);
 export const makeGenerationFailures = (kernel: Pick<StoreKernel, "sql">) => {
   const { sql } = kernel;
   /**
-   * Failed summary work, read from the work rows themselves: their report diagnostics are trimmed
-   * per space and can be refused admission. A later completed run of the same conversation and
-   * kind replaces the failure. Uses the same space as readLocalProcessingStatus.
+   * Threads with summary work that failed for good, read from the work rows: their report
+   * diagnostics are trimmed per space and can be refused admission. Work still due again is not a
+   * failure yet, and retention removes a failed row once newer work of its thread exists. Uses the
+   * same space as readLocalProcessingStatus.
    */
   const readGenerationFailure = Effect.fn("MemoryStore.readGenerationFailure")(function* (input: {
     readonly environmentId: M.EnvironmentId;
@@ -22,29 +23,20 @@ export const makeGenerationFailures = (kernel: Pick<StoreKernel, "sql">) => {
       "generation-failure-read",
       sql<{
         threads: number;
-        retrying: number | null;
+        codes: number;
         failure_code: string | null;
-      }>`WITH failed AS (
-        SELECT json_extract(o.metadata_json,'$.sourceThread.threadId') AS thread,o.status,o.failure_code,
-          coalesce(o.terminal_at,o.next_attempt_at) AS at
-        FROM memory_outbox o
-        WHERE o.space=${space} AND o.kind IN ('summary','consolidate') AND o.status IN ('retry','running','failed')
-          AND o.failure_code IS NOT NULL AND json_extract(o.metadata_json,'$.kind')='summary'
-          AND NOT EXISTS (SELECT 1 FROM memory_outbox n WHERE n.kind IN ('summary','consolidate') AND n.kind=o.kind AND n.status='completed'
-            AND json_extract(n.metadata_json,'$.sourceThread.threadId')=json_extract(o.metadata_json,'$.sourceThread.threadId')
-            AND coalesce(json_extract(n.metadata_json,'$.observedThroughSequence'),json_extract(n.metadata_json,'$.sourceWatermark.throughSequence'))
-              >=coalesce(json_extract(o.metadata_json,'$.observedThroughSequence'),json_extract(o.metadata_json,'$.sourceWatermark.throughSequence')))
-      )
-      SELECT count(DISTINCT thread) AS threads,max(status!='failed') AS retrying,
-        (SELECT failure_code FROM failed ORDER BY at DESC LIMIT 1) AS failure_code
-      FROM failed`,
+      }>`SELECT count(DISTINCT json_extract(metadata_json,'$.sourceThread.environmentId')||' '||json_extract(metadata_json,'$.sourceThread.threadId')) AS threads,
+        count(DISTINCT failure_code) AS codes,min(failure_code) AS failure_code
+      FROM memory_outbox
+      WHERE space=${space} AND kind IN ('summary','consolidate') AND status='failed' AND failure_code IS NOT NULL
+        AND json_extract(metadata_json,'$.kind')='summary'`,
     );
     const row = rows[0];
-    if (!row || row.threads < 1 || !isFailureCode(row.failure_code)) return undefined;
+    if (!row || row.threads < 1) return undefined;
     return {
       threads: row.threads,
-      failureCode: row.failure_code,
-      retrying: row.retrying === 1,
+      // One reason is shown only when it explains every failed thread.
+      failureCode: row.codes === 1 && isFailureCode(row.failure_code) ? row.failure_code : null,
     } satisfies M.MemorySyncStatus["generationFailure"];
   });
   return { readGenerationFailure };

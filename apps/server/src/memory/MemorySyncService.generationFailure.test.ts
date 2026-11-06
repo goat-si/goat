@@ -1,45 +1,39 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as Settings from "../serverSettings.ts";
 import * as Sync from "./MemorySyncService.ts";
-import { fixture, local, space } from "./MemorySyncService.testkit.ts";
+import { fixture, id, local, space } from "./MemorySyncService.testkit.ts";
 
-const work = (id: string, status: string, throughSequence: number, kind = "consolidate") =>
+const work = (key: string, thread: string, status: string, code: string, target: string = space) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const metadata = JSON.stringify({
       kind: "summary",
-      sourceThread: { environmentId: local, threadId: `thread-${id}` },
-      sourceWatermark: { throughSequence },
+      sourceThread: { environmentId: local, threadId: thread },
     });
     yield* sql`INSERT INTO memory_outbox(id,space,kind,status,metadata_json,next_attempt_at,failure_code)
-      VALUES (${id},${space},${kind},${status},${metadata},0,${status === "completed" ? null : "generation_failed"})`;
+      VALUES (${key},${target},'consolidate',${status},${metadata},0,${code})`;
   });
 
-it.effect(
-  "reports failed summaries only to a request that opts in, and only while unreplaced",
-  () =>
-    Effect.gen(function* () {
-      const sync = yield* Sync.MemorySyncService;
-      const sql = yield* SqlClient.SqlClient;
-      yield* work("a", "failed", 5);
-      yield* work("b", "retry", 5);
-      // A later completed run of the same conversation replaces its older failure.
-      yield* work("c", "failed", 5);
-      yield* sql`INSERT INTO memory_outbox(id,space,kind,status,metadata_json,next_attempt_at)
-      SELECT 'c-later',space,kind,'completed',json_set(metadata_json,'$.sourceWatermark.throughSequence',9),0 FROM memory_outbox WHERE id='c'`;
-      const legacy = yield* sync.syncStatus({}, Effect.void);
-      assert.notProperty(legacy, "generationFailure");
-      const opted = yield* sync.syncStatus({ includeGenerationFailure: true }, Effect.void);
-      assert.deepStrictEqual(opted.generationFailure, {
-        threads: 2,
-        failureCode: "generation_failed",
-        retrying: true,
-      });
-      // With memory off, queued summaries wait, so nothing is being retried.
-      yield* (yield* Settings.ServerSettingsService).updateSettings({ memoryEnabled: false });
-      const off = yield* sync.syncStatus({ includeGenerationFailure: true }, Effect.void);
-      assert.strictEqual(off.generationFailure?.retrying, false);
-    }).pipe(Effect.provide(fixture())),
+it.effect("reports summaries that failed for good only to a request that opts in", () =>
+  Effect.gen(function* () {
+    const sync = yield* Sync.MemorySyncService;
+    const sql = yield* SqlClient.SqlClient;
+    // Two failed chunks of one thread count once; retrying work and other spaces do not count.
+    yield* work("a1", "a", "failed", "generation_failed");
+    yield* work("a2", "a", "failed", "generation_failed");
+    yield* work("b", "b", "retry", "generation_failed");
+    yield* work("other", "c", "failed", "generation_failed", id(9));
+    yield* work("d", "d", "failed", "generation_input_too_large");
+    const legacy = yield* sync.syncStatus({}, Effect.void);
+    assert.notProperty(legacy, "generationFailure");
+    const status = () => sync.syncStatus({ includeGenerationFailure: true }, Effect.void);
+    // Different reasons: none of them is presented as the reason for all.
+    assert.deepStrictEqual((yield* status()).generationFailure, { threads: 2, failureCode: null });
+    yield* sql`DELETE FROM memory_outbox WHERE id='d'`;
+    assert.deepStrictEqual((yield* status()).generationFailure, {
+      threads: 1,
+      failureCode: "generation_failed",
+    });
+  }).pipe(Effect.provide(fixture())),
 );

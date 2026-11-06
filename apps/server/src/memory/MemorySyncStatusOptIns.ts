@@ -29,11 +29,6 @@ export const readSyncStatusOptIns = Effect.fn("MemorySyncService.readStatusOptIn
   const failure = request.includeGenerationFailure ? yield* input.failures : undefined;
   return {
     ...(generationHold ? { generationHold } : {}),
-    // Queued summaries wait while memory is off, so nothing is being retried then.
-    ...(failure
-      ? {
-          generationFailure: { ...failure, retrying: failure.retrying && settings.memoryEnabled },
-        }
-      : {}),
+    ...(failure ? { generationFailure: failure } : {}),
   };
 });

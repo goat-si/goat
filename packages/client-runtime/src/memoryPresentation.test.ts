@@ -725,21 +725,16 @@ describe("shared memory progress presentation", () => {
     ).toBeNull();
   });
   it.each([
-    [true, "generation_failed", "2 conversations were not summarized yet; GOAT is trying again"],
     [
-      false,
       "generation_failed",
       "2 conversations were not summarized: the memory model failed on every try. Choose another Memory model if this keeps happening",
     ],
-    [
-      false,
-      "generation_input_too_large",
-      "2 conversations were not summarized: too long to summarize",
-    ],
-    // No action is offered where none would help.
-    [false, "identity_mismatch", "2 conversations were not summarized"],
-  ] as const)("explains failed summaries (retrying %s, %s)", (retrying, failureCode, label) => {
-    const generationFailure = { threads: 2, failureCode, retrying };
+    ["generation_input_too_large", "2 conversations were not summarized: too long to summarize"],
+    // No action is offered where none would help, or where the failures have different reasons.
+    ["identity_mismatch", "2 conversations were not summarized"],
+    [null, "2 conversations were not summarized"],
+  ] as const)("explains failed summaries with reason %s", (failureCode, label) => {
+    const generationFailure = { threads: 2, failureCode };
     expect(presentMemoryProcessingLabels({ processing, generationFailure })).toContain(label);
     expect(presentMemoryProcessingLabels({ processing })).not.toContain(label);
   });

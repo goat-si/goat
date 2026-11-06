@@ -487,8 +487,8 @@ export function presentMemoryProcessing(
 }
 
 /**
- * Why conversations were not summarized, with an action only where one helps. Failures that will
- * be tried again say so; a hold explains its own pause.
+ * Conversations whose summary failed for good, with a reason and action only where they hold for
+ * every one of them. Summaries still waiting to be tried again are not failures.
  */
 export function presentMemoryGenerationFailure(failure: MemorySyncStatus["generationFailure"]) {
   if (!failure) return null;
@@ -496,7 +496,6 @@ export function presentMemoryGenerationFailure(failure: MemorySyncStatus["genera
     failure.threads === 1
       ? "1 conversation was not summarized"
       : `${failure.threads} conversations were not summarized`;
-  if (failure.retrying) return `${subject} yet; GOAT is trying again`;
   switch (failure.failureCode) {
     case "generation_failed":
     case "invalid_output":
@@ -504,7 +503,7 @@ export function presentMemoryGenerationFailure(failure: MemorySyncStatus["genera
     case "generation_input_too_large":
       return `${subject}: too long to summarize`;
     case "secret_detected":
-      return `${subject}: it looked like it contained a secret`;
+      return `${subject}: their content looked like a secret`;
     default:
       return subject;
   }

@@ -1197,9 +1197,9 @@ export const MemorySyncStatus = struct({
   processing: MemoryProcessingStatus,
   /** Present only when the request opted in with includeGenerationHold. */
   generationHold: Schema.optionalKey(MemoryGenerationHold),
-  /** Opt-in: threads whose newest summary failed and no later one replaced. */
+  /** Opt-in: threads whose summary failed for good; the code only when all share it. */
   generationFailure: Schema.optionalKey(
-    struct({ threads: PositiveInt, failureCode: MemoryFailureCode, retrying: Schema.Boolean }),
+    struct({ threads: PositiveInt, failureCode: Schema.NullOr(MemoryFailureCode) }),
   ),
 }).check(Schema.makeFilter((v) => v.lastHubSequence === v.processing.lastReceivedHubSequence));
 export type MemorySyncStatus = typeof MemorySyncStatus.Type;

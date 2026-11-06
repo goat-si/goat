@@ -11,42 +11,18 @@ const read = Effect.gen(function* () {
 });
 
 describe("MemoryWorker generation failures", () => {
-  it.effect("reports a failing conversation until a later summary of it succeeds", () => {
-    let failing = true;
-    return Effect.gen(function* () {
-      yield* TestClock.setTime(Date.parse(now));
-      yield* seed;
-      const worker = yield* Worker.MemoryWorker;
-      yield* worker.sweepDue();
-      assert.deepStrictEqual(yield* read, {
-        threads: 1,
-        failureCode: "generation_failed",
-        retrying: true,
-      });
-      failing = false;
-      yield* TestClock.adjust(Worker.memoryRetryDelay(1));
-      yield* worker.sweepDue();
-      assert.isUndefined(yield* read);
-    }).pipe(
-      Effect.provide(
-        live(() => (failing ? "Memory evidence or execution is invalid." : undefined)),
-      ),
-    );
-  });
-  it.effect("reports a failure GOAT stopped retrying as not retrying", () =>
+  it.effect("reports a summary as failed only once GOAT stops trying it", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(now));
       yield* seed;
       const worker = yield* Worker.MemoryWorker;
-      for (let pass = 0; pass < Worker.MEMORY_GENERATION_MAX_ATTEMPTS + 1; pass++) {
-        yield* worker.sweepDue();
+      yield* worker.sweepDue();
+      assert.isUndefined(yield* read);
+      for (let pass = 1; pass < Worker.MEMORY_GENERATION_MAX_ATTEMPTS + 1; pass++) {
         yield* TestClock.adjust(Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
+        yield* worker.sweepDue();
       }
-      assert.deepStrictEqual(yield* read, {
-        threads: 1,
-        failureCode: "generation_failed",
-        retrying: false,
-      });
+      assert.deepStrictEqual(yield* read, { threads: 1, failureCode: "generation_failed" });
     }).pipe(Effect.provide(live(() => "Memory evidence or execution is invalid."))),
   );
 });
