@@ -13,6 +13,7 @@ import {
 } from "@goat/contracts/relay";
 import { RelayRateLimitExceededError } from "@goat/contracts/relayErrors";
 import * as RelayJwt from "@goat/shared/relayJwt";
+import { SignJWT } from "jose";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Test from "alchemy/Test/Vitest";
 import { resolveDev } from "alchemy/Test/Core";
@@ -298,7 +299,7 @@ const assertHttpBudgetsDeny = (rates: RelayRateLimits["Service"]) =>
         { concurrency: "unbounded" },
       );
     }
-    using signing = vi.spyOn(RelayJwt, "signRelayJwt");
+    using signing = vi.spyOn(SignJWT.prototype, "sign");
     yield* assertLimited(
       yield* post("/v1/client/environment-link-challenges", intent),
       "link_challenge",
