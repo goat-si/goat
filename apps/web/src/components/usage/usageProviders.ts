@@ -40,6 +40,11 @@ export const PROVIDER_PRESENTATION = {
     color: "#4d9f8a",
     driverKind: ProviderDriverKind.make("pi"),
   },
+  omo: {
+    label: "OmO",
+    color: "#d48745",
+    driverKind: ProviderDriverKind.make("omo"),
+  },
   muse: {
     label: "Muse Code",
     color: "#0866ff",

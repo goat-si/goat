@@ -65,6 +65,10 @@ function clampPiThinkingLevel(
 }
 
 function supportedPiThinkingLevelsFromModel(model: unknown): ReadonlyArray<PiThinkingLevel> {
+  const advertised = recordField(model, "supportedThinkingLevels");
+  if (Array.isArray(advertised)) {
+    return PI_THINKING_LEVELS.filter((level) => advertised.includes(level));
+  }
   if (recordField(model, "reasoning") !== true) return [];
   const thinkingLevelMap = thinkingLevelMapFromModel(model);
   return PI_THINKING_LEVELS.filter((level) => {

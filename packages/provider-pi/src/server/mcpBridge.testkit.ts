@@ -62,6 +62,7 @@ export async function loadMcpBridge(
     readonly screenSkillGate?: string;
     /** The per-turn native subagent gate file the adapter writes. */
     readonly subagentGate?: string;
+    readonly profile?: "pi" | "omo";
     readonly browser?: boolean;
     readonly inputSchema?: Record<string, unknown>;
     /** False starts the extension without GOAT MCP credentials, as a thread without GOAT MCP does. */
@@ -143,6 +144,7 @@ export async function loadMcpBridge(
                 }),
           GOAT_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
           GOAT_PI_RUNTIME_MODE: options.runtimeMode,
+          GOAT_PI_PROFILE: options.profile,
           GOAT_BROWSER_TOOLS: options.browser ? "on" : "off",
           ...(options.cua === undefined
             ? {}

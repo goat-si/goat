@@ -18,7 +18,15 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import type { PiSettings } from "../settings.ts";
-import { PiDriver } from "./driver.ts";
+import { OmoDriver, PiDriver } from "./driver.ts";
+
+it("provides a separate OmO driver with its own binary and no home route settings", () => {
+  assert.equal(OmoDriver.driverKind, "omo");
+  assert.equal(OmoDriver.defaultConfig().binaryPath, "omo");
+  assert.notProperty(OmoDriver.defaultConfig(), "modelRoute");
+  assert.equal(OmoDriver.usage?.provider, "omo");
+  assert.equal(PiDriver.defaultConfig().binaryPath, "pi");
+});
 
 const layerTest = Layer.mergeAll(
   TestProviderHost.layer({

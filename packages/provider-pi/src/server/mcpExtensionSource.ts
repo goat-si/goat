@@ -14,6 +14,7 @@ import {
   GOAT_ORCHESTRATION_INSTRUCTIONS,
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
+import { OMO_PROFILE, PI_PROFILE } from "./profile.ts";
 import {
   COMPUTER_USE_INSTRUCTIONS,
   SCREEN_CODE_INSTRUCTION_SECTIONS,
@@ -24,6 +25,7 @@ export const PI_GOAT_MCP_EXTENSION_FILENAME = "pi-goat-mcp-extension.ts";
 export const GOAT_MCP_URL_ENV = "GOAT_MCP_URL";
 export const GOAT_MCP_BEARER_ENV = "GOAT_MCP_BEARER_TOKEN";
 export const GOAT_PI_RUNTIME_MODE_ENV = "GOAT_PI_RUNTIME_MODE";
+export const GOAT_PI_PROFILE_ENV = "GOAT_PI_PROFILE";
 export const GOAT_PI_MCP_EXTENSION_PATH_ENV = "GOAT_PI_MCP_EXTENSION_PATH";
 /** The managed Cua Driver's stdio MCP command, as JSON `{ command, args, env }`. */
 export const GOAT_CUA_MCP_ENV = "GOAT_CUA_MCP";
@@ -72,6 +74,7 @@ import { Type } from "typebox";
 const URL_ENV = ${JSON.stringify(GOAT_MCP_URL_ENV)};
 const TOKEN_ENV = ${JSON.stringify(GOAT_MCP_BEARER_ENV)};
 const RUNTIME_MODE_ENV = ${JSON.stringify(GOAT_PI_RUNTIME_MODE_ENV)};
+const PROFILE_ENV = ${JSON.stringify(GOAT_PI_PROFILE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(GOAT_PI_MCP_EXTENSION_PATH_ENV)};
 const CUA_ENV = ${JSON.stringify(GOAT_CUA_MCP_ENV)};
 const CUA_GATE_ENV = ${JSON.stringify(GOAT_CUA_GATE_ENV)};
@@ -89,6 +92,9 @@ const SCREEN_CODE_INSTRUCTIONS = ${JSON.stringify(SCREEN_CODE_INSTRUCTION_SECTIO
 const PROTOCOL = "2025-06-18";
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const FILE_CHANGE_TOOLS = new Set(${JSON.stringify(PI_FILE_CHANGE_TOOLS)});
+const OMO_SPAWN_TOOLS = new Set(${JSON.stringify(OMO_PROFILE.spawnToolNames)});
+const PI_SPAWN_TOOLS = new Set(${JSON.stringify(PI_PROFILE.spawnToolNames)});
+const OMO_BLOCKED_TOOLS = new Set(${JSON.stringify(OMO_PROFILE.blockedNativeTools)});
 
 type RuntimeMode = "approval-required" | "auto-accept-edits" | "auto" | "full-access";
 
@@ -590,7 +596,11 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   };
 
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName === "subagent" && !(await subagentsOpen())) {
+    const omo = env(PROFILE_ENV) === "omo";
+    if (omo && OMO_BLOCKED_TOOLS.has(event.toolName)) {
+      return { block: true, reason: "This native tool is disabled by GOAT." };
+    }
+    if ((omo ? OMO_SPAWN_TOOLS : PI_SPAWN_TOOLS).has(event.toolName) && !(await subagentsOpen())) {
       return { block: true, reason: "This thread's GOAT permission profile allows no native subagents." };
     }
     const mode = runtimeMode();

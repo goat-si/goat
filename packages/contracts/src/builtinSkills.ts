@@ -98,6 +98,7 @@ export const BUILTIN_SKILL_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "acpRegistry",
   "opencode",
   "pi",
+  "omo",
 ]);
 
 export const BuiltInSkillActivationInput = Schema.Struct({

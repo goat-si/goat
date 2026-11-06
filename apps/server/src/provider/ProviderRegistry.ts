@@ -166,7 +166,7 @@ export function upsertProviderWorkspaceSnapshot(
 }
 
 const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
-  if (provider.driver === ProviderDriverKind.make("pi")) {
+  if (["pi", "omo"].includes(provider.driver)) {
     // Pi auth becomes known only after inventory discovery: empty means unauthenticated; failed/interactive discovery preserves unknown auth and cached models.
     return !(
       provider.installed &&

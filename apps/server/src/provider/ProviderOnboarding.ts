@@ -26,6 +26,7 @@ import {
   type ServerProvider,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { ACP_LOCAL_PRESETS } from "@goat/provider-acp-registry/localPresets";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -59,6 +60,7 @@ const SIGN_IN: Readonly<Record<string, { readonly kind: ProviderSignInKind }>> =
   acpRegistry: { kind: "agent" },
   grok: { kind: "credentials" },
   opencode: { kind: "command" },
+  omo: { kind: "terminal" },
 };
 
 const error = (code: string, message: string, fix?: { instruction: string; path?: string }) => ({
@@ -84,6 +86,7 @@ export const buildAddableDrivers = (
     return {
       driver: ProviderDriverKind.make(driverKind),
       displayName,
+      ...(driverKind === "acpRegistry" ? { presets: ACP_LOCAL_PRESETS } : {}),
       install: {
         state: probe === undefined ? "unknown" : probe.installed ? "installed" : "missing",
         inApp: own.some((snapshot) => snapshot.setup?.canInstall === true),
