@@ -19,7 +19,7 @@ export const unloadedOpen = (tabId: string, cause: unknown): unknown => {
 };
 
 export async function settleInitialOpen(
-  navigation: Promise<unknown> | undefined,
+  navigation: Promise<unknown> | null | undefined,
   tabId: string,
   close: () => Promise<void>,
 ): Promise<void> {
