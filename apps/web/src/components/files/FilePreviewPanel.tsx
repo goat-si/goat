@@ -591,7 +591,6 @@ function useEditableAfterHighlight(file: FileContents) {
     if (ready || workerPool === undefined) return;
     workerPool.primeFileHighlightCache(file).catch(() => setHighlightedFile(file));
   }, [file, ready, workerPool]);
-
   const onPostRender = (renderedFile: FileContents | undefined, phase: PostRenderPhase) => {
     if (ready || phase === "unmount" || renderedFile?.cacheKey !== file.cacheKey) return;
     // Cache results arrive just before instance rendering; seeing the cache during render means rows are
@@ -904,6 +903,7 @@ function EditableFileSurface({
                 <div className="py-1">
                   {annotation.metadata.entries.map((entry) => (
                     <DiffCommentAnnotation
+                      environmentId={environmentId}
                       key={entry.id}
                       kind={entry.kind}
                       rangeLabel={formatFileCommentRange(entry.startLine, entry.endLine)}

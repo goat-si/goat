@@ -1,6 +1,6 @@
 import { AuthOrchestrationOperateScope, type EnvironmentId } from "@goat/contracts";
 import * as Option from "effect/Option";
-import { useId, type RefObject } from "react";
+import { useId, type ReactNode, type RefObject } from "react";
 import { useComposerVoiceController } from "../components/chat/useComposerVoiceController";
 import { ComposerVoiceButton } from "../components/chat/ComposerVoiceButton";
 import { Button } from "../components/ui/button";
@@ -91,4 +91,13 @@ export function CommentSpeechControls({ speech }: { speech: ReturnType<typeof us
       {voice.state.error ? <span role="alert">{voice.state.error}</span> : null}
     </span>
   );
+}
+
+export function CommentSpeechScope({
+  children,
+  ...input
+}: Parameters<typeof useCommentSpeech>[0] & {
+  children: (speech: ReturnType<typeof useCommentSpeech>) => ReactNode;
+}) {
+  return children(useCommentSpeech(input));
 }

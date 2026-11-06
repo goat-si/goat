@@ -1,11 +1,21 @@
-import { ASSISTANT_CITATION_MAX_COMMENT_LENGTH, type AssistantCitation } from "@goat/contracts";
-import { useState, type Ref } from "react";
+import {
+  ASSISTANT_CITATION_MAX_COMMENT_LENGTH,
+  type AssistantCitation,
+  type EnvironmentId,
+} from "@goat/contracts";
+import { useRef, useState, type RefObject } from "react";
 import { textDirection } from "~/textDirection";
+import {
+  CommentSpeechControls,
+  CommentSpeechScope,
+  type useCommentSpeech,
+} from "../../speech/useCommentSpeech";
 
 import { Button } from "../ui/button";
 
 export function AssistantCitationCommentEditor({
   citation,
+  environmentId,
   inputRef,
   onSubmit,
   onSubmitAndSend,
@@ -13,13 +23,20 @@ export function AssistantCitationCommentEditor({
   onDraftChange,
 }: {
   citation: AssistantCitation;
-  inputRef?: Ref<HTMLTextAreaElement>;
+  inputRef?: RefObject<HTMLTextAreaElement | null>;
+  environmentId?: EnvironmentId | null | undefined;
   onSubmit: (comment: string) => boolean;
   onSubmitAndSend?: (comment: string) => boolean;
   onCancel: () => void;
   onDraftChange?: (comment: string) => void;
 }) {
   const [comment, setComment] = useState(citation.comment ?? "");
+  const fallbackRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = inputRef ?? fallbackRef;
+  const updateComment = (value: string) => {
+    setComment(value);
+    onDraftChange?.(value);
+  };
   const commentTooLong = comment.length > ASSISTANT_CITATION_MAX_COMMENT_LENGTH;
   const submit = () => {
     if (!commentTooLong) onSubmit(comment);
@@ -33,7 +50,7 @@ export function AssistantCitationCommentEditor({
     }
   };
 
-  return (
+  const renderEditor = (speech: ReturnType<typeof useCommentSpeech> | null) => (
     <div
       data-citation-comment-editor="true"
       onKeyDown={(event) => {
@@ -41,12 +58,16 @@ export function AssistantCitationCommentEditor({
         if (event.nativeEvent.isComposing || event.keyCode === 229) return;
         if (event.key === "Escape") {
           event.preventDefault();
+          if (speech?.voice.blocksSubmission()) {
+            speech.voice.cancel();
+            return;
+          }
           onCancel();
         }
       }}
     >
       <textarea
-        ref={inputRef}
+        ref={textareaRef}
         aria-label="Comment on selected text"
         aria-description="Enter to save the citation comment; Command/Ctrl+Enter to save and send; Shift+Enter for a new line."
         aria-invalid={commentTooLong || undefined}
@@ -56,13 +77,13 @@ export function AssistantCitationCommentEditor({
         className="field-sizing-content block max-h-40 min-h-16 w-full resize-none bg-transparent px-1 py-1.5 text-base outline-none placeholder:text-muted-foreground sm:text-sm"
         value={comment}
         onChange={(event) => {
-          setComment(event.currentTarget.value);
-          onDraftChange?.(event.currentTarget.value);
+          updateComment(event.currentTarget.value);
         }}
         onKeyDown={(event) => {
           if (
             event.key === "Enter" &&
             !event.shiftKey &&
+            !speech?.voice.blocksSubmission() &&
             !event.nativeEvent.isComposing &&
             event.keyCode !== 229
           ) {
@@ -82,6 +103,7 @@ export function AssistantCitationCommentEditor({
         </p>
       ) : null}
       <div className="mt-2 flex items-center justify-end gap-2">
+        {speech ? <CommentSpeechControls speech={speech} /> : null}
         <Button
           variant="outline"
           size="xs"
@@ -92,7 +114,7 @@ export function AssistantCitationCommentEditor({
         </Button>
         <Button
           size="xs"
-          disabled={commentTooLong}
+          disabled={commentTooLong || (speech?.voice.blocksSubmission() ?? false)}
           onPointerDown={(event) => event.preventDefault()}
           onClick={submit}
         >
@@ -100,5 +122,17 @@ export function AssistantCitationCommentEditor({
         </Button>
       </div>
     </div>
+  );
+  return environmentId ? (
+    <CommentSpeechScope
+      environmentId={environmentId}
+      textareaRef={textareaRef}
+      text={comment}
+      onTextChange={updateComment}
+    >
+      {renderEditor}
+    </CommentSpeechScope>
+  ) : (
+    renderEditor(null)
   );
 }

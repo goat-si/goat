@@ -5,7 +5,11 @@ import type {
   SelectedLineRange,
 } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
-import type { PullRequestReviewGuideExcerpt, PullRequestReviewPosition } from "@goat/contracts";
+import type {
+  EnvironmentId,
+  PullRequestReviewGuideExcerpt,
+  PullRequestReviewPosition,
+} from "@goat/contracts";
 import { ArrowUpRightIcon } from "~/components/solar";
 import { useState } from "react";
 
@@ -53,6 +57,7 @@ export interface ExcerptNoteMarker {
 }
 
 export interface ExcerptCommenting {
+  readonly environmentId?: EnvironmentId | undefined;
   readonly canComment: boolean;
   /** The host anchors a comment to a range of lines rather than to its last one. */
   readonly rangeComments: boolean;
@@ -322,6 +327,7 @@ function ExcerptDiff({
             ))}
             {annotation.metadata.draft && draft !== null && commenting !== null ? (
               <DiffCommentAnnotation
+                environmentId={commenting.environmentId}
                 kind="draft"
                 rangeLabel={`${excerpt.path}:${getReviewPositionAnchor(draft.position).line}`}
                 text=""

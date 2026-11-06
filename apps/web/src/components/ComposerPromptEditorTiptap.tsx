@@ -409,16 +409,15 @@ const ComposerCitationExtension = Node.create({
 
 function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
   const commentContext = use(ComposerCitationCommentContext);
+  const actions = use(ComposerContextActionsContext);
   const citation = node.attrs.citation as AssistantCitation;
   const citeKey = node.attrs.citeKey as string;
   const commentTarget =
     commentContext.openComment?.key === citeKey ? commentContext.openComment : null;
-
   const nodePos = () => {
     const pos = typeof getPos === "function" ? getPos() : null;
     return typeof pos === "number" ? pos : null;
   };
-
   const onSaveComment = (comment: string): boolean => {
     if (!editor.isEditable) return false;
     const pos = nodePos();
@@ -489,6 +488,7 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
         citation={citation}
         composer
         commentEditor={{
+          environmentId: actions.environmentId,
           open: commentTarget !== null,
           sourceAnchor: commentTarget?.sourceAnchor,
           onOpenChange: (open) => {
