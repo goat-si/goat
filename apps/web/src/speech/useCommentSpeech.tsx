@@ -57,7 +57,6 @@ export function useCommentSpeech(input: {
         field?.setSelectionRange(selection.start, selection.end);
       });
     },
-    onSubmit: input.onTextChange,
   });
   return { voice, visible: selected !== null };
 }

@@ -77,7 +77,7 @@ export interface ComposerVoiceDependencies {
   readonly cancelRecording: () => Promise<void>;
   readonly readDraft: () => VoiceDraftSnapshot | null;
   readonly commitDraft: (text: string, selection: VoiceDraftSnapshot["selection"]) => void;
-  readonly onSubmit: (text: string) => void;
+  readonly onSubmit?: ((text: string) => void) | undefined;
   readonly prewarm: (target: ComposerVoiceTarget, signal: AbortSignal) => Promise<unknown>;
   readonly transcribe: (
     target: ComposerVoiceTarget,
@@ -270,6 +270,7 @@ export class ComposerVoiceController {
   readonly send = () => this.finish(true);
 
   private async finish(send: boolean): Promise<boolean> {
+    if (send && !this.dependencies.onSubmit) return false;
     if (this.state.phase !== "recording" || !this.captured || !this.abort) return false;
     const generation = this.generation;
     const target = this.target;
@@ -306,7 +307,7 @@ export class ComposerVoiceController {
       this.captured = null;
       this.publish(IDLE);
       this.dependencies.commitDraft(commit.text, commit.selection);
-      if (send && commit.text.trim() && isCurrent()) this.dependencies.onSubmit(commit.text);
+      if (send && commit.text.trim() && isCurrent()) this.dependencies.onSubmit?.(commit.text);
       return true;
     } catch (error) {
       if (isCurrent()) this.fail(error);
@@ -318,7 +319,7 @@ export class ComposerVoiceController {
 export interface UseComposerVoiceControllerOptions extends ComposerVoiceTarget {
   readonly readDraft: ComposerVoiceDependencies["readDraft"];
   readonly commitDraft: ComposerVoiceDependencies["commitDraft"];
-  readonly onSubmit: ComposerVoiceDependencies["onSubmit"];
+  readonly onSubmit?: ComposerVoiceDependencies["onSubmit"];
   readonly onStart?: () => void;
   readonly subscribeDraft?: (listener: () => void) => () => void;
   readonly resolveContext?: (
@@ -349,7 +350,7 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
       flushSync(() => options.commitDraft(text, selection));
     },
   );
-  const onSubmit = useStableCallback(options.onSubmit);
+  const onSubmit = useStableCallback((text: string) => options.onSubmit?.(text));
   const resolveContext = useStableCallback(options.resolveContext ?? resolveComposerVoiceContext);
   const [controller] = useState(
     () =>
@@ -359,7 +360,7 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
         cancelRecording: recorder.cancelRecording,
         readDraft,
         commitDraft,
-        onSubmit,
+        ...(options.onSubmit ? { onSubmit } : {}),
         prewarm: async (target, signal) => {
           if (target.localModelGrant) return;
           const request = voiceTranscriptionRequest(target.route, target);

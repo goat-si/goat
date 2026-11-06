@@ -28,6 +28,7 @@ it("forwards only valid events and states from the active annotation session", (
   const state = {
     tabId: "tab",
     sessionId: "current",
+    sequence: 1,
     phase: "idle" as const,
     available: true,
     error: null,

@@ -24,13 +24,25 @@ export type AnnotationVoiceEvent = typeof AnnotationVoiceEvent.Type;
 export const AnnotationVoiceState = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   sessionId: SessionId,
+  sequence: Schema.Int.check(Schema.isGreaterThan(0)),
   phase: Schema.Literals(["idle", "preparing", "recording", "transcribing", "error"]),
   available: Schema.Boolean,
   error: Schema.NullOr(Schema.String.check(Schema.isMaxLength(2048))),
   draft: Schema.NullOr(
-    Schema.Struct({ text: Text, cursor: Cursor, selectionEnd: Cursor }).check(
+    Schema.Struct({
+      text: Text,
+      cursor: Cursor,
+      selectionEnd: Cursor,
+      expectedText: Text,
+      expectedCursor: Cursor,
+      expectedSelectionEnd: Cursor,
+    }).check(
       Schema.makeFilter(
-        ({ text, cursor, selectionEnd }) => cursor <= selectionEnd && selectionEnd <= text.length,
+        ({ text, cursor, selectionEnd, expectedText, expectedCursor, expectedSelectionEnd }) =>
+          cursor <= selectionEnd &&
+          selectionEnd <= text.length &&
+          expectedCursor <= expectedSelectionEnd &&
+          expectedSelectionEnd <= expectedText.length,
       ),
     ),
   ),

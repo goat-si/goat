@@ -253,7 +253,8 @@ existing voice input** to turn it off. Someone with voice management permission 
 download, select, or remove models from **Manage voice models** in the same menu.
 Connections through a hub do not currently support this option.
 After choosing an environment, you can also dictate into a pull request comment
-on that environment.
+on that environment. In the desktop Browser, the same choice applies to annotation
+comments.
 
 The first time on a Mac, macOS asks whether GOAT may use the microphone. If you
 declined, or turned GOAT off later, the composer says so and offers **Open System

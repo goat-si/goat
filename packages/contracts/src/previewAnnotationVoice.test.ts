@@ -28,14 +28,24 @@ it("accepts old pick requests and bounds annotation voice messages", () => {
       selectionEnd: 0,
     }),
   ).toThrow();
+  const state = {
+    tabId: "tab",
+    sessionId: "session",
+    sequence: 1,
+    phase: "idle",
+    available: true,
+    error: null,
+    draft: {
+      text: "done",
+      cursor: 4,
+      selectionEnd: 4,
+      expectedText: "draft",
+      expectedCursor: 0,
+      expectedSelectionEnd: 5,
+    },
+  };
+  expect(decodeState(state).draft?.text).toBe("done");
   expect(() =>
-    decodeState({
-      tabId: "tab",
-      sessionId: "session",
-      phase: "idle",
-      available: true,
-      error: null,
-      draft: { text: "", cursor: -1, selectionEnd: 0 },
-    }),
+    decodeState({ ...state, draft: { ...state.draft, expectedSelectionEnd: 6 } }),
   ).toThrow();
 });
