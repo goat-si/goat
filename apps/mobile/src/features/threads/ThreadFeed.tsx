@@ -1484,7 +1484,7 @@ function renderFeedEntry(
       );
       return (
         <Animated.View
-          className="mb-5 items-end"
+          className="mb-5 mt-2 items-end"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
           {foldRowId !== null ? (

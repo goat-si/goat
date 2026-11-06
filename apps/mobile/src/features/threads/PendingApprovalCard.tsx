@@ -2,6 +2,7 @@ import { Button } from "../../components/ui/Button";
 import type {
   ProviderApprovalDecision,
   ProviderApprovalOption,
+  ProviderRequestKind,
   RuntimeRequestId,
 } from "@goat/contracts";
 import {
@@ -9,7 +10,8 @@ import {
   fullAccessOverrideExplanation,
 } from "@goat/client-runtime/state/thread-requests";
 import { useState } from "react";
-import { Pressable, View } from "react-native";
+import { Pressable, ScrollView, View, type StyleProp, type ViewStyle } from "react-native";
+import Animated, { type AnimatedStyle } from "react-native-reanimated";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -19,6 +21,8 @@ export interface PendingApprovalCardProps {
   readonly canOperateThread: boolean;
   readonly approval: PendingApproval;
   readonly respondingApprovalId: RuntimeRequestId | null;
+  /** Caps the card; the request text scrolls while the actions stay in view. */
+  readonly maxHeightStyle?: StyleProp<AnimatedStyle<StyleProp<ViewStyle>>>;
   readonly onRespond: (
     requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
@@ -31,6 +35,14 @@ const DEFAULT_APPROVAL_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
   { decision: "decline", label: "Decline" },
 ];
 
+const APPROVAL_TITLE: Record<ProviderRequestKind, string> = {
+  command: "Run a command",
+  "file-read": "Read a file",
+  "file-change": "Change files",
+  "mcp-elicitation": "App access",
+  permission: "App permission",
+};
+
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const options: ReadonlyArray<ProviderApprovalOption> =
     props.approval.options ?? DEFAULT_APPROVAL_OPTIONS;
@@ -39,7 +51,10 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const disabled = !canRespond || props.respondingApprovalId === props.approval.requestId;
   const [explanationOpen, setExplanationOpen] = useState(false);
   return (
-    <View className="gap-3 rounded-[20px] border border-border bg-card-alt p-4">
+    <Animated.View
+      className="gap-3 overflow-hidden rounded-[20px] border border-border bg-card-alt p-4"
+      style={props.maxHeightStyle}
+    >
       <View className="flex-row items-center gap-1.5">
         <SymbolView
           name="exclamationmark.shield"
@@ -55,43 +70,54 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
         </Text>
       </View>
       <Text className="font-goat-bold text-lg text-foreground">
-        {props.approval.appName ?? props.approval.requestKind}
+        {props.approval.appName ?? APPROVAL_TITLE[props.approval.requestKind]}
       </Text>
-      {props.approval.detail ? (
-        <Text className="font-sans text-sm leading-normal text-foreground-secondary">
-          {props.approval.detail}
-        </Text>
-      ) : null}
-      {props.approval.reason ? (
-        <Text className="font-sans text-xs leading-normal text-warning-foreground">
-          {props.approval.reason}
-        </Text>
-      ) : null}
-      {props.approval.fullAccessOverride ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ expanded: explanationOpen }}
-          onPress={() => setExplanationOpen((open) => !open)}
-        >
-          <Text className="font-goat-bold text-xs text-foreground-secondary underline">
-            {FULL_ACCESS_OVERRIDE_QUESTION}
+      <ScrollView
+        bounces={false}
+        className="min-h-0"
+        contentContainerClassName="gap-3"
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+        style={{ flexShrink: 1 }}
+      >
+        {props.approval.detail ? (
+          <Text selectable className="font-sans text-sm leading-normal text-foreground-secondary">
+            {props.approval.detail}
           </Text>
-          {explanationOpen ? (
-            <Text className="mt-1 font-sans text-xs leading-normal text-foreground-muted">
-              {fullAccessOverrideExplanation(props.approval.fullAccessOverride)}
+        ) : null}
+        {props.approval.reason ? (
+          <Text className="font-sans text-xs leading-normal text-warning-foreground">
+            {props.approval.reason}
+          </Text>
+        ) : null}
+        {props.approval.fullAccessOverride ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: explanationOpen }}
+            onPress={() => setExplanationOpen((open) => !open)}
+          >
+            <Text className="font-goat-bold text-xs text-foreground-secondary underline">
+              {FULL_ACCESS_OVERRIDE_QUESTION}
             </Text>
-          ) : null}
-        </Pressable>
-      ) : null}
-      {!canRespond ? (
-        <Text className="font-sans text-sm leading-5 text-foreground-muted">
-          The provider process for this request is no longer available. Interrupt or restart the run
-          to continue.
-        </Text>
-      ) : null}
-      {warning ? (
-        <Text className="font-sans text-xs leading-normal text-warning-foreground">{warning}</Text>
-      ) : null}
+            {explanationOpen ? (
+              <Text className="mt-1 font-sans text-xs leading-normal text-foreground-muted">
+                {fullAccessOverrideExplanation(props.approval.fullAccessOverride)}
+              </Text>
+            ) : null}
+          </Pressable>
+        ) : null}
+        {!canRespond ? (
+          <Text className="font-sans text-sm leading-5 text-foreground-muted">
+            The provider process for this request is no longer available. Interrupt or restart the
+            run to continue.
+          </Text>
+        ) : null}
+        {warning ? (
+          <Text className="font-sans text-xs leading-normal text-warning-foreground">
+            {warning}
+          </Text>
+        ) : null}
+      </ScrollView>
       <View className="flex-row flex-wrap gap-2">
         {options.map((option) => (
           <Button
@@ -114,6 +140,6 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
           This connection cannot respond to approvals.
         </Text>
       ) : null}
-    </View>
+    </Animated.View>
   );
 }

@@ -121,6 +121,7 @@ export function FileChangeInlineDiff(props: {
           file={file}
           patch={extractFilePatch(patch, file)}
           workspaceRoot={workspaceRoot}
+          showStats={files.length > 1}
         />
       ))}
     </View>
@@ -133,6 +134,8 @@ function InlineFileDiff(props: {
   readonly file: FileDiffMetadata;
   readonly patch: string;
   readonly workspaceRoot: string | undefined;
+  /** The work row already shows the totals; per-file counts only help with several files. */
+  readonly showStats: boolean;
 }) {
   const { file, patch } = props;
   const navigation = useNavigation();
@@ -198,7 +201,9 @@ function InlineFileDiff(props: {
           >
             {displayPath}
           </Text>
-          <PullRequestDiffStats additions={stats.additions} deletions={stats.deletions} compact />
+          {props.showStats ? (
+            <PullRequestDiffStats additions={stats.additions} deletions={stats.deletions} compact />
+          ) : null}
           <SymbolView name="arrow.up.right" size={12} tintColorClassName="accent-icon-muted" />
         </Pressable>
         {patch.length > 0 ? (

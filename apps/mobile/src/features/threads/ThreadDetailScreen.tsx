@@ -1663,19 +1663,14 @@ function ThreadDetailBody(
                       exiting={FadeOut.duration(140)}
                     >
                       {props.activePendingApproval ? (
-                        <Animated.ScrollView
+                        <PendingApprovalCard
                           key={props.activePendingApproval.requestId}
-                          style={approvalHeightStyle}
-                          keyboardShouldPersistTaps="handled"
-                          nestedScrollEnabled
-                        >
-                          <PendingApprovalCard
-                            canOperateThread={props.canOperateThread}
-                            approval={props.activePendingApproval}
-                            respondingApprovalId={props.respondingApprovalId}
-                            onRespond={props.onRespondToApproval}
-                          />
-                        </Animated.ScrollView>
+                          maxHeightStyle={approvalHeightStyle}
+                          canOperateThread={props.canOperateThread}
+                          approval={props.activePendingApproval}
+                          respondingApprovalId={props.respondingApprovalId}
+                          onRespond={props.onRespondToApproval}
+                        />
                       ) : null}
                       {props.activePendingUserInput ? (
                         <PendingUserInputCard
@@ -1775,8 +1770,8 @@ function ThreadDetailBody(
                         placeholder={
                           props.activePendingApproval
                             ? props.activePendingApproval.supportsFeedback
-                              ? "Send feedback to decline this request"
-                              : "Send a message to decline and redirect the agent"
+                              ? "Decline with feedback"
+                              : "Decline with a message"
                             : "Ask anything"
                         }
                         contentMaxWidth={contentMaxWidth}
