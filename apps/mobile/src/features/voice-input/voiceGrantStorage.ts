@@ -25,8 +25,19 @@ export function createVoiceGrantStorage(input: {
     },
     choose(environmentId: EnvironmentId | null): VoiceGrant | null {
       const grant = environmentId === null ? null : { id: input.newId(), environmentId };
-      input.writeMarker(grant?.id ?? "");
-      input.writeSecret(grant ? JSON.stringify(grant) : "");
+      // Attempt both writes: either one alone breaks the match that keeps an old grant alive.
+      let failure: unknown;
+      try {
+        input.writeMarker(grant?.id ?? "");
+      } catch (error) {
+        failure = error;
+      }
+      try {
+        input.writeSecret(grant ? JSON.stringify(grant) : "");
+      } catch (error) {
+        failure ??= error;
+      }
+      if (failure !== undefined) throw failure;
       return grant;
     },
   };
