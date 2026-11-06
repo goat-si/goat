@@ -70,3 +70,39 @@ it("opens the selected image before a sibling resolves and keeps its gallery slo
     vi.unstubAllGlobals();
   }
 });
+
+it("keeps the selected preview open when a sibling fails", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.previews.length = 0;
+  state.mounts = 0;
+  state.refresh.mockImplementation((url: string) =>
+    url === "missing"
+      ? Promise.reject(new Error("missing"))
+      : Promise.resolve("https://signed.test/selected"),
+  );
+  const image = (url: string): FilePreviewItem => ({
+    kind: "image",
+    environmentId: EnvironmentId.make("env"),
+    resource: { _tag: SOURCE_CONTROL_MEDIA_ASSET, cwd: "/repo", url },
+  });
+  const selected = image("selected");
+  const onRequestClose = vi.fn();
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () =>
+      root.render(
+        <FilePreviewModal
+          source={{ ...selected, gallery: [selected, image("missing")] }}
+          onRequestClose={onRequestClose}
+        />,
+      ),
+    );
+    expect(state.previews.at(-1)).toMatchObject({
+      gallerySlots: [{ uri: "https://signed.test/selected" }, { failed: true }],
+    });
+    expect(onRequestClose).not.toHaveBeenCalled();
+  } finally {
+    await act(() => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
