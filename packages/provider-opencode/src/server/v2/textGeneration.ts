@@ -16,6 +16,7 @@ import {
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
+import * as NodeURL from "node:url";
 import * as FileSystem from "effect/FileSystem";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -23,6 +24,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import { isProviderNativeImageAttachment } from "@goat/provider-core/server/attachmentPrompt";
 import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
@@ -236,11 +238,14 @@ const runOnServer = Effect.fn("Opencode2TextGeneration.runOnServer")(function* (
       ),
     ),
   );
-  const images = (input.attachments ?? []).flatMap((attachment) => {
-    if (attachment.type !== "image") return [];
+  const images: Array<{ uri: string; name: string }> = [];
+  for (const attachment of connection.external ? [] : (input.attachments ?? [])) {
+    if (!isProviderNativeImageAttachment(attachment)) continue;
     const path = resolveAttachmentPath(attachment);
-    return path === null ? [] : [{ uri: `file://${path}`, name: attachment.name }];
-  });
+    if (path === null) continue;
+    const exists = yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false));
+    if (exists) images.push({ uri: NodeURL.pathToFileURL(path).href, name: attachment.name });
+  }
   yield* client.session
     .prompt({
       sessionID: session.id,
