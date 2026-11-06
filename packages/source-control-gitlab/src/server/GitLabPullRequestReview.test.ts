@@ -341,6 +341,38 @@ layer("GitLabPullRequestCli review", (it) => {
     }),
   );
 
+  it.effect("reports GraphQL errors before posting review comments", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(JSON.stringify({ username: "bilal" }))))
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              JSON.stringify({
+                data: { mergeRequestSetReviewers: null },
+                errors: [{ message: "Unsupported mutation" }],
+              }),
+            ),
+          ),
+        );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      const result = yield* Effect.result(
+        cli.submitReview({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          verdict: "request-changes",
+          body: "Needs work",
+          comments: [],
+        }),
+      );
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure.message).toContain("Unsupported mutation");
+      expect(mockedExecute).toHaveBeenCalledTimes(2);
+    }),
+  );
+
   it.effect("reports failure when no reference endpoint answers", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(

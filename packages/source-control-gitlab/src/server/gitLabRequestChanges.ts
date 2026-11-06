@@ -15,14 +15,17 @@ const REQUEST_CHANGES = `mutation($projectPath: ID!, $iid: String!) {
 }`;
 const decode = decodeJsonResult(
   Schema.Struct({
-    data: Schema.Record(
-      Schema.String,
+    data: Schema.optional(
       Schema.NullOr(
-        Schema.Struct({
-          errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
-        }),
+        Schema.Record(
+          Schema.String,
+          Schema.NullOr(
+            Schema.Struct({ errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))) }),
+          ),
+        ),
       ),
     ),
+    errors: Schema.optional(Schema.Array(Schema.Struct({ message: Schema.String }))),
   }),
 );
 
@@ -48,7 +51,17 @@ export function makeGitLabRequestChanges(
       [REQUEST_CHANGES, target],
     ] as const) {
       const result = yield* read({ ...input, operation: "submitReview", query, variables, decode });
-      const reasons = Object.values(result.data).flatMap((payload) => payload?.errors ?? []);
+      const payloads = Object.values(result.data ?? {});
+      const reasons = [
+        ...(result.errors ?? []).map((error) => error.message),
+        ...payloads.flatMap((payload) => payload?.errors ?? []),
+      ];
+      if (
+        reasons.length === 0 &&
+        (payloads.length === 0 || payloads.some((payload) => payload === null))
+      ) {
+        reasons.push("GitLab returned no mutation result");
+      }
       if (reasons.length > 0) {
         return yield* new GitLabMutationRefusedError({
           command: "glab",
