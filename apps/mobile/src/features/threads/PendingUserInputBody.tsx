@@ -8,6 +8,7 @@ import {
 import type { ReactNode } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
 import {
   isPendingUserInputOptionSelected,
@@ -112,7 +113,7 @@ export function PendingUserInputBody(props: BodyProps) {
                     accessibilityState={{ checked: selected, disabled: responseDisabled }}
                     disabled={responseDisabled}
                     className={cn(
-                      "min-h-12 w-full rounded-2xl border px-3.5 py-3",
+                      "min-h-12 w-full flex-row items-center gap-3 rounded-2xl border px-3.5 py-3",
                       selected ? "border-primary bg-primary/10" : "border-border bg-input",
                     )}
                     onPress={() =>
@@ -123,8 +124,10 @@ export function PendingUserInputBody(props: BodyProps) {
                       <Text
                         style={proseDirectionStyle(option.label, setDirection)}
                         className={cn(
-                          "font-goat-bold text-sm",
-                          selected ? "text-foreground" : "text-foreground-secondary",
+                          "text-sm",
+                          selected
+                            ? "font-goat-bold text-foreground"
+                            : "font-goat-medium text-foreground-secondary",
                         )}
                       >
                         {option.label}
@@ -138,6 +141,14 @@ export function PendingUserInputBody(props: BodyProps) {
                         </Text>
                       ) : null}
                     </View>
+                    {selected ? (
+                      <SymbolView
+                        name="checkmark.circle.fill"
+                        size={18}
+                        tintColorClassName="accent-primary"
+                        type="monochrome"
+                      />
+                    ) : null}
                   </Pressable>
                 );
               })}
