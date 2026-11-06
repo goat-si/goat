@@ -139,13 +139,7 @@ it.effect.each(["merge", "disable-auto-merge"] as const)(
 
 describe("gitLabViewerPermissions", () => {
   it("offers everything to a viewer GitLab says can merge", () => {
-    expect(
-      gitLabViewerPermissions({
-        viewerCanMerge: true,
-        viewerCanDeleteBranch: true,
-        viewerCanEditLabels: true,
-      }),
-    ).toEqual({
+    expect(gitLabViewerPermissions({ viewerCanMerge: true, viewerCanEditLabels: true })).toEqual({
       actions: [
         "merge",
         "ready",
@@ -155,7 +149,6 @@ describe("gitLabViewerPermissions", () => {
         "update-branch",
         "enable-auto-merge",
         "disable-auto-merge",
-        "delete-branch",
       ],
       comment: true,
       resolve: true,

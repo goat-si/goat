@@ -229,8 +229,6 @@ export interface GitLabMergeRequestDetail extends GitLabMergeRequestListItem {
   readonly reviewers: ReadonlyArray<PullRequestActor>;
   readonly checks: ReadonlyArray<PullRequestCheck>;
   readonly viewerCanMerge: boolean;
-  /** Read only for a closed or merged merge request; absent on an open one. */
-  readonly viewerCanDeleteBranch?: boolean;
   /** Set by the detail read, which asks GraphQL; REST carries no label permission. */
   readonly viewerCanEditLabels?: boolean;
   readonly reviewerIds: ReadonlyArray<number>;

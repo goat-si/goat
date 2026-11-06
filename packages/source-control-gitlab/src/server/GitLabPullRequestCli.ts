@@ -11,8 +11,6 @@ export type {
 import { makeGitLabViewer } from "./gitLabViewer.ts";
 import { makeGitLabGraphqlSupport } from "./gitLabGraphqlSupport.ts";
 import { makeGitLabListReads } from "./gitLabListReads.ts";
-import { makeGitLabBranchDeletion } from "./gitLabBranchDeletion.ts";
-import { GitLabBranchDeletionRefusedError } from "./gitLabBranchDeletionError.ts";
 import { stateParam, involvementParams, filterParams, searchParams, query } from "./gitLabQuery.ts";
 import {
   GitLabMergeRequestReadError,
@@ -109,7 +107,6 @@ export type GitLabPullRequestCliError =
   | GitLabCli.GitLabCliError
   | GitLabPinnedRebaseError
   | GitLabPinnedAutoMergeError
-  | GitLabBranchDeletionRefusedError
   | GitLabMergeRequestReadError
   | GitLabUnknownLabelError
   | GitLabDiffCursorError
@@ -428,7 +425,6 @@ export const make = Effect.gen(function* () {
     readonly path: string;
     readonly method?: string;
     readonly stdin?: string;
-    readonly headers?: ReadonlyArray<string>;
     readonly maxOutputBytes?: number;
     readonly timeoutMs?: number;
   }) =>
@@ -443,7 +439,6 @@ export const make = Effect.gen(function* () {
         ...(input.stdin === undefined
           ? []
           : ["--input", "-", "--header", "Content-Type: application/json"]),
-        ...(input.headers ?? []).flatMap((header) => ["--header", header]),
       ],
       ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
       ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
@@ -1051,7 +1046,6 @@ export const make = Effect.gen(function* () {
 
   const { labelPermission, supportsGraphqlList, pipelineStageChecks } =
     makeGitLabGraphqlSupport(graphqlRead);
-  const { sourceBranch, deleteSourceBranch } = makeGitLabBranchDeletion({ api, graphqlRead });
 
   const mergeRequestStats = (input: {
     readonly cwd: string;
@@ -1241,26 +1235,7 @@ export const make = Effect.gen(function* () {
           [mergeRequestDetail(input), labelPermission(input)],
           { concurrency: 2 },
         );
-        // Only a closed or merged merge request offers its branch for deletion, so an open one,
-        // the page most often read, skips the extra query.
-        const detail =
-          read.state === "open"
-            ? { ...read, viewerCanEditLabels }
-            : {
-                ...read,
-                viewerCanEditLabels,
-                viewerCanDeleteBranch: yield* sourceBranch(input).pipe(
-                  Effect.map((source) => source?.canDelete === true),
-                  // The answer gates one optional action; an unusable CLI or account still surfaces.
-                  Effect.catchIf(
-                    (cause) =>
-                      cause._tag !== "GitLabCliUnavailableError" &&
-                      cause._tag !== "GitLabCliAuthenticationError" &&
-                      cause._tag !== "GitLabCliRateLimitError",
-                    () => Effect.succeed(false),
-                  ),
-                ),
-              };
+        const detail = { ...read, viewerCanEditLabels };
         if (input.downstreamChecks === false || detail.headPipeline === undefined) return detail;
         const stages = yield* pipelineStageChecks({ ...input, url: detail.url });
         if (stages !== null) return { ...detail, checks: stages };
@@ -1618,7 +1593,6 @@ export const make = Effect.gen(function* () {
         // `glab mr merge` arms auto-merge and never disarms it, so the one direction the CLI has
         // no flag for is asked of GitLab directly through the same `api` passthrough the rest of
         // this module writes with.
-        if (input.action === "delete-branch") return yield* deleteSourceBranch(input);
         if (input.action === "disable-auto-merge") {
           const result = yield* api({
             cwd: input.cwd,
