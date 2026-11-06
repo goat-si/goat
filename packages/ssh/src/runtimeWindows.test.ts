@@ -15,6 +15,7 @@ import {
 import { vi } from "vite-plus/test";
 
 import { issueExistingServerCredential, probeAppServer, probeExistingServer } from "./appServer.ts";
+import { launchOrReuseRemoteServer } from "./tunnel.ts";
 import { SshCommandError } from "./errors.ts";
 import {
   detectNativeWindows,
@@ -382,5 +383,36 @@ it.effect.each([
       Effect.flip,
     );
     expect(refused.message).toContain("HTTP 403");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+// shouldMoveToAppServer never moves a selection marked declined (appServer.test.ts).
+it.effect("a native launch whose app server was refused keeps clients on the managed server", () =>
+  Effect.gen(function* () {
+    const signals = {
+      serverVersion: "0.0.45",
+      sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
+      orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+    };
+    const state = { selection, live: true, signals, binarySignals: signals, reused: true };
+    setup([
+      posixMissing,
+      { stdout: native },
+      { stdout: "GOAT_APP_SERVER=port-owner\r\n" },
+      posixMissing,
+      { stdout: native },
+      { stdout: JSON.stringify(state) },
+      { stdout: JSON.stringify(state) },
+    ]);
+    const launched = yield* launchOrReuseRemoteServer(
+      target,
+      {},
+      { archiveVersion: "0.0.45", attachAppServer: true },
+    );
+    expect(launched).toMatchObject({
+      status: "ready",
+      remoteServerKind: "managed",
+      selectedRuntime: { appServerDeclined: true },
+    });
   }).pipe(Effect.provide(NodeServices.layer)),
 );
