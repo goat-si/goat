@@ -1,7 +1,9 @@
 import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react";
-import { RemoteEnvironmentAuthorization } from "@goat/client-runtime/authorization/service";
-import { ManagedRelay } from "@goat/client-runtime/relay";
-import type { EnvironmentId } from "@goat/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES,
+  type EnvironmentId,
+} from "@goat/contracts";
 import {
   AudioModule,
   IOSOutputFormat,
@@ -22,8 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import { AppState, Platform } from "react-native";
-import { AsyncResult, Atom } from "effect/reactivity";
-import * as Effect from "effect/Effect";
+import { AsyncResult } from "effect/reactivity";
 import * as Option from "effect/Option";
 import { useSharedValue } from "react-native-reanimated";
 
@@ -33,22 +34,26 @@ import {
   rememberMicrophones,
 } from "../../lib/microphonePriority";
 import { getLocalVoiceTranscriber, getVoiceTranscriber } from "../../native/voiceTranscription";
-import { connectionAtomRuntime } from "../../connection/runtime";
 import { environmentSession } from "../../state/session";
-import { environmentPresentations } from "../../state/presentation";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { getNativeShowcaseScene } from "../showcase/nativeShowcaseScene";
 import {
   VOICE_RECORDING_LIMIT_SECONDS,
   createRemoteVoiceTranscriber,
+  transcribeLocalModelEffect,
+  VoiceTranscriptionError,
   throwIfVoiceTranscriptionAborted,
   voiceInputBlocksSubmission,
-  type EnvironmentVoiceRequestContext,
   type VoiceInputState,
 } from "@goat/client-runtime/voice-input";
 import { createLazyVoiceRecorder } from "./lazyVoiceRecorder";
 import { normalizeVoiceInputDecibels, VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
 import { VoiceInputSession } from "./voiceInputSession";
+import { createEnvironmentWavTranscriber } from "./environmentWavTranscriber";
+import { voiceGrantAtom } from "./voiceGrant";
+import { voiceRequestContextsAtom } from "./voiceEnvironment";
+import { runMobileSpeechRequest } from "./mobileSpeechRequest";
+import { sessionHasScope, useEnvironmentScope, usePreparedConnection } from "../../state/session";
 import {
   acquireAudioSession,
   activateAudioSession,
@@ -77,29 +82,6 @@ const VOICE_RECORDING_OPTIONS = {
     : RecordingPresets.HIGH_QUALITY.android),
 };
 
-const voiceServicesAtom = connectionAtomRuntime.atom(
-  Effect.gen(function* () {
-    const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
-    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
-    return { signer, remoteAuthorization };
-  }),
-);
-
-const voiceRequestContextsAtom = Atom.make((get) => {
-  const services = get(voiceServicesAtom);
-  const presentations = get(environmentPresentations.presentationsAtom);
-  const contexts = new Map<EnvironmentId, EnvironmentVoiceRequestContext>();
-  if (!AsyncResult.isSuccess(services)) return contexts;
-  for (const [environmentId, presentation] of presentations) {
-    if (presentation.connection.phase !== "connected") continue;
-    const prepared = Option.getOrNull(
-      get(environmentSession.preparedConnectionValueAtom(environmentId)),
-    );
-    if (prepared) contexts.set(environmentId, { prepared, ...services.value });
-  }
-  return contexts;
-});
-
 const VoiceInputContext = createContext<ReturnType<typeof useVoiceInputRuntime> | null>(null);
 
 export function VoiceInputProvider({ children }: { readonly children: ReactNode }) {
@@ -116,6 +98,12 @@ export function useGlobalVoiceInput() {
 function useVoiceInputRuntime() {
   const registry = use(RegistryContext);
   const remoteContexts = useAtomValue(voiceRequestContextsAtom);
+  const voiceGrant = useAtomValue(voiceGrantAtom);
+  const grantedScope = useEnvironmentScope(
+    voiceGrant?.environmentId ?? null,
+    AuthOrchestrationOperateScope,
+  );
+  const grantedConnection = usePreparedConnection(voiceGrant?.environmentId ?? null);
   useAtomMount(mobilePreferencesAtom);
   useAtomMount(updateMobilePreferencesAtom);
   const [{ state, ownerKey, label }, setState] = useState({
@@ -173,6 +161,49 @@ function useVoiceInputRuntime() {
     session = new VoiceInputSession({
       recorder,
       getTranscriber: () => {
+        const grant = registry.get(voiceGrantAtom);
+        if (grant === undefined) return null;
+        if (grant !== null) {
+          if (Platform.OS !== "ios") return null;
+          const canSend = () => {
+            const current = registry.get(voiceGrantAtom);
+            const context = registry.get(voiceRequestContextsAtom).get(grant.environmentId);
+            return (
+              current?.id === grant.id &&
+              current.environmentId === grant.environmentId &&
+              context !== undefined &&
+              context.prepared.target._tag !== "HubProxyConnectionTarget" &&
+              sessionHasScope(
+                registry.get(environmentSession.sessionStateAtom(grant.environmentId)),
+                AuthOrchestrationOperateScope,
+              )
+            );
+          };
+          return createEnvironmentWavTranscriber({
+            environmentId: grant.environmentId,
+            locale: Intl.DateTimeFormat().resolvedOptions().locale,
+            canSend,
+            resolveContext: () =>
+              registry.get(voiceRequestContextsAtom).get(grant.environmentId) ?? null,
+            readAudio: async (uri, signal) => {
+              throwIfVoiceTranscriptionAborted(signal);
+              const file = new File(uri);
+              if (file.size === null || file.size > VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES)
+                throw new VoiceTranscriptionError(
+                  "transcription-failed",
+                  "The voice recording is too large or unavailable.",
+                );
+              return file.bytes();
+            },
+            upload: async (context, audio, signal, canSendAudio) =>
+              (
+                await runMobileSpeechRequest(
+                  transcribeLocalModelEffect(context, audio, canSendAudio),
+                  signal,
+                )
+              ).text,
+          });
+        }
         const target = session?.currentTarget;
         const environmentId = target?.environmentId;
         const remote =
@@ -298,12 +329,38 @@ function useVoiceInputRuntime() {
   const stop = useCallback(() => controller.stop(), [controller]);
   const cancel = useCallback(() => controller.cancel(), [controller]);
   const localAvailable = getLocalVoiceTranscriber() !== null || getNativeShowcaseScene() !== null;
+  const selectedAvailable =
+    voiceGrant !== null &&
+    voiceGrant !== undefined &&
+    Platform.OS === "ios" &&
+    grantedScope &&
+    Option.isSome(grantedConnection) &&
+    grantedConnection.value.target._tag !== "HubProxyConnectionTarget" &&
+    remoteContexts.has(voiceGrant.environmentId);
+  const grantIdentity = voiceGrant === undefined ? "loading" : (voiceGrant?.id ?? "device");
+  const previousGrant = useRef({ identity: grantIdentity, available: selectedAvailable });
+  // oxlint-disable-next-line goat/react-effect-budget -- Stop microphone and network work when consent or its connection changes.
+  useEffect(() => {
+    const previous = previousGrant.current;
+    previousGrant.current = { identity: grantIdentity, available: selectedAvailable };
+    if (previous.identity !== grantIdentity || (previous.available && !selectedAvailable))
+      controller.cancel();
+  }, [controller, grantIdentity, selectedAvailable]);
   const isAvailableForEnvironment = (environmentId: EnvironmentId | null) =>
-    localAvailable ||
-    (Platform.OS === "ios" && environmentId !== null && remoteContexts.has(environmentId));
+    voiceGrant === undefined
+      ? false
+      : voiceGrant !== null
+        ? selectedAvailable
+        : localAvailable ||
+          (Platform.OS === "ios" && environmentId !== null && remoteContexts.has(environmentId));
 
   return {
-    isAvailable: localAvailable || (Platform.OS === "ios" && remoteContexts.size > 0),
+    isAvailable:
+      voiceGrant === undefined
+        ? false
+        : voiceGrant !== null
+          ? selectedAvailable
+          : localAvailable || (Platform.OS === "ios" && remoteContexts.size > 0),
     isAvailableForEnvironment,
     state,
     audioLevels,

@@ -211,13 +211,12 @@ and use **Attach again** or remove the missing file before sending.
 
 ## Voice input on iPhone
 
-On supported iPhones with iOS 26 or later, use the composer's microphone to record,
-then confirm to transcribe. Text is inserted where your selection was when
-recording started, ready for you to review and edit before sending.
+On iPhone, use the composer's microphone to record, then confirm to transcribe.
+Text is inserted where your selection was when recording started, ready for you
+to review and edit before sending.
 
-Voice input depends on Apple's on-device speech transcription. On a device without
-it, the composer has no microphone button and **Settings → Microphone** says voice
-input isn't available.
+Apple's on-device speech transcription requires a supported device with iOS 26
+or later. When it is unavailable, GOAT can use an environment to transcribe instead.
 
 The first use may download Apple's speech model and needs a network connection.
 Later transcription works offline for that language. Recordings can be up to five
@@ -232,9 +231,11 @@ for example, put **Other Bluetooth** above your AirPods so a new headset is pref
 while the AirPods microphone stays low. By default, CarPlay comes after the built-in
 microphone.
 
-Transcription runs on your iPhone when Apple's speech model supports your
-language. Otherwise the recording is transcribed by the environment the thread
-belongs to, and the composer names it while you record. GOAT deletes the
+By default, transcription runs on your iPhone when Apple's speech model supports
+your language. Otherwise the thread's environment transcribes it. You can choose
+a paired environment and manage its speech models in **Settings → Microphone**;
+that device-only choice sends recordings to the selected environment. The composer
+names the destination while you record. GOAT deletes the
 temporary audio after transcription or cancellation; only the message text is
 sent when you submit.
 
