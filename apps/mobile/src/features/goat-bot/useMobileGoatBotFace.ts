@@ -1,8 +1,11 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
+  GOAT_BOT_READING_LIMIT_MS,
   advanceGoatBotFace,
   goatBotFaceKey,
-  goatBotWaitingTaskCount,
+  goatBotFaceTasks,
+  goatBotItemReaders,
+  goatBotReplyingSince,
   type GoatBotFaceInput,
   type GoatBotFaceState,
 } from "@goat/client-runtime/goatBot";
@@ -14,8 +17,8 @@ import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
 /**
- * The main bot's face, from its session shell and the task chips in its conversation, which the
- * roster and chat already hold. Mobile has no waiting badge, so it counts every waiting chip.
+ * The main bot's face, from its conversation shell and the task chips in its conversation, which
+ * the roster and chat already hold. Mobile has no waiting badge, so every waiting chip counts.
  */
 export function useMobileGoatBotFace(activity: GoatBotFaceInput["activity"]): GoatBotFaceState {
   const { botRef } = useMobileGoatBotHomeMode();
@@ -26,10 +29,20 @@ export function useMobileGoatBotFace(activity: GoatBotFaceInput["activity"]): Go
     environmentId: botRef?.environmentId ?? null,
     threadId: botRef?.threadId ?? null,
   });
+  // The bot's own reply turns carry no chip, so reading comes from the unanswered message.
+  const replyingSince = goatBotReplyingSince({
+    visibleTurnItems: items,
+    readers: goatBotItemReaders,
+  });
+  const readingUntil =
+    replyingSince === null ? Number.NaN : Date.parse(replyingSince) + GOAT_BOT_READING_LIMIT_MS;
+  const readingOver = useDeadlinePassed(Number.isFinite(readingUntil) ? readingUntil : null);
+  const reading = Number.isFinite(readingUntil) && !readingOver;
   const input: GoatBotFaceInput = {
-    activity,
-    waitingCount: goatBotWaitingTaskCount(items),
+    activity: activity ?? (reading ? READING : null),
+    waitingCount: 0,
     shell: shell?.source ?? null,
+    tasks: goatBotFaceTasks(items),
   };
   const key = goatBotFaceKey(input);
   // The clock is read inside the updaters so a restarted render gets the current time.
@@ -40,3 +53,5 @@ export function useMobileGoatBotFace(activity: GoatBotFaceInput["activity"]): Go
   }
   return track.hold.shown;
 }
+
+const READING = { state: "reading" } as const;

@@ -8,9 +8,9 @@ import {
   advanceGoatBotFace,
   faceHoldStep,
   goatBotFace,
-  goatBotWaitingTaskCount,
+  goatBotFaceTasks,
   type GoatBotFaceInput,
-  type GoatBotWaitingTaskItem,
+  type GoatBotFaceTaskItem,
   type GoatBotFaceShell,
 } from "./face.ts";
 
@@ -31,7 +31,7 @@ function shell(overrides: Partial<GoatBotFaceShell> = {}): GoatBotFaceShell {
 }
 
 function input(overrides: Partial<GoatBotFaceInput> = {}): GoatBotFaceInput {
-  return { activity: null, waitingCount: 0, shell: shell(), ...overrides };
+  return { activity: null, waitingCount: 0, shell: shell(), tasks: null, ...overrides };
 }
 
 const blockingRequest = {
@@ -206,21 +206,74 @@ describe("goatBotFace request and failure rules", () => {
   });
 });
 
-describe("goatBotWaitingTaskCount", () => {
-  it("counts tasks whose newest chip waits on the person", () => {
+describe("goatBotFace from the conversation's task chips", () => {
+  const tasks = (overrides: Partial<NonNullable<GoatBotFaceInput["tasks"]>>) => ({
+    waiting: 0,
+    active: 0,
+    ended: null,
+    ...overrides,
+  });
+
+  it("works while a task runs, though the conversation thread itself never runs", () => {
+    expect(goatBotFace(input({ tasks: tasks({ active: 1 }) }), T0).state).toBe("working");
+  });
+
+  it("waits while a task waits on the person", () => {
+    expect(goatBotFace(input({ tasks: tasks({ waiting: 1, active: 1 }) }), T0).state).toBe(
+      "waiting",
+    );
+  });
+
+  it("shows a failed task until the person writes again", () => {
+    const failed = tasks({ ended: { status: "failed", at: T0 - 5_000 } });
+    expect(goatBotFace(input({ tasks: failed }), T0).state).toBe("failed");
+    const answered = input({
+      tasks: failed,
+      shell: shell({ latestUserMessageAt: at(T0 - 1_000) }),
+    });
+    expect(goatBotFace(answered, T0).state).toBe("idle");
+  });
+
+  it("is finished for a beat after a task completes", () => {
+    const done = tasks({ ended: { status: "completed", at: T0 - 1_000 } });
+    expect(goatBotFace(input({ tasks: done }), T0)).toEqual({
+      state: "finished",
+      changesAt: T0 - 1_000 + FINISHED_MS,
+    });
+  });
+});
+
+describe("goatBotFaceTasks", () => {
+  it("reads only each task's newest chip, filtered or not", () => {
     const items = [
       chip("a", 1, "running"),
       chip("a", 2, "waiting_input"),
       chip("b", 1, "waiting_input"),
       chip("b", 2, "completed"),
-      chip("c", 1, "waiting_input"),
+      chip("c", 1, "running"),
     ];
-    expect(goatBotWaitingTaskCount(items)).toBe(2);
+    expect(goatBotFaceTasks(items)).toEqual({ waiting: 1, active: 1, ended: null });
+  });
+
+  it("names the newest ended task once nothing is going", () => {
+    const items = [
+      chip("a", 1, "completed", "2026-11-07T09:00:00.000Z"),
+      chip("b", 1, "failed", "2026-11-07T09:30:00.000Z"),
+    ];
+    expect(goatBotFaceTasks(items).ended).toEqual({
+      status: "failed",
+      at: Date.parse("2026-11-07T09:30:00.000Z"),
+    });
   });
 });
 
-function chip(taskId: string, taskVersion: number, status: string): GoatBotWaitingTaskItem {
+function chip(
+  taskId: string,
+  taskVersion: number,
+  status: string,
+  updatedAt = "2026-11-07T09:00:00.000Z",
+): GoatBotFaceTaskItem {
   return {
-    item: { type: "notification", ledgerTask: { taskId, taskVersion, status } },
-  } as unknown as GoatBotWaitingTaskItem;
+    item: { type: "notification", ledgerTask: { taskId, taskVersion, status, updatedAt } },
+  } as unknown as GoatBotFaceTaskItem;
 }

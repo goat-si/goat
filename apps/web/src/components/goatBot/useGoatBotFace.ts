@@ -3,13 +3,20 @@ import {
   GOAT_BOT_READING_LIMIT_MS,
   advanceGoatBotFace,
   goatBotFaceKey,
+  goatBotFaceTasks,
+  goatBotItemReaders,
+  goatBotReplyingSince,
+  observeResidentAtom,
+  residentAtomValue,
   type GoatBotFaceInput,
   type GoatBotFaceState,
 } from "@goat/client-runtime/goatBot";
 import type { ScopedThreadRef } from "@goat/contracts";
 import { useState, useSyncExternalStore } from "react";
 
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useThreadShell } from "~/state/entities";
+import { environmentThreadDetails } from "~/state/threads";
 
 function useDeadlinePassed(deadlineMs: number | null): boolean {
   const store = deadlineStore(deadlineMs);
@@ -31,15 +38,44 @@ function useGoatBotFaceState(input: GoatBotFaceInput): GoatBotFaceState {
   return track.hold.shown;
 }
 
-/** A bot's face from its session thread shell, which every client already streams. */
+/** The conversation's items only while another view keeps them loaded; never loads them. */
+function useResidentVisibleItems(ref: ScopedThreadRef | null) {
+  const atom = ref === null ? null : environmentThreadDetails.threadAtom(ref);
+  const resident = atom !== null && residentAtomValue(appAtomRegistry, atom) !== null;
+  const subscribe = (onChange: () => void) =>
+    atom === null || !resident ? () => {} : observeResidentAtom(appAtomRegistry, atom, onChange);
+  const thread = useSyncExternalStore(subscribe, () =>
+    atom === null ? null : residentAtomValue(appAtomRegistry, atom),
+  );
+  return thread?.projection?.visibleTurnItems ?? null;
+}
+
+/**
+ * A bot's face from its conversation: the shell every client streams, and its task chips while
+ * the sidebar or chat already holds them. The bot's own reply turns carry no chip, so reading
+ * comes from the unanswered message in those same items.
+ */
 export function useGoatBotSessionFace(
   threadRef: ScopedThreadRef | null,
   waitingCount: number,
   activity: GoatBotFaceInput["activity"],
 ): GoatBotFaceState {
   const shell = useThreadShell(threadRef);
-  return useGoatBotFaceState({ activity, waitingCount, shell: shell?.source ?? null });
+  const items = useResidentVisibleItems(threadRef);
+  const reading = useGoatBotReading(
+    items === null
+      ? null
+      : goatBotReplyingSince({ visibleTurnItems: items, readers: goatBotItemReaders }),
+  );
+  return useGoatBotFaceState({
+    activity: activity ?? (reading ? READING : null),
+    waitingCount,
+    shell: shell?.source ?? null,
+    tasks: items === null ? null : goatBotFaceTasks(items),
+  });
 }
+
+const READING = { state: "reading" } as const;
 
 /** True from when GOAT Bot starts reading a message until it answers or the limit passes. */
 export function useGoatBotReading(replyingSince: string | null): boolean {
