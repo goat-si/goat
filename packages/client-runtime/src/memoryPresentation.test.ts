@@ -731,7 +731,7 @@ describe("shared memory progress presentation", () => {
     ],
     ["generation_input_too_large", "2 conversations were not summarized: too long to summarize"],
     // No action is offered where none would help, or where the failures have different reasons.
-    ["identity_mismatch", "2 conversations were not summarized"],
+    ["invalid_output", "2 conversations were not summarized"],
     [null, "2 conversations were not summarized"],
   ] as const)("explains failed summaries with reason %s", (failureCode, label) => {
     const generationFailure = { threads: 2, failureCode };
