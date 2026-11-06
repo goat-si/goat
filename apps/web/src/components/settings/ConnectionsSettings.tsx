@@ -1,3 +1,4 @@
+import { NoLocalEnvironmentSettings } from "./SavedEnvironmentAccess";
 import {
   ADVANCED_CONNECTION_SETTING_IDS,
   LocalVersionStatusLabel,
@@ -1350,17 +1351,11 @@ export function ConnectionsSettings() {
           </Dialog>
         </>
       ) : (
-        <SettingsSection {...searchableSetting("connections-environment")}>
-          <SettingsRow
-            title="No environment selected"
-            description="Connect an environment to view its settings and access."
-          />
-          <LocalEnvironmentSetting />
-          <HeadlessServerSetting />
-          {canReadRelay || canManageRelay ? (
-            <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
-          ) : null}
-        </SettingsSection>
+        <NoLocalEnvironmentSettings
+          environments={savedEnvironments}
+          canReadRelay={canReadRelay}
+          canManageRelay={canManageRelay}
+        />
       )}
     </>
   );
