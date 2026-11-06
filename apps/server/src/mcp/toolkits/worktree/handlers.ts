@@ -7,7 +7,6 @@ import {
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as GitWorkflow from "../../../git/GitWorkflowService.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import { readThread, unavailable } from "../../threadAccess.ts";
 import * as Effect from "effect/Effect";

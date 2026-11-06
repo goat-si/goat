@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 import type { ThreadPullRequestSnapshot } from "@goat/contracts";
 import { isFinalPullRequestSnapshot } from "./pullRequestSyncFinal.ts";
 
