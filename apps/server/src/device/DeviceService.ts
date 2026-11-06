@@ -28,7 +28,7 @@ import {
   LOCAL_DEVICE_HOST_LABEL,
   type ThreadId,
 } from "@goat/contracts";
-import { SshCommandError } from "@goat/ssh/errors";
+import { sshProbeFailureMessage } from "./DeviceHostDiagnostics.ts";
 import * as FileSystem from "effect/FileSystem";
 import { resolveNodeExecutable, nodeRuntimeUnavailableMessage } from "@goat/shared/nodeRuntime";
 import * as Path from "effect/Path";
@@ -63,28 +63,6 @@ import * as Exit from "effect/Exit";
 import * as LocalDeviceHost from "./LocalDeviceHost.ts";
 
 export const DEVICE_HUB_ROUTE_PREFIX = "/api/device-hub";
-
-const sshProbeFailureMessage = (error: DeviceHost.DeviceHostError): string => {
-  const cause = error.cause;
-  if (
-    !(cause instanceof SshCommandError) ||
-    cause.exitCode === null ||
-    cause.exitCode < 1 ||
-    cause.exitCode > 254
-  )
-    return "Could not connect to this host over SSH.";
-
-  // Only the known bootstrap diagnostic is safe to expose as Node guidance.
-  if (
-    cause.exitCode === 1 &&
-    cause.stderr
-      .split(/\r?\n/u)
-      .some((line) => line.trim() === "Node is missing from the non-interactive SSH PATH")
-  )
-    return "Connected over SSH, but Node is not on this host's PATH for non-interactive SSH commands.";
-
-  return `Connected over SSH, but the device host check failed (exit code ${cause.exitCode}).`;
-};
 
 export interface DeviceScreenshot {
   readonly device: DeviceSummary;
@@ -964,13 +942,19 @@ export const make = Effect.gen(function* () {
         }
         return yield* SshDeviceHost.probe(host).pipe(Effect.provide(probeContext));
       }).pipe(
-        Effect.mapError(
-          (error) =>
-            new DeviceOperationError({
-              operation: "probe host",
-              reason: "request_failed",
-              cause: error,
-            }),
+        Effect.mapError((error) =>
+          error._tag === "DeviceHostError" && SshDeviceHost.isSshWindowsHostError(error.cause)
+            ? new DeviceHostUnavailableError({
+                hostId: host.id,
+                hostLabel: host.label,
+                reason: sshProbeFailureMessage(error),
+                cause: error,
+              })
+            : new DeviceOperationError({
+                operation: "probe host",
+                reason: "request_failed",
+                cause: error,
+              }),
         ),
       ),
     configureAgent,
