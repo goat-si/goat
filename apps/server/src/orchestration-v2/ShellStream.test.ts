@@ -401,10 +401,11 @@ describe("omitOlderSettledShells", () => {
       row(`side-${index}`, index < 100 ? 0 : 40, { sideChatOf: ThreadId.make("old") }),
     );
     const result = omit([...newest, row("old", 30), ...hidden]);
-    expect(result.threads.map((thread) => thread.id)).toEqual([
-      ...newest.map((thread) => thread.id),
-      ...hidden.slice(0, 100).map((thread) => thread.id),
-    ]);
+    expect(result.threads).toHaveLength(50);
+    expect(result.threads.slice(0, 25).map((thread) => thread.id)).toEqual(
+      newest.map((thread) => thread.id),
+    );
+    expect(result.threads.filter((thread) => thread.sideChatOf != null)).toHaveLength(25);
     expect(result.olderSettled.before).toBe(
       DateTime.formatIso(DateTime.makeUnsafe(100 * DAY - 2.4 * DAY)),
     );

@@ -158,19 +158,46 @@ export function omitOlderSettledShells(input: {
     if (thread.lineage.parentThreadId !== null) ancestorIds.add(thread.lineage.parentThreadId);
     ancestorIds.add(thread.lineage.rootThreadId);
   }
+  // Side chats are hidden from the list, so do not let their history fill the snapshot.
+  const recentSideChats = new Set(
+    input.threads
+      .filter(
+        (thread) =>
+          thread.sideChatOf != null &&
+          thread.settledOverride === "settled" &&
+          thread.settledAt !== null &&
+          DateTime.toEpochMillis(thread.settledAt) >= beforeMs,
+      )
+      .toSorted(
+        (a, b) =>
+          (b.settledAt === null ? 0 : DateTime.toEpochMillis(b.settledAt)) -
+            (a.settledAt === null ? 0 : DateTime.toEpochMillis(a.settledAt)) ||
+          a.id.localeCompare(b.id),
+      )
+      .slice(0, NEWEST_SETTLED_KEPT)
+      .map((thread) => thread.id),
+  );
   const counts = new Map<ProjectId, number>();
   const sideChatCounts = new Map<ProjectId, number>();
   const threads = input.threads.filter((thread) => {
-    if (!isOlderSettledThreadShell(thread, beforeMs)) return true;
-    counts.set(thread.projectId, (counts.get(thread.projectId) ?? 0) + 1);
-    if (thread.sideChatOf != null)
-      sideChatCounts.set(thread.projectId, (sideChatCounts.get(thread.projectId) ?? 0) + 1);
-    return (
+    const protectedRow =
       thread.pinnedAt != null ||
       (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) ||
       isLiveSubagentShell(thread) ||
-      ancestorIds.has(thread.id)
-    );
+      ancestorIds.has(thread.id);
+    if (!isOlderSettledThreadShell(thread, beforeMs)) {
+      return (
+        thread.sideChatOf == null ||
+        thread.settledOverride !== "settled" ||
+        thread.settledAt === null ||
+        recentSideChats.has(thread.id) ||
+        protectedRow
+      );
+    }
+    counts.set(thread.projectId, (counts.get(thread.projectId) ?? 0) + 1);
+    if (thread.sideChatOf != null)
+      sideChatCounts.set(thread.projectId, (sideChatCounts.get(thread.projectId) ?? 0) + 1);
+    return protectedRow;
   });
   return {
     threads,
