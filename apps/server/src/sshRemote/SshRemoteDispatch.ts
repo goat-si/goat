@@ -511,7 +511,7 @@ const make = Effect.gen(function* () {
   const linkExpired = (alias: string) =>
     failure(
       "remote_refused",
-      `${alias} no longer accepts this machine's link; it expired or was revoked there. Create a pairing code on ${alias} with goat auth pairing create and call ${goatCallText("host_link.create")} again.`,
+      `${alias} no longer accepts this machine's link; it expired (links last 30 days) or was revoked there. ${LinkedHosts.pairingStep(alias)} to ${goatCallText("host_link.create")} with the same name and access.`,
     );
   /**
    * `wake` resumes a stopped machine; only explicit agent work passes it. Polling through

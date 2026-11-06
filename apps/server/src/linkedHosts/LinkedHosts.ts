@@ -118,6 +118,10 @@ export interface LinkTarget {
   readonly code: string;
 }
 
+/** How a person on the host makes a code that only grants agent access; a GOAT thread cannot run it. */
+export const pairingStep = (host: string) =>
+  `Ask the person at ${host} to run \`goat pair --scope orchestration:read --scope orchestration:operate\` there (add --tailscale when this machine reaches it over Tailscale) and pass the printed pairing URL`;
+
 /**
  * Reads where to link and with which code. `url` is the host's origin, or a
  * pairing URL whose `#token=` fragment carries the code (what `goat pair` and
@@ -138,7 +142,7 @@ export function parseLinkTarget(url: string, code: string | undefined): LinkTarg
   const fromQuery = parsed.searchParams.get("token") ?? "";
   const resolved = code?.trim() || fromFragment.trim() || fromQuery.trim();
   if (resolved.length === 0)
-    return "Pass the host's pairing URL, or its address with code from `goat auth pairing create` on that host.";
+    return `Pass the host's pairing URL, or its address with its code. ${pairingStep("that host")}.`;
   if (parsed.pathname !== "/" && parsed.pathname !== "/pair")
     return `Use the host's origin (${parsed.origin}) or its pairing URL; GOAT serves /mcp only at the root.`;
   return { baseUrl: parsed.origin, code: resolved };
@@ -304,7 +308,7 @@ const make = Effect.gen(function* () {
       if (decision.status < 200 || decision.status >= 300)
         return yield* fail(
           "link_refused",
-          `${target.baseUrl} refused the pairing code: ${refusal(decisionBody) ?? `HTTP ${decision.status}`}. Create a new one on that host with goat auth pairing create.`,
+          `${target.baseUrl} refused the pairing code: ${refusal(decisionBody) ?? `HTTP ${decision.status}`}. A code works once and expires after five minutes. ${pairingStep("that host")} for a new one.`,
         );
       const { redirectTo } = yield* decoded(AuthMcpApprovalRedirect, "the approval")(decisionBody);
       const answer = URL.parse(redirectTo);
