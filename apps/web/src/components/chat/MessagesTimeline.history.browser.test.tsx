@@ -67,7 +67,7 @@ it("shows input history for a browser-only work entry", async () => {
   expect(screen.text()).toContain("Show input history");
 });
 
-it("keeps a tool row open when a text selection completes, while click and keyboard toggle it", async () => {
+it("toggles a tool row for unrelated selections while preserving internal selection and keyboard behavior", async () => {
   const item = {
     id: "browser-selection",
     type: "dynamic_tool",
@@ -110,14 +110,26 @@ it("keeps a tool row open when a text selection completes, while click and keybo
   expect(row.getAttribute("aria-expanded")).toBe("true");
   expect(selection.toString()).toBe(selectedText);
   selection.removeAllRanges();
-  await click(row);
+  range.setStartBefore(row);
+  range.setEndAfter(row);
+  selection.addRange(range);
+  await act(async () => row.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
   expect(row.getAttribute("aria-expanded")).toBe("false");
+  selection.removeAllRanges();
+  range.setStart(label!, 0);
+  range.setEndAfter(row);
+  selection.addRange(range);
+  await act(async () => row.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+  expect(row.getAttribute("aria-expanded")).toBe("false");
+  selection.removeAllRanges();
+  await click(row);
+  expect(row.getAttribute("aria-expanded")).toBe("true");
   await act(async () =>
     row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
   );
-  expect(row.getAttribute("aria-expanded")).toBe("true");
+  expect(row.getAttribute("aria-expanded")).toBe("false");
   await act(async () =>
     row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true })),
   );
-  expect(row.getAttribute("aria-expanded")).toBe("false");
+  expect(row.getAttribute("aria-expanded")).toBe("true");
 });
