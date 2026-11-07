@@ -92,3 +92,6 @@ Confirm the intended projects appear, exercise the affected flow, and capture
 evidence. Retain the app and environment while iterating. At teardown, remove
 the disposable connection, close the AgentDevice session, call `goat_call {path:"device.close"}`,
 and stop only your backend and Metro processes.
+Settling or archiving the thread also ends its device sessions, but not the
+simulator: name any simulator you started that is still running in your report,
+and shut one down only when the user asked for it.
