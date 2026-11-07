@@ -53,6 +53,7 @@ const Started = Schema.Struct({
   token: Schema.optionalKey(Schema.String),
   entryPath: Schema.optionalKey(Schema.String),
   cleanupWarning: Schema.optionalKey(Schema.String),
+  stopError: Schema.optionalKey(Schema.String),
   helpers: Schema.Struct({
     serveSimAxSettings: Schema.NullOr(Schema.String),
     serveSimCli: Schema.NullOr(Schema.String),
