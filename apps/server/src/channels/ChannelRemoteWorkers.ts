@@ -2508,17 +2508,19 @@ const make = Effect.gen(function* () {
         return yield* ledger.completeForward({ owner, sequence: pending.sequence });
       }
       const ids = answerForwardIdsFor(event.eventId);
-      // Someone else's answer goes only while they may still direct this work. The SSH layer runs
-      // the authorize effect again right before the request, so a sender narrowed meanwhile sends
-      // nothing; whether an earlier attempt reached the host stays unknown, hence "may not have".
+      // Runs last in authorize, which the SSH layer repeats right before each request, so requester
+      // and sender are judged together at that point. A lost requester leaves the answer pending as
+      // authorityFor does; whether an earlier attempt reached the host stays unknown.
       const senderGate = requesterForDelivery(stored.task, event.payload.sender).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
         Effect.mapError(() => new Superseded()),
         Effect.flatMap((authority) =>
-          authority._tag === "sender_changed"
-            ? Effect.fail(new SenderRefused({ name: authority.name }))
-            : Effect.void,
+          authority._tag === "allowed"
+            ? Effect.void
+            : authority._tag === "sender_changed"
+              ? Effect.fail(new SenderRefused({ name: authority.name }))
+              : Effect.fail(new Superseded()),
         ),
       );
       const refuseSender = (refused: SenderRefused) =>
