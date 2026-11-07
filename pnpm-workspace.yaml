@@ -414,8 +414,6 @@ patchedDependencies:
   # Observe the owned host exit independently of descendants retaining its stdio.
   "@muse-code/sdk@1.4.6": patches/@muse-code__sdk@1.4.6.patch
   app-builder-lib@26.16.1: patches/app-builder-lib@26.16.1.patch
-  # iOS integrated search's own X dismisses without the cancel delegate; report it as onClose.
-  react-native-screens@5.0.0-t3.48: patches/react-native-screens@5.0.0-t3.48.patch
 
 peerDependencyRules:
   allowAny:

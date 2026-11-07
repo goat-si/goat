@@ -137,11 +137,10 @@ export const MOBILE_KEEP_RULES: readonly KeepRule[] = [
   {
     id: "mobile:vendor-tarballs",
     pattern:
-      /react-native-(?:enriched-markdown|screens)[-@][\d.]+-t3\.\d+|fork\/t3-mobile|t3chat-markdown-parity-v2|t3-fork\.json|pack-t3\.mjs/g,
+      /react-native-(?:enriched-markdown|screens)-[\d.]+-t3\.\d+|fork\/t3-mobile|t3chat-markdown-parity-v2|t3-fork\.json|pack-t3\.mjs/g,
     scope: (path) =>
       path === "apps/mobile/package.json" ||
       path.startsWith("apps/mobile/deps/") ||
-      path.startsWith("patches/react-native-screens@") ||
       path === "pnpm-workspace.yaml",
     reason:
       "Upstream fork tarballs keep their versioned file names (lockfile and allowBuilds identities).",
