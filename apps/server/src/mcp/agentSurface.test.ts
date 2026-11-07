@@ -73,8 +73,8 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims and memory recall.
-  expect(entries).toHaveLength(294);
+  // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall and the bot list.
+  expect(entries).toHaveLength(295);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 75 shipped names off the path grammar plus five whose verb D11 normalized.
