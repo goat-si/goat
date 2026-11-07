@@ -738,8 +738,8 @@ it.effect("reports sustained pinned-reader admission pressure with frame counts 
     const reader = yield* open(true);
     reader.exec("BEGIN");
     reader.prepare("SELECT value FROM existing_wal").all();
-    seed.exec("INSERT INTO existing_wal VALUES (zeroblob(42 * 1024 * 1024))");
-    assert.isAtLeast(Number(seed.prepare("PRAGMA wal_checkpoint(NOOP)").get()?.log), 10000);
+    seed.exec("INSERT INTO existing_wal VALUES (zeroblob(140 * 1024 * 1024))");
+    assert.isAtLeast(Number(seed.prepare("PRAGMA wal_checkpoint(NOOP)").get()?.log), 32768);
     const notices = captureWriterNotices();
     const retries = yield* gateAdmissionRetries;
     const startupCheckpoints: Array<string> = [];
@@ -804,7 +804,7 @@ it.effect("reports sustained pinned-reader admission pressure with frame counts 
         1,
         "persistent refusals must report degradation once",
       );
-      assert.match(String(warningsUnderPressure[0]), /walFrames.*10[0-9]{3}/);
+      assert.match(String(warningsUnderPressure[0]), /walFrames.*3[0-9]{4}/);
       assert.match(String(warningsUnderPressure[0]), /checkpointedFrames/);
       assert.equal(notices.recoveries.length, 1);
       assert.equal((yield* sql`SELECT COUNT(*) AS count FROM existing_wal`)[0]?.count, 3);
@@ -846,7 +846,7 @@ it.effect.each(["frames", "journal-size"] as const)(
           worker.on("message", listener);
           yield* Effect.addFinalizer(() => Effect.sync(() => worker.off("message", listener)));
           if (pressure === "frames")
-            yield* sql`INSERT INTO checkpoint_probe VALUES (zeroblob(42 * 1024 * 1024))`;
+            yield* sql`INSERT INTO checkpoint_probe VALUES (zeroblob(140 * 1024 * 1024))`;
           else yield* sql`INSERT INTO checkpoint_probe VALUES (zeroblob(8192))`;
           const cancelled = yield* sql
             .withTransaction(sql`INSERT INTO checkpoint_probe VALUES ('cancelled before BEGIN')`)

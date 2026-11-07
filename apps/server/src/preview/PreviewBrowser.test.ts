@@ -19,6 +19,20 @@ import {
 } from "./PreviewBrowser.testkit.ts";
 
 it.layer(NodeServices.layer)("PreviewBrowser", (it) => {
+  it.effect.each(["headless-shell", "chrome"] as const)(
+    "selects the pinned Chrome 157 archive for %s",
+    (variant) =>
+      Effect.gen(function* () {
+        const { browser, requests } = yield* makeHarness({ variant, pinnedRelease: true });
+        yield* browser.executable.pipe(Effect.flip);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toContain(`/157.0.8103.38/`);
+        expect(requests[0]).toContain(
+          variant === "chrome" ? "/chrome-" : "/chrome-headless-shell-",
+        );
+      }).pipe(Effect.scoped),
+  );
+
   it.effect.each(["0.8.0", "1.2.3"])("retains another version when installing %s", (current) =>
     Effect.gen(function* () {
       const { browser, fs, path, installRoot, requests } = yield* makeHarness({ version: current });

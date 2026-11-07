@@ -109,12 +109,16 @@ export const layer: Layer.Layer<
           : yield* checkpoints.materializeBaselineCheckpoint({
               scope,
               ordinalWithinScope: 0,
+              nodeId: rootNode.id,
+              capturedAt: run.requestedAt,
             });
       const baselineCheckpoint = hasReadyCheckpoint(baselineOrdinalWithinScope)
         ? null
         : yield* checkpoints.materializeBaselineCheckpoint({
             scope,
             ordinalWithinScope: baselineOrdinalWithinScope,
+            nodeId: rootNode.id,
+            capturedAt: run.requestedAt,
           });
       const checkpoint = yield* checkpoints.capture({
         scope,

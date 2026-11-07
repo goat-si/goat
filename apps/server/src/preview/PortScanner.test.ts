@@ -17,6 +17,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vite-plus/test";
 import { FetchHttpClient } from "effect/http";
 
+import { countingTracer } from "../observability/countingTracer.testkit.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "./PortScanner.ts";
 const processProbeFailure: ProcessRunner.ProcessRunner["Service"]["run"] = (input) =>
@@ -600,4 +601,20 @@ effectIt.effect("ignores a partial Windows netstat snapshot when one query exits
     ]);
     expect(requests).toEqual([]);
   }).pipe(Effect.provide(layer));
+});
+
+effectIt.effect("traces requested scans without spans for routine polling helpers", () => {
+  const spans = new Map<string, number>();
+  return Effect.gen(function* () {
+    const scanner = yield* PortScanner.PortDiscovery;
+    yield* scanner.scan();
+    expect(spans.get("PortDiscovery.scan")).toBe(1);
+    expect(spans.get("PortDiscovery.scanUnlocked") ?? 0).toBe(0);
+    expect(spans.get("PortDiscovery.probeWebServers") ?? 0).toBe(0);
+    expect(spans.get("PortDiscovery.scanSnapshot") ?? 0).toBe(0);
+    expect(spans.get("PortDiscovery.pollTick") ?? 0).toBe(0);
+  }).pipe(
+    Effect.provide(layerProbeFailure(processProbeFailure)),
+    Effect.withTracer(countingTracer(spans)),
+  );
 });
