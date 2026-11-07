@@ -52,6 +52,10 @@ vi.mock(import("../../state/use-atom-command"), () => ({
       : AsyncResult.failure(Cause.fail(new Error("Connection lost")))) as never,
 }));
 
+vi.mock(import("../../lib/useThreadContextHosts"), () => ({
+  useThreadContextHosts: () => new Map([[EnvironmentId.make("remote-env"), "builder"]]),
+}));
+
 import { render } from "../../../test/render";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import { ToastProvider } from "../ui/toast";
@@ -241,4 +245,51 @@ it("hides a verified deleted fork while retaining omitted and archived forks", a
   await expect.element(screen.getByText("Unloaded fork", { exact: true })).toBeVisible();
   await expect.element(screen.getByText("Archived fork", { exact: true })).toBeVisible();
   await expect.element(screen.getByText("deleted-fork", { exact: true })).not.toBeInTheDocument();
+});
+
+it("groups completed remote agents with previous agents and opens the matching host", async () => {
+  setup();
+  const projection = makeThreadProjectionFixture();
+  state.projection = {
+    ...projection,
+    subagents: [
+      {
+        id: NodeId.make("remote-agent"),
+        threadId: projection.thread.id,
+        runId: null,
+        parentNodeId: NodeId.make("parent"),
+        origin: "app_owned",
+        createdBy: "agent",
+        driver: "codex",
+        providerInstanceId: projection.thread.providerInstanceId,
+        providerThreadId: null,
+        childThreadId: null,
+        nativeTaskRef: null,
+        remote: {
+          host: "builder",
+          threadId: ThreadId.make("remote-thread"),
+          correlationId: "task",
+        },
+        prompt: "Inspect",
+        title: "Remote inspection",
+        model: null,
+        status: "completed",
+        result: null,
+        startedAt: null,
+        completedAt: projection.thread.updatedAt,
+        updatedAt: projection.thread.updatedAt,
+      },
+    ],
+  };
+  await using screen = await render(
+    <ThreadRelationshipsPanel environmentId={environmentId} threadId={projection.thread.id} />,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: /Remote inspection/ }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("button", { name: /Previous agents/ }).click();
+  await screen.getByRole("button", { name: /Remote inspection/ }).click();
+  await vi.waitFor(() =>
+    expect(screen.router?.state.location.pathname).toBe("/remote-env/remote-thread"),
+  );
 });
