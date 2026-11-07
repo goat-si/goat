@@ -27,6 +27,7 @@ import {
   ChannelWorkerObservation,
   channelWorkerObservationEquals,
   CommandId,
+  type ChannelChildWork,
   type ChannelChildWorkState,
   type ChannelTaskEventId,
   type ChannelTask,
@@ -51,6 +52,13 @@ import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import { sessionTaskRuns } from "./channelBotSessionRuns.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
+import {
+  anyLaunchedResultOwed,
+  ChannelLaunchWakes,
+  launchedResultOwed,
+  type LaunchedEnd,
+  readLaunchedEnds,
+} from "./channelLaunchedResults.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
@@ -181,63 +189,111 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const childWorkStore = yield* Effect.serviceOption(ChannelChildWorkStore.ChannelChildWorkStore);
   const skillProposals = yield* makeSkillProposalOffers;
+  const launchWakes = yield* ChannelLaunchWakes;
+
+  /** A task's child work, every generation, or "unknown" when the store cannot be read. */
+  const readChildWork = (taskId: ChannelTask["taskId"]) =>
+    Option.isNone(childWorkStore)
+      ? Effect.succeed<ReadonlyArray<ChannelChildWork>>([])
+      : childWorkStore.value
+          .listForTask(taskId)
+          .pipe(Effect.orElseSucceed(() => "unknown" as const));
+
+  const launchedEnds = (
+    records: ReadonlyArray<ChannelChildWork> | "unknown",
+    generation: number,
+    launcherThreadId: ThreadId,
+  ) =>
+    readLaunchedEnds({ threads, watch: launchWakes.watch }, records, generation, launcherThreadId);
 
   /**
-   * Whether launched child work of this generation is still running. A bare reservation
-   * ("reserved") never claimed a launch, so after the worker's run ends it cannot hold completion;
-   * a store read failure returns "unknown" so the pass waits rather than settling early.
+   * A coding thread that ended STALLED_AFTER_MS ago without its result coming back is told to
+   * the person the way a quiet run is, once per end; the task keeps waiting for the result.
    */
-  const hasActiveChildWork = (taskId: ChannelTask["taskId"], generation: number) =>
-    Option.isNone(childWorkStore)
-      ? Effect.succeed(false as const)
-      : childWorkStore.value.listForTask(taskId).pipe(
-          Effect.flatMap((records) =>
-            Effect.gen(function* () {
-              const current = records.filter((record) => record.generation === generation);
-              if (current.some((record) => CHILD_WORK_HOLD_STATES.has(record.state))) return true;
-              for (const record of current) {
-                const childThreadId = record.destination?.threadId;
-                if (childThreadId === undefined || record.state !== "completed") continue;
-                const pending = yield* threads
-                  .delegatedTaskResultPending(childThreadId)
-                  .pipe(Effect.orElseSucceed(() => false));
-                if (pending) return true;
-              }
-              return false;
-            }),
-          ),
-          Effect.orElseSucceed(() => "unknown" as const),
-        );
+  const launchStallNotices = (
+    task: ChannelTask,
+    ends: ReadonlyArray<LaunchedEnd | "unreadable">,
+    runs: ReadonlyArray<OrchestrationV2Run>,
+    allRuns: ReadonlyArray<OrchestrationV2Run>,
+  ) =>
+    Effect.gen(function* () {
+      // Agents over MCP never answer, so they are not told.
+      if (task.requester.originKind === "mcp") return;
+      const now = yield* DateTime.now;
+      const nowMs = DateTime.toEpochMillis(now);
+      const notices = ends.flatMap((end) =>
+        end !== "unreadable" &&
+        end.endIso !== null &&
+        nowMs - Date.parse(end.endIso) > STALLED_AFTER_MS &&
+        launchedResultOwed(end, runs, allRuns)
+          ? [stallDelivery(task, "launch:" + end.childThreadId + ":" + end.runId, end.endIso)]
+          : [],
+      );
+      if (notices.length > 0) yield* ledger.enqueueDeliveries(notices, DateTime.formatIso(now));
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("launched thread stall notice not recorded", { cause }),
+      ),
+    );
+
+  /**
+   * Whether this generation's child work still runs or a thread it launched still owes its result.
+   * A bare reservation never claimed a launch, so it cannot hold completion; an unreadable store
+   * is "unknown" so the pass waits. `runs` (the task's) and `allRuns` (the worker thread's) come
+   * from the read made after `ends`.
+   */
+  const hasActiveChildWork = (
+    records: ReadonlyArray<ChannelChildWork> | "unknown",
+    generation: number,
+    ends: ReadonlyArray<LaunchedEnd | "unreadable">,
+    runs: ReadonlyArray<OrchestrationV2Run>,
+    allRuns: ReadonlyArray<OrchestrationV2Run>,
+  ) =>
+    Effect.gen(function* () {
+      if (records === "unknown") return "unknown" as const;
+      const current = records.filter((record) => record.generation === generation);
+      if (current.some((record) => CHILD_WORK_HOLD_STATES.has(record.state))) return true;
+      if (anyLaunchedResultOwed(ends, runs, allRuns)) return true;
+      for (const record of current) {
+        const childThreadId = record.destination?.threadId;
+        if (childThreadId === undefined || record.state !== "completed") continue;
+        const pending = yield* threads
+          .delegatedTaskResultPending(childThreadId)
+          .pipe(Effect.orElseSucceed(() => false));
+        if (pending) return true;
+      }
+      return false;
+    });
 
   /**
    * Pending requests in the coding threads this generation launched that still run: a question
    * there waits on the person like the worker's own. Remote child work is not read here. A failed
    * read returns "unknown" so the pass keeps what it observed before; a deleted thread asks nothing.
    */
-  const childWorkRequests = (taskId: ChannelTask["taskId"], generation: number) =>
-    Option.isNone(childWorkStore)
-      ? Effect.succeed([] as const)
-      : childWorkStore.value.listForTask(taskId).pipe(
-          Effect.flatMap((records) =>
-            Effect.forEach(
-              records.flatMap((record) =>
-                record.generation === generation &&
-                record.surface === "thread_launch" &&
-                CHILD_WORK_HOLD_STATES.has(record.state) &&
-                record.destination?.threadId !== undefined
-                  ? [record.destination.threadId]
-                  : [],
-              ),
-              (threadId) =>
-                threads.getThreadRecords(threadId, ["runtimeRequests"]).pipe(
-                  Effect.map((records) =>
-                    records.runtimeRequests.map((request) => ({ ...request, threadId })),
-                  ),
-                  Effect.catchIf(isThreadMissing, () => Effect.succeed([])),
-                ),
-              { concurrency: 1 },
-            ),
+  const childWorkRequests = (
+    records: ReadonlyArray<ChannelChildWork> | "unknown",
+    generation: number,
+  ) =>
+    records === "unknown"
+      ? Effect.succeed("unknown" as const)
+      : Effect.forEach(
+          records.flatMap((record) =>
+            record.generation === generation &&
+            record.surface === "thread_launch" &&
+            CHILD_WORK_HOLD_STATES.has(record.state) &&
+            record.destination?.threadId !== undefined
+              ? [record.destination.threadId]
+              : [],
           ),
+          (threadId) =>
+            threads.getThreadRecords(threadId, ["runtimeRequests"]).pipe(
+              Effect.map((records) =>
+                records.runtimeRequests.map((request) => ({ ...request, threadId })),
+              ),
+              Effect.catchIf(isThreadMissing, () => Effect.succeed([])),
+            ),
+          { concurrency: 1 },
+        ).pipe(
           Effect.map((perThread) => perThread.flat()),
           Effect.orElseSucceed(() => "unknown" as const),
         );
@@ -380,6 +436,10 @@ const make = Effect.gen(function* () {
       const worker = task.worker;
       // Workers on another machine report through ChannelRemoteWorkers.
       if (worker === undefined || worker.host !== undefined) return false;
+      // Child work, then what each coding thread it launched owes, before the worker's runs: a
+      // wake already sent is then among those runs, so the hold and the result share one read.
+      const childWork = yield* readChildWork(task.taskId);
+      const ends = yield* launchedEnds(childWork, task.generation, worker.threadId);
       const records = yield* threads
         .getThreadRecords(worker.threadId, [
           "runs",
@@ -468,7 +528,7 @@ const make = Effect.gen(function* () {
           : undefined;
       if (limitRead === "unknown") return latest !== stored;
       const limit = limitRead;
-      const launchedRequests = yield* childWorkRequests(task.taskId, latest.task.generation);
+      const launchedRequests = yield* childWorkRequests(childWork, latest.task.generation);
       if (launchedRequests === "unknown") return latest !== stored;
       const children = yield* scanSubagents(subagents, (threadId) =>
         threads.getThreadRecords(threadId, ["runtimeRequests", "subagents"]),
@@ -574,7 +634,15 @@ const make = Effect.gen(function* () {
       if (limit !== undefined) return latest !== stored;
 
       if (current.status === "completed") {
-        const childWorkActive = yield* hasActiveChildWork(task.taskId, latest.task.generation);
+        // The ends were read for the generation this pass began with.
+        if (latest.task.generation !== task.generation) return true;
+        const childWorkActive = yield* hasActiveChildWork(
+          childWork,
+          latest.task.generation,
+          ends,
+          runs,
+          allRuns,
+        );
         if (childWorkActive === "unknown") return latest !== stored;
         const held =
           completionHoldCount({
@@ -587,6 +655,7 @@ const make = Effect.gen(function* () {
           if (latest.completionHold !== BACKGROUND_HOLD) {
             yield* ledger.setCompletionHold({ owner, taskId: task.taskId, hold: BACKGROUND_HOLD });
           }
+          yield* launchStallNotices(latest.task, ends, runs, allRuns);
           return true;
         }
         // The answer is stripped against the session's committed first line, so it waits for it.

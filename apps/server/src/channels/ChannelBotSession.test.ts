@@ -50,6 +50,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as SqlClient from "effect/sql/SqlClient";
 import { createGoatBotSendQueue } from "../../../../packages/client-runtime/src/goatBot/sendQueue.ts";
 import { botMessages, goatInput, owner, rpcContext, setupBot } from "./testkit/ChannelHarness.ts";
+import { launchWatchesOf } from "./testkit/launchWakesFake.ts";
 import {
   ask,
   botModel,
@@ -367,6 +368,56 @@ describe("GOAT Bot sessions", () => {
       const waiting = yield* ask("look: two", "d2");
       assert.isUndefined(waiting.worker);
       assert.lengthOf(harness.world.launches, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("defers a due rotation until a finished coding thread's result has run here", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const first = yield* ask("look: one", "w1");
+      const thread = first.worker!.threadId;
+      const admitted = yield* childWork.admit({
+        callerThreadId: thread,
+        callerRunId: first.worker!.runId,
+        surface: "thread_launch",
+        prompt: "fix it in a worktree",
+        destinationKey: "codex",
+      });
+      if (admitted._tag !== "admitted") return yield* Effect.die("expected admission");
+      const child = ThreadId.make("thread:session-launched");
+      harness.world.addRun(child, MessageId.make("msg:session-launched"));
+      yield* Effect.scoped(childWork.claimLaunch(admitted.record, { threadId: child }));
+      yield* childWork.markBound(admitted.record, { threadId: child });
+      launchWatchesOf(harness.world).set(child, {
+        detached: false,
+        skippedRuns: [],
+        reportedEnds: {},
+      });
+      harness.world.setStatus(child, 1, "completed", "Fixed.");
+      yield* childWork.markTerminal(admitted.record, "completed");
+      harness.world.providerTurns.set(thread, usage({ usedTokens: 195_000 }));
+      harness.world.setStatus(thread, 1, "completed", "Started a coding thread.");
+      const waiting = yield* ask("look: two", "w2");
+      assert.isUndefined(waiting.worker);
+      assert.lengthOf(harness.world.launches, 1);
+
+      harness.world.addRun(
+        thread,
+        MessageId.make(
+          "message:launch-watch:" +
+            [thread, "", child].map(encodeURIComponent).join(":") +
+            ":run:run:" +
+            child +
+            ":1",
+        ),
+      );
+      harness.world.setStatus(thread, 2, "completed", "The coding thread fixed it.");
+      yield* settle;
+      const rotated = yield* current(waiting.taskId);
+      assert.notStrictEqual(rotated.worker?.threadId, thread);
+      assert.lengthOf(harness.world.launches, 2);
     }).pipe(Effect.provide(harness.layer));
   });
 

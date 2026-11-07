@@ -14,6 +14,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
+import { parseLaunchWake } from "./channelLaunchWake.ts";
 
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 export const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
@@ -44,8 +45,34 @@ const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId:
   `.pipe(Effect.map((rows) => rows[0]));
 
 /**
+ * The run that launched the coding thread a launch-watch wake on this session reports on, from
+ * the thread's child-work record. Undefined for any other message, another launcher, or a thread
+ * on another machine, which reports through its remote dispatch instead.
+ */
+export const launchWakeParentRun = Effect.fn("ChannelBotSession.launchWakeParentRun")(function* (
+  sql: SqlClient.SqlClient,
+  threadId: string,
+  messageId: string,
+) {
+  const wake = parseLaunchWake(messageId);
+  const childThreadId = wake?.thread;
+  if (wake === undefined || wake.launcher !== threadId || wake.host !== "" || !childThreadId)
+    return undefined;
+  // Two launches recorded for one thread cannot say which run the wake continues: none is picked.
+  const rows = yield* sql<{ readonly run_id: RunId | null }>`
+    SELECT DISTINCT json_extract(value_json, '$.callerRunId') AS run_id FROM channel_runtime_state
+    WHERE key >= 'child-work:' AND key < 'child-work;'
+      AND json_extract(value_json, '$.surface') = 'thread_launch'
+      AND json_extract(value_json, '$.callerThreadId') = ${threadId}
+      AND json_extract(value_json, '$.destination.threadId') = ${childThreadId}
+  `;
+  return rows.length === 1 ? (rows[0]?.run_id ?? undefined) : undefined;
+});
+
+/**
  * The task a session run serves: the intent its own message was sent under, or for a delegated
- * completion or restart continuation, the run it continues. Undefined when GOAT never sent it.
+ * completion, restart continuation or launched thread's end wake, the run it continues.
+ * Undefined when GOAT never sent it.
  */
 export const resolveSessionRun = Effect.fn("ChannelBotSession.resolveSessionRun")(function* (
   sql: SqlClient.SqlClient,
@@ -59,7 +86,10 @@ export const resolveSessionRun = Effect.fn("ChannelBotSession.resolveSessionRun"
     const intent = yield* sessionIntentFor(sql, threadId, current.userMessageId);
     if (intent !== undefined) return intent;
     const message = records.messages.find((candidate) => candidate.id === current.userMessageId);
-    const parent = message?.delegatedCompletion?.parentRunId ?? current.restartContinuationOfRunId;
+    const parent =
+      message?.delegatedCompletion?.parentRunId ??
+      current.restartContinuationOfRunId ??
+      (yield* launchWakeParentRun(sql, threadId, current.userMessageId));
     if (parent === undefined || parent === null) return undefined;
     run = records.runs.find((candidate) => candidate.id === parent);
   }
