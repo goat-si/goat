@@ -138,6 +138,18 @@ describe("ChannelBotArtifacts list", () => {
     }).pipe(Effect.provide(artifactsLayer())),
   );
 
+  it.effect.skipIf(windowsHost)("reports a file it may not look at as a failure", () =>
+    Effect.gen(function* () {
+      const { at } = yield* folders;
+      write(at("listed", "report.txt"), "x", 1_700_000_000);
+      // Readable but not searchable: the name is listed, its details cannot be read.
+      NodeFS.chmodSync(at("listed"), 0o444);
+      const error = yield* reason(list);
+      NodeFS.chmodSync(at("listed"), 0o700);
+      assert.strictEqual(error, "persistence_failed");
+    }).pipe(Effect.provide(artifactsLayer())),
+  );
+
   it.effect("keeps the newest files and says the list is cut when there are more", () =>
     Effect.gen(function* () {
       const { at } = yield* folders;

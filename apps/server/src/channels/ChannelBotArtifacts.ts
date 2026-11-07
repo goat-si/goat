@@ -248,7 +248,14 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
                   depth: depth + 1,
                 });
             } else if (entry.isFile()) {
-              const stat = yield* lstat(path.join(dir, entry.name)).pipe(Effect.option);
+              // A file removed while the walk runs is skipped; any other failure fails the list.
+              const stat = yield* lstat(path.join(dir, entry.name)).pipe(
+                Effect.asSome,
+                Effect.catchIf(
+                  (error) => error.reason === "not_found",
+                  () => Effect.succeedNone,
+                ),
+              );
               if (Option.isNone(stat) || !stat.value.isFile()) continue;
               const millis = Number(stat.value.mtimeNs / 1_000_000n);
               found.push({
