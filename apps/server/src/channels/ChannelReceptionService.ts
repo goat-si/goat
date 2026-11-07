@@ -107,6 +107,7 @@ import {
 } from "./channelApprovalCards.ts";
 import { replyDelivery } from "./channelReplyDelivery.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
+import { makeRoutineInputs, ROUTINE_COPY, routineDecision } from "./channelRoutineInputs.ts";
 import { openQuestionTask } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
@@ -197,6 +198,7 @@ const boundTail = (
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const routineInputs = yield* makeRoutineInputs;
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const identityNow = (input: {
     readonly connectionId: string;
@@ -907,6 +909,7 @@ const make = Effect.gen(function* () {
       const readAt = DateTime.formatIso(yield* DateTime.now);
       const stored = yield* ledger.beginReception({ owner, inputId, receptionId, readAt });
       if (stored === undefined || stored.requester === undefined) return;
+      const routine = yield* routineInputs.isRoutineInput(inputId);
       if (yield* tt.shouldRefuseTaskThread(ledger, stored)) {
         yield* tt.refuseTaskThread(ledger, stored, owner);
         yield* wake.wake;
@@ -940,7 +943,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      if (origin.kind === "goat") {
+      if (origin.kind === "goat" && !routine) {
         yield* timeline
           .record({
             threadId: origin.threadId,
@@ -996,12 +999,12 @@ const make = Effect.gen(function* () {
 
       // A number or an option label is decided here, before the model. A number on an approval
       // card becomes that button's label ("Deny A1") so the approval parser and mayAnswerFor
-      // run unchanged. Agents never answer approvals or questions, so MCP goes the usual way.
-      const choice = yield* inboundChoice(message, conversationId, tasks);
+      // run unchanged. Agents and routines never answer approvals or questions.
+      const choice = routine ? undefined : yield* inboundChoice(message, conversationId, tasks);
       const approvalReply =
         choice?.type === "question"
           ? undefined
-          : message.intent === "message" && requester.originKind !== "mcp"
+          : message.intent === "message" && requester.originKind !== "mcp" && !routine
             ? parseApprovalReply(choice?.type === "approval-label" ? choice.text : message.text)
             : undefined;
       const answer =
@@ -1153,6 +1156,7 @@ const make = Effect.gen(function* () {
                   ...(journal === "" ? {} : { journal }),
                   ...(skills.length === 0 ? {} : { skills }),
                   identity: identity.value,
+                  ...(routine ? { routine } : {}),
                   requester,
                 };
                 const first = yield* generateOutcome({ ...base, readsAllowed: true });
@@ -1235,7 +1239,20 @@ const make = Effect.gen(function* () {
         yield* wake.wake;
         return;
       }
-      const decision = outcome.result;
+      const decision = routineDecision(outcome.result, routine);
+      if (decision.action.type === "no_update") {
+        // Nothing needs the person: the input settles with no reply delivered or shown.
+        yield* ledger.completeReception({
+          owner,
+          inputId,
+          receptionId,
+          replyText: ROUTINE_COPY.noUpdate,
+          decision: { replyText: ROUTINE_COPY.noUpdate, action: decision.action },
+          deliveries: [],
+          now,
+        });
+        return;
+      }
 
       // Notes are the owner's standing rules for every conversation, so only a person linked now
       // may change them; someone let in without a link, or whose access ended, may not.

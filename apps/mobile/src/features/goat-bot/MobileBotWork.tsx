@@ -23,6 +23,7 @@ import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
 const tabs = ["Tasks", "Routines", "Library", "Computer"] as const;
@@ -254,6 +255,17 @@ export function MobileBotWork(props: {
                   </View>
                 ))
               )
+            ) : null}
+            {tab === "Routines" &&
+            selected?.connected &&
+            routines.data &&
+            environmentId &&
+            home.botRef ? (
+              <MobileBotCheckInForm
+                environmentId={environmentId}
+                botThreadId={home.botRef.threadId}
+                tasks={routines.data.tasks}
+              />
             ) : null}
             {tab === "Routines" ? (
               !selected?.connected ? (

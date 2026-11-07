@@ -12,6 +12,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2DomainEvent,
+  type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -22,6 +23,14 @@ import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 import { nextScheduledRunAt } from "./Schedule.ts";
+
+/** A firing answered by GOAT Bot through channel input: no orchestration run or message. */
+export const ROUTINE_MESSAGE_PREFIX = "scheduled-task-routine:";
+
+export type ChannelFiringOutcome =
+  | { readonly type: "accepted"; readonly threadId: ThreadId }
+  | { readonly type: "completed" }
+  | { readonly type: "failed"; readonly error: string };
 
 export type FiringTerminalObserver = (input: {
   readonly taskId: ScheduledTaskId;
@@ -55,6 +64,18 @@ export class ScheduledTaskRuns extends Context.Service<
       readonly dispatchEvidence: "rejected" | "unresolved";
       readonly dispatchError?: string | null;
     }) => Effect.Effect<ScheduledTaskRun, ScheduledTaskError>;
+    /**
+     * Moves a channel firing forward and books its occurrence once. Repeats and steps that
+     * arrive after the firing is terminal, or after its routine was deleted, change nothing.
+     */
+    readonly finishChannelFiring: (input: {
+      readonly firingId: CommandId;
+      readonly outcome: ChannelFiringOutcome;
+      readonly at: string;
+    }) => Effect.Effect<void, ScheduledTaskError>;
+    readonly readFiring: (
+      firingId: CommandId,
+    ) => Effect.Effect<ScheduledTaskRun | null, ScheduledTaskError>;
     readonly resolveAttribution: (input: {
       readonly firingId: CommandId;
       readonly acceptedRun?: OrchestrationV2Run | null;
@@ -163,9 +184,10 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
   const onFiringTerminal = options.onFiringTerminal ?? (() => Effect.void);
   const readSnapshot = Effect.fn("ScheduledTaskRuns.readSnapshot")(function* (row: Row) {
     const snapshot = yield* decode(row.snapshot_json);
+    const channel = row.message_id.startsWith(ROUTINE_MESSAGE_PREFIX);
     const validIds =
       snapshot.dispatchStatus === "accepted"
-        ? snapshot.threadId !== null && snapshot.runId !== null
+        ? snapshot.threadId !== null && (snapshot.runId !== null || channel)
         : snapshot.dispatchStatus === "unknown"
           ? snapshot.runId === null
           : snapshot.threadId === null && snapshot.runId === null;
@@ -543,6 +565,73 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
     Effect.mapError(failure("Could not finish scheduled dispatch.")),
   );
 
+  const channelSnapshot = (
+    before: ScheduledTaskRun,
+    outcome: ChannelFiringOutcome,
+    at: string,
+  ): ScheduledTaskRun | undefined => {
+    if (terminal.has(before.status)) return undefined;
+    switch (outcome.type) {
+      case "accepted":
+        return before.dispatchStatus !== "dispatching"
+          ? undefined
+          : {
+              ...before,
+              dispatchStatus: "accepted",
+              status: "running",
+              threadId: outcome.threadId,
+              runId: null,
+              dispatchedAt: at,
+              startedAt: at,
+            };
+      case "completed":
+        return before.dispatchStatus !== "accepted"
+          ? undefined
+          : { ...before, status: "completed", completedAt: at };
+      case "failed":
+        return before.dispatchStatus === "dispatching"
+          ? { ...before, dispatchStatus: "failed", status: "failed", completedAt: at }
+          : { ...before, status: "failed", completedAt: at };
+    }
+  };
+  const finishChannelFiring: ScheduledTaskRuns["Service"]["finishChannelFiring"] = Effect.fn(
+    "ScheduledTaskRuns.finishChannelFiring",
+  )(
+    function* (input) {
+      const changed = yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const row =
+            (yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE firing_id=${input.firingId}`)[0];
+          if (row === undefined || !row.message_id.startsWith(ROUTINE_MESSAGE_PREFIX)) return false;
+          const next = channelSnapshot(yield* readSnapshot(row), input.outcome, input.at);
+          if (next !== undefined) {
+            const json = yield* encode(next);
+            yield* sql`UPDATE scheduled_task_runs SET thread_id=${next.threadId},run_id=NULL,dispatch_status=${next.dispatchStatus},
+              status=${next.status},completed_at=${next.completedAt},snapshot_json=${json} WHERE firing_id=${row.firing_id}`;
+            const error = input.outcome.type === "failed" ? input.outcome.error : null;
+            yield* sql`UPDATE scheduled_tasks SET last_run_status=${legacyStatus(next.status)},last_run_error=${error},updated_at=${input.at}
+              WHERE task_id=${row.task_id} AND created_at=${row.task_created_at} AND last_firing_id=${row.firing_id}`;
+          }
+          yield* advanceOccurrence(row, input.at);
+          yield* prune(row);
+          return next !== undefined || row.dispatch_bookkept_at === null;
+        }),
+      );
+      if (changed) yield* PubSub.publish(changes, undefined);
+    },
+    Effect.mapError(failure("Could not finish the routine's firing.")),
+  );
+  const readFiring: ScheduledTaskRuns["Service"]["readFiring"] = Effect.fn(
+    "ScheduledTaskRuns.readFiring",
+  )(
+    function* (firingId) {
+      const row =
+        (yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE firing_id=${firingId}`)[0];
+      return row === undefined ? null : yield* readSnapshot(row);
+    },
+    Effect.mapError(failure("Could not read scheduled firing.")),
+  );
+
   const deliveryReceipt: ScheduledTaskRuns["Service"]["deliveryReceipt"] = Effect.fn(
     "ScheduledTaskRuns.deliveryReceipt",
   )(
@@ -645,7 +734,9 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
   const reconcile = Effect.gen(function* () {
     let after = "";
     while (true) {
+      // Channel firings settle from their GOAT Bot input; ChannelRoutineIntake recovers them.
       const rows = yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE firing_id>${after}
+        AND message_id NOT LIKE ${ROUTINE_MESSAGE_PREFIX + "%"}
         AND (dispatch_bookkept_at IS NULL OR status IN ('dispatching','queued','running','unknown')) ORDER BY firing_id LIMIT 100`;
       if (!rows.length) break;
       for (const row of rows)
@@ -661,6 +752,8 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
   return ScheduledTaskRuns.of({
     begin,
     finishDispatch,
+    finishChannelFiring,
+    readFiring,
     resolveAttribution,
     resolveBatchAttributions,
     deliveryReceipt,

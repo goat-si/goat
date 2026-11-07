@@ -63,6 +63,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "MemoryCheckpointBound",
   "WorktreeSnapshots",
   "ChannelBotIds",
+  "ScheduledBotRoutines",
 ]);
 
 type MigrationEntry<E> = readonly [

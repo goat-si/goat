@@ -18,6 +18,16 @@ starts a provider turn there. Reception uses one-shot, tool-free text generation
 their first reply from a separate read-only GOAT Bot session; the canonical bot thread still
 never runs a provider. Chip notifications carry `ledgerTask`; only the ledger writes them.
 
+A routine bound to a bot thread fires as channel input instead. Only a person's RPC upsert can bind
+one (MCP passes no owner), and only on a timer. Admission writes the firing and a link row
+(`scheduled_task_channel_inputs`, frozen text and owner) in one transaction;
+[`ChannelRoutineIntake`](../../apps/server/src/channels/ChannelRoutineIntake.ts) ingests it under
+an idempotency key only the scheduler may use and settles the firing from the inbox, so every step
+repeats safely after a restart. The link, never the caller, makes an input a routine: it skips the
+session, the inbound timeline record, approval and question parsing, and any action that starts or
+steers work or keeps a note, so an unattended firing can never need an approval. `no_update`
+settles it with nothing shown or delivered.
+
 ## What the bot remembers and reads
 
 Questions about past work and memory are answered in reception, without starting a worker,

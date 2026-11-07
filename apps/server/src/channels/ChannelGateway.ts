@@ -51,6 +51,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
+import { makeRoutineInputs, ROUTINE_KEY_PREFIX } from "./channelRoutineInputs.ts";
 import {
   bindingIdFor,
   contentHashFor,
@@ -269,6 +270,7 @@ const make = Effect.gen(function* () {
   const registry = yield* ChannelTransport.ChannelTransportRegistry;
   const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
   const wake = yield* ChannelWake.ChannelWake;
+  const routines = yield* makeRoutineInputs;
   const attachmentServices = yield* Effect.context<
     | ServerConfig.ServerConfig
     | FileSystem.FileSystem
@@ -310,7 +312,8 @@ const make = Effect.gen(function* () {
       if (address.kind !== input.kind) return yield* forbidden();
       switch (input.kind) {
         case "goat": {
-          if (caller.type !== "rpc" && caller.type !== "intake") return yield* forbidden();
+          if (caller.type !== "rpc" && caller.type !== "intake" && caller.type !== "schedule")
+            return yield* forbidden();
           if (address.kind !== "goat" || input.connectionId !== GOAT_CONNECTION_ID) {
             return yield* forbidden();
           }
@@ -452,6 +455,10 @@ const make = Effect.gen(function* () {
       }
       if (input.kind === "goat" || input.kind === "mcp" || input.kind === "imessage")
         yield* home.requireHome;
+      // Routine keys belong to the scheduler, and a scheduler firing uses nothing else.
+      const fromSchedule = context.caller.type === "schedule";
+      if (fromSchedule !== input.idempotencyKey.startsWith(ROUTINE_KEY_PREFIX))
+        return yield* forbidden();
       const botId = yield* checkCaller(input, context);
       const requester = yield* resolveRequester(input, context);
       const stored = scopedForCaller(input, context, botId);
@@ -467,6 +474,11 @@ const make = Effect.gen(function* () {
         connectionId: stored.connectionId,
         idempotencyKey: stored.idempotencyKey,
       });
+      if (
+        !fromSchedule &&
+        (yield* routines.isRoutineInput(inputId).pipe(Effect.mapError(ledgerFailure)))
+      )
+        return yield* forbidden();
       const acceptedAt = DateTime.formatIso(yield* DateTime.now);
       // An input not stored yet claims its uploads first, so the stored copy names files that
       // last; the content hash stays over the uploads as sent, so a retry is the same input.
@@ -518,9 +530,10 @@ const make = Effect.gen(function* () {
           : undefined) ??
         message;
       // A retry after a crash between storing and recording finds no sequence and records again;
-      // the record's ids are fixed, so the bot shows the message once.
+      // the record's ids are fixed, so the bot shows the message once. A routine's check-in is
+      // never shown: only the bot's answer is.
       const recorded =
-        result.timelineSequence === undefined && result.state !== "rejected"
+        result.timelineSequence === undefined && result.state !== "rejected" && !fromSchedule
           ? yield* recordBotInput(recordedMessage, result, requester)
           : result;
       yield* wake.wake;
