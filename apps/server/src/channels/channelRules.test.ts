@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import type { AuthEnvironmentScope } from "@goat/contracts";
 import {
   ChannelDispatchTarget,
   ChannelGatewayError,
@@ -332,9 +333,9 @@ describe("linked account permissions", () => {
   it("lets someone else direct a person's work only with at least that person's memory", () => {
     const asker = {
       ...task().requester,
-      grantedScopes: ["orchestration:operate" as const, "memory:read" as const],
+      grantedScopes: ["orchestration:operate", "memory:read"] as Array<AuthEnvironmentScope>,
     };
-    const colleague = (grantedScopes: typeof asker.grantedScopes) => ({
+    const colleague = (grantedScopes: Array<AuthEnvironmentScope>) => ({
       ...asker,
       principalId: "colleague",
       grantedScopes,

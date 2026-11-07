@@ -42,6 +42,7 @@ import * as Option from "effect/Option";
 
 import type * as AttachmentFileLeases from "../assets/AttachmentFileLeases.ts";
 import type * as ServerConfig from "../config.ts";
+import { captureMemoryGrantCeiling, MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 import * as AttachmentClaims from "../orchestration-v2/AttachmentClaims.ts";
 import type * as DocumentText from "../provider/DocumentText.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
@@ -125,7 +126,8 @@ export const lowerRuntimeMode = (left: RuntimeMode, right: RuntimeMode): Runtime
 
 /**
  * Whether someone may answer a task's question. An answer steers work that runs under the asker's
- * ceiling, so the answerer needs to be allowed to run work and at least as far as the asker.
+ * ceiling, so the answerer needs to be allowed to run work, at least as far and with at least the
+ * memory of the asker. The asker themself is held to their current memory where their runs start.
  * A linked channel account is a person, whom handoffs/HumanStepAuthority.ts lets resolve every
  * human step; this adds the channel's own owner, scope and ceiling checks for the target.
  */
@@ -133,7 +135,10 @@ export const mayAnswerFor = (answerer: ChannelRequester, asker: ChannelRequester
   answerer.ownerId === asker.ownerId &&
   answerer.grantedScopes.includes("orchestration:operate") &&
   lowerRuntimeMode(answerer.runtimeModeCeiling, asker.runtimeModeCeiling) ===
-    asker.runtimeModeCeiling;
+    asker.runtimeModeCeiling &&
+  (answerer.principalId === asker.principalId ||
+    MEMORY_GRANT_RANK[captureMemoryGrantCeiling(answerer.grantedScopes, false)] >=
+      MEMORY_GRANT_RANK[captureMemoryGrantCeiling(asker.grantedScopes, false)]);
 
 /** What a linked account may do: the connection's ceiling and the link's, whichever is lower. */
 export const effectiveRequester = (

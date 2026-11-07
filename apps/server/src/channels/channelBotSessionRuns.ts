@@ -15,7 +15,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
-import { MEMORY_RANK } from "./channelDispatchAuthority.ts";
+import { MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 export const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
@@ -25,7 +25,7 @@ export const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
 export const holdsMoreMemory = (
   run: Pick<OrchestrationV2Run, "memoryGrantCeiling">,
   ceiling: MemoryTaskGrantCeiling,
-) => MEMORY_RANK[run.memoryGrantCeiling ?? "none"] > MEMORY_RANK[ceiling];
+) => MEMORY_GRANT_RANK[run.memoryGrantCeiling ?? "none"] > MEMORY_GRANT_RANK[ceiling];
 
 export interface SessionIntent {
   readonly thread_id: ThreadId;
