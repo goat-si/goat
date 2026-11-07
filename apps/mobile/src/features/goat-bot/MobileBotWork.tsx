@@ -276,22 +276,29 @@ export function MobileBotWork(props: {
                 props.onOpenTask(id);
               }}
             />
-            <View className="flex-row flex-wrap gap-4 bg-screen py-4">
-              {tabs.map((name) => (
-                <Pressable
-                  key={name}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: tab === name }}
-                  onPress={() => setTab(name)}
-                  className={
-                    tab === name
-                      ? "min-h-[44px] justify-center rounded-md bg-thread-selected px-3"
-                      : "min-h-[44px] justify-center px-3"
-                  }
-                >
-                  <Text className="text-foreground">{name}</Text>
-                </Pressable>
-              ))}
+            {/* One row that scrolls sideways, so large text does not stack the tabs. */}
+            <View className="bg-screen py-2">
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerClassName="gap-4"
+              >
+                {tabs.map((name) => (
+                  <Pressable
+                    key={name}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: tab === name }}
+                    onPress={() => setTab(name)}
+                    className={
+                      tab === name
+                        ? "min-h-[44px] justify-center rounded-md bg-thread-selected px-3"
+                        : "min-h-[44px] justify-center px-3"
+                    }
+                  >
+                    <Text className="text-foreground">{name}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
             </View>
             <View>
               {tab === "Tasks" &&
