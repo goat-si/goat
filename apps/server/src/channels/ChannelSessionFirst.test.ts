@@ -148,7 +148,9 @@ describe("session first receipts", () => {
         const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
         const worker = task.worker!;
         const notice = harness.world.addRun(worker.threadId, MessageId.make("message:notice"));
-        noticeRunsOf(harness.world).set(notice.id, worker.runId!);
+        const own = worker.runId;
+        if (own === undefined) throw new Error("The task has no session run");
+        noticeRunsOf(harness.world).set(notice.id, own);
         harness.assistant(
           { ...task, worker: { ...worker, runId: notice.id } },
           "NO_REPLY",

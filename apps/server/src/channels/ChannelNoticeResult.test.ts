@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { ChannelReceptionInput } from "@goat/contracts";
+import type { ChannelReceptionInput, ChannelTask, RunId } from "@goat/contracts";
 import { MessageId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -26,6 +26,13 @@ import {
 import { noticeRunsOf } from "./testkit/harnessMessages.ts";
 
 const botModel = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-luna" } as const;
+
+/** The task's session run; a task without one fails the test. */
+const sessionRun = (task: ChannelTask): RunId => {
+  const runId = task.worker?.runId;
+  if (runId === undefined) throw new Error("The task has no session run");
+  return runId;
+};
 
 const harnessFor = () => {
   const harness = makeHarness({
@@ -74,7 +81,7 @@ describe("a background command's notice run is never its request's result", () =
       yield* reports.reconcile(runtime.ownerToken);
       const turn = yield* onlyTask;
       const session = turn.worker!.threadId;
-      const own = turn.worker!.runId;
+      const own = sessionRun(turn);
       const settleOwn = () =>
         harness.world.setStatus(session, 1, "completed", "Book the van for Friday.");
       if (!early) settleOwn();
@@ -108,7 +115,7 @@ describe("a background command's notice run is never its request's result", () =
       const session = turn.worker!.threadId;
       harness.world.setStatus(session, 1, "completed", "Book the van for Friday.");
       const notice = harness.world.addRun(session, MessageId.make("message:command-notice"));
-      noticeRunsOf(harness.world).set(notice.id, turn.worker!.runId);
+      noticeRunsOf(harness.world).set(notice.id, sessionRun(turn));
       harness.world.setStatus(session, 2, "completed", "The payments key is in the Ops vault.");
       // A recovered send binds the task to its newest owned run, which is the notice.
       const stored = (yield* ledger.getTask(turn.taskId))!;
@@ -145,7 +152,7 @@ describe("a follow-up while a background command's notice runs", () => {
       const childWork = yield* ChannelChildWork.ChannelChildWork;
       const admission = yield* childWork.admit({
         callerThreadId: session,
-        callerRunId: turn.worker!.runId,
+        callerRunId: sessionRun(turn),
         surface: "thread_launch",
         prompt: "keep working in a worktree",
         destinationKey: "codex/gpt-6.1-sol",
@@ -157,7 +164,7 @@ describe("a follow-up while a background command's notice runs", () => {
       yield* childWork.markBound(admission.record, { threadId: child });
       harness.world.setStatus(session, 1, "completed", "Book the van for Friday.");
       const notice = harness.world.addRun(session, MessageId.make("message:command-notice"));
-      noticeRunsOf(harness.world).set(notice.id, turn.worker!.runId);
+      noticeRunsOf(harness.world).set(notice.id, sessionRun(turn));
       yield* reports.reconcile(runtime.ownerToken);
       yield* gateway.ingest(goatInput("also: and book a driver", "f2"), rpcContext);
       yield* runtime.drain;
@@ -185,7 +192,7 @@ describe("a background command's notice run cannot report for its request", () =
       const turn = yield* onlyTask;
       const session = turn.worker!.threadId;
       const notice = harness.world.addRun(session, MessageId.make("message:command-notice"));
-      noticeRunsOf(harness.world).set(notice.id, turn.worker!.runId);
+      noticeRunsOf(harness.world).set(notice.id, sessionRun(turn));
       const reportAs = (runId: string, eventId: string) =>
         reports
           .report(
@@ -211,7 +218,7 @@ describe("a background command's notice run cannot report for its request", () =
             Effect.catchTags({ ChannelGatewayError: (error) => Effect.succeed(error.reason) }),
           );
       assert.strictEqual(yield* reportAs(notice.id, "from-notice"), "forbidden");
-      assert.strictEqual(yield* reportAs(turn.worker!.runId!, "from-own"), "accepted");
+      assert.strictEqual(yield* reportAs(sessionRun(turn), "from-own"), "accepted");
       assert.strictEqual((yield* ledger.getTask(turn.taskId))?.task.status, "running");
     }).pipe(Effect.provide(harness.layer));
   });
