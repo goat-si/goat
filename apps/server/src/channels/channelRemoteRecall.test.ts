@@ -273,12 +273,30 @@ const link = (environmentId: string, token: string): LinkedHosts.LinkedHostCrede
   token,
 });
 
-/** The links the reader sees, one per lookup, the last repeating. */
-const linksSeen = (...links: ReadonlyArray<LinkedHosts.LinkedHostCredential | undefined>) => {
-  let index = 0;
-  return Layer.mock(LinkedHosts.LinkedHosts)({
-    find: () => Effect.sync(() => Option.fromNullishOr(links[Math.min(index++, links.length - 1)])),
+/**
+ * One saved link that both the reader and callHostTool read, so a relink between their lookups is
+ * seen by whichever looks next. afterFind runs after each of the reader's lookups.
+ */
+const linkStore = (initial: LinkedHosts.LinkedHostCredential) => {
+  const store = { current: initial, afterFind: (_lookup: number) => {} };
+  let lookups = 0;
+  const credential: LinkedHosts.LinkedHostCredential = {
+    get host() {
+      return store.current.host;
+    },
+    get token() {
+      return store.current.token;
+    },
+  };
+  const layer = Layer.mock(LinkedHosts.LinkedHosts)({
+    find: () =>
+      Effect.sync(() => {
+        const seen = { ...store.current };
+        store.afterFind(lookups++);
+        return Option.some(seen);
+      }),
   });
+  return { store, credential, layer };
 };
 
 type Answer = Parameters<typeof withRemote>[0]["answer"];
@@ -372,6 +390,15 @@ describe("a remote thread read that cannot be used", () => {
           {},
           "build-box may no longer be the GOAT that ran it",
         ],
+        // The thread read answers, but the host cannot then say which environment it is.
+        [
+          (request: Parameters<Answer>[0]) =>
+            request.tool === "goat_environment_read"
+              ? { status: 500 }
+              : answering({ result: { structuredContent: threadRead(payrollMessages) } })(request),
+          {},
+          "build-box may no longer be the GOAT that ran it",
+        ],
         [
           answering({ result: { structuredContent: threadRead(payrollMessages) } }),
           { hostAlias: "elsewhere" },
@@ -389,22 +416,33 @@ describe("a remote thread read that cannot be used", () => {
 
   it.effect("reads a linked host only while the same link names the worker's environment", () =>
     Effect.gen(function* () {
-      const same = link(workerEnvironment, "token-a");
       const read = answering({ result: { structuredContent: threadRead(payrollMessages) } });
-      const kept = yield* recallOn(read, { linkedHost: same, links: linksSeen(same, same) });
+      const steady = linkStore(link(workerEnvironment, "token-a"));
+      const kept = yield* recallOn(read, { linkedHost: steady.credential, links: steady.layer });
       assert.include(kept.text, "agent: Fixed and pushed; the export has every row now.");
 
-      // Relinked to another environment during the call, then back again under a new token.
-      const swapped = yield* recallOn(read, {
-        linkedHost: link("environment:other", "token-b"),
-        links: linksSeen(same, link(workerEnvironment, "token-c")),
-      });
+      // Relinked to another environment right after the check, and back while B answers.
+      const relinked = linkStore(link(workerEnvironment, "token-a"));
+      relinked.store.afterFind = (lookup) => {
+        if (lookup === 0) relinked.store.current = link("environment:other", "token-b");
+      };
+      const bearers: Array<string | null> = [];
+      const swapped = yield* recallOn(
+        (request) => {
+          if (request.tool === "goat_thread_read") {
+            bearers.push(request.authorization);
+            relinked.store.current = link(workerEnvironment, "token-c");
+          }
+          return read(request);
+        },
+        { linkedHost: relinked.credential, links: relinked.layer },
+      );
+      assert.deepStrictEqual(bearers, ["Bearer token-b"]);
+      assert.notInclude(swapped.text, "Fixed and pushed");
       assert.include(swapped.text, fromReports("build-box may no longer be the GOAT that ran it"));
 
-      const elsewhere = yield* recallOn(read, {
-        linkedHost: link("environment:other", "token-b"),
-        links: linksSeen(link("environment:other", "token-b")),
-      });
+      const other = linkStore(link("environment:other", "token-b"));
+      const elsewhere = yield* recallOn(read, { linkedHost: other.credential, links: other.layer });
       assert.include(
         elsewhere.text,
         fromReports("build-box may no longer be the GOAT that ran it"),
