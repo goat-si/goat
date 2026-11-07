@@ -212,6 +212,8 @@ export interface GoatBotFaceTasks {
     readonly status: "completed" | "failed" | "cancelled";
     readonly at: number;
   } | null;
+  /** When the newest still-going task started; decides which working face moves first. */
+  readonly activeSince: number | null;
 }
 
 /** How a face draws its eyes over the goat mark's horns, on the mark's 24-unit grid. */
@@ -270,16 +272,22 @@ export function goatBotFaceTasks(items: ReadonlyArray<GoatBotFaceTaskItem>): Goa
   let waiting = 0;
   let active = 0;
   let ended: GoatBotFaceTasks["ended"] = null;
+  let activeSince: number | null = null;
   for (const chip of newestChips.values()) {
     const status = chip.status;
     if (status === "waiting_input") waiting++;
-    else if (status === "received" || status === "dispatching" || status === "running") active++;
-    else {
+    else if (status === "received" || status === "dispatching" || status === "running") {
+      active++;
+      const since = Date.parse(chip.createdAt);
+      if (Number.isFinite(since) && (activeSince === null || since > activeSince)) {
+        activeSince = since;
+      }
+    } else {
       const at = Date.parse(chip.updatedAt);
       if (Number.isFinite(at) && (ended === null || at > ended.at)) {
         ended = { status, at };
       }
     }
   }
-  return { waiting, active, ended: waiting > 0 || active > 0 ? null : ended };
+  return { waiting, active, ended: waiting > 0 || active > 0 ? null : ended, activeSince };
 }

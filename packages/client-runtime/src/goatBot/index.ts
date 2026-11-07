@@ -12,3 +12,4 @@ export * from "./taskVisibility.ts";
 export * from "./botRoster.ts";
 export * from "./botWork.ts";
 export * from "./face.ts";
+export * from "./faceMotion.ts";

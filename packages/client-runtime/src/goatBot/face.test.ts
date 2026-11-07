@@ -211,6 +211,7 @@ describe("goatBotFace from the conversation's task chips", () => {
     waiting: 0,
     active: 0,
     ended: null,
+    activeSince: null,
     ...overrides,
   });
 
@@ -252,7 +253,12 @@ describe("goatBotFaceTasks", () => {
       chip("b", 2, "completed"),
       chip("c", 1, "running"),
     ];
-    expect(goatBotFaceTasks(items)).toEqual({ waiting: 1, active: 1, ended: null });
+    expect(goatBotFaceTasks(items)).toEqual({
+      waiting: 1,
+      active: 1,
+      ended: null,
+      activeSince: Date.parse("2026-11-07T09:00:00.000Z"),
+    });
   });
 
   it("names the newest ended task once nothing is going", () => {
@@ -274,6 +280,9 @@ function chip(
   updatedAt = "2026-11-07T09:00:00.000Z",
 ): GoatBotFaceTaskItem {
   return {
-    item: { type: "notification", ledgerTask: { taskId, taskVersion, status, updatedAt } },
+    item: {
+      type: "notification",
+      ledgerTask: { taskId, taskVersion, status, createdAt: updatedAt, updatedAt },
+    },
   } as unknown as GoatBotFaceTaskItem;
 }

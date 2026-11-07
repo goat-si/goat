@@ -1,0 +1,79 @@
+import "~/index.css";
+import { FACE_MOTION_RANK, type GoatBotFaceState } from "@goat/client-runtime/goatBot";
+import { expect, it, vi } from "vite-plus/test";
+
+import { render } from "../../../test/render";
+import { GoatBotAvatar } from "./GoatBotAvatar";
+
+function movingEyes(place: string): number {
+  const eyes = document.querySelector(`[data-face-place="${place}"] [data-face-eyes]`);
+  return eyes?.getAnimations().filter((animation) => animation.playState === "running").length ?? 0;
+}
+
+function Faces(props: { readonly header: GoatBotFaceState; readonly list: GoatBotFaceState }) {
+  return (
+    <>
+      <div data-face-place="header">
+        <GoatBotAvatar
+          state={props.header}
+          motion={{ rank: FACE_MOTION_RANK.header, since: null }}
+        />
+      </div>
+      <div data-face-place="list">
+        <GoatBotAvatar state={props.list} motion={{ rank: FACE_MOTION_RANK.list, since: null }} />
+      </div>
+    </>
+  );
+}
+
+it("moves only the chat header face when the header and the sidebar both show work, then hands over", async () => {
+  // No routes: the faces read nothing from the router.
+  await using screen = await render(<Faces header="working" list="working" />, { router: false });
+  await vi.waitFor(() => expect(movingEyes("header")).toBe(1));
+  expect(movingEyes("list")).toBe(0);
+  await screen.rerender(<Faces header="idle" list="working" />);
+  await vi.waitFor(() => expect(movingEyes("list")).toBe(1));
+  expect(movingEyes("header")).toBe(0);
+});
+
+it("stops the moving face when it unmounts", async () => {
+  // No routes: the faces read nothing from the router.
+  const screen = await render(<Faces header="reading" list="idle" />, { router: false });
+  await vi.waitFor(() => expect(movingEyes("header")).toBe(1));
+  const eyes = document.querySelector("[data-face-place='header'] [data-face-eyes]");
+  await screen[Symbol.asyncDispose]();
+  expect(eyes?.getAnimations().length ?? 0).toBe(0);
+});
+
+it("stops while the tab is hidden and resumes when it shows again", async () => {
+  let state: DocumentVisibilityState = "visible";
+  using _visibility = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => state);
+  // No routes: the faces read nothing from the router.
+  await using _screen = await render(<Faces header="working" list="idle" />, { router: false });
+  await vi.waitFor(() => expect(movingEyes("header")).toBe(1));
+  state = "hidden";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.waitFor(() => expect(movingEyes("header")).toBe(0));
+  state = "visible";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.waitFor(() => expect(movingEyes("header")).toBe(1));
+});
+
+it("holds still when the person turns on reduced motion", async () => {
+  const query = new EventTarget() as EventTarget & { matches: boolean };
+  query.matches = false;
+  const original = window.matchMedia.bind(window);
+  using _media = vi
+    .spyOn(window, "matchMedia")
+    .mockImplementation((media: string) =>
+      media.includes("prefers-reduced-motion")
+        ? (query as unknown as MediaQueryList)
+        : original(media),
+    );
+  // No routes: the faces read nothing from the router.
+  await using _screen = await render(<Faces header="working" list="idle" />, { router: false });
+  await vi.waitFor(() => expect(movingEyes("header")).toBe(1));
+  query.matches = true;
+  query.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(movingEyes("header")).toBe(0));
+});
