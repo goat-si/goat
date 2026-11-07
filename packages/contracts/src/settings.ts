@@ -1,3 +1,5 @@
+import { GoatMcpServerSettingsFields, GoatMcpServerSettingsPatchFields } from "./mcpServers.ts";
+import { StandingInstructions } from "./standingInstructions.ts";
 import { GoatBotSettingsFields, GoatBotSettingsPatchFields } from "./goatBotSessionRouting.ts";
 import { SpeechSettingsFields, SpeechSettingsPatchFields } from "./speech.ts";
 import {
@@ -1090,16 +1092,7 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
 ] as const;
 export type ProjectScopedServerSettingKey = (typeof PROJECT_SCOPED_SERVER_SETTING_KEYS)[number];
 
-export const STANDING_INSTRUCTIONS_MAX_CHARS = 20_000;
-
-/**
- * Dispatcher-owned policy GOAT prepends to the first message of threads that
- * agents launch (goat_thread_launch, including launches over SSH). Distinct
- * from AGENTS.md, which the repository owns. Empty means none.
- */
-export const StandingInstructions = TrimmedString.check(
-  Schema.isMaxLength(STANDING_INSTRUCTIONS_MAX_CHARS),
-);
+export { STANDING_INSTRUCTIONS_MAX_CHARS, StandingInstructions } from "./standingInstructions.ts";
 export const ProjectProviderInstanceOverride = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
 });
@@ -1285,6 +1278,7 @@ export function newGoatBotHomeClaim({
   };
 }
 export const ServerSettings = Schema.Struct({
+  ...GoatMcpServerSettingsFields,
   ...SpeechSettingsFields,
   ...AgentMemoryLimitSettingsFields,
   agentWorkspaceAccess: AgentWorkspaceAccess.pipe(
@@ -1756,6 +1750,7 @@ const ModelSelectionPatch = Schema.Struct({
   options: Schema.optionalKey(ProviderOptionSelections),
 });
 const ServerSettingsPatchFields = Schema.Struct({
+  ...GoatMcpServerSettingsPatchFields,
   ...SpeechSettingsPatchFields,
   ...AgentMemoryLimitSettingsPatchFields,
   agentWorkspaceAccess: Schema.optionalKey(AgentWorkspaceAccess),

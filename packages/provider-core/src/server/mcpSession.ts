@@ -4,11 +4,13 @@ import type {
   BuiltInSkillName,
   CuaDriverMcpConfiguration,
   EnvironmentId,
+  GoatMcpServerLaunch,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
 
 export interface McpProviderSessionConfig {
+  readonly goatMcpServers?: ReadonlyArray<GoatMcpServerLaunch>;
   readonly grantedScopes?: ReadonlyArray<AuthEnvironmentScope>;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;

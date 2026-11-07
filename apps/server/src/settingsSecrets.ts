@@ -166,8 +166,31 @@ export function mapSettingsSecrets(
     ),
   } as ServerSettings["completionWebhook"];
 
+  const mcpServers = Object.fromEntries(
+    Object.entries(settings.mcpServers).map(([name, server]) => {
+      const key = server.transport === "stdio" ? "env" : "headers";
+      const prefix = server.transport === "stdio" ? "env" : "header";
+      const values = Object.fromEntries(
+        Object.entries(server.transport === "stdio" ? server.env : server.headers).map(
+          ([field, value]) => {
+            const result = map({
+              secretName: `mcp-server:${name}:${prefix}:${field}`,
+              kind: "field",
+              value,
+              redacted: value === SECRET_REDACTED,
+              sensitive: true,
+            });
+            return [field, result.redacted ? SECRET_REDACTED : result.value];
+          },
+        ),
+      );
+      return [name, { ...server, [key]: values }];
+    }),
+  ) as ServerSettings["mcpServers"];
+
   return {
     ...settings,
+    mcpServers,
     providerInstances,
     sourceControlHosts,
     usageLimitSources,
