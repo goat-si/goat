@@ -26,7 +26,6 @@ import {
 } from "@goat/contracts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import { prependStandingInstructions } from "@goat/shared/standingInstructions";
-import { resolveGoatBotModelSelection } from "@goat/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -73,6 +72,8 @@ import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import { chooseBotModel } from "./channelBotModel.ts";
+import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import { workerInstruction } from "./channelWorkerBrief.ts";
 import { ENDED_RUN_STATUSES, isThreadMissing } from "./channelWorkerObservation.ts";
 import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
@@ -131,6 +132,7 @@ const make = Effect.gen(function* () {
   const providers = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const usageSources = yield* UsageLimitSources.UsageLimitSources;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
   const session = yield* ChannelBotSession.ChannelBotSession;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -354,7 +356,7 @@ const make = Effect.gen(function* () {
       const task = stored.task;
       const bot = yield* ledger.getBotById(stored.ownerId, stored.botId);
       const shells = yield* projects.listShells().pipe(Effect.orElseSucceed(() => []));
-      if (task.kind === "turn") return yield* turnTarget(task, bot?.bot.projectId, shells);
+      if (task.kind === "turn") return yield* turnTarget(stored, bot?.bot.projectId, shells);
       const real = shells.filter((shell) => shell.id !== bot?.bot.projectId);
       const allowed = real.length > 0 ? real : shells;
       const hostWorkspace = shells.some((shell) => shell.id === bot?.bot.projectId);
@@ -439,7 +441,7 @@ const make = Effect.gen(function* () {
    * the bot than the prompt's read-only promise.
    */
   const turnTarget = (
-    task: ChannelTask,
+    stored: ChannelLedger.ChannelStoredTask,
     botProjectId: string | undefined,
     shells: ReadonlyArray<{ readonly id: ProjectId }>,
   ) =>
@@ -451,23 +453,17 @@ const make = Effect.gen(function* () {
           text: "I can't find my own workspace on this machine. Open GOAT Bot in GOAT once, then ask again.",
         };
       }
+      const task = stored.task;
       const all = yield* serverSettings.getSettings.pipe(Effect.orDie);
       // The environment's settings, not the bot workspace's: the settings page shows and saves
       // the bot's model from the same resolution, so what it says is what runs.
-      const fallback = resolveGoatBotModelSelection({ ...all, goatBotModelSelection: null });
-      const chosen = all.goatBotModelSelection;
-      const preferred = chosen !== null && (yield* modelOffered(chosen)) ? chosen : undefined;
-      if (chosen !== null && preferred === undefined) {
-        yield* Effect.logWarning("GOAT Bot model is not available here; using the default", {
-          instanceId: chosen.instanceId,
-          model: chosen.model,
-        });
-      }
+      const own = yield* profiles.modelFor(stored.ownerId, stored.botId).pipe(Effect.orDie);
+      const modelSelection = yield* chooseBotModel(own, all, modelOffered);
       const memoryGrantCeiling = yield* requesterMemoryCeiling(task);
       const target: ChannelDispatchTarget = {
         environmentId: yield* environment.getEnvironmentId,
         projectId: home.id,
-        modelSelection: preferred ?? fallback,
+        modelSelection,
         runtimeMode: task.requester.runtimeModeCeiling,
         interactionMode: "default",
         workspaceStrategy: { type: "root" },

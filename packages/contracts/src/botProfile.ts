@@ -24,5 +24,9 @@ export const BotProfile = Schema.Struct({
   sessionThreadId: ThreadId,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  /** Left out of the roster by a person; still answers. Absent means shown. */
+  hidden: Schema.optionalKey(Schema.Boolean),
+  /** A deleted member keeps its id and archived thread until it is restored. Absent means active. */
+  state: Schema.optionalKey(Schema.Literals(["active", "deleted"])),
 });
 export type BotProfile = typeof BotProfile.Type;

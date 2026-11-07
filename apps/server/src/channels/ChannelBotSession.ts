@@ -515,7 +515,8 @@ const make = Effect.gen(function* () {
     const allowed = captureMemoryGrantCeiling(requester.grantedScopes, false);
     const recorded = target.memoryGrantCeiling ?? "none";
     const memoryGrantCeiling = MEMORY_RANK[allowed] < MEMORY_RANK[recorded] ? allowed : recorded;
-    const key = bindingKeyFor(initial.task, { ...target, memoryGrantCeiling }, sharing, requester);
+    const ceiling = { ...target, memoryGrantCeiling };
+    const key = bindingKeyFor(initial.task, ceiling, sharing, requester, initial.botId);
     let row = yield* currentRow(key);
     const read = yield* Rotation.readSessionRecords(threads, row?.thread_id);
     const records = read === "unknown" ? Option.none() : read;

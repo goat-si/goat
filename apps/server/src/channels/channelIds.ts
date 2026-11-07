@@ -235,6 +235,16 @@ export const botLaunchIdsFor = (ownerId: string, replacing?: ThreadId) => {
   };
 };
 
+/** A member bot's session thread: every create retry and reconciler pass lands on one thread. */
+export const memberBotLaunchIdsFor = (ownerId: string, botId: string) => ({
+  commandId: CommandId.make(stableId("channel-member-bot-launch", [ownerId, botId])),
+  threadId: ThreadId.make(stableId("channel-member-bot", [ownerId, botId])),
+});
+
+/** Archiving or unarchiving a member's thread for one lifecycle step. */
+export const memberBotStepCommandIdFor = (threadId: ThreadId, step: string, at: string) =>
+  CommandId.make(stableId("channel-member-bot-step", [threadId, step, at]));
+
 /** Switching a stored bot thread to full access, once per thread and moment it was needed. */
 export const botFullAccessCommandIdFor = (threadId: ThreadId, at: string) =>
   CommandId.make(stableId("channel-bot-full-access", [threadId, at]));

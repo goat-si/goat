@@ -17,6 +17,7 @@ import * as MemoryStore from "../memory/MemoryStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelBotThreads from "./ChannelBotThreads.ts";
 import * as ChannelTaskViews from "./channelTaskViews.ts";
@@ -64,6 +65,7 @@ const layerTimeline = Layer.mergeAll(ChannelBotTimeline.layer, ChannelBotThreads
 const layerGateway = Layer.mergeAll(
   ChannelGateway.layer,
   ChannelBotRegistry.layer,
+  ChannelBotMembers.layer,
   ChannelIdentityService.layer,
 ).pipe(Layer.provideMerge(layerTimeline));
 
