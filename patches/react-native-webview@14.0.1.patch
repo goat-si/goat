@@ -55,10 +55,61 @@ index 80c68034b193a47bedb56ca527352de9548e8ac6..374f824283903c55627ad850dcf20ba1
      protected void onSizeChanged(int w, int h, int ow, int oh) {
          super.onSizeChanged(w, h, ow, oh);
 diff --git a/apple/RNCWebViewImpl.m b/apple/RNCWebViewImpl.m
-index 38904266dc37b006274104f4680778ffbfece369..4001990b2b4ae54b3a414b9f5ed61b92997acab5 100644
+index 38904266dc37b006274104f4680778ffbfece369..bb240ec6d3ca477bf2603d823c55d1d27368f1b3 100644
 --- a/apple/RNCWebViewImpl.m
 +++ b/apple/RNCWebViewImpl.m
-@@ -923,8 +923,14 @@ -(void)setKeyboardDisplayRequiresUserAction:(BOOL)keyboardDisplayRequiresUserAct
+@@ -16,6 +16,7 @@
+ #endif // !TARGET_OS_OSX
+ 
+ #import "objc/runtime.h"
++#import <objc/message.h>
+ 
+ static NSTimer *keyboardTimer;
+ static NSString *const HistoryShimName = @"ReactNativeHistoryShim";
+@@ -26,6 +27,17 @@
+ NSString *const CUSTOM_SELECTOR = @"_CUSTOM_SELECTOR_";
+ 
+ #if TARGET_OS_IOS
++// WebKit asks an input delegate before its user-gesture heuristics; Allow (1) lets script focus
++// show the keyboard, which newer WebKit refuses even when userIsInteracting is forced.
++@interface RNCWebViewFocusInputDelegate : NSObject
++@end
++@implementation RNCWebViewFocusInputDelegate
++- (NSInteger)_webView:(WKWebView *)webView decidePolicyForFocusedElement:(id)info
++{
++  return 1;
++}
++@end
++
+ // runtime trick to remove WKWebView keyboard default toolbar
+ // see: http://stackoverflow.com/questions/19033292/ios-7-uiwebview-keyboard-issue/19042279#19042279
+ @interface _SwizzleHelperWK : UIView
+@@ -137,6 +149,9 @@ @implementation RNCWebViewImpl
+ #endif // !TARGET_OS_OSX
+   BOOL _savedHideKeyboardAccessoryView;
+   BOOL _savedKeyboardDisplayRequiresUserAction;
++#if TARGET_OS_IOS
++  RNCWebViewFocusInputDelegate *_focusInputDelegate;
++#endif
+ 
+   // Workaround for StatusBar appearance bug for iOS 12
+   // https://github.com/react-native-webview/react-native-webview/issues/62
+@@ -918,13 +933,29 @@ -(void)setKeyboardDisplayRequiresUserAction:(BOOL)keyboardDisplayRequiresUserAct
+     return;
+   }
+ 
++  // The web view holds its input delegate weakly; this view keeps it alive.
++  SEL setInputDelegate = sel_getUid("_setInputDelegate:");
++  if ([_webView respondsToSelector:setInputDelegate]) {
++    if (!keyboardDisplayRequiresUserAction && _focusInputDelegate == nil) {
++      _focusInputDelegate = [RNCWebViewFocusInputDelegate new];
++    }
++    ((void (*)(id, SEL, id))objc_msgSend)(
++        _webView, setInputDelegate, keyboardDisplayRequiresUserAction ? nil : _focusInputDelegate);
++  }
++
+   if (_savedKeyboardDisplayRequiresUserAction == true) {
+     return;
    }
  
    UIView* subview;
@@ -73,7 +124,7 @@ index 38904266dc37b006274104f4680778ffbfece369..4001990b2b4ae54b3a414b9f5ed61b92
      if([[view.class description] hasPrefix:@"WK"])
        subview = view;
    }
-@@ -944,9 +950,19 @@ -(void)setKeyboardDisplayRequiresUserAction:(BOOL)keyboardDisplayRequiresUserAct
+@@ -944,9 +975,19 @@ -(void)setKeyboardDisplayRequiresUserAction:(BOOL)keyboardDisplayRequiresUserAct
      // iOS 13.0.0 - Future
      SEL selector = sel_getUid("_elementDidFocus:userIsInteracting:blurPreviousNode:activityStateChanges:userObject:");
      method = class_getInstanceMethod(class, selector);
