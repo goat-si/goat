@@ -75,6 +75,7 @@ import { useTerminalExitNavigation } from "./useTerminalExitNavigation";
 import {
   useInitialTerminalLaunchLocation,
   takePendingTerminalLaunch,
+  terminalLaunchAttachOptions,
   type PendingTerminalLaunch,
 } from "./terminalLaunchContext";
 import {
@@ -450,8 +451,7 @@ function ThreadTerminal(props: {
             worktreePath: launchLocation.worktreePath,
             cols: initialAttachGridSize.cols,
             rows: initialAttachGridSize.rows,
-            ...(pendingLaunch?.env ? { env: pendingLaunch.env } : {}),
-            ...(pendingLaunch ? { restartIfNotRunning: true } : {}),
+            ...terminalLaunchAttachOptions(pendingLaunch),
           }
         : null,
     [

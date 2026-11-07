@@ -1,3 +1,4 @@
+import { settlementCase } from "./ManagerSettlement.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -95,7 +96,7 @@ class GatedPtyAdapter extends FakePtyAdapter {
   }
 }
 
-function openInput(overrides: Partial<TerminalOpenInput> = {}): TerminalOpenInput {
+export function openInput(overrides: Partial<TerminalOpenInput> = {}): TerminalOpenInput {
   return {
     threadId: "thread-1",
     terminalId: DEFAULT_TERMINAL_ID,
@@ -157,7 +158,7 @@ interface ManagerFixture {
   readonly getEvents: Effect.Effect<ReadonlyArray<TerminalEvent>>;
 }
 
-const createManager = (
+export const createManager = (
   historyLineLimit = 5,
   options: CreateManagerOptions = {},
 ): Effect.Effect<
@@ -226,7 +227,7 @@ const createManager = (
     }),
   );
 
-const layerWithHostPlatform = (platform: NodeJS.Platform) =>
+export const layerWithHostPlatform = (platform: NodeJS.Platform) =>
   Layer.succeed(HostProcess.Platform, platform);
 
 function retainedHistory(text: string, maxLines: number, maxBytes = Infinity): string {
@@ -529,34 +530,9 @@ it.layer(
     }),
   );
 
-  it.effect("closes only a thread's idle shells, ignoring a helper forked from the shell", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        processTable: Effect.succeed([
-          { pid: 9000, ppid: 1, name: "zsh" },
-          { pid: 100, ppid: 9000, name: "zsh" },
-          { pid: 9001, ppid: 1, name: "zsh" },
-          { pid: 200, ppid: 9001, name: "node" },
-          { pid: 9002, ppid: 1, name: "zsh" },
-          { pid: 300, ppid: 9002, name: "zsh" },
-          { pid: 301, ppid: 300, name: "sleep" },
-          { pid: 9003, ppid: 1, name: "zsh" },
-        ]),
-      }).pipe(Effect.provide(layerWithHostPlatform("linux")));
-      yield* manager.open(openInput({ terminalId: "idle" }));
-      yield* manager.open(openInput({ terminalId: "dev-server" }));
-      yield* manager.open(openInput({ terminalId: "subshell" }));
-      yield* manager.open(openInput({ threadId: "thread-2" }));
-
-      yield* manager.closeIdle({ threadId: "thread-1" });
-
-      expect(ptyAdapter.processes.map((process) => process.killed)).toEqual([
-        true,
-        false,
-        false,
-        false,
-      ]);
-    }),
+  it.effect(
+    "closes idle shells and opted-in actions on settlement without stopping other commands",
+    () => settlementCase(createManager, openInput, layerWithHostPlatform),
   );
 
   it.effect("labels a running command by its whole process name, spaces included", () =>

@@ -118,6 +118,7 @@ import * as ComputerUseTestkit from "../cua/ComputerUseLeases.testkit.ts";
 import { askComputer, carriesSkill } from "./ComputerUseSkill.testkit.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ReleaseTest from "./ProviderSessionManager.persistence.testkit.ts";
 import {
   layerTestDatabase,
   layerTestStores,
@@ -3335,14 +3336,17 @@ it.effect("ProviderSessionManagerV2 marks pending runtime requests non-live on r
       yield* eventSink.write({
         events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
       });
-      const pendingRequest = yield* makePendingRuntimeRequestEvents({
-        idAllocator,
+      const requestArgs = { idAllocator, threadId, providerSessionId, providerThread, now };
+      const pendingRequest = yield* makePendingRuntimeRequestEvents(requestArgs);
+      const historical = yield* makePendingRuntimeRequestEvents(requestArgs);
+      yield* ReleaseTest.seedRequestFilter({
+        sink: eventSink,
+        projections: projectionStore,
         threadId,
-        providerSessionId,
-        providerThread,
+        pending: pendingRequest,
+        historical,
         now,
       });
-      yield* eventSink.write({ events: pendingRequest.events });
       yield* manager.open({
         threadId,
         providerSessionId,
@@ -3354,16 +3358,11 @@ it.effect("ProviderSessionManagerV2 marks pending runtime requests non-live on r
         reason: "runtime_error",
         detail: "process exited",
       });
-      const projection = yield* projectionStore.getThreadProjection(threadId);
-      const request = projection.runtimeRequests.at(-1);
-      const requestNode = projection.nodes.find((node) => node.id === request?.nodeId);
-      const requestTurnItem = projection.turnItems.find(
-        (item) => item.type === "approval_request" && item.requestId === request?.id,
+      ReleaseTest.assertReleasedRequest(
+        yield* projectionStore.getThreadProjection(threadId),
+        pendingRequest,
+        historical,
       );
-      assert.equal(request?.status, "expired");
-      assert.equal(request?.responseCapability.type, "not_resumable");
-      assert.equal(requestNode?.status, "failed");
-      assert.equal(requestTurnItem?.status, "failed");
     });
     yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
   }),

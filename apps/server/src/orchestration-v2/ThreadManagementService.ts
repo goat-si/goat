@@ -1,3 +1,4 @@
+import * as ThreadSettlementAfterRun from "./ThreadSettlementAfterRun.ts";
 import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -1748,20 +1749,12 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const settleAfterRun: ThreadManagementServiceShape["settleAfterRun"] = Effect.fn(
-    "orchestrationV2.threadManagement.settleAfterRun",
-  )(function* (input) {
-    const { run } = yield* waitForThread({
-      ...input,
-      timeoutMs: SETTLE_AFTER_RUN_WAIT_MS,
-      releaseOnPendingQuestion: false,
-    });
-    if (run?.status !== "completed") return;
-    yield* dispatch({
-      type: "thread.settle",
-      commandId: CommandId.make(`server:settle-after-run:${input.runId}`),
-      threadId: input.threadId,
-    });
+  const settleAfterRun = ThreadSettlementAfterRun.make({
+    timeoutMs: SETTLE_AFTER_RUN_WAIT_MS,
+    waitForThread,
+    orchestrator,
+    records: getProjectThreadRecords,
+    dispatch,
   });
 
   const settleThread: ThreadManagementServiceShape["settleThread"] = Effect.fn(

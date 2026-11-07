@@ -38,6 +38,7 @@ export const ProjectScript = Schema.Struct({
   icon: ProjectScriptIcon,
   runOnWorktreeCreate: Schema.Boolean,
   runOnSettle: Schema.optional(Schema.Boolean),
+  stopOnSettle: Schema.optional(Schema.Boolean),
   /** Runs when a thread's run completes; GOAT records its exit code beside the reported tests. */
   runAsCheck: Schema.optional(Schema.Boolean),
   /** Lets the check also run for threads in the shared checkout, where other threads may be editing. */

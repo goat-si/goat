@@ -1,3 +1,4 @@
+import { staleSettlementAndItemStatuses } from "./OrchestratorSettlement.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
@@ -902,11 +903,7 @@ it.effect("settles only the stopped run's background work, once", () =>
         },
       });
     }
-    const itemStatuses = Effect.map(projections.getThreadProjection(threadId), (projection) =>
-      projection.turnItems
-        .flatMap((item) => (item.type === "command_execution" ? [`${item.id}:${item.status}`] : []))
-        .toSorted(),
-    );
+    const itemStatuses = yield* staleSettlementAndItemStatuses(orchestrator, projections, threadId);
     const settle = {
       type: "thread.background-work.settle",
       commandId: CommandId.make("stop-run-1:background-work-settled"),

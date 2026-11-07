@@ -1,3 +1,4 @@
+import { assert } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -113,3 +114,50 @@ export const layerBeforeUnchangedWriteEventSink = (before: Ref.Ref<Effect.Effect
       });
     }),
   ).pipe(Layer.provide(layerTestEventSink));
+
+type RequestFixture = {
+  readonly requestId: import("@goat/contracts").RuntimeRequestId;
+  readonly events: ReadonlyArray<import("@goat/contracts").OrchestrationV2DomainEvent>;
+};
+export const seedRequestFilter = Effect.fn("test.seedRequestFilter")(function* (input: {
+  readonly sink: EventSink.EventSinkV2["Service"];
+  readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
+  readonly threadId: import("@goat/contracts").ThreadId;
+  readonly pending: RequestFixture;
+  readonly historical: RequestFixture;
+  readonly now: import("effect/DateTime").Utc;
+}) {
+  yield* input.sink.write({ events: input.pending.events });
+  yield* input.sink.write({
+    events: input.historical.events.map((event) =>
+      event.type === "runtime-request.updated"
+        ? { ...event, payload: { ...event.payload, status: "resolved", resolvedAt: input.now } }
+        : event,
+    ),
+  });
+  assert.deepEqual(
+    (yield* input.projections.getThreadRecords(input.threadId, ["turnItems"], {
+      turnItemRequestIds: [input.pending.requestId],
+    })).turnItems.map((item) => item.id),
+    [input.pending.events.find((event) => event.type === "turn-item.updated")?.payload.id],
+  );
+});
+export function assertReleasedRequest(
+  projection: import("@goat/contracts").OrchestrationV2ThreadProjection,
+  pending: RequestFixture,
+  historical: RequestFixture,
+) {
+  const request = projection.runtimeRequests.find((item) => item.id === pending.requestId);
+  assert.equal(
+    projection.runtimeRequests.find((item) => item.id === historical.requestId)?.status,
+    "resolved",
+  );
+  const node = projection.nodes.find((item) => item.id === request?.nodeId);
+  const item = projection.turnItems.find(
+    (item) => item.type === "approval_request" && item.requestId === request?.id,
+  );
+  assert.equal(request?.status, "expired");
+  assert.equal(request?.responseCapability.type, "not_resumable");
+  assert.equal(node?.status, "failed");
+  assert.equal(item?.status, "failed");
+}

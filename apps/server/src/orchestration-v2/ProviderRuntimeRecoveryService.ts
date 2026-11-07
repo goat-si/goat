@@ -1,3 +1,17 @@
+import {
+  nonterminalRuns,
+  isNonterminalTurnItemStatus,
+  isNonterminalNodeStatus,
+  isAppOwnedDelegation,
+  isAppOwnedDelegationItem,
+} from "./RecoveryStatePredicates.ts";
+import { recoverUsageLimit } from "./RecoveryUsageLimit.ts";
+import {
+  ProviderRuntimeRecoveryError,
+  isProviderRuntimeRecoveryError,
+  drainOutboxError,
+} from "./ProviderRuntimeRecoveryErrors.ts";
+export { ProviderRuntimeRecoveryError } from "./ProviderRuntimeRecoveryErrors.ts";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
@@ -7,16 +21,14 @@ import {
   type ProviderThreadId,
   type RunId,
   type OrchestrationV2RestartCancelledBackgroundWork,
-  type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   isOrchestrationV2WorkActive,
-  ThreadId,
+  type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 
 import * as EffectOutbox from "./EffectOutbox.ts";
 import { cancelledItem, isBackgroundCapableTurnItemType } from "./ProviderRuntimeRecoveryItems.ts";
@@ -43,21 +55,6 @@ import {
   mergeRestartCancelledBackgroundWork,
   neverStarted,
 } from "./RestartBackgroundNote.ts";
-
-export class ProviderRuntimeRecoveryError extends Schema.TaggedError<ProviderRuntimeRecoveryError>()(
-  "ProviderRuntimeRecoveryError",
-  {
-    operation: Schema.Literals(["read-projections", "reconcile", "drain-outbox"]),
-    threadId: Schema.optional(ThreadId),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Provider runtime recovery failed during ${this.operation}.`;
-  }
-}
-const drainOutboxError = (cause: unknown) =>
-  new ProviderRuntimeRecoveryError({ operation: "drain-outbox", cause });
 
 export interface ProviderRuntimeRecoverySummary {
   readonly terminalizedRuns: number;
@@ -91,44 +88,6 @@ export class ProviderRuntimeRecoveryService extends Context.Service<
     readonly recover: Effect.Effect<ProviderRuntimeRecoverySummary, ProviderRuntimeRecoveryError>;
   }
 >()("goat/orchestration-v2/ProviderRuntimeRecoveryService") {}
-
-function nonterminalRuns(projection: ProjectionStore.ProjectionRuntimeRecoveryState) {
-  return projection.runs.filter((run) => {
-    const status: string = run.status;
-    return (
-      status === "preparing" ||
-      run.status === "starting" ||
-      run.status === "running" ||
-      run.status === "waiting"
-    );
-  });
-}
-
-function isNonterminalTurnItemStatus(status: string): boolean {
-  return status === "pending" || status === "running" || status === "waiting";
-}
-
-function isNonterminalNodeStatus(status: string): boolean {
-  return status === "pending" || status === "running" || status === "waiting";
-}
-
-function isAppOwnedDelegation(task: {
-  readonly origin: OrchestrationV2Subagent["origin"];
-  readonly childThreadId: ThreadId | null;
-  readonly remote?: OrchestrationV2Subagent["remote"];
-}): boolean {
-  return task.origin === "app_owned" && (task.childThreadId !== null || task.remote !== undefined);
-}
-
-function isAppOwnedDelegationItem(
-  item: OrchestrationV2ThreadProjection["turnItems"][number],
-  delegatedTaskNodeIds: ReadonlySet<string>,
-): boolean {
-  return (
-    item.type === "subagent" &&
-    (isAppOwnedDelegation(item) || delegatedTaskNodeIds.has(item.subagentId))
-  );
-}
 
 function providerThreadHasPendingBackgroundTasks(
   providerThread: OrchestrationV2ThreadProjection["providerThreads"][number],
@@ -404,6 +363,21 @@ export const make = Effect.gen(function* () {
       });
       runs = recoveredQueue.runs;
       events.push(...recoveredQueue.events);
+      const usageRecovery = yield* recoverUsageLimit({
+        projection,
+        runs,
+        projections,
+        now,
+        commandId,
+        allocateEventId,
+        readError: (cause) =>
+          new ProviderRuntimeRecoveryError({
+            operation: "read-projections",
+            threadId: projection.thread.id,
+            cause,
+          }),
+      });
+      events.push(...usageRecovery.events);
       for (const question of questions) {
         events.push({
           id: yield* allocateEventId(),
@@ -522,6 +496,7 @@ export const make = Effect.gen(function* () {
         for (const item of projection.turnItems.filter(
           (candidate) =>
             candidate.type !== "human_handoff" &&
+            !usageRecovery.itemIds.has(candidate.id) &&
             candidate.runId === run.id &&
             (candidate.nodeId === null || !messageRequestNodeIds.has(candidate.nodeId)) &&
             !isAppOwnedDelegationItem(candidate, delegatedTaskNodeIds) &&
@@ -756,6 +731,7 @@ export const make = Effect.gen(function* () {
         (candidate) => candidate.status !== "stopped" && candidate.status !== "error",
       ).length;
       let retiredEffects: number;
+      let cancelledEffectIds: ReadonlyArray<string> = [];
       if (events.length === 0 && effects.length === 0) {
         const retiredEffectIds = yield* outbox
           .cancelUnsettled({
@@ -774,7 +750,7 @@ export const make = Effect.gen(function* () {
                 }),
             ),
           );
-        yield* outbox.signalCancellations(retiredEffectIds);
+        cancelledEffectIds = retiredEffectIds;
         retiredEffects = retiredEffectIds.length;
       } else {
         const result = yield* eventSink
@@ -809,6 +785,7 @@ export const make = Effect.gen(function* () {
         stoppedSessions,
         closedRequests: requests.length,
         retiredEffects,
+        cancelledEffectIds,
       };
     },
   );
@@ -829,30 +806,21 @@ export const make = Effect.gen(function* () {
     let closedRequests = 0;
     let retiredEffects = 0;
     const stoppedThisPass = new Map<string, RecoverySession>();
-    for (const threadId of threadIds) {
-      const hasSurvivor =
-        trigger === "startup" && survivorBindings.some((binding) => binding.threadId === threadId);
-      if (
-        (protectedThreads.has(threadId) && (!hasSurvivor || blockedThreads.has(threadId))) ||
-        (trigger === "startup" && terminalThreads.has(threadId))
-      )
-        continue;
-      const loaded = yield* projections.getRuntimeRecoveryProjection(threadId).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderRuntimeRecoveryError({
-              operation: "read-projections",
-              threadId,
-              cause,
-            }),
-        ),
-      );
-      const filtered = hasSurvivor
-        ? yield* SurvivorRecoveryProjection.excludeSurvivorFamily({
-            projection: loaded,
-            bindings: survivorBindings,
-            projections,
-          }).pipe(
+    const grouped = trigger === "shutdown" && threadIds.length > 1;
+    const groupSize = grouped ? 32 : 1;
+    for (let offset = 0; offset < threadIds.length; offset += groupSize) {
+      const cancelledEffectIds: string[] = [];
+      const reconcileGroup = Effect.gen(function* () {
+        for (const threadId of threadIds.slice(offset, offset + groupSize)) {
+          const hasSurvivor =
+            trigger === "startup" &&
+            survivorBindings.some((binding) => binding.threadId === threadId);
+          if (
+            (protectedThreads.has(threadId) && (!hasSurvivor || blockedThreads.has(threadId))) ||
+            (trigger === "startup" && terminalThreads.has(threadId))
+          )
+            continue;
+          const loaded = yield* projections.getRuntimeRecoveryProjection(threadId).pipe(
             Effect.mapError(
               (cause) =>
                 new ProviderRuntimeRecoveryError({
@@ -861,49 +829,75 @@ export const make = Effect.gen(function* () {
                   cause,
                 }),
             ),
-          )
-        : loaded;
-      const projection = {
-        ...filtered,
-        providerSessions: filtered.providerSessions.filter(
-          (session) => !protectedSessions.has(session.id),
-        ),
-      };
-      const enabled =
-        continueAfterRestart !== null &&
-        resolveProjectSettings(continueAfterRestart, projection.thread.projectId).settings
-          .continueThreadsAfterServerUpdate;
-      const preserveStarts = loaded.runs
-        .filter(
-          (run) =>
-            run.restartContinuationOfRunId !== undefined &&
-            survivorBindings.some(
-              (binding) =>
-                binding.threadId === threadId &&
-                binding.sourceRunId === run.restartContinuationOfRunId,
+          );
+          const filtered = hasSurvivor
+            ? yield* SurvivorRecoveryProjection.excludeSurvivorFamily({
+                projection: loaded,
+                bindings: survivorBindings,
+                projections,
+              }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderRuntimeRecoveryError({
+                      operation: "read-projections",
+                      threadId,
+                      cause,
+                    }),
+                ),
+              )
+            : loaded;
+          const projection = {
+            ...filtered,
+            providerSessions: filtered.providerSessions.filter(
+              (session) => !protectedSessions.has(session.id),
             ),
-        )
-        .map((run) => run.id);
-      const result = yield* reconcileProjection(
-        projection,
-        trigger,
-        enabled,
-        stoppedThisPass,
-        preserveStarts,
-      );
-      if (hasSurvivor)
-        yield* outbox
-          .requeueSurvivorStarts(threadId, preserveStarts)
-          .pipe(Effect.mapError(drainOutboxError));
-      for (const session of projection.providerSessions) {
-        if (session.status !== "stopped" && session.status !== "error") {
-          stoppedThisPass.set(session.id, session);
+          };
+          const enabled =
+            continueAfterRestart !== null &&
+            resolveProjectSettings(continueAfterRestart, projection.thread.projectId).settings
+              .continueThreadsAfterServerUpdate;
+          const preserveStarts = loaded.runs
+            .filter(
+              (run) =>
+                run.restartContinuationOfRunId !== undefined &&
+                survivorBindings.some(
+                  (binding) =>
+                    binding.threadId === threadId &&
+                    binding.sourceRunId === run.restartContinuationOfRunId,
+                ),
+            )
+            .map((run) => run.id);
+          const result = yield* reconcileProjection(
+            projection,
+            trigger,
+            enabled,
+            stoppedThisPass,
+            preserveStarts,
+          );
+          if (hasSurvivor)
+            yield* outbox
+              .requeueSurvivorStarts(threadId, preserveStarts)
+              .pipe(Effect.mapError(drainOutboxError));
+          for (const session of projection.providerSessions) {
+            if (session.status !== "stopped" && session.status !== "error") {
+              stoppedThisPass.set(session.id, session);
+            }
+          }
+          cancelledEffectIds.push(...result.cancelledEffectIds);
+          terminalizedRuns += result.terminalizedRuns;
+          stoppedSessions += result.stoppedSessions;
+          closedRequests += result.closedRequests;
+          retiredEffects += result.retiredEffects;
         }
-      }
-      terminalizedRuns += result.terminalizedRuns;
-      stoppedSessions += result.stoppedSessions;
-      closedRequests += result.closedRequests;
-      retiredEffects += result.retiredEffects;
+      });
+      yield* (grouped ? eventSink.withProviderBatch(reconcileGroup) : reconcileGroup).pipe(
+        Effect.mapError((cause) =>
+          isProviderRuntimeRecoveryError(cause)
+            ? cause
+            : new ProviderRuntimeRecoveryError({ operation: "reconcile", cause }),
+        ),
+      );
+      if (cancelledEffectIds.length > 0) yield* outbox.signalCancellations(cancelledEffectIds);
     }
     const outboxReconciliation = yield* (
       protectedThreads.size > 0

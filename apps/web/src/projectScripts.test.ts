@@ -9,6 +9,7 @@ import {
 } from "@goat/shared/projectScripts";
 
 import {
+  buildProjectScript,
   commandForProjectScript,
   nextProjectScriptId,
   primaryProjectScript,
@@ -16,6 +17,20 @@ import {
 } from "./projectScripts";
 
 describe("projectScripts helpers", () => {
+  it("stores the action's stop-on-settle opt-in", () => {
+    const input = {
+      name: "Dev",
+      command: "npm start",
+      icon: "play" as const,
+      runOnWorktreeCreate: false,
+      waitForSetup: false,
+      runOnSettle: false,
+      previewUrl: null,
+      autoOpenPreview: false,
+    };
+    expect(buildProjectScript("dev", { ...input, stopOnSettle: true }).stopOnSettle).toBe(true);
+    expect(buildProjectScript("dev", input).stopOnSettle).toBeUndefined();
+  });
   it.each(["install-javascript-dependencies", "A", "a.b", "a b", "-a", "", "a".repeat(25)])(
     "omits the shortcut for legacy script ID %j without crashing script menus",
     (id) => {
