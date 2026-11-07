@@ -378,12 +378,12 @@ export const makeChannelBotNoteWriter = (
   });
 
 /**
- * The sentence a reply gains when reception dropped a note the model asked to keep, or a request
- * to change notes from someone who may not: neither is dropped without saying so.
+ * The sentence a reply gains when reception dropped a note the model asked to keep, or a notes
+ * change it would not grant: neither is dropped without saying so.
  */
-export const droppedNoteNotice = (refusal: string | undefined, editRequested = false) =>
+export const droppedNoteNotice = (refusal: string | undefined) =>
   refusal === "missing_quote" || refusal === "quote_not_in_input"
     ? CHANNEL_COPY.noteNotSaved
-    : refusal === "not_linked" || refusal === "not_a_person" || editRequested
+    : refusal === "not_linked" || refusal === "not_a_person"
       ? CHANNEL_COPY.noteEditNotAllowed
       : undefined;
