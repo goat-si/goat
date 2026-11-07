@@ -24,7 +24,6 @@ import {
   type ChannelReceptionRead,
   type ChannelReceptionReadResult,
   type ChannelReceptionResult,
-  type ChannelReplyAddress,
   type ChannelRequester,
   type ChannelTask,
   type ChannelTaskApprovalRef,
@@ -32,7 +31,6 @@ import {
   ChannelReceptionId,
   CommandId,
   CHANNEL_RECEPTION_TAIL_LIMITS,
-  type ChannelOutboundKind,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import {
@@ -68,6 +66,7 @@ import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import { isUnlinkedPrincipal, lowerRuntimeMode, mayAnswerFor } from "./ChannelGateway.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
+import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
@@ -105,17 +104,12 @@ import {
   parseApprovalReply,
   whichApproval,
 } from "./channelApprovalCards.ts";
-import { numberedChoiceLines } from "./channelDecisionChoices.ts";
+import { replyDelivery } from "./channelReplyDelivery.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
 import { openQuestionTask } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
-import {
-  answerForwardIdsFor,
-  deliveryIdFor,
-  taskEventIdFor,
-  turnSteerIdsFor,
-} from "./channelIds.ts";
+import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import {
   botAddress,
   chipDelivery,
@@ -129,11 +123,17 @@ const CHANNEL_RECEPTION_TIMEOUT_MS = 45_000;
 
 type ReceptionOutcome =
   | { readonly ok: true; readonly result: ChannelReceptionResult }
-  | { readonly ok: false; readonly failure: TextGenerationFailureKind };
+  | { readonly ok: false; readonly failure: TextGenerationFailureKind; readonly reply?: string };
 const receptionFailure = (failure: TextGenerationFailureKind): ReceptionOutcome => ({
   ok: false,
   failure,
 });
+// No reply goes out under a name the person changed; this one says why instead.
+const profileUnreadable: ReceptionOutcome = {
+  ok: false,
+  failure: "unavailable",
+  reply: "I couldn't read that: GOAT Bot's name and purpose could not be read on its computer.",
+};
 /** How many recently active threads a reception pass sees by title. */
 const CHANNEL_RECEPTION_RECENT_THREADS = 20;
 /** How long one read may take before the answer says so and goes on without it. */
@@ -177,45 +177,6 @@ export class ChannelReceptionService extends Context.Service<
   }
 >()("goat/channels/ChannelReceptionService") {}
 
-const replyDelivery = (input: {
-  readonly causeKey: string;
-  readonly destination: ChannelReplyAddress;
-  readonly kind: ChannelOutboundKind;
-  readonly text: string;
-  readonly inputId?: ChannelInputId | undefined;
-  readonly task?: ChannelTask | undefined;
-  readonly mentionActorId?: string | undefined;
-  readonly options?: ReadonlyArray<string> | undefined;
-}): ChannelLedger.ChannelOutboxInsert => {
-  const deliveryId = deliveryIdFor(input.causeKey);
-  const options = input.options === undefined || input.options.length === 0 ? [] : input.options;
-  // The GOAT app shows choices as buttons. Slack keeps the labels for Block Kit buttons and
-  // also lists them, so a notification or a typed number still works. iMessage and the rest
-  // get the numbered list only.
-  const buttons = input.destination.kind === "goat" && options.length > 0;
-  const listed = !buttons && options.length > 0;
-  const text = listed ? input.text + "\n" + numberedChoiceLines(options) : input.text;
-  const keepOptions = buttons || (input.destination.kind === "slack" && options.length > 0);
-  return {
-    deliveryId,
-    causeKey: input.causeKey,
-    ...(input.inputId === undefined ? {} : { inputId: input.inputId }),
-    ...(input.task === undefined ? {} : { taskId: input.task.taskId }),
-    message: {
-      deliveryId,
-      destination: input.destination,
-      kind: input.kind,
-      text,
-      ...(input.inputId === undefined ? {} : { inReplyToInputId: input.inputId }),
-      ...(input.task === undefined
-        ? {}
-        : { taskId: input.task.taskId, taskVersion: input.task.version }),
-      ...(input.mentionActorId === undefined ? {} : { mentionActorId: input.mentionActorId }),
-      ...(keepOptions ? { options } : {}),
-    },
-  };
-};
-
 /** Keeps the newest tail entries that fit the byte budget. */
 const boundTail = (
   entries: ReadonlyArray<ChannelReceptionInput["tail"][number]>,
@@ -244,6 +205,7 @@ const make = Effect.gen(function* () {
   const home = yield* ChannelBotHome.ChannelBotHome;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
   const wake = yield* ChannelWake.ChannelWake;
@@ -1130,6 +1092,8 @@ const make = Effect.gen(function* () {
                   ),
                 );
                 const skills = yield* listChannelBotSkills(fileSystem, path, botFiles);
+                const identity = yield* Effect.option(profiles.identity(requester.ownerId));
+                if (Option.isNone(identity)) return profileUnreadable;
                 const base: ChannelReceptionInput = {
                   mode: "input",
                   conversationId,
@@ -1182,6 +1146,7 @@ const make = Effect.gen(function* () {
                   ...(notes === "" ? {} : { notes }),
                   ...(journal === "" ? {} : { journal }),
                   ...(skills.length === 0 ? {} : { skills }),
+                  identity: identity.value,
                   requester,
                 };
                 const first = yield* generateOutcome({ ...base, readsAllowed: true });
@@ -1243,7 +1208,7 @@ const make = Effect.gen(function* () {
 
       const now = DateTime.formatIso(yield* DateTime.now);
       if (!outcome.ok) {
-        const reply = CHANNEL_COPY.receptionFailedBecause[outcome.failure];
+        const reply = outcome.reply ?? CHANNEL_COPY.receptionFailedBecause[outcome.failure];
         yield* ledger.failReception({
           owner,
           inputId,
@@ -1684,10 +1649,12 @@ const make = Effect.gen(function* () {
           ? []
           : [{ role: "user" as const, text: request.message.text, at: request.message.receivedAt }];
       // Milestones, questions and a turn's answer keep the words written for the person.
+      const identity = yield* Effect.option(profiles.identity(task.requester.ownerId));
       const worded =
         pending.event.type === "task.progress" ||
         base.kind === "question" ||
-        (task.kind === "turn" && base.kind === "result")
+        (task.kind === "turn" && base.kind === "result") ||
+        Option.isNone(identity)
           ? baseText
           : Option.match(
               yield* generate({
@@ -1698,6 +1665,7 @@ const make = Effect.gen(function* () {
                 tail: requestTail,
                 tasks: [],
                 allowedTargets: [],
+                identity: identity.value,
                 requester: task.requester,
               }),
               {
@@ -1743,10 +1711,15 @@ const make = Effect.gen(function* () {
       yield* wake.wake;
     });
 
-  const acknowledgeSession = Effect.fn("ChannelReceptionService.acknowledgeSession")(
-    (input: ChannelReceptionInput) =>
-      Effect.map(generate(input), (r) => Option.getOrUndefined(r)?.replyText.trim() || undefined),
-  );
+  const acknowledgeSession = Effect.fn("ChannelReceptionService.acknowledgeSession")(function* (
+    input: ChannelReceptionInput,
+  ) {
+    // Without the bot's identity the session's own reply, which follows, speaks for it.
+    const identity = yield* Effect.option(profiles.identity(input.requester.ownerId));
+    if (Option.isNone(identity)) return undefined;
+    const result = yield* generate({ ...input, identity: identity.value });
+    return Option.getOrUndefined(result)?.replyText.trim() || undefined;
+  });
   return ChannelReceptionService.of({ receive, narrate, acknowledgeSession, isDeterministicReply });
 });
 
