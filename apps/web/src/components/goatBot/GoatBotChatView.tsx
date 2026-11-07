@@ -453,7 +453,17 @@ function GoatBotNotice({
   readonly homeMove?: GoatBotChatViewProps["homeMove"];
   readonly onSelectExample?: ((text: string) => void) | undefined;
 }) {
-  const { title, description, retryLabel } = noticeCopy(availability);
+  const member = useGoatBotMember();
+  const copy = noticeCopy(availability);
+  // A member introduces itself by its own name and purpose.
+  const { title, description, retryLabel } =
+    member !== null && availability.kind === "ready"
+      ? {
+          ...copy,
+          title: member.name,
+          description: member.purpose || "It answers here and does the work in its own threads.",
+        }
+      : copy;
   const actions: ReactNode[] = [];
   if (availability.kind === "home_offline" && homeMove)
     actions.push(
