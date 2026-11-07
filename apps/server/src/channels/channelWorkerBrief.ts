@@ -175,9 +175,11 @@ export const turnInstruction = (
     ...(supervisor ? [GOAT_BOT_SUPERVISOR_RULE] : []),
     task.notesChangeRequested === undefined
       ? "Leave the notes file unchanged; this message did not ask to change a note."
-      : "The person asked to change or forget a note (" +
+      : "Exception to the read-only rule above: the person asked to change or forget a note (" +
         JSON.stringify(task.notesChangeRequested) +
-        "). This is the one change you may make yourself: edit the notes file only to make that change.",
+        "). Edit GOAT Bot's notes file (" +
+        files.notes +
+        ") yourself to make exactly that change, and change nothing else.",
     ...channelWorkerRules("local", "turn"),
   ].join("\n");
 
