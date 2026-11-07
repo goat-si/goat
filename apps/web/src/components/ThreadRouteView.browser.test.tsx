@@ -33,12 +33,15 @@ vi.mock("./goatBot/GoatBotThreadView", () => ({
   GoatBotThreadView: () => <div data-view="goat-bot" />,
 }));
 // Which thread is a member bot's conversation, as the roster's bot list says.
-const members = vi.hoisted(() => ({ threadId: null as string | null }));
+const members = vi.hoisted(() => ({ threadId: null as string | null, resolving: false }));
 vi.mock("./goatBot/goatBotMemberThread", () => ({
-  useGoatBotMemberAt: (target: { threadId: string } | null) =>
-    target !== null && target.threadId === members.threadId
-      ? { botId: "research", state: "deleted" }
-      : null,
+  useGoatBotMemberAt: (target: { threadId: string } | null) => ({
+    member:
+      target !== null && target.threadId === members.threadId
+        ? { botId: "research", state: "deleted" }
+        : null,
+    resolving: members.resolving,
+  }),
 }));
 vi.mock("./ChatView.logic", () => ({
   resolveDraftPromotionNavigationTarget: () => null,
@@ -135,6 +138,17 @@ it("keeps a deleted member bot's archived conversation on the bot view instead o
     expect(navigate).not.toHaveBeenCalled();
   } finally {
     members.threadId = null;
+  }
+});
+
+it("waits for the bot list before treating a missing thread as an ordinary one", async () => {
+  members.resolving = true;
+  try {
+    await renderThread(ThreadId.make("gone"));
+    expect(container.querySelector("[data-view]")).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+  } finally {
+    members.resolving = false;
   }
 });
 

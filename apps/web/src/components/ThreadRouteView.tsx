@@ -54,7 +54,9 @@ export function ThreadRouteView({
       { environmentId: target.threadRef.environmentId, id: target.threadRef.threadId },
       goatBotRef,
     );
-  const goatBotMember = useGoatBotMemberAt(target.kind === "server" ? target.threadRef : null);
+  const { member: goatBotMember, resolving: goatBotMemberResolving } = useGoatBotMemberAt(
+    target.kind === "server" ? target.threadRef : null,
+  );
   const goatBotThread = goatBotTarget || goatBotMember !== null;
   const draftId = target.kind === "draft" ? target.draftId : null;
   const draftSession = useComposerDraftStore((store) =>
@@ -88,6 +90,10 @@ export function ThreadRouteView({
 
   const shellStatus = useEnvironmentShellStatus(serverThreadRef?.environmentId ?? null);
   const serverThreadShell = serverThread;
+  // Until the bot list answers, a missing thread or one in the bot project may be a member's.
+  const goatBotMemberPending =
+    goatBotMemberResolving &&
+    (serverThreadShell === null || serverThreadShell.projectId === goatBotRef?.projectId);
   const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
   const bootstrapComplete = isThreadRouteSnapshotAuthoritative(shellStatus);
   const draftThread = useComposerDraftStore((store) =>
@@ -169,7 +175,7 @@ export function ThreadRouteView({
   }, [background, canonicalThreadRef, draftSession, navigate, target.kind]);
 
   useEffect(() => {
-    if (target.kind !== "server" || !bootstrapComplete || goatBotThread) {
+    if (target.kind !== "server" || !bootstrapComplete || goatBotThread || goatBotMemberPending) {
       return;
     }
     if (renderState === "missing") {
@@ -184,6 +190,7 @@ export function ThreadRouteView({
     bootstrapComplete,
     environmentHasAnyThreads,
     goatBotThread,
+    goatBotMemberPending,
     navigate,
     renderState,
     target,
@@ -218,6 +225,8 @@ export function ThreadRouteView({
         member={goatBotMember}
       />
     );
+  } else if (goatBotMemberPending) {
+    view = null;
   } else if (renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)) {
     view = (
       <ChatView

@@ -46,6 +46,7 @@ import {
   pickGoatBotEnvironment,
   resolveGoatBotAvailability,
   resolveGoatBotHomeSelection,
+  type GoatBotAvailability,
   type GoatBotEnvironmentInput,
 } from "@goat/client-runtime/goatBot";
 import {
@@ -295,6 +296,29 @@ function useGoatBotWorking(visibleTurnItems: ReadonlyArray<OrchestrationV2Projec
   });
 }
 
+/**
+ * Sets the members whose messages may leave this environment's queue to the roster's active ones,
+ * so a member deleted while its chat is closed stops sending.
+ */
+export function syncGoatBotMemberThreads(
+  environmentId: EnvironmentId,
+  bots: ReadonlyArray<BotProfile>,
+): void {
+  const current = useSessions.getState().sessions.get(environmentId);
+  if (!current) return;
+  const members = new Set(
+    bots
+      .filter(
+        (bot) =>
+          bot.role === "member" && bot.state !== "deleted" && bot.environmentId === environmentId,
+      )
+      .map((bot) => bot.sessionThreadId as string),
+  );
+  if (members.size === current.members.size && [...members].every((id) => current.members.has(id)))
+    return;
+  update(environmentId, { ...current, members });
+}
+
 /** Lets a member's messages through the queue while it is active, and stops them once deleted. */
 function useMemberRegistration(environmentId: EnvironmentId | null, member: BotProfile | null) {
   const threadId = member?.sessionThreadId ?? null;
@@ -463,10 +487,17 @@ export function useGoatBotSession(
             ? session.machine.ensure
             : { state: "idle" },
       });
-  const availability =
-    member !== null && mainAvailability.kind === "ready"
-      ? { ...mainAvailability, bot: memberBotRef(member, mainAvailability.bot) }
-      : mainAvailability;
+  // A member answers only through its own environment's session.
+  const availability: GoatBotAvailability =
+    member === null || mainAvailability.kind !== "ready"
+      ? mainAvailability
+      : member.environmentId !== mainAvailability.bot.environmentId
+        ? {
+            kind: "error",
+            environmentId: member.environmentId,
+            message: `${member.name} runs on another computer.`,
+          }
+        : { ...mainAvailability, bot: memberBotRef(member, mainAvailability.bot) };
   const targetThreadId = member?.sessionThreadId ?? botRef?.threadId ?? null;
   const queue = session?.queue;
   useEffect(() => {

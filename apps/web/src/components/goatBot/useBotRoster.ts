@@ -7,7 +7,7 @@ import { useThreadVisibleTurnItems } from "~/state/entities";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
-import { useGoatBotEnabled } from "./useGoatBotSession";
+import { syncGoatBotMemberThreads, useGoatBotEnabled } from "./useGoatBotSession";
 
 /**
  * One bot's task threads, main when botId is null. The list is read again when channel records
@@ -80,6 +80,11 @@ export function useBotRoster() {
       : null,
   );
   const bots = profiles.data?.bots;
+  // oxlint-disable-next-line goat/react-effect-budget -- Keep the environment's send queue to the members the roster lists as active.
+  useEffect(() => {
+    if (environmentId !== null && supportsMembers && bots !== undefined)
+      syncGoatBotMemberThreads(environmentId, bots);
+  }, [environmentId, supportsMembers, bots]);
   return {
     environmentId,
     supportsMembers,

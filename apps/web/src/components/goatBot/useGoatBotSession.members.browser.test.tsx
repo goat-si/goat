@@ -41,9 +41,10 @@ vi.mock("../WorkspacePageHeader", () => ({
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
-import { useGoatBotSession } from "./useGoatBotSession";
+import { syncGoatBotMemberThreads, useGoatBotSession } from "./useGoatBotSession";
 
 const decodeProfile = Schema.decodeSync(BotProfile);
+const encodeProfile = Schema.encodeSync(BotProfile);
 const member = decodeProfile({
   botId: "research",
   role: "member",
@@ -56,6 +57,16 @@ const member = decodeProfile({
   sessionThreadId: "member-thread",
   createdAt: "2026-11-07T00:00:00.000Z",
   updatedAt: "2026-11-07T00:00:00.000Z",
+});
+
+const accepted = (inputId: string): ChannelIngestResult => ({
+  inputId: ChannelInputId.make(inputId),
+  conversationId: ChannelConversationId.make("conversation"),
+  bindingId: ChannelBindingId.make("binding"),
+  duplicate: false,
+  state: "accepted",
+  acceptedAt: "2026-11-07T00:00:00.000Z",
+  taskIds: [],
 });
 
 function Chat({ bot }: { bot: BotProfile | null }) {
@@ -119,4 +130,90 @@ it("sends a member's message to its own conversation and keeps its pending row o
     acceptedAt: "2026-11-07T00:00:00.000Z",
     taskIds: [],
   });
+});
+
+it("does not send a closed member chat's queued message once the roster no longer lists the member", async () => {
+  let releaseMain: (result: ChannelIngestResult) => void = () => {};
+  const ingested: ChannelIngestInput[] = [];
+  const port: GoatBotChannelPort = {
+    ensureBot: vi.fn(async () => ({
+      environmentId,
+      projectId: ProjectId.make("project"),
+      threadId: ThreadId.make("main-thread"),
+    })),
+    ingest: vi.fn(async (_environmentId, input) => {
+      ingested.push(input);
+      return new Promise<ChannelIngestResult>((resolve) => {
+        releaseMain = resolve;
+      });
+    }),
+    getBotStatus: vi.fn(async () => ({ bot: null, waitingCount: 0 })),
+    listTasks: vi.fn(async () => ({ tasks: [] })),
+    useCanSend: () => true,
+  };
+  const screen = await render(
+    <GoatBotChannelContext.Provider value={port}>
+      <Chat bot={member} />
+      <Chat bot={null} />
+    </GoatBotChannelContext.Provider>,
+    { router: false }, // Only the chats render; no navigation happens.
+  );
+  await using _screen = screen;
+  const main = page.getByRole("region", { name: "Main chat" }).getByPlaceholder("Message GOAT Bot");
+  const memberBox = page
+    .getByRole("region", { name: "Member chat" })
+    .getByPlaceholder("Message Research");
+  await expect.element(memberBox).toBeEnabled();
+  await userEvent.type(main, "first{Enter}");
+  await vi.waitFor(() => expect(ingested).toHaveLength(1));
+  await userEvent.type(memberBox, "queued for research{Enter}");
+  await screen.rerender(
+    <GoatBotChannelContext.Provider value={port}>
+      <Chat bot={null} />
+    </GoatBotChannelContext.Provider>,
+  );
+  syncGoatBotMemberThreads(environmentId, []);
+  releaseMain(accepted("main-input"));
+  const deleted = decodeProfile({ ...encodeProfile(member), state: "deleted" });
+  await screen.rerender(
+    <GoatBotChannelContext.Provider value={port}>
+      <Chat bot={deleted} />
+      <Chat bot={null} />
+    </GoatBotChannelContext.Provider>,
+  );
+  await expect
+    .element(
+      page
+        .getByRole("region", { name: "Member chat" })
+        .getByRole("button", { name: "Retry sending" }),
+    )
+    .toBeVisible();
+  expect(ingested.map((input) => input.text)).toEqual(["first"]);
+});
+
+it("keeps a member that runs on another computer from sending through this one", async () => {
+  const port: GoatBotChannelPort = {
+    ensureBot: vi.fn(async () => ({
+      environmentId,
+      projectId: ProjectId.make("project"),
+      threadId: ThreadId.make("main-thread"),
+    })),
+    ingest: vi.fn(async () => accepted("unused")),
+    getBotStatus: vi.fn(async () => ({ bot: null, waitingCount: 0 })),
+    listTasks: vi.fn(async () => ({ tasks: [] })),
+    useCanSend: () => true,
+  };
+  const elsewhere = decodeProfile({
+    ...encodeProfile(member),
+    environmentId: "other-env",
+  });
+  await using _screen = await render(
+    <GoatBotChannelContext.Provider value={port}>
+      <Chat bot={elsewhere} />
+    </GoatBotChannelContext.Provider>,
+    { router: false }, // Only the chat renders; no navigation happens.
+  );
+  await expect.element(page.getByPlaceholder("Research isn't available")).toBeDisabled();
+  await expect.element(page.getByText("Research runs on another computer.")).toBeVisible();
+  expect(port.ingest).not.toHaveBeenCalled();
 });
