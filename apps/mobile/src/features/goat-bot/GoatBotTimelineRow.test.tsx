@@ -188,3 +188,22 @@ it("opens the task represented by a task thread pill", async () => {
   await view.click("Task thread · Check disks · Running");
   expect(onSelectTask).toHaveBeenCalledWith("task-1");
 });
+it("shows a bot event as a centered note line", async () => {
+  h = createNativeMemoryHarness();
+  view = renderNative(
+    h,
+    <GoatBotTimelineRow
+      {...props}
+      row={{
+        kind: "event",
+        id: "event",
+        text: "Routine Check in paused",
+        createdAt: "2026-11-07T09:40:00Z",
+        firstInGroup: true,
+        groupPosition: "single",
+      }}
+    />,
+  );
+  await view.render();
+  expect(view.container.textContent).toBe("Routine Check in paused");
+});
