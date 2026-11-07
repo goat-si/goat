@@ -111,12 +111,9 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const botsRepaired = yield* Ref.make(false);
   const repairBots = Effect.gen(function* () {
-    if (yield* Ref.get(botsRepaired)) return true;
-    const changed = yield* ledger.repairTaskBots();
+    const changed = yield* ledger.ensureTaskBotsRepaired();
     if (changed > 0) yield* Effect.logInfo("channel tasks returned to their bots", { changed });
-    yield* Ref.set(botsRepaired, true);
     return true;
   }).pipe(
     Effect.catchCause((cause) =>

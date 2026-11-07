@@ -346,6 +346,7 @@ const make = Effect.gen(function* () {
     change(owner, input.botId, (record, at) =>
       Effect.gen(function* () {
         if (record.state === "deleted") return record;
+        yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
         if (yield* hasOpenWork(owner.ownerId, record.botId).pipe(Effect.mapError(failed)))
           return yield* fail("bot_busy");
         return {

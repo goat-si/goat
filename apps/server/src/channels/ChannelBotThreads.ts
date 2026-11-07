@@ -58,6 +58,7 @@ const make = Effect.gen(function* () {
     owner: ChannelConnectionOwner,
     botId: BotId = BotId.make(MAIN_BOT_ID),
   ) {
+    yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
     const bot = yield* ledger.getBotById(owner.ownerId, botId).pipe(Effect.mapError(failed));
     if (bot === undefined) return { rows: [], mainMessageCount: 0 };
     const now = DateTime.toEpochMillis(yield* DateTime.now);
