@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -77,6 +78,38 @@ it.effect("appends each input note once as a dated single line with its source",
     const text = yield* fs.readFileString(files.notes);
     expect(text.match(/# GOAT Bot notes/gu)).toHaveLength(1);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+// 17:10 UTC is already the next day in Seoul, where the person and GOAT's machine are.
+it.effect("dates a note and its correction by the day where GOAT runs, not UTC", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const files = channelBotFilesFor(path, yield* fs.makeTempDirectoryScoped());
+    yield* appendChannelBotNote(
+      fs,
+      files,
+      "I deploy on Fridays.",
+      "2026-11-07T14:59:00Z",
+      "input-1",
+    );
+    yield* appendChannelBotNote(
+      fs,
+      files,
+      "I deploy on Mondays.",
+      "2026-11-07T17:10:00Z",
+      "input-2",
+      "I deploy on Fridays.",
+    );
+    const text = yield* fs.readFileString(files.notes);
+    expect(text).toContain("- 2026-11-07: I deploy on Fridays. (asked in input-1)\n");
+    expect(text).toContain(
+      '- 2026-11-08: I deploy on Mondays. (asked in input-2) (replaces: "I deploy on Fridays.")\n',
+    );
+  }).pipe(
+    Effect.provide(NodeServices.layer),
+    Effect.provide(DateTime.layerCurrentZoneNamed("Asia/Seoul")),
+  ),
 );
 
 it.effect("creates no notes file for an empty note", () =>

@@ -30,6 +30,7 @@ import {
   appendChannelBotNote,
   appendPrefix,
   channelBotNoteLine,
+  noteDay,
   noteSource,
   type ChannelBotFiles,
 } from "./channelBotNotes.ts";
@@ -212,7 +213,9 @@ export const makeChannelBotNoteWriter = (
       const inForce = parseChannelBotNoteLines(text).some(
         (line) => line.replacedBy === undefined && line.text === note,
       );
-      const line = inForce ? channelBotNoteLine(next, readAt, inputId, note) : undefined;
+      const line = inForce
+        ? channelBotNoteLine(next, yield* noteDay(readAt), inputId, note)
+        : undefined;
       if (line === undefined) return CHANNEL_COPY.noteNotFound;
       yield* fs.writeFileString(files.notes, appendPrefix(exists, text) + line + "\n", {
         flag: "a",

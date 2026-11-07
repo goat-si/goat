@@ -9,6 +9,7 @@ import {
   type ChannelRequester,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -53,12 +54,16 @@ const setup = (text: string, hooks: NoteWriterHooks = {}) =>
     yield* fs.makeDirectory(files.dir, { recursive: true });
     if (text !== "") yield* fs.writeFileString(files.notes, text);
     const writer = yield* makeChannelBotNoteWriter(fs, files, noOpenTasks, hooks);
-    const edit = (message: string, who: ChannelRequester | null = person()) =>
+    const edit = (
+      message: string,
+      who: ChannelRequester | null = person(),
+      readAt = "2026-11-07T10:00:00Z",
+    ) =>
       Effect.map(
         writer.tabEdit(
           { intent: "message", text: message },
           "input-1",
-          "2026-11-07T10:00:00Z",
+          readAt,
           Effect.succeed(who ?? undefined),
         ),
         (answer) => answer?.text,
@@ -119,6 +124,23 @@ describe("Memory tab note edits", () => {
             ' (replaces: "I deploy on Fridays.")\n',
         );
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  // 17:10 UTC is already Nov 8 in Seoul, where GOAT runs.
+  it.effect("a change made after midnight where GOAT runs carries that day, not UTC's", () =>
+    Effect.gen(function* () {
+      const { edit, read } = yield* setup(NOTES_HEADER + line(fridays, "a") + "\n");
+      yield* edit(
+        goatBotChangeNoteMessage(fridays, "I deploy on Mondays."),
+        person(),
+        "2026-11-07T17:10:00Z",
+      );
+      assert.include(yield* read, "\n- 2026-11-08: I deploy on Mondays. (asked in input-1)");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      Effect.provide(DateTime.layerCurrentZoneNamed("Asia/Seoul")),
+    ),
   );
 
   it.effect("notes with quotes are matched exactly, and a longer message goes to reception", () =>
