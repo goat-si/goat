@@ -182,3 +182,59 @@ it.effect("when the notice cannot be queued the tool does not say the person was
     assert.strictEqual(failed._tag, "ChannelLedgerError");
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect(
+  "a request bound to an earlier generation cannot change notes for the retried task",
+  () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const tidy = yield* turn(harness, "tidy my notes", "tidy");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const owner = (yield* ChannelRuntime.ChannelRuntime).ownerToken;
+      let reads = 0;
+      const actions = yield* actionsWith(
+        Layer.succeed(ChannelLedger.ChannelLedger, {
+          ...ledger,
+          // After the call is bound, the task finishes and is retried as its next generation.
+          getTask: (taskId) =>
+            Effect.gen(function* () {
+              reads += 1;
+              if (reads === 2) {
+                yield* commitTransition(
+                  ledger,
+                  (yield* ledger.getTask(taskId))!,
+                  {
+                    type: "task.completed",
+                    payload: { generation: tidy.task.generation, summary: "Done" },
+                  },
+                  { owner },
+                );
+                yield* commitTransition(
+                  ledger,
+                  (yield* ledger.getTask(taskId))!,
+                  {
+                    type: "task.retry.requested",
+                    payload: { generation: tidy.task.generation + 1 },
+                  },
+                  { owner },
+                );
+              }
+              return yield* ledger.getTask(taskId);
+            }),
+        }) as never,
+      );
+      const result = yield* actions.change({
+        caller: tidy.caller,
+        taskId: tidy.task.taskId,
+        inputId: tidy.inputId,
+        kind: "edit",
+        quote: "tidy my notes",
+      });
+      assert.strictEqual(result.reason, "task_finished");
+      const task = yield* ledger.getTask(tidy.task.taskId);
+      assert.strictEqual(task?.task.generation, tidy.task.generation + 1);
+      assert.isUndefined(task?.task.notesChangeRequested);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);

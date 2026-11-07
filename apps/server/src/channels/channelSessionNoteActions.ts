@@ -173,12 +173,13 @@ const make = Effect.gen(function* () {
         return yield* fail("not_found");
       const message = input.message;
       const now = DateTime.formatIso(yield* DateTime.now);
-      const refuse = Effect.fn("ChannelSessionNoteActions.refuse")(function* (
-        reason: NotesChangeRefusal,
+      // Queued with the outbox's retries before the model hears back: once per request, kind and
+      // reason, so a retried call adds nothing and a call refused for a new reason says so.
+      const notify = Effect.fn("ChannelSessionNoteActions.notify")(function* (
+        reason: NotesChangeRefusal | "correction_unmatched",
         text: string,
       ) {
-        // Queued with the outbox's retries, once per request and kind, before the model hears back.
-        const causeKey = "note-request:" + request.inputId + ":" + request.kind;
+        const causeKey = "note-request:" + request.inputId + ":" + request.kind + ":" + reason;
         const deliveryId = deliveryIdFor(causeKey);
         yield* ledger.enqueueDeliveries(
           [
@@ -197,6 +198,12 @@ const make = Effect.gen(function* () {
           ],
           now,
         );
+      });
+      const refuse = Effect.fn("ChannelSessionNoteActions.refuse")(function* (
+        reason: NotesChangeRefusal,
+        text: string,
+      ) {
+        yield* notify(reason, text);
         const result: NotesChangeResult = {
           outcome: "refused",
           reason,
@@ -227,7 +234,8 @@ const make = Effect.gen(function* () {
 
       for (let attempt = 0; attempt < 2; attempt++) {
         const latest = (yield* ledger.getTask(request.taskId)) ?? stored;
-        if (!OPEN.includes(latest.task.status))
+        // The run carries the generation it was bound to; a retry since then is new work.
+        if (latest.task.generation !== stored.task.generation || !OPEN.includes(latest.task.status))
           return yield* refuse("task_finished", CHANNEL_COPY.noteEditTaskDone);
         if (sameGrant(latest.task)) {
           const granted: NotesChangeResult = {
@@ -248,7 +256,7 @@ const make = Effect.gen(function* () {
           if (notice === CHANNEL_COPY.noteNotSaved)
             return yield* refuse("not_saved", CHANNEL_COPY.noteNotSaved);
           if (notice !== undefined) {
-            yield* refuse("not_saved", notice);
+            yield* notify("correction_unmatched", notice);
             const unmatched: NotesChangeResult = {
               outcome: "saved",
               reason: "correction_unmatched",

@@ -6,6 +6,7 @@ import {
   type RunId,
   type ThreadId,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -27,7 +28,7 @@ import * as ChannelSessionTaskActions from "./channelSessionTaskActions.ts";
 import { NOTES_HEADER, parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
-import { taskIdFor } from "./channelIds.ts";
+import { deliveryIdFor, taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { environmentId, goatInput, rpcContext, setupBot } from "./testkit/ChannelHarness.ts";
 
@@ -170,7 +171,7 @@ const inputIdIn = (sent: string, pattern: RegExp) => sent.match(pattern)?.[1] as
 
 const notices = Effect.gen(function* () {
   const rows = yield* (yield* SqlClient.SqlClient)<{ readonly message_json: string }>`
-    SELECT message_json FROM channel_outbox WHERE cause_key LIKE 'note-request:%'`;
+    SELECT message_json FROM channel_outbox WHERE cause_key LIKE 'note-request:%' ORDER BY rowid`;
   return rows.map((row) => (JSON.parse(row.message_json) as { readonly text: string }).text);
 });
 
@@ -523,25 +524,79 @@ describe("notes changes from a GOAT Bot session turn", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("a refusal notice is queued once in the outbox and delivered", () => {
+  it.effect(
+    "a refusal notice is queued once and is sent after a restart and a failed attempt",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* writeNotes(NOTES_HEADER);
+        // Reception already sent this turn's receipt; on a session-first turn the outbox would send
+        // the notice after the turn's answer, keeping one task's messages in order.
+        const turn = yield* lookTurn(harness, "remember that I deploy on Fridays", "quote");
+        const args = remember(turn, fridays, "words the person never wrote");
+        assert.isTrue((yield* callNotes(harness, turn.caller, args)).told);
+        yield* callNotes(harness, turn.caller, args);
+        assert.deepStrictEqual(yield* notices, [CHANNEL_COPY.noteNotSaved]);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const owner = runtime.ownerToken;
+        const now = DateTime.formatIso(yield* DateTime.now);
+        const noticeId = deliveryIdFor(
+          "note-request:" + turn.inputId + ":remember:quote_not_in_input",
+        );
+        const claimNotice = Effect.map(
+          ledger.claimDueDeliveries({ owner, now, limit: 50 }),
+          (claimed) => claimed.find((row) => row.deliveryId === noticeId),
+        );
+        // The server stopped while the notice was being sent, then the next attempt failed.
+        assert.isDefined(yield* claimNotice);
+        yield* ledger.settleInterruptedDeliveries({ owner, now });
+        const retried = yield* claimNotice;
+        assert.isDefined(retried);
+        yield* ledger.recordDelivery({
+          owner,
+          deliveryId: retried!.deliveryId,
+          attempt: retried!.attempts,
+          now,
+          outcome: { type: "retry", at: now, errorCode: "transport_unavailable" },
+        });
+        yield* runtime.drain;
+        const state = yield* (yield* SqlClient.SqlClient)<{ readonly state: string }>`
+        SELECT state FROM channel_outbox WHERE cause_key LIKE 'note-request:%'`;
+        assert.deepStrictEqual(
+          state.map((row) => row.state),
+          ["delivered"],
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a later refusal for a new reason posts its own notice", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
       yield* setupBot;
       yield* writeNotes(NOTES_HEADER);
-      // Reception already sent this turn's receipt; on a session-first turn the outbox would send
-      // the notice after the turn's answer, keeping one task's messages in order.
-      const turn = yield* lookTurn(harness, "remember that I deploy on Fridays", "quote");
-      const args = remember(turn, fridays, "words the person never wrote");
-      assert.isTrue((yield* callNotes(harness, turn.caller, args)).told);
-      yield* callNotes(harness, turn.caller, args);
-      assert.deepStrictEqual(yield* notices, [CHANNEL_COPY.noteNotSaved]);
-      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-      const state = yield* (yield* SqlClient.SqlClient)<{ readonly state: string }>`
-        SELECT state FROM channel_outbox WHERE cause_key LIKE 'note-request:%'`;
-      assert.deepStrictEqual(
-        state.map((row) => row.state),
-        ["delivered"],
+      const tidy = yield* lookTurn(harness, "tidy my notes", "tidy");
+      const other = yield* lookTurn(harness, "remember that staging is staging-02", "other");
+      yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"));
+      harness.world.setStatus(tidy.caller.threadId, 1, "completed");
+      const misquoted = yield* callNotes(
+        harness,
+        other.caller,
+        remember(other, "Staging is staging-02.", "words the person never wrote"),
       );
+      assert.strictEqual(misquoted.reason, "quote_not_in_input");
+      const busy = yield* callNotes(
+        harness,
+        other.caller,
+        remember(other, "Staging is staging-02.", "remember that staging is staging-02"),
+      );
+      assert.strictEqual(busy.reason, "busy");
+      assert.deepStrictEqual(yield* notices, [
+        CHANNEL_COPY.noteNotSaved,
+        CHANNEL_COPY.noteEditBusy,
+      ]);
     }).pipe(Effect.provide(harness.layer));
   });
 
