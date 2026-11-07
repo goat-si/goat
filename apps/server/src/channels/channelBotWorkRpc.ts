@@ -12,7 +12,7 @@ export const channelBotWorkRpcHandlers = Effect.fn("channel.botWorkRpcHandlers")
 ) {
   return {
     ...ChannelBotThreads.rpcHandlers(yield* ChannelBotThreads.ChannelBotThreads, owner),
-    ...ChannelBotNotesReader.rpcHandlers(yield* ChannelBotNotesReader.ChannelBotNotesReader),
+    ...ChannelBotNotesReader.rpcHandlers(yield* ChannelBotNotesReader.ChannelBotNotesReader, owner),
     // Built once per connection, so this permit lets each connection read one chunk at a time.
     ...ChannelBotArtifacts.rpcHandlers(
       yield* ChannelBotArtifacts.ChannelBotArtifacts,

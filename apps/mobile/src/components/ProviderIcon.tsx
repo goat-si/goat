@@ -240,6 +240,8 @@ export function ProviderInstanceIcon(props: {
             }}
           >
             <Text
+              // The badge is a fixed 12pt mark on a fixed-size icon; scaled initials overflow it.
+              allowFontScaling={false}
               className={accentColor ? undefined : "text-foreground-muted"}
               style={{
                 fontSize: 7,

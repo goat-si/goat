@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotNotesReader from "./ChannelBotNotesReader.ts";
 import { channelNotesRevision } from "./channelBriefs.ts";
@@ -49,7 +50,11 @@ const readerLayer = (
     ChannelBotNotesReader.make(options),
   ).pipe(
     Layer.provideMerge(
-      Layer.mergeAll(ServerConfig.layerTest(process.cwd(), { prefix: "goat-bot-notes-" }), home),
+      Layer.mergeAll(
+        ServerConfig.layerTest(process.cwd(), { prefix: "goat-bot-notes-" }),
+        home,
+        SqlitePersistence.layerMemory,
+      ),
     ),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -71,7 +76,22 @@ const writeNotes = (text: string | Uint8Array) =>
     return files;
   });
 
-const list = Effect.flatMap(ChannelBotNotesReader.ChannelBotNotesReader, (reader) => reader.list);
+// Sources are covered in ChannelBotNoteSources.test.ts; these notes name inputs no ledger holds.
+const viewer = {
+  ownerId: "environment:test",
+  principalId: "owner",
+  displayName: "Owner",
+  grantedScopes: ["memory:read" as const],
+  runtimeModeCeiling: "approval-required" as const,
+};
+const list = Effect.flatMap(ChannelBotNotesReader.ChannelBotNotesReader, (reader) =>
+  reader.list(viewer),
+).pipe(
+  Effect.map((result) => ({
+    ...result,
+    notes: result.notes.map(({ source: _source, ...note }) => note),
+  })),
+);
 
 describe("ChannelBotNotesReader", () => {
   it.effect("lists dated notes newest first without the header or their source", () =>
