@@ -140,6 +140,7 @@ const sample = (day: number, value = day): M.MemoryStorageSample => {
 
 const encodeFailure = Schema.encodeSync(M.OrchestratorMcpFailure);
 const decodeFailure = Schema.decodeUnknownSync(M.OrchestratorMcpFailure);
+const isMcpFailure = Schema.is(M.OrchestratorMcpFailure);
 const fixtureNow = Date.parse(now);
 const overBudgetSample = () =>
   Effect.gen(function* () {
@@ -190,8 +191,9 @@ describe("MemoryStoreReclaim", () => {
         reclaimable: 0,
       });
       const failure = yield* Effect.flip(memoryFailure("goat_memory_remember")(refusal));
-      const wire = encodeFailure(failure as M.OrchestratorMcpFailure);
-      assert.deepInclude(decodeFailure(wire), {
+      assert.isTrue(isMcpFailure(failure), "a store-full refusal is an OrchestratorMcpFailure");
+      if (!isMcpFailure(failure)) return;
+      assert.deepInclude(decodeFailure(encodeFailure(failure)), {
         code: "capacity_exceeded",
         remoteCode: "memory_store_full",
       });
