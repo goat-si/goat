@@ -25,6 +25,7 @@ import { detachStackFrame } from "../git/detachStackFrame.ts";
 import { forkParked } from "../serverActivation.ts";
 
 const CONCURRENT_READS = 512;
+const SCOPE_STRIPES = 64;
 // Entry filenames have the store-id prefix; the scope revisions file does not.
 const STORE_ID = "pr-v2";
 const ENTRY_FILE_NAME = new RegExp(`^${STORE_ID}[0-9a-f]{64}$`);
@@ -84,6 +85,16 @@ export const make = Effect.gen(function* () {
   const clock = yield* Clock.Clock;
   let enabled = true;
   const lock = yield* Semaphore.make(CONCURRENT_READS);
+  const stripes = yield* Effect.forEach(Array.from({ length: SCOPE_STRIPES }), () =>
+    Semaphore.make(CONCURRENT_READS),
+  );
+  const stripeOf = (scope: string) => (Hash.string(scope) >>> 0) % SCOPE_STRIPES;
+  const stripeAt = (index: number) => {
+    const stripe = stripes[index];
+    if (stripe === undefined) throw new Error("Missing PR cache stripe");
+    return stripe;
+  };
+  const revisionWrites = yield* Semaphore.make(1);
   const digest = (key: string) =>
     crypto.digest("SHA-256", new TextEncoder().encode(key)).pipe(Effect.map(Hex.encode));
   const revisions = yield* Cache.makeWith(
@@ -160,6 +171,12 @@ export const make = Effect.gen(function* () {
           PersistenceError: () => read,
           SchemaError: () => read,
         }),
+        // A read stores its result under the revisions it started with, so an invalidation of
+        // one of its scopes must wait for it; reads of other scopes run on.
+        (effect) =>
+          [...new Set(scopes.map(stripeOf))]
+            .toSorted((left, right) => left - right)
+            .reduceRight((inner, stripe) => stripeAt(stripe).withPermits(1)(inner), effect),
         lock.withPermits(1),
       );
     }, detachStackFrame),
@@ -180,7 +197,8 @@ export const make = Effect.gen(function* () {
         return Effect.logWarning("PR cache disabled after clearing failed");
       }),
       Effect.uninterruptible,
-      lock.withPermits(CONCURRENT_READS),
+      revisionWrites.withPermits(1),
+      (effect, scope) => stripeAt(stripeOf(scope)).withPermits(CONCURRENT_READS)(effect),
       detachStackFrame,
     ),
   });

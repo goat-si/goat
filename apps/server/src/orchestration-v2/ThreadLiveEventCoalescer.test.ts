@@ -42,6 +42,7 @@ function makeToolActivity(
     readonly kind?: "tool.updated" | "tool.completed";
     readonly toolCallId?: string;
     readonly turnId?: RunId;
+    readonly output?: string;
   } = {},
 ): ThreadEvent {
   const itemRunId = options.turnId ?? runId;
@@ -72,7 +73,7 @@ function makeToolActivity(
         completedAt: status === "completed" ? now : null,
         updatedAt: now,
         input: "echo app.ts",
-        output: `output-${sequence}`,
+        output: options.output ?? `output-${sequence}`,
       },
     },
   };
@@ -204,6 +205,62 @@ const emptyProjection = {
 } satisfies OrchestrationV2ThreadProjection;
 
 describe("ThreadLiveEventCoalescer", () => {
+  it.effect.each(["items", "bytes"] as const)(
+    "replaces superseded tool output before charging the %s budget",
+    (limit) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const updates = Array.from({ length: 1_100 }, (_, index) => makeToolActivity(index + 1));
+          const latest = updates.at(-1)!;
+          const coalescer = yield* makeThreadLiveEventCoalescer(
+            limit === "items"
+              ? { maxItems: 1 }
+              : { maxSerializedBytes: Buffer.byteLength(encodeEvent(latest)) },
+          );
+          yield* coalescer.offerAll(updates);
+          expect(yield* coalescer.usage).toEqual({
+            retainedItems: 1,
+            retainedSerializedBytes: Buffer.byteLength(encodeEvent(latest)),
+          });
+          yield* coalescer.end;
+          expect(yield* coalescer.stream.pipe(Stream.runCollect)).toEqual([latest]);
+          expect(yield* coalescer.usage).toEqual({ retainedItems: 0, retainedSerializedBytes: 0 });
+        }),
+      ),
+  );
+
+  it.effect("handles a tool output burst larger than the default 8 MiB buffer", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const coalescer = yield* makeThreadLiveEventCoalescer();
+        const updates = Array.from({ length: 150 }, (_, index) =>
+          makeToolActivity(index + 1, { output: "x".repeat(64 * 1024) }),
+        );
+        yield* coalescer.offerAll(updates);
+        yield* coalescer.end;
+        expect(yield* coalescer.stream.pipe(Stream.runCollect)).toEqual([updates.at(-1)]);
+      }),
+    ),
+  );
+
+  it.effect("still fails when a single replacement exceeds the byte budget", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const first = makeToolActivity(1);
+        const coalescer = yield* makeThreadLiveEventCoalescer({
+          maxSerializedBytes: Buffer.byteLength(encodeEvent(first)),
+        });
+        yield* coalescer.offer(first);
+        const overflow = yield* coalescer
+          .offer(makeToolActivity(2, { output: "x".repeat(2_000) }))
+          .pipe(Effect.result);
+        expect(overflow._tag).toBe("Failure");
+        yield* coalescer.closed;
+        expect(yield* coalescer.usage).toEqual({ retainedItems: 0, retainedSerializedBytes: 0 });
+      }),
+    ),
+  );
+
   it("preserves tool-call identity switches as insertion-order boundaries", () => {
     const events = [
       makeToolActivity(1, { toolCallId: "call-a" }),
@@ -406,8 +463,8 @@ describe("ThreadLiveEventCoalescer", () => {
           yield* TestClock.adjust("40 millis");
           yield* coalescer.offerAll(latest);
           expect(yield* coalescer.usage).toEqual({
-            retainedItems: 4,
-            retainedSerializedBytes: serializedBytes([...first, ...latest]),
+            retainedItems: 2,
+            retainedSerializedBytes: serializedBytes(latest),
           });
           yield* TestClock.adjust("10 millis");
           const expectedUsage = {
