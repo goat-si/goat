@@ -10,6 +10,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as HostProcess from "@goat/shared/HostProcess";
+
 import * as ServerConfig from "../config.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -448,6 +450,49 @@ describe("GOAT Bot skill proposals", () => {
         const done = yield* proposalTask;
         assert.strictEqual(done?.resultSummary, "Saved the skill deploy-check.");
         assert.strictEqual(yield* fs.readFileString(target), expected);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  // Permissions cannot hide a file from Windows or from root.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32" || process.getuid?.() === 0)(
+    "a save that cannot read the file at its path settles nothing until it can",
+    () => {
+      const { harness } = harnessCapturing();
+      return Effect.gen(function* () {
+        yield* finishWith(harness);
+        const asked = (yield* proposalTask)!;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(asked.taskId))!,
+          {
+            type: "task.question.answered",
+            payload: { questionId: asked.openQuestions[0]!.questionId, answer: "Save" },
+          },
+          { owner: runtime.ownerToken },
+        );
+        const [answer] = yield* ledger.recentAnswers(asked.taskId, 1);
+        const expected = skillFileText({
+          taskId: asked.taskId,
+          proposal: asked.skillProposal!,
+          approvedAt: answer!.occurredAt,
+        });
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const dir = yield* skillsDir;
+        yield* fs.makeDirectory(dir, { recursive: true });
+        const target = path.join(dir, "deploy-check.md");
+        // An earlier link left the approved file, now unreadable.
+        yield* fs.writeFileString(target, expected);
+        yield* fs.chmod(target, 0o000);
+        yield* runtime.drain;
+        assert.strictEqual((yield* proposalTask)?.status, "received");
+        assert.lengthOf(yield* completions(asked.taskId), 0);
+        yield* fs.chmod(target, 0o644);
+        yield* runtime.drain;
+        assert.strictEqual((yield* proposalTask)?.resultSummary, "Saved the skill deploy-check.");
       }).pipe(Effect.provide(harness.layer));
     },
   );

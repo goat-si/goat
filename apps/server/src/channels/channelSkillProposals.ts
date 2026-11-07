@@ -128,7 +128,7 @@ export const makeSkillProposalAnswers = Effect.gen(function* () {
   // With the owner token, unique per save attempt across processes; a temp file is never reopened.
   const attempts = yield* Ref.make(0);
 
-  /** What is at the skill's path now: these exact bytes, another file, or nothing. */
+  /** What is at the skill's path now: these bytes, another file, nothing, or unknown (unreadable). */
   const found = (target: string, bytes: Uint8Array) =>
     fs.stat(target).pipe(
       Effect.flatMap((info) =>
@@ -145,27 +145,24 @@ export const makeSkillProposalAnswers = Effect.gen(function* () {
       Effect.catchTags({
         PlatformError: (cause) =>
           Effect.succeed(
-            cause.reason._tag === "NotFound" ? ("missing" as const) : ("failed" as const),
+            cause.reason._tag === "NotFound" ? ("missing" as const) : ("unknown" as const),
           ),
       }),
     );
 
   /**
-   * Links the prepared file into place. Without a prepared file (it could not be written), an
-   * earlier attempt's link may still be there, so the path decides.
+   * Links the prepared file into place. When that fails or there is no prepared file, an earlier
+   * attempt's link may be there, so the path decides; "missing" means nothing was written.
    */
   const place = (tmp: string | undefined, target: string, bytes: Uint8Array) =>
     (tmp === undefined
       ? found(target, bytes)
-      : fs.link(tmp, target).pipe(
-          Effect.as("saved" as const),
-          Effect.catchTags({
-            PlatformError: (cause) =>
-              cause.reason._tag === "AlreadyExists"
-                ? found(target, bytes)
-                : Effect.succeed("failed" as const),
-          }),
-        )
+      : fs
+          .link(tmp, target)
+          .pipe(
+            Effect.as("saved" as const),
+            Effect.catchTags({ PlatformError: () => found(target, bytes) }),
+          )
     ).pipe(Effect.map((outcome) => (outcome === "missing" ? ("failed" as const) : outcome)));
 
   const sweep = Effect.gen(function* () {
@@ -221,6 +218,13 @@ export const makeSkillProposalAnswers = Effect.gen(function* () {
           const outcome = save
             ? yield* place(prepared ? tmp : undefined, target, bytes)
             : "declined";
+          // Not knowing what is on disk settles nothing: the next pass looks again.
+          if (outcome === "unknown") {
+            yield* Effect.logWarning("GOAT Bot skill save could not read its file; retrying", {
+              taskId: current.task.taskId,
+            });
+            return;
+          }
           const summary =
             outcome === "saved"
               ? "Saved the skill " + proposal.name + "."
