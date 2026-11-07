@@ -220,8 +220,21 @@ async function install(name, version, entry) {
       if (attempt === 4) throw Error('Device hub exited before becoming ready. See ' + path.join(state, 'hub.log'));
     }
   }
-  let agentResult = {};
   let cleanupWarning;
+  let stopError;
+  if (mode === 'start' && read(daemonFile)) {
+    const entry = read(agentFile)?.entryPath || path.join(root, 'tools', 'agent-device@' + agentVersion, 'node_modules', 'agent-device', 'bin', 'agent-device.mjs');
+    if (fs.existsSync(entry)) {
+      const stopped = stopDaemon(entry, 25000, 15000);
+      cleanupWarning = stopped.cleanupWarning;
+      stopError = stopped.stopError;
+      if (stopped.status === 0) fs.rmSync(daemonFile, { force: true });
+    } else {
+      cleanupWarning = 'agent-device cleanup did not run; executable is missing: ' + entry;
+      stopError = 'agent-device did not stop; executable is missing: ' + entry;
+    }
+  }
+  let agentResult = {};
   if (mode === 'agent-start') {
   const agentEntry = await install('agent-device', agentVersion, 'bin/agent-device.mjs');
   const previousAgent = read(agentFile)?.entryPath;
@@ -247,7 +260,7 @@ async function install(name, version, entry) {
   const vendor = path.resolve(path.dirname(hubEntry), '../../vendor/serve-sim/dist');
   const optional = file => fs.existsSync(file) ? file : null;
   await pruneTools(path.join(root, 'tools'), [['expo-device-hub', hubVersion], ...(mode === 'agent-start' ? [['agent-device', agentVersion]] : [])], true).catch(() => {});
-  console.log(JSON.stringify({ nodePath: process.execPath, platforms, tools: versions(), hubPort: hub.port, ...agentResult, ...(cleanupWarning ? { cleanupWarning } : {}),
+  console.log(JSON.stringify({ nodePath: process.execPath, platforms, tools: versions(), hubPort: hub.port, ...agentResult, ...(cleanupWarning ? { cleanupWarning } : {}), ...(stopError ? { stopError } : {}),
     helpers: { serveSimAxSettings: optional(path.join(vendor, 'simax/serve-sim-ax-settings')), serveSimCli: optional(path.join(vendor, 'serve-sim.js')) } }));
   } finally { releaseHost(); }
 })().catch(error => { console.error(error.message); process.exitCode = 1; });
