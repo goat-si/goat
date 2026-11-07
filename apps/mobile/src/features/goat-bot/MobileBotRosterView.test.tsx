@@ -58,6 +58,7 @@ vi.mock("react-native", () => ({
     accessibilityLabel,
     onAccessibilityAction,
     accessibilityActions,
+    className,
   }: {
     children?: ReactNode;
     ref?: React.Ref<{ measureInWindow: Measure }>;
@@ -68,6 +69,7 @@ vi.mock("react-native", () => ({
     accessibilityLabel?: string;
     onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
     accessibilityActions?: ReadonlyArray<{ name: string; label?: string }>;
+    className?: string;
   }) => {
     React.useImperativeHandle(ref, () => measurer(() => roster.rowRect));
     if (onLayout) roster.rowLayout = onLayout;
@@ -78,6 +80,7 @@ vi.mock("react-native", () => ({
         aria-pressed={accessibilityState?.selected}
         aria-expanded={accessibilityState?.expanded}
         aria-label={accessibilityLabel}
+        data-class={className}
         data-actions={accessibilityActions?.map((action) => action.label ?? action.name).join(",")}
         onKeyDown={(event) => onAccessibilityAction?.({ nativeEvent: { actionName: event.key } })}
       >
@@ -567,6 +570,10 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
   expect(open).toHaveBeenLastCalledWith({ kind: "member", profile: gone });
   const restore = container.querySelector<HTMLButtonElement>('button[aria-label="Restore Gone"]');
   expect(restore?.textContent).toBe("Restore");
+  // A 44pt touch target in both directions, like the other GOAT Bot row buttons.
+  expect(restore?.getAttribute("data-class")?.split(" ")).toEqual(
+    expect.arrayContaining(["min-h-[44px]", "min-w-[44px]"]),
+  );
   await act(async () => restore?.click());
   expect(restoreDeleted).toHaveBeenCalledWith(gone);
   expect(open).toHaveBeenCalledTimes(2);
