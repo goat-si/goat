@@ -7,11 +7,15 @@ const state = vi.hoisted(() => ({
   capabilities: {} as Record<string, boolean>,
   calls: [] as string[],
   bots: [] as ReadonlyArray<Record<string, unknown>>,
+  connected: true,
+  botRef: null as { readonly environmentId: string; readonly threadId: string } | null,
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({
-    environments: [{ environmentId: "env", connected: true, supportsChannelLedger: true }],
-    botRef: null,
+    environments: [
+      { environmentId: "env", connected: state.connected, supportsChannelLedger: true },
+    ],
+    botRef: state.botRef,
   }),
 }));
 vi.mock("../../state/use-thread-detail", () => ({ useThreadVisibleTurnItems: () => [] }));
@@ -57,6 +61,8 @@ afterEach(async () => {
   state.calls = [];
   state.capabilities = {};
   state.bots = [];
+  state.connected = true;
+  state.botRef = null;
 });
 
 it("queries only capabilities advertised by the selected bot environment", async () => {
@@ -88,4 +94,21 @@ it("names the main bot's chat with its renamed profile", async () => {
   expect(named?.main?.name).toBe("Goaty");
   await act(async () => root?.render(<NameProbe botId="echo" />));
   expect(named?.member?.name).toBe("Echo");
+});
+
+it("reads the main bot's name only while its computer is connected, as the roster does", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.connected = false;
+  // A saved home keeps its computer selected while it is offline.
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  function NameProbe(props: { readonly botId?: string }) {
+    useMobileGoatBotMember(props.botId);
+    return null;
+  }
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<NameProbe />));
+  expect(state.calls).toEqual([]);
+  // A named member is still looked up, as before.
+  await act(async () => root?.render(<NameProbe botId="echo" />));
+  expect(state.calls).toContain("profiles");
 });

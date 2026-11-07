@@ -134,8 +134,11 @@ export function useMobileGoatBotMember(botId: string | undefined) {
       ? undefined
       : presentationById.get(environmentId)?.serverConfig?.environment.capabilities;
   const supported = capabilities?.goatBotMembers === true;
+  // A named member is looked up as before; the main bot's name follows the roster's condition.
+  const readsMember = supported && botId !== undefined;
+  const readsMain = selected?.connected === true && capabilities?.goatBotProfiles === true;
   const profiles = useEnvironmentQuery(
-    environmentId !== null && (supported || capabilities?.goatBotProfiles === true)
+    environmentId !== null && (readsMember || readsMain)
       ? channelEnvironment.listBots({
           environmentId,
           input: supported ? { includeDeleted: true } : {},
