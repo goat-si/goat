@@ -82,8 +82,8 @@ export interface GoatBotDiagnosticsInput {
   /** Null until the home server's settings and providers have loaded. */
   readonly model: GoatBotModelStatus | null;
   readonly canChangeModel: boolean;
-  /** Null until the bot's task rows have loaded. */
-  readonly rows: ReadonlyArray<BotThreadRow> | null;
+  /** Null until the bot's task rows have loaded; "unavailable" when its server cannot list them. */
+  readonly rows: ReadonlyArray<BotThreadRow> | null | "unavailable";
   readonly slack: ReadonlyArray<
     Pick<SlackChannelSettings, "enabled" | "status" | "lastError" | "lastDeliveryError">
   > | null;
@@ -161,7 +161,8 @@ function modelLine(
   };
 }
 
-function workLine(rows: ReadonlyArray<BotThreadRow> | null): GoatBotDiagnosticLine {
+function workLine(rows: GoatBotDiagnosticsInput["rows"]): GoatBotDiagnosticLine | null {
+  if (rows === "unavailable") return null;
   if (rows === null) return { key: "work", tone: "pending", text: "Loading work…", action: null };
   const tasks = rows.flatMap((row) => (row.kind === "task" ? [row.task] : []));
   const running = tasks.filter((task) => task.status === "running").length;

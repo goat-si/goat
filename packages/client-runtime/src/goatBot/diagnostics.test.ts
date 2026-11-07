@@ -160,6 +160,7 @@ describe("diagnoseGoatBot", () => {
     const loading = healthy({ rows: null });
     expect(line(loading, "work")).toMatchObject({ tone: "pending", text: "Loading work…" });
     expect(diagnoseGoatBot(loading).verdict).toBe("checking");
+    expect(line(healthy({ rows: "unavailable" }), "work")).toBeUndefined();
   });
 
   it("shows Slack problems for the main bot and hides Slack for members or when off", () => {
