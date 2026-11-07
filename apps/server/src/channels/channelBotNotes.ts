@@ -14,7 +14,9 @@ import type { ChannelReceptionSkill } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 
+import { CHANNEL_COPY } from "./channelCopy.ts";
 import {
   collapseNoteText,
   NOTES_HEADER,
@@ -121,6 +123,28 @@ export const appendChannelBotNote = (
     );
     return saved(target !== undefined);
   });
+
+/**
+ * Saves notes one at a time, so a correction sees the note the one before it saved. Each save
+ * answers what the reply must add: a correction that matched nothing, or a failed save.
+ */
+export const makeChannelBotNoteSaver = (fs: FileSystem.FileSystem, files: ChannelBotFiles) =>
+  Effect.map(
+    Semaphore.make(1),
+    (gate) => (note: string, readAt: string, inputId: string, replaces?: string) =>
+      gate
+        .withPermits(1)(appendChannelBotNote(fs, files, note, readAt, inputId, replaces))
+        .pipe(
+          Effect.map(({ correction }) =>
+            correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
+          ),
+          Effect.catch((cause) =>
+            Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
+              Effect.as(CHANNEL_COPY.noteNotSaved),
+            ),
+          ),
+        ),
+  );
 
 /**
  * Whether `quote` occurs in the person's message, ignoring differences in whitespace. Used to
