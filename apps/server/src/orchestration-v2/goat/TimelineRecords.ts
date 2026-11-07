@@ -264,6 +264,33 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
         });
         return;
       }
+      if (entry.type === "event") {
+        if (
+          existing !== undefined &&
+          existing !== null &&
+          (existing.type !== "notification" || existing.ledgerTask !== undefined)
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Turn item " + turnItemId + " is not an event line.",
+          });
+        }
+        const turnItem: OrchestrationV2TurnItem = {
+          ...base,
+          type: "notification",
+          source: { kind: "goat_bot_event" },
+          outcome: "updated",
+          summary: entry.text,
+        };
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: turnItem,
+        });
+        return;
+      }
       if (
         existing !== undefined &&
         existing !== null &&

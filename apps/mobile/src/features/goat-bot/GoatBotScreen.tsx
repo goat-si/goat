@@ -223,6 +223,13 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   if (row.kind === "day") {
     return <GoatBotDayStamp at={row.at} nowMs={nowMs} formatTime={receiptTime} />;
   }
+  if (row.kind === "event") {
+    return (
+      <Text accessibilityRole="text" className="my-2 text-center text-xs text-foreground-muted">
+        {row.text}
+      </Text>
+    );
+  }
   const layout = goatBotBubbleLayout(row.groupPosition);
   if (row.kind === "task") {
     if (props.onSelectTask) {

@@ -471,6 +471,11 @@ export const ChannelTimelineRecord = Schema.Struct({
       type: Schema.Literal("task_chip"),
       chip: ChannelTaskChip,
     }),
+    /** A line about the bot itself, such as a rename; recorded after the change it describes. */
+    Schema.Struct({
+      type: Schema.Literal("event"),
+      text: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+    }),
   ]),
 });
 export type ChannelTimelineRecord = typeof ChannelTimelineRecord.Type;

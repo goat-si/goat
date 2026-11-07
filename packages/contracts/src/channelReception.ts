@@ -190,8 +190,8 @@ export const ChannelReceptionAction = Schema.Union([
     host: Schema.optional(TrimmedNonEmptyString),
     requestedTarget: Schema.optional(ChannelDispatchTarget),
     /**
-     * The person's words in the current input asking the work to change or forget a standing
-     * note. The server keeps it only when it occurs in that input; only such tasks may edit notes.
+     * The person's words in the current input asking the work to change, forget or tidy standing
+     * notes. The server keeps it only when it occurs in that input; only such tasks may edit notes.
      */
     notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
     /**

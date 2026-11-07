@@ -34,6 +34,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
+import * as ChannelBotEvents from "./ChannelBotEvents.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -107,6 +108,9 @@ const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const permit = yield* Semaphore.make(1);
   const serial = <A, E, R>(effect: Effect.Effect<A, E, R>) => permit.withPermits(1)(effect);
+  const events = yield* ChannelBotEvents.ChannelBotEvents;
+  // Edits queue their lines in commit order, so two quick renames read in the order they landed.
+  const profileEdits = yield* Semaphore.make(1);
   const now = Effect.map(DateTime.now, DateTime.formatIso);
 
   const readMember = (ownerId: string, botId: string) =>
@@ -385,6 +389,23 @@ const make = Effect.gen(function* () {
       Effect.andThen(profiles.list(owner, { includeDeleted: input.includeDeleted })),
     );
 
+  /** A rename or a new purpose leaves a line in that bot's conversation once it is saved. */
+  const update: ChannelBotMembers["Service"]["update"] = (input, owner) =>
+    profileEdits.withPermits(1)(
+      Effect.gen(function* () {
+        const { bot, changed } = yield* profiles.updateWithChanges(input, owner);
+        for (const field of changed)
+          yield* events.emit({
+            ownerId: owner.ownerId,
+            botId: bot.botId,
+            kind: "profile-" + field,
+            id: bot.botId,
+            text: field === "name" ? "Renamed to " + bot.name : "Purpose updated",
+          });
+        return bot;
+      }),
+    );
+
   return ChannelBotMembers.of({
     create,
     setHidden,
@@ -392,7 +413,7 @@ const make = Effect.gen(function* () {
     restore,
     list,
     reconcileAll: reconcile(undefined),
-    update: profiles.update,
+    update,
   });
 });
 

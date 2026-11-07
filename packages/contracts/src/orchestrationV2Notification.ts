@@ -94,6 +94,7 @@ export const OrchestrationV2NotificationSource = kindUnionWithFallback(
     }),
     Schema.Struct({ kind: Schema.Literal("background_task") }),
     Schema.Struct({ kind: Schema.Literal("system") }),
+    Schema.Struct({ kind: Schema.Literal("goat_bot_event") }),
   ],
   (kind) => Schema.Struct({ kind }),
   () => ({ kind: "background_task" }),

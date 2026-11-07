@@ -114,14 +114,22 @@ export const applySnapshotToWorktree = Effect.fn("restoreSnapshot.applySnapshotT
         for (const name of deleted.toString().split("\0").filter(Boolean)) {
           const path = NodePath.resolve(cwd, name);
           const rel = NodePath.relative(cwd, path);
-          if (!rel || rel.startsWith("..") || NodePath.isAbsolute(rel))
+          if (
+            !rel ||
+            rel === ".." ||
+            rel.startsWith(`..${NodePath.sep}`) ||
+            NodePath.isAbsolute(rel)
+          )
             throw new Error("Invalid snapshot path");
           await NodeFSP.rm(path, { force: true });
           let parent = NodePath.dirname(path);
+          let parentRel = NodePath.relative(cwd, parent);
           while (
             parent !== cwd &&
-            NodePath.relative(cwd, parent) &&
-            !NodePath.relative(cwd, parent).startsWith("..")
+            parentRel &&
+            parentRel !== ".." &&
+            !parentRel.startsWith(`..${NodePath.sep}`) &&
+            !NodePath.isAbsolute(parentRel)
           ) {
             try {
               await NodeFSP.rmdir(parent);
@@ -134,6 +142,7 @@ export const applySnapshotToWorktree = Effect.fn("restoreSnapshot.applySnapshotT
               throw error;
             }
             parent = NodePath.dirname(parent);
+            parentRel = NodePath.relative(cwd, parent);
           }
         }
         const changed = await git(cwd, [

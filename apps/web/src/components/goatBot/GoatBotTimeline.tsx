@@ -183,6 +183,16 @@ export function GoatBotTimeline({
                   </li>
                 );
               }
+              case "event":
+                return (
+                  <li
+                    key={row.id}
+                    role="note"
+                    className="my-2 text-center text-xs leading-4 text-muted-foreground"
+                  >
+                    {row.text}
+                  </li>
+                );
               case "user": {
                 const delivery = row.delivery;
                 const failed = delivery.state === "failed";

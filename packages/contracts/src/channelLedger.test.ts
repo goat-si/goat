@@ -312,6 +312,15 @@ describe("timeline records", () => {
         },
       }),
     ).toMatchObject({ entry: { meta: { inReplyToInputId: "input-1" } } });
+    expect(
+      roundTrip(ChannelTimelineRecord, {
+        recordKey: "event:profile-name:scout:change-1",
+        entry: { type: "event", text: "Renamed to Scout" },
+      }),
+    ).toEqual({
+      recordKey: "event:profile-name:scout:change-1",
+      entry: { type: "event", text: "Renamed to Scout" },
+    });
   });
 });
 

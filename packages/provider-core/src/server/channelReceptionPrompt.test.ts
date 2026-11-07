@@ -196,6 +196,17 @@ describe("channel reception reads", () => {
     ).toBe(plain);
   });
 
+  // The field is the only permission a task has to edit the notes, and what the Memory tab's busy
+  // check reads; a tidy request without it can neither tidy nor hold off a forget.
+  it("asks for notesChangeRequested when the person asks to tidy or reorganise the notes", () => {
+    const prompt = buildChannelReceptionPrompt({ ...input, inputText: "tidy my notes" }).prompt;
+    expect(prompt).toContain(
+      "To forget a note, change several at once, or tidy, reorganise, merge or clean up the notes,",
+    );
+    expect(prompt).toContain("To change, forget or tidy notes this way,");
+    expect(prompt).toContain("changes, forgets or tidies notes at the person's request");
+  });
+
   it("tells a renamed bot its name and purpose right after who it is", () => {
     const lines = buildChannelReceptionPrompt({
       ...input,
