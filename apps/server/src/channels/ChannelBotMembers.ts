@@ -81,7 +81,7 @@ const newBotId = () =>
 const PROFILE_PREFIX = "bot-profile:";
 /** At most this many active members per owner, and member records of any state. */
 export const MEMBER_LIMIT = 50;
-export const MEMBER_RECORD_LIMIT = 500;
+const MEMBER_RECORD_LIMIT = 500;
 /** Unfinished members one reconcile pass takes; the next list or ownership takes the rest. */
 const RECONCILE_BATCH = 100;
 const createKey = (ownerId: string, clientRequestId: string) =>
