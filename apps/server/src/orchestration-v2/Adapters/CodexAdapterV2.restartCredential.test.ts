@@ -17,7 +17,13 @@ describe("Codex credential after a server restart", () => {
           yield* sessions.set(f.config);
           // Codex answers the resume idle, as it does for a held thread it rejoins.
           f.resume(2, f.threadParams());
-          yield* f.turnStart(f.reload(3, undefined, { terminals: true }), 1, false);
+          // A dead credential does not wait for background terminals: the reload never asks for them,
+          // and the turn tells the agent they stopped.
+          yield* f.turnStart(f.reload(3), 1, {
+            computerUse: false,
+            screenCode: false,
+            reloadedAfterRestart: true,
+          });
           f.turnCompleted(1);
           const replay = yield* f.openResumed("idle");
           yield* replay.startTurn(1);

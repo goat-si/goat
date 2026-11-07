@@ -115,7 +115,11 @@ import type {
 } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
-import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
+import {
+  CUA_DEFERRED_NOTE,
+  RESTART_RELOAD_NOTE,
+  makeCodexThreadStatuses,
+} from "./codexThreadStatuses.ts";
 import * as CodexSubagents from "./codexSubagents.ts";
 import {
   interruptStopTargets,
@@ -792,9 +796,13 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     const deferredContext = input.computerUseDeferred
       ? { goat_computer_use_deferred: { kind: "application" as const, value: CUA_DEFERRED_NOTE } }
       : {};
+    const restartContext = input.reloadedAfterRestart
+      ? { goat_restart_reload: { kind: "application" as const, value: RESTART_RELOAD_NOTE } }
+      : {};
     const additionalContext = {
       ...goatContext,
       ...deferredContext,
+      ...restartContext,
       ...appContext,
       ...memoryContext,
     };
@@ -6929,15 +6937,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const limitChanged =
               (appliedSubagentsByThread.get(threadId) ?? "") !== runtime.subagentKey;
             // A held thread may carry any credential, such as one from before a server restart.
-            const credentialStale = applied !== next || foreignConfigThreads.has(threadId);
+            const foreign = foreignConfigThreads.has(threadId);
+            const credentialStale = applied !== next || foreign;
             const stale = credentialStale || limitChanged || threadStatuses.dropped(threadId);
             const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
             // Other changes wait for background terminals too; a new driver alone does not
-            // (#1569), but one that comes with a new subagent limit does (#1572).
+            // (#1569), but one that comes with a new subagent limit does (#1572). A credential from
+            // an earlier server is dead, so only running work and goals defer its replacement.
             const driverChanged = mcpSession ? cuaChanged : managedCuaByThread.has(threadId);
             const busy =
               stale &&
-              (yield* threadStatuses.busy(client, conversation, !driverChanged || limitChanged));
+              (yield* threadStatuses.busy(
+                client,
+                conversation,
+                !foreign && (!driverChanged || limitChanged),
+              ));
             const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
             if (isGoatBotSessionThreadId(turnInput.threadId) && credentialStale && busy)
               return yield* toProtocolError(
@@ -6958,7 +6972,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               };
               yield* threadStatuses.reload(client, threadId, {
                 ...runtime.params,
-                ...(mcpSession || (applied === undefined && !foreignConfigThreads.has(threadId))
+                ...(mcpSession || (applied === undefined && !foreign)
                   ? {}
                   : { config: { ...runtime.params.config, mcp_servers: detached } }),
               });
@@ -6987,6 +7001,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               ...codexTurnSkills(mcpSession, runtime.cuaDriver),
               computerUseDeferred,
+              reloadedAfterRestart: foreign && !busy,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });

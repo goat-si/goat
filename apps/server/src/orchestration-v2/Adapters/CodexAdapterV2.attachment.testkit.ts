@@ -464,13 +464,19 @@ export const fixture = (scenario: string) => {
   const turnStart = (
     id: number,
     ordinal: number,
-    skills: boolean | { readonly computerUse: boolean; readonly screenCode: boolean },
+    skills:
+      | boolean
+      | {
+          readonly computerUse: boolean;
+          readonly screenCode: boolean;
+          readonly reloadedAfterRestart?: boolean;
+        },
     deferred = false,
     thread = nativeThreadId,
     text = `turn-${ordinal}`,
   ) =>
     Effect.gen(function* () {
-      const { computerUse, screenCode } =
+      const { computerUse, screenCode, reloadedAfterRestart } =
         typeof skills === "boolean" ? { computerUse: skills, screenCode: false } : skills;
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
         nativeThreadId: thread,
@@ -481,6 +487,7 @@ export const fixture = (scenario: string) => {
         browserToolsAvailable: false,
         computerUse,
         computerUseDeferred: deferred,
+        reloadedAfterRestart,
         screenCode,
       });
       entries.push({ type: "expect_outbound", frame: { id, method: "turn/start", params } });
