@@ -1,4 +1,4 @@
-import { withGitPermit } from "./BackgroundGitWork.ts";
+import { BackgroundGitWork } from "./BackgroundGitWork.ts";
 import { makeReviewDiffHash } from "./reviewDiffHash.ts";
 import {
   parseReviewNumstat,
@@ -107,12 +107,14 @@ const branchBaseConfigKey = (branch: string) => `branch.${branch}.t3-merge-base`
  * CLI's key, which branches cut before then still carry instead.
  */
 const legacyBranchBaseConfigKey = (branch: string) => `branch.${branch}.gh-merge-base`;
+const gitProcesses = Semaphore.makeUnsafe(8);
 // Silence, not total time, marks a stuck checkout: a Windows checkout under real-time
 // scanning or a hook installing dependencies can print steadily for many minutes.
 const WORKTREE_ADD_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
 // The first fetch after a long gap can pull thousands of new refs for minutes while
 // printing progress the whole time, so the worktree base fetch also stops only on silence.
 const WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
+const backgroundGitProcesses = Semaphore.makeUnsafe(2);
 const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
@@ -1060,7 +1062,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         input.timeoutMs === null ||
         (input.timeoutMs ?? DEFAULT_TIMEOUT_MS) > DEFAULT_TIMEOUT_MS
           ? execution
-          : withGitPermit(execution),
+          : Effect.gen(function* () {
+              const lane = (yield* BackgroundGitWork) ? backgroundGitProcesses : gitProcesses;
+              return yield* lane.withPermits(1)(execution);
+            }),
       Effect.withSpan(input.operation, {
         kind: "client",
         attributes: {

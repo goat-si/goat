@@ -1,10 +1,4 @@
 import { assert, it } from "@effect/vitest";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { BackgroundGitWork } from "../vcs/BackgroundGitWork.ts";
-import { makeGitVcsDriverCore } from "../vcs/GitVcsDriverCore.ts";
-import { makeSuccessfulHandle } from "../vcs/testing/configLockRegression.ts";
-import { layerServerConfig } from "../vcs/testing/gitFixture.ts";
 import {
   backgroundReads,
   failFastReaderAdmission,
@@ -128,83 +122,6 @@ export function settlementAdmissionTests({
   startHarness,
 }: Pick<typeof Harness, "makeHarness" | "makeThread" | "makeSnapshot" | "startHarness">) {
   admissionWorkerTests();
-  it.effect("settles a stopped thread while full-sweep lookups and Git are saturated", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        yield* TestClock.setTime(Date.parse(NOW));
-        const release = yield* Deferred.make<void>();
-        const lookups = yield* Queue.unbounded<string>();
-        const gitStarts = yield* Queue.unbounded<string>();
-        const targetLane = yield* Queue.unbounded<boolean>();
-        const settled = yield* Deferred.make<void>();
-        const spawner = ChildProcessSpawner.make((command) =>
-          Effect.gen(function* () {
-            const branch = ChildProcess.isStandardCommand(command) ? String(command.args[0]) : "";
-            yield* Queue.offer(gitStarts, branch);
-            return ChildProcessSpawner.makeHandle({
-              ...makeSuccessfulHandle("ok"),
-              exitCode:
-                branch === "target"
-                  ? Effect.succeed(ChildProcessSpawner.ExitCode(0))
-                  : Deferred.await(release).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
-            });
-          }),
-        );
-        const driver = yield* makeGitVcsDriverCore().pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provide(layerServerConfig),
-        );
-        const blockers = Array.from({ length: 8 }, (_, index) =>
-          makeThread(`full-${index}`, { branch: `full-${index}` }),
-        );
-        const target = makeThread("priority-target", { branch: "target" });
-        const fixture = yield* makeHarness({
-          snapshot: makeSnapshot(blockers),
-          settings: {
-            ...DEFAULT_SERVER_SETTINGS,
-            sidebarAutoSettleAfterDays: null,
-            sidebarAutoSettleOnMerge: true,
-          },
-          onCandidateRead: (id) =>
-            id === target.id
-              ? Effect.flatMap(BackgroundGitWork, (background) =>
-                  Queue.offer(targetLane, background),
-                ).pipe(Effect.asVoid)
-              : Effect.void,
-          branchPullRequest: (input) =>
-            Queue.offer(lookups, input.branch).pipe(
-              Effect.andThen(
-                driver.execute({
-                  operation: "test.settlementGit",
-                  cwd: input.cwd,
-                  args: [input.branch],
-                }),
-              ),
-              Effect.as(branchResult(input.branch, input.branch === "target")),
-            ),
-          onDispatch: (command) =>
-            command.threadId === target.id
-              ? Deferred.succeed(settled, undefined).pipe(Effect.asVoid)
-              : Effect.void,
-        });
-        yield* Effect.gen(function* () {
-          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
-          yield* service.start();
-          yield* Deferred.succeed(fixture.activation, undefined);
-          for (let i = 0; i < 8; i++) yield* Queue.take(lookups);
-          for (let i = 0; i < 2; i++) yield* Queue.take(gitStarts);
-          yield* Ref.set(fixture.snapshots, makeSnapshot([...blockers, target]));
-          yield* fixture.publishEvent(terminalEvent(target.id));
-          assert.isFalse(yield* Queue.take(targetLane));
-          assert.strictEqual(yield* Queue.take(lookups), "target");
-          assert.strictEqual(yield* Queue.take(gitStarts), "target");
-          yield* Deferred.await(settled);
-          yield* Deferred.succeed(release, undefined);
-          yield* service.drain;
-        }).pipe(Effect.provide(fixture.layer));
-      }).pipe(Effect.provide(NodeServices.layer)),
-    ),
-  );
   it.effect(
     "overflow reconciliation reads interactively while periodic full sweeps read in the background",
     () =>

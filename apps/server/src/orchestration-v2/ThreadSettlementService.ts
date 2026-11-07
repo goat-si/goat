@@ -1,4 +1,4 @@
-import { BackgroundGitWork, TargetedSettlementGitWork } from "../vcs/BackgroundGitWork.ts";
+import { BackgroundGitWork } from "../vcs/BackgroundGitWork.ts";
 import {
   backgroundWorkHoldsCompletion,
   turnItemUpdateCanEndBackgroundWork,
@@ -328,7 +328,6 @@ export const make = Effect.gen(function* () {
   const evaluated = new Map<ThreadId, { key: string; expiresAt: number }>();
   const lookupCache = new Map<string, { value: SettlementPullRequest | null; expiresAt: number }>();
   const lookupPermits = yield* Semaphore.make(LOOKUP_CONCURRENCY);
-  const targetedLookupPermits = yield* Semaphore.make(LOOKUP_CONCURRENCY);
   let mergeGeneration = 0;
 
   const sweep = Effect.fn("ThreadSettlementServiceV2.sweep")(function* (
@@ -637,9 +636,7 @@ export const make = Effect.gen(function* () {
           const pullRequest =
             cached !== undefined && cached.expiresAt > nowMs && mergedPullRequest === null
               ? cached.value
-              : yield* pullRequestFor(group).pipe(
-                  (threadId === undefined ? lookupPermits : targetedLookupPermits).withPermits(1),
-                );
+              : yield* pullRequestFor(group).pipe(lookupPermits.withPermits(1));
           if (pullRequest !== undefined && generation === mergeGeneration) {
             lookupCache.set(key, {
               value: pullRequest,
@@ -685,8 +682,7 @@ export const make = Effect.gen(function* () {
     refreshLookups = false,
   ) =>
     sweep(mergedPullRequest, threadId, refreshLookups).pipe(
-      Effect.provideService(BackgroundGitWork, threadId === undefined),
-      Effect.provideService(TargetedSettlementGitWork, threadId !== undefined),
+      Effect.provideService(BackgroundGitWork, true),
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterruptsOnly(cause),
         (cause) =>
