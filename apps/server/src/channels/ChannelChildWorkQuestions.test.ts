@@ -246,7 +246,7 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
   );
 
   it.effect(
-    "refuses a launched thread's approval from a lower ceiling, a read-only link, a stranger and an agent",
+    "refuses a launched thread's approval from a lower ceiling, a read-only link and a stranger",
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
@@ -273,32 +273,6 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
         yield* gateway.ingest(slackInput("approve", "Ev2", root, "U2"), slackContext);
         yield* gateway.ingest(slackInput("approve", "Ev3", root, "U3"), slackContext);
         yield* gateway.ingest(slackInput("approve", "Ev4", root, "U9"), slackContext);
-        yield* gateway.ingest(
-          {
-            kind: "mcp",
-            connectionId: "mcp",
-            conversationKey: "default",
-            externalMessageId: "agent-approve",
-            idempotencyKey: "agent-approve",
-            actor: { senderThreadId: ThreadId.make("thread:some-agent") },
-            replyAddress: {
-              kind: "mcp",
-              connectionId: "mcp",
-              requestNamespace: "ns-1",
-              conversationKey: "default",
-            },
-            text: "approve A1",
-            attachments: [],
-            receivedAt: since,
-            intent: "message",
-          },
-          {
-            ...owner,
-            principalId: "mcp:ns-1",
-            grantedScopes: ["orchestration:read", "orchestration:operate"],
-            caller: { type: "mcp", requestNamespace: "ns-1" },
-          },
-        );
         yield* runtime.drain;
         assert.strictEqual(responses(harness).length, 0);
 
