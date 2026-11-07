@@ -25,9 +25,15 @@ import {
   parseChannelBotNoteLines,
   replacesMarker,
 } from "./channelBotNoteLines.ts";
+import {
+  channelBotNotesSection,
+  EMPTY_NOTES,
+  NOTES_SCAN_BYTES,
+  selectChannelBotNotes,
+  type ChannelBotNotesSnapshot,
+} from "./channelBotNotesRecall.ts";
+import { readChannelBotNotesTail } from "./channelBotNotesTail.ts";
 
-/** The newest part of the notes reception reads, in characters. */
-const NOTES_READ_CHARS = 6_000;
 /** How far back a correction looks for the note it replaces, in characters. */
 const CORRECTION_READ_CHARS = 64 * 1024;
 const NOTE_MAX_CHARS = 500;
@@ -58,19 +64,31 @@ export const channelBotFilesFor = (path: Path.Path, stateDir: string): ChannelBo
 };
 
 /**
- * The newest notes still in force, one line each, or an empty string when there are none or they
- * cannot be read. A replaced note is left out; its replacement is always later, so the newest part
- * of the file decides that alone.
+ * The notes to show the bot for `query` (the message, request or instruction at hand), read from
+ * the newest part of the file; undefined when the file cannot be read, so a caller can tell a
+ * failed read from a file with no notes.
  */
-export const readChannelBotNotes = (fs: FileSystem.FileSystem, files: ChannelBotFiles) =>
-  Effect.gen(function* () {
-    const text = yield* fs.readFileString(files.notes);
-    const body = text.startsWith(NOTES_HEADER) ? text.slice(NOTES_HEADER.length) : text;
-    return parseChannelBotNoteLines(notesTail(body, NOTES_READ_CHARS))
-      .filter((line) => line.replacedBy === undefined)
-      .map((line) => line.raw)
-      .join("\n");
-  }).pipe(Effect.orElseSucceed(() => ""));
+export const readChannelBotNotesSnapshot = Effect.fn("channelBotNotes.readSnapshot")(
+  function* (files: ChannelBotFiles, query: string) {
+    const tail = yield* readChannelBotNotesTail(files.notes, NOTES_SCAN_BYTES);
+    if (tail === null) return EMPTY_NOTES;
+    return selectChannelBotNotes(new TextDecoder().decode(tail.bytes), query);
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("GOAT Bot notes could not be read", { cause }).pipe(
+          Effect.as<ChannelBotNotesSnapshot | undefined>(undefined),
+        ),
+      ),
+    ),
+);
+
+/** The notes section for `query`, or an empty string when there are none or they cannot be read. */
+export const readChannelBotNotes = (files: ChannelBotFiles, query: string) =>
+  Effect.map(readChannelBotNotesSnapshot(files, query), (notes) =>
+    notes === undefined ? "" : channelBotNotesSection(notes),
+  );
 
 export interface ChannelBotNoteSaved {
   /** Set when the note was a correction: whether it replaced the note it named. */

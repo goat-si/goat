@@ -511,7 +511,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (read.kind) {
         case "memory": {
-          const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+          const notes = yield* readChannelBotNotes(botFiles, read.query);
           // The whole visible journal is searched; only the prompt's copy is cut to size.
           const journal = journalFor(
             yield* visibleTasks(viewer, conversationId),
@@ -1083,7 +1083,7 @@ const make = Effect.gen(function* () {
                 );
                 const shells = yield* listThreads;
                 const facts = yield* hostFacts(shells);
-                const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+                const notes = yield* readChannelBotNotes(botFiles, message.text);
                 // Everything this pass sees about other work is judged with the link as it is now.
                 const viewer = yield* viewerNow(requester, message.connectionId);
                 // Titles of the owner's threads are other work, so only someone who may read it sees them.
