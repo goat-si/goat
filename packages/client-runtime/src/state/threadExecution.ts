@@ -669,6 +669,7 @@ export function notificationChildThreadId(
     case "monitor":
     case "background_task":
     case "system":
+    case "goat_bot_event":
       return undefined;
     default:
       source satisfies never;

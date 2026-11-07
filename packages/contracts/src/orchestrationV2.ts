@@ -18,10 +18,10 @@ import {
 } from "./memory.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import { withRecordIdTable } from "./orchestrationV2IdTable.ts";
+import { kindUnionWithFallback } from "./kindUnion.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
@@ -990,43 +990,6 @@ export const OrchestrationV2ProviderSessionDetached = Schema.Struct({
 export type OrchestrationV2ProviderSessionDetached =
   typeof OrchestrationV2ProviderSessionDetached.Type;
 
-function encodedKind(member: Schema.Top): string {
-  const encoded = SchemaAST.toEncoded(member.ast);
-  const kind = SchemaAST.isObjects(encoded)
-    ? encoded.propertySignatures.find((property) => property.name === "kind")?.type
-    : undefined;
-  if (kind !== undefined && SchemaAST.isLiteral(kind) && typeof kind.literal === "string") {
-    return kind.literal;
-  }
-  throw new Error("Each member of a kind union needs a literal string `kind`.");
-}
-
-function kindUnionWithFallback<
-  const Members extends ReadonlyArray<Schema.Top & { readonly Encoded: { readonly kind: string } }>,
-  Unknown extends Schema.Top,
->(
-  members: Members,
-  unknown: (kind: Schema.optional<Schema.String>) => Unknown,
-  fallback: (value: Unknown["Type"]) => Schema.Union<Members>["Encoded"],
-) {
-  const knownKinds: ReadonlySet<string> = new Set(members.map(encodedKind));
-  const unknownKind = unknown(
-    Schema.optional(
-      Schema.String.check(
-        Schema.makeFilter(
-          (kind: string) => !knownKinds.has(kind) || "A known kind must decode in full.",
-        ),
-      ),
-    ),
-  ).pipe(
-    Schema.decodeTo(Schema.Union(members), {
-      decode: SchemaGetter.transform(fallback),
-      encode: SchemaGetter.forbidden(() => "Unknown kinds are decode-only."),
-    }),
-  );
-  return Schema.Union([...members, unknownKind]);
-}
-
 const PendingBackgroundTaskFields = {
   taskId: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),
@@ -1303,6 +1266,7 @@ export const OrchestrationV2NotificationSource = kindUnionWithFallback(
     }),
     Schema.Struct({ kind: Schema.Literal("background_task") }),
     Schema.Struct({ kind: Schema.Literal("system") }),
+    Schema.Struct({ kind: Schema.Literal("goat_bot_event") }),
   ],
   (kind) => Schema.Struct({ kind }),
   () => ({ kind: "background_task" }),

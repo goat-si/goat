@@ -162,6 +162,15 @@ export type GoatBotRow =
       readonly card: GoatBotTaskCard;
       readonly firstInGroup: boolean;
       readonly groupPosition: GoatBotGroupPosition;
+    }
+  | {
+      /** A line about the bot itself, such as a rename or a paused routine. */
+      readonly kind: "event";
+      readonly id: string;
+      readonly text: string;
+      readonly createdAt: string;
+      readonly firstInGroup: boolean;
+      readonly groupPosition: GoatBotGroupPosition;
     };
 
 export interface GoatBotConversationPreview {
@@ -176,7 +185,7 @@ export function goatBotConversationPreview(input: {
   readonly lastVisitedAt: string | null | undefined;
   readonly active: boolean;
 }): GoatBotConversationPreview | null {
-  const last = input.rows.findLast((row) => row.kind !== "day");
+  const last = input.rows.findLast((row) => row.kind !== "day" && row.kind !== "event");
   if (!last) return null;
   const visitedAt = input.lastVisitedAt
     ? Date.parse(input.lastVisitedAt)
@@ -214,7 +223,8 @@ type ContentRow = Exclude<GoatBotRow, { kind: "day" }>;
 type UngroupedRow =
   | Omit<Extract<ContentRow, { kind: "user" }>, "firstInGroup" | "groupPosition" | "showReceipt">
   | Omit<Extract<ContentRow, { kind: "bot" }>, "firstInGroup" | "groupPosition">
-  | Omit<Extract<ContentRow, { kind: "task" }>, "firstInGroup" | "groupPosition">;
+  | Omit<Extract<ContentRow, { kind: "task" }>, "firstInGroup" | "groupPosition">
+  | Omit<Extract<ContentRow, { kind: "event" }>, "firstInGroup" | "groupPosition">;
 
 function itemCreatedAt(item: OrchestrationV2TurnItem): string {
   return DateTime.formatIso(item.startedAt ?? item.updatedAt);
@@ -228,8 +238,8 @@ function localDayKey(iso: string): string {
     : `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 }
 
-function side(row: UngroupedRow): "user" | "bot" {
-  return row.kind === "user" ? "user" : "bot";
+function side(row: UngroupedRow): "user" | "bot" | "event" {
+  return row.kind === "user" ? "user" : row.kind === "event" ? "event" : "bot";
 }
 
 const attachmentLabels = (
@@ -337,6 +347,19 @@ export function buildGoatBotTimeline(input: {
       continue;
     }
     if (item.type === "notification") {
+      if (item.source.kind === "goat_bot_event" && item.ledgerTask === undefined) {
+        // Event lines describe the bot, so a single task's view leaves them out.
+        if (input.taskId === undefined) {
+          previousInputKey = null;
+          committed.push({
+            kind: "event",
+            id: item.id,
+            text: item.summary,
+            createdAt: itemCreatedAt(item),
+          });
+        }
+        continue;
+      }
       const card = input.readers.taskCard(item);
       if (card === null) continue;
       if (input.taskId != null && card.key !== input.taskId) continue;
