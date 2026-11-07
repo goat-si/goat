@@ -339,12 +339,14 @@ export function MobileBotRosterView(props: {
                 <Text className="text-foreground-muted">Deleted</Text>
               </Pressable>
               {props.members?.canRestore ? (
-                <Button
-                  label="Restore"
+                <Pressable
+                  accessibilityRole="button"
                   accessibilityLabel={`Restore ${profile.name}`}
-                  tone="text"
                   onPress={() => props.members?.onRestoreDeleted(profile)}
-                />
+                  className="min-h-[44px] min-w-[44px] items-center justify-center px-3"
+                >
+                  <Text className="font-goat-medium text-primary-text">Restore</Text>
+                </Pressable>
               ) : null}
             </View>
           ))}
