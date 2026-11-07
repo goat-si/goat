@@ -300,6 +300,7 @@ export function GoatBotChatView({
             key={seed?.nonce ?? 0}
             initialText={seed?.text ?? ""}
             disabled={!canSend}
+            botName={title}
             placeholder={canSend ? `Message ${title}` : `${title} isn't available`}
             attachmentSupport={attachmentSupport}
             onSend={onSend}

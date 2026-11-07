@@ -22,6 +22,7 @@ async function render(disabled = false, initialText = "") {
     root?.render(
       <GoatBotComposer
         disabled={disabled}
+        botName="GOAT Bot"
         placeholder="Message GOAT Bot"
         initialText={initialText}
         onSend={onSend}
