@@ -20,7 +20,8 @@ export function useGoatBotMemberAt(
   readonly member: BotProfile | null;
   readonly pending: boolean;
   readonly unavailable: boolean;
-  readonly retry: () => void;
+  /** Reads the bot list again; null while the computer is unreachable, since GOAT reconnects itself. */
+  readonly retry: (() => void) | null;
 } {
   const environmentId = target?.environmentId ?? null;
   const presentation = useEnvironment(environmentId);
@@ -53,6 +54,6 @@ export function useGoatBotMemberAt(
       !unavailable &&
       (capabilities === undefined || profiles.isPending || profiles.data === null),
     unavailable,
-    retry: profiles.refresh,
+    retry: capabilities === undefined ? null : profiles.refresh,
   };
 }

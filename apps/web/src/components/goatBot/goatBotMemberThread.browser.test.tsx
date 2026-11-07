@@ -46,7 +46,7 @@ const connected = (goatBotMembers: boolean | undefined) => ({
 function Lookup({ threadId }: { threadId: ThreadId }) {
   const result = useGoatBotMemberAt({ environmentId, threadId });
   return (
-    <output>
+    <output data-retry={result.retry === null ? "none" : "list"}>
       {result.member?.name ??
         (result.unavailable ? "unavailable" : result.pending ? "pending" : "ordinary")}
     </output>
@@ -63,6 +63,11 @@ it("decides when a thread may be a member's: wait, retry, the member, or an ordi
   expect(await look()).toBe("pending");
   server.presentation = { connection: { phase: "offline" } };
   expect(await look()).toBe("unavailable");
+  {
+    await using screen = await render(<Lookup threadId={memberThread} />, { router: false }); // A hook check.
+    // Unreachable before capabilities: GOAT reconnects on its own, so there is nothing to retry.
+    expect(screen.container.querySelector("output")?.dataset.retry).toBe("none");
+  }
   server.presentation = connected(true);
   server.query = { data: null, error: null, isPending: true };
   expect(await look()).toBe("pending");
