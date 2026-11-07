@@ -434,9 +434,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ),
     );
   // Per-batch streaming does not need its own trace span.
-  const applyEventsLocked = Effect.fnUntraced(function* (
-    items: ReadonlyArray<SequencedItem>,
-  ) {
+  const applyEventsLocked = Effect.fnUntraced(function* (items: ReadonlyArray<SequencedItem>) {
     const appliedSequence = yield* SubscriptionRef.get(lastSequence);
     let sequence = appliedSequence;
     let unknown = 0;

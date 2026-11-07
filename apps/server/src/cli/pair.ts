@@ -317,7 +317,8 @@ const discoverPairTarget = Effect.fn("pair.discoverPairTarget")(function* (
     inLinkedWorktree,
     serveCommand: (yield* resolveHostCliCommand("serve", baseDirArgs)).command,
     pairCommand: (yield* resolveHostCliCommand("pair", baseDirArgs)).command,
-    tailscaleCommand: (yield* resolveHostCliCommand("pair", [...baseDirArgs, "--tailscale"])).command,
+    tailscaleCommand: (yield* resolveHostCliCommand("pair", [...baseDirArgs, "--tailscale"]))
+      .command,
   });
 });
 

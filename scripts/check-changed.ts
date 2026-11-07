@@ -156,13 +156,15 @@ const runKnip = files.some(
 const knipScripts: Record<string, string> = JSON.parse(
   NodeFS.readFileSync(NodePath.join(root, "package.json"), "utf8"),
 ).scripts;
-const knipPasses = [knipScripts["knip:check:files"], knipScripts["knip:check:exports"]].map((command, index, all) => {
-  const [bin, ...args] = command.trim().split(/\s+/);
-  if (bin !== "knip" || /["'$\\|;&<>]/.test(command)) {
-    throw new Error(`check:changed cannot split knip:check: ${command}`);
-  }
-  return { name: `knip ${index + 1}/${all.length}`, args: ["exec", "knip", ...args] };
-});
+const knipPasses = [knipScripts["knip:check:files"], knipScripts["knip:check:exports"]].map(
+  (command, index, all) => {
+    const [bin, ...args] = command.trim().split(/\s+/);
+    if (bin !== "knip" || /["'$\\|;&<>]/.test(command)) {
+      throw new Error(`check:changed cannot split knip:check: ${command}`);
+    }
+    return { name: `knip ${index + 1}/${all.length}`, args: ["exec", "knip", ...args] };
+  },
+);
 
 // A version bump can leave a patch unused, causing pnpm to reject the install
 // with ERR_PNPM_UNUSED_PATCH. Check it here as Release Smoke does in CI.

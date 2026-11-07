@@ -388,7 +388,12 @@ it.layer(NodeServices.layer)("project lookup with unavailable workspaces", (it) 
         yield* runCli([
           "project",
           "remove",
-          { id: project.id, "stored path": workspaceRoot, "relative path": NodePath.relative(process.cwd(), workspaceRoot), "trailing separator": `${workspaceRoot}${NodePath.sep}` }[identifier],
+          {
+            id: project.id,
+            "stored path": workspaceRoot,
+            "relative path": NodePath.relative(process.cwd(), workspaceRoot),
+            "trailing separator": `${workspaceRoot}${NodePath.sep}`,
+          }[identifier],
           "--base-dir",
           baseDir,
         ]);
