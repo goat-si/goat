@@ -249,7 +249,13 @@ export function MobileBotWork(props: {
           </Pressable>
           {/* The status card scrolls away and the tab row sticks, so large text still leaves
               room for the list. */}
-          <ScrollView stickyHeaderIndices={[1]}>
+          {/* The keyboard insets the list, so a note's wording field and its buttons can scroll
+              above it, and a tap on a button lands while the keyboard is up. */}
+          <ScrollView
+            stickyHeaderIndices={[1]}
+            automaticallyAdjustKeyboardInsets
+            keyboardShouldPersistTaps="handled"
+          >
             <MobileBotStatusCard
               environmentId={environmentId}
               member={member}
