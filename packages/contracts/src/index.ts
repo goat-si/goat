@@ -1,3 +1,5 @@
+export * from "./globalSkillsRpc.ts";
+export * from "./globalSkills.ts";
 export * from "./mcpServers.ts";
 export { AuthAccessMutationError } from "./authAccessRpc.ts";
 export * from "./baseSchemas.ts";

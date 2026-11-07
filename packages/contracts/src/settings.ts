@@ -1,4 +1,4 @@
-import { GoatMcpServerSettingsFields, GoatMcpServerSettingsPatchFields } from "./mcpServers.ts";
+import { GoatSettingsFields, GoatSettingsPatchFields } from "./goatSettingsFields.ts";
 import { StandingInstructions } from "./standingInstructions.ts";
 import { GoatBotSettingsFields, GoatBotSettingsPatchFields } from "./goatBotSessionRouting.ts";
 import { SpeechSettingsFields, SpeechSettingsPatchFields } from "./speech.ts";
@@ -1278,7 +1278,7 @@ export function newGoatBotHomeClaim({
   };
 }
 export const ServerSettings = Schema.Struct({
-  ...GoatMcpServerSettingsFields,
+  ...GoatSettingsFields,
   ...SpeechSettingsFields,
   ...AgentMemoryLimitSettingsFields,
   agentWorkspaceAccess: AgentWorkspaceAccess.pipe(
@@ -1750,7 +1750,7 @@ const ModelSelectionPatch = Schema.Struct({
   options: Schema.optionalKey(ProviderOptionSelections),
 });
 const ServerSettingsPatchFields = Schema.Struct({
-  ...GoatMcpServerSettingsPatchFields,
+  ...GoatSettingsPatchFields,
   ...SpeechSettingsPatchFields,
   ...AgentMemoryLimitSettingsPatchFields,
   agentWorkspaceAccess: Schema.optionalKey(AgentWorkspaceAccess),

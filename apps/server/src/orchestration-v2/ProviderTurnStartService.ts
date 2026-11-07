@@ -1,3 +1,5 @@
+import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
+export { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
 import { isRegisteredAttach, nativeForkTurns } from "./providerTurnStartHelpers.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
@@ -45,7 +47,7 @@ import { makeCloudResultEvents } from "./CloudResultEvents.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
 import { sideChatNote } from "./SideChatNote.ts";
-import { builtInSkillProviderText } from "./BuiltInSkillText.ts";
+import { providerTextWithSkills } from "../skills/GoatSkillText.ts";
 import { refusedBeforePrompt } from "./PromptRefusal.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -78,15 +80,6 @@ export class ProviderTurnStartError extends Schema.TaggedError<ProviderTurnStart
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
-
-export class WorkspaceLeaseBusyError extends Schema.TaggedError<WorkspaceLeaseBusyError>()(
-  "WorkspaceLeaseBusyError",
-  {},
-) {
-  override get message(): string {
-    return "Workspace is busy with checkout removal or preparation.";
-  }
-}
 
 const isProviderTurnStartError = Schema.is(ProviderTurnStartError);
 const isCloudTaskSourceError = Schema.is(CloudSource.CloudTaskSourceError);
@@ -138,6 +131,7 @@ export const layer: Layer.Layer<
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const path = yield* Path.Path;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
+    const globalSkillsDir = (yield* ServerConfig.ServerConfig).globalSkillsDir;
     const recreateMissingWorktree = yield* makeRestoreThreadWorkspace;
     const restorePending = yield* makeRestorePending;
     const projects = yield* ProjectService.ProjectService;
@@ -831,9 +825,10 @@ export const layer: Layer.Layer<
       });
       let effectiveHandoffs = cloud ? [] : handoffs;
       let resumeFellBack = false;
-      const userText = yield* builtInSkillProviderText(Option.some(serverSettings), {
+      const userText = yield* providerTextWithSkills(Option.some(serverSettings), {
         message,
         driver: session.driver,
+        globalSkillsDir,
         project: Effect.succeed(projection.thread.projectId),
       });
       // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.

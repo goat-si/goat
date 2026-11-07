@@ -1,3 +1,4 @@
+import * as ServerConfig from "../config.ts";
 import {
   MessageId,
   type NodeId,
@@ -19,7 +20,7 @@ import * as Stream from "effect/Stream";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { builtInSkillProviderText } from "./BuiltInSkillText.ts";
+import { providerTextWithSkills } from "../skills/GoatSkillText.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -92,6 +93,7 @@ export const layer: Layer.Layer<
     const computerUse = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
     // Optional so test assemblies without settings still build; then no built-in skill is sent.
     const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+    const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
     // Stop reaches the screen first: the driver transport dies before the provider is asked.
     const stopComputerUse = (threadId: ThreadId) =>
       Option.isSome(computerUse) ? computerUse.value.stop(threadId) : Effect.void;
@@ -448,9 +450,10 @@ export const layer: Layer.Layer<
               providerTurnId: loaded.providerTurn.id,
               message: {
                 messageId: message.id,
-                text: yield* builtInSkillProviderText(settings, {
+                text: yield* providerTextWithSkills(settings, {
                   message,
                   driver: loaded.session.value.driver,
+                  globalSkillsDir: Option.isSome(config) ? config.value.globalSkillsDir : undefined,
                   project: projections
                     .getThread(input.threadId)
                     .pipe(Effect.map((thread) => thread.projectId)),
@@ -499,5 +502,20 @@ export const layer: Layer.Layer<
           ),
       ),
     });
+  }),
+);
+
+export const layerWithSkills = Layer.unwrap(
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    return layer.pipe(
+      Layer.provide(
+        Layer.merge(
+          Layer.succeed(ServerConfig.ServerConfig, config),
+          Layer.succeed(ServerSettings.ServerSettingsService, settings),
+        ),
+      ),
+    );
   }),
 );

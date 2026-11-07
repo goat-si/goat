@@ -1,3 +1,4 @@
+import { GLOBAL_SKILLS_WS_METHODS } from "./globalSkillsRpc.ts";
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
 import {
@@ -22,6 +23,8 @@ import { SLACK_CHANNEL_WS_METHODS } from "./slackChannel.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [GLOBAL_SKILLS_WS_METHODS.globalRemove]: AuthSettingsWriteScope,
+  [GLOBAL_SKILLS_WS_METHODS.globalRescan]: AuthSettingsWriteScope,
   [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: AuthOrchestrationReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,

@@ -4,7 +4,7 @@ import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheT
 import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
 import { makeClaudeAssistantTextProjector } from "./ClaudeAssistantText.ts";
 import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
-import { isGoatBotSessionThreadId } from "@goat/contracts";
+import { isGoatBotSessionThreadId, isGoatSkillName } from "@goat/contracts";
 import {
   readClaudeAppendSystemPromptFile,
   readClaudeLaunchArgSettings,
@@ -4532,7 +4532,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         (skills) =>
           new Map(
             skills
-              .filter((skill) => skill.enabled && skill.userInvocable !== false)
+              .filter((s) => s.enabled && s.userInvocable !== false && !isGoatSkillName(s.name))
               .map((skill) => [skill.name, skill]),
           ),
       ),
