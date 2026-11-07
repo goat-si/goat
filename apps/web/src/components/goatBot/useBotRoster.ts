@@ -1,33 +1,44 @@
 import { useEffect } from "react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { botRoster, botRosterGroups } from "@goat/client-runtime/goatBot";
+import type { BotId, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { useThreadVisibleTurnItems } from "~/state/entities";
-import { botRoster } from "@goat/client-runtime/goatBot";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
 import { useGoatBotEnabled } from "./useGoatBotSession";
 
-export function useBotRoster() {
-  const { environment } = useGoatBotEnabled();
-  const environmentId = environment?.environmentId ?? null;
+/**
+ * One bot's task threads, main when botId is null. The list is read again when channel records
+ * in that bot's conversation change, so a member's work follows its own chat.
+ */
+export function useBotThreads(
+  environmentId: EnvironmentId | null,
+  bot: { readonly botId: BotId; readonly threadId: ThreadId } | null,
+) {
   const presentation = useEnvironment(environmentId);
   const capabilities = presentation?.serverConfig?.environment.capabilities;
   const connected = presentation?.connection.phase === "connected";
-  const profiles = useEnvironmentQuery(
-    connected && environmentId !== null && capabilities?.goatBotProfiles === true
-      ? channelEnvironment.listBots({ environmentId, input: {} })
-      : null,
-  );
+  const supported =
+    connected &&
+    environmentId !== null &&
+    capabilities?.goatBotTaskThreads === true &&
+    (bot === null || capabilities.goatBotMembers === true);
   const threads = useEnvironmentQuery(
-    connected && environmentId !== null && capabilities?.goatBotTaskThreads === true
-      ? channelEnvironment.listBotThreads({ environmentId, input: {} })
+    supported
+      ? channelEnvironment.listBotThreads({
+          environmentId,
+          input: bot === null ? {} : { botId: bot.botId },
+        })
       : null,
   );
   const botRef = useGlobalAgentStore((state) => state.botRef);
+  const watchedThreadId =
+    bot?.threadId ?? (botRef?.environmentId === environmentId ? botRef?.threadId : undefined);
   const items = useThreadVisibleTurnItems(
-    botRef && botRef.environmentId === environmentId
-      ? scopeThreadRef(botRef.environmentId, botRef.threadId)
+    supported && watchedThreadId && environmentId !== null
+      ? scopeThreadRef(environmentId, watchedThreadId)
       : null,
   );
   const revision = items
@@ -40,28 +51,45 @@ export function useBotRoster() {
     .map(({ sourceItemId, item }) => `${sourceItemId}:${item.updatedAt}`)
     .join("|");
   const refreshThreads = threads.refresh;
-  const botThreadId = botRef?.threadId;
-  const shouldRefresh =
-    connected &&
-    capabilities?.goatBotTaskThreads === true &&
-    botRef?.environmentId === environmentId;
-  // oxlint-disable-next-line goat/react-effect-budget -- Refresh the roster when channel timeline records change.
+  // oxlint-disable-next-line goat/react-effect-budget -- Refresh the bot's task list when its channel timeline records change.
   useEffect(() => {
-    if (shouldRefresh && botThreadId && revision !== undefined) refreshThreads();
-  }, [shouldRefresh, botThreadId, revision, refreshThreads]);
+    if (supported && watchedThreadId && revision !== undefined) refreshThreads();
+  }, [supported, watchedThreadId, revision, refreshThreads]);
+  return { rows: threads.data?.rows ?? [], loaded: threads.isSuccess, refresh: threads.refresh };
+}
+
+export function useBotRoster() {
+  const { environment } = useGoatBotEnabled();
+  const environmentId = environment?.environmentId ?? null;
+  const presentation = useEnvironment(environmentId);
+  const capabilities = presentation?.serverConfig?.environment.capabilities;
+  const connected = presentation?.connection.phase === "connected";
+  const supportsMembers = connected && capabilities?.goatBotMembers === true;
+  const profiles = useEnvironmentQuery(
+    connected && environmentId !== null && capabilities?.goatBotProfiles === true
+      ? channelEnvironment.listBots({
+          environmentId,
+          input: supportsMembers ? { includeDeleted: true } : {},
+        })
+      : null,
+  );
+  const threads = useBotThreads(environmentId, null);
   const slack = useEnvironmentQuery(
     connected && environmentId !== null && capabilities?.slackChannel === true
       ? channelEnvironment.slackSettings({ environmentId, input: {} })
       : null,
   );
+  const bots = profiles.data?.bots;
   return {
     environmentId,
-    roster: botRoster({
-      supportsProfiles: capabilities?.goatBotProfiles === true,
-      bots: profiles.data?.bots,
-    }),
-    rows: threads.data?.rows ?? [],
-    rowsLoaded: threads.isSuccess,
+    supportsMembers,
+    bots,
+    botsLoaded: profiles.isSuccess,
+    botsPending: profiles.isPending,
+    roster: botRoster({ supportsProfiles: capabilities?.goatBotProfiles === true, bots }),
+    groups: botRosterGroups(bots ?? []),
+    rows: threads.rows,
+    rowsLoaded: threads.loaded,
     refresh: threads.refresh,
     slackEnabled: slack.data?.some((connection) => connection.enabled) === true,
   };

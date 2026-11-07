@@ -1,4 +1,4 @@
-import { ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import { BotId, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { render } from "../../test/render";
 
@@ -11,11 +11,17 @@ const state = vi.hoisted(() => ({
   chatSession: null as object | null,
   paneSession: null as object | null,
   navigate: vi.fn(),
+  bots: [] as Array<object>,
+  shellRefs: [] as Array<unknown>,
+  memberArgs: [] as Array<unknown>,
 }));
 vi.mock("../hooks/useMediaQuery", () => ({ useMediaQuery: () => state.narrow }));
 vi.mock("../hooks/useSettings", () => ({ useClientSettings: () => state.beside }));
 vi.mock("../state/entities", () => ({
-  useThreadShell: () => ({}),
+  useThreadShell: (ref: unknown) => {
+    state.shellRefs.push(ref);
+    return {};
+  },
   resolveThreadDetailRef: () => null,
   useThreadVisibleTurnItems: () => [],
 }));
@@ -32,7 +38,8 @@ vi.mock("../components/goatBot/GoatBotTaskPane", () => ({
   },
 }));
 vi.mock("../components/goatBot/useGoatBotSession", () => ({
-  useGoatBotSession: () => {
+  useGoatBotSession: (_items: unknown, _task: unknown, member: unknown) => {
+    state.memberArgs.push(member ?? null);
     const session = {
       availability: { kind: "ready", bot: { environmentId: "env", threadId: "bot" } },
       supportsTaskThreads: state.supported,
@@ -41,6 +48,14 @@ vi.mock("../components/goatBot/useGoatBotSession", () => ({
     state.sessions.push(session);
     return session;
   },
+}));
+vi.mock("../components/goatBot/useBotRoster", () => ({
+  useBotRoster: () => ({
+    bots: state.bots,
+    botsLoaded: true,
+    botsPending: false,
+    environmentId: "env",
+  }),
 }));
 vi.mock("../components/goatBot/goatBotHooks", () => ({ useLegacyGlobalAgentRoute: () => null }));
 vi.mock("../components/goatBot/useGoatBotHome", () => ({ useGoatBotHomeSettings: () => ({}) }));
@@ -107,4 +122,38 @@ it("ignores a task query when the server lacks task threads", async () => {
   expect(state.navigate).toHaveBeenCalledWith(
     expect.objectContaining({ to: "/$environmentId/$threadId", replace: true }),
   );
+});
+
+it("opens a member's task with that member's own conversation, never the main bot's", async () => {
+  state.supported = true;
+  state.shellRefs = [];
+  state.memberArgs = [];
+  state.bots = [
+    { botId: "research", role: "member", environmentId: "env", sessionThreadId: "thread-research" },
+  ];
+  using _search = vi
+    .spyOn(Route, "useSearch")
+    .mockReturnValue({ task: ChannelTaskId.make("task"), bot: BotId.make("research") });
+  const Component = Route.options.component;
+  if (!Component) throw new Error("missing route component");
+  try {
+    await using screen = await render(<Component />, { router: false }); // Search and navigation are mocked.
+    await expect.element(screen.getByText("Main chat")).toBeVisible();
+    expect(state.memberArgs.at(-1)).toMatchObject({ botId: "research" });
+    expect(state.shellRefs.at(-1)).toMatchObject({ threadId: "thread-research" });
+  } finally {
+    state.bots = [];
+  }
+});
+
+it("says a named bot isn't available instead of opening the main bot", async () => {
+  state.memberArgs = [];
+  using _search = vi
+    .spyOn(Route, "useSearch")
+    .mockReturnValue({ task: ChannelTaskId.make("task"), bot: BotId.make("unknown") });
+  const Component = Route.options.component;
+  if (!Component) throw new Error("missing route component");
+  await using screen = await render(<Component />);
+  await expect.element(screen.getByText("This bot isn't available")).toBeVisible();
+  expect(screen.getByText("Main chat").query()).toBeNull();
 });

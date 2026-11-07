@@ -14,7 +14,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { GoatBotTimeline } from "./GoatBotTimeline";
-import { useBotRoster } from "./useBotRoster";
+import { memberThreadsKey, useGoatBotMember } from "./goatBotMemberContext";
+import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
 
@@ -42,7 +43,8 @@ export function GoatBotTaskPane({
   const headingRef = useStableCallback((element: HTMLHeadingElement | null) =>
     focusTaskHeading(taskFocus, taskId, element),
   );
-  const { rows, refresh } = useBotRoster();
+  const member = useGoatBotMember();
+  const { rows, refresh } = useBotThreads(environmentId, memberThreadsKey(member));
   const task = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
@@ -157,7 +159,11 @@ export function GoatBotTaskPane({
       />
       <GoatBotComposer
         disabled={!canSend}
-        placeholder={canSend ? "Message GOAT Bot" : "GOAT Bot isn't available"}
+        placeholder={
+          canSend
+            ? `Message ${member?.name ?? "GOAT Bot"}`
+            : `${member?.name ?? "GOAT Bot"} isn't available`
+        }
         attachmentSupport={session.attachmentSupport}
         onSend={(text, attachments) => session.onSendToTask(taskId, text, attachments)}
       />

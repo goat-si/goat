@@ -27,6 +27,7 @@ import {
 } from "react";
 
 import { usePrimarySettings } from "~/hooks/useSettings";
+import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { cn } from "~/lib/utils";
 import { observeResize } from "~/lib/observeResize";
@@ -66,6 +67,7 @@ export function GoatBotTimeline({
   readonly onPick?: ((answer: string) => void) | undefined;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
+  const member = useGoatBotMember();
   const taskFocus = getTaskPaneFocus();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Messages sent while this view is mounted, by send key, and the server id each one received.
@@ -366,7 +368,10 @@ export function GoatBotTimeline({
                         </details>
                         <Link
                           to="/bot"
-                          search={{ task: ChannelTaskId.make(row.card.key) }}
+                          search={{
+                            task: ChannelTaskId.make(row.card.key),
+                            ...goatBotSearch(member),
+                          }}
                           data-task-opener={`pill:${row.id}`}
                           onClick={(event) => {
                             if (
