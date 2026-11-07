@@ -114,10 +114,15 @@ describe("key names before a call reaches the driver", () => {
   it("passes keypad keys through to a driver that presses them", () => {
     assert.isFalse(driverPressesKeypad("0.38.0-goat.3"));
     assert.isTrue(driverPressesKeypad("0.38.0-goat.4"));
+    assert.isTrue(driverPressesKeypad("0.40.1-goat.1"));
     for (const key of ["KP_0", "KP_9", "KP_Add", "kp_decimal"]) {
       const line = call("press_key", { ...window, key });
       assert.deepEqual(resolveKeyCall(line, { keypad: true }), { line }, key);
     }
+    const line = call("press_key", { ...window, key: "KP_0" });
+    assert.deepEqual(resolveKeyCall(line, { keypad: driverPressesKeypad("0.40.1-goat.1") }), {
+      line,
+    });
   });
 
   it("refuses a hotkey with an unknown modifier or more than one plain key", () => {
