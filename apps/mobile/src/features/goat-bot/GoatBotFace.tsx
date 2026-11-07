@@ -2,8 +2,11 @@ import {
   FACE_MOTION_RANK,
   GOAT_BOT_FACE_STROKE_WIDTH,
   GOAT_BOT_SLEEP_MARK_PATH,
+  goatBotAvatarEmoji,
+  goatBotAvatarSignal,
   goatBotFaceArt,
   goatBotFaceLabel,
+  type GoatBotAvatarSignal,
   type FaceMotion,
   type GoatBotFaceInput,
   type GoatBotFaceState,
@@ -139,24 +142,42 @@ export function GoatBotFace(props: {
   );
 }
 
-const RING: Partial<Record<GoatBotFaceState, string>> = {
-  working: "border-primary",
+const RING: Record<NonNullable<GoatBotAvatarSignal["ring"]>, string> = {
+  active: "border-primary",
   failed: "border-danger",
+  finished: "border-adaptive-emerald-600-400",
 };
 
-/** The face on the bot's round avatar; callers put the face label in their own row label. */
+/**
+ * The bot's round avatar: its chosen emoji, else its face. The ring and dot carry the state
+ * either way; callers put the face label in their own row label.
+ */
 export function GoatBotFaceAvatar(props: {
   readonly state: GoatBotFaceState;
   readonly size: number;
   readonly motion?: FaceMotion | null;
+  /** The bot's profile avatar; an emoji replaces the drawn face. */
+  readonly emoji?: string | null | undefined;
 }) {
+  const picture = goatBotAvatarEmoji(props.emoji);
+  const signal = goatBotAvatarSignal(props.state, picture !== null);
   return (
     <View
       style={{ width: props.size, height: props.size }}
-      className={`items-center justify-center rounded-full border bg-grouped-card ${RING[props.state] ?? "border-transparent"}`}
+      className={`items-center justify-center rounded-full border bg-grouped-card ${signal.ring === null ? "border-transparent" : RING[signal.ring]}`}
     >
-      <GoatBotFace state={props.state} size={props.size * 0.64} motion={props.motion ?? null} />
-      {props.state === "waiting" ? (
+      {picture !== null ? (
+        <Text
+          allowFontScaling={false}
+          style={{ fontSize: props.size * 0.5, lineHeight: props.size * 0.62 }}
+          className={signal.dimmed ? "opacity-50" : undefined}
+        >
+          {picture}
+        </Text>
+      ) : (
+        <GoatBotFace state={props.state} size={props.size * 0.64} motion={props.motion ?? null} />
+      )}
+      {signal.waitingDot ? (
         <View className="absolute top-0 right-0 h-2.5 w-2.5 rounded-full bg-warning" />
       ) : null}
     </View>
@@ -167,6 +188,7 @@ function GoatBotHeaderTitle(props: {
   readonly state: GoatBotFaceState;
   readonly motion: FaceMotion | null;
   readonly title: string;
+  readonly emoji: string | null;
 }) {
   const label = goatBotFaceLabel(props.state);
   const accessibilityLabel = label ? `${props.title}, ${label}` : props.title;
@@ -174,7 +196,12 @@ function GoatBotHeaderTitle(props: {
     // Unflattened so the text swap below stays in this row and leaves the native title view alone.
     <View collapsable={false} className="flex-row items-center gap-2">
       <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        <GoatBotFaceAvatar state={props.state} size={28} motion={props.motion} />
+        <GoatBotFaceAvatar
+          state={props.state}
+          size={28}
+          motion={props.motion}
+          emoji={props.emoji}
+        />
       </View>
       {/* VoiceOver reads the text element here, and iOS keeps a text's first label until its text
           changes; a new key gives each state a fresh element instead of a stale second one. */}
@@ -196,21 +223,30 @@ export function GoatBotHeaderFace(props: {
   readonly title: string;
   /** A member bot's conversation; the main bot's when absent. */
   readonly conversation?: Parameters<typeof useMobileGoatBotFace>[1];
+  /** The bot's profile avatar. */
+  readonly emoji?: string | null | undefined;
 }) {
   const face = useMobileGoatBotFace(props.activity, props.conversation);
-  // The header shows whenever its screen is focused, which the motion hook already checks.
-  const motion = useMobileGoatBotFaceMotion(face.state, FACE_MOTION_RANK.header, face.since, true);
+  const emoji = goatBotAvatarEmoji(props.emoji);
+  // The header shows whenever its screen is focused, which the motion hook already checks; an
+  // emoji has no eyes, so it never takes the one moving face.
+  const motion = useMobileGoatBotFaceMotion(
+    face.state,
+    FACE_MOTION_RANK.header,
+    face.since,
+    emoji === null,
+  );
   const { state } = face;
   const title = props.title;
   const renderTitle = useCallback(
-    () => <GoatBotHeaderTitle state={state} motion={motion} title={title} />,
-    [state, motion, title],
+    () => <GoatBotHeaderTitle state={state} motion={motion} title={title} emoji={emoji} />,
+    [state, motion, title, emoji],
   );
   return (
     <NativeStackScreenOptions
       // The title is also the navigation bar's accessible name; the stack's default says GOAT Bot.
       options={{ title, headerTitle: renderTitle }}
-      optionsVersion={`${title}:${state}:${motion === null ? "still" : "moving"}`}
+      optionsVersion={`${title}:${state}:${emoji ?? ""}:${motion === null ? "still" : "moving"}`}
     />
   );
 }

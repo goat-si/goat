@@ -127,3 +127,23 @@ it("gives a member's navigation bar the member's name, not the stack's GOAT Bot 
     await act(async () => root.unmount());
   }
 });
+it("draws a bot's emoji avatar in the header in place of its face, keeping the state VoiceOver reads", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    header.state = "reading";
+    await act(async () =>
+      root.render(<GoatBotHeaderFace activity={null} title="Ada" emoji=" 🐙 " />),
+    );
+    const texts = [...container.querySelectorAll("span")].map((span) => span.textContent);
+    expect(texts).toContain("🐙");
+    const title = [...container.querySelectorAll("span")].find(
+      (span) => span.textContent === "Ada",
+    );
+    expect(title?.getAttribute("aria-label")).toBe("Ada, Reading");
+  } finally {
+    header.state = "idle";
+    await act(async () => root.unmount());
+  }
+});

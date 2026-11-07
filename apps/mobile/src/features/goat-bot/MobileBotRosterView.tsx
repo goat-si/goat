@@ -3,6 +3,7 @@ import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import {
   FACE_MOTION_RANK,
   botThreadKey,
+  goatBotAvatarEmoji,
   goatBotFaceLabel,
   presentTaskStatus,
 } from "@goat/client-runtime/goatBot";
@@ -121,13 +122,17 @@ export function MobileBotRosterView(props: {
     (Platform.OS === "ios" ? insets.bottom : 0);
   const mainFace = useMobileGoatBotFace(null);
   const mainFaceLabel = goatBotFaceLabel(mainFace.state);
+  const mainEmoji = goatBotAvatarEmoji(
+    props.bots.find((bot) => bot.kind === "main")?.profile?.avatar,
+  );
   const { scrollRef, rowRef, onScreen, measure, hold, settle, measureUnlessCoasting } =
     useRowOnScreen();
+  // An emoji has no eyes, so the main row then never takes the one moving face.
   const mainMotion = useMobileGoatBotFaceMotion(
     mainFace.state,
     FACE_MOTION_RANK.list,
     mainFace.since,
-    onScreen,
+    onScreen && mainEmoji === null,
   );
   return (
     <ScrollView
@@ -162,7 +167,12 @@ export function MobileBotRosterView(props: {
             }
           >
             {bot.kind === "main" ? (
-              <GoatBotFaceAvatar state={mainFace.state} size={40} motion={mainMotion} />
+              <GoatBotFaceAvatar
+                state={mainFace.state}
+                size={40}
+                motion={mainMotion}
+                emoji={mainEmoji}
+              />
             ) : (
               <MemberFace bot={bot.profile} />
             )}
@@ -389,7 +399,7 @@ function MemberFace({ bot }: { readonly bot: BotProfile }) {
   );
   return (
     <View className="flex-row items-center gap-1">
-      <GoatBotFaceAvatar state={face.state} size={40} motion={null} />
+      <GoatBotFaceAvatar state={face.state} size={40} motion={null} emoji={bot.avatar} />
       {waitingCount > 0 ? (
         <Text
           accessibilityLabel={`${waitingCount} waiting for you`}

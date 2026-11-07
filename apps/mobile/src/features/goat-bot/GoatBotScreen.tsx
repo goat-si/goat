@@ -533,6 +533,7 @@ export function GoatBotScreen(props: {
         <GoatBotHeaderFace
           activity={session.activity ?? null}
           title={title}
+          emoji={(member ?? props.main ?? null)?.avatar}
           {...(member
             ? {
                 conversation: {
