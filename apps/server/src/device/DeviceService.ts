@@ -710,9 +710,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     );
   });
 
-  const close: DeviceService["Service"]["close"] = Effect.fn("DeviceService.close")(function* (
-    input,
-  ) {
+  const endSessions = Effect.fn("DeviceService.endSessions")(function* (input: DeviceCloseInput) {
     const { state } = yield* SynchronizedRef.get(stateRef);
     const closing = state.sessions.filter(
       (session) =>
@@ -729,8 +727,10 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         ...current,
         sessions: current.sessions.filter((session) => !closing.includes(session)),
       }));
-    yield* agentCloses.flush(input.threadId, sessions);
   }, closeLock.withPermit);
+  // Agent-device closes can wait on an unreachable daemon, so they run outside the close lock.
+  const close: DeviceService["Service"]["close"] = (input) =>
+    endSessions(input).pipe(Effect.andThen(agentCloses.flush(input.threadId, sessions)));
 
   const shutdown: DeviceService["Service"]["shutdown"] = Effect.fn("DeviceService.shutdown")(
     function* (input) {

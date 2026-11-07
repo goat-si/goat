@@ -2,7 +2,9 @@ import { describe, expect, it } from "@effect/vitest";
 import { DeviceId, LOCAL_DEVICE_HOST_ID, ThreadId } from "@goat/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as ServerSettings from "../serverSettings.ts";
 import { classifyAgentClose, type AgentSessionTarget } from "./AgentSessionRelease.ts";
@@ -17,8 +19,15 @@ const lane = ThreadId.make("lane");
 const other = ThreadId.make("other");
 
 // A hub with two booted emulators and a scripted agent-device close.
-const makeService = Effect.fn("makeService")(function* (failingCloses: number) {
+const makeService = Effect.fn("makeService")(function* (
+  failingCloses: number,
+  options: {
+    readonly unrunnableCloses?: number;
+    readonly beforeClose?: (target: AgentSessionTarget) => Effect.Effect<void>;
+  } = {},
+) {
   let failuresLeft = failingCloses;
+  let unrunnableLeft = options.unrunnableCloses ?? 0;
   const closes: AgentSessionTarget[] = [];
   const shutdowns: string[] = [];
   const http = HttpClient.make((request) =>
@@ -75,19 +84,22 @@ const makeService = Effect.fn("makeService")(function* (failingCloses: number) {
     stop: Effect.void,
   };
   const closeAgentSession = (target: AgentSessionTarget) =>
-    Effect.suspend(() => {
+    Effect.gen(function* () {
+      yield* options.beforeClose?.(target) ?? Effect.void;
       if (failuresLeft > 0) {
         failuresLeft -= 1;
-        return Effect.fail(
-          new DeviceOperationError({
-            operation: "close agent session",
-            reason: "request_failed",
-            cause: new Error("daemon busy"),
-          }),
-        );
+        return yield* new DeviceOperationError({
+          operation: "close agent session",
+          reason: "request_failed",
+          cause: new Error("daemon busy"),
+        });
+      }
+      if (unrunnableLeft > 0) {
+        unrunnableLeft -= 1;
+        return "pending" as const;
       }
       closes.push(target);
-      return Effect.succeed("closed" as const);
+      return "closed" as const;
     });
   const service = yield* DeviceService.makeWithHosts(
     new Map([[host.id, host]]),
@@ -171,6 +183,47 @@ describe("DeviceService.releaseThread", () => {
       expect(closes.map((target) => target.deviceId)).toEqual([tablet]);
       expect((yield* service.state).sessions).toEqual([reopened]);
     }).pipe(Effect.provide(ServerSettings.layerTest({ enableDeviceSupport: true })), Effect.scoped),
+  );
+
+  it.effect("a close agent-device cannot run yet stays queued and runs on the next release", () =>
+    Effect.gen(function* () {
+      const { service, closes } = yield* makeService(0, { unrunnableCloses: 1 });
+      yield* open(service, lane, phone);
+
+      yield* service.releaseThread(lane);
+      expect(closes).toEqual([]);
+      yield* service.releaseThread(lane);
+      expect(closes.map((target) => target.deviceId)).toEqual([phone]);
+    }).pipe(Effect.provide(ServerSettings.layerTest({ enableDeviceSupport: true })), Effect.scoped),
+  );
+
+  it.effect(
+    "a release waiting on one thread's agent-device close does not hold up another thread's",
+    () =>
+      Effect.gen(function* () {
+        const held = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        const { service, closes } = yield* makeService(0, {
+          beforeClose: (target) =>
+            target.threadId === lane
+              ? Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+              : Effect.void,
+        });
+        yield* open(service, lane, phone);
+        yield* open(service, other, tablet);
+        const releasing = yield* service.releaseThread(lane).pipe(Effect.forkChild);
+        yield* Deferred.await(held);
+
+        yield* service.releaseThread(other);
+        expect(closes.map((target) => target.threadId)).toEqual([other]);
+
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(releasing);
+        expect(closes.map((target) => target.threadId)).toEqual([other, lane]);
+      }).pipe(
+        Effect.provide(ServerSettings.layerTest({ enableDeviceSupport: true })),
+        Effect.scoped,
+      ),
   );
 });
 

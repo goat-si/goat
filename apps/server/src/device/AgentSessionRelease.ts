@@ -38,10 +38,13 @@ export interface AgentSessionTarget {
   readonly deviceId: DeviceId;
 }
 
-/** "absent" means agent-device holds no such session any more, so nothing is left to close. */
+/**
+ * "absent": agent-device holds no such session any more. "pending": GOAT cannot run the close yet
+ * (agent-device or its host config is missing), so the session stays queued without failing.
+ */
 export type AgentSessionClose = (
   target: AgentSessionTarget,
-) => Effect.Effect<"closed" | "absent", DeviceOperationError>;
+) => Effect.Effect<"closed" | "absent" | "pending", DeviceOperationError>;
 
 const targetKey = (target: AgentSessionTarget) =>
   JSON.stringify([target.threadId, target.hostId, target.deviceId]);
@@ -67,8 +70,7 @@ export const makePendingAgentCloses = (close: AgentSessionClose) => {
         const key = targetKey(target);
         // A reopened session owns the name again; closing it would end the live session.
         if ((yield* open).some((session) => targetKey(session) === key)) return pending.delete(key);
-        yield* close(target);
-        pending.delete(key);
+        if ((yield* close(target)) !== "pending") pending.delete(key);
       }),
     );
   return {
@@ -128,13 +130,13 @@ export const makeAgentSessionClose = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const config = yield* ServerConfig.ServerConfig;
   const environment = yield* HostProcess.Environment;
-  const exists = (file: string) => fs.exists(file).pipe(Effect.orElseSucceed(() => false));
+  const exists = (file: string) => fs.exists(file).pipe(Effect.mapError(failed));
   const failed = (cause: unknown) =>
     new DeviceOperationError({ operation: "close agent session", reason: "command_failed", cause });
   const close: AgentSessionClose = Effect.fn("AgentSessionRelease.close")(
     function* (target: AgentSessionTarget) {
-      if (!(yield* isAgentDeviceInstalled(config.baseDir).pipe(Effect.orElseSucceed(() => false))))
-        return "absent" as const;
+      if (!(yield* isAgentDeviceInstalled(config.baseDir).pipe(Effect.mapError(failed))))
+        return "pending" as const;
       // Hosts with a daemon per device keep a config per device; agents only reach a daemon through one.
       const perDevice = yield* agentDeviceConfigPath(
         config.stateDir,
@@ -148,7 +150,7 @@ export const makeAgentSessionClose = Effect.gen(function* () {
         : (yield* exists(shared))
           ? shared
           : null;
-      if (configFile === null) return "absent" as const;
+      if (configFile === null) return "pending" as const;
       const tool = yield* ensureAgentDevice(config.baseDir).pipe(Effect.mapError(failed));
       const nodePath = yield* resolveNodeExecutable("Device automation", environment).pipe(
         Effect.mapError(failed),
