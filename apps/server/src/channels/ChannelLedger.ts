@@ -132,7 +132,7 @@ export interface ChannelTailEntry {
   readonly receivedAt: string;
   readonly replyText: string | undefined;
 }
-type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelTaskEvent };
+export type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelTaskEvent };
 
 export class ChannelLedger extends Context.Service<
   ChannelLedger,
@@ -316,6 +316,8 @@ export class ChannelLedger extends Context.Service<
       /** Changes the task's remote worker state in the same transaction. */
       readonly remoteWorker?: RemoteWorkerStateUpdate | undefined;
       readonly completeForwardSequence?: number | undefined;
+      /** Tasks this transition starts, inserted in the same write; an id already stored is kept. */
+      readonly createdTasks?: ReadonlyArray<CreatedTask & { readonly ownerId: string }> | undefined;
     }) => Effect.Effect<number, ChannelLedgerError>;
     /** Marks why a finished run is not reported yet; the owner scan re-checks held tasks. */
     readonly setCompletionHold: (input: {
@@ -323,6 +325,11 @@ export class ChannelLedger extends Context.Service<
       readonly taskId: ChannelTaskId;
       readonly hold: string | null;
     }) => Effect.Effect<void, ChannelLedgerError>;
+    /** Runs `body` holding SQLite's write lock, once this process is confirmed as the workers' owner. */
+    readonly underWorkerLock: (
+      owner: string,
+      body: Effect.Effect<void, ChannelLedgerError>,
+    ) => Effect.Effect<void, ChannelLedgerError>;
     readonly hasTaskEvent: (eventId: string) => Effect.Effect<boolean, ChannelLedgerError>;
     readonly listPendingNarrations: (
       limit: number,
@@ -1320,6 +1327,12 @@ const make = Effect.gen(function* () {
               if (pending.length === 0) return 0;
             }
             const sequence = yield* writeTaskEvent(input.write);
+            for (const created of input.createdTasks ?? []) {
+              const existing = yield* sql<{ readonly task_id: string }>`
+                SELECT task_id FROM channel_tasks WHERE task_id = ${created.task.taskId}`;
+              if (existing.length === 0)
+                yield* insertTask(created.task, created.ownerId, created.event);
+            }
             yield* insertDeliveries(input.deliveries, input.write.event.occurredAt);
             if (input.cursor !== undefined) {
               yield* upsertCursor(input.cursor, input.write.event.occurredAt);
@@ -1331,6 +1344,23 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(Effect.mapError(toLedgerError("applyTaskEvent"))),
+
+    underWorkerLock: (owner, body) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            // A write first, so the lock is held before anything is read.
+            const owned = yield* sql`UPDATE channel_runtime_state SET updated_at = updated_at
+              WHERE key = ${WORKER_KEY} AND owner_token = ${owner} RETURNING key`;
+            if (owned.length === 0)
+              return yield* new ChannelLedgerError({
+                reason: "ownership_lost",
+                detail: "Another process owns the channel workers.",
+              });
+            yield* body;
+          }),
+        )
+        .pipe(Effect.mapError(toLedgerError("underWorkerLock"))),
 
     setCompletionHold: (input) =>
       sql

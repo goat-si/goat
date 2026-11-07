@@ -7,8 +7,9 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import { isSameIdentity, mayAnswerFor } from "./ChannelGateway.ts";
-import type * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
 import { currentRequester, requesterForDispatch } from "./channelDispatchAuthority.ts";
+import { refuseForward } from "./channelForwardRefusal.ts";
 import { deliveryIdFor } from "./channelIds.ts";
 
 export const senderOf = (requester: ChannelRequester, connectionId: string): ChannelTaskSender => ({
@@ -44,6 +45,38 @@ export const senderAnswerRefused = (name: string) =>
   name +
   "'s answer wasn't passed on: their access changed after they sent it. " +
   "Answer again, or answer in the thread.";
+
+/** Asks again for an answer that was not delivered because its sender's or requester's access changed. */
+export const refuseAnswerForward = Effect.fn("channel.refuseAnswerForward")(function* (
+  ledger: ChannelLedger.ChannelLedger["Service"],
+  stored: ChannelLedger.ChannelStoredTask,
+  authority:
+    | { readonly _tag: "requester_changed" }
+    | { readonly _tag: "sender_changed"; readonly name: string },
+  owner: string,
+  sequence: number,
+  ids: { readonly messageId: string },
+) {
+  yield* refuseForward(
+    ledger,
+    stored,
+    authority._tag === "sender_changed"
+      ? senderAnswerRefused(authority.name)
+      : "The requester’s permission changed; your answer was not sent. Open the thread in GOAT.",
+    owner,
+    sequence,
+    [ids.messageId],
+  ).pipe(
+    Effect.mapError(
+      (cause) =>
+        new ChannelLedger.ChannelLedgerError({
+          reason: "persistence",
+          detail: "Could not record forward refusal.",
+          cause,
+        }),
+    ),
+  );
+});
 
 /**
  * Drops a follow-up whose sender may no longer direct the work: one notice to the conversation

@@ -68,6 +68,9 @@ const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instructi
     ").",
 ];
 
+/** Only a worker on this machine can offer a skill; origin.report has no field for one. */
+const SKILL_PROPOSAL_RULE = `If the finished work followed a repeatable procedure the person will likely ask for again, you may add skillProposal to your completed ${goatCallText("channel.task_report")}: a short lowercase name, a one-line summary, and the procedure as Markdown. GOAT asks the person and saves it as a skill only if they agree. Never put secrets, tokens, or personal data in it.`;
+
 /** Every worker and bot session runs on the person's own machine, beside their private data. */
 export const PERSONAL_DATA_RULE =
   "Personal data rule: read browser memory or history (such as Aside), mail, messages, passwords, the keychain, ~/.ssh or other credential files only when the person's request asks about that data. Never search the whole home folder (rg, find or grep over ~ or /Users/<name>); look in GOAT Bot's notes, the project folders and GOAT's tools (memory.recall, thread.search) first.";
@@ -148,6 +151,7 @@ export const workerInstruction = (task: BriefTask, files: ChannelBotFiles) =>
         JSON.stringify(task.notesChangeRequested) +
         "). Edit the notes file only to make that change.",
     ...channelWorkerRules("local"),
+    SKILL_PROPOSAL_RULE,
   ].join("\n");
 
 /**
@@ -187,6 +191,7 @@ export const turnInstruction = (
         files.notes +
         ") yourself to make exactly that change, and change nothing else.",
     ...channelWorkerRules("local", "turn"),
+    SKILL_PROPOSAL_RULE,
   ].join("\n");
 
 /**

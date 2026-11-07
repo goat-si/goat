@@ -60,6 +60,7 @@ import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
+import { makeSkillProposalAnswers } from "./channelSkillProposals.ts";
 import {
   answerForwardIdsFor,
   questionIdFor,
@@ -68,7 +69,7 @@ import {
 } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
-import { requesterForDelivery, senderAnswerRefused } from "./channelSenderAuthority.ts";
+import { refuseAnswerForward, requesterForDelivery } from "./channelSenderAuthority.ts";
 import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
@@ -146,6 +147,7 @@ const make = Effect.gen(function* () {
   const remoteReservations = yield* Ref.make<ReadonlyMap<string, ChannelRequester>>(new Map());
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+  const proposals = yield* makeSkillProposalAnswers;
 
   /**
    * The Slack connection's default project and model, for work that came in through it. A
@@ -816,6 +818,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const stored = yield* ledger.getTask(taskId);
       if (stored === undefined) return;
+      if (stored.task.skillProposal !== undefined) return yield* proposals.advance(stored, owner);
       let dispatchRequester = stored.task.requester;
       if (stored.task.status === "received") {
         const requester = yield* requesterForDispatch(stored.task).pipe(
@@ -1147,25 +1150,7 @@ const make = Effect.gen(function* () {
           yield* ledger.completeForward({ owner, sequence: pending.sequence });
           return;
         }
-        yield* refuseForward(
-          ledger,
-          stored,
-          authority._tag === "sender_changed"
-            ? senderAnswerRefused(authority.name)
-            : "The requester’s permission changed; your answer was not sent. Open the thread in GOAT.",
-          owner,
-          pending.sequence,
-          [ids.messageId],
-        ).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ChannelLedger.ChannelLedgerError({
-                reason: "persistence",
-                detail: "Could not record forward refusal.",
-                cause,
-              }),
-          ),
-        );
+        yield* refuseAnswerForward(ledger, stored, authority, owner, pending.sequence, ids);
         return;
       }
       // The worker's modes may have been raised since the task started. The orchestrator re-checks

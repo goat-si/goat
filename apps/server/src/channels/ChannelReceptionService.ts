@@ -111,7 +111,7 @@ import {
 import { replyDelivery, turnAnswerReplyTo } from "./channelReplyDelivery.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
 import { makeRoutineInputs, ROUTINE_COPY, routineDecision } from "./channelRoutineInputs.ts";
-import { openQuestionTask } from "./channelQuestionAnswers.ts";
+import { mayAnswerTask, openQuestionTask, questionTextForModel } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
 import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
@@ -1117,7 +1117,7 @@ const make = Effect.gen(function* () {
                       : { pullRequests: task.observed!.pullRequests.map(pullRequestLabel) }),
                     openQuestions: task.openQuestions.map((question) => ({
                       questionId: question.questionId,
-                      text: question.text,
+                      text: questionTextForModel(task, question),
                     })),
                     ...(task.observed?.result === undefined
                       ? {}
@@ -1483,7 +1483,10 @@ const make = Effect.gen(function* () {
         if (refused !== undefined) {
           finalDecision = refused;
           replyText = finalDecision.replyText;
-        } else if (answerer === undefined || !directs(answerer, stored.task)) {
+        } else if (
+          answerer === undefined ||
+          !mayAnswerTask(answerer, stored.task, message.connectionId)
+        ) {
           replyText = CHANNEL_COPY.answerNotAllowed;
           finalDecision = { replyText, action: { type: "report_only" } };
         } else {
@@ -1518,7 +1521,7 @@ const make = Effect.gen(function* () {
                 : {}),
               // A dispatcher question picks the project and may pick the machine: a known
               // host, or this one.
-              ...(hasWorker
+              ...(hasWorker || stored.task.skillProposal !== undefined
                 ? {}
                 : {
                     amend: (next: ChannelTask) => {
