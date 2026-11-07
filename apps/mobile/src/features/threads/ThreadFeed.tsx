@@ -234,6 +234,7 @@ import {
 } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
+import { settledRunAnchorId } from "./turn-settle";
 import { htmlRenderFrameHeight } from "@goat/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
@@ -2867,8 +2868,11 @@ export const ThreadFeed = memo(function ThreadFeed({
   })();
   // An interrupted run unfolds; a run that is no longer latest folds back.
   const [previousLatestRun, setPreviousLatestRun] = useState(props.latestRun);
+  // A settling run folds its work; otherwise the list anchors the user message above it and the reply jumps.
+  const [settleAnchorId, setSettleAnchorId] = useState<string | null>(null);
   if (previousLatestRun !== props.latestRun) {
     setPreviousLatestRun(props.latestRun);
+    setSettleAnchorId(settledRunAnchorId(previousLatestRun, props.latestRun, presentedFeed));
     const latest = props.latestRun;
     const previous = previousLatestRun;
     if (latest && previous) {
@@ -2924,6 +2928,7 @@ export const ThreadFeed = memo(function ThreadFeed({
           });
         }
         disclosureAnchorKeyRef.current = null;
+        setSettleAnchorId(null);
         setDisclosureToggleSettling(false);
         const motion = disclosureMotionRef.current;
         if (motion && !motion.playing) {
@@ -2999,9 +3004,17 @@ export const ThreadFeed = memo(function ThreadFeed({
       settleDisclosureAfterLayout();
     }
   };
+  const holdSettleAnchor = useEffectEvent((anchorKey: string) => {
+    disclosureAnchorKeyRef.current = anchorKey;
+    settleDisclosureAfterLayout();
+  });
+  // oxlint-disable-next-line goat/react-effect-budget -- the fold's rows measure after commit; hold the anchor until they settle
+  useEffect(() => {
+    if (settleAnchorId !== null) holdSettleAnchor(settleAnchorId);
+  }, [settleAnchorId]);
 
   const shouldRestoreVisibleContentPosition = (entry: ThreadFeedRow) => {
-    const disclosureAnchorKey = disclosureAnchorKeyRef.current;
+    const disclosureAnchorKey = disclosureAnchorKeyRef.current ?? settleAnchorId;
     return disclosureAnchorKey === null || entry.id === disclosureAnchorKey;
   };
 
