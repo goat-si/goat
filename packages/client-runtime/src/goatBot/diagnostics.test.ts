@@ -104,6 +104,19 @@ describe("diagnoseGoatBot", () => {
     expect(line({ ...offline, moveTarget: null }, "home")?.action).toBeNull();
   });
 
+  it("reports a connected home that cannot run GOAT Bot", () => {
+    const old = healthy({
+      home: { ...healthy().home, homeSupportsBot: false } as GoatBotDiagnosticsInput["home"],
+      moveTarget: { environmentId: LAPTOP, label: "MacBook" },
+    });
+    expect(diagnoseGoatBot(old).verdict).toBe("down");
+    expect(line(old, "home")).toMatchObject({
+      tone: "error",
+      text: "Mac Studio can't run GOAT Bot",
+      action: { kind: "claim_home", environmentId: LAPTOP },
+    });
+  });
+
   it("never says Ready while the home or the model is still unknown", () => {
     expect(diagnoseGoatBot(healthy({ home: { state: "unknown" } }))).toMatchObject({
       verdict: "checking",

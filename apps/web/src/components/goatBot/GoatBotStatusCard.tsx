@@ -47,7 +47,7 @@ const TONE_DOT: Record<GoatBotDiagnosticTone, string> = {
  * client already holds for the bot's home; `rows` come from the caller's own task list.
  */
 export function GoatBotStatusCard({
-  environmentId,
+  environmentId: callerEnvironmentId,
   member,
   rows,
   className,
@@ -58,6 +58,9 @@ export function GoatBotStatusCard({
   readonly className?: string;
 }) {
   const home = useGoatBotHomeSettings();
+  const homeId = home.resolution.state === "claimed" ? home.resolution.claim.environmentId : null;
+  // Read at the home the card names, never at another machine the caller happens to show.
+  const environmentId = homeId ?? callerEnvironmentId;
   const presentation = useEnvironment(environmentId);
   const settings = useAtomValue(
     environmentId === null ? NO_SETTINGS : serverEnvironment.settingsValueAtom(environmentId),
@@ -91,7 +94,6 @@ export function GoatBotStatusCard({
     if (slackLive !== null) refreshSlack();
   }, [slackLive, refreshSlack]);
   const now = Date.parse(`${useNowMinute()}:00Z`);
-  const homeId = home.resolution.state === "claimed" ? home.resolution.claim.environmentId : null;
   const diagnostics = diagnoseGoatBot({
     home: home.resolution,
     homeLabel:
@@ -110,7 +112,7 @@ export function GoatBotStatusCard({
             ...(member === null ? {} : { override: member.defaultModelSelection }),
           }),
     canChangeModel,
-    rows,
+    rows: homeId === null || homeId === callerEnvironmentId ? rows : "unavailable",
     slack: !slackSupported ? "unavailable" : (slack.data ?? (slack.error ? "failed" : "loading")),
     slackLive,
     canConfigureSlack,

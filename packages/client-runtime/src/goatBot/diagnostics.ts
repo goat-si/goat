@@ -135,19 +135,21 @@ function homeLine(input: GoatBotDiagnosticsInput): GoatBotDiagnosticLine {
       return line("pending", "Checking the home machine…");
     case "unclaimed":
       return line("pending", "Choosing a home machine…");
-    case "claimed":
-      if (input.home.homeConnected) return line("ok", `Answers on ${input.homeLabel}`);
-      return line(
-        "error",
-        `Home machine is offline (${input.homeLabel})`,
+    case "claimed": {
+      const move: GoatBotDiagnosticAction | null =
         input.moveTarget === null
           ? null
           : {
               kind: "claim_home",
               environmentId: input.moveTarget.environmentId,
               label: `Make ${input.moveTarget.label} the home`,
-            },
-      );
+            };
+      if (!input.home.homeConnected)
+        return line("error", `Home machine is offline (${input.homeLabel})`, move);
+      if (!input.home.homeSupportsBot)
+        return line("error", `${input.homeLabel} can't run GOAT Bot`, move);
+      return line("ok", `Answers on ${input.homeLabel}`);
+    }
   }
 }
 

@@ -50,8 +50,12 @@ export function MobileBotStatusCard(props: {
   readonly refreshRows: () => void;
   readonly onOpenTask: (taskId: ChannelTaskId) => void;
 }) {
-  const { environmentId, member } = props;
+  const { member } = props;
   const home = useMobileGoatBotHomeSettings();
+  const homeId = home.resolution.state === "claimed" ? home.resolution.claim.environmentId : null;
+  // Read at the home the card names, never at another machine the sheet happens to show.
+  const environmentId = homeId ?? props.environmentId;
+  const rowsFromHome = homeId === null || homeId === props.environmentId;
   const config = useEnvironmentServerConfig(environmentId);
   const { presentationById } = useEnvironments();
   const presentation = environmentId === null ? undefined : presentationById.get(environmentId);
@@ -87,7 +91,6 @@ export function MobileBotStatusCard(props: {
     if (memberRevision !== null) refreshRows();
   }, [memberRevision, refreshRows]);
   const now = useNowMinuteMs();
-  const homeId = home.resolution.state === "claimed" ? home.resolution.claim.environmentId : null;
   const diagnostics = diagnoseGoatBot({
     home: home.resolution,
     homeLabel:
@@ -105,7 +108,7 @@ export function MobileBotStatusCard(props: {
         })
       : null,
     canChangeModel: false,
-    rows: props.rows,
+    rows: rowsFromHome ? props.rows : "unavailable",
     slack: !slackSupported ? "unavailable" : (slack.data ?? (slack.error ? "failed" : "loading")),
     slackLive,
     canConfigureSlack: false,

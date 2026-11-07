@@ -36,6 +36,7 @@ const state = vi.hoisted(() => ({
   moveTarget: null as null | { environmentId: string; label: string },
   changeHome: vi.fn(),
   memberUpdatedAt: "2026-11-07T10:00:00Z",
+  homeConfig: null as unknown,
   refreshRows: vi.fn(),
 }));
 
@@ -61,29 +62,32 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
 }));
 vi.mock("../../state/entities", () => ({
   useThreadShell: (ref: unknown) => (ref === null ? null : { updatedAt: state.memberUpdatedAt }),
-  useEnvironmentServerConfig: () => ({
-    settings: {
-      ...DEFAULT_SERVER_SETTINGS,
-      goatBotModelSelection: { instanceId: "codex", model: "gpt-5.4" },
-    },
-    providers: [
-      {
-        instanceId: ProviderInstanceId.make("codex"),
-        driver: ProviderDriverKind.make("codex"),
-        displayName: "Codex",
-        enabled: true,
-        installed: true,
-        version: "1.0.0",
-        status: "ready",
-        auth: { status: "authenticated" },
-        checkedAt: "2026-01-01T00:00:00.000Z",
-        models: [{ slug: "gpt-5.4", name: "GPT-5.4", isCustom: false, capabilities: null }],
-        slashCommands: [],
-        skills: [],
-      },
-    ],
-  }),
+  useEnvironmentServerConfig: (environmentId: string | null) =>
+    environmentId === "env-studio" ? state.homeConfig : null,
 }));
+const homeConfig = {
+  settings: {
+    ...DEFAULT_SERVER_SETTINGS,
+    goatBotModelSelection: { instanceId: "codex", model: "gpt-5.4" },
+  },
+  providers: [
+    {
+      instanceId: ProviderInstanceId.make("codex"),
+      driver: ProviderDriverKind.make("codex"),
+      displayName: "Codex",
+      enabled: true,
+      installed: true,
+      version: "1.0.0",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      models: [{ slug: "gpt-5.4", name: "GPT-5.4", isCustom: false, capabilities: null }],
+      slashCommands: [],
+      skills: [],
+    },
+  ],
+};
+state.homeConfig = homeConfig;
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({ presentationById: new Map() }),
 }));
@@ -181,6 +185,15 @@ it("reads a member's tasks again when its conversation changes", async () => {
   state.memberUpdatedAt = "2026-11-07T11:00:00Z";
   await render({ member });
   expect(state.refreshRows.mock.calls.length).toBe(before + 1);
+});
+
+it("reads the named home even when the sheet shows another machine", async () => {
+  state.homeConnected = true;
+  await render({ environmentId: LAPTOP, rows: [waiting] });
+  expect(container.textContent).toContain("Answers on Mac Studio");
+  expect(container.textContent).toContain("GPT-5.4 on Codex");
+  expect(container.textContent).not.toContain("waiting for your answer");
+  expect(button("Answer")).toBeUndefined();
 });
 
 it("says Ready for a healthy main bot once its work has loaded", async () => {
