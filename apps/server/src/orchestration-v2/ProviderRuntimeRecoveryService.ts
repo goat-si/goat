@@ -1,4 +1,12 @@
 import {
+  nonterminalRuns,
+  isNonterminalTurnItemStatus,
+  isNonterminalNodeStatus,
+  isAppOwnedDelegation,
+  isAppOwnedDelegationItem,
+} from "./RecoveryStatePredicates.ts";
+import { recoverUsageLimit } from "./RecoveryUsageLimit.ts";
+import {
   ProviderRuntimeRecoveryError,
   isProviderRuntimeRecoveryError,
   drainOutboxError,
@@ -13,7 +21,6 @@ import {
   type ProviderThreadId,
   type RunId,
   type OrchestrationV2RestartCancelledBackgroundWork,
-  type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   isOrchestrationV2WorkActive,
   type ThreadId,
@@ -81,44 +88,6 @@ export class ProviderRuntimeRecoveryService extends Context.Service<
     readonly recover: Effect.Effect<ProviderRuntimeRecoverySummary, ProviderRuntimeRecoveryError>;
   }
 >()("goat/orchestration-v2/ProviderRuntimeRecoveryService") {}
-
-function nonterminalRuns(projection: ProjectionStore.ProjectionRuntimeRecoveryState) {
-  return projection.runs.filter((run) => {
-    const status: string = run.status;
-    return (
-      status === "preparing" ||
-      run.status === "starting" ||
-      run.status === "running" ||
-      run.status === "waiting"
-    );
-  });
-}
-
-function isNonterminalTurnItemStatus(status: string): boolean {
-  return status === "pending" || status === "running" || status === "waiting";
-}
-
-function isNonterminalNodeStatus(status: string): boolean {
-  return status === "pending" || status === "running" || status === "waiting";
-}
-
-function isAppOwnedDelegation(task: {
-  readonly origin: OrchestrationV2Subagent["origin"];
-  readonly childThreadId: ThreadId | null;
-  readonly remote?: OrchestrationV2Subagent["remote"];
-}): boolean {
-  return task.origin === "app_owned" && (task.childThreadId !== null || task.remote !== undefined);
-}
-
-function isAppOwnedDelegationItem(
-  item: OrchestrationV2ThreadProjection["turnItems"][number],
-  delegatedTaskNodeIds: ReadonlySet<string>,
-): boolean {
-  return (
-    item.type === "subagent" &&
-    (isAppOwnedDelegation(item) || delegatedTaskNodeIds.has(item.subagentId))
-  );
-}
 
 function providerThreadHasPendingBackgroundTasks(
   providerThread: OrchestrationV2ThreadProjection["providerThreads"][number],
@@ -394,6 +363,21 @@ export const make = Effect.gen(function* () {
       });
       runs = recoveredQueue.runs;
       events.push(...recoveredQueue.events);
+      const usageRecovery = yield* recoverUsageLimit({
+        projection,
+        runs,
+        projections,
+        now,
+        commandId,
+        allocateEventId,
+        readError: (cause) =>
+          new ProviderRuntimeRecoveryError({
+            operation: "read-projections",
+            threadId: projection.thread.id,
+            cause,
+          }),
+      });
+      events.push(...usageRecovery.events);
       for (const question of questions) {
         events.push({
           id: yield* allocateEventId(),
@@ -512,6 +496,7 @@ export const make = Effect.gen(function* () {
         for (const item of projection.turnItems.filter(
           (candidate) =>
             candidate.type !== "human_handoff" &&
+            !usageRecovery.itemIds.has(candidate.id) &&
             candidate.runId === run.id &&
             (candidate.nodeId === null || !messageRequestNodeIds.has(candidate.nodeId)) &&
             !isAppOwnedDelegationItem(candidate, delegatedTaskNodeIds) &&
