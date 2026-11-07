@@ -433,7 +433,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         }),
       ),
     );
-  const applyEventsLocked = Effect.fn("EnvironmentThreadState.applyEventsLocked")(function* (
+  // Per-batch streaming does not need its own trace span.
+  const applyEventsLocked = Effect.fnUntraced(function* (
     items: ReadonlyArray<SequencedItem>,
   ) {
     const appliedSequence = yield* SubscriptionRef.get(lastSequence);
@@ -606,7 +607,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     yield* applyEventsLocked([item]);
   });
 
-  const applyItems = Effect.fn("EnvironmentThreadState.applyItems")(function* (
+  // Per-batch streaming does not need its own trace span.
+  const applyItems = Effect.fnUntraced(function* (
     items: ReadonlyArray<OrchestrationV2ResolvedThreadStreamItem>,
   ) {
     yield* applyLock.withPermits(1)(
