@@ -424,16 +424,14 @@ const listBotsAs = (caller: EnvironmentId) =>
     if (!("bots" in listed)) return assert.fail(JSON.stringify(listed));
     return listed.bots.toSorted((a, b) => a.name.localeCompare(b.name));
   }).pipe(
-    Effect.provide(
-      Layer.succeed(McpInvocationContext.McpInvocationContext, {
-        environmentId: caller,
-        capabilities: new Set(["orchestration"] as const),
-        issuedAt: 0,
-        requestNamespace: "bot-list",
-        thread: undefined,
-        client: { sessionId: "bot-list", label: "Agent", access: "read-only" },
-      }),
-    ),
+    Effect.provideService(McpInvocationContext.McpInvocationContext, {
+      environmentId: caller,
+      capabilities: new Set(["orchestration"] as const),
+      issuedAt: 0,
+      requestNamespace: "bot-list",
+      thread: undefined,
+      client: { sessionId: "bot-list", label: "Agent", access: "read-only" },
+    }),
   );
 
 it.effect("agents list only their owner's active bots and only who each bot is", () => {
