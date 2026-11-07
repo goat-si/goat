@@ -1,7 +1,19 @@
-import { MessageId, RunId, ThreadId, type OrchestrationV2Run } from "@goat/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import {
+  ChannelChildWorkId,
+  ChannelTaskId,
+  MessageId,
+  RunId,
+  ThreadId,
+  type OrchestrationV2Run,
+} from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
+import { describe, expect } from "vite-plus/test";
 
-import { launchedResultOwed, type LaunchedEnd } from "./channelLaunchedResults.ts";
+import { runMigrations } from "../persistence/Migrations.ts";
+import { launchedResultOwed, owesLaunched, type LaunchedEnd } from "./channelLaunchedResults.ts";
 
 const session = ThreadId.make("goat-bot-session:s");
 const child = ThreadId.make("channel-child-work:c");
@@ -94,3 +106,63 @@ describe("launchedResultOwed", () => {
     expect(launchedResultOwed(end({ watch: null }), [], [unowned])).toBe(true);
   });
 });
+it.effect("keeps a session busy while a wake that arrived since its first read still runs", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const sql = yield* SqlClient.SqlClient;
+    const task = { taskId: ChannelTaskId.make("task:probe"), generation: 1 };
+    yield* sql`INSERT INTO channel_bot_session_runs
+      (thread_id, message_id, task_id, task_generation, kind, created_at)
+      VALUES (${session}, 'message:launch', ${task.taskId}, 1, 'task', '2026-11-07T00:00:00.000Z')`;
+    const record = {
+      ownerId: "owner",
+      taskId: task.taskId,
+      childWorkId: ChannelChildWorkId.make("probe"),
+      generation: 1,
+      callerThreadId: session,
+      callerRunId: RunId.make("launch"),
+      requestKey: "probe",
+      promptDigest: "digest",
+      surface: "thread_launch",
+      destination: { threadId: child },
+      state: "completed",
+      createdAt: "2026-11-07T00:00:00.000Z",
+      updatedAt: "2026-11-07T00:00:00.000Z",
+    } as const;
+    yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+      VALUES ('child-work:task:probe:probe', ${JSON.stringify(record)}, '2026-11-07T00:00:00.000Z')`;
+    const sessionRuns = [
+      {
+        id: RunId.make("launch"),
+        ordinal: 1,
+        status: "completed",
+        userMessageId: "message:launch",
+      },
+      {
+        id: RunId.make("wake"),
+        ordinal: 2,
+        status: "running",
+        userMessageId: wakeId("run:run:c:1"),
+      },
+    ];
+    const threads = {
+      getThreadRecords: (threadId: string) =>
+        Effect.succeed(
+          threadId === child
+            ? { runs: [{ id: runId, ordinal: 1, status: "completed", completedAt: null }] }
+            : { runs: sessionRuns, messages: [] },
+        ),
+    } as never;
+    const owed = yield* owesLaunched(
+      {
+        threads,
+        sql,
+        watch: () => Effect.succeed({ detached: false, skippedRuns: [], reportedEnds: {} }),
+      },
+      session,
+      task,
+      [record as never],
+    );
+    expect(owed).toBe(true);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

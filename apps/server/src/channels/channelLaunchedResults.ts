@@ -176,6 +176,8 @@ export const owesLaunched = Effect.fn("ChannelBotSession.owesLaunched")(function
     .getThreadRecords(sessionThreadId, ["runs", "messages"])
     .pipe(Effect.option);
   if (records._tag === "None") return true;
+  // A wake that arrived since the caller's own read is a live run the session must not lose.
+  if (records.value.runs.some((run) => !ENDED.has(run.status))) return true;
   const own = yield* sessionTaskRuns(deps.sql, sessionThreadId, records.value, task);
   return anyLaunchedResultOwed(ends, own, records.value.runs);
 });
