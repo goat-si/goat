@@ -1,3 +1,4 @@
+import { BackgroundGitWork } from "../vcs/BackgroundGitWork.ts";
 import {
   backgroundWorkHoldsCompletion,
   turnItemUpdateCanEndBackgroundWork,
@@ -681,6 +682,7 @@ export const make = Effect.gen(function* () {
     refreshLookups = false,
   ) =>
     sweep(mergedPullRequest, threadId, refreshLookups).pipe(
+      Effect.provideService(BackgroundGitWork, true),
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterruptsOnly(cause),
         (cause) =>
