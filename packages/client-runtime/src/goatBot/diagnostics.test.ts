@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   type ServerProvider,
   type ServerSettings,
+  SlackChannelConnectionId,
   type SlackChannelSettings,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
@@ -41,7 +42,12 @@ const model: GoatBotModelStatus = {
 };
 
 const slack = (patch: Partial<SlackChannelSettings>) =>
-  ({ enabled: true, status: "connected", ...patch }) as const;
+  ({
+    connectionId: SlackChannelConnectionId.make("slack-1"),
+    enabled: true,
+    status: "connected",
+    ...patch,
+  }) as const;
 
 function healthy(patch: Partial<GoatBotDiagnosticsInput> = {}): GoatBotDiagnosticsInput {
   return {
@@ -60,6 +66,7 @@ function healthy(patch: Partial<GoatBotDiagnosticsInput> = {}): GoatBotDiagnosti
     canChangeModel: true,
     rows: [],
     slack: null,
+    slackLive: null,
     canConfigureSlack: true,
     now: NOW,
     ...patch,
@@ -190,6 +197,24 @@ describe("diagnoseGoatBot", () => {
       text: "Slack connected",
       action: null,
     });
+  });
+
+  it("lets a pushed Slack status replace the snapshot for the connection it names", () => {
+    const pushed = (connectionId: string) =>
+      healthy({
+        slack: [slack({})],
+        slackLive: {
+          connectionId: SlackChannelConnectionId.make(connectionId),
+          status: "error",
+          lastError: "socket closed",
+        },
+      });
+    expect(line(pushed("slack-1"), "slack")).toMatchObject({
+      tone: "error",
+      text: "Slack: socket closed",
+    });
+    expect(diagnoseGoatBot(pushed("slack-1")).verdict).toBe("down");
+    expect(line(pushed("slack-2"), "slack")?.text).toBe("Slack connected");
   });
 
   it("warns about a Slack reply that failed in the last day and forgets older ones", () => {

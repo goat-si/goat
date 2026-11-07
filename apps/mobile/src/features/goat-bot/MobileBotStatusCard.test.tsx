@@ -83,7 +83,13 @@ vi.mock("../../state/entities", () => ({
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({ presentationById: new Map() }),
 }));
-vi.mock("../../state/channels", () => ({ channelEnvironment: { slackSettings: () => "slack" } }));
+vi.mock("../../state/channels", () => ({
+  channelEnvironment: { slackSettings: () => "slack", slackStatus: () => "slack-status" },
+}));
+vi.mock("@effect/atom-react", async () => {
+  const { AsyncResult } = await import("effect/reactivity");
+  return { useAtomValue: () => AsyncResult.initial() };
+});
 vi.mock("../../state/query", () => ({ useEnvironmentQuery: () => ({ data: null }) }));
 vi.mock("../../lib/clock", () => ({ useNowMinuteMs: () => Date.parse("2026-11-07T12:00:00Z") }));
 

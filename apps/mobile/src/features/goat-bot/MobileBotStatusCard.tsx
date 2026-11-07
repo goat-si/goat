@@ -4,7 +4,15 @@ import {
   type GoatBotDiagnosticTone,
   type GoatBotDiagnosticsInput,
 } from "@goat/client-runtime/goatBot";
-import type { BotProfile, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import type {
+  BotProfile,
+  ChannelTaskId,
+  EnvironmentId,
+  SlackChannelStatusEvent,
+} from "@goat/contracts";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { Pressable, Text, View } from "react-native";
 
 import { useNowMinuteMs } from "../../lib/clock";
@@ -13,6 +21,10 @@ import { useEnvironmentServerConfig } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
+
+const NO_SLACK_EVENT = Atom.make<AsyncResult.AsyncResult<SlackChannelStatusEvent, unknown>>(
+  AsyncResult.initial(),
+);
 
 const TONE_DOT: Record<GoatBotDiagnosticTone, string> = {
   ok: "bg-adaptive-emerald-600-400",
@@ -44,6 +56,12 @@ export function MobileBotStatusCard(props: {
       ? channelEnvironment.slackSettings({ environmentId, input: {} })
       : null,
   );
+  // Pushed status changes; subscribed only while a Slack connection is on.
+  const slackLive = useAtomValue(
+    environmentId !== null && slack.data?.some((connection) => connection.enabled) === true
+      ? channelEnvironment.slackStatus({ environmentId, input: {} })
+      : NO_SLACK_EVENT,
+  );
   const now = useNowMinuteMs();
   const homeId = home.resolution.state === "claimed" ? home.resolution.claim.environmentId : null;
   const diagnostics = diagnoseGoatBot({
@@ -65,6 +83,7 @@ export function MobileBotStatusCard(props: {
     canChangeModel: false,
     rows: props.rows,
     slack: slack.data ?? null,
+    slackLive: Option.getOrNull(AsyncResult.value(slackLive)),
     canConfigureSlack: false,
     now,
   });

@@ -6,6 +6,7 @@ import type {
   ServerProvider,
   ServerSettings,
   SlackChannelSettings,
+  SlackChannelStatusEvent,
 } from "@goat/contracts";
 
 import type { GoatBotHomeResolution } from "./home.ts";
@@ -91,8 +92,13 @@ export interface GoatBotDiagnosticsInput {
   /** Null until the bot's task rows have loaded; "unavailable" when its server cannot list them. */
   readonly rows: ReadonlyArray<BotThreadRow> | null | "unavailable";
   readonly slack: ReadonlyArray<
-    Pick<SlackChannelSettings, "enabled" | "status" | "lastError" | "lastDeliveryError">
+    Pick<
+      SlackChannelSettings,
+      "connectionId" | "enabled" | "status" | "lastError" | "lastDeliveryError"
+    >
   > | null;
+  /** The latest pushed Slack status, newer than the snapshot for the connection it names. */
+  readonly slackLive: SlackChannelStatusEvent | null;
   readonly canConfigureSlack: boolean;
   readonly now: number;
 }
@@ -210,7 +216,19 @@ function slackLine(
   input: GoatBotDiagnosticsInput,
   homeId: EnvironmentId | null,
 ): GoatBotDiagnosticLine | null {
-  const connections = (input.slack ?? []).filter((connection) => connection.enabled);
+  const live = input.slackLive;
+  const connections = (input.slack ?? [])
+    .filter((connection) => connection.enabled)
+    .map((connection) =>
+      live === null || live.connectionId !== connection.connectionId
+        ? connection
+        : {
+            ...connection,
+            status: live.status,
+            lastError: live.lastError,
+            lastDeliveryError: live.lastDeliveryError,
+          },
+    );
   if (connections.length === 0) return null;
   const action: GoatBotDiagnosticAction | null =
     input.canConfigureSlack && homeId !== null

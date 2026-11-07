@@ -11,9 +11,11 @@ import {
   type BotProfile,
   type EnvironmentId,
   type ServerSettings,
+  type SlackChannelStatusEvent,
 } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { Atom } from "effect/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
 
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { cn } from "~/lib/utils";
@@ -28,6 +30,9 @@ import { useGoatBotHomeSettings } from "./useGoatBotHome";
 
 const NO_PERMISSION = Atom.make(false);
 const NO_SETTINGS = Atom.make<ServerSettings | null>(null);
+const NO_SLACK_EVENT = Atom.make<AsyncResult.AsyncResult<SlackChannelStatusEvent, unknown>>(
+  AsyncResult.initial(),
+);
 
 const TONE_DOT: Record<GoatBotDiagnosticTone, string> = {
   ok: "bg-success",
@@ -72,6 +77,12 @@ export function GoatBotStatusCard({
       ? channelEnvironment.slackSettings({ environmentId, input: {} })
       : null,
   );
+  // Pushed status changes; subscribed only while a Slack connection is on.
+  const slackLive = useAtomValue(
+    environmentId !== null && slack.data?.some((connection) => connection.enabled) === true
+      ? channelEnvironment.slackStatus({ environmentId, input: {} })
+      : NO_SLACK_EVENT,
+  );
   const now = Date.parse(`${useNowMinute()}:00Z`);
   const homeId = home.resolution.state === "claimed" ? home.resolution.claim.environmentId : null;
   const diagnostics = diagnoseGoatBot({
@@ -94,6 +105,7 @@ export function GoatBotStatusCard({
     canChangeModel,
     rows,
     slack: slack.data ?? null,
+    slackLive: Option.getOrNull(AsyncResult.value(slackLive)),
     canConfigureSlack,
     now,
   });
