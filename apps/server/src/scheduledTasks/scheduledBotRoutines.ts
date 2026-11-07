@@ -44,12 +44,12 @@ export const BOT_ROUTINE_NEEDS_OWNER =
 
 export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(function* () {
   const sql = yield* SqlClient.SqlClient;
-  // Servers assembled without channels (some tests) have no GOAT Bot threads.
-  const directory = yield* Effect.serviceOption(ChannelBotDirectory.ChannelBotDirectory);
+  // Required: without it every bot thread looks ordinary and its routines would send directly.
+  const directory = yield* ChannelBotDirectory.ChannelBotDirectory;
   const isBotThread = (threadId: string | null) =>
-    threadId === null || Option.isNone(directory)
+    threadId === null
       ? Effect.succeed(false)
-      : directory.value
+      : directory
           .isBotThread(ThreadId.make(threadId))
           .pipe(
             Effect.mapError((cause) => taskError("Could not read GOAT Bot threads.", { cause })),
