@@ -704,3 +704,43 @@ describe("member limits", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 });
+
+describe("reconciling many members", () => {
+  it.effect("finishes a member behind more than a batch of steps that keep failing", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const stuckOwner = "environment:stuck";
+      const record = (botId: string, threadId: string) => ({
+        botId,
+        role: "member",
+        name: "Bot",
+        avatar: null,
+        purpose: "",
+        defaultModelSelection: null,
+        defaultProjectId: null,
+        environmentId,
+        sessionThreadId: threadId,
+        createdAt: NOW,
+        updatedAt: NOW,
+        state: "deleted",
+        lifecycle: { pending: "archive", at: NOW },
+      });
+      // Their threads do not exist, so every archive fails and stays pending.
+      for (let index = 0; index < 120; index++) {
+        const botId = "a" + String(index).padStart(11, "0");
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
+          (${profileKey(botId, stuckOwner)}, ${JSON.stringify(record(botId, "thread:gone-" + index))}, ${NOW})`;
+      }
+      const thread = ThreadId.make("thread:last-member");
+      yield* ensureThread(thread);
+      yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
+        (${profileKey("zzzzzzzzzzzz", stuckOwner)}, ${JSON.stringify(record("zzzzzzzzzzzz", thread))}, ${NOW})`;
+
+      yield* members.reconcileAll;
+      assert.isTrue((yield* threadView(thread)).archived);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
