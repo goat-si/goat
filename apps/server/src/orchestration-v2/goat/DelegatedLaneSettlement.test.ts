@@ -282,11 +282,19 @@ it.effect("a lane keeps its project's opt-out and its pull request rules", () =>
   ),
 );
 
-it.effect("a settled lane runs no settle script in a checkout an unsettled thread still uses", () =>
+it.effect("a settled lane never runs a settle script in its parent's checkout", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const lane = appThread(childId, "settled", "/worktrees/shared");
-      const parent = appThread(parentId, null, "/worktrees/shared");
+      const lane = {
+        ...appThread(childId, "settled", "/worktrees/shared"),
+        lineage: {
+          rootThreadId: parentId,
+          parentThreadId: parentId,
+          relationshipToParent: "subagent",
+        },
+      } satisfies OrchestrationV2AppThread;
+      // The parent is settled now but can resume in that checkout at any moment.
+      const parent = appThread(parentId, "settled", "/worktrees/shared");
       const own = appThread("own-worktree", "settled", "/worktrees/own");
       const settledEvent = (settledThread: OrchestrationV2AppThread) =>
         ({
