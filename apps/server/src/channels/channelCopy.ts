@@ -53,7 +53,6 @@ export const CHANNEL_COPY = {
   noteChanged: "Changed that note.",
   noteForgotten: "Forgot that note.",
   noteNotFound: "I couldn't find that note in my notes, so nothing changed.",
-  noteAmbiguous: "I couldn't tell which note that changes, so nothing changed.",
   noteEditBusy:
     "Another change to my notes is still in progress, so nothing changed. Try again when it finishes.",
   noteEditFailed: "I couldn't change my notes just now, so nothing changed. Please try again.",

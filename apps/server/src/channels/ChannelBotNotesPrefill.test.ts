@@ -35,7 +35,8 @@ it.effect.each([
               type: "create_task",
               title: "Update a note",
               instruction: "Update the requested note.",
-              notesChangeRequested: note,
+              // The note sits JSON-quoted in the sentence, so the model copies it as written there.
+              notesChangeRequested: JSON.stringify(note).slice(1, -1),
             },
           })
         : defaultScript(input);
@@ -46,7 +47,7 @@ it.effect.each([
         rpcContext,
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-      assert.strictEqual((yield* onlyTask).notesChangeRequested, note);
+      assert.strictEqual((yield* onlyTask).notesChangeRequested, JSON.stringify(note).slice(1, -1));
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   },
 );

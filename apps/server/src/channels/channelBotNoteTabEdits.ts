@@ -47,20 +47,49 @@ const OPEN_STATUSES: ReadonlyArray<ChannelTaskStatus> = [
   "waiting_input",
 ];
 
-const FORGET_PREFIX = goatBotForgetNoteMessage("").slice(0, -1);
-const CHANGE_PREFIX = goatBotChangeNoteMessage("", "").split('" to: "')[0] ?? "";
+// The fixed words around the notes, taken from the sentences the clients build.
+const FORGET_PREFIX = goatBotForgetNoteMessage("").slice(0, -2);
+const CHANGE_SAMPLE = goatBotChangeNoteMessage("", "");
+const CHANGE_PREFIX = CHANGE_SAMPLE.slice(0, CHANGE_SAMPLE.indexOf('"'));
+const CHANGE_TO = CHANGE_SAMPLE.slice(CHANGE_PREFIX.length + 2, -2);
 
-type TabRequest = { readonly kind: "forget" | "change"; readonly message: string };
+type TabRequest =
+  | { readonly kind: "forget"; readonly note: string }
+  | { readonly kind: "change"; readonly note: string; readonly next: string };
+
+/** The JSON string literal starting at `from`, and the index just after it. */
+const jsonStringAt = (text: string, from: number) => {
+  if (text[from] !== '"') return undefined;
+  for (let at = from + 1; at < text.length; at++) {
+    if (text[at] === "\\") at++;
+    else if (text[at] === '"') {
+      try {
+        const value: unknown = JSON.parse(text.slice(from, at + 1));
+        return typeof value === "string" ? { value, end: at + 1 } : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+};
 
 /** The Memory tab's sentences, recognised only when they are the whole message. */
 const tabRequest = (text: string): TabRequest | undefined => {
   const message = text.trim();
-  if (!message.endsWith('"')) return undefined;
-  if (message.startsWith(FORGET_PREFIX) && message.length > FORGET_PREFIX.length + 1)
-    return { kind: "forget", message };
-  if (message.startsWith(CHANGE_PREFIX) && message.includes('" to: "', CHANGE_PREFIX.length))
-    return { kind: "change", message };
-  return undefined;
+  if (message.startsWith(FORGET_PREFIX)) {
+    const note = jsonStringAt(message, FORGET_PREFIX.length);
+    return note?.end === message.length && note.value !== ""
+      ? { kind: "forget", note: note.value }
+      : undefined;
+  }
+  if (!message.startsWith(CHANGE_PREFIX)) return undefined;
+  const note = jsonStringAt(message, CHANGE_PREFIX.length);
+  if (note === undefined || !message.startsWith(CHANGE_TO, note.end)) return undefined;
+  const next = jsonStringAt(message, note.end + CHANGE_TO.length);
+  return next?.end === message.length && next.value.trim() !== ""
+    ? { kind: "change", note: note.value, next: next.value }
+    : undefined;
 };
 
 /** What a tab edit answers; shaped like an approval answer so reception completes it the same way. */
@@ -84,19 +113,6 @@ const BOM = "\uFEFF";
 
 const sameBytes = (left: Uint8Array, right: Uint8Array) =>
   left.length === right.length && left.every((byte, index) => byte === right[index]);
-
-/** Every in-force note whose change sentence, with some non-empty new text, is `message`. */
-const changeCandidates = (lines: ReadonlyArray<ChannelBotNoteLine>, message: string) => {
-  const found = new Map<string, string>();
-  for (const line of lines) {
-    if (line.replacedBy !== undefined) continue;
-    const prefix = goatBotChangeNoteMessage(line.text, "").slice(0, -1);
-    if (!message.startsWith(prefix)) continue;
-    const next = message.slice(prefix.length, -1);
-    if (next.trim() !== "") found.set(line.text, next);
-  }
-  return [...found];
-};
 
 /**
  * The file without the note `text`: its lines, every earlier line they replaced, every other line
@@ -180,7 +196,8 @@ export const makeChannelBotNoteWriter = (
     const readNotes = readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES);
 
     const change = Effect.fn("channelBotNoteTabEdits.change")(function* (
-      message: string,
+      note: string,
+      next: string,
       text: string,
       exists: boolean,
       inputId: string,
@@ -188,11 +205,10 @@ export const makeChannelBotNoteWriter = (
     ) {
       // A pass re-run after a restart finds its own line and answers as the first pass did.
       if (text.includes(noteSource(inputId))) return CHANNEL_COPY.noteChanged;
-      const candidates = changeCandidates(parseChannelBotNoteLines(text), message);
-      const [only] = candidates;
-      if (only === undefined) return CHANNEL_COPY.noteNotFound;
-      if (candidates.length > 1) return CHANNEL_COPY.noteAmbiguous;
-      const line = channelBotNoteLine(only[1], readAt, inputId, only[0]);
+      const inForce = parseChannelBotNoteLines(text).some(
+        (line) => line.replacedBy === undefined && line.text === note,
+      );
+      const line = inForce ? channelBotNoteLine(next, readAt, inputId, note) : undefined;
       if (line === undefined) return CHANNEL_COPY.noteNotFound;
       yield* fs.writeFileString(files.notes, appendPrefix(exists, text) + line + "\n", {
         flag: "a",
@@ -203,7 +219,7 @@ export const makeChannelBotNoteWriter = (
     // Residuals, accepted: a write that lands between the compare and the rename is lost, and a
     // writer holding a copy read before the rename can write the removed words back afterwards.
     const forget = Effect.fn("channelBotNoteTabEdits.forget")(function* (
-      message: string,
+      note: string,
       original: Uint8Array,
     ) {
       const decoded = yield* Effect.try({
@@ -214,9 +230,7 @@ export const makeChannelBotNoteWriter = (
       const bom = decoded.value.startsWith(BOM) ? BOM : "";
       const text = decoded.value.slice(bom.length);
       const lines = parseChannelBotNoteLines(text);
-      const target = lines.find(
-        (line) => line.replacedBy === undefined && goatBotForgetNoteMessage(line.text) === message,
-      );
+      const target = lines.find((line) => line.replacedBy === undefined && line.text === note);
       if (target === undefined) return CHANNEL_COPY.noteNotFound;
       const next = withoutNote(text, lines, target.text);
       if (next === undefined) return CHANNEL_COPY.noteEditFailed;
@@ -257,8 +271,15 @@ export const makeChannelBotNoteWriter = (
         if (read?.truncated === true) return CHANNEL_COPY.noteFileTooLarge;
         const original = read?.bytes ?? new Uint8Array();
         if (request.kind === "change")
-          return yield* change(request.message, decode(original), read !== null, inputId, readAt);
-        const answer = yield* forget(request.message, original);
+          return yield* change(
+            request.note,
+            request.next,
+            decode(original),
+            read !== null,
+            inputId,
+            readAt,
+          );
+        const answer = yield* forget(request.note, original);
         if (answer !== undefined) return answer;
       }
       return CHANNEL_COPY.noteEditFailed;

@@ -177,12 +177,26 @@ const WORD_CHAR = /[\p{L}\p{N}]/u;
 // quote there may stop inside a written word.
 const SPACED_WORD_CHAR = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{N}]/u;
 
+/** The code point that ends just before `at`, reading a surrogate pair whole. */
+const codePointBefore = (text: string, at: number) => {
+  if (at <= 0) return undefined;
+  const low = text.charCodeAt(at - 1);
+  const high = at >= 2 ? text.charCodeAt(at - 2) : 0;
+  const pair = low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff;
+  return text.slice(pair ? at - 2 : at - 1, at);
+};
+
+const codePointFrom = (text: string, at: number) => {
+  const point = text.codePointAt(at);
+  return point === undefined ? undefined : String.fromCodePoint(point);
+};
+
 const atWordBoundaries = (haystack: string, needle: string) => {
-  const first = Array.from(needle)[0] ?? "";
-  const last = Array.from(needle).at(-1) ?? "";
+  const first = codePointFrom(needle, 0) ?? "";
+  const last = codePointBefore(needle, needle.length) ?? "";
   for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
-    const before = Array.from(haystack.slice(0, at)).at(-1);
-    const after = Array.from(haystack.slice(at + needle.length))[0];
+    const before = codePointBefore(haystack, at);
+    const after = codePointFrom(haystack, at + needle.length);
     const cutsBefore =
       SPACED_WORD_CHAR.test(first) && before !== undefined && SPACED_WORD_CHAR.test(before);
     const cutsAfter =

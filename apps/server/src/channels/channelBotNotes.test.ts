@@ -42,6 +42,11 @@ describe("quotedFromInput", () => {
   ])("matches %j against %j: %s", (quote, input, matches) => {
     expect(quotedFromInput(quote, input)).toBe(matches);
   });
+
+  it("checks a word against a long run of letters without matching inside it", () => {
+    expect(quotedFromInput("a", "a".repeat(32_000))).toBe(false);
+    expect(quotedFromInput("a", "a".repeat(32_000) + " a")).toBe(true);
+  });
 });
 
 it.effect("appends each input note once as a dated single line with its source", () =>

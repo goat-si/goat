@@ -121,17 +121,21 @@ describe("Memory tab note edits", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("a change that could name two notes changes nothing", () =>
+  it.effect("notes with quotes are matched exactly, and a longer message goes to reception", () =>
     Effect.gen(function* () {
       const first = 'Say "hi';
       const second = 'Say "hi" to: "Mina';
       const text = NOTES_HEADER + line(first, "a") + "\n" + line(second, "b") + "\n";
       const { edit, read } = yield* setup(text);
-      // Both notes read as the start of this sentence.
-      const message = goatBotChangeNoteMessage(second, "Bob");
-      assert.isTrue(message.startsWith(goatBotChangeNoteMessage(first, "").slice(0, -1)));
-      assert.strictEqual(yield* edit(message), CHANNEL_COPY.noteAmbiguous);
+      assert.isUndefined(yield* edit('Please forget this note: "x" and remember "y"'));
+      assert.isUndefined(yield* edit(goatBotChangeNoteMessage(second, "Bob") + ' and "z"'));
       assert.strictEqual(yield* read, text);
+      assert.strictEqual(
+        yield* edit(goatBotChangeNoteMessage(second, "Bob")),
+        CHANNEL_COPY.noteChanged,
+      );
+      const saved = yield* read;
+      assert.isTrue(saved.endsWith(" (replaces: " + JSON.stringify(second) + ")\n"));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
