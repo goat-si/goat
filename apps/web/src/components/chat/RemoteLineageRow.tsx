@@ -1,4 +1,5 @@
 import type { EnvironmentId, OrchestrationV2Subagent, ThreadId } from "@goat/contracts";
+import type { ComposerThreadHosts } from "@goat/client-runtime/composerThreadItems";
 import { BotIcon } from "~/components/solar";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadRelationshipIcon";
@@ -18,11 +19,10 @@ export function RemoteLineageRow({
   onOpen,
 }: {
   readonly agent: RemoteLineageAgent;
-  readonly hosts: ReadonlyMap<EnvironmentId, string>;
+  readonly hosts: ComposerThreadHosts;
   readonly onOpen: (environmentId: EnvironmentId, threadId: ThreadId) => void;
 }) {
-  const matches = [...hosts].filter(([, host]) => host === agent.remote.host);
-  const environmentId = matches.length === 1 ? matches[0]?.[0] : undefined;
+  const environmentId = hosts.resolve(agent.remote.host);
   const threadId = agent.remote.threadId;
   return (
     <li>

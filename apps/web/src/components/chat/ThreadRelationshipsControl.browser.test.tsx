@@ -52,9 +52,19 @@ vi.mock(import("../../state/use-atom-command"), () => ({
       : AsyncResult.failure(Cause.fail(new Error("Connection lost")))) as never,
 }));
 
-vi.mock(import("../../lib/useThreadContextHosts"), () => ({
-  useThreadContextHosts: () => new Map([[EnvironmentId.make("remote-env"), "builder"]]),
-}));
+vi.mock(import("../../lib/useThreadContextHosts"), async () => {
+  const { ComposerThreadHosts } = await import("@goat/client-runtime/composerThreadItems");
+  return {
+    useThreadContextHosts: () => {
+      const hosts = new ComposerThreadHosts();
+      const id = EnvironmentId.make("remote-env");
+      hosts.set(id, "builder");
+      hosts.allow(id, "builder");
+      hosts.allow(id, "builder-ssh");
+      return hosts;
+    },
+  };
+});
 
 import { render } from "../../../test/render";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
@@ -247,7 +257,7 @@ it("hides a verified deleted fork while retaining omitted and archived forks", a
   await expect.element(screen.getByText("deleted-fork", { exact: true })).not.toBeInTheDocument();
 });
 
-it("groups completed remote agents with previous agents and opens the matching host", async () => {
+it("groups completed remote agents and opens a verified secondary host alias", async () => {
   setup();
   const projection = makeThreadProjectionFixture();
   state.projection = {
@@ -266,7 +276,7 @@ it("groups completed remote agents with previous agents and opens the matching h
         childThreadId: null,
         nativeTaskRef: null,
         remote: {
-          host: "builder",
+          host: "builder-ssh",
           threadId: ThreadId.make("remote-thread"),
           correlationId: "task",
         },
