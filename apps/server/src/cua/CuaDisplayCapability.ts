@@ -204,12 +204,12 @@ const LINUX_DRIVER_LIBRARIES = [
 ] as const;
 
 /**
- * A virtual display a server started without DISPLAY finds on its own, by socket and the cookie
- * in the person's own Xauthority, where their apps find it too; xcompmgr lets one window be
- * captured.
+ * A virtual display a server started without DISPLAY finds on its own, by socket and the -auth
+ * file on Xvfb's command line. A file of its own, so a failed start never drops a cookie from
+ * ~/.Xauthority; xcompmgr lets one window be captured.
  */
 const LINUX_VIRTUAL_DISPLAY =
-  'setsid xvfb-run -n 99 -f "$HOME/.Xauthority" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
+  'setsid xvfb-run -n 99 -f "$HOME/.goat-display.xauth" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
 
 export interface LinuxDisplayFacts {
   readonly user: string;
@@ -287,7 +287,7 @@ function virtualDisplayRemedy(facts: LinuxDisplayFacts): string {
       : command
         ? ` Install it with: ${command}.`
         : ` Install ${missing.map(([, label]) => label).join(", ")} from your distribution's packages.`;
-  return `Sign in to a desktop session on this computer, or run computer use in a virtual display, which GOAT looks for each time it checks.${install} ${install ? "Then start it" : "Start one"} with: ${LINUX_VIRTUAL_DISPLAY} Agents open apps there themselves; to start one yourself, put DISPLAY=:99 in front of its command.`;
+  return `Sign in to a desktop session on this computer, or run computer use in a virtual display, which GOAT looks for each time it checks.${install} ${install ? "Then start it" : "Start one"} with: ${LINUX_VIRTUAL_DISPLAY} Agents open apps there themselves; to start one yourself, put DISPLAY=:99 XAUTHORITY=$HOME/.goat-display.xauth in front of its command.`;
 }
 
 /** What to do when app controls cannot be read: a shared session bus, or AT-SPI itself. */

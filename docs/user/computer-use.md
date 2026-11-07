@@ -363,14 +363,15 @@ On Linux, what agents can do depends on the session:
   display, and GOAT finds it the next time it checks.
 
   ```sh
-  setsid xvfb-run -n 99 -f "$HOME/.Xauthority" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &
+  setsid xvfb-run -n 99 -f "$HOME/.goat-display.xauth" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &
   ```
 
   This needs Xvfb with `xvfb-run`, `xauth` and `xcompmgr` (on Debian and
   Ubuntu, `sudo apt install xvfb xauth xcompmgr`). GOAT looks for it only when
   its own environment names no display or Wayland session, as when it was
   started over SSH. Agents open apps there themselves; to start one yourself,
-  put `DISPLAY=:99` in front of its command.
+  put `DISPLAY=:99 XAUTHORITY=$HOME/.goat-display.xauth` in front of its
+  command. If display 99 is taken, use another number in both places.
 
 App controls need AT-SPI (the `at-spi2-core` package) and one D-Bus session
 bus that GOAT and the apps share; without them agents can still take

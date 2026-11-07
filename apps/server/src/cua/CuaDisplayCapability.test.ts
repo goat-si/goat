@@ -89,7 +89,7 @@ const facts = (overrides: Partial<LinuxDisplayFacts> = {}): LinuxDisplayFacts =>
 });
 
 const HEADLESS_START =
-  'setsid xvfb-run -n 99 -f "$HOME/.Xauthority" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
+  'setsid xvfb-run -n 99 -f "$HOME/.goat-display.xauth" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
 
 describe("Linux remedies name what to install and run", () => {
   it("reads the package manager from os-release, through ID_LIKE for derivatives", () => {
@@ -107,8 +107,8 @@ describe("Linux remedies name what to install and run", () => {
     const ready = classifyLinux(facts({ displays: [] }));
     expect(ready.capability).toBe("unavailable");
     expect(ready.reason).toContain(HEADLESS_START);
-    // Apps a person starts reach it by its number; the cookie is in their own Xauthority.
-    expect(ready.reason).toContain("DISPLAY=:99");
+    // Apps a person starts reach it by its number and its own cookie file.
+    expect(ready.reason).toContain("DISPLAY=:99 XAUTHORITY=$HOME/.goat-display.xauth");
     expect(ready.reason).not.toContain("install");
     const fedora = classifyLinux(
       facts({
@@ -442,7 +442,7 @@ describe("classifyLinux", () => {
   it("is unavailable without a reachable display, naming refused displays", () => {
     expect(classifyLinux(facts({ displays: [] }))).toMatchObject({
       capability: "unavailable",
-      reason: `No X display is reachable for root. Sign in to a desktop session on this computer, or run computer use in a virtual display, which GOAT looks for each time it checks. Start one with: ${HEADLESS_START} Agents open apps there themselves; to start one yourself, put DISPLAY=:99 in front of its command.`,
+      reason: `No X display is reachable for root. Sign in to a desktop session on this computer, or run computer use in a virtual display, which GOAT looks for each time it checks. Start one with: ${HEADLESS_START} Agents open apps there themselves; to start one yourself, put DISPLAY=:99 XAUTHORITY=$HOME/.goat-display.xauth in front of its command.`,
       environment: [],
     });
     const refused = classifyLinux(
