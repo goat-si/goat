@@ -44,9 +44,9 @@ vi.mock("react-native-reanimated", () => {
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
 vi.mock("uniwind", () => ({ withUniwind: (component: unknown) => component }));
 vi.mock("../../native/StackHeader", () => ({
-  NativeStackScreenOptions: (props: { options: { headerTitle?: () => ReactNode } }) => (
-    <header>{props.options.headerTitle?.()}</header>
-  ),
+  NativeStackScreenOptions: (props: {
+    options: { title?: string; headerTitle?: () => ReactNode };
+  }) => <header data-title={props.options.title}>{props.options.headerTitle?.()}</header>,
 }));
 vi.mock("./useMobileGoatBotFace", () => ({
   useMobileGoatBotFace: () => ({ state: header.state, since: null }),
@@ -113,6 +113,17 @@ it("replaces the header title text when its state changes, since iOS caches a te
     expect(after[0]).not.toBe(reading);
   } finally {
     header.state = "idle";
+    await act(async () => root.unmount());
+  }
+});
+it("gives a member's navigation bar the member's name, not the stack's GOAT Bot title", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<GoatBotHeaderFace activity={null} title="Scout" />));
+    expect(container.querySelector("header")?.getAttribute("data-title")).toBe("Scout");
+  } finally {
     await act(async () => root.unmount());
   }
 });

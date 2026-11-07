@@ -7,6 +7,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotMember } from "./useMobileBotRoster";
+import { useMobileBotManage } from "./useMobileBotManage";
 import { GoatBotScreen } from "./GoatBotScreen";
 
 export function GoatBotRouteScreen({
@@ -17,6 +18,7 @@ export function GoatBotRouteScreen({
   const preview = useMobileBotPreview();
   const botId = route.params?.botId;
   const { member, missing } = useMobileGoatBotMember(botId);
+  const manage = useMobileBotManage(member?.environmentId ?? null);
   const environmentId = botRef?.environmentId;
   const threadId = botRef?.threadId;
   const taskId = route.params?.taskId;
@@ -41,6 +43,11 @@ export function GoatBotRouteScreen({
     <GoatBotScreen
       visible={focused}
       member={member}
+      onRestoreMember={
+        member !== null && member.state === "deleted" && manage.canManage
+          ? () => manage.restore(member)
+          : undefined
+      }
       taskId={taskId ? ChannelTaskId.make(taskId) : undefined}
     />
   );

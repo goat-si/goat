@@ -2,11 +2,13 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { GoatBotRow, GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import {
+  BotProfile,
   EnvironmentId,
   goatBotChangeNoteMessage,
   goatBotForgetNoteMessage,
   ThreadId,
 } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 
 const session = vi.hoisted(() => ({
@@ -308,4 +310,37 @@ it("the open Memory tab reads the notes again after the answer and after the tas
   await openMemory(view.container);
   expect(session.refresh).toHaveBeenCalledTimes(opened + 4);
   await view.unmount();
+});
+const decodeBotProfile = Schema.decodeUnknownSync(BotProfile);
+it("shows a deleted member's banner and drops it once the restored profile arrives", async () => {
+  setup();
+  const member = (state: "active" | "deleted") =>
+    decodeBotProfile({
+      botId: "scout",
+      role: "member",
+      name: "Scout",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+      defaultProjectId: null,
+      environmentId: "env",
+      sessionThreadId: "thread-scout",
+      createdAt: "2026-11-07T00:00:00.000Z",
+      updatedAt: "2026-11-07T00:00:00.000Z",
+      state,
+    });
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () =>
+    root.render(
+      <GoatBotScreen visible member={member("deleted")} onRestoreMember={async () => true} />,
+    ),
+  );
+  expect(container.textContent).toContain("Scout was deleted");
+  expect(buttonIn(container, "Restore")).toBeDefined();
+  await act(async () => root.render(<GoatBotScreen visible member={member("active")} />));
+  expect(container.textContent).not.toContain("Scout was deleted");
+  await act(async () => root.unmount());
+  container.remove();
 });
