@@ -1652,16 +1652,16 @@ export const MemoryHistoryInput = struct({
 });
 export type MemoryHistoryInput = typeof MemoryHistoryInput.Type;
 
-/**
- * Each opt-in is sent only when its capability (memory.retainedLocalSpace,
- * memory.generationHold, memory.generationFailure) is advertised: a strict legacy decoder rejects
- * fields it does not know, so legacy requests remain empty.
- */
-export const MemorySyncStatusInput = struct({
+// Opt-ins go only where advertised; only struct({}) refuses hidden keys, so {} decodes through it.
+const syncStatusOptIns = struct({
   includeRetainedLocalSpaceId: Schema.optionalKey(Schema.Literal(true)),
   includeGenerationHold: Schema.optionalKey(Schema.Literal(true)),
   includeGenerationFailure: Schema.optionalKey(Schema.Literal(true)),
 });
+export const MemorySyncStatusInput = Schema.Union([
+  struct({}),
+  syncStatusOptIns.check(Schema.makeFilter((v) => Object.keys(v).length > 0)),
+]);
 export type MemorySyncStatusInput = typeof MemorySyncStatusInput.Type;
 
 export const MemoryUpsertInput = struct({

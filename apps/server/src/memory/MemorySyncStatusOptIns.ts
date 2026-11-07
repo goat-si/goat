@@ -16,7 +16,8 @@ export const readSyncStatusOptIns = Effect.fn("MemorySyncService.readStatusOptIn
   readonly hold: Hold.MemoryGenerationHold["Service"];
   readonly failures: Effect.Effect<M.MemorySyncStatus["generationFailure"], E>;
 }) {
-  const { request, settings, hold } = input;
+  const { settings, hold } = input;
+  const request: { includeGenerationHold?: true; includeGenerationFailure?: true } = input.request;
   const selected = settings.memoryEnabled ? resolveMemoryModelSelection(settings, undefined) : null;
   const model =
     selected === null

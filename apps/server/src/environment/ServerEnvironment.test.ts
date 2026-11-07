@@ -174,6 +174,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         resolutionInputs: true,
         retainedLocalSpace: true,
         generationHold: true,
+        generationFailure: true,
         hubDiagnostics: true,
         siteNotes: true,
       });
