@@ -68,7 +68,7 @@ const decodeLoadedThread = Schema.decodeUnknownEffect(LoadedThread);
  * reports for each. Subagents that survived a restart are unknown to this session, and GOAT does
  * not hear their status, so it asks Codex at every turn. False when Codex could not tell.
  */
-export const addSurvivingDescendants = Effect.fn("CodexAdapterV2.addSurvivingDescendants")(
+const addSurvivingDescendants = Effect.fn("CodexAdapterV2.addSurvivingDescendants")(
   function* (
     raw: Pick<CodexClient.CodexAppServerClient["Service"]["raw"], "request">,
     statuses: { readonly record: (threadId: string, status: string) => void },
