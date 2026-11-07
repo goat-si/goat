@@ -1,3 +1,6 @@
+import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
+import type { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import type { ProviderFilterOptionPage } from "@goat/source-control-core/server/PullRequestProvider";
 
 const FILTER_OPTIONS_LIMIT = 100;
@@ -49,3 +52,32 @@ export function rankFilterOptions<A>(
     truncated: ranked.length > FILTER_OPTIONS_LIMIT || pages.some((page) => page.truncated),
   };
 }
+
+export const gatherReferencePages = Effect.fn("PullRequestService.gatherReferencePages")(
+  <Project, Item>(
+    projects: ReadonlyArray<Project>,
+    read: (
+      project: Project,
+    ) => Effect.Effect<ProviderFilterOptionPage<Item>, PullRequestProviderError> | undefined,
+    concurrency: number,
+  ) =>
+    Effect.forEach(
+      projects,
+      (project) => {
+        const page = read(project);
+        return page === undefined ? Effect.succeed(null) : Effect.result(page);
+      },
+      { concurrency },
+    ).pipe(
+      Effect.map((answers) => {
+        const pages: Array<ProviderFilterOptionPage<Item>> = [];
+        let failure: PullRequestProviderError | undefined;
+        for (const answer of answers) {
+          if (answer === null) continue;
+          if (Result.isSuccess(answer)) pages.push(answer.success);
+          else failure ??= answer.failure;
+        }
+        return { pages, failure };
+      }),
+    ),
+);

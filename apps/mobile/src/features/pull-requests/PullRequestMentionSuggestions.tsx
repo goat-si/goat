@@ -96,10 +96,23 @@ export function PullRequestCompletionSuggestions({
       ) : (
         <View className="px-3.5 py-2.5">
           <Text className="text-xs text-foreground-tertiary">
-            {copy[completions.isLoading ? "pending" : completions.failed ? "failed" : "none"]}
+            {completions.isLoading
+              ? copy.pending
+              : completions.failed
+                ? copy.failed
+                : completions.incomplete
+                  ? "Results may be incomplete"
+                  : copy.none}
           </Text>
         </View>
       )}
+      {completions.candidates.length > 0 && (completions.failed || completions.incomplete) ? (
+        <View className="px-3.5 py-2.5">
+          <Text className="text-xs text-foreground-tertiary">
+            {completions.failed ? copy.failed : "Results may be incomplete"}
+          </Text>
+        </View>
+      ) : null}
     </GlassSurface>
   );
 }

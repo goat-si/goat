@@ -47,6 +47,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => ({
               { reference: "#12", kind: "issue", number: 12, title: "Crash", state: "open" },
               { reference: "!12", kind: "change-request", number: 12, title: "Fix", state: "open" },
             ],
+      truncated: false,
       error: null,
       isPending: false,
     };

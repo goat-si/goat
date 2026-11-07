@@ -1,4 +1,4 @@
-import { rankFilterOptions } from "./pullRequestFilterRanking.ts";
+import { gatherReferencePages, rankFilterOptions } from "./pullRequestFilterRanking.ts";
 import { toPullRequestSummary, matchesFilterRepository } from "./pullRequestSummary.ts";
 import { ACTION_ACCESS_REFUSALS, pinnedAutoMergeRefusal } from "./pullRequestActionPolicy.ts";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
@@ -2545,16 +2545,29 @@ export const make = Effect.gen(function* () {
       return { labels: items, authors: [], references: [], truncated };
     }
     if (input.kind === "references") {
-      const pages = yield* gather<PullRequestReferenceCandidate>((project) =>
-        project.api.searchRepositoryReferences?.({ ...refOf(project), sigil: input.sigil }),
+      const { pages, failure } = yield* gatherReferencePages<
+        SupportedProject,
+        PullRequestReferenceCandidate
+      >(
+        repositories,
+        (project) =>
+          project.api.searchRepositoryReferences?.({ ...refOf(project), sigil: input.sigil }),
+        REPOSITORY_CONCURRENCY,
       );
+      if (failure !== undefined && pages.length === 0)
+        return yield* toPullRequestError("filterOptions")(failure);
       const { items, truncated } = rankFilterOptions(pages, {
         query: input.query,
         keyOf: (candidate) => candidate.reference,
         textsOf: (candidate) => [String(candidate.number), candidate.title],
         hostOrder: true,
       });
-      return { labels: [], authors: [], references: items, truncated };
+      return {
+        labels: [],
+        authors: [],
+        references: items,
+        truncated: truncated || failure !== undefined,
+      };
     }
     const pages = yield* gather<PullRequestActor>((project) =>
       project.api.searchRepositoryAuthors?.(refOf(project)),

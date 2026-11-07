@@ -111,6 +111,7 @@ function useCompletions(
     completions,
     isPending: hosted.isPending || sentKey !== key,
     failed: hosted.error !== null,
+    incomplete: hosted.truncated,
   };
 }
 
@@ -213,6 +214,7 @@ export function PullRequestMarkdownTextarea({
     completions: candidates,
     isPending,
     failed,
+    incomplete,
   } = useCompletions(completionScope, open ? trigger : null);
   const activeIndex =
     trigger !== null && highlight.query === trigger.query
@@ -345,13 +347,22 @@ export function PullRequestMarkdownTextarea({
             </div>
           ) : (
             <p className="px-1 text-xs text-muted-foreground">
-              {
-                EMPTY_STATE[trigger?.kind ?? "mention"][
-                  isPending ? "pending" : failed ? "failed" : "none"
-                ]
-              }
+              {isPending
+                ? EMPTY_STATE[trigger?.kind ?? "mention"].pending
+                : failed
+                  ? EMPTY_STATE[trigger?.kind ?? "mention"].failed
+                  : incomplete
+                    ? "Results may be incomplete"
+                    : EMPTY_STATE[trigger?.kind ?? "mention"].none}
             </p>
           )}
+          {candidates.length > 0 && (failed || incomplete) ? (
+            <p className="px-1 text-xs text-muted-foreground">
+              {failed
+                ? EMPTY_STATE[trigger?.kind ?? "mention"].failed
+                : "Results may be incomplete"}
+            </p>
+          ) : null}
         </PopoverPopup>
       </Popover>
     </>

@@ -83,6 +83,7 @@ export function usePullRequestCompletions(input: {
     candidates,
     isLoading: hosted.isPending || sentKey !== key,
     failed: hosted.error !== null,
+    incomplete: hosted.data?.truncated === true,
     selection: placed ?? undefined,
     onSelectionChange: (event: TextInputSelectionChangeEvent) => {
       setSelection(event.nativeEvent.selection);
