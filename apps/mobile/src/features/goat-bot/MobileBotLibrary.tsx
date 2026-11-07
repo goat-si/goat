@@ -45,6 +45,7 @@ export function MobileBotLibrary(props: {
   const [opening, setOpening] = useState<string | null>(null);
   const [messages, setMessages] = useState<Readonly<Record<string, string>>>({});
   const [preview, setPreview] = useState<ImagePreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const lifetime = useRef<AbortController | null>(null);
   const previewRef = useRef<ImagePreview | null>(null);
   // oxlint-disable-next-line goat/react-effect-budget -- Reads and cache copies outlive a render; stop the read and drop an unshared copy when the tab goes away.
@@ -59,6 +60,7 @@ export function MobileBotLibrary(props: {
   }, []);
   const show = (next: ImagePreview | null) => {
     previewRef.current = next;
+    setPreviewError(null);
     setPreview(next);
   };
   const closePreview = () => {
@@ -202,13 +204,27 @@ export function MobileBotLibrary(props: {
               accessibilityRole="button"
               onPress={() => {
                 const signal = lifetime.current?.signal;
-                if (preview && signal) void preview.file.share(signal).catch(() => {});
+                if (!preview || !signal) return;
+                setPreviewError(null);
+                void preview.file.share(signal).catch((error: unknown) => {
+                  if (!signal.aborted)
+                    setPreviewError(
+                      error instanceof Error
+                        ? error.message
+                        : "Could not open the share sheet. Try again.",
+                    );
+                });
               }}
               className="min-h-[44px] min-w-[44px] justify-center px-2"
             >
               <Text className="text-foreground">Share</Text>
             </Pressable>
           </View>
+          {previewError !== null ? (
+            <Text accessibilityRole="alert" className="text-danger-foreground">
+              {previewError}
+            </Text>
+          ) : null}
           {preview ? (
             <Image
               source={{ uri: preview.file.uri }}

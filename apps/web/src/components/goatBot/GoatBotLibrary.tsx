@@ -42,13 +42,17 @@ export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId
   const [messages, setMessages] = useState<Readonly<Record<string, string>>>({});
   const [preview, setPreview] = useState<Preview | null>(null);
   const previewUrl = useRef<string | null>(null);
-  // oxlint-disable-next-line goat/react-effect-budget -- A preview's Blob URL holds the file in memory until revoked; let it go when the tab goes away.
-  useEffect(
-    () => () => {
+  const lifetime = useRef<AbortController | null>(null);
+  // oxlint-disable-next-line goat/react-effect-budget -- A read and a preview's Blob URL outlive a render; stop the read and let the URL go when the tab goes away.
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    return () => {
+      controller.abort();
       if (previewUrl.current !== null) URL.revokeObjectURL(previewUrl.current);
-    },
-    [],
-  );
+      previewUrl.current = null;
+    };
+  }, []);
   const closePreview = () => {
     if (previewUrl.current !== null) URL.revokeObjectURL(previewUrl.current);
     previewUrl.current = null;
@@ -60,11 +64,14 @@ export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId
     return result.value;
   };
   const open = async (file: ChannelBotArtifact) => {
+    const signal = lifetime.current?.signal;
+    if (signal === undefined || signal.aborted) return;
     const name = botArtifactName(file.relativePath);
     setOpening(file.relativePath);
     setMessages(({ [file.relativePath]: _old, ...rest }) => rest);
     try {
-      const result = await readWholeBotArtifact(file.relativePath, readChunk);
+      const result = await readWholeBotArtifact(file.relativePath, readChunk, signal);
+      if (signal.aborted) return;
       if (result.status !== "ok") {
         setMessages((current) => ({
           ...current,
@@ -89,12 +96,13 @@ export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId
       anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (error) {
+      if (signal.aborted) return;
       setMessages((current) => ({
         ...current,
         [file.relativePath]: botArtifactsFailure(error).message,
       }));
     } finally {
-      setOpening(null);
+      if (!signal.aborted) setOpening(null);
     }
   };
   if (!supported) return <p>Files need a newer GOAT server.</p>;

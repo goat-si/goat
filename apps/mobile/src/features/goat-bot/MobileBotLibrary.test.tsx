@@ -342,3 +342,17 @@ it("says when this device cannot share files", async () => {
   expect(container.textContent).toContain("Sharing isn't available on this device.");
   expect(kept()).toEqual([]);
 });
+it("an image preview says why sharing did not start", async () => {
+  setup();
+  state.available.mockResolvedValue(false);
+  await render();
+  await press("Open chart.png");
+  await press("Share");
+  expect(container.textContent).toContain(
+    "Saving and sharing files is unavailable on this device.",
+  );
+  state.available.mockResolvedValue(true);
+  state.share.mockRejectedValue(new Error("no"));
+  await press("Share");
+  expect(container.textContent).toContain("Could not open the share sheet. Try again.");
+});

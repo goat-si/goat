@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   files: new Map<string, { mimeType: string; bytes: Uint8Array }>(),
   read: vi.fn(),
   gate: null as Promise<void> | null,
+  answered: 0,
 }));
 vi.mock("~/state/entities", () => ({
   useServerConfigs: () =>
@@ -66,6 +67,7 @@ function setup(options: { data?: unknown; failure?: unknown; supported?: boolean
   state.refresh.mockReset();
   state.requested.mockReset();
   state.gate = null;
+  state.answered = 0;
   state.files = new Map([
     [
       "notes/report.txt",
@@ -77,6 +79,7 @@ function setup(options: { data?: unknown; failure?: unknown; supported?: boolean
   state.read.mockReset();
   state.read.mockImplementation(async ({ input }: { input: ChannelReadBotArtifactInput }) => {
     if (state.gate) await state.gate;
+    state.answered += 1;
     const file = state.files.get(input.relativePath);
     if (!file)
       return { _tag: "Success", value: { status: "busy", relativePath: input.relativePath } };
@@ -215,4 +218,23 @@ it("opens one file at a time", async () => {
   await expect.element(screen.getByRole("button", { name: "Open chart.png" })).toBeDisabled();
   release();
   await expect.element(page.getByRole("dialog", { name: "report.txt" })).toBeVisible();
+});
+it("a file that finishes opening after the tab closes neither previews nor downloads", async () => {
+  setup();
+  let release = () => {};
+  state.gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const create = vi.spyOn(URL, "createObjectURL");
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  const screen = await render(<GoatBotLibrary environmentId={environmentId} />);
+  await userEvent.click(screen.getByRole("button", { name: "Open chart.png" }));
+  await screen[Symbol.asyncDispose]();
+  release();
+  await vi.waitFor(() => expect(state.answered).toBe(1));
+  await Promise.resolve();
+  expect(create).not.toHaveBeenCalled();
+  expect(click).not.toHaveBeenCalled();
+  create.mockRestore();
+  click.mockRestore();
 });
