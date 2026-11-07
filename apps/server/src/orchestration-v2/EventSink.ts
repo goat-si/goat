@@ -27,10 +27,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
-import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as EventSinkBatch from "./EventSinkBatch.ts";
 import { stampComputerUseStop } from "./goat/StampComputerUseStop.ts";
 import { replayAndBufferProjectedLiveEvents } from "./LiveStreamBudget.ts";
 import type { UnsequencedProjectEvent } from "../persistence/OrchestrationEventStore.ts";
@@ -79,7 +79,7 @@ export class EventSinkStreamError extends Schema.TaggedError<EventSinkStreamErro
 export const EventSinkV2Error = Schema.Union([EventSinkWriteError, EventSinkStreamError]);
 export type EventSinkV2Error = typeof EventSinkV2Error.Type;
 
-export interface EventSinkV2Shape {
+export interface EventSinkV2Shape extends EventSinkBatch.Shape {
   readonly write: (input: {
     /** Return no events if another thread owns this native session at commit time. */
     readonly unlessNativeThreadOwned?: Pick<
@@ -292,32 +292,10 @@ const layerBase: Layer.Layer<
           Effect.andThen(publishLiveEvents(events)),
         );
 
-    // Serialize commit and publish; reordered publication makes clients drop earlier sequences.
-    const publishLane = yield* Semaphore.make(1);
-    const commitThenPublish = <A, E, R>(
-      transaction: Effect.Effect<A, E, R>,
-      publish: (committed: A) => Effect.Effect<void>,
-    ) =>
-      Effect.uninterruptibleMask((restore) => {
-        let holdsLane = false;
-        const takeLane = publishLane.take(1).pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              holdsLane = true;
-            }),
-          ),
-          Effect.uninterruptible,
-        );
-        // Once committed, publish before interruption so parent tasks observe failed child runs.
-        return sql
-          .withTransaction(Effect.tap(restore(transaction), () => takeLane))
-          .pipe(
-            Effect.tap(publish),
-            Effect.ensuring(
-              Effect.suspend(() => (holdsLane ? publishLane.release(1) : Effect.void)),
-            ),
-          );
-      });
+    const batch = yield* EventSinkBatch.make(
+      (cause) => new EventSinkWriteError({ eventCount: 0, cause }),
+    );
+    const commitThenPublish = batch.commitThenPublish;
 
     // A user can answer after terminal normalization reads the pending request.
     // Recheck inside the write transaction so stale cleanup cannot erase answers.
@@ -1009,6 +987,7 @@ const layerBase: Layer.Layer<
     };
 
     return EventSinkV2.of({
+      ...batch.service,
       write: (input) =>
         writeEffect({ ...input, effects: [] }).pipe(
           Effect.mapError(
