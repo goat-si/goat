@@ -57,6 +57,7 @@ export function useBotThreads(
   }, [supported, watchedThreadId, revision, refreshThreads]);
   return {
     rows: threads.data?.rows ?? [],
+    supported,
     loaded: threads.isSuccess,
     failed: threads.error !== null,
     refresh: threads.refresh,

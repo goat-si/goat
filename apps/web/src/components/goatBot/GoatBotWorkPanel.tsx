@@ -23,7 +23,10 @@ export function GoatBotWorkPanel({
 }) {
   const [tab, setTab] = useState<Tab>("Tasks");
   const member = useGoatBotMember();
-  const { rows, loaded, failed } = useBotThreads(environmentId, memberThreadsKey(member));
+  const { rows, supported, loaded, failed } = useBotThreads(
+    environmentId,
+    memberThreadsKey(member),
+  );
   const routines = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
@@ -45,7 +48,7 @@ export function GoatBotWorkPanel({
           className="mt-4 rounded-lg border border-border p-3"
           environmentId={environmentId}
           member={member}
-          rows={failed ? "failed" : loaded ? rows : null}
+          rows={!supported ? "unavailable" : failed ? "failed" : loaded ? rows : null}
         />
         <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
           {tasks.length === 0 ? (
