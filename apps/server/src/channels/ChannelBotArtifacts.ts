@@ -68,7 +68,10 @@ const missingOrFailed = (cause: unknown) =>
 
 const idOf = (stat: NodeFS.BigIntStats) => stat.dev + ":" + stat.ino;
 const versionOf = (stat: NodeFS.BigIntStats) => idOf(stat) + ":" + stat.size + ":" + stat.mtimeNs;
-const plainName = (name: string) => !name.startsWith(".") && !/[:\\]/u.test(name);
+// Only names read() accepts unchanged are listed: no leading dot, colon, backslash or edge spaces.
+const plainName = (name: string) =>
+  !name.startsWith(".") && !/[:\\]/u.test(name) && name === name.trim();
+const PATH_MAX = 512;
 
 /** The path's components, or undefined when it is not plainly inside the folder. */
 const segmentsOf = (relativePath: string) => {
@@ -205,7 +208,12 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
 
   const list = Effect.fn("ChannelBotArtifacts.list")(function* () {
     yield* home.requireHome;
-    const rootStat = yield* lstat(root).pipe(Effect.option);
+    const rootStat = yield* lstat(root).pipe(
+      Effect.map(Option.some),
+      Effect.catch((error) =>
+        error.reason === "not_found" ? Effect.succeedNone : Effect.fail(error),
+      ),
+    );
     if (Option.isNone(rootStat) || !rootStat.value.isDirectory()) {
       if (Option.isSome(rootStat)) yield* Effect.logWarning("GOAT Bot artifacts folder is a link");
       return { artifacts: [], truncated: false };
@@ -220,7 +228,7 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
       Effect.scoped(
         Effect.gen(function* () {
           const handle = yield* Effect.acquireRelease(
-            Effect.tryPromise({ try: () => NodeFS.promises.opendir(dir), catch: failed }),
+            Effect.tryPromise({ try: () => NodeFS.promises.opendir(dir), catch: missingOrFailed }),
             (opened) => Effect.tryPromise(() => opened.close()).pipe(Effect.ignore),
           );
           for (;;) {
@@ -229,6 +237,7 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
             if (++visits > maxVisits) return false;
             if (!plainName(entry.name)) continue;
             const relativePath = prefix + entry.name;
+            if (relativePath.length > PATH_MAX) continue;
             if (entry.isDirectory()) {
               if (depth + 1 > maxDepth) truncated = true;
               else
@@ -252,7 +261,12 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
             }
           }
         }),
-      ).pipe(Effect.orElseSucceed(() => true));
+      ).pipe(
+        // A folder removed while the walk runs is skipped; any other failure fails the list.
+        Effect.catch((error) =>
+          error.reason === "not_found" ? Effect.succeed(true) : Effect.fail(error),
+        ),
+      );
     for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
       if (!(yield* readFolder(next.dir, next.prefix, next.depth))) {
         truncated = true;
