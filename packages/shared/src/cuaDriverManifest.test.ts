@@ -34,24 +34,17 @@ vi.mock("node:child_process", { spy: true });
 
 /**
  * Every tool the pinned driver can offer, on any platform. Refresh it from the new tag when the
- * pin moves to a version not in `verified`; goat.19 changes no tool registration.
+ * pin moves to a version not in `verified`.
  */
 const PINNED_DRIVER_TOOLS = {
-  verified: [
-    "0.38.0-goat.13",
-    "0.38.0-goat.14",
-    "0.38.0-goat.15",
-    "0.38.0-goat.16",
-    "0.38.0-goat.17",
-    "0.38.0-goat.18",
-    "0.38.0-goat.19",
-  ],
+  verified: ["0.40.1-goat.1"],
   tools: [
     // `cua-driver list-tools` of the macOS binary.
     "bring_to_front",
     "browser_click",
     "browser_dialog",
     "browser_download",
+    "browser_fill_secret",
     "browser_navigate",
     "browser_pointer",
     "browser_prepare",
@@ -173,6 +166,7 @@ describe("cuaDriverManifest", () => {
     expect(available).toContain('    - "browser_click"');
     expect(available).not.toContain("kind: existing_profile");
     expect(available).not.toContain('"browser_download"');
+    expect(available).not.toContain('"browser_fill_secret"');
     expect(available).not.toContain('"browser_set_input_files"');
   });
   it("records the tool set of the pinned driver version", () => {
@@ -245,6 +239,7 @@ describe("cuaDriverManifest", () => {
       "escalate_session",
       "get_session_state",
       "browser_download",
+      "browser_fill_secret",
       "browser_set_input_files",
       "clipboard_read",
       // A whole-display screenshot shows every other app (#1321).
