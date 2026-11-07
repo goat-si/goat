@@ -36,7 +36,7 @@ Servers that support it also offer **Aside**. Discovery lists each Aside store o
 
 Importing from a browser needs a secure connection: open GOAT over HTTPS, for example with [Tailscale HTTPS](./remote-access.md#tailscale-https), or use the desktop app. You can still check a saved import result. Imports leave provider originals unchanged, and forgotten memories are not imported again.
 
-If memory storage is full, the import result names the limit that was reached and, when you can free it, what to do: for most limits, forget memories you no longer need, then preview again.
+If memory storage is full, the import result names the limit that was reached and, when you can free it, what to do: for most limits, forget memories you no longer need, then preview again. When the whole memory store is full, GOAT runs its automatic cleanup once before refusing a memory; forgetting then helps only when many memories are no longer needed.
 
 ## Share between devices
 

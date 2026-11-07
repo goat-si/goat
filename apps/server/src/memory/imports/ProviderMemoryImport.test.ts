@@ -498,6 +498,47 @@ describe("ProviderMemoryImport closed coordinator", () => {
       }),
     ),
   );
+  const storeFull = () =>
+    new Store.MemoryCapacityError({
+      dimension: "live_payload_bytes",
+      current: M.MEMORY_STORE_BUDGET_BYTES,
+      limit: M.MEMORY_STORE_BUDGET_BYTES,
+      budget: "store",
+    });
+  const storeReclaim = (frees: boolean, reclaims: { count: number; full: boolean }) =>
+    Quota.MemoryStoreReclaim.of({
+      reclaim: () =>
+        Effect.sync(() => {
+          reclaims.count++;
+          if (frees) reclaims.full = false;
+          return { outcome: "completed" as const, eligibleLogicalBytes: 0, nextEligibleAtMs: null };
+        }),
+      bindHub: () => Effect.void,
+    });
+  it.effect.each([true, false])(
+    "a full memory store runs one cleanup before an item is refused (cleanup frees room: %s)",
+    (frees) =>
+      fixtureTest((h) =>
+        Effect.gen(function* () {
+          const { input } = yield* prepare(h);
+          const reclaims = { count: 0, full: true };
+          yield* h
+            .make({
+              commit: (a, permit) =>
+                reclaims.full && !a.rejectOnly
+                  ? Effect.fail(storeFull())
+                  : h.ports.commit(a, permit),
+            })
+            .run(input, Effect.void)
+            .pipe(Effect.provideService(Quota.MemoryStoreReclaim, storeReclaim(frees, reclaims)));
+          assert.equal(reclaims.count, 1);
+          assert.equal(h.commits.length, 1);
+          const capacity = h.commits[0]!.rejectOnly?.capacity;
+          if (frees) assert.isUndefined(capacity);
+          else assert.isTrue(capacity !== undefined && M.isMemoryStoreBudgetCapacity(capacity));
+        }),
+      ),
+  );
   it.effect.each(["noop", "revised", "conflicted", "aliased"] as const)(
     "prepares %s with accepted parents and captured live head",
     (outcome) =>

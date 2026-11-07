@@ -1,6 +1,8 @@
 import {
   MEMORY_IMPORT_PREVIEW_MAX_ITEMS,
+  MEMORY_STORE_FULL_LABEL,
   MemoryImportRpcError,
+  isMemoryStoreBudgetCapacity,
   type MemoryCapacityDimension,
   type MemoryCapacityExceeded,
   type MemoryImportIssue,
@@ -112,6 +114,9 @@ const memoryCapacityLabels: Record<MemoryCapacityDimension, string> = {
 const forgetToFree =
   "Forget memories you no longer need in Settings → Memory to free space, then preview again";
 const waitToFree = "GOAT frees this as pending work and syncing finish; try again later";
+// The whole-store budget shares live_payload_bytes on the wire; forgetting frees only its own text.
+const storeFullNextStep =
+  "Automatic cleanup already ran and could not make room. Forgetting a memory frees only its own text, so it helps only when many memories are no longer needed";
 // Only limits a person can free get a next step; the rest stay a plain limit message.
 const capacityNextSteps: Partial<Record<MemoryCapacityDimension, string>> = {
   body: "Shorten this memory, then try again",
@@ -141,6 +146,10 @@ const capacityNextSteps: Partial<Record<MemoryCapacityDimension, string>> = {
 
 /** What is full and how to free it, from a capacity refusal. */
 function memoryImportCapacityMessage(capacity: MemoryCapacityExceeded): string {
+  if (isMemoryStoreBudgetCapacity(capacity)) {
+    const mib = (bytes: number) => `${(bytes / 1048576).toFixed(1)} MiB`;
+    return `${MEMORY_STORE_FULL_LABEL}: ${mib(capacity.current)} of ${mib(capacity.limit)} used. ${storeFullNextStep}.`;
+  }
   const next = capacityNextSteps[capacity.dimension];
   return `Memory storage is full: ${memoryCapacityLabels[capacity.dimension]} (${capacity.current} of ${capacity.limit}).${next ? ` ${next}.` : ""}`;
 }
@@ -193,6 +202,9 @@ export function memoryImportResultLines(counts: MemoryImportCounts): readonly st
   return [
     ...lines(memoryImportOutcomeLabels, counts.outcomes),
     ...lines(memoryImportIssueLabels, counts.issues),
+    ...(counts.storeFull
+      ? [`${MEMORY_STORE_FULL_LABEL}: ${counts.storeFull}`, storeFullNextStep]
+      : []),
     ...capacity,
     ...new Set(
       (Object.keys(counts.capacity) as MemoryCapacityDimension[]).flatMap((dimension) => {
@@ -240,6 +252,8 @@ export interface MemoryImportCounts {
   readonly outcomes: Readonly<Partial<Record<MemoryImportOutcome, number>>>;
   readonly issues: Readonly<Partial<Record<MemoryImportIssue, number>>>;
   readonly capacity: Readonly<Partial<Record<MemoryCapacityDimension, number>>>;
+  /** Refusals by the whole-store budget, kept apart from the live payload limit it shares. */
+  readonly storeFull?: number;
 }
 export interface MemoryImportChunkSummary extends MemoryImportCounts {
   readonly operationId: MemoryOperationId;
@@ -295,10 +309,12 @@ export function reduceMemoryImportProgress(
       const outcomes = { ...counts.outcomes };
       const issues = { ...counts.issues };
       const capacity = { ...counts.capacity };
+      let storeFull = 0;
       for (const item of event.receipt.items) {
         outcomes[item.outcome] = (outcomes[item.outcome] ?? 0) + 1;
         if (item.issue !== undefined) issues[item.issue] = (issues[item.issue] ?? 0) + 1;
-        if (item.capacity !== undefined) {
+        if (item.capacity !== undefined && isMemoryStoreBudgetCapacity(item.capacity)) storeFull++;
+        else if (item.capacity !== undefined) {
           const dimension = item.capacity.dimension;
           capacity[dimension] = (capacity[dimension] ?? 0) + 1;
         }
@@ -309,6 +325,7 @@ export function reduceMemoryImportProgress(
         outcomes,
         issues,
         capacity,
+        ...(storeFull ? { storeFull } : {}),
       };
       const existing = state.chunkSummaries.findIndex((s) => s.operationId === summary.operationId);
       // A selection admits at most four chunks. Status replaces that operation's summary.
@@ -320,6 +337,7 @@ export function reduceMemoryImportProgress(
         outcomes: Partial<Record<MemoryImportOutcome, number>>;
         issues: Partial<Record<MemoryImportIssue, number>>;
         capacity: Partial<Record<MemoryCapacityDimension, number>>;
+        storeFull?: number;
       };
       for (const chunk of chunkSummaries) {
         for (const key of Object.keys(chunk.outcomes) as MemoryImportOutcome[])
@@ -328,6 +346,7 @@ export function reduceMemoryImportProgress(
           totals.issues[key] = (totals.issues[key] ?? 0) + chunk.issues[key]!;
         for (const key of Object.keys(chunk.capacity) as MemoryCapacityDimension[])
           totals.capacity[key] = (totals.capacity[key] ?? 0) + chunk.capacity[key]!;
+        if (chunk.storeFull) totals.storeFull = (totals.storeFull ?? 0) + chunk.storeFull;
       }
       return {
         ...state,
