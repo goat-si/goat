@@ -47,12 +47,22 @@ move when the window is hidden or when your system asks to reduce motion.
   you're allowed to take it.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. **Check in on me** sets up a routine on the days and
-  hours you choose: the bot looks over its tasks and writes only when something needs you.
+  hours you choose: the bot looks over its tasks and writes only when something needs you. A
+  routine whose last run failed shows **Run now**.
+- A task that failed or that you stopped shows **Retry** on its card and in its task view; each
+  retry runs it again as its next attempt (**Attempt 2**, then 3). While the stopped work is still
+  ending, Retry is refused; try again once it has ended. Work that ran on another computer is not
+  retried from here: check it on that computer, then ask the bot again.
 - **Memory** shows the notes GOAT Bot keeps, newest first, with where each was asked for. **Ask
   to change** or **Ask to forget** puts a request quoting the note in the message box for you to
-  send. When you correct something you told it before, the new note replaces the old one; the
-  old one moves behind **Show replaced notes**. The bot uses changed notes from your next
-  message, and older notes that match what you ask about.
+  send. Sent as is, it changes or forgets that note at once without starting other work, and the
+  bot answers "Changed that note." or "Forgot that note." If another note change is still
+  running, the note can't be found, or the file is too large to edit, the bot's answer says so
+  instead. When you correct something you told it before,
+  the new note replaces the old one; the old one moves behind **Show replaced notes**. The bot
+  uses changed notes from your next message, and older notes that match what you ask about.
+  When `memory.md` is larger than 64 KB, the tab lists only notes from its newest 64 KB; the
+  file itself is unchanged.
 - **Library** lists the files the bot saved, newest first. Images and text open in place; other
   files download, or open the share sheet on mobile. Files over 20 MB don't open.
 - **Computer** shows which machines the bot's running tasks use.
