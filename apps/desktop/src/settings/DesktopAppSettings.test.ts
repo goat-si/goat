@@ -249,9 +249,10 @@ describe("DesktopSettings", () => {
       Effect.gen(function* () {
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
         for (const bounds of [
-          { x: 10.5, y: 20, width: 400, height: 360 },
-          { x: 10, y: 20, width: 399, height: 360 },
-          { x: 10, y: 20, width: 400, height: 359 },
+          { x: 10.5, y: 20, width: 840, height: 620 },
+          { x: 10, y: 20, width: 839, height: 620 },
+          { x: 10, y: 20, width: 840, height: 619 },
+          { x: 10, y: 20, width: 400, height: 360 },
         ]) {
           yield* writeSettingsPatch({
             mainWindowBounds: bounds,
@@ -275,14 +276,14 @@ describe("DesktopSettings", () => {
         const fileSystem = yield* FileSystem.FileSystem;
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
 
-        yield* settings.setMainWindowBounds({ x: -1200, y: 40, width: 400, height: 360 }, true);
+        yield* settings.setMainWindowBounds({ x: -1200, y: 40, width: 840, height: 620 }, true);
         yield* settings.setServerExposureMode("network-accessible");
 
         const persisted = yield* decodeDesktopSettingsPatch(
           yield* fileSystem.readFileString(environment.desktopSettingsPath),
         );
         assert.deepEqual(persisted, {
-          mainWindowBounds: { x: -1200, y: 40, width: 400, height: 360 },
+          mainWindowBounds: { x: -1200, y: 40, width: 840, height: 620 },
           mainWindowMaximized: true,
           serverExposureMode: "network-accessible",
         } satisfies typeof DesktopSettingsPatch.Type);
