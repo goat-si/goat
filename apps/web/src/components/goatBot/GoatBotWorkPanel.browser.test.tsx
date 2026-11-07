@@ -8,12 +8,14 @@ import { render } from "../../../test/render";
 
 const mocks = vi.hoisted(() => ({ tasks: [] as unknown[], setEnabled: vi.fn() }));
 vi.mock("./useBotRoster", () => ({ useBotRoster: () => ({ rows: [] }) }));
+vi.mock("~/state/entities", () => ({ useThreadShell: () => null }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({ data: { tasks: mocks.tasks }, error: null }),
 }));
 vi.mock("~/state/server", () => ({
   serverEnvironment: {
     scheduledTasksLive: () => null,
+    upsertScheduledTask: { permissionAtom: () => Atom.make(false), execute: vi.fn() },
     setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
   },
 }));
