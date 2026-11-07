@@ -67,11 +67,11 @@ function ArtifactTemplateCard(props: {
           tintColorClassName="accent-foreground-muted"
           type="monochrome"
         />
-        <View className="absolute -right-1 -bottom-1 h-4 w-4 items-center justify-center rounded-full bg-fuchsia-500">
+        <View className="absolute -right-1 -bottom-1 h-4 w-4 items-center justify-center rounded-full bg-primary">
           <SymbolView
             name={{ ios: "sparkles", android: "auto_awesome" }}
             size={9}
-            tintColor="white"
+            tintColorClassName="accent-primary-foreground"
             type="monochrome"
           />
         </View>

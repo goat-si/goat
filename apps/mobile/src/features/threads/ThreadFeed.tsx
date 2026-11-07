@@ -22,6 +22,9 @@ import {
 } from "../../lib/enrichedLinkPresentation";
 import { GOAT_CONTEXT_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import { ThreadContextDivider } from "./thread-context-divider";
+import { StandingInstructionsRow } from "./standing-instructions-row";
+import { EXPANDABLE_ROW_MIN_HEIGHT } from "./work-log-layout";
+import { FeedEntryShimmerContext } from "./work-shimmer-arbiter";
 import {
   ThreadHandoffDivider,
   ThreadHandoffRow,
@@ -45,7 +48,6 @@ import {
   IDLE_COMPACTING_LABELS,
   resolveUserMessagePresentation,
 } from "@goat/client-runtime/user-message";
-import type { StandingInstructionsBlock } from "@goat/shared/standingInstructions";
 import { canForkProjectedAssistantItem } from "@goat/client-runtime/state/thread-workflows";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
@@ -182,6 +184,7 @@ import {
   deriveThreadFeedInitialContentInset,
   deriveThreadWorkLogSizing,
   type LayoutVariant,
+  THREAD_WORK_ROW_MIN_HEIGHT,
 } from "../../lib/layout";
 import { uuidv4 } from "../../lib/uuid";
 import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
@@ -297,7 +300,7 @@ function formatMessageTime(input: string): string {
   return MESSAGE_TIME_FORMATTER.format(timestamp);
 }
 
-const TURN_FOLD_HEIGHT = 42;
+const TURN_FOLD_HEIGHT = EXPANDABLE_ROW_MIN_HEIGHT + 3.5;
 const FEED_PADDING_TOP = 12;
 // Rows re-measure within a commit or two of a width change. LegendList also defers imperative
 // scrolls for 100ms after it compensates a size change, and a deferred restore could land
@@ -477,6 +480,7 @@ function AssistantForkButton(props: {
           })
           .finally(() => setBusy(false));
       }}
+      hitSlop={8}
       className="h-7 w-7 items-center justify-center disabled:opacity-40"
       style={
         Platform.OS === "android"
@@ -968,40 +972,6 @@ function useMarkdownStyles(): MarkdownStyleSets {
   ]);
 }
 
-/** Messages from other agents fold to one line so the user's own messages stay easy to find. */
-/** What GOAT put in front of a launched thread's first message, collapsed until tapped. */
-function StandingInstructionsRow(props: { readonly block: StandingInstructionsBlock }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <View className="gap-1">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: open }}
-        accessibilityLabel={open ? "Hide standing instructions" : "Show standing instructions"}
-        hitSlop={4}
-        onPress={() => setOpen((value) => !value)}
-        className="flex-row items-center gap-1"
-      >
-        <SymbolView
-          name={open ? "chevron.down" : "chevron.right"}
-          size={10}
-          tintColorClassName="accent-foreground-muted"
-          type="monochrome"
-        />
-        <Text className="font-goat-medium text-2xs text-foreground-muted">
-          Standing instructions
-        </Text>
-        <Text className="text-2xs text-foreground-muted opacity-70">{props.block.version}</Text>
-      </Pressable>
-      {open ? (
-        <Text selectable className="text-xs text-foreground-muted">
-          {props.block.text}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
 /** Automation prompts are long, repeated runbooks; a folded bubble keeps them out of the way. */
 function ThreadAutomationMessageRow(props: {
   readonly environmentId: EnvironmentId;
@@ -1160,6 +1130,7 @@ function RunFoldButton({
   }, [entry.expanded, anchorsKey, environmentId, threadId]);
   const error = anchorsKey && failed ? "Couldn't load work. Tap to retry." : null;
   const loading = entry.expanded && anchorsKey !== "" && !failed;
+  const foldHeight = Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight);
   const toggle = () => {
     setFailed(false);
     if (error && entry.expanded) load();
@@ -1173,8 +1144,8 @@ function RunFoldButton({
         accessibilityState={{ expanded: entry.expanded, busy: loading }}
         onPress={toggle}
         hitSlop={4}
-        className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2"
-        style={{ minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight) }}
+        className="min-w-0 flex-1 flex-row items-center gap-2"
+        style={{ minHeight: foldHeight }}
       >
         <Text
           key={rowSizing.textSizeKey}
@@ -1516,7 +1487,7 @@ function renderFeedEntry(
       );
       return (
         <Animated.View
-          className="mb-5 items-end"
+          className="mb-5 mt-2 items-end"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
           {foldRowId !== null ? (
@@ -1527,7 +1498,7 @@ function renderFeedEntry(
             />
           ) : null}
           {presentation.attribution === "t3code" ? (
-            <Text className="mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted opacity-60">
+            <Text className="mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted">
               Sent by GOAT
             </Text>
           ) : null}
@@ -3118,7 +3089,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       case "work-toggle":
         return entry.thought ? undefined : WORK_GROUP_TOGGLE_HEIGHT;
       case "thinking":
-        return WORK_GROUP_TOGGLE_HEIGHT;
+        return THREAD_WORK_ROW_MIN_HEIGHT;
       case "activity-group":
         if (entry.activities[0]?.projectedItem.item.type === "subagent") {
           return undefined;
@@ -3191,48 +3162,50 @@ export const ThreadFeed = memo(function ThreadFeed({
               iconColor={iconSubtleColor}
             />
           ) : null}
-          {renderFeedEntry(info, {
-            environmentId: props.environmentId,
-            dispatchingMessageId: props.dispatchingMessageId,
-            onEditPendingMessage: props.onEditPendingMessage,
-            onUseArtifactTemplate: props.onUseArtifactTemplate,
-            threadId: props.threadId,
-            copiedRowId,
-            expandedWorkRows,
-            workRowSizing,
-            workGroupScrollPositions,
-            terminalAssistantMessageIds,
-            unsettledTurnId,
-            compactionLabelsByEntryId,
-            failedRunIds,
-            onCopyWorkRow,
-            onToggleWorkGroup,
-            onToggleWorkRow,
-            onToggleTurnFold,
-            onOpenTurnDiff,
-            onPressPreview,
-            onPlaybackStart: onInlinePlaybackStart,
-            markdownLinkHandlers,
-            renderMarkdownImage,
-            renderViewedImage,
-            renderReasoning,
-            iconSubtleColor,
-            replyActionSize,
-            screenColor,
-            userBubbleColor,
-            markdownStyles,
-            reviewCommentColors,
-            reviewCommentBubbleWidth,
-            themeAppearance,
-            duoColumns,
-            userBubbleMaxWidth,
-            markdownContentWidth,
-            contentWidth,
-            threadTitle: props.threadTitle,
-            skills: props.skills,
-            workspaceRoot: props.workspaceRoot,
-            workflowOpening,
-          })}
+          <FeedEntryShimmerContext value={info.index}>
+            {renderFeedEntry(info, {
+              environmentId: props.environmentId,
+              dispatchingMessageId: props.dispatchingMessageId,
+              onEditPendingMessage: props.onEditPendingMessage,
+              onUseArtifactTemplate: props.onUseArtifactTemplate,
+              threadId: props.threadId,
+              copiedRowId,
+              expandedWorkRows,
+              workRowSizing,
+              workGroupScrollPositions,
+              terminalAssistantMessageIds,
+              unsettledTurnId,
+              compactionLabelsByEntryId,
+              failedRunIds,
+              onCopyWorkRow,
+              onToggleWorkGroup,
+              onToggleWorkRow,
+              onToggleTurnFold,
+              onOpenTurnDiff,
+              onPressPreview,
+              onPlaybackStart: onInlinePlaybackStart,
+              markdownLinkHandlers,
+              renderMarkdownImage,
+              renderViewedImage,
+              renderReasoning,
+              iconSubtleColor,
+              replyActionSize,
+              screenColor,
+              userBubbleColor,
+              markdownStyles,
+              reviewCommentColors,
+              reviewCommentBubbleWidth,
+              themeAppearance,
+              duoColumns,
+              userBubbleMaxWidth,
+              markdownContentWidth,
+              contentWidth,
+              threadTitle: props.threadTitle,
+              skills: props.skills,
+              workspaceRoot: props.workspaceRoot,
+              workflowOpening,
+            })}
+          </FeedEntryShimmerContext>
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
           ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (

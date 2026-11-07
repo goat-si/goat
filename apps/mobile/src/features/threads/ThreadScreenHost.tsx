@@ -8,6 +8,7 @@ import {
 } from "react";
 import { View } from "react-native";
 import { ThreadDetailScreen, type ThreadDetailScreenProps } from "./ThreadDetailScreen";
+import { createWorkShimmerArbiter, WorkShimmerArbiterContext } from "./work-shimmer-arbiter";
 
 type ThreadScreenContent =
   | { readonly props: ThreadDetailScreenProps }
@@ -50,11 +51,14 @@ function ThreadScreenOutlet() {
 // the keyboard host, or the editor. Publish before paint to avoid an intermediate frame.
 export function ThreadScreenHost({ children }: { readonly children: ReactNode }) {
   const [store] = useState(createThreadScreenStore);
+  const [shimmerArbiter] = useState(createWorkShimmerArbiter);
   return (
     <ThreadScreenContext.Provider value={store}>
       {children}
       <View className="flex-1 bg-screen android:overflow-hidden android:rounded-t-[28px] android:bg-thread-canvas">
-        <ThreadScreenOutlet />
+        <WorkShimmerArbiterContext value={shimmerArbiter}>
+          <ThreadScreenOutlet />
+        </WorkShimmerArbiterContext>
       </View>
     </ThreadScreenContext.Provider>
   );

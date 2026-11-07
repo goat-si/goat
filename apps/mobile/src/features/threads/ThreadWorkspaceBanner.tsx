@@ -42,11 +42,11 @@ export function ThreadWorkspaceBanner({
     appAtomRegistry.refresh(query);
   };
   return (
-    <View className="gap-2 px-4 pb-3">
-      <Text>
+    <View className="mx-4 mb-3 gap-2 rounded-[20px] border border-border bg-card-alt p-4">
+      <Text className="font-goat-medium text-sm text-foreground">
         {state === "cleaned" ? "This worktree was cleaned up." : "This worktree is missing."}
       </Text>
-      <Text>Sending a message also restores it.</Text>
+      <Text className="text-xs text-foreground-muted">Sending a message also restores it.</Text>
       {error ? (
         <Text selectable className="text-danger-foreground">
           {error}
