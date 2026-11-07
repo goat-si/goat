@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 
 import { fixture, layerAdapterTest } from "./CodexAdapterV2.attachment.testkit.ts";
+import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
 
 // After a GOAT server restart a surviving Codex app-server still holds the thread with the credential
 // the earlier server installed, and Codex ignores the overrides a resume of a held thread carries.
@@ -58,6 +59,33 @@ describe("Codex credential after a server restart", () => {
         f.turnCompleted(2);
         const replay = yield* f.openResumed("idle");
         assert.isTrue(Exit.isFailure(yield* Effect.exit(replay.startTurn(1))));
+        yield* replay.startTurn(2);
+        yield* replay.terminal;
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("the restart notice survives a reload whose resume fails before a cold resume", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = fixture("restart-dropped");
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.resume(2, {});
+        // The unsubscribe went through, so terminals may have stopped, but the resume failed.
+        const next = f.reload(3, undefined, { error: { code: -32603, message: "resume failed" } });
+        f.resume(next, f.threadParams());
+        yield* f.turnStart(next + 1, 2, noted);
+        f.turnCompleted(2);
+        // Codex holds the thread at the first resume and has let it go by the second.
+        const replay = yield* f.openResumed("idle", "notLoaded");
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(replay.startTurn(1))));
+        yield* replay.runtime.resumeThread({
+          threadId: replay.threadId,
+          providerThread: replay.providerThread,
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        });
         yield* replay.startTurn(2);
         yield* replay.terminal;
       }),

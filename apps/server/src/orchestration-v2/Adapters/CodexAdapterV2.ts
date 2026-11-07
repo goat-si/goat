@@ -6967,13 +6967,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       },
                     }),
               };
+              // The unsubscribe can stop terminals even when the resume that follows fails.
+              if (foreign) restartNotices.add(threadId);
               yield* threadStatuses.reload(client, threadId, {
                 ...runtime.params,
                 ...(mcpSession || (applied === undefined && !foreign)
                   ? {}
                   : { config: { ...runtime.params.config, mcp_servers: detached } }),
               });
-              if (foreign) restartNotices.add(threadId);
               recordLoaded(threadId, runtime, mcpSession);
             }
             const memoryContext = turnInput.refreshMemoryContext

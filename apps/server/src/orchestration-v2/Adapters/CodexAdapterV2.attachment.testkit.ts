@@ -69,12 +69,13 @@ export const unusedRegistry = {
 /**
  * Opens one replayed Codex session and records the thread requests the adapter sends. With
  * `heldAs`, the session resumes the thread instead of starting it, as a restarted server does, and
- * Codex reports the thread with that status before the resume (`notLoaded` when it holds none).
+ * Codex answers each thread/read with the next of those statuses (`notLoaded` when it holds none).
  */
 const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   transcript: CodexReplay.CodexAppServerReplayTranscript,
-  heldAs?: string,
+  heldAs?: ReadonlyArray<string>,
 ) {
+  const statuses = [...(heldAs ?? [])];
   const driver = yield* CodexReplay.makeReplayDriver(transcript);
   const threadConfigs: Array<Record<string, unknown>> = [];
   const requests: Array<string> = [];
@@ -116,7 +117,9 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
                           ? Effect.succeed({
                               thread: {
                                 id: (params as { threadId: string }).threadId,
-                                status: { type: heldAs },
+                                status: {
+                                  type: statuses.length > 1 ? statuses.shift() : statuses[0],
+                                },
                               },
                             })
                           : client.raw.request(method, params),
@@ -545,7 +548,7 @@ export const fixture = (scenario: string) => {
       Effect.provideService(McpSessionRegistry.McpSessionRegistry, registry),
     );
   const open = openWith(unusedRegistry);
-  const openResumed = (heldAs: string) =>
+  const openResumed = (...heldAs: ReadonlyArray<string>) =>
     openReplay(makeCodexReplayTranscript({ scenario, entries }), heldAs).pipe(
       Effect.provideService(McpSessionRegistry.McpSessionRegistry, unusedRegistry),
     );
