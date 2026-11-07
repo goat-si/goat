@@ -558,6 +558,7 @@ export function useGoatBotSession(
     activity,
     attachmentSupport,
     supportsTaskThreads: capabilities?.goatBotTaskThreads === true,
+    supportsTaskRetry: capabilities?.goatBotTaskRetry === true,
     rowsForTask,
     onSendToTask: (
       selectedTask: ChannelTaskId,

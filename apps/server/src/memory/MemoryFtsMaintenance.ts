@@ -8,13 +8,11 @@ import * as Metric from "effect/Metric";
 import * as Metrics from "../observability/Metrics.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Quota from "./MemoryQuotaService.ts";
+import { MEMORY_STORAGE_SAMPLE_INTERVAL_MS } from "./MemoryStorageTiming.ts";
 
-/**
- * How often an unchanged store is re-measured. The worker calls cycle on every sweep, and a
- * sample reads every memory btree, so an idle server must not pay for it per sweep.
- */
-export const MEMORY_STORAGE_SAMPLE_INTERVAL_MS = 3_600_000;
-/** Resample interval while the store is over budget, so the admission brake releases promptly. */
+export { MEMORY_STORAGE_SAMPLE_INTERVAL_MS } from "./MemoryStorageTiming.ts";
+
+/** Resample above the target so the admission brake follows growth and cleanup promptly. */
 const MEMORY_STORAGE_OVER_BUDGET_SAMPLE_INTERVAL_MS = 300_000;
 
 /** Footprint areas for the size metric: what is injected, how it is found, and its machinery. */
@@ -161,11 +159,16 @@ const make = Effect.gen(function* () {
       }
       for (const [area, bytes] of areas)
         yield* Metric.update(Metric.withAttributes(Metrics.memoryStoreBytes, { area }), bytes);
-      if (sampled.memoryBytes >= M.MEMORY_STORE_BUDGET_BYTES) overBudget.add(environmentId);
+      const budgetBytes = (yield* store.storeBudgetBytes(
+        environmentId,
+        yield* Clock.currentTimeMillis,
+      )).bytes;
+      if (budgetBytes !== null && budgetBytes >= M.MEMORY_STORE_TARGET_BYTES)
+        overBudget.add(environmentId);
       else overBudget.delete(environmentId);
-      if (sampled.memoryBytes >= M.MEMORY_STORE_TARGET_BYTES)
+      if (budgetBytes !== null && budgetBytes >= M.MEMORY_STORE_TARGET_BYTES)
         yield* Effect.logWarning("Memory store is above its size target", {
-          memoryBytes: sampled.memoryBytes,
+          memoryBytes: budgetBytes,
           targetBytes: M.MEMORY_STORE_TARGET_BYTES,
           budgetBytes: M.MEMORY_STORE_BUDGET_BYTES,
         });

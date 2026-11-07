@@ -97,6 +97,7 @@ import {
   threadDigest,
 } from "./channelBotRecall.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
+import { makeRemoteThreadRecall } from "./channelRemoteRecall.ts";
 import {
   approvalCard,
   type ApprovalReply,
@@ -229,6 +230,7 @@ const make = Effect.gen(function* () {
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
   const memoryService = yield* Effect.serviceOption(MemoryService.MemoryService);
   const memorySync = yield* Effect.serviceOption(MemorySyncService.MemorySyncService);
+  const remoteThreadRecall = yield* makeRemoteThreadRecall;
 
   // Facts that do not change while the server runs.
   const linuxName =
@@ -509,7 +511,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (read.kind) {
         case "memory": {
-          const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+          const notes = yield* readChannelBotNotes(botFiles, read.query);
           // The whole visible journal is searched; only the prompt's copy is cut to size.
           const journal = journalFor(
             yield* visibleTasks(viewer, conversationId),
@@ -542,13 +544,7 @@ const make = Effect.gen(function* () {
             return taskDigest(task) + "\nIts coding thread has not started.";
           }
           if (worker.host !== undefined) {
-            // Remote threads are read through their reports, which the ledger already holds.
-            return (
-              taskDigest(task) +
-              "\nIts thread runs on " +
-              worker.host +
-              "; only its reports reach this machine."
-            );
+            return yield* remoteThreadRecall(task, { ...worker, host: worker.host }, viewer);
           }
           // Only the newest runs' messages are loaded; a long thread is never read whole.
           const { runs } = yield* threads.getThreadRecords(worker.threadId, ["runs"]);
@@ -1087,7 +1083,7 @@ const make = Effect.gen(function* () {
                 );
                 const shells = yield* listThreads;
                 const facts = yield* hostFacts(shells);
-                const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+                const notes = yield* readChannelBotNotes(botFiles, message.text);
                 // Everything this pass sees about other work is judged with the link as it is now.
                 const viewer = yield* viewerNow(requester, message.connectionId);
                 // Titles of the owner's threads are other work, so only someone who may read it sees them.

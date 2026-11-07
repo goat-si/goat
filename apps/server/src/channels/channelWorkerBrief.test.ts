@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { ChannelTaskId } from "@goat/contracts";
 
 import { NOTES_REPLACED_RULE } from "./channelBotNotes.ts";
+import { EMPTY_NOTES } from "./channelBotNotesRecall.ts";
 
 import {
   channelWorkerRules,
@@ -49,7 +50,7 @@ describe("channel worker brief", () => {
 
   it("carries the home machine's notes and named skills to a remote worker", () => {
     const message = remoteWorkerMessage(task, {
-      notes: "- 2026-10-17: open PRs as drafts",
+      notes: { ...EMPTY_NOTES, standing: "- 2026-10-17: open PRs as drafts" },
       skills: [{ name: "deploy-staging", text: "# Deploy staging\nRun the deploy script." }],
     });
     assert.isTrue(message.startsWith(task.instruction + "\n\n---\n"));
@@ -62,11 +63,11 @@ describe("channel worker brief", () => {
   });
 
   it("leaves the context out when there is none, but says a note change must happen at home", () => {
-    const plain = remoteWorkerMessage(task, { notes: "", skills: [] });
+    const plain = remoteWorkerMessage(task, { notes: EMPTY_NOTES, skills: [] });
     assert.notInclude(plain, "goat_bot_notes");
     const change = remoteWorkerMessage(
       { ...task, notesChangeRequested: "forget the draft rule" },
-      { notes: "", skills: [] },
+      { notes: EMPTY_NOTES, skills: [] },
     );
     assert.include(change, '"forget the draft rule"');
     assert.include(change, "still needs to be made there");
@@ -74,7 +75,7 @@ describe("channel worker brief", () => {
 
   it("drops skills, then notes, to keep the message within what the remote accepts", () => {
     const context = {
-      notes: "n".repeat(3_000),
+      notes: { ...EMPTY_NOTES, standing: "n".repeat(3_000) },
       skills: [
         { name: "first", text: "f".repeat(4_000) },
         { name: "second", text: "s".repeat(4_000) },

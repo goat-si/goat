@@ -5,7 +5,11 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { isMap, isScalar, isSeq, parseDocument } from "yaml";
 import { scanMemoryValue } from "../MemorySecretScanner.ts";
-import type { ImportParsedItem, MemoryImportParser } from "./MemoryImportTypes.ts";
+import {
+  withoutByteOrderMark,
+  type ImportParsedItem,
+  type MemoryImportParser,
+} from "./MemoryImportTypes.ts";
 
 export const ASIDE_SEMANTIC_PROFILE = "aside-semantic-v1";
 const DIRECTORIES = new Set([
@@ -81,7 +85,7 @@ const frontmatter = (source: string) => {
  * inside code fences are text. Anything else is ambiguous and the whole page is refused.
  */
 const page = (text: string): Page | undefined => {
-  const lines = text.normalize("NFC").replace(/\r\n?/g, "\n").split("\n");
+  const lines = withoutByteOrderMark(text).normalize("NFC").replace(/\r\n?/g, "\n").split("\n");
   if (lines[0] !== "---") return undefined;
   const end = lines.indexOf("---", 1);
   if (end < 0) return undefined;

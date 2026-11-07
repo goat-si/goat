@@ -8,6 +8,7 @@ import type { BotIdentity } from "./ChannelBotProfiles.ts";
 import {
   identityIsCurrent,
   identitySection,
+  notesAreCurrent,
   sessionRotationDue,
 } from "./channelBotSessionBrief.ts";
 import { readRecords } from "./channelBotSessionRecords.ts";
@@ -33,22 +34,45 @@ export const readSessionRecords = (
         ),
       );
 
-/** The rotation reason for an active session: its cache or context first, then a changed profile. */
+/** The token usage of a session's newest provider turn, which decides cache and context rotation. */
+export const latestTurnUsage = (
+  records: Option.Option<Effect.Success<ReturnType<typeof readRecords>>>,
+) =>
+  Option.isNone(records)
+    ? undefined
+    : records.value.providerTurns
+        .flatMap((turn) => (turn.tokenUsage === undefined ? [] : [turn.tokenUsage]))
+        .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+
+export interface SessionCurrent {
+  readonly identity: BotIdentity;
+  /** The standing notes a new prefix would carry now; undefined when they could not be read. */
+  readonly notes: string | undefined;
+}
+
+/**
+ * The rotation reason for an active session: its cache or context first, then a changed profile,
+ * then changed notes. A failed notes read never rotates; the next good read decides.
+ */
 export const sessionRotationReason = (
   usage: OrchestrationV2ProviderTurnTokenUsage | undefined,
   nowMs: number,
   contextText: string | null,
-  identity: BotIdentity,
+  current: SessionCurrent,
 ) =>
   sessionRotationDue(usage, nowMs) ??
   // A row without its prefix predates frozen prefixes and carries no identity.
   ((
     contextText === null
-      ? identitySection(identity) === ""
-      : identityIsCurrent(contextText, identity)
+      ? identitySection(current.identity) === ""
+      : identityIsCurrent(contextText, current.identity)
   )
     ? undefined
-    : ("profile" as const));
+    : ("profile" as const)) ??
+  (current.notes === undefined ||
+  (contextText !== null && notesAreCurrent(contextText, current.notes))
+    ? undefined
+    : ("notes" as const));
 
 /** A new session's prefix: the identity, read in the same serve that judged the old one, then the frozen parts. */
 export const withIdentity = (identity: BotIdentity, prefix: string) =>

@@ -36,6 +36,17 @@ const rejected = (rows: readonly ImportParsedItem[]) =>
   rows.flatMap((row) => (row.kind === "rejected" ? [row] : []));
 
 describe("Aside semantic page parser", () => {
+  it.effect("a page saved with a UTF-8 byte order mark imports like the same page", () =>
+    Effect.gen(function* () {
+      const plain = yield* parseAsideMemory(snapshot({ "tools.md": page("One statement.") }));
+      const marked = yield* parseAsideMemory(
+        snapshot({ "tools.md": `\uFEFF${page("One statement.")}` }),
+      );
+      assert.equal(candidates(plain).length, 1);
+      assert.deepEqual(marked, plain);
+    }),
+  );
+
   it.effect("splits only the leading Current by H3 into stable path keys", () =>
     Effect.gen(function* () {
       const text = page(

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { botRoster, botRosterGroups } from "@goat/client-runtime/goatBot";
+import { botRoster, botRosterGroups, goatBotTurnsWaiting } from "@goat/client-runtime/goatBot";
 import type { BotId, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { useThreadVisibleTurnItems } from "~/state/entities";
@@ -36,8 +36,10 @@ export function useBotThreads(
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const watchedThreadId =
     bot?.threadId ?? (botRef?.environmentId === environmentId ? botRef?.threadId : undefined);
+  // The conversation is read whether or not the server lists task threads: a question the bot
+  // asked in its own turn shows only there.
   const items = useThreadVisibleTurnItems(
-    supported && watchedThreadId && environmentId !== null
+    watchedThreadId && environmentId !== null
       ? scopeThreadRef(environmentId, watchedThreadId)
       : null,
   );
@@ -60,6 +62,8 @@ export function useBotThreads(
     supported,
     loaded: threads.isSuccess,
     failed: threads.error !== null,
+    /** The bot's own turns asking a question in its chat, which the rows never list. */
+    turnsWaiting: goatBotTurnsWaiting(items),
     refresh: threads.refresh,
   };
 }

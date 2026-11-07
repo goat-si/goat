@@ -16,6 +16,7 @@ import {
   editDraft,
   createDraft,
   hasScheduledTaskDraftChanges,
+  scheduledTaskContextFields,
 } from "./scheduledTaskDraft";
 
 describe("scheduleDraftForTask", () => {
@@ -245,4 +246,68 @@ it("reopens notification policy without losing future values or old-host default
   };
   expect(editDraft(task).notificationPolicy).toBe("all_runs");
   expect(editDraft({ ...task, notificationPolicy: "future" }).notificationPolicy).toBe("future");
+});
+const routine = (overrides: Partial<ScheduledTask> = {}): ScheduledTask => ({
+  id: ScheduledTaskId.make("goat-bot-check-in:bot"),
+  title: "Check in",
+  prompt: "Look over my GOAT Bot tasks.",
+  enabled: true,
+  schedule: { type: "interval", everyMs: 3_600_000 },
+  projectId: ProjectId.make("removed-project"),
+  threadId: null,
+  workspaceStrategy: { type: "existing_worktree", worktreePath: "/checkouts/bot" },
+  modelSelection: { instanceId: ProviderInstanceId.make("replay"), model: "write-approval" },
+  runtimeMode: "approval-required",
+  interactionMode: "default",
+  createdBy: "user",
+  creationSource: "web",
+  createdAt: "2026-11-07T00:00:00.000Z",
+  updatedAt: "2026-11-07T00:00:00.000Z",
+  nextRunAt: null,
+  lastRunAt: null,
+  lastRunStatus: "never",
+  lastRunError: null,
+  runCount: 0,
+  ...overrides,
+});
+
+describe("scheduledTaskContextFields", () => {
+  it("saves a GOAT Bot routine's stored project, model and workspace without asking for them", () => {
+    const task = routine({ goatBotRoutine: true });
+    const draft = { ...editDraft(task), projectId: null, modelSelection: null, checkoutPath: "" };
+    expect(scheduledTaskContextFields(draft, [])).toEqual({
+      kind: "fields",
+      projectId: task.projectId,
+      modelSelection: task.modelSelection,
+      workspaceStrategy: task.workspaceStrategy,
+    });
+  });
+
+  it("still asks an ordinary task for a project, model and checkout it can use", () => {
+    const task = routine();
+    const available = [ProjectId.make("project")];
+    expect(scheduledTaskContextFields(editDraft(task), available)).toEqual({
+      kind: "project_unavailable",
+    });
+    expect(scheduledTaskContextFields({ ...editDraft(task), projectId: null }, available)).toEqual({
+      kind: "incomplete",
+    });
+    expect(
+      scheduledTaskContextFields(
+        { ...editDraft(task), projectId: available[0] ?? null, checkoutPath: " " },
+        available,
+      ),
+    ).toEqual({ kind: "incomplete" });
+    expect(
+      scheduledTaskContextFields(
+        { ...editDraft(task), projectId: available[0] ?? null, workspace: "root" },
+        available,
+      ),
+    ).toEqual({
+      kind: "fields",
+      projectId: available[0],
+      modelSelection: task.modelSelection,
+      workspaceStrategy: { type: "root" },
+    });
+  });
 });

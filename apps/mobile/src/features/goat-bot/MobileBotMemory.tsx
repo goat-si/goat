@@ -4,11 +4,15 @@ import {
   forgetNoteDraft,
   GOAT_BOT_NOTES_COPY,
   GOAT_BOT_NOTES_SHARED_COPY,
+  GOAT_BOT_NOTES_TRUNCATED_COPY,
+  goatBotNoteSourceLabel,
+  goatBotNotesView,
   noteDateLabel,
 } from "@goat/client-runtime/goatBot";
 import type { ChannelBotNote, EnvironmentId } from "@goat/contracts";
 import { useEffect, useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
+import { useNowMinuteMs } from "../../lib/clock";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentQuery } from "../../state/query";
 
@@ -64,31 +68,91 @@ export function MobileBotMemory(props: {
         </View>
       ) : notes.data === null ? (
         <Text className="text-foreground-muted">Loading notes…</Text>
-      ) : notes.data.notes.length === 0 ? (
+      ) : (
+        <MobileNoteList
+          revision={notes.data.revision}
+          notes={notes.data.notes}
+          truncated={notes.data.truncated}
+          onDraft={onDraft}
+        />
+      )}
+    </View>
+  );
+}
+
+function MobileNoteList(props: {
+  readonly revision: string | null;
+  readonly notes: ReadonlyArray<ChannelBotNote>;
+  readonly truncated: boolean;
+  readonly onDraft: ((text: string) => void) | undefined;
+}) {
+  const view = goatBotNotesView({ notes: props.notes, truncated: props.truncated });
+  const [showReplaced, setShowReplaced] = useState(false);
+  const now = useNowMinuteMs();
+  return (
+    <View className="gap-1">
+      {props.truncated ? (
+        <Text className="text-foreground-muted">{GOAT_BOT_NOTES_TRUNCATED_COPY}</Text>
+      ) : null}
+      {view.empty === "none" ? (
         <Text className="text-foreground-muted">
           No notes yet. Ask GOAT Bot to remember a standing rule.
         </Text>
+      ) : view.empty === "none_in_window" ? (
+        <Text className="text-foreground-muted">
+          No complete note fits in the newest 64 KB of memory.md.
+        </Text>
+      ) : view.empty === "no_current" ? (
+        <Text className="text-foreground-muted">No current notes.</Text>
       ) : (
-        <View className="gap-1">
-          {notes.data.truncated ? (
-            <Text className="text-foreground-muted">Showing the newest notes only.</Text>
-          ) : null}
-          {notes.data.notes.map((note) => (
-            // An index is a line's place in this read only, so a new read starts every row over.
-            <MobileNoteRow
-              key={`${notes.data?.revision}:${note.index}`}
-              note={note}
-              onDraft={onDraft}
-            />
-          ))}
-        </View>
+        view.current.map((note) => (
+          // An index is a line's place in this read only, so a new read starts every row over.
+          <MobileNoteRow
+            key={`${props.revision}:${note.index}`}
+            note={note}
+            source={goatBotNoteSourceLabel(note.source, { now })}
+            onDraft={props.onDraft}
+          />
+        ))
       )}
+      {view.replaced.length > 0 ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: showReplaced }}
+          onPress={() => setShowReplaced((value) => !value)}
+          className="min-h-[44px] min-w-[44px] justify-center px-2"
+        >
+          <Text className="text-foreground">
+            {showReplaced ? "Hide replaced notes" : `Show replaced notes (${view.replaced.length})`}
+          </Text>
+        </Pressable>
+      ) : null}
+      {showReplaced
+        ? view.replaced.map((note) => {
+            const replacing = view.replacingText(note);
+            const source = goatBotNoteSourceLabel(note.source, { now });
+            return (
+              <View
+                key={`${props.revision}:${note.index}`}
+                className="gap-1 border-b border-border py-2"
+              >
+                <Text className="text-foreground-muted">{noteDateLabel(note.date)}</Text>
+                {source !== null ? <Text className="text-foreground-muted">{source}</Text> : null}
+                <Text className="text-foreground-muted">{note.text}</Text>
+                <Text className="text-foreground-muted">
+                  {replacing === null ? "Replaced by a later note" : `Replaced by: “${replacing}”`}
+                </Text>
+              </View>
+            );
+          })
+        : null}
     </View>
   );
 }
 
 function MobileNoteRow(props: {
   readonly note: ChannelBotNote;
+  readonly source: string | null;
   readonly onDraft: ((text: string) => void) | undefined;
 }) {
   const { note, onDraft } = props;
@@ -98,7 +162,11 @@ function MobileNoteRow(props: {
   return (
     <View className="gap-1 border-b border-border py-2">
       <Text className="text-foreground-muted">{noteDateLabel(note.date)}</Text>
+      {props.source !== null ? <Text className="text-foreground-muted">{props.source}</Text> : null}
       <Text className="text-foreground">{note.text}</Text>
+      {note.replaces !== undefined ? (
+        <Text className="text-foreground-muted">Replaces: “{note.replaces}”</Text>
+      ) : null}
       {wording === null ? (
         <View className="flex-row gap-4">
           <Pressable

@@ -24,6 +24,8 @@ import {
   ChannelListBotThreadsResult,
   ChannelUpdateTaskViewInput,
   ChannelTaskView,
+  ChannelRetryTaskInput,
+  ChannelRetryTaskResult,
   ChannelGatewayError,
   ChannelGetInputInput,
   ChannelGetTaskInput,
@@ -36,6 +38,12 @@ import {
   ChannelListTasksRpcInput,
   ChannelListTasksResult,
 } from "./channelGateway.ts";
+import {
+  ChannelListBotArtifactsInput,
+  ChannelListBotArtifactsResult,
+  ChannelReadBotArtifactInput,
+  ChannelReadBotArtifactResult,
+} from "./channelBotArtifacts.ts";
 import { ChannelListBotNotesInput, ChannelListBotNotesResult } from "./channelBotNotes.ts";
 import { ChannelTask } from "./channelLedger.ts";
 import {
@@ -112,6 +120,18 @@ const ChannelListBotNotesRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotNotes,
   error: ChannelRpcError,
 });
 
+const ChannelListBotArtifactsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts, {
+  payload: ChannelListBotArtifactsInput,
+  success: ChannelListBotArtifactsResult,
+  error: ChannelRpcError,
+});
+
+const ChannelReadBotArtifactRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.readBotArtifact, {
+  payload: ChannelReadBotArtifactInput,
+  success: ChannelReadBotArtifactResult,
+  error: ChannelRpcError,
+});
+
 const ChannelListChildWorkRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listChildWork, {
   payload: ChannelListChildWorkInput,
   success: ChannelListChildWorkResult,
@@ -121,6 +141,12 @@ const ChannelListChildWorkRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listChildWor
 const ChannelUpdateTaskViewRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.updateTaskView, {
   payload: ChannelUpdateTaskViewInput,
   success: ChannelTaskView,
+  error: ChannelRpcError,
+});
+
+const ChannelRetryTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.retryTask, {
+  payload: ChannelRetryTaskInput,
+  success: ChannelRetryTaskResult,
   error: ChannelRpcError,
 });
 
@@ -199,8 +225,11 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelRestoreBotRpc,
   ChannelListBotThreadsRpc,
   ChannelListBotNotesRpc,
+  ChannelListBotArtifactsRpc,
+  ChannelReadBotArtifactRpc,
   ChannelListChildWorkRpc,
   ChannelUpdateTaskViewRpc,
+  ChannelRetryTaskRpc,
   ChannelIngestRpc,
   ChannelGetTaskRpc,
   ChannelListTasksRpc,

@@ -6,6 +6,7 @@ import "vite-plus/test/config";
 const reactTests = [
   "src/features/keyboard/keyboardControllerState.test.tsx",
   "src/features/settings/ClaudeAccountControls.test.tsx",
+  "src/features/settings/ScheduledTaskContextSections.test.tsx",
   "src/features/threads/CustomAnswerInput.test.tsx",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/notes/live-editor/note-editor-images.dom.test.ts",
@@ -48,6 +49,8 @@ const reactTests = [
   "src/features/goat-bot/useMobileGoatBotFace.motion.test.tsx",
   "src/features/goat-bot/MobileBotWork.test.tsx",
   "src/features/goat-bot/MobileBotMemory.test.tsx",
+  "src/features/goat-bot/MobileBotLibrary.test.tsx",
+  "src/features/goat-bot/MobileBotComputer.test.tsx",
   "src/features/goat-bot/GoatBotScreen.notes.test.tsx",
   "src/features/goat-bot/MobileBotCheckInForm.test.tsx",
   "src/features/goat-bot/MobileBotStatusCard.test.tsx",

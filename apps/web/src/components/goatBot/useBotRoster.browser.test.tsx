@@ -15,7 +15,9 @@ vi.mock("~/globalAgentStore", () => ({
   useGlobalAgentStore: (select: (state: unknown) => unknown) =>
     select({ botRef: { environmentId: "env-1", threadId: "bot" } }),
 }));
-vi.mock("~/state/entities", () => ({ useThreadVisibleTurnItems: () => state.items }));
+vi.mock("~/state/entities", () => ({
+  useThreadVisibleTurnItems: (ref: unknown) => (ref === null ? [] : state.items),
+}));
 vi.mock("~/state/environments", () => ({
   useEnvironment: () => ({
     connection: { phase: "connected" },
@@ -35,7 +37,7 @@ vi.mock("~/state/query", () => ({
     refresh: state.refresh,
   }),
 }));
-import { useBotRoster } from "./useBotRoster";
+import { useBotRoster, useBotThreads } from "./useBotRoster";
 
 function RosterProbe() {
   const { roster, rows } = useBotRoster();
@@ -73,4 +75,33 @@ it("refreshes the task roster when a new task chip appears", async () => {
   ];
   await screen.rerender(<RosterProbe />);
   expect(state.refresh).toHaveBeenCalled();
+});
+
+function TurnsProbe() {
+  const { turnsWaiting } = useBotThreads("env-1" as never, null);
+  return <span>{turnsWaiting} questions in the chat</span>;
+}
+
+it("sees a question the bot asked in its chat even when the server cannot list task threads", async () => {
+  state.supported = false;
+  state.items = [
+    {
+      sourceItemId: "chip-turn",
+      item: {
+        type: "notification",
+        updatedAt: "2026-01-01",
+        ledgerTask: {
+          taskId: "turn-1",
+          kind: "turn",
+          taskVersion: 2,
+          status: "waiting_input",
+          openQuestionCount: 1,
+        },
+      },
+    },
+  ];
+  // This probe has no route-dependent behavior.
+  await using screen = await render(<TurnsProbe />, { router: false });
+  await expect.element(screen.getByText("1 questions in the chat")).toBeVisible();
+  state.items = [];
 });

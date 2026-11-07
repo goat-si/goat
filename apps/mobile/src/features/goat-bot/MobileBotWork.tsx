@@ -1,5 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
-import { groupBotWork, presentTaskStatus } from "@goat/client-runtime/goatBot";
+import {
+  goatBotWaitingInChatText,
+  groupBotWork,
+  isRetryableTaskStatus,
+  presentTaskStatus,
+  retryRefusalText,
+  taskAttemptLabel,
+} from "@goat/client-runtime/goatBot";
 import { botRoutineRows, type BotRoutineRow } from "@goat/client-runtime/scheduledTasks";
 import {
   isAtomCommandInterrupted,
@@ -18,6 +25,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { useNowMinuteMs } from "../../lib/clock";
+import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
@@ -26,6 +34,8 @@ import { serverEnvironment } from "../../state/server";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
+import { MobileBotComputer } from "./MobileBotComputer";
+import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
@@ -40,8 +50,11 @@ export function MobileBotWork(props: {
   readonly member?: {
     readonly botId: BotId;
     readonly threadId: ThreadId;
+    readonly name: string;
     readonly defaultModelSelection: BotProfile["defaultModelSelection"];
   } | null;
+  /** The bot's own turns asking a question in the chat behind this sheet. */
+  readonly turnsWaiting?: number;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
   readonly onDraft?: ((text: string) => void) | undefined;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
@@ -128,6 +141,9 @@ export function MobileBotWork(props: {
           </Text>
           <Text className="text-foreground-muted">
             {task ? presentTaskStatus(task.row.task.status, task.row.view.doneAt).label : null}
+            {task && taskAttemptLabel(task.row.task.generation)
+              ? ` · ${taskAttemptLabel(task.row.task.generation)}`
+              : null}
           </Text>
           {!enabled ? (
             <Text className="text-foreground-muted">
@@ -148,6 +164,15 @@ export function MobileBotWork(props: {
           ) : null}
           {task ? (
             <View className="flex-row flex-wrap gap-3">
+              {environmentId &&
+              capabilities?.goatBotTaskRetry === true &&
+              isRetryableTaskStatus(task.row.task.status) ? (
+                <MobileTaskRetry
+                  environmentId={environmentId}
+                  taskId={task.row.task.taskId}
+                  onStarted={threads.refresh}
+                />
+              ) : null}
               <Pressable
                 accessibilityRole="button"
                 className="min-h-[44px] justify-center"
@@ -211,6 +236,8 @@ export function MobileBotWork(props: {
               !enabled ? "unavailable" : threads.error ? "failed" : threads.isSuccess ? rows : null
             }
             refreshRows={threads.refresh}
+            turnsWaiting={props.turnsWaiting ?? 0}
+            onOpenChat={() => setOpen(false)}
             onOpenTask={(id) => {
               setOpen(false);
               props.onOpenTask(id);
@@ -234,6 +261,17 @@ export function MobileBotWork(props: {
             ))}
           </View>
           <ScrollView>
+            {tab === "Tasks" && (props.turnsWaiting ?? 0) > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setOpen(false)}
+                className="min-h-[44px] justify-center"
+              >
+                <Text className="text-foreground">
+                  {goatBotWaitingInChatText(member?.name ?? "GOAT Bot")}. Open the chat
+                </Text>
+              </Pressable>
+            ) : null}
             {tab === "Tasks" ? (
               !enabled ? (
                 <Text className="text-foreground-muted">
@@ -333,12 +371,18 @@ export function MobileBotWork(props: {
               />
             ) : null}
             {tab === "Library" ? (
-              <Text className="text-foreground-muted">Files GOAT Bot saves will appear here.</Text>
+              <MobileBotLibrary
+                environmentId={environmentId}
+                connected={selected?.connected === true}
+                supported={capabilities?.goatBotLibrary === true}
+              />
             ) : null}
             {tab === "Computer" ? (
-              <Text className="text-foreground-muted">
-                Machines GOAT Bot works on will appear here.
-              </Text>
+              <MobileBotComputer
+                environmentId={environmentId}
+                connected={selected?.connected === true}
+                botId={member?.botId ?? null}
+              />
             ) : null}
           </ScrollView>
         </View>
@@ -355,9 +399,30 @@ function MobileRoutineRow(props: {
   const canOperate = useAtomValue(
     serverEnvironment.setScheduledTaskEnabled.permissionAtom(environmentId),
   );
+  const canRunNow = useAtomValue(
+    serverEnvironment.runScheduledTaskNow.permissionAtom(environmentId),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const runAgain = async () => {
+    if (running) return;
+    setRunning(true);
+    setRunError(null);
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      serverEnvironment.runScheduledTaskNow,
+      { environmentId, input: { id: row.id } },
+      { label: "GOAT Bot routine run now", reportFailure: false },
+    );
+    setRunning(false);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const failure = squashAtomCommandFailure(result);
+      setRunError(failure instanceof Error ? failure.message : String(failure));
+    }
+  };
   const toggle = async (enabled: boolean) => {
     if (busy) return;
     setBusy(true);
@@ -399,9 +464,78 @@ function MobileRoutineRow(props: {
         />
       </View>
       {expanded ? <Text className="text-foreground-muted">{row.prompt}</Text> : null}
+      {row.lastFailed && canRunNow ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: running }}
+          disabled={running}
+          onPress={() => void runAgain()}
+          className="min-h-[44px] self-start justify-center"
+        >
+          <Text className="text-foreground">Run now</Text>
+        </Pressable>
+      ) : null}
       {error !== null ? (
         <Text accessibilityRole="alert" className="text-danger-foreground">
           Couldn't {row.enabled ? "pause" : "resume"} this routine: {error}
+        </Text>
+      ) : null}
+      {runError !== null ? (
+        <Text accessibilityRole="alert" className="text-danger-foreground">
+          Couldn't run this routine: {runError}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/** Runs failed or stopped work again; each tap is its own request and the server may refuse. */
+function MobileTaskRetry(props: {
+  readonly environmentId: EnvironmentId;
+  readonly taskId: ChannelTaskId;
+  readonly onStarted: () => void;
+}) {
+  const canRetry = useAtomValue(channelEnvironment.retryTask.permissionAtom(props.environmentId));
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  if (!canRetry) return null;
+  const run = async () => {
+    if (busy) return;
+    setBusy(true);
+    setProblem(null);
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      channelEnvironment.retryTask,
+      {
+        environmentId: props.environmentId,
+        input: { taskId: props.taskId, clientRequestId: uuidv4() },
+      },
+      { label: "GOAT Bot task retry", reportFailure: false },
+    );
+    setBusy(false);
+    if (result._tag === "Success") {
+      if (result.value.status === "refused") setProblem(retryRefusalText(result.value.reason));
+      else props.onStarted();
+      return;
+    }
+    if (isAtomCommandInterrupted(result)) return;
+    const failure = squashAtomCommandFailure(result);
+    setProblem(`Couldn't retry: ${failure instanceof Error ? failure.message : String(failure)}`);
+  };
+  return (
+    <View className="gap-1">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ disabled: busy }}
+        disabled={busy}
+        onPress={() => void run()}
+        className="min-h-[44px] justify-center"
+      >
+        <Text className="text-foreground">Retry</Text>
+      </Pressable>
+      {problem !== null ? (
+        <Text accessibilityRole="alert" className="text-danger-foreground">
+          {problem}
         </Text>
       ) : null}
     </View>

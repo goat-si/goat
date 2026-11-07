@@ -129,7 +129,7 @@ function environment() {
     },
   };
 }
-function setup(policy = "all_runs", bound = true) {
+function setup(policy = "all_runs", bound = true, overrides: Partial<ScheduledTask> = {}) {
   state.dropPolicy = false;
   state.toast.mockReset();
   state.upsert.mockReset();
@@ -155,6 +155,7 @@ function setup(policy = "all_runs", bound = true) {
     lastRunStatus: "never",
     lastRunError: null,
     runCount: 0,
+    ...overrides,
   };
   state.tasks = [task];
   state.upsert.mockImplementation(async ({ input }: { input: ScheduledTaskUpsertInput }) => {
@@ -242,4 +243,64 @@ it("offers Important updates only for tasks posting into an existing thread", as
   await userEvent.click(page.getByRole("button", { name: "Save task" }));
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
   expect(state.tasks[0]?.notificationPolicy).toBe("failed_runs_only");
+});
+
+// A check-in saved from a GOAT Bot conversation: the bot shell's model, a project since removed.
+const botRoutine: Partial<ScheduledTask> = {
+  goatBotRoutine: true,
+  projectId: ProjectId.make("removed-project"),
+  modelSelection: { instanceId: ProviderInstanceId.make("replay"), model: "write-approval" },
+  workspaceStrategy: { type: "existing_worktree", worktreePath: "/checkouts/bot" },
+};
+
+it("a GOAT Bot routine shows GOAT Bot's model and saves its stored project, model and workspace", async () => {
+  const task = setup("important_updates", true, botRoutine);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const dialog = page.getByRole("dialog");
+  await expect.element(dialog.getByText("GOAT Bot's model", { exact: true })).toBeVisible();
+  await expect
+    .element(dialog.getByText("Each run sends this prompt to GOAT Bot in this conversation."))
+    .toBeVisible();
+  await expect.element(dialog.getByRole("combobox", { name: "Project" })).not.toBeInTheDocument();
+  await expect.element(dialog.getByRole("combobox", { name: "Workspace" })).not.toBeInTheDocument();
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(dialog).not.toBeInTheDocument();
+  expect(state.upsert).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({
+        projectId: botRoutine.projectId,
+        modelSelection: botRoutine.modelSelection,
+        workspaceStrategy: botRoutine.workspaceStrategy,
+        threadId: ThreadId.make("bound"),
+      }),
+    }),
+  );
+});
+
+it("a GOAT Bot routine moved to new threads asks for a project and model again", async () => {
+  const task = setup("all_runs", true, botRoutine);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const dialog = page.getByRole("dialog");
+  await userEvent.click(dialog.getByRole("button", { name: "Run in new threads" }));
+  await expect.element(dialog.getByRole("combobox", { name: "Project" })).toBeVisible();
+  await expect
+    .element(dialog.getByText("GOAT Bot's model", { exact: true }))
+    .not.toBeInTheDocument();
+});
+
+it("a routine from a server that does not mark GOAT Bot routines keeps the full editor", async () => {
+  const { goatBotRoutine: _unmarked, ...olderServer } = botRoutine;
+  const task = setup("all_runs", true, olderServer);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const dialog = page.getByRole("dialog");
+  await expect.element(dialog.getByRole("combobox", { name: "Project" })).toBeVisible();
+  await expect
+    .element(dialog.getByText("GOAT Bot's model", { exact: true }))
+    .not.toBeInTheDocument();
 });

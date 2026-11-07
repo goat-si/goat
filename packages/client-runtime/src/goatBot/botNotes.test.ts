@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  BotId,
   ChannelGatewayError,
   EnvironmentAuthorizationError,
   goatBotChangeNoteMessage,
@@ -9,7 +10,10 @@ import {
   botNotesFailure,
   changeNoteDraft,
   forgetNoteDraft,
+  GOAT_BOT_NOTES_TRUNCATED_COPY,
+  goatBotNoteSourceLabel,
   goatBotNotesRefreshKey,
+  goatBotNotesView,
   noteDateLabel,
 } from "./botNotes.ts";
 
@@ -86,5 +90,91 @@ describe("goatBotNotesRefreshKey", () => {
     const running = goatBotNotesRefreshKey([user, bot, card(1)]);
     expect(goatBotNotesRefreshKey([user, bot, card(1)])).toBe(running);
     expect(goatBotNotesRefreshKey([user, bot, card(2)])).not.toBe(running);
+  });
+});
+describe("goatBotNoteSourceLabel", () => {
+  const shown = (
+    channel: "goat" | "slack" | "imessage" | "mcp",
+    at = "2026-11-07T10:00:00.000Z",
+    from = "Juni",
+  ) => ({
+    kind: "shown" as const,
+    inputId: "in-1",
+    channel,
+    botId: BotId.make("main"),
+    from,
+    at,
+  });
+  const now = Date.parse("2026-11-07T12:00:00.000Z");
+
+  it("names the channel, the person and the day", () => {
+    expect(goatBotNoteSourceLabel(shown("slack"), { now, timeZone: "UTC" })).toBe(
+      "Slack, Juni, Nov 7",
+    );
+    expect(goatBotNoteSourceLabel(shown("goat"), { now, timeZone: "UTC" })).toBe(
+      "GOAT, Juni, Nov 7",
+    );
+    expect(goatBotNoteSourceLabel(shown("imessage"), { now, timeZone: "UTC" })).toBe(
+      "iMessage, Juni, Nov 7",
+    );
+    expect(goatBotNoteSourceLabel(shown("mcp"), { now, timeZone: "UTC" })).toBe(
+      "an agent, Juni, Nov 7",
+    );
+    expect(goatBotNoteSourceLabel(shown("slack", undefined, "  "), { now, timeZone: "UTC" })).toBe(
+      "Slack, Nov 7",
+    );
+  });
+
+  it("says another conversation when the details are not this viewer's, and nothing for a hand-written line", () => {
+    expect(goatBotNoteSourceLabel({ kind: "elsewhere" }, { now })).toBe(
+      "Asked in another conversation",
+    );
+    expect(goatBotNoteSourceLabel(undefined, { now })).toBeNull();
+  });
+
+  it("reads the day in the viewer's time zone", () => {
+    const late = shown("slack", "2026-11-07T23:30:00.000Z");
+    expect(goatBotNoteSourceLabel(late, { now, timeZone: "UTC" })).toBe("Slack, Juni, Nov 7");
+    expect(goatBotNoteSourceLabel(late, { now, timeZone: "Asia/Seoul" })).toBe(
+      "Slack, Juni, Nov 8",
+    );
+  });
+
+  it("adds the year only when it is not this year in that time zone", () => {
+    const newYear = Date.parse("2026-01-01T03:00:00.000Z");
+    const eve = shown("slack", "2025-12-31T20:00:00.000Z");
+    expect(goatBotNoteSourceLabel(eve, { now: newYear, timeZone: "UTC" })).toBe(
+      "Slack, Juni, Dec 31, 2025",
+    );
+    expect(goatBotNoteSourceLabel(eve, { now: newYear, timeZone: "Asia/Seoul" })).toBe(
+      "Slack, Juni, Jan 1",
+    );
+  });
+});
+
+describe("goatBotNotesView", () => {
+  const a = { index: 0, date: "2026-11-05", text: "Reply in Korean", replacedBy: 1 };
+  const b = { index: 1, date: "2026-11-07", text: "Reply in English", replaces: "Reply in Korean" };
+  const c = { index: 2, date: null, text: "Keep it short" };
+
+  it("splits current notes from replaced ones and finds what replaced each", () => {
+    const view = goatBotNotesView({ notes: [c, b, a], truncated: false });
+    expect(view.current).toEqual([c, b]);
+    expect(view.replaced).toEqual([a]);
+    expect(view.replacingText(a)).toBe("Reply in English");
+    expect(view.replacingText({ ...a, replacedBy: 9 })).toBeNull();
+    expect(view.empty).toBeNull();
+  });
+
+  it("tells an empty file from an all-replaced list from a window with no complete note", () => {
+    expect(goatBotNotesView({ notes: [], truncated: false }).empty).toBe("none");
+    expect(goatBotNotesView({ notes: [a], truncated: false }).empty).toBe("no_current");
+    expect(goatBotNotesView({ notes: [], truncated: true }).empty).toBe("none_in_window");
+  });
+
+  it("explains a partial list without claiming what the bot reads", () => {
+    expect(GOAT_BOT_NOTES_TRUNCATED_COPY).toBe(
+      "memory.md is larger than 64 KB, so this list shows only complete notes from its newest 64 KB. The rest of the file is unchanged.",
+    );
   });
 });

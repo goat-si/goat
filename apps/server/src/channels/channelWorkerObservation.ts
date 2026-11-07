@@ -224,6 +224,9 @@ export const ENDED_RUN_STATUSES = new Set([
   "rolled_back",
 ]);
 
+/** How long a launch that was in flight may still create its worker thread. */
+export const STOP_LAUNCH_GRACE_MS = 120_000;
+
 /** Whether a failed thread read means the thread does not exist, rather than a read that failed. */
 export const isThreadMissing = (error: unknown): boolean => {
   let current: unknown = error;
