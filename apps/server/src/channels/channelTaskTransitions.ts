@@ -35,12 +35,27 @@ const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskSta
   "task.question.answered": ["waiting_input"],
   "task.followup.received": ["running", "waiting_input"],
   "task.completion.proposed": ["running"],
-  "task.completed": ["running"],
+  // From received only for a skill proposal task, which has no worker (guarded below).
+  "task.completed": ["running", "received"],
   "task.failed": ["received", "dispatching", "running", "waiting_input"],
   "task.cancelled": ["received", "dispatching", "running", "waiting_input"],
   "task.retry.requested": ["completed", "failed", "cancelled"],
   "task.worker.observed": ["running", "waiting_input", "completed", "failed", "cancelled"],
   "task.moved": ["dispatching", "running", "waiting_input"],
+};
+
+/** A skill proposal task only asks and settles: it is never dispatched or retried. */
+const skillProposalRule = (task: ChannelTask, event: ChannelTaskEvent): string | undefined => {
+  if (task.skillProposal === undefined) {
+    return event.type === "task.completed" && task.status === "received"
+      ? "Only a skill proposal task finishes without running."
+      : undefined;
+  }
+  if (event.type === "task.dispatch.claimed" || event.type === "task.retry.requested")
+    return "A skill proposal task is never dispatched or retried.";
+  if (event.type === "task.completed" && task.openQuestions.length > 0)
+    return "A skill proposal task finishes only after its question is answered.";
+  return undefined;
 };
 
 const eventGeneration = (event: ChannelTaskEvent): number | undefined => {
@@ -74,6 +89,8 @@ export function applyChannelTaskEvent(
   if (!allowedFrom[event.type].includes(task.status)) {
     return reject(`${event.type} is not allowed while the task is ${task.status}.`);
   }
+  const proposalRule = skillProposalRule(task, event);
+  if (proposalRule !== undefined) return reject(proposalRule);
   if (event.type === "task.retry.requested" || event.type === "task.moved") {
     if (event.payload.generation !== task.generation + 1) {
       return reject(
