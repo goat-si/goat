@@ -13,21 +13,12 @@ import {
 import { useState } from "react";
 import type { EnvironmentId } from "@goat/contracts";
 import type { EnvironmentVoiceRequestContext } from "@goat/client-runtime/voice-input";
-import {
-  Dialog,
-  DialogPopup,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogPanel,
-} from "../ui/dialog";
 import { VoiceModelDialog } from "../../speech/VoiceModelDialog";
 
 export interface ComposerVoiceButtonProps {
   readonly disabled?: boolean;
   readonly onClick: () => void;
   readonly environmentSpeech?: {
-    readonly choice: "unset" | "off" | "selected";
     readonly label: string;
     readonly selected: boolean;
     readonly destinations: ReadonlyArray<{
@@ -48,43 +39,8 @@ export function ComposerVoiceButton({
   environmentSpeech,
 }: ComposerVoiceButtonProps) {
   const [modelsOpen, setModelsOpen] = useState(false);
-  const [setupOpen, setSetupOpen] = useState(false);
   return (
     <>
-      <Dialog open={setupOpen} onOpenChange={setSetupOpen}>
-        <DialogPopup>
-          <DialogHeader>
-            <DialogTitle>Set up voice input</DialogTitle>
-            <DialogDescription>
-              Choose where to transcribe recordings. Audio is sent to the selected environment only
-              after you choose it.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogPanel>
-            {environmentSpeech?.destinations.map((destination) => (
-              <Button
-                key={destination.environmentId}
-                variant="outline"
-                onClick={() => {
-                  environmentSpeech.enable(destination.environmentId);
-                  setSetupOpen(false);
-                }}
-              >
-                Transcribe on {destination.label}
-              </Button>
-            ))}
-            <Button
-              variant="outline"
-              onClick={() => {
-                environmentSpeech?.disable();
-                setSetupOpen(false);
-              }}
-            >
-              Turn off voice input
-            </Button>
-          </DialogPanel>
-        </DialogPopup>
-      </Dialog>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -95,11 +51,7 @@ export function ComposerVoiceButton({
               disabled={disabled}
               aria-label="Record voice input"
               onPointerDown={(event) => event.preventDefault()}
-              onClick={() =>
-                environmentSpeech && environmentSpeech.choice !== "selected"
-                  ? setSetupOpen(true)
-                  : onClick()
-              }
+              onClick={onClick}
             />
           }
         >
@@ -143,7 +95,7 @@ export function ComposerVoiceButton({
                 <MenuItem disabled>No permitted environment connected</MenuItem>
               ) : null}
               <MenuRadioItem value="existing" closeOnClick onClick={environmentSpeech.disable}>
-                Turn off voice input
+                Use existing voice input
               </MenuRadioItem>
             </MenuRadioGroup>
             <MenuSeparator />

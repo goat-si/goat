@@ -38,7 +38,7 @@ import {
 import {
   chooseEnvironmentSpeech,
   isEnvironmentSpeechGrantCurrent,
-  useEnvironmentSpeechChoice,
+  useEnvironmentSpeechGrant,
   type EnvironmentSpeechGrant,
 } from "../../speech/voiceConsent";
 import * as Option from "effect/Option";
@@ -478,8 +478,8 @@ export function useChatComposerVoiceController(
   },
 ) {
   const ownerKey = composerTargetKey(options.draftTarget);
-  const choice = useEnvironmentSpeechChoice();
-  const selectedGrant = choice === "off" ? null : choice;
+  const grant = useEnvironmentSpeechGrant();
+  const selectedGrant = grant;
   const destinationId = selectedGrant?.environmentId ?? options.environmentId;
   const { environments } = useEnvironments();
   const permitted = useEnvironmentsWithScope(environments, AuthOrchestrationOperateScope);
@@ -541,12 +541,6 @@ export function useChatComposerVoiceController(
     voiceControl: {
       ...controller.voiceControl,
       environmentSpeech: {
-        choice:
-          choice === null
-            ? ("unset" as const)
-            : choice === "off"
-              ? ("off" as const)
-              : ("selected" as const),
         label: environmentLabel,
         selected: selectedGrant !== null,
         environmentId: destinationId,

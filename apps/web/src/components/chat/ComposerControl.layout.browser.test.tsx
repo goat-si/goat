@@ -1,5 +1,4 @@
-import { EnvironmentId } from "@goat/contracts";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 import "~/index.css";
@@ -110,32 +109,4 @@ describe("composer control rows", () => {
     expect(row).toHaveLength(3);
     expectAlignedControlRow(row);
   });
-});
-
-it("offers destination choice before recording on first use", async () => {
-  const onClick = vi.fn();
-  const enable = vi.fn();
-  const disable = vi.fn();
-  await using screen = await render(
-    <ComposerVoiceButton
-      onClick={onClick}
-      environmentSpeech={{
-        choice: "unset",
-        label: "Local",
-        selected: false,
-        environmentId: EnvironmentId.make("local"),
-        canManage: false,
-        resolveContext: async () => null,
-        destinations: [{ environmentId: EnvironmentId.make("local"), label: "Local" }],
-        enable,
-        disable,
-      }}
-    />,
-  );
-  await screen.getByRole("button", { name: "Record voice input" }).click();
-  await expect.element(screen.getByRole("dialog", { name: "Set up voice input" })).toBeVisible();
-  expect(onClick).not.toHaveBeenCalled();
-  await screen.getByRole("button", { name: "Turn off voice input" }).click();
-  expect(disable).toHaveBeenCalledOnce();
-  expect(enable).not.toHaveBeenCalled();
 });
