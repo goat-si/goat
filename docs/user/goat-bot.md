@@ -40,7 +40,7 @@ move when the window is hidden or when your system asks to reduce motion.
 
 ## Work
 
-**Work** in the bot's header opens its tasks, routines, memory and status.
+**Work** in the bot's header opens its status, tasks, routines, memory, library and computers.
 
 - **Status** says whether the bot can work right now and why not: the machine it answers on, its
   model, open and waiting work, and Slack. Each problem comes with the action that fixes it when
@@ -50,8 +50,12 @@ move when the window is hidden or when your system asks to reduce motion.
   hours you choose: the bot looks over its tasks and writes only when something needs you.
 - **Memory** shows the notes GOAT Bot keeps, newest first, with where each was asked for. **Ask
   to change** or **Ask to forget** puts a request quoting the note in the message box for you to
-  send. When you correct something you told it before, the new note replaces the old one. Notes
-  reach the bot from its next conversation session.
+  send. When you correct something you told it before, the new note replaces the old one; the
+  old one moves behind **Show replaced notes**. The bot uses changed notes from your next
+  message, and older notes that match what you ask about.
+- **Library** lists the files the bot saved, newest first. Images and text open in place; other
+  files download, or open the share sheet on mobile. Files over 20 MB don't open.
+- **Computer** shows which machines the bot's running tasks use.
 
 ## Going back to an older GOAT
 
