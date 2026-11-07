@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { AuthEnvironmentScope } from "@goat/contracts";
-import { CommandId } from "@goat/contracts";
+import { ChannelQuestionId, CommandId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -91,8 +91,12 @@ const withScopes = <C extends { readonly grantedScopes: ReadonlyArray<AuthEnviro
   scopes: ReadonlyArray<AuthEnvironmentScope>,
 ) => ({ ...context, grantedScopes: [...context.grantedScopes, ...scopes] });
 
-/** Links Slack user U2 with memory scopes as well; the creator holds both so the link keeps them. */
-const linkTeammateWithMemory = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
+/** Links a Slack user with these memory scopes; the creator holds both so the link keeps them. */
+const linkTeammateWithMemory = (
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  user = "U2",
+  principalId = "teammate",
+) =>
   Effect.gen(function* () {
     const identities = yield* ChannelIdentityService.ChannelIdentityService;
     const gateway = yield* ChannelGateway.ChannelGateway;
@@ -102,7 +106,7 @@ const linkTeammateWithMemory = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
         runtimeModeCeiling: "auto-accept-edits",
         grantedScopes: ["orchestration:read", "orchestration:operate", ...scopes],
       },
-      withScopes({ ...owner, principalId: "teammate", displayName: "Teammate" }, [
+      withScopes({ ...owner, principalId, displayName: principalId }, [
         "memory:read",
         "memory:write",
       ]),
@@ -110,9 +114,9 @@ const linkTeammateWithMemory = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
     yield* gateway.linkIdentity(
       {
         connectionId: "slack-1",
-        externalActorId: "U2",
+        externalActorId: user,
         code,
-        idempotencyKey: "memory-link-U2",
+        idempotencyKey: "memory-link-" + user,
         replyAddress: slackInput("", "unused").replyAddress,
       },
       slackContext,
@@ -306,4 +310,64 @@ describe("GOAT Bot session runs after the first at the requester's memory ceilin
       assert.notProperty(noneSend!, "memoryGrantCeiling");
     }).pipe(Effect.provide(harness.layer));
   });
+});
+
+describe("someone else directing a person's GOAT Bot work", () => {
+  it.effect.each([
+    { scopes: [], allowed: false },
+    { scopes: ["memory:read"], allowed: true },
+    { scopes: ["memory:read", "memory:write"], allowed: true },
+  ] as const)(
+    "lets a colleague with memory $scopes follow up, answer and stop a memory task: $allowed",
+    ({ scopes, allowed }) => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkTeammateWithMemory(["memory:read"]);
+        yield* linkTeammateWithMemory(scopes, "U1", "colleague");
+        const task = yield* dispatchNow("look: task", "other-1");
+        assert.strictEqual(task.target?.memoryGrantCeiling, "read");
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const reception = yield* ChannelReceptionService.ChannelReceptionService;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        const fromColleague = (text: string, key: string) =>
+          Effect.gen(function* () {
+            const input = yield* gateway.ingest(
+              slackInput(text, key, "1760000000.000900", "U1"),
+              slackMemoryContext,
+            );
+            yield* reception.receive(input.inputId, runtime.ownerToken);
+            for (const pending of yield* ledger.listPendingForwards(10))
+              yield* dispatcher.forward(pending, runtime.ownerToken);
+          });
+        yield* fromColleague("more:" + task.taskId + " colleague note", "other-2");
+        assert.strictEqual(
+          harness.world.sends.some((send) => send.text.includes("colleague note")),
+          allowed,
+        );
+        const questionId = ChannelQuestionId.make("question:other");
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.opened",
+            payload: {
+              question: { questionId, text: "Which disk?", askedAt: "2026-10-12T00:00:00.000Z" },
+            },
+          },
+          { owner: runtime.ownerToken },
+        );
+        yield* fromColleague("answer:" + task.taskId + " " + questionId + " sda", "other-3");
+        const answered = (yield* ledger.getTask(task.taskId))!.task;
+        assert.strictEqual(answered.openQuestions.length === 0, allowed);
+        yield* fromColleague("stop:" + task.taskId, "other-4");
+        assert.strictEqual(
+          (yield* ledger.getTask(task.taskId))!.task.status === "cancelled",
+          allowed,
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
