@@ -61,12 +61,11 @@ export function findMemberBot(
 }
 
 /** Where a member's messages go: its own conversation, in the main bot's project. */
-export function memberBotRef(profile: BotProfile, main: ChannelBotRef): ChannelBotRef {
-  return {
-    environmentId: profile.environmentId,
-    projectId: main.projectId,
-    threadId: profile.sessionThreadId,
-  };
+export function memberBotRef<Ref extends Pick<ChannelBotRef, "environmentId" | "threadId">>(
+  profile: BotProfile,
+  main: Ref,
+): Ref {
+  return { ...main, environmentId: profile.environmentId, threadId: profile.sessionThreadId };
 }
 
 const isGatewayError = Schema.is(ChannelGatewayError);
