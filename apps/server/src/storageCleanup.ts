@@ -1,5 +1,5 @@
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
-import { isMissingGitRepository } from "./storageCleanupGitErrors.ts";
+import { cleanupFailureReason, isMissingGitRepository } from "./storageCleanupGitErrors.ts";
 import {
   GitCommandError,
   OrchestrationV2AppThreadJson,
@@ -86,14 +86,6 @@ const ORPHAN_WORKTREE_GRACE_MS = 60 * 60 * 1_000;
 
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const REPORT_ENTRY_LIMIT = 200;
-const isGitCommandError = Schema.is(GitCommandError);
-
-function cleanupFailureReason(error: { readonly message: string }) {
-  return isGitCommandError(error)
-    ? `${error.command}: ${error.detail.split(/\r?\n/)[0]}${error.reason ? ` (${error.reason})` : ""}`
-    : (error.message.split(/\r?\n/)[0] ?? error.message);
-}
-
 type LimitRecoverySettings = Pick<
   ServerSettings,
   "autoResumeLimitedThreads" | "snoozeLimitedThreads"
@@ -1273,9 +1265,12 @@ const make = Effect.gen(function* () {
           )
             return Effect.void;
         }
-        return anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete)
-          ? requestSweep
-          : Effect.void;
+        if (!anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete)) return Effect.void;
+        return event.type === "provider-session.updated" && event.payload.status === "error"
+          ? providerSessions
+              .isLive(event.payload.id)
+              .pipe(Effect.flatMap((live) => (live ? Effect.void : requestSweep)))
+          : requestSweep;
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Storage cleanup event stream failed", { cause }),
