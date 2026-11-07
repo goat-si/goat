@@ -1,3 +1,4 @@
+import { registerPiExtensionStatusChecks } from "./extensionStatusChecks.testkit.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -566,6 +567,17 @@ export const startTurn = Effect.fnUntraced(function* (
 });
 
 describe("PiAdapterV2", () => {
+  registerPiExtensionStatusChecks({
+    makeFakePi,
+    openRuntime,
+    startTurn,
+    THREAD_ID,
+    SESSION_ID,
+    modelSelection,
+    runtimePolicy,
+    layerTest,
+  });
+
   it.effect("keeps native image bytes and the saved path in the prompt", () =>
     Effect.gen(function* () {
       const host = yield* ProviderHost.ProviderHost;

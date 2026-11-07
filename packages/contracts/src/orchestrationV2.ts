@@ -1,3 +1,5 @@
+export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
+import { PiExtensionStatuses } from "./piExtensionStatus.ts";
 import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
@@ -947,12 +949,6 @@ export const OrchestrationV2Subagent = Schema.Struct({
 });
 export type OrchestrationV2Subagent = typeof OrchestrationV2Subagent.Type;
 
-export function isOrchestrationV2WorkActive(
-  status: OrchestrationV2ExecutionNode["status"],
-): boolean {
-  return status === "pending" || status === "running" || status === "waiting";
-}
-
 export const OrchestrationV2CheckpointScope = Schema.Struct({
   id: CheckpointScopeId,
   threadId: ThreadId,
@@ -976,6 +972,7 @@ export const OrchestrationV2ProviderSession = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   model: Schema.NullOr(TrimmedNonEmptyString),
   capabilities: OrchestrationV2ProviderCapabilities,
+  extensionStatuses: PiExtensionStatuses,
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   lastError: Schema.NullOr(Schema.String),

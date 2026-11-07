@@ -1,3 +1,5 @@
+import { deriveProviderExtensionStatuses } from "@goat/client-runtime/state/thread-execution";
+import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import type {
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderGoal,
@@ -24,6 +26,23 @@ import { cn } from "~/lib/utils";
 import { Button, InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
+
+export function withPiExtensionStatus(
+  items: ComposerBannerStackItem[],
+  projection: ThreadStructure | null,
+): ComposerBannerStackItem[] {
+  const statuses = deriveProviderExtensionStatuses(projection);
+  if (statuses.length === 0) return items;
+  return [
+    ...items,
+    {
+      id: "pi-extension-status",
+      variant: "default",
+      icon: <span>▸</span>,
+      title: <output>{`Pi · ${statuses.map((status) => status.text).join(" · ")}`}</output>,
+    },
+  ];
+}
 
 /** Subagents waiting on the user, unless the parent is itself waiting on them. */
 export function childInputBannerItem(input: {

@@ -56,6 +56,8 @@ describe("ACP GOAT MCP context", () => {
     const merged = mergeThreadEnvironment({ PATH: "/usr/bin" }, processEnvironment);
     expect(merged.BROWSER).toBe(opener);
     expect(merged.GOAT_ACP_MCP_AUTHORIZATION).toBe("Bearer test-token");
+    expect(merged.GOAT_THREAD_ID).toBe("thread-one");
+    expect(merged.T3CODE_THREAD_ID).toBe("thread-one"); // goat-rename: legacy
   });
 });
 

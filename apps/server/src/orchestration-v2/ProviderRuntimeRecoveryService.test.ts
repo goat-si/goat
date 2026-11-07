@@ -1,3 +1,4 @@
+import { cloudRecoveryCases } from "./RecoveryCases.testkit.ts";
 import {
   fakeCloudCapabilities,
   fakeCloudDriver,
@@ -496,6 +497,7 @@ it.effect(
           driver: ProviderDriverKind.make("claude"),
           providerInstanceId: claudeInstanceId,
           status: "ready",
+          extensionStatuses: [{ key: "watch", text: "Watching" }],
         },
       ],
       providerThreads: [
@@ -613,6 +615,13 @@ it.effect(
         yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).reconcile("startup");
       assert.equal(summary.terminalizedRuns, 1);
       const events = committedInput?.events ?? [];
+      const session = events.find((event) => event.type === "provider-session.updated");
+      assert.deepEqual(
+        session?.type === "provider-session.updated"
+          ? session.payload.extensionStatuses
+          : undefined,
+        [],
+      );
 
       const turnItemCancels = events.filter(
         (event) => event.type === "turn-item.updated" && event.payload.status === "cancelled",
@@ -1186,16 +1195,6 @@ it.effect.each(["startup", "shutdown"] as const)(
     }),
 );
 
-const cloudRecoveryCases = (["startup", "shutdown"] as const).flatMap((trigger) =>
-  (["submitting", "running", "unknown", "failed", "succeeded", "cancelled"] as const).flatMap(
-    (taskStatus) =>
-      (taskStatus === "running" ? [false, true] : [false]).map((mixed) => ({
-        trigger,
-        taskStatus,
-        mixed,
-      })),
-  ),
-);
 it.effect.each(cloudRecoveryCases)(
   "preserves $taskStatus during $trigger mixed=$mixed",
   ({ trigger, taskStatus, mixed }) =>

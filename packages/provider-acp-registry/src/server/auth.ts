@@ -5,6 +5,9 @@ import {
 } from "@goat/contracts";
 import type { AcpRegistrySettings } from "../settings.ts";
 import * as Crypto from "effect/Crypto";
+import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
+import * as EffectAcpErrors from "effect-acp/errors";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -21,6 +24,18 @@ import { normalizeAcpRegistryAuthMethods, normalizeAcpRegistryWebUrl } from "./p
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
+
+const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
+
+const formatFailureDetail = (detail: string, cause?: unknown): string => {
+  const error = Cause.isCause(cause) ? Cause.squash(cause) : cause;
+  if (!isAcpRequestError(error)) return detail;
+  let message = error.errorMessage.trim();
+  if (message.length > 500) message = `${message.slice(0, 500).trimEnd()}…`;
+  if (!message) return detail;
+  const base = detail.trimEnd();
+  return `${base}${base.endsWith(".") ? " " : ". "}${message}`;
+};
 
 type Runtime = Pick<
   AcpSessionRuntime.AcpSessionRuntime["Service"],
@@ -47,7 +62,12 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
   const agentKey =
     options.settings.source === "local" ? `local:${options.instanceId}` : options.settings.agentId;
   const failure = (operation: string, detail: string, cause?: unknown) =>
-    new ProviderSetupError({ instanceId: options.instanceId, operation, detail, cause });
+    new ProviderSetupError({
+      instanceId: options.instanceId,
+      operation,
+      detail: formatFailureDetail(detail, cause),
+      cause,
+    });
   const resolve = catalog
     .resolve(options.settings, options.cwd, options.environment)
     .pipe(
