@@ -247,184 +247,202 @@ export function MobileBotWork(props: {
           >
             <Text className="text-foreground">Close</Text>
           </Pressable>
-          <MobileBotStatusCard
-            environmentId={environmentId}
-            member={member}
-            rows={
-              !enabled ? "unavailable" : threads.error ? "failed" : threads.isSuccess ? rows : null
-            }
-            refreshRows={threads.refresh}
-            turnsWaiting={props.turnsWaiting ?? []}
-            onOpenChat={() => setOpen(false)}
-            onOpenTask={(id) => {
-              setOpen(false);
-              props.onOpenTask(id);
-            }}
-          />
-          <View className="flex-row flex-wrap gap-4 py-4">
-            {tabs.map((name) => (
-              <Pressable
-                key={name}
-                accessibilityRole="button"
-                accessibilityState={{ selected: tab === name }}
-                onPress={() => setTab(name)}
-                className={
-                  tab === name
-                    ? "min-h-[44px] justify-center rounded-md bg-thread-selected px-3"
-                    : "min-h-[44px] justify-center px-3"
-                }
-              >
-                <Text className="text-foreground">{name}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <ScrollView>
-            {tab === "Tasks" &&
-            goatBotTurnsOutsideList(props.turnsWaiting ?? [], rows).length > 0 ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setOpen(false)}
-                className="min-h-[44px] justify-center"
-              >
-                <Text className="text-foreground">
-                  {goatBotWaitingInChatText(member?.name ?? "GOAT Bot")}. Open the chat
-                </Text>
-              </Pressable>
-            ) : null}
-            {tab === "Tasks" ? (
-              !enabled ? (
-                <Text className="text-foreground-muted">
-                  Tasks are unavailable while GOAT Bot is offline or unsupported.
-                </Text>
-              ) : threads.error ? (
+          {/* The status card scrolls away and the tab row sticks, so large text still leaves
+              room for the list. */}
+          <ScrollView stickyHeaderIndices={[1]}>
+            <MobileBotStatusCard
+              environmentId={environmentId}
+              member={member}
+              rows={
+                !enabled
+                  ? "unavailable"
+                  : threads.error
+                    ? "failed"
+                    : threads.isSuccess
+                      ? rows
+                      : null
+              }
+              refreshRows={threads.refresh}
+              turnsWaiting={props.turnsWaiting ?? []}
+              onOpenChat={() => setOpen(false)}
+              onOpenTask={(id) => {
+                setOpen(false);
+                props.onOpenTask(id);
+              }}
+            />
+            <View className="flex-row flex-wrap gap-4 bg-screen py-4">
+              {tabs.map((name) => (
+                <Pressable
+                  key={name}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: tab === name }}
+                  onPress={() => setTab(name)}
+                  className={
+                    tab === name
+                      ? "min-h-[44px] justify-center rounded-md bg-thread-selected px-3"
+                      : "min-h-[44px] justify-center px-3"
+                  }
+                >
+                  <Text className="text-foreground">{name}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View>
+              {tab === "Tasks" &&
+              goatBotTurnsOutsideList(props.turnsWaiting ?? [], rows).length > 0 ? (
                 <Pressable
                   accessibilityRole="button"
-                  onPress={threads.refresh}
+                  onPress={() => setOpen(false)}
                   className="min-h-[44px] justify-center"
                 >
-                  <Text className="text-danger-foreground">Couldn't load tasks. Try again</Text>
+                  <Text className="text-foreground">
+                    {goatBotWaitingInChatText(member?.name ?? "GOAT Bot")}. Open the chat
+                  </Text>
                 </Pressable>
-              ) : threads.isPending || !threads.isSuccess ? (
-                <Text className="text-foreground-muted">Loading tasks…</Text>
-              ) : work.inProgress.length + work.done.length === 0 ? (
-                <Text className="text-foreground-muted">
-                  No tasks yet. Ask GOAT Bot to start work.
-                </Text>
-              ) : (
-                (
-                  [
-                    ["In progress", work.inProgress],
-                    ["Done", work.done],
-                  ] as const
-                ).map(([label, tasks]) => (
-                  <View key={label} className="gap-2 py-2">
-                    <Text className="font-semibold text-foreground">{label}</Text>
-                    {tasks.map(({ row }) => (
-                      <View key={row.task.taskId}>
-                        <Pressable
-                          accessibilityRole="button"
-                          className="min-h-[44px] justify-center"
-                          onPress={() => {
-                            setOpen(false);
-                            props.onOpenTask(row.task.taskId);
-                          }}
-                        >
-                          <Text className="text-foreground">{row.task.title}</Text>
-                        </Pressable>
-                        {rows.map((coding) =>
-                          coding.kind === "coding" && coding.taskId === row.task.taskId ? (
-                            <Pressable
-                              key={coding.environmentId + ":" + coding.threadId}
-                              accessibilityRole="button"
-                              accessibilityLabel={"GOAT thread: " + (coding.title || "GOAT thread")}
-                              className="ml-4 min-h-[44px] justify-center"
-                              onPress={() => {
-                                setOpen(false);
-                                props.onOpenThread({
-                                  environmentId: coding.environmentId,
-                                  id: coding.threadId,
-                                });
-                              }}
-                            >
-                              <Text numberOfLines={1} className="text-foreground-muted">
-                                {coding.title || "GOAT thread"}
-                              </Text>
-                            </Pressable>
-                          ) : null,
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                ))
-              )
-            ) : null}
-            {tab === "Routines" &&
-            selected?.connected &&
-            routines.data &&
-            environmentId &&
-            home.botRef ? (
-              <MobileBotCheckInForm
-                environmentId={environmentId}
-                botThreadId={home.botRef.threadId}
-                tasks={routines.data.tasks}
-              />
-            ) : null}
-            {tab === "Routines" ? (
-              !selected?.connected ? (
-                <Text className="text-foreground-muted">
-                  Routines are unavailable while GOAT Bot is offline.
-                </Text>
-              ) : routines.error ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={routines.refresh}
-                  className="min-h-[44px] justify-center"
-                >
-                  <Text className="text-danger-foreground">Couldn't load routines. Try again</Text>
-                </Pressable>
-              ) : !routines.data ? (
-                <Text className="text-foreground-muted">Loading routines…</Text>
-              ) : boundRoutines.length && environmentId ? (
-                boundRoutines.map((routine) => (
-                  <MobileRoutineRow key={routine.id} environmentId={environmentId} row={routine} />
-                ))
-              ) : (
-                <Text className="text-foreground-muted">
-                  Ask GOAT Bot in chat to set up a routine.
-                </Text>
-              )
-            ) : null}
-            {tab === "Memory" ? (
-              <MobileBotMemory
-                environmentId={environmentId}
-                connected={selected?.connected === true}
-                supported={capabilities?.goatBotNotes === true}
-                member={member !== null}
-                onDraft={
-                  props.onDraft
-                    ? (text) => {
-                        setOpen(false);
-                        props.onDraft?.(text);
-                      }
-                    : undefined
-                }
-                refreshKey={props.notesRefreshKey}
-              />
-            ) : null}
-            {tab === "Library" ? (
-              <MobileBotLibrary
-                environmentId={environmentId}
-                connected={selected?.connected === true}
-                supported={capabilities?.goatBotLibrary === true}
-              />
-            ) : null}
-            {tab === "Computer" ? (
-              <MobileBotComputer
-                environmentId={environmentId}
-                connected={selected?.connected === true}
-                botId={member?.botId ?? null}
-              />
-            ) : null}
+              ) : null}
+              {tab === "Tasks" ? (
+                !enabled ? (
+                  <Text className="text-foreground-muted">
+                    Tasks are unavailable while GOAT Bot is offline or unsupported.
+                  </Text>
+                ) : threads.error ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={threads.refresh}
+                    className="min-h-[44px] justify-center"
+                  >
+                    <Text className="text-danger-foreground">Couldn't load tasks. Try again</Text>
+                  </Pressable>
+                ) : threads.isPending || !threads.isSuccess ? (
+                  <Text className="text-foreground-muted">Loading tasks…</Text>
+                ) : work.inProgress.length + work.done.length === 0 ? (
+                  <Text className="text-foreground-muted">
+                    No tasks yet. Ask GOAT Bot to start work.
+                  </Text>
+                ) : (
+                  (
+                    [
+                      ["In progress", work.inProgress],
+                      ["Done", work.done],
+                    ] as const
+                  ).map(([label, tasks]) => (
+                    <View key={label} className="gap-2 py-2">
+                      <Text className="font-semibold text-foreground">{label}</Text>
+                      {tasks.map(({ row }) => (
+                        <View key={row.task.taskId}>
+                          <Pressable
+                            accessibilityRole="button"
+                            className="min-h-[44px] justify-center"
+                            onPress={() => {
+                              setOpen(false);
+                              props.onOpenTask(row.task.taskId);
+                            }}
+                          >
+                            <Text className="text-foreground">{row.task.title}</Text>
+                          </Pressable>
+                          {rows.map((coding) =>
+                            coding.kind === "coding" && coding.taskId === row.task.taskId ? (
+                              <Pressable
+                                key={coding.environmentId + ":" + coding.threadId}
+                                accessibilityRole="button"
+                                accessibilityLabel={
+                                  "GOAT thread: " + (coding.title || "GOAT thread")
+                                }
+                                className="ml-4 min-h-[44px] justify-center"
+                                onPress={() => {
+                                  setOpen(false);
+                                  props.onOpenThread({
+                                    environmentId: coding.environmentId,
+                                    id: coding.threadId,
+                                  });
+                                }}
+                              >
+                                <Text numberOfLines={1} className="text-foreground-muted">
+                                  {coding.title || "GOAT thread"}
+                                </Text>
+                              </Pressable>
+                            ) : null,
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                  ))
+                )
+              ) : null}
+              {tab === "Routines" &&
+              selected?.connected &&
+              routines.data &&
+              environmentId &&
+              home.botRef ? (
+                <MobileBotCheckInForm
+                  environmentId={environmentId}
+                  botThreadId={home.botRef.threadId}
+                  tasks={routines.data.tasks}
+                />
+              ) : null}
+              {tab === "Routines" ? (
+                !selected?.connected ? (
+                  <Text className="text-foreground-muted">
+                    Routines are unavailable while GOAT Bot is offline.
+                  </Text>
+                ) : routines.error ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={routines.refresh}
+                    className="min-h-[44px] justify-center"
+                  >
+                    <Text className="text-danger-foreground">
+                      Couldn't load routines. Try again
+                    </Text>
+                  </Pressable>
+                ) : !routines.data ? (
+                  <Text className="text-foreground-muted">Loading routines…</Text>
+                ) : boundRoutines.length && environmentId ? (
+                  boundRoutines.map((routine) => (
+                    <MobileRoutineRow
+                      key={routine.id}
+                      environmentId={environmentId}
+                      row={routine}
+                    />
+                  ))
+                ) : (
+                  <Text className="text-foreground-muted">
+                    Ask GOAT Bot in chat to set up a routine.
+                  </Text>
+                )
+              ) : null}
+              {tab === "Memory" ? (
+                <MobileBotMemory
+                  environmentId={environmentId}
+                  connected={selected?.connected === true}
+                  supported={capabilities?.goatBotNotes === true}
+                  member={member !== null}
+                  onDraft={
+                    props.onDraft
+                      ? (text) => {
+                          setOpen(false);
+                          props.onDraft?.(text);
+                        }
+                      : undefined
+                  }
+                  refreshKey={props.notesRefreshKey}
+                />
+              ) : null}
+              {tab === "Library" ? (
+                <MobileBotLibrary
+                  environmentId={environmentId}
+                  connected={selected?.connected === true}
+                  supported={capabilities?.goatBotLibrary === true}
+                />
+              ) : null}
+              {tab === "Computer" ? (
+                <MobileBotComputer
+                  environmentId={environmentId}
+                  connected={selected?.connected === true}
+                  botId={member?.botId ?? null}
+                />
+              ) : null}
+            </View>
           </ScrollView>
         </View>
       </Modal>
