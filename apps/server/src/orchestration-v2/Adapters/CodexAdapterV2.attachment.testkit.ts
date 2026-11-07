@@ -90,6 +90,8 @@ export interface HeldReplay {
   /** How Codex refuses thread/loaded/list, if it does. */
   readonly listError?: CodexErrors.CodexAppServerRequestError;
   readonly threadId?: ThreadId;
+  /** Statuses Codex reports for the root while answering the listing with this number. */
+  readonly reportsDuringListing?: Readonly<Record<number, ReadonlyArray<string>>>;
 }
 
 // The next answer of a sequence; the last one repeats.
@@ -108,16 +110,27 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   const heldAs = held?.statuses;
   const statuses = [...(heldAs ?? [])];
   let listings = 0;
+  // The adapter's thread/status/changed handler, so a listing can report activity while it runs.
+  let reportStatus: ((payload: unknown) => Effect.Effect<void>) | undefined;
   const listed = () => ({ ...held?.survivors, ...(listings > 1 ? held?.lateSurvivors : {}) });
   const answerHeld = (method: string, params: unknown) => {
     if (method === "thread/loaded/list") {
       listings++;
-      return held?.listError === undefined
-        ? Effect.succeed({
-            data: [transcript.scenario, ...Object.keys(listed())],
-            nextCursor: null,
-          })
-        : Effect.fail(held.listError);
+      const reports = Effect.forEach(held?.reportsDuringListing?.[listings] ?? [], (type) =>
+        reportStatus === undefined
+          ? Effect.void
+          : reportStatus({ threadId: transcript.scenario, status: { type, activeFlags: [] } }),
+      );
+      return reports.pipe(
+        Effect.andThen(
+          held?.listError === undefined
+            ? Effect.succeed({
+                data: [transcript.scenario, ...Object.keys(listed())],
+                nextCursor: null,
+              })
+            : Effect.fail(held.listError),
+        ),
+      );
     }
     const threadId = (params as { threadId: string }).threadId;
     const survivor = listed()[threadId];
@@ -161,6 +174,11 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
             (client) =>
               ({
                 ...client,
+                handleServerNotification: (method, handler) =>
+                  Effect.sync(() => {
+                    if (method === "thread/status/changed")
+                      reportStatus = handler as (payload: unknown) => Effect.Effect<void>;
+                  }).pipe(Effect.andThen(client.handleServerNotification(method, handler))),
                 request: (method, params) =>
                   record(method, params).pipe(Effect.andThen(client.request(method, params))),
                 raw: {

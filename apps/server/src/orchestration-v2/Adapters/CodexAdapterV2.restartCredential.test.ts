@@ -190,6 +190,32 @@ describe("A held conversation after a server restart", () => {
       ).pipe(Effect.provide(layerAdapterTest)),
   );
 
+  it.effect("work the conversation reports during the second listing defers the reload", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = fixture("restart-second-listing");
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.resume(2, {});
+        // The root works and goes idle again while Codex answers the second listing.
+        f.goalGet(3, f.nativeThreadId, { result: { goal: null } });
+        yield* f.turnStart(4, 1, false);
+        f.turnCompleted(1);
+        yield* f.turnStart(f.reload(5), 2, noted);
+        f.turnCompleted(2);
+        const replay = yield* f.openHeld({
+          statuses: ["idle"],
+          reportsDuringListing: { 2: ["active", "idle"] },
+        });
+        for (const ordinal of [1, 2]) {
+          yield* replay.startTurn(ordinal);
+          yield* replay.terminal;
+        }
+        assert.deepEqual(goatHeaders(replay.threadConfigs), [f.config.authorizationHeader]);
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("a subagent started during the check defers the reload even within one second", () =>
     Effect.scoped(
       Effect.gen(function* () {

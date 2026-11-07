@@ -165,7 +165,10 @@ export const conversationBusy = Effect.fn("CodexAdapterV2.conversationBusy")(fun
     statuses.record(survivor.threadId, survivor.status);
     conversation.push(survivor.threadId);
   }
-  if (yield* statuses.busy(client, conversation, false)) return true;
-  // GOAT hears nothing from survivors, so it looks again for anything that changed meanwhile.
-  return !survivorsSettled(survivors, yield* loadedDescendants(client.raw, roots));
+  // GOAT hears nothing from survivors, so it looks again for anything that changed meanwhile, inside
+  // the busy check's window so the threads it does hear from count while it looks.
+  const changed = loadedDescendants(client.raw, roots).pipe(
+    Effect.map((again) => !survivorsSettled(survivors, again)),
+  );
+  return yield* statuses.busy(client, conversation, false, changed);
 });

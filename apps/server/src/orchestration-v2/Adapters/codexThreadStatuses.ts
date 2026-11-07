@@ -118,6 +118,8 @@ export function makeCodexThreadStatuses() {
       client: CodexClient.CodexAppServerClient["Service"],
       threadIds: ReadonlyArray<string>,
       terminals: boolean,
+      /** Any further check, run inside the same window, so activity during it counts too. */
+      also: Effect.Effect<boolean> = Effect.succeed(false),
     ) => {
       // Codex resumes a thread cold only from idle: a root left in systemError keeps its old
       // configuration through unsubscribe and resume, so it waits for its next turn (#1569).
@@ -132,6 +134,7 @@ export function makeCodexThreadStatuses() {
             Effect.flatMap((active) =>
               active || !terminals ? Effect.succeed(active) : terminalsRunning(client, loaded),
             ),
+            Effect.flatMap((busy) => (busy ? Effect.succeed(true) : also)),
             Effect.map((busy) => busy || !settled() || worked()),
           )
         : Effect.succeed(true);
