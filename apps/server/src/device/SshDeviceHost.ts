@@ -123,6 +123,12 @@ const stopRemote = (config: SshDeviceHostConfig, owner: string, mode: "stop-agen
     Effect.tap(({ stdout }) =>
       logCleanupWarning(config.id, Option.getOrUndefined(decodeStopped(stdout.trim()))),
     ),
+    Effect.tapError((error) =>
+      Effect.logWarning("agent-device did not stop; its daemon and runners may still be running", {
+        hostId: config.id,
+        stopError: error.message,
+      }),
+    ),
   );
 
 // cmd expands only %OS% and PowerShell only $env:OS; POSIX shells expand neither to Windows_NT.

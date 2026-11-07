@@ -171,9 +171,9 @@ async function install(name, version, entry) {
     }
     const entry = read(agentFile)?.entryPath || path.join(root, 'tools', 'agent-device@' + agentVersion, 'node_modules', 'agent-device', 'bin', 'agent-device.mjs');
     if (fs.existsSync(entry)) {
-      // Stop modes share SshDeviceHost's 45 s limit with the connection and the host lock.
-      const remaining = startedAt + 38000 - Date.now();
-      const cleanMs = Math.max(1000, Math.min(25000, remaining - 8000));
+      // SshDeviceHost allows stop modes 45 s, connection included; 15 s of it is left for connecting.
+      const remaining = startedAt + 30000 - Date.now();
+      const cleanMs = Math.max(1000, Math.min(22000, remaining - 8000));
       const stopped = stopDaemon(entry, cleanMs, Math.max(1000, remaining - cleanMs));
       if (stopped.cleanupWarning) console.log(JSON.stringify({ cleanupWarning: stopped.cleanupWarning, stopError: stopped.stopError }));
     }

@@ -6,6 +6,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
@@ -49,6 +50,7 @@ const agentFixture = Effect.fn("agentFixture")(function* (
     readonly net?: NetService.NetService["Service"];
     readonly runs?: Array<ReadonlyArray<string>>;
     readonly cleanStop?: ProcessRunner.ProcessRunOutput;
+    readonly plainStop?: ProcessRunner.ProcessRunOutput;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -103,6 +105,8 @@ const agentFixture = Effect.fn("agentFixture")(function* (
         if (input.args.includes("devices")) return startup(stateDir);
         if (input.args.includes("--clean") && options.cleanStop)
           return Effect.succeed(options.cleanStop);
+        if (input.args.includes("daemon") && !input.args.includes("--clean") && options.plainStop)
+          return Effect.succeed(options.plainStop);
         return Effect.succeed(input.args.includes("-list-avds") ? avdOutput : processOutput(0));
       },
     }),
@@ -773,6 +777,25 @@ describe("AgentDevice stop", () => {
       expect(daemonStops(runs)).toEqual([
         `daemon stop --clean --state-dir ${stateDir}`,
         `daemon stop --state-dir ${stateDir}`,
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("warns that the daemon may still run when both stops fail", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const logs: Array<unknown> = [];
+      const { host } = yield* agentFixture(startDaemon(fs), undefined, undefined, {
+        cleanStop: processOutput(1),
+        plainStop: processOutput(1),
+      });
+      yield* host.ensureAgentReady(() => Effect.void);
+      yield* host.stop.pipe(
+        Effect.provide(Logger.layer([Logger.make(({ message }) => logs.push(message))])),
+      );
+      expect(logs).toContainEqual([
+        "agent-device did not stop; its daemon and runners may still be running",
+        { cleanup: "exit 1: ", stop: "exit 1: " },
       ]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

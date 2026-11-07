@@ -23,6 +23,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -620,6 +621,18 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
     }
   });
 
+  /** Undefined when the stop succeeded; otherwise what went wrong, for the log. */
+  const describeStop = (
+    result: Result.Result<ProcessRunner.ProcessRunOutput, ProcessRunner.ProcessRunError>,
+  ) =>
+    result._tag === "Failure"
+      ? String(result.failure)
+      : result.success.timedOut
+        ? "timed out"
+        : result.success.code === 0
+          ? undefined
+          : `exit ${result.success.code}: ${result.success.stdout.slice(0, 400)}`;
+
   const runDaemonStop = (
     agentTool: { readonly entryPath: string; readonly nodePath: string },
     clean: boolean,
@@ -641,29 +654,28 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
 
   // A plain stop leaves the daemon's XCTest runners running for reuse; --clean ends them. agent-device
   // refuses --clean for a daemon it cannot prove is its own, so a plain stop still follows.
-  const stopAgentDeviceDaemon = (
+  const stopAgentDeviceDaemon = Effect.fn("LocalDeviceHost.stopAgentDeviceDaemon")(function* (
     agentTool: { readonly entryPath: string; readonly nodePath: string } | null,
-  ) =>
-    agentTool
-      ? runDaemonStop(agentTool, true).pipe(
-          Effect.result,
-          Effect.flatMap((result) =>
-            result._tag === "Success" && result.success.code === 0 && !result.success.timedOut
-              ? Effect.void
-              : Effect.logWarning(
-                  "agent-device runner cleanup did not finish; stopping the daemon without it",
-                  {
-                    outcome:
-                      result._tag === "Failure"
-                        ? String(result.failure)
-                        : result.success.timedOut
-                          ? "timed out"
-                          : `exit ${result.success.code}: ${result.success.stdout.slice(0, 400)}`,
-                  },
-                ).pipe(Effect.andThen(runDaemonStop(agentTool, false)), Effect.ignore),
-          ),
+  ) {
+    if (!agentTool) return;
+    const clean = describeStop(yield* runDaemonStop(agentTool, true).pipe(Effect.result));
+    if (clean === undefined) return;
+    const plain = describeStop(yield* runDaemonStop(agentTool, false).pipe(Effect.result));
+    yield* plain === undefined
+      ? Effect.logWarning(
+          "agent-device runner cleanup did not finish; its daemon stopped without it",
+          {
+            cleanup: clean,
+          },
         )
-      : Effect.void;
+      : Effect.logWarning(
+          "agent-device did not stop; its daemon and runners may still be running",
+          {
+            cleanup: clean,
+            stop: plain,
+          },
+        );
+  });
 
   let agentToolRef: { readonly entryPath: string; readonly nodePath: string } | null = null;
 
