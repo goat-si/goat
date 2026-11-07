@@ -105,11 +105,26 @@ export function createChannelEnvironmentAtoms<R, E>(
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotNotes,
       staleTimeMs: 2_000,
     }),
+    listBotArtifacts: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:list-bot-artifacts",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts,
+      staleTimeMs: 2_000,
+    }),
+    /** One chunk of a Library file; callers read a file one chunk at a time. */
+    readBotArtifact: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:read-bot-artifact",
+      tag: CHANNEL_GATEWAY_WS_METHODS.readBotArtifact,
+    }),
     listChildWork: (target: Parameters<typeof childWorkQuery>[0]) =>
       childWorkFamily(JSON.stringify(target)),
     updateTaskView: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:update-task-view",
       tag: CHANNEL_GATEWAY_WS_METHODS.updateTaskView,
+    }),
+    /** A person runs failed or stopped work again; a resent clientRequestId returns the first result. */
+    retryTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:retry-task",
+      tag: CHANNEL_GATEWAY_WS_METHODS.retryTask,
     }),
     ingest: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:ingest",

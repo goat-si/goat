@@ -7,6 +7,7 @@ import {
   type ScheduledTask,
   type ScheduledTaskUpsertSchedule,
   type ModelSelection,
+  type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type RuntimeMode,
   type ProviderInteractionMode,
   type ServerSettings,
@@ -339,3 +340,16 @@ export const EMPTY_DRAFT: DraftState = {
   filters: [],
   savedFilters: [],
 };
+
+export function workspaceStrategyFromDraft(
+  draft: DraftState,
+): OrchestrationV2ThreadLaunchWorkspaceStrategy {
+  if (draft.workspaceMode === "root") return { type: "root" };
+  if (draft.workspaceMode === "existing_worktree")
+    return { type: "existing_worktree", worktreePath: draft.existingWorktreePath.trim() };
+  return {
+    type: "worktree",
+    baseRef: draft.baseRef.trim() || "main",
+    startFromOrigin: draft.startFromOrigin,
+  };
+}

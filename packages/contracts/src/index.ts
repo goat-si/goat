@@ -153,6 +153,7 @@ export * from "./secretRequest.ts";
 export * from "./clientRpcPermissions.ts";
 
 export * from "./memory.ts";
+export * from "./memoryStoreBudget.ts";
 export * from "./siteNotes.ts";
 export * from "./memoryRecall.ts";
 export * from "./memoryRemember.ts";

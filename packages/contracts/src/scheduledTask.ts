@@ -271,6 +271,9 @@ export const ScheduledTask = Schema.Struct({
   lastRunError: Schema.NullOr(Schema.String),
   runCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   webhook: Schema.optional(ScheduledTaskWebhookEndpoint),
+  /** GOAT Bot answers this routine with its own model: it was set up in a GOAT Bot conversation,
+      even one replaced since. Absent for other tasks and from older servers. */
+  goatBotRoutine: Schema.optionalKey(Schema.Literal(true)),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
 

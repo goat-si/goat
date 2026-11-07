@@ -72,6 +72,13 @@ export const taskEventIdFor = (taskId: ChannelTaskId, version: number) =>
 export const skillProposalTaskIdFor = (sourceTaskId: ChannelTaskId, generation: number) =>
   stableId("channel-task", [sourceTaskId, String(generation), "skill-proposal"]) as ChannelTaskId;
 
+/** A person's retry of a task; the same tap, sent again, lands on the same event. */
+export const taskRetryEventIdFor = (taskId: ChannelTaskId, clientRequestId: string) =>
+  stableId("channel-task-retry", [taskId, clientRequestId]) as ChannelTaskEventId;
+
+/** Keeps a retried attempt's worker thread tied to its task after the ledger lets go of it. */
+export const retiredWorkerKeyFor = (threadId: string) => "retired-worker:" + threadId;
+
 export const questionIdFor = (taskId: ChannelTaskId, version: number) =>
   stableId("channel-question", [taskId, String(version)]) as ChannelQuestionId;
 

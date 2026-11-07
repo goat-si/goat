@@ -38,6 +38,10 @@ export class MemoryCompactor extends Context.Service<
     readonly compactIfNeeded: (
       principal: M.MemoryHubPrincipal,
     ) => Effect.Effect<Store.HubRetention, MemoryHubServiceError>;
+    /** Publish a fresh checkpoint and remove every covered log row the pressure rule allows. */
+    readonly reclaim: (
+      principal: M.MemoryHubPrincipal,
+    ) => Effect.Effect<Store.HubRetention, MemoryHubServiceError>;
     readonly start: (
       principal: M.MemoryHubPrincipal,
     ) => Effect.Effect<void, MemoryHubServiceError, Scope.Scope>;
@@ -50,6 +54,11 @@ export const make = Effect.gen(function* () {
   const configuration = yield* MemoryHubConfiguration;
   const activity = yield* MemoryHubActivity;
   const producer = yield* MemoryHubCheckpointProducer;
+  const pressured = (principal: M.MemoryHubPrincipal, now: number) =>
+    Effect.map(
+      store.storeBudgetBytes(principal.environmentId, now),
+      (figure) => figure.bytes !== null && figure.bytes >= M.MEMORY_STORE_TARGET_BYTES,
+    );
   const run = Effect.fnUntraced(function* (principal: M.MemoryHubPrincipal, force: boolean) {
     return yield* store.transact(
       Effect.gen(function* () {
@@ -70,6 +79,7 @@ export const make = Effect.gen(function* () {
         const previous = yield* store.readHubRetentionTx(principal.memorySpaceId);
         const usage = yield* store.readHubUsageTx(principal.memorySpaceId);
         const lastRun = previous.compaction.lastRunAtUtc;
+        const pressure = yield* pressured(principal, now);
         if (
           !force &&
           previous.checkpointId !== null &&
@@ -120,6 +130,7 @@ export const make = Effect.gen(function* () {
           expectedFloor: (yield* store.readHubRetentionTx(principal.memorySpaceId)).retentionFloor,
           now,
           limit: M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS,
+          pressure,
         });
         return yield* store.readHubRetentionTx(principal.memorySpaceId);
       }),
@@ -131,6 +142,36 @@ export const make = Effect.gen(function* () {
   const compactIfNeeded: MemoryCompactor["Service"]["compactIfNeeded"] = Effect.fn(
     "MemoryCompactor.compactIfNeeded",
   )((principal) => run(principal, false));
+  const reclaim: MemoryCompactor["Service"]["reclaim"] = Effect.fn("MemoryCompactor.reclaim")(
+    function* (principal) {
+      let retention = yield* run(principal, true);
+      // Each pass is its own bounded transaction; a full pass means more rows may be eligible.
+      for (
+        let pass = 0;
+        pass < 64 &&
+        retention.compaction.removedRows >= M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS &&
+        (yield* pressured(principal, yield* Clock.currentTimeMillis));
+        pass++
+      ) {
+        yield* Effect.yieldNow;
+        retention = yield* store.transact(
+          Effect.gen(function* () {
+            yield* store.requireHubMemberTx(principal);
+            yield* store.compactEligibleHistoryTx({
+              memorySpaceId: principal.memorySpaceId,
+              expectedFloor: (yield* store.readHubRetentionTx(principal.memorySpaceId))
+                .retentionFloor,
+              now: yield* Clock.currentTimeMillis,
+              limit: M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS,
+              pressure: true,
+            });
+            return yield* store.readHubRetentionTx(principal.memorySpaceId);
+          }),
+        );
+      }
+      return retention;
+    },
+  );
   const start: MemoryCompactor["Service"]["start"] = Effect.fn("MemoryCompactor.start")(
     function* (principal) {
       // Subscribe before the startup sweep, so a concurrent commit cannot be lost.
@@ -174,7 +215,7 @@ export const make = Effect.gen(function* () {
       yield* scheduledSweep.pipe(Effect.forever, Effect.forkScoped);
     },
   );
-  return MemoryCompactor.of({ compact, compactIfNeeded, start });
+  return MemoryCompactor.of({ compact, compactIfNeeded, reclaim, start });
 });
 
 const producerLayer = Layer.effect(

@@ -92,6 +92,7 @@ const chipFor = (task: ChannelTask): ChannelTaskChip => ({
     ? {}
     : { placementReason: task.target.placementReason }),
   ...(task.movedFrom === undefined ? {} : { movedFrom: task.movedFrom }),
+  ...(task.generation > 1 ? { generation: task.generation } : {}),
   // A turn's summary is GOAT Bot's answer, which the conversation already shows as a message.
   ...(task.resultSummary === undefined || task.kind === "turn"
     ? {}

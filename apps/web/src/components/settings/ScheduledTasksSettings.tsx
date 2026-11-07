@@ -2,6 +2,7 @@ import { resolvePastedPath } from "@goat/shared/path";
 import * as Schema from "effect/Schema";
 import { ScheduledTaskNotificationPolicy } from "@goat/contracts";
 import { WebhookFiltersField } from "./ScheduledTaskWebhookFiltersField";
+import { ScheduledTaskBotModelField, ScheduledTaskDestination } from "./ScheduledTaskDestination";
 import {
   Field,
   ScheduledTaskNotificationPolicyField,
@@ -31,7 +32,6 @@ import { type ReactNode, useRef, useState } from "react";
 import type {
   EnvironmentId,
   ModelSelection,
-  OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
   ScheduledTask,
   ScheduledTaskId,
@@ -74,12 +74,10 @@ import {
   useEnvironmentHttpBaseUrl,
   type EnvironmentPresentation,
 } from "../../state/environments";
-import { useProjects, useThreadShell } from "../../state/entities";
-import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { useProjects } from "../../state/entities";
 import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
-import { threadFamilies } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { WorktreeBaseBranchPicker } from "../WorktreeBaseBranchPicker";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
@@ -100,6 +98,7 @@ import {
   scheduledTaskDefaultModel,
   taskToDraft,
   type DraftState,
+  workspaceStrategyFromDraft,
   type ScheduleMode,
   type WorkspaceMode,
 } from "./scheduledTasksSettings.logic";
@@ -972,38 +971,6 @@ function ScheduledTaskEditorDialog({
   );
 }
 
-function ScheduledTaskDestination({
-  environmentId,
-  threadId,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId | null;
-}) {
-  const ref = threadId === null ? null : scopeThreadRef(environmentId, threadId);
-  const shell = useThreadShell(ref);
-  // The shell can omit older settled threads; their family read still carries the title.
-  const family = useEnvironmentQuery(
-    ref !== null && shell === null ? threadFamilies.familyAtom(environmentId, ref.threadId) : null,
-  );
-  const thread = shell ?? family.data?.threads.find((row) => row.id === threadId);
-  return (
-    <Field label="Destination">
-      {ref === null ? (
-        <p className="text-sm text-muted-foreground">
-          Each run starts a new thread with the workspace and model below.
-        </p>
-      ) : (
-        <div className="space-y-1 text-sm">
-          <p className="wrap-anywhere">{thread?.title.trim() || `Thread ${ref.threadId}`}</p>
-          <p className="text-muted-foreground">
-            Each run continues this conversation, in its workspace and with its current model.
-          </p>
-        </div>
-      )}
-    </Field>
-  );
-}
-
 function ScheduledTaskEditorForm({
   initialEnvironmentId,
   task,
@@ -1065,6 +1032,11 @@ function ScheduledTaskEditorForm({
   const liveTask = tasksQuery.data
     ? (tasksQuery.data.tasks.find((entry) => entry.id === draft.editingId) ?? null)
     : task;
+  // Still bound to its GOAT Bot conversation; moved to new threads it is an ordinary task again.
+  const botRoutine =
+    liveTask?.goatBotRoutine === true &&
+    draft.threadId !== "" &&
+    draft.threadId === liveTask.threadId;
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const instanceEntries = sortProviderInstanceEntries(
@@ -1116,8 +1088,8 @@ function ScheduledTaskEditorForm({
     if (
       !draft.title.trim() ||
       !draft.prompt.trim() ||
-      !projects.some((project) => project.id === selectedProjectId) ||
-      selection === null
+      (!botRoutine &&
+        (!projects.some((project) => project.id === selectedProjectId) || selection === null))
     ) {
       reportFailure("Scheduled task is incomplete", "Add a title, prompt, project, and model.");
       return;
@@ -1149,26 +1121,35 @@ function ScheduledTaskEditorForm({
       reportFailure("Invalid interval", "Enter an interval of at least one minute.");
       return;
     }
-    if (draft.workspaceMode === "existing_worktree" && !draft.existingWorktreePath.trim()) {
+    if (
+      !botRoutine &&
+      draft.workspaceMode === "existing_worktree" &&
+      !draft.existingWorktreePath.trim()
+    ) {
       reportFailure("Checkout path is required", "Enter the path of the checkout to run in.");
       return;
     }
-    const modelSelection =
-      draft.baseModelSelection !== null &&
-      draft.baseModelSelection.instanceId === selection.instanceId &&
-      draft.baseModelSelection.model === selection.model
-        ? draft.baseModelSelection
-        : selection;
-    const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
-      draft.workspaceMode === "root"
-        ? { type: "root" }
-        : draft.workspaceMode === "existing_worktree"
-          ? { type: "existing_worktree", worktreePath: draft.existingWorktreePath.trim() }
+    // GOAT Bot answers a bot routine itself, so its hidden fields go back exactly as stored.
+    const context =
+      botRoutine && liveTask !== null
+        ? {
+            projectId: liveTask.projectId,
+            modelSelection: liveTask.modelSelection,
+            workspaceStrategy: liveTask.workspaceStrategy,
+          }
+        : selection === null
+          ? null
           : {
-              type: "worktree",
-              baseRef: draft.baseRef.trim() || "main",
-              startFromOrigin: draft.startFromOrigin,
+              projectId: selectedProjectId as ProjectId,
+              modelSelection:
+                draft.baseModelSelection !== null &&
+                draft.baseModelSelection.instanceId === selection.instanceId &&
+                draft.baseModelSelection.model === selection.model
+                  ? draft.baseModelSelection
+                  : selection,
+              workspaceStrategy: workspaceStrategyFromDraft(draft),
             };
+    if (context === null) return;
     const input: ScheduledTaskUpsertInput = {
       ...(draft.editingId ? { id: draft.editingId as ScheduledTaskId, requireExisting: true } : {}),
       title: draft.title.trim(),
@@ -1178,10 +1159,8 @@ function ScheduledTaskEditorForm({
         ? { notificationPolicy: draft.notificationPolicy }
         : {}),
       schedule,
-      projectId: selectedProjectId as ProjectId,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
-      workspaceStrategy,
-      modelSelection,
+      ...context,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.interactionMode,
       creationSource: "web",
@@ -1313,93 +1292,100 @@ function ScheduledTaskEditorForm({
           <ScheduledTaskDestination
             environmentId={environmentId}
             threadId={draft.threadId ? (draft.threadId as ThreadId) : null}
+            botRoutine={botRoutine}
           />
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Project" htmlFor="scheduled-task-project">
-              <Select
-                value={selectedProjectId}
-                onValueChange={(projectId) =>
-                  setDraft((current) => ({ ...current, projectId: projectId ?? "" }))
-                }
-              >
-                <SelectTrigger size="sm" id="scheduled-task-project">
-                  <SelectValue placeholder="Select a project">{selectedProject?.title}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup>
-                  {projects.map((project) => (
-                    <SelectItem key={project.id} value={project.id} label={project.title}>
-                      <span className="block truncate">{project.title}</span>
-                      {allProjects.some(
-                        (other) =>
-                          other.title === project.title &&
-                          (other.environmentId !== project.environmentId ||
-                            other.id !== project.id),
-                      ) ? (
-                        <span className="block max-w-72 truncate text-xs text-muted-foreground">
-                          {project.workspaceRoot}
-                        </span>
-                      ) : null}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            </Field>
+          {botRoutine ? null : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Project" htmlFor="scheduled-task-project">
+                  <Select
+                    value={selectedProjectId}
+                    onValueChange={(projectId) =>
+                      setDraft((current) => ({ ...current, projectId: projectId ?? "" }))
+                    }
+                  >
+                    <SelectTrigger size="sm" id="scheduled-task-project">
+                      <SelectValue placeholder="Select a project">
+                        {selectedProject?.title}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup>
+                      {projects.map((project) => (
+                        <SelectItem key={project.id} value={project.id} label={project.title}>
+                          <span className="block truncate">{project.title}</span>
+                          {allProjects.some(
+                            (other) =>
+                              other.title === project.title &&
+                              (other.environmentId !== project.environmentId ||
+                                other.id !== project.id),
+                          ) ? (
+                            <span className="block max-w-72 truncate text-xs text-muted-foreground">
+                              {project.workspaceRoot}
+                            </span>
+                          ) : null}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </Field>
 
-            <Field label="Workspace" htmlFor="scheduled-task-workspace">
-              <Select
-                value={draft.workspaceMode}
-                onValueChange={(value) =>
-                  setDraft((current) => ({ ...current, workspaceMode: value as WorkspaceMode }))
-                }
-              >
-                <SelectTrigger size="sm" id="scheduled-task-workspace">
-                  <SelectValue>{WORKSPACE_MODE_LABELS[draft.workspaceMode]}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup>
-                  <SelectItem value="worktree">Create a new worktree</SelectItem>
-                  <SelectItem value="root">Use the project checkout</SelectItem>
-                  <SelectItem value="existing_worktree">Use a specific checkout</SelectItem>
-                </SelectPopup>
-              </Select>
-            </Field>
-          </div>
+                <Field label="Workspace" htmlFor="scheduled-task-workspace">
+                  <Select
+                    value={draft.workspaceMode}
+                    onValueChange={(value) =>
+                      setDraft((current) => ({ ...current, workspaceMode: value as WorkspaceMode }))
+                    }
+                  >
+                    <SelectTrigger size="sm" id="scheduled-task-workspace">
+                      <SelectValue>{WORKSPACE_MODE_LABELS[draft.workspaceMode]}</SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup>
+                      <SelectItem value="worktree">Create a new worktree</SelectItem>
+                      <SelectItem value="root">Use the project checkout</SelectItem>
+                      <SelectItem value="existing_worktree">Use a specific checkout</SelectItem>
+                    </SelectPopup>
+                  </Select>
+                </Field>
+              </div>
 
-          {draft.workspaceMode === "worktree" ? (
-            <Field label="Base branch" htmlFor="scheduled-task-base-ref">
-              <WorktreeBaseBranchPicker
-                key={`${environmentId}:${selectedProjectId}`}
-                id="scheduled-task-base-ref"
-                environmentId={environmentId}
-                cwd={selectedProject?.workspaceRoot ?? null}
-                value={draft.baseRef}
-                onValueChange={(baseRef) => setDraft((current) => ({ ...current, baseRef }))}
-                startFromOrigin={draft.startFromOrigin}
-                onStartFromOriginChange={(startFromOrigin) =>
-                  setDraft((current) => ({ ...current, startFromOrigin }))
-                }
-                disabled={saving || !connected}
-              />
-            </Field>
-          ) : null}
-          {draft.workspaceMode === "existing_worktree" ? (
-            <Field label="Checkout path" htmlFor="scheduled-task-checkout">
-              <Input
-                id="scheduled-task-checkout"
-                value={draft.existingWorktreePath}
-                placeholder="/path/to/checkout"
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    existingWorktreePath: resolvePastedPath(
-                      current.existingWorktreePath,
-                      event.target.value,
-                    ),
-                  }))
-                }
-              />
-            </Field>
-          ) : null}
+              {draft.workspaceMode === "worktree" ? (
+                <Field label="Base branch" htmlFor="scheduled-task-base-ref">
+                  <WorktreeBaseBranchPicker
+                    key={`${environmentId}:${selectedProjectId}`}
+                    id="scheduled-task-base-ref"
+                    environmentId={environmentId}
+                    cwd={selectedProject?.workspaceRoot ?? null}
+                    value={draft.baseRef}
+                    onValueChange={(baseRef) => setDraft((current) => ({ ...current, baseRef }))}
+                    startFromOrigin={draft.startFromOrigin}
+                    onStartFromOriginChange={(startFromOrigin) =>
+                      setDraft((current) => ({ ...current, startFromOrigin }))
+                    }
+                    disabled={saving || !connected}
+                  />
+                </Field>
+              ) : null}
+              {draft.workspaceMode === "existing_worktree" ? (
+                <Field label="Checkout path" htmlFor="scheduled-task-checkout">
+                  <Input
+                    id="scheduled-task-checkout"
+                    value={draft.existingWorktreePath}
+                    placeholder="/path/to/checkout"
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        existingWorktreePath: resolvePastedPath(
+                          current.existingWorktreePath,
+                          event.target.value,
+                        ),
+                      }))
+                    }
+                  />
+                </Field>
+              ) : null}
+            </>
+          )}
 
           <Field label="Prompt" htmlFor="scheduled-task-prompt">
             <Textarea
@@ -1413,24 +1399,28 @@ function ScheduledTaskEditorForm({
             />
           </Field>
 
-          <Field label="Model">
-            <div>
-              <ProviderModelPicker
-                environmentId={environmentId}
-                disabled={saving || !connected}
-                activeInstanceId={activeInstanceId}
-                model={activeModel}
-                lockedProvider={null}
-                instanceEntries={instanceEntries}
-                modelOptionsByInstance={modelOptionsByInstance}
-                isComposerOwned={false}
-                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
-                }
-              />
-            </div>
-          </Field>
+          {botRoutine ? (
+            <ScheduledTaskBotModelField />
+          ) : (
+            <Field label="Model">
+              <div>
+                <ProviderModelPicker
+                  environmentId={environmentId}
+                  disabled={saving || !connected}
+                  activeInstanceId={activeInstanceId}
+                  model={activeModel}
+                  lockedProvider={null}
+                  instanceEntries={instanceEntries}
+                  modelOptionsByInstance={modelOptionsByInstance}
+                  isComposerOwned={false}
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  onInstanceModelChange={(instanceId, model) =>
+                    setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
+                  }
+                />
+              </div>
+            </Field>
+          )}
 
           <div className="space-y-3">
             {task?.schedule.type === "interval" &&

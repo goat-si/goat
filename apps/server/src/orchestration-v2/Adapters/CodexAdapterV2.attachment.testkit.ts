@@ -7,6 +7,7 @@ import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as CodexClient from "effect-codex-app-server/client";
+import type * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -66,10 +67,93 @@ export const unusedRegistry = {
   currentMemoryPolicy: () => Effect.succeed(undefined),
 } satisfies McpSessionRegistry.McpSessionRegistry["Service"];
 
-/** Opens one replayed Codex session and records the thread requests the adapter sends. */
+/** Subagent threads Codex still holds after a restart, by id: their parent and status answers. */
+type Survivors = Readonly<
+  Record<
+    string,
+    {
+      readonly parent: string;
+      readonly statuses: Array<string>;
+      readonly updates?: Array<number>;
+      /** Codex answers its reads without a status. */
+      readonly malformed?: boolean;
+      /** Codex names the parent only in the thread's spawn source. */
+      readonly parentInSource?: boolean;
+    }
+  >
+>;
+
+/** What Codex holds after a restart: the root's status answers and anything it lists with it. */
+export interface HeldReplay {
+  readonly statuses: ReadonlyArray<string>;
+  readonly survivors?: Survivors;
+  /** Threads Codex lists only from its second listing on, as if started during the first check. */
+  readonly lateSurvivors?: Survivors;
+  /** How Codex refuses thread/loaded/list, if it does. */
+  readonly listError?: CodexErrors.CodexAppServerRequestError;
+  readonly threadId?: ThreadId;
+  /** Statuses Codex reports for the root while answering the listing with this number. */
+  readonly reportsDuringListing?: Readonly<Record<number, ReadonlyArray<string>>>;
+}
+
+// The next answer of a sequence; the last one repeats.
+const nextOf = <A>(answers: Array<A>) => (answers.length > 1 ? answers.shift() : answers[0]);
+
+/**
+ * Opens one replayed Codex session and records the thread requests the adapter sends. With
+ * `heldAs`, the session resumes the thread instead of starting it, as a restarted server does, and
+ * Codex answers each thread/read with the next of those statuses (`notLoaded` when it holds none).
+ * Codex also lists `survivors` as loaded and answers their reads.
+ */
 const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   transcript: CodexReplay.CodexAppServerReplayTranscript,
+  held?: HeldReplay,
 ) {
+  const heldAs = held?.statuses;
+  const statuses = [...(heldAs ?? [])];
+  let listings = 0;
+  // The adapter's thread/status/changed handler, so a listing can report activity while it runs.
+  let reportStatus: ((payload: unknown) => Effect.Effect<void>) | undefined;
+  const listed = () => ({ ...held?.survivors, ...(listings > 1 ? held?.lateSurvivors : {}) });
+  const answerHeld = (method: string, params: unknown) => {
+    if (method === "thread/loaded/list") {
+      listings++;
+      const reports = Effect.forEach(held?.reportsDuringListing?.[listings] ?? [], (type) =>
+        reportStatus === undefined
+          ? Effect.void
+          : reportStatus({ threadId: transcript.scenario, status: { type, activeFlags: [] } }),
+      );
+      return reports.pipe(
+        Effect.andThen(
+          held?.listError === undefined
+            ? Effect.succeed({
+                data: [transcript.scenario, ...Object.keys(listed())],
+                nextCursor: null,
+              })
+            : Effect.fail(held.listError),
+        ),
+      );
+    }
+    const threadId = (params as { threadId: string }).threadId;
+    const survivor = listed()[threadId];
+    if (survivor?.malformed) return Effect.succeed({ thread: { id: threadId } });
+    return Effect.succeed({
+      thread: {
+        id: threadId,
+        ...(survivor === undefined
+          ? {}
+          : survivor.parentInSource
+            ? {
+                source: {
+                  subAgent: { thread_spawn: { parent_thread_id: survivor.parent, depth: 1 } },
+                },
+              }
+            : { parentThreadId: survivor.parent }),
+        status: { type: nextOf(survivor?.statuses ?? statuses) },
+        updatedAt: nextOf(survivor?.updates ?? [1]),
+      },
+    });
+  };
   const driver = yield* CodexReplay.makeReplayDriver(transcript);
   const threadConfigs: Array<Record<string, unknown>> = [];
   const requests: Array<string> = [];
@@ -100,12 +184,24 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
             (client) =>
               ({
                 ...client,
+                handleServerNotification: (method, handler) =>
+                  Effect.sync(() => {
+                    if (method === "thread/status/changed")
+                      reportStatus = handler as (payload: unknown) => Effect.Effect<void>;
+                  }).pipe(Effect.andThen(client.handleServerNotification(method, handler))),
                 request: (method, params) =>
                   record(method, params).pipe(Effect.andThen(client.request(method, params))),
                 raw: {
                   ...client.raw,
                   request: (method, params) =>
-                    record(method, params).pipe(Effect.andThen(client.raw.request(method, params))),
+                    record(method, params).pipe(
+                      Effect.andThen(
+                        heldAs !== undefined &&
+                          (method === "thread/read" || method === "thread/loaded/list")
+                          ? answerHeld(method, params)
+                          : client.raw.request(method, params),
+                      ),
+                    ),
                 },
               }) satisfies CodexClient.CodexAppServerClient["Service"],
           ),
@@ -124,18 +220,47 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     idAllocator: yield* IdAllocator.IdAllocatorV2,
     serverConfig: yield* makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie),
   });
-  const threadId = ThreadId.make(`thread-${transcript.scenario}`);
+  const threadId = held?.threadId ?? ThreadId.make(`thread-${transcript.scenario}`);
   const runtime = yield* adapter.openSession({
     threadId,
     providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
     modelSelection: CODEX_TEST_MODEL_SELECTION,
     runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
   });
-  const providerThread = yield* runtime.ensureThread({
-    threadId,
-    modelSelection: CODEX_TEST_MODEL_SELECTION,
-    runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-  });
+  const now = yield* DateTime.now;
+  const providerThread =
+    heldAs === undefined
+      ? yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        })
+      : yield* runtime.resumeThread({
+          threadId,
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          providerThread: {
+            id: M.ProviderThreadId.make(`provider-thread-${transcript.scenario}`),
+            driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+            providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+            providerSessionId: ProviderSessionId.make("before-restart"),
+            appThreadId: threadId,
+            ownerNodeId: null,
+            nativeThreadRef: {
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeId: transcript.scenario,
+              strength: "strong",
+            },
+            nativeConversationHeadRef: null,
+            status: "idle",
+            firstRunOrdinal: 1,
+            lastRunOrdinal: 1,
+            handoffIds: [],
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
   const terminals = yield* Queue.unbounded<{
     readonly providerTurnId: string;
     readonly status: string;
@@ -333,6 +458,18 @@ export const fixture = (scenario: string) => {
       },
       error === undefined ? answer(id, thread) : { type: "emit_inbound", frame: { id, error } },
     );
+  // Before resuming a thread it has no record of, the adapter asks whether Codex holds it already.
+  const read = (id: number, status: string, thread = nativeThreadId) =>
+    entries.push(
+      {
+        type: "expect_outbound",
+        frame: { id, method: "thread/read", params: { threadId: thread, includeTurns: false } },
+      },
+      {
+        type: "emit_inbound",
+        frame: { id, result: { thread: { id: thread, status: { type: status } } } },
+      },
+    );
   const reload = (
     first: number,
     cua?: Record<string, unknown>,
@@ -407,23 +544,32 @@ export const fixture = (scenario: string) => {
   const turnStart = (
     id: number,
     ordinal: number,
-    skills: boolean | { readonly computerUse: boolean; readonly screenCode: boolean },
+    skills:
+      | boolean
+      | {
+          readonly computerUse: boolean;
+          readonly screenCode: boolean;
+          readonly reloadedAfterRestart?: boolean;
+          /** The turn runs without GOAT's MCP server. */
+          readonly detached?: boolean;
+        },
     deferred = false,
     thread = nativeThreadId,
     text = `turn-${ordinal}`,
   ) =>
     Effect.gen(function* () {
-      const { computerUse, screenCode } =
+      const { computerUse, screenCode, reloadedAfterRestart, detached } =
         typeof skills === "boolean" ? { computerUse: skills, screenCode: false } : skills;
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
         nativeThreadId: thread,
         codexInput: [{ type: "text", text }],
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
         modelSelection: CODEX_TEST_MODEL_SELECTION,
-        hasGoatMcp: true,
-        browserToolsAvailable: false,
+        hasGoatMcp: detached !== true,
+        browserToolsAvailable: detached === true,
         computerUse,
         computerUseDeferred: deferred,
+        reloadedAfterRestart: reloadedAfterRestart === true,
         screenCode,
       });
       entries.push({ type: "expect_outbound", frame: { id, method: "turn/start", params } });
@@ -481,6 +627,11 @@ export const fixture = (scenario: string) => {
       Effect.provideService(McpSessionRegistry.McpSessionRegistry, registry),
     );
   const open = openWith(unusedRegistry);
+  const openResumed = (...heldAs: ReadonlyArray<string>) => openHeld({ statuses: heldAs });
+  const openHeld = (held: HeldReplay) =>
+    openReplay(makeCodexReplayTranscript({ scenario, entries }), held).pipe(
+      Effect.provideService(McpSessionRegistry.McpSessionRegistry, unusedRegistry),
+    );
   return {
     config,
     nativeThreadId,
@@ -492,6 +643,7 @@ export const fixture = (scenario: string) => {
     goalGet,
     answer,
     resume,
+    read,
     reload,
     turnStart,
     turnSteer,
@@ -499,6 +651,8 @@ export const fixture = (scenario: string) => {
     status,
     open,
     openWith,
+    openResumed,
+    openHeld,
   };
 };
 

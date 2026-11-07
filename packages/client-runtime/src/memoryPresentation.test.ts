@@ -829,5 +829,17 @@ describe("shared memory progress presentation", () => {
       label: "Memory storage usage unknown",
       searchLabel: "Search storage usage unknown",
     });
+    // The whole-store budget is not a listed quota; the server reports it as a warning.
+    expect(
+      presentMemoryStorage({
+        ...storage,
+        measuredAtUtc: M.MemoryUtcTimestamp.make("2026-11-07T00:00:00.000Z"),
+        quotas: storage.quotas.map((quota) => ({
+          ...quota,
+          warning: "normal" as const,
+          blockedReasons: [],
+        })),
+      }),
+    ).toMatchObject({ label: "Memory storage limit reached" });
   });
 });

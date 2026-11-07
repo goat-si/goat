@@ -53,11 +53,14 @@ export function GoatBotTimeline({
   onPick,
   taskDetails = false,
   taskThreads = false,
+  retryEnvironmentId = null,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly taskDetails?: boolean;
   /** Task chips become task-thread pills; the caller knows whether the server supports them. */
   readonly taskThreads?: boolean;
+  /** Where failed or stopped work can be retried from its card; null when it can't. */
+  readonly retryEnvironmentId?: EnvironmentId | null;
   /** The environment whose history these rows show; links in bot text resolve there. */
   readonly environmentId?: EnvironmentId | null;
   readonly replyingSince?: string | null;
@@ -359,12 +362,17 @@ export function GoatBotTimeline({
                       <GoatBotTaskChip
                         card={row.card}
                         tail={row.groupPosition === "last" || row.groupPosition === "single"}
+                        retryEnvironmentId={taskDetails ? null : retryEnvironmentId}
                       />
                     ) : (
                       <div>
                         <details>
                           <summary className="text-xs text-muted-foreground">Task details</summary>
-                          <GoatBotTaskChip card={row.card} tail={false} />
+                          <GoatBotTaskChip
+                            card={row.card}
+                            tail={false}
+                            retryEnvironmentId={retryEnvironmentId}
+                          />
                         </details>
                         <Link
                           to="/bot"

@@ -427,6 +427,8 @@ export const ChannelTaskChip = Schema.Struct({
   observed: Schema.optional(ChannelWorkerObservation),
   /** Copied from the task: the machine it continued from. */
   movedFrom: Schema.optional(ChannelTaskMove),
+  /** The task's attempt when a person retried it; absent means the first. */
+  generation: Schema.optional(PositiveInt),
 });
 export type ChannelTaskChip = typeof ChannelTaskChip.Type;
 
