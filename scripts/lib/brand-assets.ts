@@ -12,6 +12,8 @@ export const BRAND_ASSET_PATHS = {
   productionWebFavicon16Png: "assets/prod/goat-black-web-favicon-16x16.png",
   productionWebFavicon32Png: "assets/prod/goat-black-web-favicon-32x32.png",
   productionWebAppleTouchIconPng: "assets/prod/goat-black-web-apple-touch-180.png",
+  productionWebIcon192Png: "assets/prod/goat-black-web-icon-192x192.png",
+  productionWebIcon512Png: "assets/prod/goat-black-web-icon-512x512.png",
 
   nightlyIconComposerProject: "assets/nightly/app-icon.icon",
   nightlyIosIconPng: "assets/nightly/nightly-ios-1024.png",
@@ -22,6 +24,8 @@ export const BRAND_ASSET_PATHS = {
   nightlyWebFavicon16Png: "assets/nightly/nightly-web-favicon-16x16.png",
   nightlyWebFavicon32Png: "assets/nightly/nightly-web-favicon-32x32.png",
   nightlyWebAppleTouchIconPng: "assets/nightly/nightly-web-apple-touch-180.png",
+  nightlyWebIcon192Png: "assets/nightly/nightly-web-icon-192x192.png",
+  nightlyWebIcon512Png: "assets/nightly/nightly-web-icon-512x512.png",
 
   developmentDesktopIconPng: "assets/dev/blueprint-macos-1024.png",
   developmentWindowsIconIco: "assets/dev/blueprint-windows.ico",
@@ -29,6 +33,8 @@ export const BRAND_ASSET_PATHS = {
   developmentWebFavicon16Png: "assets/dev/blueprint-web-favicon-16x16.png",
   developmentWebFavicon32Png: "assets/dev/blueprint-web-favicon-32x32.png",
   developmentWebAppleTouchIconPng: "assets/dev/blueprint-web-apple-touch-180.png",
+  developmentWebIcon192Png: "assets/dev/blueprint-web-icon-192x192.png",
+  developmentWebIcon512Png: "assets/dev/blueprint-web-icon-512x512.png",
 } as const;
 
 export type WebAssetBrand = "development" | "nightly" | "production";
@@ -65,24 +71,24 @@ const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
     favicon16Png: BRAND_ASSET_PATHS.developmentWebFavicon16Png,
     favicon32Png: BRAND_ASSET_PATHS.developmentWebFavicon32Png,
     appleTouchIconPng: BRAND_ASSET_PATHS.developmentWebAppleTouchIconPng,
-    icon192Png: "assets/dev/blueprint-web-icon-192x192.png",
-    icon512Png: "assets/dev/blueprint-web-icon-512x512.png",
+    icon192Png: BRAND_ASSET_PATHS.developmentWebIcon192Png,
+    icon512Png: BRAND_ASSET_PATHS.developmentWebIcon512Png,
   },
   nightly: {
     faviconIco: BRAND_ASSET_PATHS.nightlyWebFaviconIco,
     favicon16Png: BRAND_ASSET_PATHS.nightlyWebFavicon16Png,
     favicon32Png: BRAND_ASSET_PATHS.nightlyWebFavicon32Png,
     appleTouchIconPng: BRAND_ASSET_PATHS.nightlyWebAppleTouchIconPng,
-    icon192Png: "assets/nightly/nightly-web-icon-192x192.png",
-    icon512Png: "assets/nightly/nightly-web-icon-512x512.png",
+    icon192Png: BRAND_ASSET_PATHS.nightlyWebIcon192Png,
+    icon512Png: BRAND_ASSET_PATHS.nightlyWebIcon512Png,
   },
   production: {
     faviconIco: BRAND_ASSET_PATHS.productionWebFaviconIco,
     favicon16Png: BRAND_ASSET_PATHS.productionWebFavicon16Png,
     favicon32Png: BRAND_ASSET_PATHS.productionWebFavicon32Png,
     appleTouchIconPng: BRAND_ASSET_PATHS.productionWebAppleTouchIconPng,
-    icon192Png: "assets/prod/goat-black-web-icon-192x192.png",
-    icon512Png: "assets/prod/goat-black-web-icon-512x512.png",
+    icon192Png: BRAND_ASSET_PATHS.productionWebIcon192Png,
+    icon512Png: BRAND_ASSET_PATHS.productionWebIcon512Png,
   },
 } as const satisfies Record<WebAssetBrand, Record<keyof typeof WEB_ICON_TARGET_FILENAMES, string>>;
 

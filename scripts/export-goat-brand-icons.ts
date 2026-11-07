@@ -139,6 +139,8 @@ export async function renderGoatIconOutputs(
       BRAND_ASSET_PATHS[`${variant.prefix}WebAppleTouchIconPng`],
       await resize(universal, 180),
     );
+    outputs.set(BRAND_ASSET_PATHS[`${variant.prefix}WebIcon192Png`], await resize(universal, 192));
+    outputs.set(BRAND_ASSET_PATHS[`${variant.prefix}WebIcon512Png`], await resize(universal, 512));
     outputs.set(BRAND_ASSET_PATHS[`${variant.prefix}WebFavicon16Png`], await resize(universal, 16));
     outputs.set(BRAND_ASSET_PATHS[`${variant.prefix}WebFavicon32Png`], await resize(universal, 32));
     const ico = encodePngIco(
