@@ -154,6 +154,21 @@ it("labels only the first proactive bubble in a group", async () => {
   expect(view.container.textContent).not.toContain("GOAT Bot · Update");
 });
 
+it("names a member bot on its update and leaves a reply unlabeled", async () => {
+  h = createNativeMemoryHarness();
+  view = renderNative(
+    h,
+    <GoatBotTimelineRow {...props} botName="Scout" row={bot({ proactive: true })} />,
+  );
+  await view.render();
+  expect(view.container.textContent).toContain("Scout · Update");
+  expect(view.container.textContent).not.toContain("GOAT Bot · Update");
+  await view.rerender(
+    <GoatBotTimelineRow {...props} botName="Scout" row={bot({ proactive: false })} />,
+  );
+  expect(view.container.textContent).not.toContain("· Update");
+});
+
 it("opens the task represented by a task thread pill", async () => {
   h = createNativeMemoryHarness();
   const onSelectTask = vi.fn();
