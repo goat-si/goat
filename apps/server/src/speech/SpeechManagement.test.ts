@@ -63,7 +63,6 @@ it.effect("lists, downloads, configures and removes catalog models", () =>
     expect((yield* service.list).find((entry) => entry.id === modelId)).toMatchObject({
       installed: true,
       selected: true,
-      languages: expect.arrayContaining(["en"]),
     });
     const encoded = encodeMonoPcm16Wav([new Float32Array(24_000)], 24_000);
     if (!encoded) throw new Error("invalid fixture");

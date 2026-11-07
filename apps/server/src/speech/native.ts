@@ -29,7 +29,6 @@ process.on("message", async (message) => {
         ? { device }
         : { backend: message.acceleration });
       sendReply({ type: "goat-speech-reply", ok: true, backend: model.backend,
-        languages: model.capabilities.languages,
         supportsStreaming: model.capabilities.supportsStreaming,
         supportsTranslation: model.capabilities.supportsTranslate,
         supportsVocabulary: model.supports("vocabulary") });
@@ -130,7 +129,6 @@ type Reply = {
   readonly supportsTranslation?: boolean;
   readonly supportsVocabulary?: boolean;
   readonly backend?: string;
-  readonly languages?: unknown;
   readonly revision?: number;
   readonly preview?: SpeechStreamText | null;
 };
@@ -270,28 +268,13 @@ async function loadNativeSpeechModelOnce(
     await dispose();
     throw error;
   }
-  const languages = Array.isArray(loaded.languages)
-    ? loaded.languages.filter((entry): entry is string => typeof entry === "string")
-    : [];
-  const languageHint = (language: string | undefined) => {
-    if (!language || language === "auto") return undefined;
-    const normalize = (value: string) => value.toLowerCase().replaceAll("_", "-");
-    const wanted = normalize(language);
-    return (
-      languages.find((entry) => normalize(entry) === wanted) ??
-      (!wanted.includes("-")
-        ? languages.find((entry) => normalize(entry).split("-", 1)[0] === wanted)
-        : undefined) ??
-      language
-    );
-  };
   return {
     backend: loaded.backend ?? "unknown",
     supportsStreaming: loaded.supportsStreaming === true,
     supportsTranslation: loaded.supportsTranslation === true,
     supportsVocabulary: loaded.supportsVocabulary === true,
     begin: async (language?: string, vocabulary?: readonly string[]) => {
-      await send({ kind: "begin", language: languageHint(language), vocabulary });
+      await send({ kind: "begin", language, vocabulary });
     },
     feed: async (pcm: Float32Array) => {
       if (pcm.byteLength === 0 || pcm.byteLength > 16_000 * 4 * 10)
@@ -338,11 +321,7 @@ async function loadNativeSpeechModelOnce(
     ) => {
       if (pcm.byteLength === 0 || pcm.byteLength > 16_000 * 4 * 300)
         throw new Error("Invalid speech audio length.");
-      const result = await send({
-        kind: "transcribe",
-        pcm,
-        options: { ...options, language: languageHint(options.language) },
-      });
+      const result = await send({ kind: "transcribe", pcm, options });
       if (typeof result.text !== "string") throw new Error("Invalid speech process response.");
       return { text: result.text };
     },
@@ -352,7 +331,7 @@ async function loadNativeSpeechModelOnce(
       const result = await send({
         kind: "transcribeWav",
         pcm,
-        options: { timestamps: "none", language: languageHint(language) },
+        options: { timestamps: "none", language },
       });
       if (typeof result.text !== "string") throw new Error("Invalid speech process response.");
       return result.text;

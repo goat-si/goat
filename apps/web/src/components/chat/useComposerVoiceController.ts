@@ -37,7 +37,6 @@ import {
 } from "../../state/session";
 import {
   chooseEnvironmentSpeech,
-  chooseExistingVoiceInput,
   isEnvironmentSpeechGrantCurrent,
   useEnvironmentSpeechChoice,
   type EnvironmentSpeechGrant,
@@ -480,7 +479,7 @@ export function useChatComposerVoiceController(
 ) {
   const ownerKey = composerTargetKey(options.draftTarget);
   const choice = useEnvironmentSpeechChoice();
-  const selectedGrant = typeof choice === "string" ? null : choice;
+  const selectedGrant = choice === "off" ? null : choice;
   const destinationId = selectedGrant?.environmentId ?? options.environmentId;
   const { environments } = useEnvironments();
   const permitted = useEnvironmentsWithScope(environments, AuthOrchestrationOperateScope);
@@ -516,10 +515,7 @@ export function useChatComposerVoiceController(
     localModelGrant: selectedGrant,
     enabled:
       options.enabled && (!selectedGrant || (hasScope && Option.isSome(connection) && !isProxied)),
-    locale:
-      typeof navigator === "undefined"
-        ? "en-US"
-        : window.desktopBridge?.getSystemLocale?.() || navigator.language || "en-US",
+    locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
     subscribeDraft: useComposerDraftStore.subscribe,
     readDraft: () => {
       const text =
@@ -550,9 +546,7 @@ export function useChatComposerVoiceController(
             ? ("unset" as const)
             : choice === "off"
               ? ("off" as const)
-              : choice === "existing"
-                ? ("existing" as const)
-                : ("selected" as const),
+              : ("selected" as const),
         label: environmentLabel,
         selected: selectedGrant !== null,
         environmentId: destinationId,
@@ -567,7 +561,6 @@ export function useChatComposerVoiceController(
             reportVoiceChoice(chooseEnvironmentSpeech(id));
         },
         disable: () => reportVoiceChoice(chooseEnvironmentSpeech(null)),
-        useExisting: () => reportVoiceChoice(chooseExistingVoiceInput()),
       },
     },
   };

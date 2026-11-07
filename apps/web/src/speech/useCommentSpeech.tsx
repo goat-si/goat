@@ -31,10 +31,7 @@ export function useCommentSpeech(input: {
     providerInstanceId: null,
     cwd: null,
     ownerKey,
-    locale:
-      typeof navigator === "undefined"
-        ? "en-US"
-        : window.desktopBridge?.getSystemLocale?.() || navigator.language || "en-US",
+    locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
     route: { kind: "environment", environmentId: destinationId },
     localModelGrant: selected,
     enabled:

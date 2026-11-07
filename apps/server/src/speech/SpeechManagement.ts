@@ -27,8 +27,6 @@ export class SpeechManagement extends Context.Service<
         size: number;
         installed: boolean;
         selected: boolean;
-        languages: readonly string[];
-        recommended: boolean;
       }>,
       SpeechManagementError
     >;
@@ -81,8 +79,6 @@ const make = Effect.gen(function* () {
               size: model.size,
               installed,
               selected: model.id === current.speech.modelId,
-              languages: model.languages,
-              recommended: model.recommended,
             })),
           ),
         { concurrency: 4 },

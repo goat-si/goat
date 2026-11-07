@@ -25,7 +25,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 
-import { chooseSetupSpeechModel, filterSpeechModels } from "./speechModelBrowser";
+import { filterSpeechModels } from "./speechModelBrowser";
 
 type Model = (typeof SpeechModelList.Type.models)[number];
 export function VoiceModelDialog(props: {
@@ -112,11 +112,6 @@ export function VoiceModelDialog(props: {
       setError(failure instanceof Error ? failure.message : "Could not update the voice model.");
     setBusy(false);
   }
-  const preferredLanguages =
-    typeof navigator === "undefined"
-      ? []
-      : [window.desktopBridge?.getSystemLocale?.() ?? "", ...navigator.languages];
-  const recommendation = chooseSetupSpeechModel(models, preferredLanguages);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogPopup>
@@ -127,9 +122,6 @@ export function VoiceModelDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
-          {!props.canManage ? (
-            <p>Voice model management permission is required on this environment.</p>
-          ) : null}
           {error ? <p role="alert">{error}</p> : null}
           {busy ? <p role="status">Updating voice model…</p> : null}
           <label>
@@ -158,7 +150,6 @@ export function VoiceModelDialog(props: {
               <option value="name">Name</option>
             </select>
           </label>
-          {recommendation ? <p>Suggested for your language: {recommendation.name}</p> : null}
           {filterSpeechModels(models, search, installedOnly, sort).map((model) => (
             <div key={model.id} className="flex items-center justify-between gap-3 py-2">
               <div>

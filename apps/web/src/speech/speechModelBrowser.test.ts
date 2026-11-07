@@ -1,5 +1,5 @@
 import { expect, it } from "vite-plus/test";
-import { chooseSetupSpeechModel, filterSpeechModels } from "./speechModelBrowser";
+import { filterSpeechModels } from "./speechModelBrowser";
 
 it("filters models and orders them by the selected criterion", () => {
   const models = [
@@ -38,32 +38,4 @@ it("filters models and orders them by the selected criterion", () => {
     "c",
     "a",
   ]);
-});
-
-it("offers a model supporting the preferred language before an English-only selection", () => {
-  const models = [
-    {
-      id: "english",
-      name: "English",
-      description: "",
-      size: 1,
-      installed: false,
-      selected: true,
-      languages: ["en"],
-      recommended: true,
-    },
-    {
-      id: "multi",
-      name: "Multi",
-      description: "",
-      size: 2,
-      installed: false,
-      selected: false,
-      languages: ["en", "ko"],
-      recommended: true,
-    },
-  ];
-  expect(chooseSetupSpeechModel(models, ["ko-KR", "en-US"])?.id).toBe("multi");
-  expect(chooseSetupSpeechModel(models, ["en-US"])?.id).toBe("english");
-  expect(chooseSetupSpeechModel(models, ["xx"])).toBeUndefined();
 });

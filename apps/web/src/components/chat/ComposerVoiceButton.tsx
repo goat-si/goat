@@ -27,7 +27,7 @@ export interface ComposerVoiceButtonProps {
   readonly disabled?: boolean;
   readonly onClick: () => void;
   readonly environmentSpeech?: {
-    readonly choice: "unset" | "off" | "existing" | "selected";
+    readonly choice: "unset" | "off" | "selected";
     readonly label: string;
     readonly selected: boolean;
     readonly destinations: ReadonlyArray<{
@@ -36,7 +36,6 @@ export interface ComposerVoiceButtonProps {
     }>;
     readonly enable: (id: EnvironmentId) => void;
     readonly disable: () => void;
-    readonly useExisting: () => void;
     readonly environmentId: EnvironmentId;
     readonly canManage: boolean;
     readonly resolveContext: (id: EnvironmentId) => Promise<EnvironmentVoiceRequestContext | null>;
@@ -69,7 +68,6 @@ export function ComposerVoiceButton({
                 onClick={() => {
                   environmentSpeech.enable(destination.environmentId);
                   setSetupOpen(false);
-                  setModelsOpen(true);
                 }}
               >
                 Transcribe on {destination.label}
@@ -98,8 +96,7 @@ export function ComposerVoiceButton({
               aria-label="Record voice input"
               onPointerDown={(event) => event.preventDefault()}
               onClick={() =>
-                environmentSpeech &&
-                (environmentSpeech.choice === "unset" || environmentSpeech.choice === "off")
+                environmentSpeech && environmentSpeech.choice !== "selected"
                   ? setSetupOpen(true)
                   : onClick()
               }
@@ -130,11 +127,7 @@ export function ComposerVoiceButton({
           </MenuTrigger>
           <MenuPopup align="end" side="top">
             <MenuRadioGroup
-              value={
-                environmentSpeech.selected
-                  ? environmentSpeech.environmentId
-                  : environmentSpeech.choice
-              }
+              value={environmentSpeech.selected ? environmentSpeech.environmentId : "existing"}
             >
               {environmentSpeech.destinations.map((destination) => (
                 <MenuRadioItem
@@ -149,10 +142,7 @@ export function ComposerVoiceButton({
               {environmentSpeech.destinations.length === 0 ? (
                 <MenuItem disabled>No permitted environment connected</MenuItem>
               ) : null}
-              <MenuRadioItem value="existing" closeOnClick onClick={environmentSpeech.useExisting}>
-                Use existing voice input
-              </MenuRadioItem>
-              <MenuRadioItem value="off" closeOnClick onClick={environmentSpeech.disable}>
+              <MenuRadioItem value="existing" closeOnClick onClick={environmentSpeech.disable}>
                 Turn off voice input
               </MenuRadioItem>
             </MenuRadioGroup>
