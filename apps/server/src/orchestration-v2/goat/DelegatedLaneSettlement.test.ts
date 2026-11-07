@@ -6,6 +6,7 @@ import {
   RunId,
   ThreadId,
   type OrchestrationV2ServerCommand,
+  type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
 } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
@@ -14,7 +15,9 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
@@ -29,6 +32,7 @@ import * as Orchestrator from "../Orchestrator.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ProjectStore from "../ProjectStore.ts";
 import * as ThreadSettlementService from "../ThreadSettlementService.ts";
+import { appThread } from "../ThreadSettlementService.admission-test-cases.ts";
 import { shell, type SettlementShell } from "../ThreadSettlementService.testFixtures.ts";
 
 const NOW = "2026-11-07T12:00:00.000Z";
@@ -61,6 +65,7 @@ interface Scenario {
   readonly queued?: boolean;
   readonly appOwned?: boolean;
   readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
+  readonly threads?: ReadonlyArray<OrchestrationV2AppThread>;
 }
 
 // The real settlement sweep over one candidate; stores answer only what the child rule reads.
@@ -69,8 +74,11 @@ const sweep = Effect.fn("sweep")(function* (
   after?: (
     publish: (event: OrchestrationV2DomainEvent) => Effect.Effect<boolean>,
     setResultRun: (runId: RunId) => Effect.Effect<void>,
+    scripts: Queue.Queue<ThreadId>,
   ) => Effect.Effect<void>,
 ) {
+  const scripts = yield* Queue.unbounded<ThreadId>();
+  const threads = scenario.threads ?? [];
   yield* TestClock.setTime(Date.parse(NOW));
   const activation = yield* Deferred.make<void>();
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
@@ -114,6 +122,16 @@ const sweep = Effect.fn("sweep")(function* (
           getSettlementCandidates: () => Effect.succeed([scenario.lane]),
           getThreadRecords: (threadId) =>
             records(threadId).pipe(Effect.map((value) => value as never)),
+          getThread: (threadId) =>
+            Effect.succeed(threads.find((thread) => thread.id === threadId)!),
+          getThreadWorktreePaths: () =>
+            Effect.succeed(
+              threads.flatMap((thread) =>
+                thread.worktreePath === null
+                  ? []
+                  : [{ threadId: thread.id, worktreePath: thread.worktreePath }],
+              ),
+            ),
         }),
         Layer.mock(Orchestrator.OrchestratorV2)({
           streamDomainEvents: Stream.fromPubSub(events),
@@ -123,8 +141,13 @@ const sweep = Effect.fn("sweep")(function* (
               Effect.as({ sequence: 1, storedEvents: [] }),
             ),
         }),
-        Layer.mock(TerminalManager.TerminalManager)({}),
-        Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
+        Layer.mock(TerminalManager.TerminalManager)({ closeIdle: () => Effect.void }),
+        Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+          runForThread: (input) =>
+            Queue.offer(scripts, ThreadId.make(input.threadId)).pipe(
+              Effect.as({ status: "no-script" } as const),
+            ),
+        }),
         Layer.mock(GitManager.GitManager)({}),
         Layer.mock(PullRequestService.PullRequestService)({
           subscribeMerges: PubSub.subscribe(merges).pipe(Effect.map(Stream.fromSubscription)),
@@ -138,7 +161,7 @@ const sweep = Effect.fn("sweep")(function* (
             digest: (_algorithm, data) => Effect.succeed(data),
           }),
         ),
-        FileSystem.layerNoop({}),
+        FileSystem.layerNoop({ exists: () => Effect.succeed(true) }),
       ),
     ),
   );
@@ -153,6 +176,7 @@ const sweep = Effect.fn("sweep")(function* (
       yield* after(
         (event) => PubSub.publish(events, event),
         (runId) => Ref.set(resultRun, runId),
+        scripts,
       );
       yield* TestClock.adjust(0);
       yield* service.drain;
@@ -254,6 +278,33 @@ it.effect("a lane keeps its project's opt-out and its pull request rules", () =>
         },
       });
       assert.deepEqual(settled(yield* sweep({ lane: withPullRequest })), []);
+    }),
+  ),
+);
+
+it.effect("a settled lane runs no settle script in a checkout an unsettled thread still uses", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const lane = appThread(childId, "settled", "/worktrees/shared");
+      const parent = appThread(parentId, null, "/worktrees/shared");
+      const own = appThread("own-worktree", "settled", "/worktrees/own");
+      const settledEvent = (settledThread: OrchestrationV2AppThread) =>
+        ({
+          type: "thread.settled",
+          threadId: settledThread.id,
+          payload: settledThread,
+        }) as never;
+      yield* sweep(
+        { lane: child({ status: "failed" }), threads: [lane, parent, own] },
+        (publish, _setResultRun, scripts) =>
+          Effect.gen(function* () {
+            yield* publish(settledEvent(lane));
+            yield* publish(settledEvent(own));
+            // Events are handled in order, so the second script proves the first event is done.
+            assert.strictEqual(yield* Queue.take(scripts), own.id);
+            assert.isTrue(Option.isNone(yield* Queue.poll(scripts)));
+          }),
+      );
     }),
   ),
 );

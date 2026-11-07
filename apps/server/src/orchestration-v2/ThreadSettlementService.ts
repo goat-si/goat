@@ -700,6 +700,13 @@ export const make = Effect.gen(function* () {
       if (thread.settledOverride !== "settled") return;
       const settledAtMs = toMillis(thread.settledAt);
       if (settledAtMs === null || settleActionRunAt.get(threadId) === settledAtMs) return;
+      // A task lane can share its parent's checkout; an unsettled thread there may still be working.
+      const sharers = (yield* projections.getThreadWorktreePaths()).filter(
+        (entry) => entry.threadId !== threadId && entry.worktreePath === worktreePath,
+      );
+      for (const sharer of sharers) {
+        if ((yield* readThreadMetadata(sharer.threadId)).settledOverride !== "settled") return;
+      }
       const run = yield* projectScripts.runForThread({
         threadId,
         projectId: thread.projectId,
