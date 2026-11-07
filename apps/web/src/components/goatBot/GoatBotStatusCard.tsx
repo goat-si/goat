@@ -132,15 +132,18 @@ export function GoatBotStatusCard({
           <li key={line.key} className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span aria-hidden className={cn("size-2 shrink-0 rounded-full", TONE_DOT[line.tone])} />
             <span className="min-w-0 flex-1">{line.text}</span>
-            {line.action ? (
-              <StatusAction
-                action={line.action}
-                member={member}
-                busy={home.busy}
-                onClaim={home.changeHome}
-                onShowChat={onShowChat}
-              />
-            ) : null}
+            {[line.action, line.alsoAction ?? null].map((action) =>
+              action === null ? null : (
+                <StatusAction
+                  key={action.kind}
+                  action={action}
+                  member={member}
+                  busy={home.busy}
+                  onClaim={home.changeHome}
+                  onShowChat={onShowChat}
+                />
+              ),
+            )}
           </li>
         ))}
       </ul>

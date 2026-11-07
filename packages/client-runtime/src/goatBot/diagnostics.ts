@@ -37,6 +37,8 @@ export interface GoatBotDiagnosticLine {
   readonly tone: GoatBotDiagnosticTone;
   readonly text: string;
   readonly action: GoatBotDiagnosticAction | null;
+  /** A second way in, when the line counts two kinds of things that each have their own place. */
+  readonly alsoAction?: GoatBotDiagnosticAction;
 }
 
 export interface GoatBotDiagnostics {
@@ -265,6 +267,9 @@ function workLine(
       tone: "warn",
       text,
       action: { kind: "open_task", taskId: oldest.taskId, label: "Answer" },
+      ...(turnsWaiting > 0
+        ? { alsoAction: { kind: "open_chat", label: "Open the chat" } as const }
+        : {}),
     };
   return turnsWaiting > 0
     ? { key: "work", tone: "warn", text, action: { kind: "open_chat", label: "Open the chat" } }

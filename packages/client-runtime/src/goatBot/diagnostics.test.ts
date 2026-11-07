@@ -183,7 +183,11 @@ describe("diagnoseGoatBot", () => {
     expect(line(both, "work")).toMatchObject({
       text: "2 waiting for your answer",
       action: { kind: "open_task", taskId: "q" },
+      alsoAction: { kind: "open_chat", label: "Open the chat" },
     });
+    expect(
+      line(healthy({ rows: [task("q", "waiting_input")] }), "work")?.alsoAction,
+    ).toBeUndefined();
   });
 
   it("still reports a waiting turn when the task list is loading, failed or unavailable", () => {

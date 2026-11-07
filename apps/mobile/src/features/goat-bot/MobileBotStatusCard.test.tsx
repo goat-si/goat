@@ -245,3 +245,14 @@ it("says the bot waits for an answer in the chat when its own turn asked a quest
   await act(async () => button("Open the chat")?.click());
   expect(state.openChat).toHaveBeenCalledOnce();
 });
+
+it("offers both the waiting task and the chat when each holds a question", async () => {
+  state.homeConnected = true;
+  state.openChat.mockClear();
+  const onOpenTask = await render({ rows: [waiting], turnsWaiting: 1 });
+  expect(container.textContent).toContain("2 waiting for your answer");
+  await act(async () => button("Answer")?.click());
+  expect(onOpenTask).toHaveBeenCalledWith("ask");
+  await act(async () => button("Open the chat")?.click());
+  expect(state.openChat).toHaveBeenCalledOnce();
+});
