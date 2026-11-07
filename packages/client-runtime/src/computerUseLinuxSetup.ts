@@ -109,7 +109,7 @@ function accessibilityStep(readiness: ComputerUseReadiness): ComputerUseSetupSte
       status: "action",
       title: "App controls",
       detail:
-        "AT-SPI answers, but the apps GOAT checked show it no windows. Apps such as Chrome, Firefox, VS Code and other Electron apps turn on accessibility only when they start, so quit and reopen apps that were open before computer use started, or open the app you want GOAT to use.",
+        "AT-SPI answers, but the apps GOAT checked show it no windows. Chrome and Electron apps such as VS Code turn on accessibility only when they start, so quit and reopen apps that were open before computer use started, or open the app you want GOAT to use.",
       guidance: [],
     };
   // AT-SPI is proven by reading a window; with none open there was nothing to read, so it is

@@ -205,7 +205,7 @@ const LISTING_REFUSED =
 // GOAT's driver turns AT-SPI on (org.a11y.Status IsEnabled), but Chromium, Electron and other
 // apps read that switch only when they start.
 const EMPTY_TREE =
-  "AT-SPI answers, but the open apps that were checked show it no windows. Apps such as Chrome, Firefox, VS Code and other Electron apps turn on accessibility only when they start, so quit and reopen apps that were open before computer use started.";
+  "AT-SPI answers, but the open apps that were checked show it no windows. Chrome and Electron apps such as VS Code turn on accessibility only when they start, so quit and reopen apps that were open before computer use started.";
 
 export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
   const { session } = facts;

@@ -344,21 +344,43 @@ running there without computer use.
 
 ## Windows and Linux
 
-Windows and Linux need someone signed in to the desktop. On Windows, someone at
+Windows needs someone signed in to the desktop, and Linux needs a desktop
+session or a virtual display. On Windows, someone at
 that computer may need to respond to a security prompt the first time. GOAT
 started over SSH or as a service runs where Windows has no desktop, so computer
 use cannot turn on there; start GOAT from the signed-in desktop instead.
 
-On Linux, computer use works best in an X11 session. In a Wayland session it
-works with fewer apps, and your desktop may ask you to approve screen capture.
-A headless server with Xvfb also works. Without AT-SPI (the `at-spi2-core`
-package) and a D-Bus session, agents can take screenshots and use the mouse and
-keyboard but cannot read app controls.
-Window screenshots on Linux need a desktop that composites its windows (a bare
-Xvfb needs a compositor such as xcompmgr). In a Wayland session without
-XWayland, other than Hyprland, agents read app controls but get no window
-screenshots. A screenshot shows the window as the desktop draws it; a part an
-app never painted can still show what was behind the window when it opened.
+On Linux, what agents can do depends on the session:
+
+- **X11, or Wayland with XWayland:** agents read app controls, take window
+  screenshots and act in windows. Window screenshots need a desktop that
+  composites its windows. GNOME and KDE do; with a bare window manager, start a
+  compositor such as picom or xcompmgr.
+- **Wayland without XWayland:** agents read app controls but get no window
+  screenshots, except on Hyprland, and act only on the window in front. Your
+  desktop may ask you to approve screen capture.
+- **No screen**, such as a server nobody is signed in to: start a virtual
+  display, and GOAT finds it the next time it checks.
+
+  ```sh
+  setsid xvfb-run -a -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &
+  ```
+
+  This needs Xvfb with `xvfb-run`, `xauth` and `xcompmgr` (on Debian and
+  Ubuntu, `sudo apt install xvfb xauth xcompmgr`). GOAT looks for it only when
+  its own environment names no display or Wayland session, as when it was
+  started over SSH.
+
+App controls need AT-SPI (the `at-spi2-core` package) and one D-Bus session
+bus that GOAT and the apps share; without them agents can still take
+screenshots and use the mouse and keyboard. GOAT turns accessibility on when
+computer use starts, but Chrome and Electron apps such as VS Code read that
+setting only when they open, so quit and reopen apps that were already open.
+**Settings → Integrations → Computer → Advanced** shows what is missing on that
+computer, with the install command for its distribution.
+
+A screenshot shows the window as the desktop draws it; a part an app never
+painted can still show what was behind the window when it opened.
 
 ## Other computers
 
