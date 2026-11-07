@@ -15,6 +15,7 @@ const { fromPartition, sessions } = vi.hoisted(() => ({
       readonly setPermissionRequestHandler: ReturnType<typeof vi.fn>;
       readonly setPermissionCheckHandler: ReturnType<typeof vi.fn>;
       readonly setUserAgent: ReturnType<typeof vi.fn>;
+      readonly webRequest: { readonly onBeforeSendHeaders: ReturnType<typeof vi.fn> };
     }
   >(),
 }));
@@ -61,6 +62,7 @@ describe("BrowserSession", () => {
         setPermissionRequestHandler: vi.fn(),
         setPermissionCheckHandler: vi.fn(),
         setUserAgent: vi.fn(),
+        webRequest: { onBeforeSendHeaders: vi.fn() },
       };
       sessions.set(partition, browserSession);
       return browserSession;
@@ -127,10 +129,12 @@ describe("BrowserSession", () => {
     }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("keeps the guest's effective User-Agent equal to Electron's native one", () =>
+  it.effect("keeps the native User-Agent except for the Electron token sent to Teams", () =>
     Effect.gen(function* () {
       const nativeUserAgent =
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) T3Code(Alpha)/0.0.33 Chrome/146.0.7680.216 Electron/41.5.0 Safari/537.36"; // goat-rename: legacy
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) GOAT/1.0 Chrome/146.0 Electron/41.5.0 Safari/537.36";
+      const teamsUserAgent =
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) GOAT/1.0 Chrome/146.0 Safari/537.36";
       fromPartition.mockReset();
       fromPartition.mockImplementation((partition: string) => {
         let userAgent = nativeUserAgent;
@@ -143,6 +147,7 @@ describe("BrowserSession", () => {
           setUserAgent: vi.fn((next: string) => {
             userAgent = next;
           }),
+          webRequest: { onBeforeSendHeaders: vi.fn() },
         };
         sessions.set(partition, browserSession);
         return browserSession;
@@ -155,6 +160,29 @@ describe("BrowserSession", () => {
       const browserSession = sessions.get(partition);
       assert.isDefined(browserSession);
       assert.strictEqual(browserSession.getUserAgent(), nativeUserAgent);
+
+      // Teams redirects Electron to an error page before sign-in; every other host sees the native one.
+      const calls = browserSession.webRequest.onBeforeSendHeaders.mock.calls;
+      assert.strictEqual(calls.length, 1);
+      const [filter, listener] = calls[0] ?? [];
+      assert.deepStrictEqual(filter, {
+        urls: ["https://teams.cloud.microsoft/*", "https://teams.microsoft.com/*"],
+      });
+      const send = (requestHeaders: Record<string, string>) => {
+        let response: { requestHeaders?: Record<string, string> } | undefined;
+        listener({ requestHeaders }, (next: typeof response) => {
+          response = next;
+        });
+        return response;
+      };
+      for (const key of ["User-Agent", "user-agent"]) {
+        const requestHeaders = { [key]: nativeUserAgent, Accept: "*/*" };
+        assert.deepStrictEqual(send(requestHeaders), {
+          requestHeaders: { [key]: teamsUserAgent, Accept: "*/*" },
+        });
+        assert.strictEqual(requestHeaders[key], nativeUserAgent);
+      }
+      assert.deepStrictEqual(send({ Accept: "*/*" }), {});
     }).pipe(Effect.provide(layer)),
   );
 

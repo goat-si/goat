@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./sshRuntimeProtocolComparison": {
+      "types": "./src/sshRuntimeProtocolComparison.ts",
+      "import": "./src/sshRuntimeProtocolComparison.ts"
+    },
     "./socketFrameParts": {
       "types": "./src/socketFrameParts.ts",
       "import": "./src/socketFrameParts.ts"
