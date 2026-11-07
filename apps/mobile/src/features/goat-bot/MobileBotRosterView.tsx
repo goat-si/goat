@@ -1,13 +1,14 @@
 import type { ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
-import { botThreadKey, presentTaskStatus } from "@goat/client-runtime/goatBot";
+import { botThreadKey, goatBotFaceLabel, presentTaskStatus } from "@goat/client-runtime/goatBot";
 import type { BotThreadRow } from "@goat/contracts";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { GoatWordmark } from "../../components/GoatWordmark";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
+import { GoatBotFaceAvatar } from "./GoatBotFace";
+import { useMobileGoatBotFace } from "./useMobileGoatBotFace";
 
 /** New bot is disabled until bots can be created. */
 const ignorePress = () => undefined;
@@ -82,6 +83,8 @@ export function MobileBotRosterView(props: {
   onLongPressTask: (row: Extract<BotThreadRow, { kind: "task" }>) => void;
   onShowMore: () => void;
 }) {
+  const mainFace = useMobileGoatBotFace(null);
+  const mainFaceLabel = goatBotFaceLabel(mainFace);
   return (
     <ScrollView className="flex-1 bg-screen" contentInsetAdjustmentBehavior="automatic">
       {props.header}
@@ -91,22 +94,22 @@ export function MobileBotRosterView(props: {
             accessibilityRole="button"
             onPress={() => props.onOpenBot(bot)}
             accessibilityState={{ selected: bot.kind === "main" && props.selectedKey === "main" }}
-            accessibilityLabel={`${bot.profile?.name ?? "GOAT Bot"}${bot.kind === "main" && props.unread ? ", unread" : ""}`}
+            accessibilityLabel={`${bot.profile?.name ?? "GOAT Bot"}${bot.kind === "main" && mainFaceLabel ? `, ${mainFaceLabel}` : ""}${bot.kind === "main" && props.unread ? ", unread" : ""}`}
             className={
               bot.kind === "main" && props.selectedKey === "main"
                 ? "flex-row items-center gap-3 bg-thread-selected px-4 py-3"
                 : "flex-row items-center gap-3 px-4 py-3"
             }
           >
-            <View className="h-10 w-10 items-center justify-center rounded-full bg-grouped-card">
-              {bot.kind === "main" ? (
-                <GoatWordmark height={20} colorClassName="accent-icon" />
-              ) : (
+            {bot.kind === "main" ? (
+              <GoatBotFaceAvatar state={mainFace} size={40} />
+            ) : (
+              <View className="h-10 w-10 items-center justify-center rounded-full bg-grouped-card">
                 <Text className="text-lg text-foreground">
                   {(bot.profile?.name ?? "GOAT Bot").slice(0, 1)}
                 </Text>
-              )}
-            </View>
+              </View>
+            )}
             <View className="min-w-0 flex-1">
               <Text className="font-semibold text-foreground">
                 {bot.profile?.name ?? "GOAT Bot"}

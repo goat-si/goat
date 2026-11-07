@@ -39,6 +39,15 @@ vi.mock("react-native", () => ({
   ),
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => <span /> }));
+const face = vi.hoisted(() => ({ items: [] as ReadonlyArray<object> }));
+vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => <span /> }));
+vi.mock("./useMobileGoatBotHomeMode", () => ({
+  useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: "env", threadId: "bot" } }),
+}));
+vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
+vi.mock("../../state/use-thread-detail", () => ({
+  useThreadVisibleTurnItems: () => face.items,
+}));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({ themeAppearance: "light" }),
 }));
@@ -232,4 +241,35 @@ it("marks the selected coding thread with its own status", async () => {
   );
   expect(row?.getAttribute("aria-label")).toBe("Code, Working");
   expect(row?.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("shows the waiting face on the main bot for a waiting task the roster hides", async () => {
+  face.items = [
+    {
+      item: {
+        type: "notification",
+        ledgerTask: { taskId: "quiet", taskVersion: 2, status: "waiting_input" },
+      },
+    },
+  ];
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[{ kind: "main", profile: null }]}
+          rows={[]}
+          hasMore={false}
+          slackEnabled={false}
+          onOpenBot={() => {}}
+          onOpenChild={() => {}}
+          onLongPressTask={() => {}}
+          onShowMore={() => {}}
+        />,
+      ),
+    );
+    expect(container.querySelector('[aria-label="GOAT Bot, Waiting for you"]')).not.toBeNull();
+  } finally {
+    face.items = [];
+  }
 });

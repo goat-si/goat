@@ -1,7 +1,7 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { useRef, useState, type ReactNode } from "react";
+import { useContext, useRef, useState, type ReactNode } from "react";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
@@ -20,11 +20,12 @@ import { Button } from "../ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { GoatBotAvatar } from "./GoatBotAvatar";
+import { GoatBotAvatar, GoatBotMainAvatar } from "./GoatBotAvatar";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
 import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
-import { GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
+import { useGoatBotReading } from "./useGoatBotFace";
 import {
   canSendToGoatBot,
   type GoatBotAvailability,
@@ -118,6 +119,8 @@ export function GoatBotChatView({
       }),
   });
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null);
+  const working = useContext(GoatBotActivityContext);
+  const reading = useGoatBotReading(replyingSince);
   const headerStatus =
     removal === "archived"
       ? "Archived"
@@ -135,7 +138,11 @@ export function GoatBotChatView({
           {/* Equal sides center the title until the controls, which never shrink, need its space. */}
           <div aria-hidden className="flex-1 basis-0" />
           <div className="flex max-w-[60%] min-w-0 items-center gap-2">
-            <GoatBotAvatar size="md" />
+            <GoatBotMainAvatar
+              size="md"
+              chatOpen
+              activity={reading ? { state: "reading" } : removed ? null : working}
+            />
             <div className="flex min-w-0 items-center gap-2">
               <h1 className="goat-name-capsule truncate text-foreground">
                 {GOAT_BOT_TITLE} <ChevronRightIcon aria-hidden className="size-3" />

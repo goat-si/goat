@@ -10,6 +10,7 @@ const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFo
 
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
+vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({

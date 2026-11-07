@@ -8,6 +8,10 @@ import { useGlobalAgentStore } from "~/globalAgentStore";
 
 const actions = vi.hoisted(() => ({ show: vi.fn(), update: vi.fn(), refresh: vi.fn() }));
 const navigation = vi.hoisted(() => ({ pathname: "/", environmentId: "", threadId: "" }));
+const bots = vi.hoisted(() => ({
+  roster: [{ kind: "main", profile: { name: "Helper" } }] as Array<object>,
+  memberShell: null as object | null,
+}));
 vi.mock("@tanstack/react-router", async (original) => ({
   ...(await original<typeof import("@tanstack/react-router")>()),
   useLocation: () => ({ pathname: navigation.pathname, search: {} }),
@@ -37,6 +41,17 @@ vi.mock("@tanstack/react-router", async (original) => ({
 }));
 vi.mock("./useGoatBotHome", () => ({ useGoatBotHome: () => undefined }));
 vi.mock("./useGoatBotSession", () => ({ useGoatBotEnabled: () => ({ enabled: true }) }));
+vi.mock("./useGoatBotWaitingCount", () => ({ useGoatBotWaitingCount: () => 3 }));
+vi.mock("~/state/entities", async (original) => {
+  const entities = await original<typeof import("~/state/entities")>();
+  return {
+    ...entities,
+    useThreadShell: (ref: Parameters<typeof entities.useThreadShell>[0]) => {
+      const shell = entities.useThreadShell(ref);
+      return ref?.threadId === "member-session" ? bots.memberShell : shell;
+    },
+  };
+});
 vi.mock("./GoatBotSidebarRow", () => ({
   GoatBotSidebarRow: ({ name }: { name: string }) => <div>{name} Main</div>,
 }));
@@ -95,7 +110,7 @@ const rows = [
 ];
 vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({
-    roster: [{ kind: "main", profile: { name: "Helper" } }],
+    roster: [...bots.roster],
     rows,
     rowsLoaded: true,
     environmentId: EnvironmentId.make("env-1"),
@@ -194,4 +209,44 @@ it("opens the task actions with the keyboard and returns focus on Escape", async
   await expect.element(document.body.querySelector<HTMLElement>('[role="menu"]')!).toBeVisible();
   await userEvent.keyboard("{ArrowDown}{Escape}");
   await expect.element(action).toHaveFocus();
+});
+
+it("draws a member bot's face from its own session, never the main bot's waiting count", async () => {
+  const { DateTime } = await import("effect");
+  bots.roster = [
+    { kind: "main", profile: { name: "Helper" } },
+    {
+      kind: "member",
+      profile: {
+        botId: "member",
+        name: "Scout",
+        environmentId: "env-1",
+        sessionThreadId: "member-session",
+      },
+    },
+  ];
+  bots.memberShell = {
+    source: {
+      activityRunStatus: "running",
+      pendingRuntimeRequest: null,
+      latestRunCompletedAt: null,
+      status: "running",
+      latestVisibleMessage: null,
+      latestUserMessageAt: null,
+      createdAt: DateTime.makeUnsafe("2026-11-07T10:00:00.000Z"),
+    },
+  };
+  try {
+    useGlobalAgentStore.getState().setMode("bot");
+    // The router is mocked to render the roster without the application route tree.
+    await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+    const member = screen.getByRole("link", { name: /Scout/ });
+    await expect.element(member.getByRole("img", { name: "Working" })).toBeInTheDocument();
+    await expect
+      .element(member.getByRole("img", { name: "Waiting for you" }))
+      .not.toBeInTheDocument();
+  } finally {
+    bots.roster = [{ kind: "main", profile: { name: "Helper" } }];
+    bots.memberShell = null;
+  }
 });
