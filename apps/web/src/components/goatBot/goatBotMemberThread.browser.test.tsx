@@ -10,9 +10,17 @@ const server = vi.hoisted(() => ({
     error: string | null;
     isPending: boolean;
   },
+  listed: [] as unknown[],
 }));
 vi.mock("~/state/environments", () => ({ useEnvironment: () => server.presentation }));
-vi.mock("~/state/channels", () => ({ channelEnvironment: { listBots: () => ({}) } }));
+vi.mock("~/state/channels", () => ({
+  channelEnvironment: {
+    listBots: (args: { readonly input: unknown }) => {
+      server.listed.push(args.input);
+      return {};
+    },
+  },
+}));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: (atom: unknown) =>
     atom === null
@@ -80,4 +88,37 @@ it("decides when a thread may be a member's: wait, retry, the member, or an ordi
   expect(await look()).toBe("ordinary");
   server.presentation = connected(undefined);
   expect(await look()).toBe("ordinary");
+});
+
+it("names the main chat from a server that keeps profiles but not members", async () => {
+  const main = decodeProfile({
+    botId: "main",
+    role: "main",
+    name: "Goaty",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId,
+    sessionThreadId: ThreadId.make("bot"),
+    createdAt: "2026-11-01T00:00:00.000Z",
+    updatedAt: "2026-11-01T00:00:00.000Z",
+  });
+  server.presentation = {
+    connection: { phase: "connected" },
+    serverConfig: { environment: { capabilities: { goatBotProfiles: true } } },
+  };
+  server.query = { data: { bots: [main] }, error: null, isPending: false };
+  server.listed = [];
+  function MainName() {
+    return (
+      <output>
+        {useGoatBotMemberAt({ environmentId, threadId: ThreadId.make("bot") }).main?.name}
+      </output>
+    );
+  }
+  await using screen = await render(<MainName />, { router: false }); // A hook check.
+  expect(screen.container.textContent).toBe("Goaty");
+  // The roster's own list: without members it reads live bots only.
+  expect(server.listed.at(-1)).toEqual({});
 });

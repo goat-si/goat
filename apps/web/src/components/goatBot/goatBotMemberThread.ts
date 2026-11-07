@@ -29,9 +29,13 @@ export function useGoatBotMemberAt(
   const presentation = useEnvironment(environmentId);
   const capabilities = presentation?.serverConfig?.environment.capabilities;
   const supported = environmentId !== null && capabilities?.goatBotMembers === true;
+  // The roster's own list (useBotRoster): it also names the main chat where profiles exist.
   const profiles = useEnvironmentQuery(
-    supported
-      ? channelEnvironment.listBots({ environmentId, input: { includeDeleted: true } })
+    environmentId !== null && (supported || capabilities?.goatBotProfiles === true)
+      ? channelEnvironment.listBots({
+          environmentId,
+          input: supported ? { includeDeleted: true } : {},
+        })
       : null,
   );
   const member =
