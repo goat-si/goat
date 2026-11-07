@@ -14,15 +14,35 @@ import type { ChannelReceptionSkill } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 
-/** The newest part of the notes reception reads, in characters. */
-const NOTES_READ_CHARS = 6_000;
+import { CHANNEL_COPY } from "./channelCopy.ts";
+import {
+  collapseNoteText,
+  NOTES_HEADER,
+  notesTail,
+  noteNamedBy,
+  parseChannelBotNoteLines,
+  replacesMarker,
+} from "./channelBotNoteLines.ts";
+import {
+  channelBotNotesSection,
+  EMPTY_NOTES,
+  NOTES_SCAN_BYTES,
+  selectChannelBotNotes,
+  type ChannelBotNotesSnapshot,
+} from "./channelBotNotesRecall.ts";
+import { readChannelBotNotesTail } from "./channelBotNotesTail.ts";
+
+/** How far back a correction looks for the note it replaces, in characters. */
+const CORRECTION_READ_CHARS = 64 * 1024;
 const NOTE_MAX_CHARS = 500;
 const SKILLS_LIMIT = 20;
 const SKILL_SUMMARY_CHARS = 200;
 
-const NOTES_HEADER =
-  "# GOAT Bot notes\n\nStanding notes people asked GOAT Bot to keep, newest last. Edit or delete lines freely.\n\n";
+/** Told to every agent that reads the notes file itself. */
+export const NOTES_REPLACED_RULE =
+  'A note line ending in (replaces: "<old text>") replaces the earlier note with that text; follow the newer note.';
 
 export interface ChannelBotFiles {
   readonly dir: string;
@@ -43,17 +63,43 @@ export const channelBotFilesFor = (path: Path.Path, stateDir: string): ChannelBo
   };
 };
 
-/** The newest notes, or an empty string when there are none or they cannot be read. */
-export const readChannelBotNotes = (fs: FileSystem.FileSystem, files: ChannelBotFiles) =>
-  Effect.gen(function* () {
-    const text = yield* fs.readFileString(files.notes);
-    const body = text.startsWith(NOTES_HEADER) ? text.slice(NOTES_HEADER.length) : text;
-    return body.length <= NOTES_READ_CHARS ? body.trim() : body.slice(-NOTES_READ_CHARS).trim();
-  }).pipe(Effect.orElseSucceed(() => ""));
+/**
+ * The notes to show the bot for `query` (the message, request or instruction at hand), read from
+ * the newest part of the file; undefined when the file cannot be read, so a caller can tell a
+ * failed read from a file with no notes.
+ */
+export const readChannelBotNotesSnapshot = Effect.fn("channelBotNotes.readSnapshot")(
+  function* (files: ChannelBotFiles, query: string) {
+    const tail = yield* readChannelBotNotesTail(files.notes, NOTES_SCAN_BYTES);
+    if (tail === null) return EMPTY_NOTES;
+    return selectChannelBotNotes(new TextDecoder().decode(tail.bytes), query);
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("GOAT Bot notes could not be read", { cause }).pipe(
+          Effect.as<ChannelBotNotesSnapshot | undefined>(undefined),
+        ),
+      ),
+    ),
+);
+
+/** The notes section for `query`, or an empty string when there are none or they cannot be read. */
+export const readChannelBotNotes = (files: ChannelBotFiles, query: string) =>
+  Effect.map(readChannelBotNotesSnapshot(files, query), (notes) =>
+    notes === undefined ? "" : channelBotNotesSection(notes),
+  );
+
+export interface ChannelBotNoteSaved {
+  /** Set when the note was a correction: whether it replaced the note it named. */
+  readonly correction?: "replaced" | "unmatched";
+}
 
 /**
  * Appends one note as a single dated line, naming the channel input that asked for it. A note
- * for an input already named in the file is not added again, so a repeated pass is harmless.
+ * for an input already named in the file is not added again, so a repeated pass is harmless and
+ * reports what the first pass saved. A correction names the note it replaces; the line records
+ * that only when the note is found, otherwise the note is kept plainly and reported unmatched.
  */
 export const appendChannelBotNote = (
   fs: FileSystem.FileSystem,
@@ -61,20 +107,62 @@ export const appendChannelBotNote = (
   note: string,
   date: string,
   sourceInputId: string,
+  replaces?: string,
 ) =>
   Effect.gen(function* () {
-    const line = note.replace(/\s+/gu, " ").trim().slice(0, NOTE_MAX_CHARS);
-    if (line === "") return;
+    const nothing: ChannelBotNoteSaved = {};
+    const line = collapseNoteText(note).slice(0, NOTE_MAX_CHARS);
+    if (line === "") return nothing;
     const source = " (asked in " + sourceInputId.replace(/\s+/gu, "") + ")";
+    const saved = (replaced: boolean): ChannelBotNoteSaved =>
+      replaces === undefined ? {} : { correction: replaced ? "replaced" : "unmatched" };
     yield* fs.makeDirectory(files.dir, { recursive: true });
     const exists = yield* fs.exists(files.notes);
-    if (exists && (yield* fs.readFileString(files.notes)).includes(source)) return;
+    const text = exists ? yield* fs.readFileString(files.notes) : "";
+    if (text.includes(source)) {
+      const first = parseChannelBotNoteLines(text).find((earlier) => earlier.raw.includes(source));
+      return saved(first?.replaces !== undefined);
+    }
+    const target =
+      replaces === undefined
+        ? undefined
+        : noteNamedBy(parseChannelBotNoteLines(notesTail(text, CORRECTION_READ_CHARS)), replaces);
     yield* fs.writeFileString(
       files.notes,
-      (exists ? "" : NOTES_HEADER) + "- " + date.slice(0, 10) + ": " + line + source + "\n",
+      (exists ? "" : NOTES_HEADER) +
+        "- " +
+        date.slice(0, 10) +
+        ": " +
+        line +
+        source +
+        (target === undefined ? "" : replacesMarker(target.text)) +
+        "\n",
       { flag: "a" },
     );
+    return saved(target !== undefined);
   });
+
+/**
+ * Saves notes one at a time, so a correction sees the note the one before it saved. Each save
+ * answers what the reply must add: a correction that matched nothing, or a failed save.
+ */
+export const makeChannelBotNoteSaver = (fs: FileSystem.FileSystem, files: ChannelBotFiles) =>
+  Effect.map(
+    Semaphore.make(1),
+    (gate) => (note: string, readAt: string, inputId: string, replaces?: string) =>
+      gate
+        .withPermits(1)(appendChannelBotNote(fs, files, note, readAt, inputId, replaces))
+        .pipe(
+          Effect.map(({ correction }) =>
+            correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
+          ),
+          Effect.catch((cause) =>
+            Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
+              Effect.as(CHANNEL_COPY.noteNotSaved),
+            ),
+          ),
+        ),
+  );
 
 /**
  * Whether `quote` occurs in the person's message, ignoring differences in whitespace. Used to

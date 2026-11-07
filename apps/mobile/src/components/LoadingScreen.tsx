@@ -22,7 +22,7 @@ export function LoadingScreen(props: {
     >
       <StatusBar barStyle={colorScheme === "dark" ? "light-content" : "dark-content"} />
       <View className="flex-1 items-center justify-center gap-5 px-6">
-        <BrandMark compact />
+        <BrandMark />
         {messagePlacement === "above-spinner" ? (
           <Text className="font-goat-bold text-lg text-foreground">{props.message}</Text>
         ) : null}

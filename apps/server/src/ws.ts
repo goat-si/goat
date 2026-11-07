@@ -1,6 +1,7 @@
+import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
-import * as ChannelBotThreads from "./channels/ChannelBotThreads.ts";
+import { channelBotWorkRpcHandlers } from "./channels/channelBotWorkRpc.ts";
 import * as Fiber from "effect/Fiber";
 import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
 import * as HubRpcSocket from "./auth/HubRpcSocket.ts";
@@ -33,7 +34,7 @@ import * as MemorySyncService from "./memory/MemorySyncService.ts";
 import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
 import * as NoteWorkService from "./notes/NoteWorkService.ts";
 import * as NotesService from "./notes/NotesService.ts";
-import { makeNoteRpcHandlers, ServerWsNotesRpcGroup } from "./notes/NotesRpcHandlers.ts";
+import { makeNoteRpcHandlersForSurface, ServerWsNotesRpcGroup } from "./notes/NotesRpcHandlers.ts";
 import { ServerWsBrowserClaimsRpcGroup } from "./preview/BrowserClaimsRpcHandlers.ts";
 import { makeBrowserClaimsHandlersLive } from "./preview/BrowserClaimWindowsLive.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -165,7 +166,7 @@ import { withSocketFrameParts, WS_RPC_SERVER_OPTIONS } from "./rpc/socketFramePa
 export { WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
-import * as ChannelBotProfiles from "./channels/ChannelBotProfiles.ts";
+import * as ChannelBotMembers from "./channels/ChannelBotMembers.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
@@ -1305,7 +1306,7 @@ export const layerWsRpc = (
       const channelGateway = yield* ChannelGateway.ChannelGateway;
       const channelLedger = yield* ChannelLedger.ChannelLedger;
       const channelBots = yield* ChannelBotRegistry.ChannelBotRegistry;
-      const channelBotProfiles = yield* ChannelBotProfiles.ChannelBotProfiles;
+      const channelBotMembers = yield* ChannelBotMembers.ChannelBotMembers;
       const channelIdentities = yield* ChannelIdentityService.ChannelIdentityService;
       const slackChannelSettings = yield* SlackChannelSettings.SlackChannelSettings;
       const channelEnvironmentId = yield* (yield* ServerEnvironment.ServerEnvironment)
@@ -1943,17 +1944,14 @@ export const layerWsRpc = (
       const mutateProject = Effect.fn("ws.projects.mutate")(function* (mutation: ProjectMutation) {
         return yield* mutateProjectWithClone(projectService, projectCloneTracker, mutation);
       });
-      const noteHandlers = makeNoteRpcHandlers(
-        yield* NotesService.NotesService,
-        yield* NoteWorkService.NoteWorkService,
+      const noteHandlers = yield* makeNoteRpcHandlersForSurface(
         clientOrigin.surface === "mobile" ? "mobile" : "web",
       );
       const channelHandlers = ServerWsChannelRpcGroup.of({
         [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
-        [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: () => channelBots.status(channelOwner),
-        [CHANNEL_GATEWAY_WS_METHODS.listBots]: () =>
-          channelBotProfiles.list(channelOwner).pipe(Effect.map((bots) => ({ bots }))),
-        ...ChannelBotThreads.rpcHandlers(yield* ChannelBotThreads.ChannelBotThreads, channelOwner),
+        ...ChannelBotRegistry.statusHandler(channelBots, channelOwner),
+        ...ChannelBotMembers.rpcHandlers(channelBotMembers, channelOwner),
+        ...(yield* channelBotWorkRpcHandlers(channelOwner)),
         // Waits only for durable storage; the reply arrives later on the bot thread.
         [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
           channelGateway.ingest(input, {
@@ -1974,6 +1972,7 @@ export const layerWsRpc = (
             .listTasks({
               ownerId: channelOwner.ownerId,
               statuses: input.status,
+              botId: input.botId,
               limit: input.limit ?? 50,
               cursor: input.cursor,
             })
@@ -2309,7 +2308,7 @@ export const layerWsRpc = (
         [WS_METHODS.scheduledTasksUpsert]: (input) =>
           captureTaskMemoryCeiling.pipe(
             Effect.flatMap((memoryGrantCeiling) =>
-              scheduledTasks.upsert(input, { memoryGrantCeiling }),
+              scheduledTasks.upsert(input, { memoryGrantCeiling, owner: channelOwner }),
             ),
           ),
         [WS_METHODS.scheduledTasksSetEnabled]: (input) =>
@@ -3586,6 +3585,7 @@ export const layerWsRpc = (
         >(handlers),
         ServerWsChannelRpcGroup.toLayer(channelHandlers),
         ServerWsNotesRpcGroup.toLayer(noteHandlers),
+        makeGlobalSkillsRpcLayer(config.globalSkillsDir, serverSettings, providerRegistry),
         ServerWsBrowserClaimsRpcGroup.toLayer(browserClaimsHandlers),
       );
     }),

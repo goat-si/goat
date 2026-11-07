@@ -1,3 +1,4 @@
+import { GLOBAL_SKILLS_WS_METHODS } from "./globalSkillsRpc.ts";
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
 import {
@@ -22,6 +23,8 @@ import { SLACK_CHANNEL_WS_METHODS } from "./slackChannel.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [GLOBAL_SKILLS_WS_METHODS.globalRemove]: AuthSettingsWriteScope,
+  [GLOBAL_SKILLS_WS_METHODS.globalRescan]: AuthSettingsWriteScope,
   [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: AuthOrchestrationReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,
@@ -158,6 +161,18 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.notesAttach]: AuthOrchestrationOperateScope,
 
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: AuthOrchestrationOperateScope,
+  // A standing name and purpose are what ingest already allows: telling the bot what to do.
+  [CHANNEL_GATEWAY_WS_METHODS.updateBot]: AuthOrchestrationOperateScope,
+  // Adding, hiding, removing and bringing back a bot are the same standing kind of change.
+  [CHANNEL_GATEWAY_WS_METHODS.createBot]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: AuthOrchestrationOperateScope,
+  // The notes file is remembered context, like the memory reads above.
+  [CHANNEL_GATEWAY_WS_METHODS.listBotNotes]: AuthMemoryReadScope,
+  // Library files are files on the server, the same class projects.readFile serves.
+  [CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts]: AuthFilesystemReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.readBotArtifact]: AuthFilesystemReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: AuthSettingsWriteScope,

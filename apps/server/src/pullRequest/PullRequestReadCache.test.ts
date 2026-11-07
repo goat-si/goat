@@ -11,6 +11,10 @@ import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 
 NodeV8.setFlagsFromString("--expose-gc");
+// Optimized code can keep a closure made per run, and the data it captures, alive across
+// collections, so the retention test below would fail without any cache involved.
+NodeV8.setFlagsFromString("--no-turbofan");
+NodeV8.setFlagsFromString("--no-maglev");
 const collectGarbage = NodeVM.runInNewContext("gc") as () => void;
 
 const cacheLayer = (directory: string) =>

@@ -17,7 +17,10 @@ import * as MemoryStore from "../memory/MemoryStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
+import * as ChannelBotArtifacts from "./ChannelBotArtifacts.ts";
+import * as ChannelBotNotesReader from "./ChannelBotNotesReader.ts";
 import * as ChannelBotThreads from "./ChannelBotThreads.ts";
 import * as ChannelTaskViews from "./channelTaskViews.ts";
 import * as ChannelBotRegistry from "./ChannelBotRegistry.ts";
@@ -31,6 +34,7 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
+import * as ChannelRoutineIntake from "./ChannelRoutineIntake.ts";
 import * as ChannelTaskExport from "./ChannelTaskExport.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelSessionTaskActions from "./channelSessionTaskActions.ts";
@@ -57,13 +61,17 @@ const layerFoundation = Layer.mergeAll(
   ChannelTransport.layer,
 );
 
-const layerTimeline = Layer.mergeAll(ChannelBotTimeline.layer, ChannelBotThreads.layer).pipe(
-  Layer.provideMerge(layerFoundation),
-);
+const layerTimeline = Layer.mergeAll(
+  ChannelBotTimeline.layer,
+  ChannelBotThreads.layer,
+  ChannelBotNotesReader.layer,
+  ChannelBotArtifacts.layer,
+).pipe(Layer.provideMerge(layerFoundation));
 
 const layerGateway = Layer.mergeAll(
   ChannelGateway.layer,
   ChannelBotRegistry.layer,
+  ChannelBotMembers.layer,
   ChannelIdentityService.layer,
 ).pipe(Layer.provideMerge(layerTimeline));
 
@@ -99,6 +107,8 @@ export const makeLayerServices = <E, R>(
     ChannelWorkerReports.layer,
     ChannelSessionTaskActions.layer,
     ChannelDeliveryWorker.layer,
+    // Routine firings bound to a bot thread become its input; needs the gateway below.
+    ChannelRoutineIntake.layer,
   ).pipe(
     // Workers on other machines; needs SshRemoteDispatch from the server.
     Layer.provideMerge(ChannelRemoteWorkers.layer),

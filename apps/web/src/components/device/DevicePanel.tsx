@@ -36,6 +36,7 @@ import {
 import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { DeviceLoadingView } from "./DeviceLoadingView";
+import { DeviceOwnership } from "./DeviceOwnership";
 import { DeviceSetup, deviceHubReadiness, isAndroidDiscoveryUncertain } from "./DeviceSetup";
 import { DeviceWorkspace } from "./DeviceWorkspace";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
@@ -330,6 +331,12 @@ export function DevicePanel(props: {
                                 <span className="truncate text-xs text-muted-foreground">
                                   {`${state.hosts.find((host) => host.id === device.hostId)?.label} · ${device.version} · ${device.booted ? "Running" : "Stopped"}`}
                                 </span>
+                                <DeviceOwnership
+                                  environmentId={environmentId}
+                                  threadId={threadId}
+                                  state={state}
+                                  device={device}
+                                />
                               </div>
                               <Button
                                 variant="outline"

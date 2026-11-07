@@ -1,14 +1,31 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
-import { botThreadKey, presentTaskStatus } from "@goat/client-runtime/goatBot";
-import type { BotThreadRow } from "@goat/contracts";
-import { Pressable, ScrollView, Text, View } from "react-native";
-import { GoatWordmark } from "../../components/GoatWordmark";
+import {
+  FACE_MOTION_RANK,
+  botThreadKey,
+  goatBotFaceLabel,
+  presentTaskStatus,
+} from "@goat/client-runtime/goatBot";
+import type { BotProfile, BotThreadRow } from "@goat/contracts";
+import {
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  type ScrollViewInstance,
+  type ViewInstance,
+} from "react-native";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
+import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
+import { GoatBotFaceAvatar } from "./GoatBotFace";
+import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
+import { useMobileMemberWaitingCount } from "./useMobileMemberStatus";
 
-/** New bot is disabled until bots can be created. */
+/** Servers without member bots keep New bot disabled. */
 const ignorePress = () => undefined;
 import { DONE_STATUS_LABEL, STATUS_LABEL_BY_STATUS } from "../threads/thread-list-v2-row-meta";
 import type { ThreadListV2Status } from "../threads/threadListV2";
@@ -47,7 +64,13 @@ export function MobileHomeSegments(props: {
               : "min-h-[44px] flex-1 items-center justify-center rounded-md px-3 py-2"
           }
         >
-          <Text className="text-sm font-semibold text-foreground">{label}</Text>
+          <Text
+            numberOfLines={1}
+            maxFontSizeMultiplier={MOBILE_CHROME_MAX_FONT_SCALE}
+            className="text-sm font-semibold text-foreground"
+          >
+            {label}
+          </Text>
         </Pressable>
       ))}
     </View>
@@ -74,32 +97,64 @@ export function MobileBotRosterView(props: {
   ) => void;
   onLongPressTask: (row: Extract<BotThreadRow, { kind: "task" }>) => void;
   onShowMore: () => void;
+  /** Member bots: shown ones are in `bots`; these two lists carry the reverse states. */
+  members?: {
+    readonly hidden: ReadonlyArray<BotProfile>;
+    readonly deleted: ReadonlyArray<BotProfile>;
+    readonly canCreate: boolean;
+    readonly onNewBot: () => void;
+    /** Edit, hide, show, delete or restore; the panel asks what to do. */
+    readonly onLongPressBot: (bot: BotRosterEntry) => void;
+    readonly onPressDeleted: (bot: BotProfile) => void;
+  };
 }) {
+  const [hiddenOpen, setHiddenOpen] = useState(false);
+  const mainFace = useMobileGoatBotFace(null);
+  const mainFaceLabel = goatBotFaceLabel(mainFace.state);
+  const { scrollRef, rowRef, onScreen, measure, hold, settle, measureUnlessCoasting } =
+    useRowOnScreen();
+  const mainMotion = useMobileGoatBotFaceMotion(
+    mainFace.state,
+    FACE_MOTION_RANK.list,
+    mainFace.since,
+    onScreen,
+  );
   return (
-    <ScrollView className="flex-1 bg-screen" contentInsetAdjustmentBehavior="automatic">
+    <ScrollView
+      ref={scrollRef}
+      className="flex-1 bg-screen"
+      contentInsetAdjustmentBehavior="automatic"
+      onLayout={measure}
+      onScrollBeginDrag={hold}
+      onMomentumScrollBegin={hold}
+      onScrollEndDrag={measureUnlessCoasting}
+      onMomentumScrollEnd={settle}
+    >
       {props.header}
       {props.bots.map((bot) => (
         <View key={bot.profile?.botId ?? "main"}>
           <Pressable
+            ref={bot.kind === "main" ? rowRef : undefined}
+            onLayout={bot.kind === "main" ? measure : undefined}
             accessibilityRole="button"
             onPress={() => props.onOpenBot(bot)}
-            accessibilityState={{ selected: bot.kind === "main" && props.selectedKey === "main" }}
-            accessibilityLabel={`${bot.profile?.name ?? "GOAT Bot"}${bot.kind === "main" && props.unread ? ", unread" : ""}`}
+            onLongPress={props.members ? () => props.members?.onLongPressBot(bot) : undefined}
+            accessibilityState={{
+              selected:
+                props.selectedKey === (bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`),
+            }}
+            accessibilityLabel={`${bot.profile?.name ?? "GOAT Bot"}${bot.kind === "main" && mainFaceLabel ? `, ${mainFaceLabel}` : ""}${bot.kind === "main" && props.unread ? ", unread" : ""}`}
             className={
-              bot.kind === "main" && props.selectedKey === "main"
+              props.selectedKey === (bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`)
                 ? "flex-row items-center gap-3 bg-thread-selected px-4 py-3"
                 : "flex-row items-center gap-3 px-4 py-3"
             }
           >
-            <View className="h-10 w-10 items-center justify-center rounded-full bg-grouped-card">
-              {bot.kind === "main" ? (
-                <GoatWordmark height={20} colorClassName="accent-icon" />
-              ) : (
-                <Text className="text-lg text-foreground">
-                  {(bot.profile?.name ?? "GOAT Bot").slice(0, 1)}
-                </Text>
-              )}
-            </View>
+            {bot.kind === "main" ? (
+              <GoatBotFaceAvatar state={mainFace.state} size={40} motion={mainMotion} />
+            ) : (
+              <MemberFace bot={bot.profile} />
+            )}
             <View className="min-w-0 flex-1">
               <Text className="font-semibold text-foreground">
                 {bot.profile?.name ?? "GOAT Bot"}
@@ -223,16 +278,156 @@ export function MobileBotRosterView(props: {
           ) : null}
         </View>
       ))}
+      {props.members && props.members.hidden.length > 0 ? (
+        <View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: hiddenOpen }}
+            onPress={() => setHiddenOpen((open) => !open)}
+            className="min-h-[44px] justify-center px-4 py-3"
+          >
+            <Text className="text-foreground-muted">
+              Hidden bots ({props.members.hidden.length})
+            </Text>
+          </Pressable>
+          {hiddenOpen
+            ? props.members.hidden.map((profile) => (
+                <Pressable
+                  key={profile.botId}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${profile.name}, hidden`}
+                  onPress={() => props.onOpenBot({ kind: "member", profile })}
+                  onLongPress={() => props.members?.onLongPressBot({ kind: "member", profile })}
+                  className="flex-row items-center gap-3 px-4 py-3"
+                >
+                  <MemberFace bot={profile} />
+                  <Text className="text-foreground">{profile.name}</Text>
+                </Pressable>
+              ))
+            : null}
+        </View>
+      ) : null}
+      {props.members && props.members.deleted.length > 0 ? (
+        <View>
+          <Text accessibilityRole="header" className="px-4 pt-3 text-foreground-muted">
+            Deleted bots
+          </Text>
+          {props.members.deleted.map((profile) => (
+            <Pressable
+              key={profile.botId}
+              accessibilityRole="button"
+              accessibilityLabel={`${profile.name}, deleted`}
+              accessibilityHint="Restore this bot"
+              onPress={() => props.members?.onPressDeleted(profile)}
+              className="min-h-[44px] flex-row items-center justify-between px-4 py-3"
+            >
+              <Text className="text-foreground-muted">{profile.name}</Text>
+              <Text className="text-foreground">Restore</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       <View className="px-4 py-3">
-        <Button
-          label="New bot · Coming soon"
-          icon="plus"
-          disabled
-          fullWidth
-          accessibilityHint="Creating more bots is coming soon."
-          onPress={ignorePress}
-        />
+        {props.members ? (
+          <Button
+            label="New bot"
+            icon="plus"
+            disabled={!props.members.canCreate}
+            fullWidth
+            onPress={props.members.onNewBot}
+          />
+        ) : (
+          <Button
+            label="New bot · Coming soon"
+            icon="plus"
+            disabled
+            fullWidth
+            accessibilityHint="Creating more bots is coming soon."
+            onPress={ignorePress}
+          />
+        )}
       </View>
     </ScrollView>
   );
+}
+
+/**
+ * A member's face from its own conversation shell and waiting count, with the count beside it;
+ * still, since only the main row and headers move.
+ */
+function MemberFace({ bot }: { readonly bot: BotProfile }) {
+  const waitingCount = useMobileMemberWaitingCount(bot);
+  const face = useMobileGoatBotFace(
+    null,
+    { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
+    { waitingCount },
+  );
+  return (
+    <View className="flex-row items-center gap-1">
+      <GoatBotFaceAvatar state={face.state} size={40} motion={null} />
+      {waitingCount > 0 ? (
+        <Text
+          accessibilityLabel={`${waitingCount} waiting for you`}
+          className="text-xs font-semibold text-foreground"
+        >
+          {waitingCount}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * Whether the main row is inside the roster's visible area, measured in window coordinates. False
+ * until measured and from a scroll's start to its end; a generation drops any measurement that
+ * lands after a scroll began, the layout changed or the roster unmounted.
+ */
+function useRowOnScreen() {
+  const scrollNode = useRef<ScrollViewInstance | null>(null);
+  const rowRef = useRef<ViewInstance>(null);
+  const generation = useRef(0);
+  const scrolling = useRef(false);
+  const [onScreen, setOnScreen] = useState(false);
+  const scrollRef = (node: ScrollViewInstance | null) => {
+    scrollNode.current = node;
+    return () => {
+      scrollNode.current = null;
+      generation.current += 1;
+    };
+  };
+  const measure = () => {
+    generation.current += 1;
+    const pass = generation.current;
+    const scroll = scrollNode.current;
+    const row = rowRef.current;
+    if (scrolling.current || scroll === null || row === null) return;
+    scroll.measureInWindow((_scrollX, scrollTop, _scrollWidth, scrollHeight) => {
+      row.measureInWindow((_rowX, rowTop, _rowWidth, rowHeight) => {
+        if (pass !== generation.current || scrolling.current) return;
+        setOnScreen(
+          rowHeight > 0 &&
+            scrollHeight > 0 &&
+            rowTop + rowHeight > scrollTop &&
+            rowTop < scrollTop + scrollHeight,
+        );
+      });
+    });
+  };
+  const hold = () => {
+    scrolling.current = true;
+    generation.current += 1;
+    setOnScreen(false);
+  };
+  const settle = () => {
+    scrolling.current = false;
+    measure();
+  };
+  // A drag released with speed coasts on; its momentum end measures instead.
+  const measureUnlessCoasting = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const velocity = event.nativeEvent.velocity;
+    if (velocity === undefined || (Math.abs(velocity.x) < 0.05 && Math.abs(velocity.y) < 0.05)) {
+      settle();
+    }
+  };
+  return { scrollRef, rowRef, onScreen, measure, hold, settle, measureUnlessCoasting };
 }

@@ -27,6 +27,11 @@ export interface SecureFocus {
   readonly secure: boolean;
   /** Top-level windows the process shows to AT-SPI: a real tree read, for readiness. */
   readonly windows: number;
+  /**
+   * The registry answered in full and the process is not on it, as an app opened before
+   * accessibility was turned on. Focus stays unknown.
+   */
+  readonly unregistered?: true;
 }
 
 /** Runs gdbus with these arguments and returns its stdout, or throws. */
@@ -56,6 +61,8 @@ const MAX_WALK_NODES = 8192;
 const WORKERS = 8;
 // A probe still reading after this answers unknown, which is private.
 const PROBE_DEADLINE_MS = 2_000;
+/** busFor's answer when the registry listed every app, each with its pid, and not this one. */
+const UNREGISTERED = Symbol("unregistered");
 
 type Ref = { readonly bus: string; readonly path: string };
 
@@ -256,7 +263,7 @@ export function makeSecureFocusProbe(
 
     // Every name is resolved once, to the unique name of its owner, and only that name is
     // called: a well-known name can change owner between two calls.
-    const busFor = async () => {
+    const busFor = async (): Promise<string | null | typeof UNREGISTERED> => {
       const known = busByPid.get(pid);
       if (known) {
         probe.connection = ownersOn;
@@ -268,9 +275,9 @@ export function makeSecureFocusProbe(
       const [registry] = owner.body;
       if (owner.signature !== "s" || typeof registry !== "string" || !registry.startsWith(":"))
         throw new Error("The bus daemon gave no owner for the AT-SPI registry.");
-      const apps = references(await call(registry, ROOT, ACCESSIBLE, "GetChildren")).filter(
-        ({ bus }) => bus.startsWith(":"),
-      );
+      const listed = references(await call(registry, ROOT, ACCESSIBLE, "GetChildren"));
+      const apps = listed.filter(({ bus }) => bus.startsWith(":"));
+      let complete = apps.length === listed.length;
       let found: string | null = null;
       await anyInOrder(
         probe,
@@ -285,6 +292,7 @@ export function makeSecureFocusProbe(
             [bus],
           );
           const appPid = uint32(reply);
+          if (appPid === null) complete = false;
           if (appPid !== null && ownersOn === probe.connection) busByPid.set(appPid, bus);
           return { bus, appPid };
         },
@@ -293,11 +301,13 @@ export function makeSecureFocusProbe(
           return appPid === pid;
         },
       );
-      return found;
+      return found ?? (complete ? UNREGISTERED : null);
     };
 
     const bus = await busFor();
     if (bus === null) return { known: false, secure: false, windows: 0 };
+    if (bus === UNREGISTERED)
+      return { known: false, secure: false, windows: 0, unregistered: true };
     const windows = references(await call(bus, ROOT, ACCESSIBLE, "GetChildren"));
     if (windows.length > MAX_WINDOWS)
       return { known: false, secure: false, windows: windows.length };

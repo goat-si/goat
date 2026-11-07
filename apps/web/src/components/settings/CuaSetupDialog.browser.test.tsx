@@ -266,7 +266,9 @@ it("explains a remote Wayland host's needs and turns on without macOS checks", a
     status: { platform: "linux", running: false, wayland: true },
     localMac: false,
   });
-  expect(document.body.textContent).toContain("needs a signed-in graphical session");
+  expect(document.body.textContent).toContain(
+    "needs a signed-in desktop session or a virtual display such as Xvfb",
+  );
   expect(document.body.textContent).toContain("Wayland");
   expect(button("Open Settings")).toBeUndefined();
   await click("Turn on");

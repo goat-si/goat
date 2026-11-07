@@ -1,4 +1,4 @@
-import { selectBotChildren } from "@goat/client-runtime/goatBot";
+import { botRosterGroups, selectBotChildren } from "@goat/client-runtime/goatBot";
 import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { ChannelUpdateTaskViewInput } from "@goat/contracts";
 import { useEffect, useState } from "react";
@@ -10,6 +10,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import { mobileBotRoster } from "./mobileBotRoster";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
+import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
 
 export function useMobileBotRoster(selectedKey: string | null) {
   const home = useMobileGoatBotHomeMode();
@@ -23,9 +24,13 @@ export function useMobileBotRoster(selectedKey: string | null) {
   const connected = selected?.connected === true;
   const supportsProfiles = connected && capabilities?.goatBotProfiles === true;
   const supportsTaskThreads = connected && capabilities?.goatBotTaskThreads === true;
+  const supportsMembers = connected && capabilities?.goatBotMembers === true;
   const profiles = useEnvironmentQuery(
     environmentId !== null && supportsProfiles
-      ? channelEnvironment.listBots({ environmentId, input: {} })
+      ? channelEnvironment.listBots({
+          environmentId,
+          input: supportsMembers ? { includeDeleted: true } : {},
+        })
       : null,
   );
   const threads = useEnvironmentQuery(
@@ -53,6 +58,12 @@ export function useMobileBotRoster(selectedKey: string | null) {
   useEffect(() => {
     if (shouldRefresh && botThreadId && revision !== undefined) refreshThreads();
   }, [shouldRefresh, botThreadId, revision, refreshThreads]);
+  const bots = profiles.data?.bots;
+  // oxlint-disable-next-line goat/react-effect-budget -- Keep the environment's send queue to the members the roster lists as active.
+  useEffect(() => {
+    if (environmentId !== null && supportsMembers && bots !== undefined)
+      syncMobileGoatBotMembers(environmentId, bots);
+  }, [environmentId, supportsMembers, bots]);
   const slack = useEnvironmentQuery(
     environmentId !== null && connected && capabilities?.slackChannel === true
       ? channelEnvironment.slackSettings({ environmentId, input: {} })
@@ -95,6 +106,8 @@ export function useMobileBotRoster(selectedKey: string | null) {
   };
   return {
     ...roster,
+    groups: botRosterGroups(profiles.data?.bots ?? []),
+    supportsMembers,
     environmentId,
     slackEnabled: slack.data?.some((connection) => connection.enabled) === true,
     expanded: showMore,
@@ -102,5 +115,38 @@ export function useMobileBotRoster(selectedKey: string | null) {
     showMore: () => setShowMore((current) => !current),
     update,
     error: profiles.error ?? threads.error,
+  };
+}
+
+/**
+ * The member bot a GoatBot screen names, deleted ones included; null for main. A named member
+ * the roster does not know is reported missing only once the roster has answered, so it never
+ * falls back to main.
+ */
+export function useMobileGoatBotMember(botId: string | undefined) {
+  const home = useMobileGoatBotHomeMode();
+  const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const environmentId = selected?.environmentId ?? null;
+  const { presentationById } = useEnvironments();
+  const supported =
+    environmentId !== null &&
+    presentationById.get(environmentId)?.serverConfig?.environment.capabilities.goatBotMembers ===
+      true;
+  const profiles = useEnvironmentQuery(
+    supported && botId !== undefined
+      ? channelEnvironment.listBots({ environmentId, input: { includeDeleted: true } })
+      : null,
+  );
+  const member =
+    botId === undefined
+      ? null
+      : (profiles.data?.bots.find((bot) => bot.role === "member" && bot.botId === botId) ?? null);
+  return {
+    member,
+    missing:
+      botId !== undefined &&
+      member === null &&
+      !profiles.isPending &&
+      (profiles.isSuccess || !supported),
   };
 }

@@ -236,11 +236,19 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotStatus: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBots`. */
   goatBotProfiles: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.updateBot`, and the main bot's sessions carry its name and purpose. */
+  goatBotProfileEdit: Schema.optionalKey(Schema.Boolean),
+  /** Server creates, hides, deletes and restores member bots, each with its own conversation. */
+  goatBotMembers: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listChildWork`. */
   goatBotChildWork: Schema.optionalKey(Schema.Boolean),
   goatBotTaskThreads: Schema.optionalKey(Schema.Boolean),
   /** `channel.getBotStatus` leaves out tasks that were waiting when the bot thread was last visited. */
   goatBotWaitingRead: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.listBotNotes`. */
+  goatBotNotes: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.listBotArtifacts` and `channel.readBotArtifact`. */
+  goatBotLibrary: Schema.optionalKey(Schema.Boolean),
   /** Server runs a live Slack channel connection. False while only the settings contract exists. */
   slackChannel: Schema.optionalKey(Schema.Boolean),
   /** Slack settings take channelScope, userAccess and unlinkedRuntimeModeCeiling. Older servers

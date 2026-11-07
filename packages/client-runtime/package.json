@@ -127,6 +127,10 @@
       "types": "./src/device/hubAccess.ts",
       "default": "./src/device/hubAccess.ts"
     },
+    "./state/global-skills": {
+      "types": "./src/state/globalSkills.ts",
+      "default": "./src/state/globalSkills.ts"
+    },
     "./state/preview-sessions": {
       "types": "./src/state/previewSessions.ts",
       "default": "./src/state/previewSessions.ts"
@@ -166,6 +170,10 @@
     "./scheduled-task-webhook": {
       "types": "./src/scheduledTaskWebhook.ts",
       "default": "./src/scheduledTaskWebhook.ts"
+    },
+    "./scheduledTasks": {
+      "types": "./src/scheduledTasks/index.ts",
+      "default": "./src/scheduledTasks/index.ts"
     },
     "./connection": {
       "types": "./src/connection/index.ts",

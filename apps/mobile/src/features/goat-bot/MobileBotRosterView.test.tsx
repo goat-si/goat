@@ -1,18 +1,56 @@
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotThreadRow } from "@goat/contracts";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { BotProfile, BotThreadRow } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
+type Rect = readonly [number, number, number, number];
+type Measure = (callback: (x: number, y: number, width: number, height: number) => void) => void;
+const roster = vi.hoisted(() => ({
+  scrollRect: [0, 100, 400, 600] as Rect,
+  rowRect: [0, 120, 400, 64] as Rect,
+  pending: [] as Array<() => void>,
+  rowLayout: null as (() => void) | null,
+  scroll: {} as Record<string, ((event: unknown) => void) | undefined>,
+}));
+function measurer(rect: () => Rect): { measureInWindow: Measure } {
+  return {
+    measureInWindow: (callback) => {
+      roster.pending.push(() => callback(...rect()));
+    },
+  };
+}
+function flushMeasurements() {
+  while (roster.pending.length > 0) roster.pending.shift()?.();
+}
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  ScrollView: ({
+    children,
+    ref,
+    ...handlers
+  }: {
+    children?: ReactNode;
+    ref?: React.Ref<{ measureInWindow: Measure }>;
+  } & Record<string, unknown>) => {
+    React.useImperativeHandle(ref, () => measurer(() => roster.scrollRect));
+    roster.scroll = handlers as typeof roster.scroll;
+    return <div>{children}</div>;
+  },
   Modal: ({ children, visible }: { children?: ReactNode; visible: boolean }) =>
     visible ? <div>{children}</div> : null,
   Alert: { alert: vi.fn() },
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Text: ({
+    children,
+    accessibilityLabel,
+  }: {
+    children?: ReactNode;
+    accessibilityLabel?: string;
+  }) => <span aria-label={accessibilityLabel}>{children}</span>,
   Pressable: ({
     children,
+    ref,
+    onLayout,
     onPress,
     disabled,
     accessibilityState,
@@ -20,25 +58,53 @@ vi.mock("react-native", () => ({
     onAccessibilityAction,
   }: {
     children?: ReactNode;
+    ref?: React.Ref<{ measureInWindow: Measure }>;
+    onLayout?: () => void;
     onPress?: () => void;
     disabled?: boolean;
     accessibilityState?: { selected?: boolean; expanded?: boolean };
     accessibilityLabel?: string;
     onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
-  }) => (
-    <button
-      onClick={onPress}
-      disabled={disabled}
-      aria-pressed={accessibilityState?.selected}
-      aria-expanded={accessibilityState?.expanded}
-      aria-label={accessibilityLabel}
-      onKeyDown={(event) => onAccessibilityAction?.({ nativeEvent: { actionName: event.key } })}
-    >
-      {children}
-    </button>
+  }) => {
+    React.useImperativeHandle(ref, () => measurer(() => roster.rowRect));
+    if (onLayout) roster.rowLayout = onLayout;
+    return (
+      <button
+        onClick={onPress}
+        disabled={disabled}
+        aria-pressed={accessibilityState?.selected}
+        aria-expanded={accessibilityState?.expanded}
+        aria-label={accessibilityLabel}
+        onKeyDown={(event) => onAccessibilityAction?.({ nativeEvent: { actionName: event.key } })}
+      >
+        {children}
+      </button>
+    );
+  },
+}));
+vi.mock("../../lib/appState", () => ({
+  useAppActive: () => true,
+  useReduceMotionEnabled: () => false,
+}));
+vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
+vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => <span /> }));
+const face = vi.hoisted(() => ({ items: [] as ReadonlyArray<object> }));
+vi.mock("./GoatBotFace", () => ({
+  GoatBotFaceAvatar: (props: { motion: object | null }) => (
+    <span data-motion={props.motion ? "moving" : "still"} />
   ),
 }));
-vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => <span /> }));
+vi.mock("./useMobileGoatBotHomeMode", () => ({
+  useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: "env", threadId: "bot" } }),
+}));
+vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
+// Each member's own waiting count, as channel.getBotStatus answers it for that bot.
+vi.mock("./useMobileMemberStatus", () => ({
+  useMobileMemberWaitingCount: (bot: { botId: string }) => (bot.botId === "research" ? 2 : 0),
+}));
+vi.mock("../../state/use-thread-detail", () => ({
+  useThreadVisibleTurnItems: () => face.items,
+}));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({ themeAppearance: "light" }),
 }));
@@ -48,8 +114,18 @@ vi.mock("../../components/ui/AppText", () => ({
 }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => <span /> }));
 vi.mock("../../components/ui/Button", () => ({
-  Button: ({ label, disabled }: { label: string; disabled?: boolean }) => (
-    <button disabled={disabled}>{label}</button>
+  Button: ({
+    label,
+    disabled,
+    onPress,
+  }: {
+    label: string;
+    disabled?: boolean;
+    onPress?: () => void;
+  }) => (
+    <button disabled={disabled} onClick={onPress}>
+      {label}
+    </button>
   ),
 }));
 import { MobileBotRosterView, MobileHomeSegments } from "./MobileBotRosterView";
@@ -64,6 +140,7 @@ const task = decodeRow({
   unread: true,
   mainMessagesSinceQuiet: 0,
 });
+const decodeProfile = Schema.decodeUnknownSync(BotProfile);
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(async () => {
@@ -232,4 +309,245 @@ it("marks the selected coding thread with its own status", async () => {
   );
   expect(row?.getAttribute("aria-label")).toBe("Code, Working");
   expect(row?.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("shows the waiting face on the main bot for a waiting task the roster hides", async () => {
+  face.items = [
+    {
+      item: {
+        type: "notification",
+        ledgerTask: { taskId: "quiet", taskVersion: 2, status: "waiting_input" },
+      },
+    },
+  ];
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[{ kind: "main", profile: null }]}
+          rows={[]}
+          hasMore={false}
+          slackEnabled={false}
+          onOpenBot={() => {}}
+          onOpenChild={() => {}}
+          onLongPressTask={() => {}}
+          onShowMore={() => {}}
+        />,
+      ),
+    );
+    expect(container.querySelector('[aria-label="GOAT Bot, Waiting for you"]')).not.toBeNull();
+  } finally {
+    face.items = [];
+  }
+});
+
+describe("the roster's main face", () => {
+  const working = [
+    {
+      item: {
+        type: "notification",
+        ledgerTask: {
+          taskId: "busy",
+          taskVersion: 1,
+          status: "running",
+          createdAt: at,
+          updatedAt: at,
+        },
+      },
+    },
+  ];
+  const props = {
+    bots: [{ kind: "main" as const, profile: null }],
+    rows: [],
+    hasMore: false,
+    slackEnabled: false,
+    onOpenBot: () => {},
+    onOpenChild: () => {},
+    onLongPressTask: () => {},
+    onShowMore: () => {},
+  };
+  const motion = () => container.querySelector("[data-motion]")?.getAttribute("data-motion");
+
+  async function showWorkingRoster() {
+    face.items = working;
+    roster.scrollRect = [0, 100, 400, 600];
+    roster.rowRect = [0, 120, 400, 64];
+    roster.pending.length = 0;
+    root = createRoot(container);
+    await act(async () => root?.render(<MobileBotRosterView {...props} />));
+  }
+
+  afterEach(() => {
+    face.items = [];
+  });
+
+  it("moves only after the row is measured inside the roster", async () => {
+    await showWorkingRoster();
+    expect(motion()).toBe("still");
+    await act(async () => {
+      roster.rowLayout?.();
+      flushMeasurements();
+    });
+    expect(motion()).toBe("moving");
+  });
+
+  it("stays still when the row is measured outside the roster", async () => {
+    await showWorkingRoster();
+    roster.rowRect = [0, 760, 400, 64];
+    await act(async () => {
+      roster.rowLayout?.();
+      flushMeasurements();
+    });
+    expect(motion()).toBe("still");
+    roster.rowRect = [0, 20, 400, 64];
+    await act(async () => {
+      roster.rowLayout?.();
+      flushMeasurements();
+    });
+    expect(motion()).toBe("still");
+  });
+
+  it("stops as a scroll starts, ignores a measurement that lands after it, and resumes after", async () => {
+    await showWorkingRoster();
+    await act(async () => {
+      roster.rowLayout?.();
+      flushMeasurements();
+    });
+    expect(motion()).toBe("moving");
+    await act(async () => {
+      roster.rowLayout?.();
+      roster.scroll.onScrollBeginDrag?.({});
+      flushMeasurements();
+    });
+    expect(motion()).toBe("still");
+    await act(async () => {
+      roster.scroll.onMomentumScrollBegin?.({});
+      roster.scroll.onMomentumScrollEnd?.({});
+      flushMeasurements();
+    });
+    expect(motion()).toBe("moving");
+  });
+});
+
+it("ignores a layout change while the roster scrolls", async () => {
+  face.items = [
+    {
+      item: {
+        type: "notification",
+        ledgerTask: {
+          taskId: "busy",
+          taskVersion: 1,
+          status: "running",
+          createdAt: at,
+          updatedAt: at,
+        },
+      },
+    },
+  ];
+  roster.scrollRect = [0, 100, 400, 600];
+  roster.rowRect = [0, 120, 400, 64];
+  roster.pending.length = 0;
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[{ kind: "main", profile: null }]}
+          rows={[]}
+          hasMore={false}
+          slackEnabled={false}
+          onOpenBot={() => {}}
+          onOpenChild={() => {}}
+          onLongPressTask={() => {}}
+          onShowMore={() => {}}
+        />,
+      ),
+    );
+    const motion = () => container.querySelector("[data-motion]")?.getAttribute("data-motion");
+    await act(async () => {
+      roster.rowLayout?.();
+      flushMeasurements();
+    });
+    expect(motion()).toBe("moving");
+    await act(async () => {
+      roster.scroll.onScrollBeginDrag?.({});
+      roster.rowLayout?.();
+      flushMeasurements();
+    });
+    expect(motion()).toBe("still");
+    await act(async () => {
+      roster.scroll.onScrollEndDrag?.({ nativeEvent: { velocity: { x: 0, y: 0 } } });
+      flushMeasurements();
+    });
+    expect(motion()).toBe("moving");
+  } finally {
+    face.items = [];
+  }
+});
+
+it("offers New bot, a member's own row, and the hidden and deleted bots when the server has members", async () => {
+  const profile = (botId: string, name: string, extra: object = {}) =>
+    decodeProfile({
+      botId,
+      role: "member",
+      name,
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+      defaultProjectId: null,
+      environmentId: "env",
+      sessionThreadId: `thread-${botId}`,
+      createdAt: at,
+      updatedAt: at,
+      ...extra,
+    });
+  const research = profile("research", "Research");
+  const quiet = profile("quiet", "Quiet", { hidden: true });
+  const gone = profile("gone", "Gone", { state: "deleted" });
+  const open = vi.fn();
+  const newBot = vi.fn();
+  const pressDeleted = vi.fn();
+  root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <MobileBotRosterView
+        bots={[
+          { kind: "main", profile: null },
+          { kind: "member", profile: research },
+        ]}
+        rows={[]}
+        hasMore={false}
+        slackEnabled={false}
+        selectedKey="bot:research"
+        onOpenBot={open}
+        onOpenChild={() => {}}
+        onLongPressTask={() => {}}
+        onShowMore={() => {}}
+        members={{
+          hidden: [quiet],
+          deleted: [gone],
+          canCreate: true,
+          onNewBot: newBot,
+          onLongPressBot: () => {},
+          onPressDeleted: pressDeleted,
+        }}
+      />,
+    ),
+  );
+  const button = (label: string) =>
+    [...container.querySelectorAll("button")].find((element) =>
+      element.textContent?.includes(label),
+    );
+  expect(button("Research")?.getAttribute("aria-pressed")).toBe("true");
+  expect(button("Research")?.querySelector('[aria-label="2 waiting for you"]')).not.toBeNull();
+  expect(container.textContent).not.toContain("Coming soon");
+  await act(async () => button("New bot")?.click());
+  expect(newBot).toHaveBeenCalledOnce();
+  expect(container.textContent).not.toContain("Quiet");
+  await act(async () => button("Hidden bots (1)")?.click());
+  await act(async () => button("Quiet")?.click());
+  expect(open).toHaveBeenCalledWith({ kind: "member", profile: quiet });
+  await act(async () => button("Restore")?.click());
+  expect(pressDeleted).toHaveBeenCalledWith(gone);
 });

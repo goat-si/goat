@@ -57,6 +57,9 @@ it.effect(
           authorizationHeader: "Bearer fixture-a",
           browserToolsAvailable: false,
           grantedScopes: [],
+          goatMcpServers: [
+            { providerName: "extra_goat", transport: "stdio", command: "tool", args: [], env: {} },
+          ],
         };
         const fileSystem = yield* FileSystem.FileSystem;
         const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -212,6 +215,12 @@ it.effect(
         expect(opens).toBe(1);
         expect(operations).toEqual(["offer", "setMcpServers", "offer"]);
         expect(JSON.stringify(servers)).toContain("Bearer fixture-b");
+        expect(servers[0]?.extra_goat).toEqual({
+          type: "stdio",
+          command: "tool",
+          args: [],
+          env: {},
+        });
       }),
     ).pipe(
       Effect.provide(

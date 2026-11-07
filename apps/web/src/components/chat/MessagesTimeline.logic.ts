@@ -60,6 +60,7 @@ import {
   type TurnItemId,
 } from "@goat/contracts";
 import type { ThreadRunSummary } from "@goat/client-runtime/state/shell";
+import { deriveUnsettledRunId, timelineIsWorking } from "./timelineLiveRun";
 import {
   resolveGoatMcpItemCall,
   type GoatMcpToolPresentation,
@@ -883,23 +884,6 @@ function deriveSupersededAttemptFolds(
   return foldsByAnchorEntryId;
 }
 
-// After send, the previous turn stays active until the server creates its replacement.
-function deriveUnsettledRunId(
-  latestRun: TimelineLatestRun | null,
-  runningRunId: RunId | null = null,
-): RunId | null {
-  if (runningRunId !== null) return runningRunId;
-  if (!latestRun) {
-    return null;
-  }
-  const isSettled =
-    latestRun.completedAt !== null &&
-    latestRun.status !== "running" &&
-    latestRun.status !== "starting" &&
-    latestRun.status !== "waiting";
-  return isSettled ? null : latestRun.runId;
-}
-
 // Children can outlive their launching turn; keep cards visible while the footer counts them.
 function liveSubagentCardEntryIds(entries: ReadonlyArray<TimelineEntry>): ReadonlySet<string> {
   const visible = new Set<string>();
@@ -1424,19 +1408,20 @@ function deriveTimelineTurnFolds(
   >,
 ) {
   const timelineEntries = timelineRowEntries(input.timelineEntries);
+  const isWorking = timelineIsWorking(input);
   const unsettledRunId = deriveUnsettledRunId(input.latestRun ?? null, input.runningRunId ?? null);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
   const activeVisualResponseRunIds = deriveActiveVisualResponseRunIds({
     timelineEntries,
     unsettledRunId,
-    isWorking: input.isWorking,
+    isWorking,
   });
   return deriveTurnFolds({
     timelineEntries,
     terminalAssistantMessageIds: deriveTerminalAssistantMessageIds(timelineEntries),
     latestRun: input.latestRun ?? null,
     unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
-    runlessWorkActive: input.isWorking && input.runlessWorkActive === true,
+    runlessWorkActive: isWorking && input.runlessWorkActive === true,
     liveSubagentEntryIds: liveSubagentCardEntryIds(timelineEntries),
     completeSupersededReplyEntryIds: completeSupersededReplyEntryIds(timelineEntries),
   });
@@ -1461,6 +1446,7 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup?: WorktreeSetupSnapshot | null;
   cloudRun?: CloudRunCard | null;
 }): MessagesTimelineRow[] {
+  const isWorking = timelineIsWorking(input);
   const timelineEntries = timelineRowEntries(input.timelineEntries);
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
@@ -1499,9 +1485,9 @@ export function deriveMessagesTimelineRows(input: {
   const activeVisualResponseRunIds = deriveActiveVisualResponseRunIds({
     timelineEntries: timelineEntries,
     unsettledRunId,
-    isWorking: input.isWorking,
+    isWorking,
   });
-  const runlessWorkActive = input.isWorking && input.runlessWorkActive === true;
+  const runlessWorkActive = isWorking && input.runlessWorkActive === true;
   const foldsByAnchorEntryId = deriveTurnFolds({
     timelineEntries: timelineEntries,
     terminalAssistantMessageIds,
@@ -1535,16 +1521,16 @@ export function deriveMessagesTimelineRows(input: {
   const runIdIsActiveResponse = (runId: RunId | null | undefined) =>
     runId == null ? runlessWorkActive : activeVisualResponseRunIds.has(runId);
   const workEntryIsInActiveRun = (entry: WorkLogEntry) =>
-    input.isWorking &&
+    isWorking &&
     entry.toolLifecycleStatus === "inProgress" &&
     (entry.runId == null ? runlessWorkActive : entry.runId === unsettledRunId);
 
-  const activeTurnHeaderIndex = input.isWorking
+  const activeTurnHeaderIndex = isWorking
     ? lastResponseBoundaryIndex(timelineEntries) + 1
     : timelineEntries.length;
 
   const activeToolEntries: Array<Extract<TimelineEntry, { kind: "work" }>> = [];
-  if (input.isWorking && (unsettledRunId !== null || runlessWorkActive)) {
+  if (isWorking && (unsettledRunId !== null || runlessWorkActive)) {
     let tailAttemptId: string | null | undefined;
     for (let index = timelineEntries.length - 1; index >= activeTurnHeaderIndex; index -= 1) {
       const entry = timelineEntries[index]!;
@@ -1660,7 +1646,7 @@ export function deriveMessagesTimelineRows(input: {
       workEntryIsInActiveRun(entry.entry),
   );
   const activeRunIsCompaction =
-    input.isWorking && unsettledRunId !== null && compactionRuns.has(unsettledRunId);
+    isWorking && unsettledRunId !== null && compactionRuns.has(unsettledRunId);
   // The item can finish before its run settles; only other work should keep activity visible.
   const compactionRunFinished =
     activeRunIsCompaction &&
@@ -1725,7 +1711,7 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
-    if (input.isWorking && index === activeTurnHeaderIndex) {
+    if (isWorking && index === activeTurnHeaderIndex) {
       appendWorkingRow();
     }
 
@@ -2151,12 +2137,11 @@ export function deriveMessagesTimelineRows(input: {
   }
 
   const hasWorkingRow = nextRows.some((row) => row.kind === "working");
-  if (input.isWorking && !hasWorkingRow && activeTurnHeaderIndex === timelineEntries.length) {
+  if (isWorking && !hasWorkingRow && activeTurnHeaderIndex === timelineEntries.length) {
     appendWorkingRow();
   }
   if (
-    input.isWorking &&
-    input.latestRun?.turnEnded !== true &&
+    isWorking &&
     !setupOwnsWorkingSlot &&
     !hasActiveCompaction &&
     !compactionOnlyRunFinished &&

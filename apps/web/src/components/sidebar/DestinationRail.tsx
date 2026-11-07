@@ -55,7 +55,7 @@ import { useFleetSummary } from "../../state/fleet";
 import { providerReadyAtom } from "../../state/server";
 import { useEnvironmentScope } from "../../state/session";
 import { resolveThreadRouteTarget } from "../../threadRoutes";
-import { GoatBotAvatar } from "../goatBot/GoatBotAvatar";
+import { GoatBotMainAvatar, GoatBotMemberAvatar } from "../goatBot/GoatBotAvatar";
 import { useBotRoster } from "../goatBot/useBotRoster";
 import { useGoatBotWaitingCount } from "../goatBot/useGoatBotWaitingCount";
 import { useGoatBotReadMenu } from "../goatBot/useGoatBotReadMenu";
@@ -251,7 +251,7 @@ const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
           {...botReadMenu}
           onClick={() => setMode("bot")}
         >
-          <GoatBotAvatar size="sm" />
+          <GoatBotMainAvatar size="sm" />
           <RailCount count={botWaiting} />
         </Link>
       </RailTooltip>
@@ -269,7 +269,7 @@ const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
                 className={railItemClassName(false)}
                 onClick={() => setMode("bot")}
               >
-                <GoatBotAvatar size="sm" />
+                <GoatBotMemberAvatar size="sm" bot={entry.profile} />
               </Link>
             </RailTooltip>
           ),

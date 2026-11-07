@@ -18,6 +18,16 @@ starts a provider turn there. Reception uses one-shot, tool-free text generation
 their first reply from a separate read-only GOAT Bot session; the canonical bot thread still
 never runs a provider. Chip notifications carry `ledgerTask`; only the ledger writes them.
 
+A routine bound to a bot thread fires as channel input instead. Only a person's RPC upsert can bind
+one (MCP passes no owner), and only on a timer. Admission writes the firing and a link row
+(`scheduled_task_channel_inputs`, frozen text and owner) in one transaction;
+[`ChannelRoutineIntake`](../../apps/server/src/channels/ChannelRoutineIntake.ts) ingests it under
+an idempotency key only the scheduler may use and settles the firing from the inbox, so every step
+repeats safely after a restart. The link, never the caller, makes an input a routine: it skips the
+session, the inbound timeline record, approval and question parsing, and any action that starts or
+steers work or keeps a note, so an unattended firing can never need an approval. `no_update`
+settles it with nothing shown or delivered.
+
 ## What the bot remembers and reads
 
 Questions about past work and memory are answered in reception, without starting a worker,
@@ -27,8 +37,17 @@ lookups, the server runs them (each within five seconds), and one more pass answ
 results. A second request to read is answered with what that pass wrote, so an input costs at most
 two generations. Reads change nothing, so a reception retried after a crash reads again.
 
-- **Memory.** Every pass gets the newest 6,000 characters of `goat-bot/memory.md` (standing
-  notes, written only when the person's own message asks, as before) and a journal: one line per
+- **Memory.** Every pass gets GOAT Bot's standing notes from `goat-bot/memory.md` (written only
+  when the person's own message asks, as before): the newest notes in force up to 6,000
+  characters, plus up to 3,000 characters of older notes that share words with the message
+  ([`channelBotNotesRecall.ts`](../../apps/server/src/channels/channelBotNotesRecall.ts)); a file
+  whose notes fit 9,000 characters goes in whole. Only the newest 256 KiB of the file is read and
+  searched, at every message, so a hand edit counts at once and no index can drift. The notes
+  are one file per environment, so this widens how many notes reach the model, never who sees
+  them. A paraphrase that shares no word with its note is not found this way; a `memory` read
+  lets the model search again in its own words. Remote workers get the same notes in their
+  first message, or only the best matches (up to 2,000 characters) when the instruction leaves
+  no room. Every pass also gets a journal: one line per
   recent task, with its state, result and pull requests. The journal is built from the ledger for
   each requester rather than kept in a file, so it shows only work that requester may see, and it
   cannot drift from the ledger or lose a line in a crash. A `memory` read searches the notes, the
@@ -64,8 +83,14 @@ concluded, a web search. Reception answers those with `run_turn`: it acknowledge
 ledger task of kind `turn` runs in the conversation's GOAT Bot session
 ([`ChannelBotSession.ts`](../../apps/server/src/channels/ChannelBotSession.ts)), a thread with
 the `goat-bot-session:` prefix in the bot's own workspace. One session serves a conversation and
-requester, so the provider's prompt cache stays warm and notes are read once per session instead
-of once per request. Each request is still a ledger task, which keeps exactly-once narration,
+requester, so the provider's prompt cache stays warm: the standing notes are frozen into the
+session's first message, and each request adds only the older notes that match it. A session
+whose frozen notes are no longer the notes in force (a note was added, corrected, edited or
+deleted) is replaced at its next request. The check needs the notes heading and the journal
+heading to appear exactly once in the frozen text, and body lines that look like a heading are
+escaped, so text inside a section cannot pass for the notes. A notes read that fails keeps the
+session and serves that request without new notes; the next good read decides. Each request is
+still a ledger task, which keeps exactly-once narration,
 restarts that read state, and the requester's ceiling. Its chip carries `kind: "turn"`: clients
 follow it for the activity line but draw no card, since the bot's reply already answers it. Running a provider on the bot
 thread itself would put each new message behind the running turn.

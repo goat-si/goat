@@ -127,6 +127,7 @@ import { dispatchingQueuedMessageIdAtom, useThreadOutboxMessages } from "./use-t
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import { useSideChatCommand } from "../features/threads/useSideChatCommand";
+import { turnCanStop } from "../features/threads/turn-settle";
 
 const EMPTY_QUEUE_WORKFLOW_ATOM = Atom.make<null>(null).pipe(
   Atom.withLabel("mobile-thread-queue-workflow:empty"),
@@ -433,6 +434,7 @@ export function useThreadComposerState() {
   const interruptibleRunId = threadRuntimeHasInterruptibleRun(selectedThreadRuntime)
     ? (selectedThreadRuntime?.activeRunId ?? null)
     : null;
+  const canStopTurn = turnCanStop(interruptibleRunId, selectedThreadActivityRun);
 
   const cancelQueuedRunEdit = () => {
     if (selectedThreadKey === null || savingQueuedEditRef.current) return;
@@ -959,6 +961,7 @@ export function useThreadComposerState() {
     interactionMode,
     activeThreadBusy,
     interruptibleRunId,
+    canStopTurn,
     onChangeDraftMessage,
     onPickDraftMedia,
     onPickDraftFiles,

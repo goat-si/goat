@@ -7,6 +7,7 @@ import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
+import { deviceReleaseEffect } from "./goat/ThreadStopEffects.ts";
 import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 
 export interface ThreadDeletionPlan {
@@ -232,6 +233,7 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
     threadId: command.threadId,
     request: { type: "preview.cleanup" },
   });
+  effects.push(deviceReleaseEffect(command));
   const attachmentIds = Array.from(new Set(input.attachmentIds));
   if (attachmentIds.length > 0) {
     effects.push({

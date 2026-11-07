@@ -432,7 +432,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     text: "#262626",
     placeholder: "#8e8e93"
   )
-  private var fontFamily = "DMSans-Regular"
+  private var fontFamily = "System"
   private var fontSize: CGFloat = 14
   private var lineHeight: CGFloat = 20
   private var contentInsetVertical: CGFloat = 0
@@ -973,8 +973,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   private func makeAttachmentString(_ token: ComposerTokenPayload) -> NSAttributedString {
     let color = token.accent.flatMap { UIColor(composerHex: $0) }
       ?? UIColor(composerHex: theme.text) ?? .label
-    let chipFont = UIFont(name: "DMSans-Medium", size: fontSize)
-      ?? UIFont.systemFont(ofSize: fontSize, weight: .medium)
+    let chipFont = UIFont.systemFont(ofSize: fontSize, weight: .medium)
     let icon = token.iconUri.flatMap(iconImage(for:)).map {
       token.tintsIcon == true ? Self.tinted($0, color: color) : $0
     }
@@ -982,6 +981,8 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       label: token.label,
       detail: token.detail,
       icon: icon,
+      // Hold the icon's place while it loads, as Android does, so the label never shifts.
+      reservesIcon: token.iconUri?.isEmpty == false,
       color: color,
       font: chipFont
     )
@@ -1004,6 +1005,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     label: String,
     detail: String?,
     icon: UIImage?,
+    reservesIcon: Bool,
     color: UIColor,
     font: UIFont
   ) -> UIImage {
@@ -1026,7 +1028,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       )
     }
     let iconSide = font.pointSize
-    let iconSlot: CGFloat = icon == nil ? 0 : iconSide * 1.25
+    let iconSlot: CGFloat = icon == nil && !reservesIcon ? 0 : iconSide * 1.25
     let padding: CGFloat = 5
     let height = ceil(font.ascender - font.descender)
     // A long path would otherwise draw a chip wider than the composer and clip. Cap the label

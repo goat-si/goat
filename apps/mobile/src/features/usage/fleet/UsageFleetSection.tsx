@@ -80,6 +80,9 @@ function FleetContent() {
   const listed = selected === null ? snapshot.machines : [selected];
   const busy = listed.filter(isFleetMachineBusy);
   const quiet = listed.filter((machine) => !isFleetMachineBusy(machine));
+  const idleBillingOwners = new Map(
+    snapshot.idleCloudMachines.map((entry) => [entry.machineId, entry.ownerLabel]),
+  );
   const { totals } = snapshot;
   const notConnected = snapshot.machines.filter((machine) => !machine.answering).length;
   const hubs = [...presentations].filter(
@@ -226,6 +229,7 @@ function FleetContent() {
               key={machine.id}
               machine={machine}
               connection={connections.get(machine.id)}
+              idleBillingOwner={idleBillingOwners.get(machine.id) ?? null}
               bordered={index > 0}
               onOpenConnections={openConnections}
             />

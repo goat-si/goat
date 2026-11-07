@@ -55,7 +55,7 @@ import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
-import { channelBotFilesFor, readChannelBotNotes } from "./channelBotNotes.ts";
+import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
 import { canSeeTask, journalFor, RECALL_TASK_SCAN } from "./channelBotRecall.ts";
 import {
   frozenSessionPrefix,
@@ -63,8 +63,9 @@ import {
   formatOpenWork,
   GOAT_BOT_SESSION_RULES,
   sessionContextRevision,
-  sessionRotationDue,
 } from "./channelBotSessionBrief.ts";
+import * as Rotation from "./channelBotSessionRotation.ts";
+import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import {
   answerForwardIdsFor,
@@ -107,9 +108,7 @@ const requireTarget = (task: ChannelTask) =>
 export class ChannelBotSession extends Context.Service<
   ChannelBotSession,
   {
-    readonly eligible: (
-      task: ChannelTask,
-    ) => Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
+    readonly eligible: Effect.Success<typeof makeSessionEligibility>;
     /** Runs a GOAT Bot turn in its conversation's session; "deferred" retries on a later pass. */
     readonly serve: (
       stored: ChannelLedger.ChannelStoredTask,
@@ -135,6 +134,7 @@ const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
   const childWork = yield* ChannelChildWork.ChannelChildWork;
   const childWorkStore = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+  const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
@@ -255,11 +255,11 @@ const make = Effect.gen(function* () {
     task: ChannelTask,
     requester: ChannelRequester,
     message: string,
+    notes: string,
   ) {
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
     const standing = resolveProjectSettings(settings, (yield* requireTarget(task)).projectId)
       .settings.standingInstructions;
-    const notes = yield* readChannelBotNotes(fileSystem, botFiles);
     const visible = yield* ledger
       .listTasks({ ownerId: task.requester.ownerId, limit: RECALL_TASK_SCAN })
       .pipe(
@@ -509,22 +509,24 @@ const make = Effect.gen(function* () {
         "The requester’s permission to start this work changed.",
         "permission_changed",
       );
+    const identity = yield* Effect.option(profiles.identity(initial.ownerId, initial.botId));
+    if (Option.isNone(identity)) return yield* fail(initial, owner, Rotation.PROFILE_UNREADABLE);
     // The memory the session may use, lowered to what the requester's scopes allow now.
     const allowed = captureMemoryGrantCeiling(requester.grantedScopes, false);
     const recorded = target.memoryGrantCeiling ?? "none";
     const memoryGrantCeiling = MEMORY_RANK[allowed] < MEMORY_RANK[recorded] ? allowed : recorded;
-    const key = bindingKeyFor(initial.task, { ...target, memoryGrantCeiling }, sharing, requester);
+    const ceiling = { ...target, memoryGrantCeiling };
+    const key = bindingKeyFor(initial.task, ceiling, sharing, requester, initial.botId);
     let row = yield* currentRow(key);
-    const records =
-      row === undefined
-        ? Option.none()
-        : yield* readRecords(threads, row.thread_id).pipe(Effect.option);
+    const read = yield* Rotation.readSessionRecords(threads, row?.thread_id);
+    const records = read === "unknown" ? Option.none() : read;
     // A generation that never finished launching belongs to the task that started it: only that
     // task resumes its launch, while it can still run; otherwise the row is retired unused.
     if (
       row?.state === "starting" &&
       (row.task_id !== initial.task.taskId || row.task_generation !== initial.task.generation)
     ) {
+      if (read === "unknown") return "deferred" as const;
       const starter = row.task_id === null ? undefined : yield* ledger.getTask(row.task_id);
       const launchedRuns = Option.isSome(records) ? records.value.runs.length : 0;
       if (
@@ -544,8 +546,9 @@ const make = Effect.gen(function* () {
       initial.task,
       requester,
     );
+    const notes = yield* readChannelBotNotesSnapshot(botFiles, initial.task.instruction);
     const message =
-      turnInstruction(initial.task, botFiles, settings.goatclaw.enabled) +
+      turnInstruction(initial.task, botFiles, settings.goatclaw.enabled, notes?.matched) +
       "\n\n" +
       formatOpenWork(openWork);
     const attachments = yield* inputAttachments(initial.task.originInputId);
@@ -562,17 +565,16 @@ const make = Effect.gen(function* () {
         skillsPath: botFiles.skills,
       });
     if (row?.state === "active") {
-      const usage = Option.isNone(records)
-        ? undefined
-        : records.value.providerTurns
-            .flatMap((turn) => (turn.tokenUsage === undefined ? [] : [turn.tokenUsage]))
-            .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
-      const due = sessionRotationDue(usage, DateTime.toEpochMillis(yield* DateTime.now));
+      const usage = Rotation.latestTurnUsage(records);
+      const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+      const current = { identity: identity.value, notes: notes?.standing };
+      const due = Rotation.sessionRotationReason(usage, nowMs, row.context_text, current);
       if (due === undefined) {
         const { stored } = yield* freeze(message);
         return yield* queueInto(stored, row.thread_id, message, owner, requester, attachments);
       }
-      if (Option.isSome(records) && (yield* sessionBusy(row.thread_id, records.value))) {
+      const busy = Option.isSome(records) && (yield* sessionBusy(row.thread_id, records.value));
+      if (read === "unknown" || busy) {
         yield* Effect.logInfo("GOAT Bot session rotation waits for its work", {
           reason: due,
           taskId: initial.task.taskId,
@@ -583,7 +585,8 @@ const make = Effect.gen(function* () {
       row = undefined;
     }
     if (row === undefined) {
-      const prefix = yield* freezePrefix(initial.task, requester, message);
+      const frozen = yield* freezePrefix(initial.task, requester, message, notes?.standing ?? "");
+      const prefix = Rotation.withIdentity(identity.value, frozen);
       row = yield* allocate(initial.task, requester, key, sharing, driver, prefix);
       if (row === undefined) return "deferred" as const;
     }

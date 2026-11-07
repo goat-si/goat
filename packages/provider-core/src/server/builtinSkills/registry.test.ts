@@ -19,6 +19,7 @@ import { computerUseAppNote } from "./computerUseSkillFiles.ts";
 import { screenCodeSkillFiles } from "./screenCodeSkillFiles.ts";
 import {
   builtInSkillSections,
+  mentionedSkillNames,
   namedBuiltInSkills,
   resolveBuiltInSkills,
   withBuiltInSkillText,
@@ -403,6 +404,20 @@ describe("the goat-discipline skill loads only when a message names it", () => {
     text: "$goat-discipline",
   };
   const reference = formatComposerContextReference(terminal);
+
+  it("finds global names only in authored text and never in slash commands", () => {
+    expect(mentionedSkillNames(`Inspect ${reference} $goat:one $goat:one $goat:two`)).toEqual([
+      "goat:one",
+      "goat:two",
+    ]);
+    const globalReference = formatComposerContextReference({
+      ...terminal,
+      label: "$goat:one",
+    });
+    expect(mentionedSkillNames(`Inspect ${globalReference}`)).toEqual([]);
+    expect(mentionedSkillNames(`/command $goat:one`)).toEqual([]);
+    expect(mentionedSkillNames(`See <terminal_context> $goat:one </terminal_context>`)).toEqual([]);
+  });
 
   it("activates on an authored mention with any currency sigil", () => {
     expect(named("Fix the bug $goat-discipline")).toEqual(["goat-discipline"]);

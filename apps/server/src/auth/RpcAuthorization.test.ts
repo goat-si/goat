@@ -1,9 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
+  GLOBAL_SKILLS_WS_METHODS,
+  WsGlobalSkillsRpcGroup,
   AuthDiagnosticsReadScope,
   AuthEnvironmentMaintainScope,
   AuthFilesystemReadScope,
+  AuthMemoryReadScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthProvidersManageScope,
@@ -61,6 +64,61 @@ describe("RPC authorization scopes", () => {
       const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall([], method, {}));
       expect(denied.requiredPermission).toBe(AuthOrchestrationReadScope);
       yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationReadScope], method, {});
+    }),
+  );
+  it.effect("requires memory read to list GOAT Bot's notes", () =>
+    Effect.gen(function* () {
+      const method = CHANNEL_GATEWAY_WS_METHODS.listBotNotes;
+      for (const scopes of [[], [AuthOrchestrationReadScope]]) {
+        const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall(scopes, method, {}));
+        expect(denied.requiredPermission).toBe(AuthMemoryReadScope);
+      }
+      yield* RpcAuthorization.authorizeRpcCall([AuthMemoryReadScope], method, {});
+    }),
+  );
+  it.effect("requires filesystem read to list and open GOAT Bot's saved files", () =>
+    Effect.gen(function* () {
+      for (const [method, input] of [
+        [CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts, {}],
+        [CHANNEL_GATEWAY_WS_METHODS.readBotArtifact, { relativePath: "a.txt" }],
+      ] as const) {
+        for (const scopes of [[], [AuthOrchestrationReadScope]]) {
+          const denied = yield* Effect.flip(
+            RpcAuthorization.authorizeRpcCall(scopes, method, input),
+          );
+          expect(denied.requiredPermission).toBe(AuthFilesystemReadScope);
+        }
+        yield* RpcAuthorization.authorizeRpcCall([AuthFilesystemReadScope], method, input);
+      }
+    }),
+  );
+  it.effect("refuses a bot profile edit to a read-only session", () =>
+    Effect.gen(function* () {
+      const method = CHANNEL_GATEWAY_WS_METHODS.updateBot;
+      const input = { botId: "main", name: "Jarvis" };
+      for (const scopes of [[], [AuthOrchestrationReadScope]]) {
+        const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall(scopes, method, input));
+        expect(denied.requiredPermission).toBe(AuthOrchestrationOperateScope);
+      }
+      yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationOperateScope], method, input);
+    }),
+  );
+  it.effect("refuses creating, hiding, deleting and restoring bots to a read-only session", () =>
+    Effect.gen(function* () {
+      for (const [method, input] of [
+        [CHANNEL_GATEWAY_WS_METHODS.createBot, { clientRequestId: "c1", name: "Helper" }],
+        [CHANNEL_GATEWAY_WS_METHODS.setBotHidden, { botId: "b1", hidden: true }],
+        [CHANNEL_GATEWAY_WS_METHODS.deleteBot, { botId: "b1" }],
+        [CHANNEL_GATEWAY_WS_METHODS.restoreBot, { botId: "b1" }],
+      ] as const) {
+        for (const scopes of [[], [AuthOrchestrationReadScope]]) {
+          const denied = yield* Effect.flip(
+            RpcAuthorization.authorizeRpcCall(scopes, method, input),
+          );
+          expect(denied.requiredPermission).toBe(AuthOrchestrationOperateScope);
+        }
+        yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationOperateScope], method, input);
+      }
     }),
   );
   it.effect("protects bot task thread reads and view changes", () =>
@@ -891,4 +949,45 @@ it.effect("requires thread read scope for computer use history", () =>
       {},
     );
   }),
+);
+
+it.effect("global skills RPCs execute only with settings write", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let calls = 0;
+      const handlers = WsGlobalSkillsRpcGroup.toLayer({
+        [GLOBAL_SKILLS_WS_METHODS.globalRemove]: () =>
+          Effect.sync(() => {
+            calls++;
+            return { globalSkillsDir: "/fixture/skills", skills: [] };
+          }),
+        [GLOBAL_SKILLS_WS_METHODS.globalRescan]: () =>
+          Effect.sync(() => {
+            calls++;
+            return { globalSkillsDir: "/fixture/skills", skills: [] };
+          }),
+      });
+      const denied = yield* RpcTest.makeClient(WsGlobalSkillsRpcGroup).pipe(
+        Effect.provide(
+          Layer.mergeAll(handlers, RpcAuthorization.layer([AuthOrchestrationReadScope])),
+        ),
+      );
+      for (const request of [
+        denied[GLOBAL_SKILLS_WS_METHODS.globalRemove]({ name: "goat:x" }),
+        denied[GLOBAL_SKILLS_WS_METHODS.globalRescan]({}),
+      ]) {
+        expect(yield* Effect.flip(request)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: AuthSettingsWriteScope,
+        });
+      }
+      expect(calls).toBe(0);
+      const allowed = yield* RpcTest.makeClient(WsGlobalSkillsRpcGroup).pipe(
+        Effect.provide(Layer.mergeAll(handlers, RpcAuthorization.layer([AuthSettingsWriteScope]))),
+      );
+      yield* allowed[GLOBAL_SKILLS_WS_METHODS.globalRemove]({ name: "goat:x" });
+      yield* allowed[GLOBAL_SKILLS_WS_METHODS.globalRescan]({});
+      expect(calls).toBe(2);
+    }),
+  ),
 );

@@ -21,9 +21,12 @@ import {
   type GoatBotAttachmentSupport,
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
+import { useGoatBotMember } from "./goatBotMemberContext";
 
 export interface GoatBotComposerHandle {
   addFiles(files: File[]): void;
+  /** Puts a drafted message in the box, keeping staged files; the person still sends it. */
+  replaceText(text: string): void;
 }
 
 /**
@@ -50,6 +53,7 @@ export function GoatBotComposer({
   ) => boolean | void;
 }) {
   const [text, setText] = useState(initialText);
+  const member = useGoatBotMember();
   const [attachments, setDraftAttachments] = useState<ReadonlyArray<GoatBotDraftAttachment>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef(attachments);
@@ -106,6 +110,10 @@ export function GoatBotComposer({
   useImperativeHandle(ref, () => ({
     addFiles(files) {
       void addFiles(files).then(() => textareaRef.current?.focus());
+    },
+    replaceText(next) {
+      setText(next);
+      textareaRef.current?.focus();
     },
   }));
   const remove = (id: string) => {
@@ -172,7 +180,7 @@ export function GoatBotComposer({
             ref={textareaRef}
             rows={1}
             data-goat-bot-composer=""
-            aria-label="Message GOAT Bot"
+            aria-label={`Message ${member?.name ?? "GOAT Bot"}`}
             placeholder={placeholder}
             value={text}
             disabled={disabled}

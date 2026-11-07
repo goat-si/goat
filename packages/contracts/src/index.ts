@@ -1,3 +1,6 @@
+export * from "./globalSkillsRpc.ts";
+export * from "./globalSkills.ts";
+export * from "./mcpServers.ts";
 export { AuthAccessMutationError } from "./authAccessRpc.ts";
 export * from "./baseSchemas.ts";
 export * from "./assistantCitations.ts";
@@ -57,6 +60,8 @@ export * from "./channelBrief.ts";
 export * from "./channelReception.ts";
 export * from "./goatBotSessionThread.ts";
 export * from "./channelGateway.ts";
+export * from "./channelBotNotes.ts";
+export * from "./channelBotArtifacts.ts";
 export * from "./slackChannel.ts";
 export * from "./cloudMachines.ts";
 export * from "./hubNodes.ts";
@@ -147,6 +152,7 @@ export * from "./secretRequest.ts";
 export * from "./clientRpcPermissions.ts";
 
 export * from "./memory.ts";
+export * from "./memoryStoreBudget.ts";
 export * from "./siteNotes.ts";
 export * from "./memoryRecall.ts";
 export * from "./memoryRemember.ts";

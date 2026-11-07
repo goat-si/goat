@@ -106,10 +106,10 @@ function accessibilityStep(readiness: ComputerUseReadiness): ComputerUseSetupSte
   if (readiness.tree === "empty")
     return {
       id: "accessibility",
-      status: "waiting",
+      status: "action",
       title: "App controls",
       detail:
-        "AT-SPI answers, but the app GOAT checked shows it no windows. Open the app you want GOAT to use.",
+        "AT-SPI answers, but the apps GOAT checked show it no windows. Chrome and Electron apps such as VS Code turn on accessibility only when they start, so quit and reopen apps that were open before computer use started, or open the app you want GOAT to use.",
       guidance: [],
     };
   // AT-SPI is proven by reading a window; with none open there was nothing to read, so it is
@@ -225,7 +225,16 @@ function captureStep(readiness: ComputerUseReadiness): ComputerUseSetupStep {
       ? "This Wayland desktop cannot show GOAT a single window." +
         (readiness.tree === "ready" ? " GOAT can still read and use app controls." : "")
       : "GOAT could not capture a window on this desktop.",
-    guidance: [],
+    // The helper refuses an X window nothing redirects (no compositing manager), the usual
+    // cause on a bare window manager or Xvfb; other failures share this state.
+    guidance: wayland
+      ? []
+      : [
+          text(
+            "If GOAT reports that no compositing manager runs on this display, start one in that session, such as picom or xcompmgr. GNOME, KDE and most full desktops run their own.",
+          ),
+          command("setsid xcompmgr >/dev/null 2>&1 &"),
+        ],
   };
 }
 

@@ -1,5 +1,6 @@
 import {
   CHANNEL_GATEWAY_WS_METHODS,
+  GLOBAL_SKILLS_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   SLACK_CHANNEL_WS_METHODS,
   WS_METHODS,
@@ -19,6 +20,8 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup | typeof WsHubNodesRpcGroup>[
 
 // Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
+  [GLOBAL_SKILLS_WS_METHODS.globalRemove]: "skills",
+  [GLOBAL_SKILLS_WS_METHODS.globalRescan]: "skills",
   [WS_METHODS.browserClaimsWindows]: "browserClaims",
   [WS_METHODS.browserClaimsClaim]: "browserClaims",
   [WS_METHODS.browserClaimsAnswer]: "browserClaims",
@@ -196,8 +199,16 @@ const RPC_AGGREGATES = {
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listBots]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.updateBot]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.createBot]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listChildWork]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listBotThreads]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.listBotNotes]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.readBotArtifact]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getTask]: "channel",

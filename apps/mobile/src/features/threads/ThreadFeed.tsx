@@ -22,6 +22,9 @@ import {
 } from "../../lib/enrichedLinkPresentation";
 import { GOAT_CONTEXT_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import { ThreadContextDivider } from "./thread-context-divider";
+import { StandingInstructionsRow } from "./standing-instructions-row";
+import { EXPANDABLE_ROW_MIN_HEIGHT } from "./work-log-layout";
+import { FeedEntryShimmerContext } from "./work-shimmer-arbiter";
 import {
   ThreadHandoffDivider,
   ThreadHandoffRow,
@@ -45,7 +48,6 @@ import {
   IDLE_COMPACTING_LABELS,
   resolveUserMessagePresentation,
 } from "@goat/client-runtime/user-message";
-import type { StandingInstructionsBlock } from "@goat/shared/standingInstructions";
 import { canForkProjectedAssistantItem } from "@goat/client-runtime/state/thread-workflows";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
@@ -182,6 +184,7 @@ import {
   deriveThreadFeedInitialContentInset,
   deriveThreadWorkLogSizing,
   type LayoutVariant,
+  THREAD_WORK_ROW_MIN_HEIGHT,
 } from "../../lib/layout";
 import { uuidv4 } from "../../lib/uuid";
 import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
@@ -231,6 +234,7 @@ import {
 } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
+import { nextSettleAnchorId } from "./turn-settle";
 import { htmlRenderFrameHeight } from "@goat/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
@@ -243,7 +247,7 @@ import {
   pickWorkspaceBasenameMatch,
   WORKSPACE_BASENAME_LOOKUP_LIMIT,
 } from "@goat/client-runtime/workspace-basename-lookup";
-import { useLiveThreadLinkLabels, useThreadChipIcons } from "../../state/entities";
+import { useLiveThreadLinkLabels, useContextChipIcons } from "../../state/entities";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -297,7 +301,7 @@ function formatMessageTime(input: string): string {
   return MESSAGE_TIME_FORMATTER.format(timestamp);
 }
 
-const TURN_FOLD_HEIGHT = 42;
+const TURN_FOLD_HEIGHT = EXPANDABLE_ROW_MIN_HEIGHT + 3.5;
 const FEED_PADDING_TOP = 12;
 // Rows re-measure within a commit or two of a width change. LegendList also defers imperative
 // scrolls for 100ms after it compensates a size change, and a deferred restore could land
@@ -477,6 +481,7 @@ function AssistantForkButton(props: {
           })
           .finally(() => setBusy(false));
       }}
+      hitSlop={8}
       className="h-7 w-7 items-center justify-center disabled:opacity-40"
       style={
         Platform.OS === "android"
@@ -852,7 +857,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
 }) {
   const iconSubtleColor = useUniwindTheme()["--color-icon-subtle"];
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
-  const threadIcons = useThreadChipIcons(props.environmentId, liveMarkdown);
+  const threadIcons = useContextChipIcons(props.environmentId, liveMarkdown);
   const linkHandlers: MarkdownLinkHandlers = {
     ...props.linkHandlers,
     linkCustomization: (href) =>
@@ -966,40 +971,6 @@ function useMarkdownStyles(): MarkdownStyleSets {
     nativeMarkdownTypography,
     regularFontFamily,
   ]);
-}
-
-/** Messages from other agents fold to one line so the user's own messages stay easy to find. */
-/** What GOAT put in front of a launched thread's first message, collapsed until tapped. */
-function StandingInstructionsRow(props: { readonly block: StandingInstructionsBlock }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <View className="gap-1">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: open }}
-        accessibilityLabel={open ? "Hide standing instructions" : "Show standing instructions"}
-        hitSlop={4}
-        onPress={() => setOpen((value) => !value)}
-        className="flex-row items-center gap-1"
-      >
-        <SymbolView
-          name={open ? "chevron.down" : "chevron.right"}
-          size={10}
-          tintColorClassName="accent-foreground-muted"
-          type="monochrome"
-        />
-        <Text className="font-goat-medium text-2xs text-foreground-muted">
-          Standing instructions
-        </Text>
-        <Text className="text-2xs text-foreground-muted opacity-70">{props.block.version}</Text>
-      </Pressable>
-      {open ? (
-        <Text selectable className="text-xs text-foreground-muted">
-          {props.block.text}
-        </Text>
-      ) : null}
-    </View>
-  );
 }
 
 /** Automation prompts are long, repeated runbooks; a folded bubble keeps them out of the way. */
@@ -1160,6 +1131,7 @@ function RunFoldButton({
   }, [entry.expanded, anchorsKey, environmentId, threadId]);
   const error = anchorsKey && failed ? "Couldn't load work. Tap to retry." : null;
   const loading = entry.expanded && anchorsKey !== "" && !failed;
+  const foldHeight = Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight);
   const toggle = () => {
     setFailed(false);
     if (error && entry.expanded) load();
@@ -1173,8 +1145,8 @@ function RunFoldButton({
         accessibilityState={{ expanded: entry.expanded, busy: loading }}
         onPress={toggle}
         hitSlop={4}
-        className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2"
-        style={{ minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight) }}
+        className="min-w-0 flex-1 flex-row items-center gap-2"
+        style={{ minHeight: foldHeight }}
       >
         <Text
           key={rowSizing.textSizeKey}
@@ -1516,7 +1488,7 @@ function renderFeedEntry(
       );
       return (
         <Animated.View
-          className="mb-5 items-end"
+          className="mb-5 mt-2 items-end"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
           {foldRowId !== null ? (
@@ -1527,7 +1499,7 @@ function renderFeedEntry(
             />
           ) : null}
           {presentation.attribution === "t3code" ? (
-            <Text className="mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted opacity-60">
+            <Text className="mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted">
               Sent by GOAT
             </Text>
           ) : null}
@@ -1862,7 +1834,7 @@ function UserMessageContent(props: UserMessageContentProps) {
   const openLinkedThread = useOpenLinkedThread();
   const { selectedThread } = useThreadSelection();
   const liveText = useLiveThreadLinkLabels(props.text, props.environmentId);
-  const threadIcons = useThreadChipIcons(props.environmentId, liveText, props.context?.records);
+  const threadIcons = useContextChipIcons(props.environmentId, liveText, props.context?.records);
   const text = replaceComposerContextReferences(liveText, (ref) => {
     const available = props.context?.records.some((record) => record.contextId === ref.contextId);
     return `[${ref.label}${available ? "" : " (unavailable)"}](${GOAT_CONTEXT_LINK_PROTOCOL}://v1/${ref.kind}/${ref.contextId})`;
@@ -2139,6 +2111,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   const { themeAppearance } = useAppearancePreferences();
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
+  const settleAnchorFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2896,8 +2869,13 @@ export const ThreadFeed = memo(function ThreadFeed({
   })();
   // An interrupted run unfolds; a run that is no longer latest folds back.
   const [previousLatestRun, setPreviousLatestRun] = useState(props.latestRun);
+  // A settling run folds its work above its reply; anchor the reply, not the user message above.
+  const [settleAnchorId, setSettleAnchorId] = useState<string | null>(null);
   if (previousLatestRun !== props.latestRun) {
     setPreviousLatestRun(props.latestRun);
+    setSettleAnchorId((anchor) =>
+      nextSettleAnchorId(anchor, previousLatestRun, props.latestRun, presentedFeed),
+    );
     const latest = props.latestRun;
     const previous = previousLatestRun;
     if (latest && previous) {
@@ -3024,14 +3002,34 @@ export const ThreadFeed = memo(function ThreadFeed({
   };
 
   const handleItemSizeChanged = () => {
-    if (disclosureAnchorKeyRef.current !== null) {
-      settleDisclosureAfterLayout();
-    }
+    if (disclosureAnchorKeyRef.current !== null) settleDisclosureAfterLayout();
+    if (settleAnchorId !== null) releaseSettleAnchorAfterLayout();
   };
+  const settleAnchorIndex =
+    settleAnchorId === null ? -1 : presentedFeed.findIndex((row) => row.id === settleAnchorId);
+  const releaseSettleAnchorAfterLayout = useEffectEvent(() => {
+    if (settleAnchorFrameRef.current !== null) cancelAnimationFrame(settleAnchorFrameRef.current);
+    settleAnchorFrameRef.current = requestAnimationFrame(() => {
+      settleAnchorFrameRef.current = requestAnimationFrame(() => {
+        settleAnchorFrameRef.current = null;
+        setSettleAnchorId(null);
+      });
+    });
+  });
+  // oxlint-disable-next-line goat/react-effect-budget -- the fold's rows measure after commit; release the anchor once they settle
+  useEffect(() => {
+    if (settleAnchorId === null) return;
+    releaseSettleAnchorAfterLayout();
+    return () => {
+      if (settleAnchorFrameRef.current !== null) cancelAnimationFrame(settleAnchorFrameRef.current);
+      settleAnchorFrameRef.current = null;
+    };
+  }, [settleAnchorId]);
 
-  const shouldRestoreVisibleContentPosition = (entry: ThreadFeedRow) => {
+  const shouldRestoreVisibleContentPosition = (entry: ThreadFeedRow, index: number) => {
     const disclosureAnchorKey = disclosureAnchorKeyRef.current;
-    return disclosureAnchorKey === null || entry.id === disclosureAnchorKey;
+    if (disclosureAnchorKey !== null) return entry.id === disclosureAnchorKey;
+    return settleAnchorIndex < 0 || index >= settleAnchorIndex;
   };
 
   const maintainVisibleContentPosition = {
@@ -3118,7 +3116,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       case "work-toggle":
         return entry.thought ? undefined : WORK_GROUP_TOGGLE_HEIGHT;
       case "thinking":
-        return WORK_GROUP_TOGGLE_HEIGHT;
+        return THREAD_WORK_ROW_MIN_HEIGHT;
       case "activity-group":
         if (entry.activities[0]?.projectedItem.item.type === "subagent") {
           return undefined;
@@ -3191,48 +3189,50 @@ export const ThreadFeed = memo(function ThreadFeed({
               iconColor={iconSubtleColor}
             />
           ) : null}
-          {renderFeedEntry(info, {
-            environmentId: props.environmentId,
-            dispatchingMessageId: props.dispatchingMessageId,
-            onEditPendingMessage: props.onEditPendingMessage,
-            onUseArtifactTemplate: props.onUseArtifactTemplate,
-            threadId: props.threadId,
-            copiedRowId,
-            expandedWorkRows,
-            workRowSizing,
-            workGroupScrollPositions,
-            terminalAssistantMessageIds,
-            unsettledTurnId,
-            compactionLabelsByEntryId,
-            failedRunIds,
-            onCopyWorkRow,
-            onToggleWorkGroup,
-            onToggleWorkRow,
-            onToggleTurnFold,
-            onOpenTurnDiff,
-            onPressPreview,
-            onPlaybackStart: onInlinePlaybackStart,
-            markdownLinkHandlers,
-            renderMarkdownImage,
-            renderViewedImage,
-            renderReasoning,
-            iconSubtleColor,
-            replyActionSize,
-            screenColor,
-            userBubbleColor,
-            markdownStyles,
-            reviewCommentColors,
-            reviewCommentBubbleWidth,
-            themeAppearance,
-            duoColumns,
-            userBubbleMaxWidth,
-            markdownContentWidth,
-            contentWidth,
-            threadTitle: props.threadTitle,
-            skills: props.skills,
-            workspaceRoot: props.workspaceRoot,
-            workflowOpening,
-          })}
+          <FeedEntryShimmerContext value={info.index}>
+            {renderFeedEntry(info, {
+              environmentId: props.environmentId,
+              dispatchingMessageId: props.dispatchingMessageId,
+              onEditPendingMessage: props.onEditPendingMessage,
+              onUseArtifactTemplate: props.onUseArtifactTemplate,
+              threadId: props.threadId,
+              copiedRowId,
+              expandedWorkRows,
+              workRowSizing,
+              workGroupScrollPositions,
+              terminalAssistantMessageIds,
+              unsettledTurnId,
+              compactionLabelsByEntryId,
+              failedRunIds,
+              onCopyWorkRow,
+              onToggleWorkGroup,
+              onToggleWorkRow,
+              onToggleTurnFold,
+              onOpenTurnDiff,
+              onPressPreview,
+              onPlaybackStart: onInlinePlaybackStart,
+              markdownLinkHandlers,
+              renderMarkdownImage,
+              renderViewedImage,
+              renderReasoning,
+              iconSubtleColor,
+              replyActionSize,
+              screenColor,
+              userBubbleColor,
+              markdownStyles,
+              reviewCommentColors,
+              reviewCommentBubbleWidth,
+              themeAppearance,
+              duoColumns,
+              userBubbleMaxWidth,
+              markdownContentWidth,
+              contentWidth,
+              threadTitle: props.threadTitle,
+              skills: props.skills,
+              workspaceRoot: props.workspaceRoot,
+              workflowOpening,
+            })}
+          </FeedEntryShimmerContext>
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
           ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (

@@ -20,7 +20,7 @@ const STATUS_CLASS = {
   unsettled: "text-warning-foreground",
   failed: "text-adaptive-rose-600-400",
   denied: "text-warning-foreground",
-  stopped: "text-foreground-subtle",
+  stopped: "text-foreground-muted",
 } as const satisfies Record<ComputerUseRunStatus, string>;
 
 /**

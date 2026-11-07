@@ -41,6 +41,17 @@ it("a desktop window's live picture needs the same read grant as a browser tab's
   ]);
 });
 describe("memory client guards", () => {
+  it("GOAT Bot's notes need the memory read grant before the client asks", () => {
+    expect(clientRpcRequiredScopes("channel.listBotNotes", {})).toEqual(["memory:read"]);
+  });
+
+  it("GOAT Bot's Library needs the filesystem read grant before the client asks", () => {
+    expect(clientRpcRequiredScopes("channel.listBotArtifacts", {})).toEqual(["filesystem:read"]);
+    expect(clientRpcRequiredScopes("channel.readBotArtifact", { relativePath: "a" })).toEqual([
+      "filesystem:read",
+    ]);
+  });
+
   it("requires memory grants for site note reads and changes", () => {
     expect(clientRpcRequiredScopes("siteNotes.list", {})).toEqual(["memory:read"]);
     for (const method of ["siteNotes.write", "siteNotes.delete", "siteNotes.restoreSeed"] as const)

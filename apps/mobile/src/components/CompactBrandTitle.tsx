@@ -8,6 +8,7 @@ import { AppText as Text } from "./ui/AppText";
 import { GoatWordmark } from "./GoatWordmark";
 import { BrandChannelPill } from "./BrandChannelPill";
 import { IPAD_HOME_TITLE_OFFSET } from "../lib/layoutMetrics";
+import { MOBILE_CHROME_MAX_FONT_SCALE } from "../lib/typography";
 import { resolveMobileBrandChannel } from "../lib/mobileBranding";
 import { useAndroidControlSizing } from "./ui/useAndroidControlSizing";
 
@@ -49,16 +50,21 @@ export function CompactBrandTitle(
         props.fit && { flexShrink: 0 },
       ]}
     >
-      <GoatWordmark colorClassName="accent-icon" height={Math.round(15 * scale)} />
+      <GoatWordmark colorClassName="accent-foreground" height={Math.round(15 * scale)} />
       <Text
         allowFontScaling={props.allowFontScaling}
-        className="font-goat-bold text-foreground-muted"
-        style={{ fontSize: 21 * scale, letterSpacing: -0.5 * scale }}
+        maxFontSizeMultiplier={MOBILE_CHROME_MAX_FONT_SCALE}
+        className="font-goat-bold text-foreground"
+        style={{ fontSize: 18 * scale, letterSpacing: 0.04 * 18 * scale }}
       >
         GOAT
       </Text>
       {showStage ? (
-        <BrandChannelPill channel={channel} allowFontScaling={props.allowFontScaling} />
+        <BrandChannelPill
+          channel={channel}
+          allowFontScaling={props.allowFontScaling}
+          maxFontSizeMultiplier={MOBILE_CHROME_MAX_FONT_SCALE}
+        />
       ) : null}
     </View>
   );

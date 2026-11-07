@@ -11,14 +11,29 @@ import {
   useThreadVisibleTurnItems,
 } from "../state/entities";
 import { GoatBotTaskPane } from "../components/goatBot/GoatBotTaskPane";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 
 import { validateBotTaskSearch } from "../components/goatBot/botTaskSearch";
 import { GoatBotChatView } from "../components/goatBot/GoatBotChatView";
 import { GoatBotChannelContext } from "../components/goatBot/goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "../components/goatBot/goatBotHooks";
+import {
+  GoatBotMemberContext,
+  goatBotSearch,
+  useGoatBotMember,
+} from "../components/goatBot/goatBotMemberContext";
+import { useBotRoster } from "../components/goatBot/useBotRoster";
+import { useBotManage } from "../components/goatBot/useBotManage";
 import { useGoatBotHomeSettings } from "../components/goatBot/useGoatBotHome";
 import { useGoatBotSession } from "../components/goatBot/useGoatBotSession";
+import { Button } from "../components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { requestTaskFocusReturn, getTaskPaneFocus } from "../components/goatBot/taskPaneFocus";
 
@@ -32,19 +47,32 @@ function GoatBotRouteView() {
 }
 
 function GoatBotRouteSession() {
-  const { task } = Route.useSearch();
+  const { task, bot: botId } = Route.useSearch();
+  const roster = useBotRoster();
+  const member =
+    botId === undefined
+      ? null
+      : (roster.bots?.find((bot) => bot.role === "member" && bot.botId === botId) ?? null);
+  // A named bot this client does not know yet waits for the roster; it never opens main instead.
+  const memberUnknown = botId !== undefined && member === null;
+  const memberResolving = memberUnknown && (!roster.botsLoaded || roster.botsPending);
   const botRef = useGlobalAgentStore((state) => state.botRef);
-  const ref = botRef ? scopeThreadRef(botRef.environmentId, botRef.threadId) : null;
+  const ref = member
+    ? scopeThreadRef(member.environmentId, member.sessionThreadId)
+    : botId === undefined && botRef
+      ? scopeThreadRef(botRef.environmentId, botRef.threadId)
+      : null;
   const shell = useThreadShell(ref);
   const items = useThreadVisibleTurnItems(
     resolveThreadDetailRef(ref, { shellExists: shell !== null, waitForShell: true }),
   );
-  const session = useGoatBotSession(items, null);
+  const session = useGoatBotSession(items, null, member);
   const homeSettings = useGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
   const legacyAgentRoute = useLegacyGlobalAgentRoute();
   const navigate = useNavigate();
-  const bot = session.availability.kind === "ready" ? session.availability.bot : null;
+  const bot =
+    !memberUnknown && session.availability.kind === "ready" ? session.availability.bot : null;
   useEffect(() => {
     if (bot && (task === undefined || !session.supportsTaskThreads))
       void navigate({
@@ -53,25 +81,55 @@ function GoatBotRouteSession() {
         replace: true,
       });
   }, [bot, navigate, task, session.supportsTaskThreads]);
+  if (memberUnknown && !memberResolving) return <GoatBotMemberMissing />;
   if (bot && task && session.supportsTaskThreads)
-    return <GoatBotTaskRoute environmentId={bot.environmentId} session={session} taskId={task} />;
+    return (
+      <GoatBotMemberContext value={member}>
+        <GoatBotTaskRoute environmentId={bot.environmentId} session={session} taskId={task} />
+      </GoatBotMemberContext>
+    );
+  return (
+    <GoatBotMemberContext value={member}>
+      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+        <GoatBotChatView
+          {...session}
+          {...(memberResolving && roster.environmentId !== null
+            ? { availability: { kind: "connecting" as const, environmentId: roster.environmentId } }
+            : {})}
+          environmentId={bot?.environmentId ?? null}
+          legacyAgentRoute={legacyAgentRoute}
+          homeMove={
+            moveTarget
+              ? {
+                  label: moveTarget.label,
+                  busy: homeSettings.busy,
+                  onMove: () => homeSettings.changeHome(moveTarget.environmentId),
+                }
+              : undefined
+          }
+          homeMoveError={homeSettings.error}
+        />
+      </SidebarInset>
+    </GoatBotMemberContext>
+  );
+}
+
+function GoatBotMemberMissing() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <GoatBotChatView
-        {...session}
-        environmentId={bot?.environmentId ?? null}
-        legacyAgentRoute={legacyAgentRoute}
-        homeMove={
-          moveTarget
-            ? {
-                label: moveTarget.label,
-                busy: homeSettings.busy,
-                onMove: () => homeSettings.changeHome(moveTarget.environmentId),
-              }
-            : undefined
-        }
-        homeMoveError={homeSettings.error}
-      />
+      <Empty className="min-h-0 flex-1">
+        <EmptyHeader className="max-w-md">
+          <EmptyTitle>This bot isn't available</EmptyTitle>
+          <EmptyDescription>It may belong to another account or server.</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <div className="flex justify-center">
+            <Button size="sm" variant="outline" render={<Link to="/bot" search={{}} />}>
+              Open GOAT Bot
+            </Button>
+          </div>
+        </EmptyContent>
+      </Empty>
     </SidebarInset>
   );
 }
@@ -91,6 +149,9 @@ export function GoatBotTaskRoute({
   const narrow = narrowViewport || !besideChat;
   const navigate = useNavigate();
   const legacyAgentRoute = useLegacyGlobalAgentRoute();
+  const member = useGoatBotMember();
+  const manage = useBotManage(environmentId);
+  const memberDeleted = member?.state === "deleted";
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -99,6 +160,10 @@ export function GoatBotTaskRoute({
             {...session}
             environmentId={environmentId}
             legacyAgentRoute={legacyAgentRoute}
+            removal={memberDeleted ? "deleted" : null}
+            onRestore={
+              memberDeleted && manage.canManage ? () => void manage.restore(member) : undefined
+            }
           />
         )}
         <GoatBotTaskPane
@@ -108,7 +173,7 @@ export function GoatBotTaskRoute({
           taskId={taskId}
           onClose={() => {
             requestTaskFocusReturn(taskFocus);
-            void navigate({ to: "/bot", search: {} });
+            void navigate({ to: "/bot", search: goatBotSearch(member) });
           }}
         />
       </div>

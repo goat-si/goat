@@ -117,7 +117,7 @@ const make = Effect.gen(function* () {
         target.task.worker.host !== undefined
       )
         return yield* fail("invalid_input");
-      const bot = yield* ledger.getBot(target.ownerId);
+      const bot = yield* ledger.getBotById(target.ownerId, target.botId);
       const prepared = prepareTransition(
         target,
         {
@@ -159,7 +159,7 @@ const make = Effect.gen(function* () {
       const { target, requester } = yield* authorize(input);
       if (!["received", "dispatching", "running", "waiting_input"].includes(target.task.status))
         return null;
-      const bot = yield* ledger.getBot(target.ownerId);
+      const bot = yield* ledger.getBotById(target.ownerId, target.botId);
       const prepared = prepareTransition(
         target,
         {
@@ -188,7 +188,7 @@ const make = Effect.gen(function* () {
       // A dispatcher question also needs target selection, which this tool cannot establish.
       if (target.task.worker === undefined) return yield* fail("invalid_input");
       const eventId = taskEventIdFor(target.task.taskId, target.task.version + 1);
-      const bot = yield* ledger.getBot(target.ownerId);
+      const bot = yield* ledger.getBotById(target.ownerId, target.botId);
       const prepared = prepareTransition(
         target,
         {

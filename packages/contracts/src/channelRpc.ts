@@ -11,6 +11,13 @@ import {
   ChannelGetBotStatusResult,
   ChannelListBotsInput,
   ChannelListBotsResult,
+  ChannelUpdateBotInput,
+  ChannelUpdateBotResult,
+  ChannelBotResult,
+  ChannelCreateBotInput,
+  ChannelDeleteBotInput,
+  ChannelRestoreBotInput,
+  ChannelSetBotHiddenInput,
   ChannelListChildWorkInput,
   ChannelListChildWorkResult,
   ChannelListBotThreadsInput,
@@ -26,9 +33,16 @@ import {
   ChannelIngestInput,
   ChannelIngestResult,
   ChannelInputSnapshot,
-  ChannelListTasksInput,
+  ChannelListTasksRpcInput,
   ChannelListTasksResult,
 } from "./channelGateway.ts";
+import {
+  ChannelListBotArtifactsInput,
+  ChannelListBotArtifactsResult,
+  ChannelReadBotArtifactInput,
+  ChannelReadBotArtifactResult,
+} from "./channelBotArtifacts.ts";
+import { ChannelListBotNotesInput, ChannelListBotNotesResult } from "./channelBotNotes.ts";
 import { ChannelTask } from "./channelLedger.ts";
 import {
   SLACK_CHANNEL_WS_METHODS,
@@ -62,9 +76,57 @@ const ChannelListBotsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBots, {
   error: ChannelRpcError,
 });
 
+const ChannelUpdateBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.updateBot, {
+  payload: ChannelUpdateBotInput,
+  success: ChannelUpdateBotResult,
+  error: ChannelRpcError,
+});
+
+const ChannelCreateBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.createBot, {
+  payload: ChannelCreateBotInput,
+  success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
+const ChannelSetBotHiddenRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.setBotHidden, {
+  payload: ChannelSetBotHiddenInput,
+  success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
+const ChannelDeleteBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.deleteBot, {
+  payload: ChannelDeleteBotInput,
+  success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
+const ChannelRestoreBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.restoreBot, {
+  payload: ChannelRestoreBotInput,
+  success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
 const ChannelListBotThreadsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotThreads, {
   payload: ChannelListBotThreadsInput,
   success: ChannelListBotThreadsResult,
+  error: ChannelRpcError,
+});
+
+const ChannelListBotNotesRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotNotes, {
+  payload: ChannelListBotNotesInput,
+  success: ChannelListBotNotesResult,
+  error: ChannelRpcError,
+});
+
+const ChannelListBotArtifactsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts, {
+  payload: ChannelListBotArtifactsInput,
+  success: ChannelListBotArtifactsResult,
+  error: ChannelRpcError,
+});
+
+const ChannelReadBotArtifactRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.readBotArtifact, {
+  payload: ChannelReadBotArtifactInput,
+  success: ChannelReadBotArtifactResult,
   error: ChannelRpcError,
 });
 
@@ -93,7 +155,7 @@ const ChannelGetTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getTask, {
 });
 
 const ChannelListTasksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listTasks, {
-  payload: ChannelListTasksInput,
+  payload: ChannelListTasksRpcInput,
   success: ChannelListTasksResult,
   error: ChannelRpcError,
 });
@@ -148,7 +210,15 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelEnsureBotRpc,
   ChannelGetBotStatusRpc,
   ChannelListBotsRpc,
+  ChannelUpdateBotRpc,
+  ChannelCreateBotRpc,
+  ChannelSetBotHiddenRpc,
+  ChannelDeleteBotRpc,
+  ChannelRestoreBotRpc,
   ChannelListBotThreadsRpc,
+  ChannelListBotNotesRpc,
+  ChannelListBotArtifactsRpc,
+  ChannelReadBotArtifactRpc,
   ChannelListChildWorkRpc,
   ChannelUpdateTaskViewRpc,
   ChannelIngestRpc,

@@ -1,3 +1,4 @@
+import { goatMcpServersFor, nativeSubagentLimiter } from "./goatSessionConfig.ts";
 import { repairSchedule } from "../retryJitter.ts";
 import { makeMemoryProviderAuthority } from "./MemoryProviderAuthority.ts";
 import { isReleasedRuntimeRequest } from "./ReleasedRuntimeRequest.ts";
@@ -66,7 +67,6 @@ import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import { proxyChannelRevoker } from "./ProxyChannelRevoker.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
-import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as MemoryAccess from "../memory/MemoryAccess.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as EventSink from "./EventSink.ts";
@@ -429,21 +429,7 @@ export const layerWithOptions = (
       const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
       const revokeProxyChannel = yield* proxyChannelRevoker(mcpSessions);
       const permissionProfiles = yield* Effect.serviceOption(PermissionProfiles.PermissionProfiles);
-      const withNativeSubagentLimit = (threadId: ThreadId, config: McpProviderSessionConfig) =>
-        Effect.gen(function* () {
-          const { nativeSubagentLimit: _previous, ...rest } = config;
-          if (Credential.sessionNativeSubagentLimit(threadId) === 0)
-            return { ...rest, nativeSubagentLimit: 0 };
-          if (Option.isNone(permissionProfiles)) return rest;
-          const limit = yield* permissionProfiles.value.nativeSubagentLimit(threadId).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Could not read the goatclaw subagent limit; allowing none.", {
-                cause,
-              }).pipe(Effect.as(0)),
-            ),
-          );
-          return limit === undefined ? rest : { ...rest, nativeSubagentLimit: limit };
-        });
+      const withNativeSubagentLimit = nativeSubagentLimiter(permissionProfiles);
       const originReads = ComputerUseOrigin.projectionOriginReads({
         getThreadRecords: (id, fields, filter) =>
           projectionStore.getThreadRecords(id, fields, filter),
@@ -798,6 +784,12 @@ export const layerWithOptions = (
                         providerSessionId: existing.providerSessionId,
                       }
                     : undefined;
+                const goatMcpServers = yield* goatMcpServersFor(
+                  existing,
+                  renew,
+                  serverSettings,
+                  driver,
+                );
                 if (renew === undefined) yield* mcpSessionRegistry.revokeThread(threadId);
                 const credential = yield* mcpSessionRegistry.issue({
                   threadId,
@@ -825,7 +817,7 @@ export const layerWithOptions = (
                 yield* mcpSessions.set(
                   yield* withNativeSubagentLimit(
                     threadId,
-                    withUrlOpener(withTurnSkills(credential.config)),
+                    withUrlOpener(withTurnSkills({ ...credential.config, goatMcpServers })),
                   ),
                 );
                 yield* Ref.update(

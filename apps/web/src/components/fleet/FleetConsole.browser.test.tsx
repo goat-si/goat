@@ -78,6 +78,9 @@ const snapshot = {
   ],
   threads: [],
   totals: { running: 9, attention: 2, reported: 3, machines: 6 },
+  hiddenCloudAliases: [],
+  hiddenRoutes: [],
+  idleCloudMachines: [],
 };
 
 let container: HTMLDivElement;
@@ -245,7 +248,7 @@ describe("FleetConsoleSlot", () => {
     expect(rows).toHaveLength(demo.snapshot.machines.length + 1);
     expect(rows).toHaveLength(demo.snapshot.totals.machines + Number(chip.textContent!.slice(1)));
     expect(chip.getAttribute("aria-label")).toContain("clisu-oracle, Unreachable");
-    expect(chip.getAttribute("aria-label")).toContain("nightly-ci, Boat · Stopped");
+    expect(chip.getAttribute("aria-label")).toContain("weekly-eval, Boat · Stopped");
     expect(chip.getAttribute("aria-label")).toContain("gpu-box, SSH host · via mac-studio");
 
     const withChip = header.getBoundingClientRect().height;

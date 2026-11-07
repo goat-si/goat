@@ -16,6 +16,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
 import {
+  type BotId,
   CHANNEL_HOST_WORKSPACE_LABEL,
   type ChannelInputId,
   type ChannelConversationId,
@@ -24,7 +25,6 @@ import {
   type ChannelReceptionRead,
   type ChannelReceptionReadResult,
   type ChannelReceptionResult,
-  type ChannelReplyAddress,
   type ChannelRequester,
   type ChannelTask,
   type ChannelTaskApprovalRef,
@@ -32,7 +32,6 @@ import {
   ChannelReceptionId,
   CommandId,
   CHANNEL_RECEPTION_TAIL_LIMITS,
-  type ChannelOutboundKind,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import {
@@ -68,6 +67,7 @@ import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import { isUnlinkedPrincipal, lowerRuntimeMode, mayAnswerFor } from "./ChannelGateway.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
+import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
@@ -76,9 +76,9 @@ import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as tt from "./channelTaskThreadRefusal.ts";
 import {
-  appendChannelBotNote,
   channelBotFilesFor,
   listChannelBotSkills,
+  makeChannelBotNoteSaver,
   quotedFromInput,
   readChannelBotNotes,
 } from "./channelBotNotes.ts";
@@ -97,6 +97,7 @@ import {
   threadDigest,
 } from "./channelBotRecall.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
+import { makeRemoteThreadRecall } from "./channelRemoteRecall.ts";
 import {
   approvalCard,
   type ApprovalReply,
@@ -105,17 +106,13 @@ import {
   parseApprovalReply,
   whichApproval,
 } from "./channelApprovalCards.ts";
-import { numberedChoiceLines } from "./channelDecisionChoices.ts";
+import { replyDelivery } from "./channelReplyDelivery.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
+import { makeRoutineInputs, ROUTINE_COPY, routineDecision } from "./channelRoutineInputs.ts";
 import { openQuestionTask } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
-import {
-  answerForwardIdsFor,
-  deliveryIdFor,
-  taskEventIdFor,
-  turnSteerIdsFor,
-} from "./channelIds.ts";
+import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import {
   botAddress,
   chipDelivery,
@@ -129,11 +126,17 @@ const CHANNEL_RECEPTION_TIMEOUT_MS = 45_000;
 
 type ReceptionOutcome =
   | { readonly ok: true; readonly result: ChannelReceptionResult }
-  | { readonly ok: false; readonly failure: TextGenerationFailureKind };
+  | { readonly ok: false; readonly failure: TextGenerationFailureKind; readonly reply?: string };
 const receptionFailure = (failure: TextGenerationFailureKind): ReceptionOutcome => ({
   ok: false,
   failure,
 });
+// No reply goes out under a name the person changed; this one says why instead.
+const profileUnreadable: ReceptionOutcome = {
+  ok: false,
+  failure: "unavailable",
+  reply: "I couldn't read that: GOAT Bot's name and purpose could not be read on its computer.",
+};
 /** How many recently active threads a reception pass sees by title. */
 const CHANNEL_RECEPTION_RECENT_THREADS = 20;
 /** How long one read may take before the answer says so and goes on without it. */
@@ -170,51 +173,15 @@ export class ChannelReceptionService extends Context.Service<
       pending: ChannelLedger.ChannelPendingEvent,
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
-    readonly acknowledgeSession: (i: ChannelReceptionInput) => Effect.Effect<string | undefined>;
+    readonly acknowledgeSession: (
+      i: ChannelReceptionInput,
+      botId: BotId,
+    ) => Effect.Effect<string | undefined>;
     readonly isDeterministicReply: (
       stored: ChannelLedger.ChannelStoredInput,
     ) => Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
   }
 >()("goat/channels/ChannelReceptionService") {}
-
-const replyDelivery = (input: {
-  readonly causeKey: string;
-  readonly destination: ChannelReplyAddress;
-  readonly kind: ChannelOutboundKind;
-  readonly text: string;
-  readonly inputId?: ChannelInputId | undefined;
-  readonly task?: ChannelTask | undefined;
-  readonly mentionActorId?: string | undefined;
-  readonly options?: ReadonlyArray<string> | undefined;
-}): ChannelLedger.ChannelOutboxInsert => {
-  const deliveryId = deliveryIdFor(input.causeKey);
-  const options = input.options === undefined || input.options.length === 0 ? [] : input.options;
-  // The GOAT app shows choices as buttons. Slack keeps the labels for Block Kit buttons and
-  // also lists them, so a notification or a typed number still works. iMessage and the rest
-  // get the numbered list only.
-  const buttons = input.destination.kind === "goat" && options.length > 0;
-  const listed = !buttons && options.length > 0;
-  const text = listed ? input.text + "\n" + numberedChoiceLines(options) : input.text;
-  const keepOptions = buttons || (input.destination.kind === "slack" && options.length > 0);
-  return {
-    deliveryId,
-    causeKey: input.causeKey,
-    ...(input.inputId === undefined ? {} : { inputId: input.inputId }),
-    ...(input.task === undefined ? {} : { taskId: input.task.taskId }),
-    message: {
-      deliveryId,
-      destination: input.destination,
-      kind: input.kind,
-      text,
-      ...(input.inputId === undefined ? {} : { inReplyToInputId: input.inputId }),
-      ...(input.task === undefined
-        ? {}
-        : { taskId: input.task.taskId, taskVersion: input.task.version }),
-      ...(input.mentionActorId === undefined ? {} : { mentionActorId: input.mentionActorId }),
-      ...(keepOptions ? { options } : {}),
-    },
-  };
-};
 
 /** Keeps the newest tail entries that fit the byte budget. */
 const boundTail = (
@@ -232,6 +199,7 @@ const boundTail = (
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const routineInputs = yield* makeRoutineInputs;
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const identityNow = (input: {
     readonly connectionId: string;
@@ -244,6 +212,7 @@ const make = Effect.gen(function* () {
   const home = yield* ChannelBotHome.ChannelBotHome;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
   const wake = yield* ChannelWake.ChannelWake;
@@ -255,11 +224,13 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
+  const saveNote = yield* makeChannelBotNoteSaver(fileSystem, botFiles);
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
   const memoryService = yield* Effect.serviceOption(MemoryService.MemoryService);
   const memorySync = yield* Effect.serviceOption(MemorySyncService.MemorySyncService);
+  const remoteThreadRecall = yield* makeRemoteThreadRecall;
 
   // Facts that do not change while the server runs.
   const linuxName =
@@ -540,7 +511,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (read.kind) {
         case "memory": {
-          const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+          const notes = yield* readChannelBotNotes(botFiles, read.query);
           // The whole visible journal is searched; only the prompt's copy is cut to size.
           const journal = journalFor(
             yield* visibleTasks(viewer, conversationId),
@@ -573,13 +544,7 @@ const make = Effect.gen(function* () {
             return taskDigest(task) + "\nIts coding thread has not started.";
           }
           if (worker.host !== undefined) {
-            // Remote threads are read through their reports, which the ledger already holds.
-            return (
-              taskDigest(task) +
-              "\nIts thread runs on " +
-              worker.host +
-              "; only its reports reach this machine."
-            );
+            return yield* remoteThreadRecall(task, { ...worker, host: worker.host }, viewer);
           }
           // Only the newest runs' messages are loaded; a long thread is never read whole.
           const { runs } = yield* threads.getThreadRecords(worker.threadId, ["runs"]);
@@ -941,6 +906,7 @@ const make = Effect.gen(function* () {
       const readAt = DateTime.formatIso(yield* DateTime.now);
       const stored = yield* ledger.beginReception({ owner, inputId, receptionId, readAt });
       if (stored === undefined || stored.requester === undefined) return;
+      const routine = yield* routineInputs.isRoutineInput(inputId);
       if (yield* tt.shouldRefuseTaskThread(ledger, stored)) {
         yield* tt.refuseTaskThread(ledger, stored, owner);
         yield* wake.wake;
@@ -974,7 +940,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      if (origin.kind === "goat") {
+      if (origin.kind === "goat" && !routine) {
         yield* timeline
           .record({
             threadId: origin.threadId,
@@ -1030,12 +996,12 @@ const make = Effect.gen(function* () {
 
       // A number or an option label is decided here, before the model. A number on an approval
       // card becomes that button's label ("Deny A1") so the approval parser and mayAnswerFor
-      // run unchanged. Agents never answer approvals or questions, so MCP goes the usual way.
-      const choice = yield* inboundChoice(message, conversationId, tasks);
+      // run unchanged. Agents and routines never answer approvals or questions.
+      const choice = routine ? undefined : yield* inboundChoice(message, conversationId, tasks);
       const approvalReply =
         choice?.type === "question"
           ? undefined
-          : message.intent === "message" && requester.originKind !== "mcp"
+          : message.intent === "message" && requester.originKind !== "mcp" && !routine
             ? parseApprovalReply(choice?.type === "approval-label" ? choice.text : message.text)
             : undefined;
       const answer =
@@ -1079,7 +1045,7 @@ const make = Effect.gen(function* () {
         return;
       }
       const hosts = yield* remoteWorkers.knownHosts;
-      const bot = (yield* ledger.getBot(stored.ownerId))?.bot;
+      const bot = (yield* ledger.getBotById(stored.ownerId, stored.botId))?.bot;
       const targets = yield* allowedTargets(bot?.projectId);
       const outcome: ReceptionOutcome =
         choice?.type === "question"
@@ -1117,7 +1083,7 @@ const make = Effect.gen(function* () {
                 );
                 const shells = yield* listThreads;
                 const facts = yield* hostFacts(shells);
-                const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+                const notes = yield* readChannelBotNotes(botFiles, message.text);
                 // Everything this pass sees about other work is judged with the link as it is now.
                 const viewer = yield* viewerNow(requester, message.connectionId);
                 // Titles of the owner's threads are other work, so only someone who may read it sees them.
@@ -1130,6 +1096,10 @@ const make = Effect.gen(function* () {
                   ),
                 );
                 const skills = yield* listChannelBotSkills(fileSystem, path, botFiles);
+                const identity = yield* Effect.option(
+                  profiles.identity(requester.ownerId, stored.botId),
+                );
+                if (Option.isNone(identity)) return profileUnreadable;
                 const base: ChannelReceptionInput = {
                   mode: "input",
                   conversationId,
@@ -1182,6 +1152,8 @@ const make = Effect.gen(function* () {
                   ...(notes === "" ? {} : { notes }),
                   ...(journal === "" ? {} : { journal }),
                   ...(skills.length === 0 ? {} : { skills }),
+                  identity: identity.value,
+                  ...(routine ? { routine } : {}),
                   requester,
                 };
                 const first = yield* generateOutcome({ ...base, readsAllowed: true });
@@ -1243,7 +1215,7 @@ const make = Effect.gen(function* () {
 
       const now = DateTime.formatIso(yield* DateTime.now);
       if (!outcome.ok) {
-        const reply = CHANNEL_COPY.receptionFailedBecause[outcome.failure];
+        const reply = outcome.reply ?? CHANNEL_COPY.receptionFailedBecause[outcome.failure];
         yield* ledger.failReception({
           owner,
           inputId,
@@ -1264,7 +1236,20 @@ const make = Effect.gen(function* () {
         yield* wake.wake;
         return;
       }
-      const decision = outcome.result;
+      const decision = routineDecision(outcome.result, routine);
+      if (decision.action.type === "no_update") {
+        // Nothing needs the person: the input settles with no reply delivered or shown.
+        yield* ledger.completeReception({
+          owner,
+          inputId,
+          receptionId,
+          replyText: ROUTINE_COPY.noUpdate,
+          decision: { replyText: ROUTINE_COPY.noUpdate, action: decision.action },
+          deliveries: [],
+          now,
+        });
+        return;
+      }
 
       // Notes are the owner's standing rules for every conversation, so only a person linked now
       // may change them; someone let in without a link, or whose access ended, may not.
@@ -1291,11 +1276,10 @@ const make = Effect.gen(function* () {
       }
       // Saved before the result commits so a restart re-runs this input and saves it then; the note
       // names its input, so a second pass for the same input does not add it twice.
-      if (decision.remember !== undefined && rememberRefusal === undefined) {
-        yield* appendChannelBotNote(fileSystem, botFiles, decision.remember, readAt, inputId).pipe(
-          Effect.catch((cause) => Effect.logWarning("GOAT Bot note was not saved", { cause })),
-        );
-      }
+      const noteNotice =
+        decision.remember !== undefined && rememberRefusal === undefined
+          ? yield* saveNote(decision.remember, readAt, inputId, decision.replacesNote)
+          : undefined;
 
       let replyText = decision.replyText;
       let finalDecision = decision;
@@ -1583,6 +1567,7 @@ const make = Effect.gen(function* () {
       }
 
       const relatedTask = createdTasks[0]?.task;
+      if (noteNotice !== undefined) replyText += " " + noteNotice;
       deliveries.unshift(
         replyDelivery({
           causeKey: "reply:" + inputId,
@@ -1654,7 +1639,7 @@ const make = Effect.gen(function* () {
       }
       const task = stored.task;
       const origin = task.originAddress;
-      const bot = (yield* ledger.getBot(stored.ownerId))?.bot;
+      const bot = (yield* ledger.getBotById(stored.ownerId, stored.botId))?.bot;
       // In GOAT Bot a task's card is its result: it already shows the outcome, the summary and
       // the checks, so a message repeating them would say everything twice. A turn is GOAT Bot's
       // own answer and stays a message.
@@ -1684,10 +1669,14 @@ const make = Effect.gen(function* () {
           ? []
           : [{ role: "user" as const, text: request.message.text, at: request.message.receivedAt }];
       // Milestones, questions and a turn's answer keep the words written for the person.
+      const identity = yield* Effect.option(
+        profiles.identity(task.requester.ownerId, stored.botId),
+      );
       const worded =
         pending.event.type === "task.progress" ||
         base.kind === "question" ||
-        (task.kind === "turn" && base.kind === "result")
+        (task.kind === "turn" && base.kind === "result") ||
+        Option.isNone(identity)
           ? baseText
           : Option.match(
               yield* generate({
@@ -1698,6 +1687,7 @@ const make = Effect.gen(function* () {
                 tail: requestTail,
                 tasks: [],
                 allowedTargets: [],
+                identity: identity.value,
                 requester: task.requester,
               }),
               {
@@ -1743,10 +1733,16 @@ const make = Effect.gen(function* () {
       yield* wake.wake;
     });
 
-  const acknowledgeSession = Effect.fn("ChannelReceptionService.acknowledgeSession")(
-    (input: ChannelReceptionInput) =>
-      Effect.map(generate(input), (r) => Option.getOrUndefined(r)?.replyText.trim() || undefined),
-  );
+  const acknowledgeSession = Effect.fn("ChannelReceptionService.acknowledgeSession")(function* (
+    input: ChannelReceptionInput,
+    botId: BotId,
+  ) {
+    // Without the bot's identity the session's own reply, which follows, speaks for it.
+    const identity = yield* Effect.option(profiles.identity(input.requester.ownerId, botId));
+    if (Option.isNone(identity)) return undefined;
+    const result = yield* generate({ ...input, identity: identity.value });
+    return Option.getOrUndefined(result)?.replyText.trim() || undefined;
+  });
   return ChannelReceptionService.of({ receive, narrate, acknowledgeSession, isDeterministicReply });
 });
 

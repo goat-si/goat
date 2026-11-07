@@ -1,6 +1,7 @@
 import { Pressable } from "react-native";
 import { Chip } from "../../components/ui/Chip";
 import { Menu } from "../../components/ui/Menu";
+import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import type { MenuProps } from "../../components/ui/Menu.types";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
@@ -32,6 +33,7 @@ export function ListFilterMenu(props: {
           trailingIcon={props.icon ? undefined : "chevron.down"}
           glass
           colorScheme={themeAppearance}
+          maxFontSizeMultiplier={MOBILE_CHROME_MAX_FONT_SCALE}
         />
       </Pressable>
     </Menu>

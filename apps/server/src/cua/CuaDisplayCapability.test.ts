@@ -23,6 +23,7 @@ import {
   x11SetupRequest,
   linuxBusCandidates,
   linuxDisplayCandidates,
+  linuxPackageManager,
   x11SocketDisplays,
   xauthorityCookie,
   xServerAuthFile,
@@ -81,7 +82,111 @@ const facts = (overrides: Partial<LinuxDisplayFacts> = {}): LinuxDisplayFacts =>
   runtimeDir: "/run/user/1000",
   atSpi: true,
   busIssues: [],
+  busNamed: false,
+  packageManager: "apt",
+  tools: { xvfbRun: true, xauth: true, xcompmgr: true },
   ...overrides,
+});
+
+const HEADLESS_START =
+  '[ -e /tmp/.X11-unix/X99 ] || setsid xvfb-run -n 99 -f "$HOME/.goat-display.xauth" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
+
+describe("Linux remedies name what to install and run", () => {
+  it("reads the package manager from os-release, through ID_LIKE for derivatives", () => {
+    expect(linuxPackageManager('NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\n')).toBe("apt");
+    expect(linuxPackageManager("ID=fedora\n")).toBe("dnf");
+    expect(linuxPackageManager('ID="rocky"\nID_LIKE="rhel centos fedora"\n')).toBe("dnf");
+    expect(linuxPackageManager("ID=manjaro\nID_LIKE=arch\n")).toBe("pacman");
+    expect(linuxPackageManager('ID="opensuse-tumbleweed"\nID_LIKE="opensuse suse"\n')).toBe(
+      "zypper",
+    );
+    expect(linuxPackageManager("ID=nixos\n")).toBeNull();
+  });
+
+  it("with no display at all, offers a virtual display the next check finds, installing only what is missing", () => {
+    const ready = classifyLinux(facts({ displays: [] }));
+    expect(ready.capability).toBe("unavailable");
+    expect(ready.reason).toContain(HEADLESS_START);
+    // Apps a person starts reach it by its number and its own cookie file.
+    expect(ready.reason).toContain("DISPLAY=:99 XAUTHORITY=$HOME/.goat-display.xauth");
+    expect(ready.reason).not.toContain("install");
+    const fedora = classifyLinux(
+      facts({
+        displays: [],
+        packageManager: "dnf",
+        tools: { xvfbRun: false, xauth: false, xcompmgr: true },
+      }),
+    );
+    expect(fedora.reason).toContain("sudo dnf install xorg-x11-server-Xvfb xorg-x11-xauth.");
+    expect(fedora.reason).toContain(HEADLESS_START);
+    // Package names this lane could not verify get no command, only the tools by name.
+    const suse = classifyLinux(
+      facts({
+        displays: [],
+        packageManager: "zypper",
+        tools: { xvfbRun: true, xauth: true, xcompmgr: false },
+      }),
+    );
+    expect(suse.reason).toContain("Install xcompmgr from your distribution's packages.");
+    expect(suse.reason).not.toContain("sudo");
+  });
+
+  it("never offers a virtual display to a server bound to a named display or Wayland session, which would not look for it", () => {
+    const named = classifyLinux(
+      facts({
+        requestedDisplay: ":5",
+        displays: [{ display: 5, outcome: "unreachable", xauthority: null }],
+      }),
+    );
+    expect(named.reason).not.toContain("xvfb-run");
+    const wayland = classifyLinux(
+      facts({ displays: [], wayland: { ...liveWayland, reachable: false } }),
+    );
+    expect(wayland.reason).not.toContain("xvfb-run");
+  });
+
+  it("names the install command for missing driver libraries on the detected distribution", () => {
+    const libraries = new Set(["libX11.so.6", "libxkbcommon.so.0"]);
+    expect(classifyLinux(facts({ libraries, packageManager: "pacman" })).reason).toContain(
+      "sudo pacman -S libxi",
+    );
+    expect(classifyLinux(facts({ libraries, packageManager: null })).reason).toContain(
+      "libXi.so.6",
+    );
+  });
+
+  it("suggests installing AT-SPI without claiming it is missing, and asks for one shared session bus", () => {
+    const atSpi = classifyLinux(
+      facts({
+        atSpi: false,
+        busIssues: ["AT-SPI (at-spi2-core) is not available on the session bus"],
+      }),
+    );
+    expect(atSpi.reason).toContain(
+      "If at-spi2-core is not installed, install it: sudo apt install at-spi2-core.",
+    );
+    const noBus = classifyLinux(
+      facts({
+        atSpi: false,
+        sessionBus: null,
+        runtimeDir: null,
+        busIssues: ["no D-Bus session bus is running for this user"],
+      }),
+    );
+    expect(noBus.reason).toContain("must share one D-Bus session bus");
+    expect(noBus.reason).not.toContain("at-spi2-core");
+    expect(noBus.reason).not.toContain("restart GOAT");
+    // A server started with a bus address tries only that one, so a new bus needs a restart.
+    const stale = classifyLinux(
+      facts({
+        atSpi: false,
+        sessionBus: null,
+        busNamed: true,
+        busIssues: ["the D-Bus session bus at unix:path=/tmp/gone does not answer"],
+      }),
+    );
+    expect(stale.reason).toContain("restart GOAT without DBUS_SESSION_BUS_ADDRESS");
+  });
 });
 
 describe("Linux display parsing", () => {
@@ -298,7 +403,7 @@ describe("classifyLinux", () => {
     expect(result.capability).toBe("partial");
     expect(result.display).toBe(":1");
     expect(result.reason).toBe(
-      "Agents can take screenshots and use the mouse and keyboard on :1, but cannot read app controls: the D-Bus session bus at unix:path=/run/user/0/bus does not answer.",
+      "Agents can take screenshots and use the mouse and keyboard on :1, but cannot read app controls: the D-Bus session bus at unix:path=/run/user/0/bus does not answer. Computer use and the apps it reads must share one D-Bus session bus: sign in to this computer as root, or keep root's user session running with loginctl enable-linger, and start the apps in that session.",
     );
     // An address that did not answer is never handed to the driver.
     expect(result.environment).toEqual([
@@ -337,8 +442,7 @@ describe("classifyLinux", () => {
   it("is unavailable without a reachable display, naming refused displays", () => {
     expect(classifyLinux(facts({ displays: [] }))).toMatchObject({
       capability: "unavailable",
-      reason:
-        "No X display is reachable for root. Sign in to a desktop session on this computer or start Xvfb.",
+      reason: `No X display is reachable for root. Sign in to a desktop session on this computer, or run computer use in a virtual display, which GOAT looks for each time it checks. Start one with: ${HEADLESS_START} Agents open apps there themselves; to start one yourself, put DISPLAY=:99 XAUTHORITY=$HOME/.goat-display.xauth in front of its command.`,
       environment: [],
     });
     const refused = classifyLinux(

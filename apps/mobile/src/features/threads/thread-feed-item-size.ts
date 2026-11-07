@@ -1,10 +1,10 @@
-import { THREAD_WORK_ROW_MIN_HEIGHT } from "../../lib/layout";
 import type { ThreadFeedEntry } from "../../lib/threadActivity";
+import { EXPANDABLE_ROW_MIN_HEIGHT } from "./work-log-layout";
 
 // Content-driven rows must be measured by LegendList: returning a fixed size
 // makes the list skip native measurement entirely.
-const TURN_FOLD_HEIGHT = 42;
-const WORK_GROUP_TOGGLE_HEIGHT = THREAD_WORK_ROW_MIN_HEIGHT;
+const TURN_FOLD_HEIGHT = EXPANDABLE_ROW_MIN_HEIGHT + 3.5;
+const WORK_GROUP_TOGGLE_HEIGHT = EXPANDABLE_ROW_MIN_HEIGHT;
 
 export function resolveThreadFeedFixedItemSize(
   entryType: ThreadFeedEntry["type"],

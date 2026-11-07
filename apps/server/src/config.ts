@@ -33,6 +33,7 @@ export const StartupPresentation = Schema.Literals(["browser", "headless"]);
 export type StartupPresentation = typeof StartupPresentation.Type;
 
 export interface ServerDerivedPaths {
+  readonly globalSkillsDir: string;
   readonly stateDir: string;
   readonly dbPath: string;
   readonly keybindingsConfigPath: string;
@@ -153,6 +154,7 @@ export const deriveServerPaths = Effect.fn(function* (
   const providerStatusCacheDir = join(baseDir, "caches");
   const devState = devUrl !== undefined && !options.baseDirIsExplicit;
   return {
+    globalSkillsDir: join(baseDir, "skills"),
     stateDir,
     dbPath,
     keybindingsConfigPath: join(stateDir, "keybindings.json"),

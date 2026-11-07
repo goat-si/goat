@@ -26,6 +26,7 @@ import { importComposerContextClipboard } from "../lib/composerContextClipboard"
 import { useThreadContextHosts } from "../lib/useThreadContextHosts";
 import { startComposerDraftOperation } from "../state/composerDraftOperations";
 import { appAtomRegistry } from "../state/atom-registry";
+import { useAppChipIcons } from "../state/appChipIcons";
 import { mobilePreferencesAtom } from "../state/preferences";
 import { useOpenLinkedThread } from "../features/threads/useOpenLinkedThread";
 import { ComposerContextSheet } from "./ComposerContextSheet";
@@ -58,6 +59,7 @@ export function ComposerEditor({
 }: ComposerEditorProps) {
   const draft = useComposerDraft(draftKey ?? null);
   const verifiedHosts = useThreadContextHosts(environmentId ?? null);
+  const appChipIconUris = useAppChipIcons(environmentId, props.value);
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const preferredEnterBehavior = AsyncResult.isSuccess(preferencesResult)
     ? preferencesResult.value.composerEnterBehavior
@@ -180,6 +182,7 @@ export function ComposerEditor({
         onChangeText={changeText}
         readOnly={props.readOnly || importing}
         onSubmit={importing ? undefined : props.onSubmit}
+        appChipIconUris={appChipIconUris}
         clipboardFragment={clipboardFragment ?? undefined}
         onPasteContext={(clipboard) => void pasteContext(clipboard)}
         context={draft.context}

@@ -22,6 +22,7 @@ vi.mock("./MobileBotWork", () => ({
   },
 }));
 const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
+vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
 const picker = vi.hoisted(() => ({
   onPicked: null as
     | ((files: ReadonlyArray<import("../../lib/composerImages").DraftComposerAttachment>) => void)

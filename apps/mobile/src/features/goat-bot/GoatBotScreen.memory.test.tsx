@@ -11,6 +11,7 @@ import {
 } from "../../testing/memoryNativeHarness";
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark" }));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
+vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));

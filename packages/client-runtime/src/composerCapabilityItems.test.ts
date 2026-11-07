@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
+import { formatComposerContextReference } from "@goat/shared/composerContextReferences";
+import {
+  appCapabilityContextRecord,
+  turnCapabilityContextRecord,
+} from "@goat/shared/turnCapabilities";
 
 import {
+  appChipIconResource,
+  appChipIcons,
   composerCapabilityDetail,
   composerThreadMayRunUnattended,
   COMPOSER_APP_ITEM_LIMIT,
@@ -199,5 +206,44 @@ describe("composer app entries", () => {
     expect(editor && composerCapabilityDetail(editor)).toBe(
       "This app's id is too long to mention. Use @computer and name the app instead.",
     );
+  });
+});
+
+describe("app chip icons", () => {
+  const finder = appCapabilityContextRecord({ id: "com.apple.finder", name: "Finder" });
+
+  it("draws an app chip with its host's icon for the app, by bundle id or by name for a path id", () => {
+    expect(appChipIconResource(finder.contextId, "Finder")).toEqual({
+      _tag: "native-app-icon",
+      app: { _tag: "app-id", appId: "com.apple.finder" },
+    });
+    const notepad = appCapabilityContextRecord({
+      id: "C:\\Windows\\notepad.exe",
+      name: "Notepad",
+    });
+    expect(appChipIconResource(notepad.contextId, "Notepad")).toEqual({
+      _tag: "native-app-icon",
+      app: { _tag: "display-name", displayName: "Notepad" },
+    });
+    // @computer and @browser keep their own icons.
+    expect(
+      appChipIconResource(turnCapabilityContextRecord("computer-use").contextId, "Computer"),
+    ).toBeNull();
+  });
+
+  it("finds each app chip in a draft or message once, and nothing in other text", () => {
+    const text = [
+      formatComposerContextReference(finder),
+      formatComposerContextReference(turnCapabilityContextRecord("browser")),
+      "then",
+      formatComposerContextReference(finder),
+    ].join(" ");
+    expect(appChipIcons(text)).toEqual([
+      {
+        contextId: finder.contextId,
+        resource: { _tag: "native-app-icon", app: { _tag: "app-id", appId: "com.apple.finder" } },
+      },
+    ]);
+    expect(appChipIcons("open Finder and a window")).toEqual([]);
   });
 });

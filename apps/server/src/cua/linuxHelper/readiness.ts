@@ -100,7 +100,14 @@ export async function readLinuxReadiness(
         }
         if (facts.tree !== "ready") {
           const focus = await deps.secureFocus(window.pid);
-          const found = !focus.known ? "unavailable" : focus.windows > 0 ? "ready" : "empty";
+          // An app the registry does not list shows AT-SPI nothing, like an app with no windows.
+          const found = !focus.known
+            ? focus.unregistered
+              ? "empty"
+              : "unavailable"
+            : focus.windows > 0
+              ? "ready"
+              : "empty";
           if (TREE_RANK[found] > TREE_RANK[facts.tree]) facts.tree = found;
         }
         if (facts.capture === "varied" && facts.tree === "ready") break;

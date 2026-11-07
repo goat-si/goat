@@ -6,6 +6,7 @@
 @layer theme {
   :root {
     @variant android {
+      --font-sans: "sans-serif";
       --font-mono: "monospace";
     }
   }
@@ -13,10 +14,11 @@
 
 /* ─── Typography ────────────────────────────────────────────────────── */
 @theme {
-  /* Keep these native family names aligned with app.config.ts. */
-  --font-sans: "DMSans-Regular";
-  --font-medium: "DMSans-Medium";
-  --font-bold: "DMSans-Bold";
+  /* System faces, like GOAT web. Weight comes from font-weight, so 600 is a real semibold. */
+  --font-sans: "System";
+
+  /* Content cards; MOBILE_SHAPE.card mirrors it for native style props. */
+  --radius-card: 16px;
 
   /* Keep this scale aligned with src/lib/typography.ts for native style props. */
   --text-3xs: 11px;
@@ -41,19 +43,21 @@
 
 /* ─── Custom utilities ──────────────────────────────────────────────── */
 @utility font-goat-medium {
-  font-family: var(--font-medium);
+  font-family: var(--font-sans);
+  font-weight: 500;
+}
+
+@utility font-goat-semibold {
+  font-family: var(--font-sans);
+  font-weight: 600;
 }
 
 @utility font-goat-bold {
-  font-family: var(--font-bold);
-}
-
-/* No 600 face is bundled; like CSS weight matching, semibold resolves to the 700 face. */
-@utility font-goat-semibold {
-  font-family: var(--font-bold);
+  font-family: var(--font-sans);
+  font-weight: 700;
 }
 
 @utility font-goat-extrabold {
-  font-family: var(--font-bold);
+  font-family: var(--font-sans);
   font-weight: 800;
 }

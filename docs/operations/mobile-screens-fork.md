@@ -1,7 +1,8 @@
 # Building the mobile Screens dependency
 
-The mobile v5 stack uses a committed tarball from the
-[T3 Screens fork](https://github.com/PixPMusic/react-native-screens/tree/t3-v5.0.0-t3.48).
+The mobile v5 stack uses a committed tarball from
+[GOAT's Screens fork](https://github.com/goat-si/react-native-screens/tree/t3-v5.0.0-t3.49),
+which GOAT owns. It was forked from PixPMusic's fork and keeps its branches and tags.
 The fork owns the integration changes; the app does not patch this package.
 Each archive includes compiled JavaScript, declarations, native source and
 `t3-fork.json` recording its version, source commit and upstream base.

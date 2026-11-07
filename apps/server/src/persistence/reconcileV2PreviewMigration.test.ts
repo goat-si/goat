@@ -149,6 +149,8 @@ describe("V2 preview upgrade", () => {
         [132, "ComputerUseInputHistory"],
         [133, "MemoryCheckpointBound"],
         [134, "WorktreeSnapshots"],
+        [135, "ChannelBotIds"],
+        [136, "ScheduledBotRoutines"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -308,6 +310,8 @@ describe("V2 preview upgrade", () => {
         [132, "ComputerUseInputHistory"],
         [133, "MemoryCheckpointBound"],
         [134, "WorktreeSnapshots"],
+        [135, "ChannelBotIds"],
+        [136, "ScheduledBotRoutines"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

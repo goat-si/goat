@@ -5,41 +5,60 @@ import { useState } from "react";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
+import { GoatBotRoutines } from "./GoatBotRoutines";
+import { GoatBotComputer } from "./GoatBotComputer";
+import { GoatBotLibrary } from "./GoatBotLibrary";
+import { GoatBotMemory } from "./GoatBotMemory";
+import { GoatBotStatusCard } from "./GoatBotStatusCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
-import { useBotRoster } from "./useBotRoster";
+import { goatBotSearch, memberThreadsKey, useGoatBotMember } from "./goatBotMemberContext";
+import { useBotThreads } from "./useBotRoster";
 
-const tabs = ["Tasks", "Routines", "Library", "Computer"] as const;
+const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
 type Tab = (typeof tabs)[number];
 
 export function GoatBotWorkPanel({
   environmentId,
   threadId,
+  onDraft,
+  notesRefreshKey,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
+  /** Puts a message in this chat's composer; absent while the chat cannot send. */
+  onDraft?: ((text: string) => void) | undefined;
+  notesRefreshKey?: string | undefined;
 }) {
   const [tab, setTab] = useState<Tab>("Tasks");
-  const { rows } = useBotRoster();
+  const member = useGoatBotMember();
+  const { rows, supported, loaded, failed } = useBotThreads(
+    environmentId,
+    memberThreadsKey(member),
+  );
   const routines = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
   const work = groupBotWork(rows, [], environmentId);
   const tasks = [...work.inProgress, ...work.done];
-  const boundRoutines = (routines.data?.tasks ?? []).filter(
-    (routine) => routine.threadId === threadId,
-  );
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 text-sm">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 text-sm">
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         <div className="pr-10">
-          <TabsList aria-label="GOAT Bot work">
+          {/* Five tabs do not fit the panel at equal widths, so each keeps its label and the row wraps. */}
+          <TabsList aria-label="GOAT Bot work" className="flex-wrap">
             {tabs.map((name) => (
-              <TabsTab key={name} value={name}>
+              <TabsTab key={name} value={name} className="flex-none">
                 {name}
               </TabsTab>
             ))}
           </TabsList>
         </div>
+        <GoatBotStatusCard
+          className="mt-4 rounded-lg border border-border p-3"
+          environmentId={environmentId}
+          member={member}
+          rows={!supported ? "unavailable" : failed ? "failed" : loaded ? rows : null}
+        />
         <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
           {tasks.length === 0 ? (
             <p>No task threads yet. Ask GOAT Bot to start work.</p>
@@ -62,21 +81,25 @@ export function GoatBotWorkPanel({
           )}
         </TabsPanel>
         <TabsPanel value="Routines" className="mt-4 min-h-0 overflow-y-auto">
-          {boundRoutines.length ? (
-            boundRoutines.map((routine) => (
-              <p key={routine.id} className="py-1">
-                {routine.title}
-              </p>
-            ))
-          ) : (
-            <p>Ask GOAT Bot in chat to set up a routine.</p>
-          )}
+          <GoatBotRoutines
+            environmentId={environmentId}
+            threadId={threadId}
+            tasks={routines.data?.tasks ?? []}
+            error={routines.error}
+          />
         </TabsPanel>
-        <TabsPanel value="Library" className="mt-4">
-          <p>Files GOAT Bot saves will appear here.</p>
+        <TabsPanel value="Memory" className="mt-4 min-h-0 overflow-y-auto">
+          <GoatBotMemory
+            environmentId={environmentId}
+            onDraft={onDraft}
+            refreshKey={notesRefreshKey}
+          />
         </TabsPanel>
-        <TabsPanel value="Computer" className="mt-4">
-          <p>Machines GOAT Bot works on will appear here.</p>
+        <TabsPanel value="Library" className="mt-4 min-h-0 overflow-y-auto">
+          <GoatBotLibrary environmentId={environmentId} />
+        </TabsPanel>
+        <TabsPanel value="Computer" className="mt-4 min-h-0 overflow-y-auto">
+          <GoatBotComputer environmentId={environmentId} />
         </TabsPanel>
       </Tabs>
     </div>
@@ -93,11 +116,12 @@ function TaskWorkRow({
   environmentId: EnvironmentId;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const member = useGoatBotMember();
   return (
     <div className="py-1">
       <Link
         to="/bot"
-        search={{ task: row.task.taskId }}
+        search={{ task: row.task.taskId, ...goatBotSearch(member) }}
         className="block rounded-md p-2 hover:bg-accent"
       >
         {row.task.title}

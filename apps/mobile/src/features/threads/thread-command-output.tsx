@@ -54,7 +54,7 @@ export function ThreadCommandOutput(props: {
   return (
     <View className="pt-1.5">
       {data?.output.truncated ? (
-        <Text className="pb-0.5 text-3xs text-foreground-subtle">Earlier output not shown</Text>
+        <Text className="pb-0.5 text-3xs text-foreground-tertiary">Earlier output not shown</Text>
       ) : null}
       <ScrollView
         ref={scrollRef}

@@ -10,7 +10,11 @@ vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
 vi.mock("./GoatBotModelPicker", () => ({ GoatBotModelPicker: () => null }));
-vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => null }));
+vi.mock("./GoatBotAvatar", () => ({
+  GoatBotAvatar: () => null,
+  GoatBotMainAvatar: () => null,
+  GoatBotSessionAvatar: () => null,
+}));
 
 import { GoatBotChatView } from "./GoatBotChatView";
 

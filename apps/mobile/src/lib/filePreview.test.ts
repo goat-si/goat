@@ -177,7 +177,7 @@ vi.mock("../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("../state/threads", () => ({ environmentThreadShells: {}, threadEnvironment: {} }));
 vi.mock("../state/entities", () => ({
   useLiveThreadLinkLabels: (text: string) => text,
-  useThreadChipIcons: () => new Map(),
+  useContextChipIcons: () => new Map(),
 }));
 vi.mock("../state/use-thread-selection", () => ({
   useThreadSelection: () => ({ selectedThread: null }),

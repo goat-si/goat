@@ -1,6 +1,5 @@
 import { setActiveComposerDraftText } from "../../state/queued-run-edit";
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
-import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ComposerTextPaste } from "../../native/GoatComposerEditor.types";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -78,6 +77,7 @@ import { useProject, useThreadShells } from "../../state/entities";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ComposerAttachmentButton } from "./ComposerAttachmentButton";
+import { ComposerNotices } from "./ComposerNotices";
 import {
   ComposerAttachmentStrip,
   ComposerAttachmentThumbnail,
@@ -133,9 +133,9 @@ import {
 } from "./use-thread-settings-sheet-presentation";
 export const COMPOSER_COLLAPSED_CHROME = 60;
 const COLLAPSED_EDITOR_DEFAULT_INSET = 6;
-// iOS puts line-height slack above glyphs. DM Sans's lowercase midline is
-// descender (0.31em) + half x-height (0.504em) above the line bottom.
-const LOWERCASE_MIDLINE_EM = 0.562;
+// iOS puts line-height slack above glyphs. The system font's lowercase midline is
+// descender (0.211em) + half x-height (0.526em) above the line bottom.
+const LOWERCASE_MIDLINE_EM = 0.474;
 function lowercaseMidline(text: ScaledTextRole): number {
   return text.lineHeight - LOWERCASE_MIDLINE_EM * text.fontSize;
 }
@@ -899,34 +899,12 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
           </ComposerPopoverAnchor>
         ) : null}
 
-        {selectedProviderStatus?.compatibilityAdvisory?.message &&
-        (selectedProviderStatus.compatibilityAdvisory.status === "unsupported" ||
-          selectedProviderStatus.compatibilityAdvisory.status === "broken") ? (
-          <Text
-            accessibilityRole={
-              selectedProviderStatus.compatibilityAdvisory.status === "broken" ? "alert" : undefined
-            }
-            accessibilityLiveRegion={
-              selectedProviderStatus.compatibilityAdvisory.status === "broken"
-                ? "assertive"
-                : "polite"
-            }
-            className={
-              selectedProviderStatus.compatibilityAdvisory.status === "broken"
-                ? "bg-danger px-3 py-2 text-xs text-danger-foreground"
-                : "px-3 py-2 text-xs text-foreground"
-            }
-          >
-            {selectedProviderStatus.compatibilityAdvisory.message}
-          </Text>
-        ) : null}
-        {modelUnavailable ? (
-          <Button
-            label="Model unavailable. Open model settings."
-            tone="text"
-            onPress={openSettings}
-          />
-        ) : null}
+        <ComposerNotices
+          advisory={selectedProviderStatus?.compatibilityAdvisory}
+          modelUnavailable={modelUnavailable}
+          onOpenModelSettings={openSettings}
+          sendBlockedReason={hasContent ? sendBlockedReason : null}
+        />
 
         <ComposerSurface
           animateLayout={false}

@@ -28,6 +28,8 @@ export interface ComposerEditorProps {
   readonly ref?: Ref<ComposerEditorHandle>;
   readonly value: string;
   readonly context?: OrchestrationMessageContext;
+  /** The app icon file each `@Finder` chip shows, by context id. */
+  readonly appChipIconUris?: ReadonlyMap<string, string>;
   readonly clipboardFragment?: string;
   readonly onPasteContext?: (
     clipboard: ComposerTextPaste & {

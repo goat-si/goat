@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { BotProfile } from "./botProfile.ts";
+import { BotId, BotProfile, BotRole } from "./botProfile.ts";
 import { AuthEnvironmentScopes } from "./auth.ts";
 import {
   EnvironmentId,
@@ -230,6 +230,8 @@ const CHANNEL_GATEWAY_FAILURE_MESSAGES = {
   not_found: "The requested channel record does not exist.",
   task_not_found: "The requested channel task does not exist.",
   not_home: "GOAT Bot runs on another machine in this cluster.",
+  bot_busy: "This bot still has work in progress.",
+  bot_limit: "This owner already has the most bots allowed.",
 } as const;
 
 export const ChannelGatewayErrorReason = Schema.Literals(
@@ -281,7 +283,7 @@ export type ChannelEnsureBotResult = ChannelBotRef;
  * a person: an open question, or a worker thread that needs an answer, approval, sign-in or resume.
  * Tasks already waiting when the bot thread was last visited (`thread.visit`) count as read.
  */
-export const ChannelGetBotStatusInput = Schema.Struct({});
+export const ChannelGetBotStatusInput = Schema.Struct({ botId: Schema.optionalKey(BotId) });
 export type ChannelGetBotStatusInput = typeof ChannelGetBotStatusInput.Type;
 
 export const ChannelGetBotStatusResult = Schema.Struct({
@@ -290,11 +292,55 @@ export const ChannelGetBotStatusResult = Schema.Struct({
 });
 export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
 
-/** Main first; never creates a bot. Empty until the canonical bot exists. */
-export const ChannelListBotsInput = Schema.Struct({});
+/** Main first; never creates a bot. Deleted members only when asked for. */
+export const ChannelListBotsInput = Schema.Struct({
+  includeDeleted: Schema.optionalKey(Schema.Boolean),
+});
 export const ChannelListBotsResult = Schema.Struct({ bots: Schema.Array(BotProfile) });
 export type ChannelListBotsInput = typeof ChannelListBotsInput.Type;
 export type ChannelListBotsResult = typeof ChannelListBotsResult.Type;
+
+/** A bot as agents see it: who it is and its conversation, nothing else a person set. */
+export const ChannelBotSummary = Schema.Struct({
+  botId: BotId,
+  role: BotRole,
+  name: BotProfile.fields.name,
+  purpose: BotProfile.fields.purpose,
+  hidden: Schema.Boolean,
+  sessionThreadId: ThreadId,
+});
+export const ChannelBotListResult = Schema.Struct({ bots: Schema.Array(ChannelBotSummary) });
+export type ChannelBotListResult = typeof ChannelBotListResult.Type;
+
+/** Changes only the keys sent. A null avatar returns the bot to its default face. */
+export const ChannelUpdateBotInput = Schema.Struct({
+  botId: BotId,
+  name: Schema.optionalKey(BotProfile.fields.name),
+  avatar: Schema.optionalKey(BotProfile.fields.avatar),
+  purpose: Schema.optionalKey(BotProfile.fields.purpose),
+});
+export const ChannelUpdateBotResult = Schema.Struct({ bot: BotProfile });
+
+/** A member bot with its own conversation. A retry with the same clientRequestId returns it. */
+export const ChannelCreateBotInput = Schema.Struct({
+  clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  name: BotProfile.fields.name,
+  avatar: BotProfile.fields.avatar,
+  purpose: BotProfile.fields.purpose,
+  defaultModelSelection: BotProfile.fields.defaultModelSelection,
+});
+export type ChannelCreateBotInput = typeof ChannelCreateBotInput.Type;
+export const ChannelSetBotHiddenInput = Schema.Struct({ botId: BotId, hidden: Schema.Boolean });
+export type ChannelSetBotHiddenInput = typeof ChannelSetBotHiddenInput.Type;
+/** Refused with bot_busy while the bot has open work; its thread is archived, not removed. */
+export const ChannelDeleteBotInput = Schema.Struct({ botId: BotId });
+export type ChannelDeleteBotInput = typeof ChannelDeleteBotInput.Type;
+export const ChannelRestoreBotInput = Schema.Struct({ botId: BotId });
+export type ChannelRestoreBotInput = typeof ChannelRestoreBotInput.Type;
+export const ChannelBotResult = Schema.Struct({ bot: BotProfile });
+export type ChannelBotResult = typeof ChannelBotResult.Type;
+export type ChannelUpdateBotInput = typeof ChannelUpdateBotInput.Type;
+export type ChannelUpdateBotResult = typeof ChannelUpdateBotResult.Type;
 
 export const ChannelTaskView = Schema.Struct({
   taskId: ChannelTaskId,
@@ -338,7 +384,7 @@ export const BotThreadRow = Schema.Union([
   }),
 ]);
 export type BotThreadRow = typeof BotThreadRow.Type;
-export const ChannelListBotThreadsInput = Schema.Struct({});
+export const ChannelListBotThreadsInput = Schema.Struct({ botId: Schema.optionalKey(BotId) });
 export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
 export const ChannelListBotThreadsResult = Schema.Struct({
   rows: Schema.Array(BotThreadRow),
@@ -378,6 +424,12 @@ export const ChannelListTasksInput = Schema.Struct({
   cursor: Schema.optional(TrimmedNonEmptyString),
 });
 export type ChannelListTasksInput = typeof ChannelListTasksInput.Type;
+/** The client's task list, which can keep to one bot; agents list through ChannelListTasksInput. */
+export const ChannelListTasksRpcInput = Schema.Struct({
+  ...ChannelListTasksInput.fields,
+  botId: Schema.optionalKey(BotId),
+});
+export type ChannelListTasksRpcInput = typeof ChannelListTasksRpcInput.Type;
 
 export const ChannelListTasksResult = Schema.Struct({
   tasks: Schema.Array(ChannelTask),
@@ -426,7 +478,15 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
   getBotStatus: "channel.getBotStatus",
   listBots: "channel.listBots",
+  updateBot: "channel.updateBot",
+  createBot: "channel.createBot",
+  setBotHidden: "channel.setBotHidden",
+  deleteBot: "channel.deleteBot",
+  restoreBot: "channel.restoreBot",
   listBotThreads: "channel.listBotThreads",
+  listBotNotes: "channel.listBotNotes",
+  listBotArtifacts: "channel.listBotArtifacts",
+  readBotArtifact: "channel.readBotArtifact",
   listChildWork: "channel.listChildWork",
   updateTaskView: "channel.updateTaskView",
   ingest: "channel.ingest",

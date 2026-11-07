@@ -66,6 +66,10 @@ Settings shows the latest revert attempt for each resolution. A refused attempt 
 
 In **Settings → Memory**, open the memory’s history and select up to 32 failed reports that have exhausted automatic delivery retries. **Retry selected reports** lets delivery try again; it does not increase your storage quota or free storage. Reports handled by another device are not eligible here.
 
+## Storage limit
+
+When memory storage reaches its limit, GOAT first removes sync records it no longer needs and tries the save once more. If that frees too little, the save fails with "Memory storage limit reached" and says when automatic cleanup can free more. Forgetting a memory frees only its own text, so it helps only when many memories are no longer needed.
+
 ## Forget a memory
 
 Open the memory, choose **Forget**, and confirm. This cannot be undone. Forgetting removes the GOAT memory’s content, retained resolution originals and judgment, and derived content such as summaries made from it. Other devices remove it when they sync.

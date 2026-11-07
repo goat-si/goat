@@ -1,3 +1,5 @@
+import * as GlobalSkillRegistry from "../skills/GlobalSkillsRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import {
   defaultInstanceIdForDriver,
   isProviderWorkspaceSnapshotCurrent,
@@ -53,6 +55,7 @@ export class ProviderRegistry extends Context.Service<
   ProviderRegistry,
   {
     readonly getProviders: Effect.Effect<ReadonlyArray<ServerProvider>>;
+    readonly rescanGlobalSkills?: Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     readonly refresh: (
       provider?: ProviderDriverKind,
@@ -350,6 +353,11 @@ export const layer = Layer.effect(
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const serviceScope = yield* Effect.scope;
     const config = yield* ServerConfig.ServerConfig;
+    const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+    const globalSkills = GlobalSkillRegistry.makeGlobalSkillInventory(
+      config.globalSkillsDir,
+      settings,
+    );
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
@@ -480,6 +488,7 @@ export const layer = Layer.effect(
       },
     ) {
       const manifest = yield* manifestService.current;
+      const globals = yield* globalSkills.scan;
       const nextProvidersWithUpdateState = yield* Effect.forEach(
         nextProviders,
         applyProviderUpdateState,
@@ -508,7 +517,10 @@ export const layer = Layer.effect(
 
           const providers = orderProviderSnapshots(
             [...mergedProviders.values()].map((provider) =>
-              classifyCompatibility(provider, manifest),
+              GlobalSkillRegistry.mergeGlobalSkills(
+                classifyCompatibility(provider, manifest),
+                globals,
+              ),
             ),
           );
           const providersToPersist = providers.filter((provider) =>
@@ -536,9 +548,7 @@ export const layer = Layer.effect(
 
     // Assigned after refreshInstance is built; breaks the snapshot/refresh
     // inference cycle while keeping auth-triggered refreshes in one place.
-    let refreshAuthDependents: (
-      instanceIds: ReadonlyArray<ProviderInstanceId>,
-    ) => Effect.Effect<void> = () => Effect.void;
+    let refreshAuthDependents: GlobalSkillRegistry.RefreshDependentAuth = () => Effect.void;
     const compatibilityRefreshRunning = yield* Ref.make(false);
     const syncProvider = Effect.fn("syncProvider")(function* (
       provider: ServerProvider,
@@ -550,15 +560,13 @@ export const layer = Layer.effect(
         (candidate) => candidate.instanceId === provider.instanceId,
       );
       const providers = yield* upsertProviders([provider], options);
-      const current = providers.find((candidate) => candidate.instanceId === provider.instanceId);
-      if (previous && current && !Equal.equals(previous.auth, current.auth)) {
-        // Forked so a slow cloud probe never holds up the sibling's own sync.
-        yield* refreshAuthDependents(
-          providers
-            .filter((candidate) => candidate.authSourceInstanceId === provider.instanceId)
-            .map((candidate) => candidate.instanceId),
-        ).pipe(Effect.forkIn(serviceScope));
-      }
+      yield* GlobalSkillRegistry.refreshDependentAuth(
+        previous,
+        provider,
+        providers,
+        refreshAuthDependents,
+        serviceScope,
+      );
       // Reclassify the current read model after fetching. Never republish the
       // probe captured before the fetch: a newer health result may have landed.
       if (!(yield* Ref.getAndSet(compatibilityRefreshRunning, true))) {
@@ -683,20 +691,7 @@ export const layer = Layer.effect(
       const instance = (yield* Ref.get(liveSubsRef)).get(instanceId);
       return instance ? yield* refreshOneSource(instance) : yield* Ref.get(providersRef);
     });
-    refreshAuthDependents = (instanceIds) =>
-      Effect.forEach(
-        instanceIds,
-        (instanceId) =>
-          refreshInstance(instanceId).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logError("cloud provider auth refresh failed", {
-                instanceId,
-                cause: Cause.pretty(cause),
-              }),
-            ),
-          ),
-        { concurrency: "unbounded", discard: true },
-      );
+    refreshAuthDependents = GlobalSkillRegistry.makeRefreshAuthDependents(refreshInstance);
 
     const refreshAfterUpdate = Effect.fn("refreshAfterUpdate")(function* (
       provider: ProviderDriverKind,
@@ -939,6 +934,9 @@ export const layer = Layer.effect(
         Effect.map(([, nextProviders]) => nextProviders),
       );
 
+    const rescanGlobalSkills = globalSkills.rescan(updateProviders);
+    yield* globalSkills.watch(rescanGlobalSkills);
+
     const refreshWorkspaceSnapshot = Effect.fn("refreshWorkspaceSnapshot")(function* (input: {
       readonly instanceId: ProviderInstanceId;
       readonly cwd: string;
@@ -981,6 +979,7 @@ export const layer = Layer.effect(
         : Effect.void;
       const runScan = refreshMachineSnapshot.pipe(
         Effect.andThen(instance.snapshotForCwd(input.cwd)),
+        Effect.flatMap(globalSkills.workspace(provider)),
         // Scans fail on error; returned inventory remains valid even when provider health reports an error.
         Effect.flatMap((scopedSnapshot) =>
           instanceRegistry.getInstance(input.instanceId).pipe(
@@ -1076,6 +1075,7 @@ export const layer = Layer.effect(
 
     return {
       getProviders: Ref.get(providersRef),
+      rescanGlobalSkills,
       refresh: (provider?: ProviderDriverKind) =>
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>

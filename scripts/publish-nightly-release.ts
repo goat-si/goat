@@ -123,6 +123,8 @@ const assetMatches = Effect.fn("nightlyAssetMatches")(function* (
   local: { name: string; size: number; sha256: string },
 ) {
   if (remote.name !== local.name || remote.size !== local.size) return false;
+  // An interrupted upload stays listed as "starter" and cannot be downloaded.
+  if (remote.state !== undefined && remote.state !== "uploaded") return false;
   const digest =
     remote.digest == null
       ? yield* hashBytes(yield* client.downloadAsset(remote.id))

@@ -5,8 +5,9 @@ need a separate branch and working directory.
 
 ## Start a thread
 
-On web and desktop, **New thread** lets you choose a project when multiple projects
-are open. Shift-click to start in the current project. A new thread carries your model
+On web and desktop, **New thread** opens a draft in the project you last worked in.
+Change the project from the draft's project name, or the machine from the composer
+toolbar. Shift-click to start in the current project. A new thread carries your model
 and mode selections, unless the destination project has its own model default.
 Its workspace starts from the project's configured default, which falls back to
 **Local**. Starting a new thread also resets an empty draft's workspace selection.
@@ -69,7 +70,11 @@ its task and coding threads. Use a task's menu to pin it, mark it done, or mark 
 A task opens its own conversation beside the main chat on a wide screen, or in place
 of the chat on a narrow one; messages you send there stay with that task. To always
 open tasks in place, turn off **Open task threads beside the main chat** in
-**Settings → GOAT Bot**. **Work** in the GOAT Bot header lists tasks and routines.
+**Settings → GOAT Bot**. **Work** in the GOAT Bot header lists tasks, routines, and
+notes. **Check in on me** under **Routines** sets up a routine on the days and hours you
+choose: the bot looks over its tasks and writes only when something needs you.
+**Memory** shows the notes GOAT Bot keeps; **Ask to change** or **Ask to forget** puts a
+request quoting the note in the message box for you to send.
 
 The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
 sent something since you last opened it; the number badge counts tasks awaiting your
@@ -225,8 +230,15 @@ to appears as last reported by that environment.
 Subagents a provider starts itself, such as Codex agents and Claude Code tasks, appear as a
 **+N** beside their thread while they work; hover it to see each one and what it is doing.
 The machine count includes only GOAT servers that answer. Machines the page shows without
-counting, such as an unreachable server, a stopped Boat machine, or an SSH host another machine
-reported, are listed behind the **+N** beside the count.
+counting, such as an unreachable server or an SSH host another machine reported, are listed
+behind the **+N** beside the count.
+
+A Boat cloud machine appears while it is starting, running, stopping or failed, while it answers
+as a GOAT server, or while work runs on it. A stopped one that does not answer and has nothing
+running on it leaves Fleet and stays in **Settings → Connections → Cloud machines**; it comes back
+when you resume it. A running machine with nothing on it stays, with a warning that Boat bills it
+while it sits idle. Cloud agent runs, such as Claude Cloud or Cursor Cloud, appear while they run
+and for 15 minutes after they last changed; open older ones from the thread list.
 
 On mobile, **Fleet** is the first tab of **Usage**, and Usage opens on it, once the phone reaches
 more than one machine or is connected to a hub. It shows the same counts and lists the running
@@ -309,12 +321,14 @@ Manually settling an idle thread dismisses unanswered async questions without
 sending an answer or restarting the agent. Settling also closes the thread's
 terminals that wait at an idle prompt, and keeps their output. A terminal that
 runs a command, such as a dev server, stays open.
+Settling or archiving also ends the thread's device sessions; see [Devices](devices.md).
 
 To reclaim disk space from settled work, turn on **Run in the thread's worktree when the
 thread settles** for one of the project's actions, for example `cargo clean`. It runs each time
 a thread in its own worktree settles, manually or automatically, even if a terminal there still
 runs a command such as a dev server. Threads in the project's main checkout skip it. Its terminal
 closes when the command succeeds and stays open when it fails.
+A task an agent delegated skips it while any other thread uses the same checkout.
 
 On web and desktop, press a thread's **Settle** button and drag up or down to
 settle every thread in that section between it and the one you release on.
@@ -324,6 +338,9 @@ Press `Escape` while dragging to cancel.
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
 thread. An empty thread's inactivity counts from when it was created.
+A task an agent delegated settles as soon as it finished and its result reached
+the thread that delegated it, unless the task failed, has a pull request, or its
+project turned automatic settlement off. A new message reopens it.
 Work in progress, pending questions or approvals, and background work the agent
 is waiting on prevent automatic settlement. An open pull request does not prevent inactivity
 settlement unless you turn on **Keep threads with a PR** in **Settings → General**,

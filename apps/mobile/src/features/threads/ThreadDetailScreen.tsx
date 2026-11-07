@@ -184,6 +184,7 @@ import {
   FloatingWorkingControl,
 } from "./floating-working-control";
 import { connectionFloatingStatus, type FloatingWorkingStatus } from "./floating-working-status";
+import { workingFloatingStatus } from "./turn-settle";
 import {
   derivePendingUserInputMaxHeight,
   ESTIMATED_KEYBOARD_HEIGHT,
@@ -471,8 +472,10 @@ function ThreadDetailBody(
   const threadScope = useRef(new AbortController());
   const {
     height: composerHeight,
+    heightBesidePending: composerHeightBesidePending,
     onSlotHeight: handleComposerSlotHeight,
     onCardsHeight: handleCardsHeight,
+    onPendingHeight: handlePendingCardHeight,
     cancel: cancelComposerHeightSettle,
   } = useSettledComposerHeight();
   const [anchorMessageId, setAnchorMessageId] = useState<MessageId | null>(null);
@@ -752,9 +755,8 @@ function ThreadDetailBody(
     if (props.isCompacting && contentPresentationKind === "ready") {
       return { kind: "compacting" };
     }
-    if (props.activeWorkStartedAt !== null && contentPresentationKind === "ready") {
-      return { kind: "working", startedAt: props.activeWorkStartedAt };
-    }
+    const working = workingFloatingStatus(props.activeWorkStartedAt, props.activityRun);
+    if (working !== null && contentPresentationKind === "ready") return working;
     if (pendingBackgroundWork !== null && contentPresentationKind === "ready") {
       return {
         kind: "background",
@@ -981,7 +983,7 @@ function ThreadDetailBody(
       windowHeight: screenAreaHeight,
       keyboardHeight: keyboardStickyEnabled ? -keyboardTranslation.value : 0,
       navigationHeaderHeight,
-      composerOverlapHeight,
+      composerOverlapHeight: composerHeightBesidePending ?? composerOverlapHeight,
     }),
     flexGrow: 0,
   }));
@@ -1651,6 +1653,8 @@ function ThreadDetailBody(
                       />
                     </Animated.View>
                   ) : null}
+                </ComposerCards>
+                <ComposerCards maxWidth={contentMaxWidth} onHeight={handlePendingCardHeight}>
                   {props.activePendingApproval || props.activePendingUserInput ? (
                     <Animated.View
                       className="shrink-0 gap-3 px-4 pb-3"
@@ -1663,19 +1667,14 @@ function ThreadDetailBody(
                       exiting={FadeOut.duration(140)}
                     >
                       {props.activePendingApproval ? (
-                        <Animated.ScrollView
+                        <PendingApprovalCard
                           key={props.activePendingApproval.requestId}
-                          style={approvalHeightStyle}
-                          keyboardShouldPersistTaps="handled"
-                          nestedScrollEnabled
-                        >
-                          <PendingApprovalCard
-                            canOperateThread={props.canOperateThread}
-                            approval={props.activePendingApproval}
-                            respondingApprovalId={props.respondingApprovalId}
-                            onRespond={props.onRespondToApproval}
-                          />
-                        </Animated.ScrollView>
+                          maxHeightStyle={approvalHeightStyle}
+                          canOperateThread={props.canOperateThread}
+                          approval={props.activePendingApproval}
+                          respondingApprovalId={props.respondingApprovalId}
+                          onRespond={props.onRespondToApproval}
+                        />
                       ) : null}
                       {props.activePendingUserInput ? (
                         <PendingUserInputCard
@@ -1775,8 +1774,8 @@ function ThreadDetailBody(
                         placeholder={
                           props.activePendingApproval
                             ? props.activePendingApproval.supportsFeedback
-                              ? "Send feedback to decline this request"
-                              : "Send a message to decline and redirect the agent"
+                              ? "Decline with feedback"
+                              : "Decline with a message"
                             : "Ask anything"
                         }
                         contentMaxWidth={contentMaxWidth}
