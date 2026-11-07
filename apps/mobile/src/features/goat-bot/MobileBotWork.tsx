@@ -6,7 +6,13 @@ import {
   runAtomCommand,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import type { ChannelTaskId, ChannelUpdateTaskViewInput, EnvironmentId } from "@goat/contracts";
+import type {
+  BotId,
+  ChannelTaskId,
+  ChannelUpdateTaskViewInput,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
@@ -17,6 +23,7 @@ import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
 const tabs = ["Tasks", "Routines", "Library", "Computer"] as const;
@@ -26,6 +33,8 @@ export function MobileBotWork(props: {
   readonly taskCard?: ReactNode;
   readonly visible: boolean;
   readonly onOpenTask: (id: ChannelTaskId) => void;
+  /** A member bot's work; the main bot's when absent. */
+  readonly member?: { readonly botId: BotId; readonly threadId: ThreadId } | null;
 }) {
   const home = useMobileGoatBotHomeMode();
   const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
@@ -35,9 +44,13 @@ export function MobileBotWork(props: {
     ? presentationById.get(environmentId)?.serverConfig?.environment.capabilities
     : undefined;
   const enabled = selected?.connected === true && capabilities?.goatBotTaskThreads === true;
+  const member = props.member ?? null;
   const threads = useEnvironmentQuery(
-    environmentId && enabled
-      ? channelEnvironment.listBotThreads({ environmentId, input: {} })
+    environmentId && enabled && (member === null || capabilities?.goatBotMembers === true)
+      ? channelEnvironment.listBotThreads({
+          environmentId,
+          input: member === null ? {} : { botId: member.botId },
+        })
       : null,
   );
   const rows = threads.data?.rows ?? [];
@@ -90,9 +103,11 @@ export function MobileBotWork(props: {
     }
   }, [props.visible, props.taskId, unreadAt, environmentId, enabled, refreshThreads]);
   const now = useNowMinuteMs();
-  const boundRoutines = home.botRef
-    ? botRoutineRows(routines.data?.tasks ?? [], home.botRef.threadId, now)
-    : [];
+  const routineThreadId = member?.threadId ?? home.botRef?.threadId ?? null;
+  const boundRoutines =
+    routineThreadId === null
+      ? []
+      : botRoutineRows(routines.data?.tasks ?? [], routineThreadId, now);
   return (
     <>
       {props.taskId ? (
@@ -240,6 +255,17 @@ export function MobileBotWork(props: {
                   </View>
                 ))
               )
+            ) : null}
+            {tab === "Routines" &&
+            selected?.connected &&
+            routines.data &&
+            environmentId &&
+            home.botRef ? (
+              <MobileBotCheckInForm
+                environmentId={environmentId}
+                botThreadId={home.botRef.threadId}
+                tasks={routines.data.tasks}
+              />
             ) : null}
             {tab === "Routines" ? (
               !selected?.connected ? (

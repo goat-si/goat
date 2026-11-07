@@ -37,8 +37,25 @@ const net = require('node:net');
 const { spawn, spawnSync } = require('node:child_process');
 const root = path.join(os.homedir(), '.t3', 'device');
 const state = path.join(root, 'hosts', owner);
+const startedAt = Date.now();
 const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', timeout: 30000, ...options });
 const read = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+// A plain stop leaves XCTest runners alive for reuse; --clean ends them, and a plain stop follows a failed clean.
+const describeRun = (result) => result.error?.message || ('exit ' + (result.status ?? result.signal) + ': ' + (result.stdout || '').slice(0, 400));
+const stopDaemon = (entry, cleanMs, plainMs) => {
+  const clean = run(process.execPath, [entry, 'daemon', 'stop', '--clean', '--state-dir', state], { timeout: cleanMs });
+  if (clean.status === 0) return clean;
+  const plain = run(process.execPath, [entry, 'daemon', 'stop', '--state-dir', state], { timeout: plainMs });
+  return { ...plain, cleanupWarning: describeRun(clean), ...(plain.status === 0 ? {} : { stopError: describeRun(plain) }) };
+};
+const probePlatforms = () => {
+  const ios = process.platform === 'darwin' && run('xcrun', ['simctl', 'help']).status === 0;
+  const android = run('adb', ['version']).status === 0;
+  return { ios, android, platforms: [
+    { platform: 'ios', available: ios, ...(!ios ? { reason: 'iOS needs macOS with Xcode and working xcrun simctl.' } : {}) },
+    { platform: 'android', available: android, ...(!android ? { reason: 'Android SDK missing. Set ANDROID_HOME or put adb on the SSH PATH.' } : {}) },
+  ] };
+};
 const write = (file, value) => { const tmp = file + '.' + process.pid; fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 }); fs.renameSync(tmp, file); };
 const toolVersions = (name, requiredVersion, entry, record) => {
   const directory = path.join(root, 'tools');
@@ -132,13 +149,8 @@ async function install(name, version, entry) {
   }
 }
 (async () => {
-  const ios = process.platform === 'darwin' && run('xcrun', ['simctl', 'help']).status === 0;
-  const android = run('adb', ['version']).status === 0;
-  const platforms = [
-    { platform: 'ios', available: ios, ...(!ios ? { reason: 'iOS needs macOS with Xcode and working xcrun simctl.' } : {}) },
-    { platform: 'android', available: android, ...(!android ? { reason: 'Android SDK missing. Set ANDROID_HOME or put adb on the SSH PATH.' } : {}) },
-  ];
   if (mode === 'probe') {
+    const { platforms } = probePlatforms();
     if (Number(process.versions.node.split('.')[0]) < 22) throw Error('Node 22 or newer is required on the device host.');
     if (run('npm', ['--version']).status !== 0) throw Error('npm is missing from the non-interactive SSH PATH.');
     console.log(JSON.stringify({ nodePath: process.execPath, platforms, tools: versions() })); return;
@@ -158,9 +170,16 @@ async function install(name, version, entry) {
       fs.rmSync(hubFile, { force: true });
     }
     const entry = read(agentFile)?.entryPath || path.join(root, 'tools', 'agent-device@' + agentVersion, 'node_modules', 'agent-device', 'bin', 'agent-device.mjs');
-    if (fs.existsSync(entry)) run(process.execPath, [entry, 'daemon', 'stop', '--state-dir', state]);
+    if (fs.existsSync(entry)) {
+      // SshDeviceHost allows stop modes 45 s, connection included; 15 s of it is left for connecting.
+      const remaining = startedAt + 30000 - Date.now();
+      const cleanMs = Math.max(1000, Math.min(22000, remaining - 8000));
+      const stopped = stopDaemon(entry, cleanMs, Math.max(1000, remaining - cleanMs));
+      if (stopped.cleanupWarning) console.log(JSON.stringify({ cleanupWarning: stopped.cleanupWarning, stopError: stopped.stopError }));
+    }
     return;
   }
+  const { ios, android, platforms } = probePlatforms();
   if (!ios && !android) throw Error(platforms.map(p => p.reason).join(' '));
   fs.mkdirSync(state, { recursive: true, mode: 0o700 });
   const hubEntry = await install('expo-device-hub', hubVersion, 'dist/server/cli.mjs');
@@ -202,12 +221,14 @@ async function install(name, version, entry) {
     }
   }
   let agentResult = {};
+  let cleanupWarning;
   if (mode === 'agent-start') {
   const agentEntry = await install('agent-device', agentVersion, 'bin/agent-device.mjs');
   const previousAgent = read(agentFile)?.entryPath;
   let daemon = read(daemonFile);
   if (daemon && (previousAgent !== agentEntry || !await healthy(daemon.httpPort, '/health'))) {
-    const stopped = run(process.execPath, [previousAgent || agentEntry, 'daemon', 'stop', '--state-dir', state]);
+    const stopped = stopDaemon(previousAgent || agentEntry, 25000, 15000);
+    cleanupWarning = stopped.cleanupWarning;
     if (stopped.status !== 0) throw Error('Could not stop the previous agent-device version.');
     fs.rmSync(daemonFile, { force: true });
     daemon = null;
@@ -226,7 +247,7 @@ async function install(name, version, entry) {
   const vendor = path.resolve(path.dirname(hubEntry), '../../vendor/serve-sim/dist');
   const optional = file => fs.existsSync(file) ? file : null;
   await pruneTools(path.join(root, 'tools'), [['expo-device-hub', hubVersion], ...(mode === 'agent-start' ? [['agent-device', agentVersion]] : [])], true).catch(() => {});
-  console.log(JSON.stringify({ nodePath: process.execPath, platforms, tools: versions(), hubPort: hub.port, ...agentResult,
+  console.log(JSON.stringify({ nodePath: process.execPath, platforms, tools: versions(), hubPort: hub.port, ...agentResult, ...(cleanupWarning ? { cleanupWarning } : {}),
     helpers: { serveSimAxSettings: optional(path.join(vendor, 'simax/serve-sim-ax-settings')), serveSimCli: optional(path.join(vendor, 'serve-sim.js')) } }));
   } finally { releaseHost(); }
 })().catch(error => { console.error(error.message); process.exitCode = 1; });

@@ -318,6 +318,28 @@ describe("GuestPage", () => {
       });
     await expectAtEnd();
 
+    // On a busy machine frames pass before the list re-measures, and LegendList gives up scrolling
+    // to a new end after 8 of them (its `tick`, which asks for the next one while it runs). Spend
+    // them at once, so new rows meet that case.
+    const requestFrame = window.requestAnimationFrame.bind(window);
+    let ticking = false;
+    let session = 0;
+    let longestSession = 0;
+    using _busy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      if (callback.name !== "tick") return requestFrame(callback);
+      session = ticking ? session + 1 : 1;
+      longestSession = Math.max(longestSession, session);
+      queueMicrotask(() => {
+        ticking = true;
+        try {
+          callback(performance.now());
+        } finally {
+          ticking = false;
+        }
+      });
+      return 0;
+    });
+
     // A new reply streams in at the end.
     send(
       threadEvent(2, {
@@ -334,6 +356,7 @@ describe("GuestPage", () => {
     );
     await expect.element(screen.getByText("Newest reply")).toBeInTheDocument();
     await expectAtEnd();
+    expect(longestSession).toBeGreaterThanOrEqual(8);
 
     // The guest reads back a little, then sends: their message comes into view anyway, as the
     // owner's own send does.

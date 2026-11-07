@@ -1,3 +1,4 @@
+import { makeCodexMcpConfigReader } from "./goatCodexMcpServers.ts";
 import { codexResumeError, forkCodexThread } from "./CodexResumeError.ts";
 import { makeSurvivorSettlement } from "./CodexSurvivorSettlement.ts";
 import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
@@ -1349,6 +1350,7 @@ export function codexThreadRuntimeParams(input: {
         ? { "features.default_mode_request_user_input": false }
         : {}),
       ...codexThreadMcpEnvironment(mcpSession),
+      ...McpProviderSession.goatCodexServers(mcpSession?.goatMcpServers, {}),
       ...codexNativeSubagentConfig(mcpSession?.nativeSubagentLimit, input.codexVersion).config,
       ...(mcpSession === undefined
         ? {}
@@ -1813,48 +1815,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             yield* Ref.set(initialized, true);
           }),
         );
-        /**
-         * Whether the user's merged Codex config (home and project layers)
-         * already defines `cua-driver`. Read once per directory, and only for a
-         * thread that would otherwise get the managed one; an unreadable
-         * config yields to the user for that call and is read again next time.
-         */
-        const userCuaDriverByCwd = new Map<string, boolean>();
-        const userCuaDriver = (
-          mcpSession: McpProviderSession.McpProviderSessionConfig | undefined,
-          cwd: string | null | undefined,
-        ) =>
-          Effect.gen(function* () {
-            if (
-              mcpSession?.cuaDriver === undefined ||
-              mcpSession.cuaDriverOverridesUserConfig === true
-            )
-              return false;
-            const key = cwd ?? "";
-            const known = userCuaDriverByCwd.get(key);
-            if (known !== undefined) return known;
-            const configured = yield* ensureInitialized.pipe(
-              Effect.andThen(
-                client.request("config/read", { cwd: cwd ?? null, includeLayers: false }),
-              ),
-              Effect.map((response): boolean | undefined => {
-                const servers: unknown = response.config.mcp_servers;
-                return (
-                  typeof servers === "object" &&
-                  servers !== null &&
-                  Object.hasOwn(servers, McpProviderSession.CUA_MCP_SERVER_NAME)
-                );
-              }),
-              Effect.catchCause((cause) =>
-                Effect.logWarning("Could not read Codex config; leaving cua-driver to the user.", {
-                  cause,
-                }).pipe(Effect.as(undefined)),
-              ),
-            );
-            if (configured === undefined) return true;
-            userCuaDriverByCwd.set(key, configured);
-            return configured;
-          });
+        const { userCuaDriver, filterGoatServers } = makeCodexMcpConfigReader((cwd) =>
+          ensureInitialized.pipe(
+            Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
+            Effect.map((response) => ({ config: { mcp_servers: response.config.mcp_servers } })),
+          ),
+        );
         const withoutConfiguredBrowser = makeCodexConfiguredBrowser((cwd) =>
           ensureInitialized.pipe(
             Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
@@ -1891,7 +1857,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 codexThreadRuntimeParams({
                   threadId: input.mcpSession?.threadId ?? sessionThreadId,
                   mcpSession: yield* withoutConfiguredBrowser(
-                    input.mcpSession,
+                    yield* filterGoatServers(input.mcpSession, input.runtimePolicy?.cwd),
                     input.runtimePolicy?.cwd,
                   ),
                   ...(input.modelSelection === undefined

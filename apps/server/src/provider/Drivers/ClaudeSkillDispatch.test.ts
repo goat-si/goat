@@ -90,3 +90,9 @@ describe("planClaudeSkillDispatch", () => {
     });
   });
 });
+
+it("reserves goat names even when a provider reports them", () => {
+  expect(
+    planClaudeSkillDispatch("$goat:shared", new Map([["goat:shared", { path: "/tmp/skill" }]])),
+  ).toBeUndefined();
+});

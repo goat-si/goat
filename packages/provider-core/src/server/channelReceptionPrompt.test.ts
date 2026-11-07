@@ -426,3 +426,33 @@ describe("channel reception follow-ups", () => {
     });
   });
 });
+describe("channel reception routines", () => {
+  const input = {
+    mode: "input",
+    conversationId: ChannelConversationId.make("conversation:routine"),
+    originKind: "goat",
+    inputText: "Look over my GOAT Bot tasks.",
+    tail: [],
+    tasks: [],
+    allowedTargets: [],
+    requester: {
+      ownerId: "owner",
+      principalId: "owner",
+      displayName: "Owner",
+      originKind: "goat",
+      runtimeModeCeiling: "approval-required",
+      grantedScopes: [],
+    },
+  } satisfies ChannelReceptionInput;
+
+  it("offers no_update only to a routine check-in, which may leave the reply empty", () => {
+    expect(buildChannelReceptionPrompt(input).prompt).not.toContain("no_update");
+    expect(buildChannelReceptionPrompt({ ...input, routine: true }).prompt).toContain(
+      "Otherwise choose no_update.",
+    );
+    expect(convert({ action: "no_update", replyText: " " })).toEqual({
+      replyText: "No update.",
+      action: { type: "no_update" },
+    });
+  });
+});

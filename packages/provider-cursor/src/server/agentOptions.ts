@@ -51,6 +51,7 @@ export function cursorMcpServers(
       },
     },
     ...McpProviderSession.cuaStdioMcpServers(session),
+    ...McpProviderSession.goatSdkServers(session.goatMcpServers),
   };
 }
 

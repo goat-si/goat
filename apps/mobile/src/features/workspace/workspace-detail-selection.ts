@@ -41,7 +41,7 @@ export function selectWorkspaceDetail(
 }
 
 const IDENTITY = {
-  GoatBot: ["taskId"],
+  GoatBot: ["taskId", "botId"],
   Thread: ["environmentId", "threadId"],
   PullRequest: ["environmentId", "projectId", "repository", "number", "host"],
 } as const;

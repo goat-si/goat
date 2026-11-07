@@ -127,6 +127,10 @@
       "types": "./src/device/hubAccess.ts",
       "default": "./src/device/hubAccess.ts"
     },
+    "./state/global-skills": {
+      "types": "./src/state/globalSkills.ts",
+      "default": "./src/state/globalSkills.ts"
+    },
     "./state/preview-sessions": {
       "types": "./src/state/previewSessions.ts",
       "default": "./src/state/previewSessions.ts"
