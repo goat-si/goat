@@ -67,7 +67,7 @@ export const channelEntries = {
     description:
       "From a GOAT Bot session, save a note or start a notes edit that a person's message asked for.",
     guide:
-      "Name the request's input id that GOAT printed with it and quote the person's exact words asking for the change. remember saves one rule; edit lets this turn change the notes file for that request only. A refusal is told to the person by GOAT.",
+      "Name the request's input id that GOAT printed with it and quote the person's exact words asking for the change. remember saves one rule; edit lets this turn change the notes file for that request only. GOAT queues a notice to the person for each refusal, delivered like any reply.",
     effect: "write",
     capability: "none",
     capabilityReason:

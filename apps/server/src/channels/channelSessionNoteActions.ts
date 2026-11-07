@@ -216,7 +216,7 @@ const make = Effect.gen(function* () {
           outcome: "refused",
           reason,
           told: true,
-          message: "Not changed. GOAT told the person: " + text,
+          message: "Not changed. " + QUEUED + text,
         };
         return result;
       });
@@ -253,10 +253,9 @@ const make = Effect.gen(function* () {
           };
           return granted;
         }
-        const holder = (yield* ledger.listTasksByStatus(OPEN)).find(
-          (open) => holdsFor(open.task) !== undefined,
+        const held = Effect.map(ledger.listTasksByStatus(OPEN), (open) =>
+          open.some((task) => holdsFor(task.task) !== undefined),
         );
-        if (holder !== undefined) return yield* refuse("busy", CHANNEL_COPY.noteEditBusy);
         if (request.kind === "remember") {
           const note = request.note?.trim() ?? "";
           if (note === "") return yield* fail("invalid_input");
@@ -270,10 +269,7 @@ const make = Effect.gen(function* () {
                 !OPEN.includes(current.task.status)
               )
                 return "task_finished" as const;
-              const held = (yield* ledger.listTasksByStatus(OPEN)).some(
-                (open) => holdsFor(open.task) !== undefined,
-              );
-              return held ? ("busy" as const) : undefined;
+              return (yield* held) ? ("busy" as const) : undefined;
             }),
             note,
             now,
@@ -293,8 +289,7 @@ const make = Effect.gen(function* () {
               outcome: "saved",
               reason: "correction_unmatched",
               told: true,
-              message:
-                "Saved, but the note it corrects was not found. GOAT told the person: " + notice,
+              message: "Saved, but the note it corrects was not found. " + QUEUED + notice,
             };
             return unmatched;
           }
@@ -305,31 +300,39 @@ const make = Effect.gen(function* () {
           };
           return saved;
         }
-        const prepared = prepareTransition(
-          latest,
-          {
-            type: "task.notes_change_requested",
-            payload: {
-              generation: latest.task.generation,
-              quote: request.quote.trim(),
-              inputId: request.inputId,
-            },
-          },
-          now,
-          undefined,
-          { actor: "agent" },
+        // Checked and recorded under the writers' lock, so two tasks never both hold a grant.
+        const recorded = yield* writer.exclusive(
+          Effect.gen(function* () {
+            if (yield* held) return "busy" as const;
+            const prepared = prepareTransition(
+              latest,
+              {
+                type: "task.notes_change_requested",
+                payload: {
+                  generation: latest.task.generation,
+                  quote: request.quote.trim(),
+                  inputId: request.inputId,
+                },
+              },
+              now,
+              undefined,
+              { actor: "agent" },
+            );
+            if (!prepared.ok) return "invalid" as const;
+            return yield* ledger
+              .applyTaskEvent({ write: prepared.write, deliveries: prepared.deliveries })
+              .pipe(
+                Effect.as("granted" as const),
+                Effect.catchIf(
+                  (error) => error.reason === "version_conflict",
+                  () => Effect.succeed("changed" as const),
+                ),
+              );
+          }),
         );
-        if (!prepared.ok) return yield* fail("invalid_input");
-        const applied = yield* ledger
-          .applyTaskEvent({ write: prepared.write, deliveries: prepared.deliveries })
-          .pipe(
-            Effect.as(true),
-            Effect.catchIf(
-              (error) => error.reason === "version_conflict",
-              () => Effect.succeed(false),
-            ),
-          );
-        if (applied) {
+        if (recorded === "busy") return yield* refuse("busy", CHANNEL_COPY.noteEditBusy);
+        if (recorded === "invalid") return yield* fail("invalid_input");
+        if (recorded === "granted") {
           const granted: NotesChangeResult = {
             outcome: "granted",
             told: false,
@@ -345,6 +348,9 @@ const make = Effect.gen(function* () {
     }),
   });
 });
+
+// Queued before the tool answers; it is delivered like any reply, so the model must not say it arrived.
+const QUEUED = "GOAT queued this notice for the person (delivered like any reply): ";
 
 const grantedMessage = (quote: string) =>
   "Allowed: edit the notes file now to make exactly this change and nothing else: " +
