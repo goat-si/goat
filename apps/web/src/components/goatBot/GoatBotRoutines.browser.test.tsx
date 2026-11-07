@@ -35,7 +35,7 @@ function setup() {
 }
 
 const savedCheckIn: BotRoutineSource = {
-  id: ScheduledTaskId.make("check-in"),
+  id: ScheduledTaskId.make("goat-bot-check-in:bot"),
   title: "Check in",
   prompt: "Look over my open work",
   enabled: true,

@@ -101,7 +101,7 @@ it("saves a check-in on the chosen days in the bot's chat, then stops offering i
     }),
   });
   expect(button("Save")).toBeUndefined();
-  await show([{ id: "check-in", title: "Check in", threadId: "bot" }]);
+  await show([{ id: "goat-bot-check-in:bot", title: "Morning look", threadId: "bot" }]);
   expect(button("Check in on me")).toBeUndefined();
 });
 

@@ -25,6 +25,11 @@ it("binds the check-in to the bot's conversation and notifies only on important 
   });
 });
 
+it("asks only about GOAT Bot tasks, which is what the bot can read for a routine", () => {
+  expect(CHECK_IN_PROMPT).toContain("GOAT Bot tasks");
+  expect(CHECK_IN_PROMPT).not.toContain("threads waiting");
+});
+
 it("defaults to weekday mornings at nine", () => {
   const input = checkInRoutineInput({ bot, modelSelection, creationSource: "mobile" });
   expect(input.schedule).toEqual({
@@ -58,18 +63,25 @@ const task = (id: string, fields: Partial<CheckInRoutineSource> = {}): CheckInRo
   ...fields,
 });
 
-it("finds the bot's check-in routine and ignores other routines and other threads", () => {
+it("gives each bot's check-in one fixed id, so a second save cannot create a duplicate", () => {
+  const first = checkInRoutineInput({ bot, modelSelection, creationSource: "web" });
+  const again = checkInRoutineInput({ bot, modelSelection, creationSource: "mobile" });
+  const other = checkInRoutineInput({
+    bot: { ...bot, threadId: ThreadId.make("member-thread") },
+    modelSelection,
+    creationSource: "web",
+  });
+  expect(first.id).toBeDefined();
+  expect(again.id).toBe(first.id);
+  expect(other.id).not.toBe(first.id);
+});
+
+it("finds the check-in by its id even after a rename, and ignores look-alike routines", () => {
+  const id = checkInRoutineInput({ bot, modelSelection, creationSource: "web" }).id ?? "";
   expect(
-    findCheckInRoutine(
-      [
-        task("other-title", { title: "Morning summary" }),
-        task("other-thread", { threadId: ThreadId.make("elsewhere") }),
-        task("unbound", { threadId: null }),
-      ],
-      bot.threadId,
-    ),
+    findCheckInRoutine([task("look-alike"), task("unbound", { threadId: null })], bot.threadId),
   ).toBeUndefined();
   expect(
-    findCheckInRoutine([task("a", { title: "Morning summary" }), task("b")], bot.threadId)?.id,
-  ).toBe("b");
+    findCheckInRoutine([task("look-alike"), task(id, { title: "Morning look" })], bot.threadId)?.id,
+  ).toBe(id);
 });
