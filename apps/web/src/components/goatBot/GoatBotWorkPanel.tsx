@@ -38,9 +38,10 @@ export function GoatBotWorkPanel({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 text-sm">
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         <div className="pr-10">
-          <TabsList aria-label="GOAT Bot work">
+          {/* Five tabs do not fit the panel at equal widths, so each keeps its label and the row wraps. */}
+          <TabsList aria-label="GOAT Bot work" className="flex-wrap">
             {tabs.map((name) => (
-              <TabsTab key={name} value={name}>
+              <TabsTab key={name} value={name} className="flex-none">
                 {name}
               </TabsTab>
             ))}
