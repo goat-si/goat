@@ -50,9 +50,10 @@ export const ChannelListBotNotesResult = Schema.Struct({
 });
 export type ChannelListBotNotesResult = typeof ChannelListBotNotesResult.Type;
 
-// Reception keeps a change or forget request only when the person's message quotes the note
-// (ChannelReceptionService), so these quote the note text exactly, without escaping.
-export const goatBotForgetNoteMessage = (note: string) => 'Please forget this note: "' + note + '"';
+// Reception answers these sentences itself when a message is exactly one of them
+// (channelBotNoteTabEdits), so each note is a JSON string: the sentence ends where it says it does.
+export const goatBotForgetNoteMessage = (note: string) =>
+  "Please forget this note: " + JSON.stringify(note);
 
 export const goatBotChangeNoteMessage = (note: string, newText: string) =>
-  'Please change this note: "' + note + '" to: "' + newText + '"';
+  "Please change this note: " + JSON.stringify(note) + " to: " + JSON.stringify(newText);
