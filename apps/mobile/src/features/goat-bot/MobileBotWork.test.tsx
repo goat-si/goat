@@ -92,6 +92,9 @@ vi.mock("../../state/channels", () => ({
   channelEnvironment: {
     listBotThreads: () => "task",
     listChildWork: () => "child",
+    listBotArtifacts: () => "artifacts",
+    readBotArtifact: {},
+    listTasks: () => "computer",
     updateTaskView: {},
     retryTask: { label: "retry", permissionAtom: () => "permission", run: state.retry },
   },
@@ -139,7 +142,14 @@ vi.mock("../../state/query", () => ({
       ? state.task
       : key === "routines"
         ? state.routines
-        : { data: null, error: null, isPending: false, isSuccess: false, refresh: vi.fn() },
+        : {
+            data: null,
+            cause: null,
+            error: null,
+            isPending: false,
+            isSuccess: false,
+            refresh: vi.fn(),
+          },
 }));
 import { MobileBotWork } from "./MobileBotWork";
 const container = document.createElement("div");
@@ -373,4 +383,14 @@ it("retries a failed task from its screen, names the attempt, and shows a refusa
     "This ran on another computer. Check it there, then ask again in chat.",
   );
   expect(state.task.refresh).toHaveBeenCalledOnce();
+});
+
+it("Library and Computer show their own views", async () => {
+  reset();
+  await render();
+  await press("Work");
+  await press("Library");
+  expect(container.textContent).toContain("Files need a newer GOAT server.");
+  await press("Computer");
+  expect(container.textContent).toContain("Loading machines…");
 });

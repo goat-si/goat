@@ -16,7 +16,12 @@ vi.mock("~/state/entities", () => ({
   useServerConfigs: () => new Map(),
 }));
 vi.mock("~/state/query", () => ({
-  useEnvironmentQuery: () => ({ data: { tasks: mocks.tasks }, error: null }),
+  useEnvironmentQuery: () => ({
+    data: { tasks: mocks.tasks },
+    error: null,
+    failure: null,
+    refresh: () => {},
+  }),
 }));
 vi.mock("~/state/server", () => ({
   serverEnvironment: {
@@ -30,7 +35,14 @@ vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: { execute: typeof mocks.setEnabled }) => command.execute,
 }));
-vi.mock("~/state/channels", () => ({ channelEnvironment: { listBotNotes: () => null } }));
+vi.mock("~/state/channels", () => ({
+  channelEnvironment: {
+    listBotNotes: () => null,
+    listBotArtifacts: () => null,
+    readBotArtifact: { execute: vi.fn() },
+    listTasks: () => null,
+  },
+}));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
 function setup(tasks: unknown[]) {
@@ -51,11 +63,9 @@ it("shows the empty state for each work tab", async () => {
   await userEvent.click(screen.getByRole("tab", { name: "Memory" }));
   await expect.element(screen.getByText("Notes need a newer GOAT server.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
-  await expect.element(screen.getByText("Files GOAT Bot saves will appear here.")).toBeVisible();
+  await expect.element(screen.getByText("Files need a newer GOAT server.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Computer" }));
-  await expect
-    .element(screen.getByText("Machines GOAT Bot works on will appear here."))
-    .toBeVisible();
+  await expect.element(screen.getByText("No work is running right now.")).toBeVisible();
 });
 
 it("a refused pause keeps the routine's stored state and shows why", async () => {

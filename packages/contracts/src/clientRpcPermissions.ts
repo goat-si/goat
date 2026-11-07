@@ -170,6 +170,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: AuthOrchestrationOperateScope,
   // The notes file is remembered context, like the memory reads above.
   [CHANNEL_GATEWAY_WS_METHODS.listBotNotes]: AuthMemoryReadScope,
+  // Library files are files on the server, the same class projects.readFile serves.
+  [CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts]: AuthFilesystemReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.readBotArtifact]: AuthFilesystemReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.retryTask]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: AuthOrchestrationOperateScope,

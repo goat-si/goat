@@ -1,5 +1,6 @@
 import { makeCodexMcpConfigReader } from "./goatCodexMcpServers.ts";
 import { codexResumeError, forkCodexThread } from "./CodexResumeError.ts";
+import * as Meta from "./CodexThreadMetadata.ts";
 import { makeSurvivorSettlement } from "./CodexSurvivorSettlement.ts";
 import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
 import * as Survivor from "./CodexSurvivorContinuation.ts";
@@ -114,9 +115,12 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
-import * as CodexClient from "effect-codex-app-server/client";
 import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
-import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
+import {
+  CUA_DEFERRED_NOTE,
+  RESTART_RELOAD_NOTE,
+  makeCodexThreadStatuses,
+} from "./codexThreadStatuses.ts";
 import * as CodexSubagents from "./codexSubagents.ts";
 import {
   interruptStopTargets,
@@ -126,7 +130,6 @@ import {
 } from "./CodexQueuedTurnStop.ts";
 import { attachmentKey, cuaPartOf } from "./CodexAttachmentKey.ts";
 import { makeCodexTurnStartGuard } from "./CodexTurnStartGuard.ts";
-import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -794,9 +797,13 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     const deferredContext = input.computerUseDeferred
       ? { goat_computer_use_deferred: { kind: "application" as const, value: CUA_DEFERRED_NOTE } }
       : {};
+    const restartContext = input.reloadedAfterRestart
+      ? { goat_restart_reload: { kind: "application" as const, value: RESTART_RELOAD_NOTE } }
+      : {};
     const additionalContext = {
       ...goatContext,
       ...deferredContext,
+      ...restartContext,
       ...appContext,
       ...memoryContext,
     };
@@ -1025,37 +1032,6 @@ export const resolveCodexForkBoundary = Effect.fn("CodexAdapterV2.resolveForkBou
 
   return { lastTurnId: nativeTurnId, rollbackTurnCount: 0 };
 });
-
-/** Generated thread/read schemas omit historyMode; probe through the raw request channel. */
-const CodexThreadHistoryMetadata = Schema.Struct({
-  thread: Schema.Struct({
-    historyMode: Schema.optionalKey(Schema.Literals(["legacy", "paginated"])),
-    status: Schema.optionalKey(Schema.Struct({ type: Schema.String })),
-  }),
-});
-const decodeCodexThreadHistoryMetadata = Schema.decodeUnknownEffect(CodexThreadHistoryMetadata);
-
-const readCodexThreadHistoryMetadata = Effect.fn("CodexAdapterV2.readThreadHistoryMetadata")(
-  function* (
-    raw: Pick<CodexClient.CodexAppServerClient["Service"]["raw"], "request">,
-    threadId: string,
-  ) {
-    const response = yield* raw.request("thread/read", { threadId, includeTurns: false });
-    const metadata = yield* decodeCodexThreadHistoryMetadata(response).pipe(
-      Effect.mapError((error) =>
-        CodexErrors.CodexAppServerRequestError.invalidPayload(
-          "thread/read",
-          "decode-payload",
-          error,
-        ),
-      ),
-    );
-    return {
-      historyMode: metadata.thread.historyMode,
-      loaded: metadata.thread.status?.type !== "notLoaded",
-    };
-  },
-);
 
 export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRollbackTurnCount")(
   function* (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) {
@@ -1625,6 +1601,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const restoredCompactions = new Set<string>();
         const restorePermit = yield* Semaphore.make(1);
         const credentialsByThread = new Map<string, string>();
+        /** Threads Codex held before this session resumed them, such as across a server restart. */
+        const foreignConfigThreads = new Set<string>();
+        /** Threads whose restart reload has not yet reached the agent in a started turn. */
+        const restartNotices = new Set<string>();
         /**
          * The subagent limits each live native thread's Codex session was built with. Codex ignores
          * resume overrides on a thread a client still holds, so a change needs a cold reload.
@@ -1643,6 +1623,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           mcpSession: McpProviderSession.McpProviderSessionConfig | undefined,
         ) => {
           threadStatuses.resumed(nativeThreadId);
+          foreignConfigThreads.delete(nativeThreadId);
           appliedSubagentsByThread.set(nativeThreadId, runtime.subagentKey);
           const cuaDriver = mcpSession && runtime.cuaDriver;
           if (mcpSession)
@@ -6923,16 +6904,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const next = mcpSession ? attachmentKey(mcpSession, runtime.cuaDriver) : undefined;
             const limitChanged =
               (appliedSubagentsByThread.get(threadId) ?? "") !== runtime.subagentKey;
-            const stale = applied !== next || limitChanged || threadStatuses.dropped(threadId);
+            const foreign = foreignConfigThreads.has(threadId);
+            const credentialStale = applied !== next || foreign;
+            const stale = credentialStale || limitChanged || threadStatuses.dropped(threadId);
             const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
             // Other changes wait for background terminals too; a new driver alone does not
             // (#1569), but one that comes with a new subagent limit does (#1572).
             const driverChanged = mcpSession ? cuaChanged : managedCuaByThread.has(threadId);
             const busy =
               stale &&
-              (yield* threadStatuses.busy(client, conversation, !driverChanged || limitChanged));
+              (yield* Meta.conversationBusy(client, threadStatuses, conversation, {
+                held: foreign,
+                terminals: !driverChanged || limitChanged,
+              }));
             const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
-            if (isGoatBotSessionThreadId(turnInput.threadId) && applied !== next && busy)
+            if (isGoatBotSessionThreadId(turnInput.threadId) && credentialStale && busy)
               return yield* toProtocolError(
                 "This GOAT Bot session's MCP credential could not be installed while the thread is busy; the turn did not start.",
               );
@@ -6949,9 +6935,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       },
                     }),
               };
+              // The unsubscribe can stop terminals even when the resume that follows fails.
+              if (foreign) restartNotices.add(threadId);
               yield* threadStatuses.reload(client, threadId, {
                 ...runtime.params,
-                ...(mcpSession || applied === undefined
+                ...(mcpSession || (applied === undefined && !foreign)
                   ? {}
                   : { config: { ...runtime.params.config, mcp_servers: detached } }),
               });
@@ -6980,6 +6968,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               ...codexTurnSkills(mcpSession, runtime.cuaDriver),
               computerUseDeferred,
+              reloadedAfterRestart: restartNotices.has(threadId),
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });
@@ -7007,7 +6996,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ).pipe(turnTerminalizationPermit.withPermits(1)),
             });
-            if (dispatched.type === "adopted") return;
+            if (dispatched.type === "adopted") return void restartNotices.delete(threadId);
             const start = dispatched.reservation;
             // Claimed only after admission: a turn Codex starts while this one prepares is not its own.
             yield* Ref.update(pendingRootTurns, (current) =>
@@ -7043,6 +7032,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               )
               .pipe(Effect.tapError(() => Effect.sync(start.failed)));
             start.answered(started.turn.id);
+            restartNotices.delete(threadId);
             // A turn from another attempt routes events there, so it cannot be adopted here.
             const owner =
               previousTurns.get(started.turn.id) ??
@@ -7352,8 +7342,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // The version from `initialize` decides which subagent keys this Codex accepts.
               yield* ensureInitialized;
               const held =
-                appliedSubagentsByThread.has(nativeThreadId) &&
+                (appliedSubagentsByThread.has(nativeThreadId) ||
+                  foreignConfigThreads.has(nativeThreadId)) &&
                 !threadStatuses.dropped(nativeThreadId);
+              const heldElsewhere =
+                !held &&
+                resumedMcp !== undefined &&
+                (yield* Meta.codexThreadHeld(client.raw, nativeThreadId));
               const resumedRuntime = yield* threadRuntimeParams({
                 mcpSession: resumedMcp,
                 modelSelection: threadInput.modelSelection,
@@ -7363,14 +7358,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // excludeTurns is not in the generated request schema yet.
               const resume = resumeNativeThread(nativeThreadId, {
                 excludeTurns: true,
-                ...resumedRuntime.params,
+                ...(heldElsewhere ? {} : resumedRuntime.params),
               });
               const response = yield* resume.pipe(Effect.flatMap(decodeCodexResumeMetadata));
               // As after thread/start: an unreported thread could never reload until its next turn.
               if (response.thread.status)
                 threadStatuses.record(response.thread.id, response.thread.status.type);
               // A held thread keeps the config it has; the next quiet turn reloads any change (#1569).
-              if (!held) recordLoaded(nativeThreadId, resumedRuntime, resumedMcp);
+              if (heldElsewhere) foreignConfigThreads.add(nativeThreadId);
+              else if (!held) recordLoaded(nativeThreadId, resumedRuntime, resumedMcp);
               // The first turn writes the post-resume goal snapshot if changed.
               return {
                 ...threadInput.providerThread,
@@ -7608,6 +7604,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
               // Only now has Codex let the thread go; until then it is held with its old config.
               credentialsByThread.delete(nativeThreadId);
+              foreignConfigThreads.delete(nativeThreadId);
+              restartNotices.delete(nativeThreadId);
               threadStatuses.forget(nativeThreadId);
               stoppedQueuedTurns.unloadThread(nativeThreadId);
               managedCuaByThread.delete(nativeThreadId);
@@ -8212,7 +8210,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 };
               }
               const { historyMode, loaded } = yield* ensureInitialized.pipe(
-                Effect.andThen(readCodexThreadHistoryMetadata(client.raw, threadId)),
+                Effect.andThen(Meta.readCodexThreadHistoryMetadata(client.raw, threadId)),
               );
               if (historyMode !== "paginated") {
                 return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
@@ -8303,7 +8301,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               recordLoaded(response.thread.id, forkRuntime, forkMcp);
               if (boundary.rollbackTurnCount > 0) {
                 const { historyMode } = yield* ensureInitialized.pipe(
-                  Effect.andThen(readCodexThreadHistoryMetadata(client.raw, response.thread.id)),
+                  Effect.andThen(
+                    Meta.readCodexThreadHistoryMetadata(client.raw, response.thread.id),
+                  ),
                 );
                 if (historyMode !== "paginated") {
                   return yield* new ProviderAdapter.ProviderAdapterForkThreadError({

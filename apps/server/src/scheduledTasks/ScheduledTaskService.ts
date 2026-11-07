@@ -2,6 +2,7 @@ import type { ScheduledTaskRow } from "./ScheduledTaskRow.ts";
 import { dispatchFailureDetails, taskError } from "./scheduledTaskError.ts";
 import { prepareScheduledTaskNotificationPrompt } from "./scheduledTaskNotificationPrompt.ts";
 import * as ScheduledTaskRuns from "./ScheduledTaskRuns.ts";
+import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import {
   CommandId,
   MessageId,
@@ -2325,4 +2326,4 @@ export const layer = Layer.effect(
       triggerWebhook,
     });
   }),
-).pipe(Layer.provide(ScheduledTaskRuns.layer));
+).pipe(Layer.provide(Layer.merge(ScheduledTaskRuns.layer, ChannelBotDirectory.layer)));

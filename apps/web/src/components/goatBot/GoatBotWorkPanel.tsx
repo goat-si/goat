@@ -6,6 +6,8 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotRoutines } from "./GoatBotRoutines";
+import { GoatBotComputer } from "./GoatBotComputer";
+import { GoatBotLibrary } from "./GoatBotLibrary";
 import { GoatBotMemory } from "./GoatBotMemory";
 import { GoatBotStatusCard } from "./GoatBotStatusCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
@@ -93,11 +95,11 @@ export function GoatBotWorkPanel({
             refreshKey={notesRefreshKey}
           />
         </TabsPanel>
-        <TabsPanel value="Library" className="mt-4">
-          <p>Files GOAT Bot saves will appear here.</p>
+        <TabsPanel value="Library" className="mt-4 min-h-0 overflow-y-auto">
+          <GoatBotLibrary environmentId={environmentId} />
         </TabsPanel>
-        <TabsPanel value="Computer" className="mt-4">
-          <p>Machines GOAT Bot works on will appear here.</p>
+        <TabsPanel value="Computer" className="mt-4 min-h-0 overflow-y-auto">
+          <GoatBotComputer environmentId={environmentId} />
         </TabsPanel>
       </Tabs>
     </div>
