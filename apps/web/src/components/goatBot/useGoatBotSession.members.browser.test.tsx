@@ -70,7 +70,10 @@ function Chat({ bot }: { bot: BotProfile | null }) {
 }
 
 it("sends a member's message to its own conversation and keeps its pending row out of the main chat", async () => {
-  const held = Promise.withResolvers<ChannelIngestResult>();
+  let release: (result: ChannelIngestResult) => void = () => {};
+  const held = new Promise<ChannelIngestResult>((resolve) => {
+    release = resolve;
+  });
   const ingested: ChannelIngestInput[] = [];
   const port: GoatBotChannelPort = {
     ensureBot: vi.fn(async () => ({
@@ -107,7 +110,7 @@ it("sends a member's message to its own conversation and keeps its pending row o
   await expect
     .element(page.getByRole("region", { name: "Main chat" }).getByText("find sources"))
     .not.toBeInTheDocument();
-  held.resolve({
+  release({
     inputId: ChannelInputId.make("member-input"),
     conversationId: ChannelConversationId.make("conversation"),
     bindingId: ChannelBindingId.make("binding"),
