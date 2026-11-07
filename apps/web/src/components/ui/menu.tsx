@@ -1,4 +1,5 @@
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
+import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu";
 import { CheckIcon, ChevronRightIcon, SearchIcon } from "~/components/solar";
 import type * as React from "react";
 
@@ -8,6 +9,8 @@ import { Input, type InputProps } from "./input";
 import { Spinner } from "./spinner";
 
 const Menu = MenuPrimitive.Root;
+/** Opens on right click, touch long press, and the keyboard's context menu key; takes `MenuPopup`. */
+const ContextMenu = ContextMenuPrimitive.Root;
 
 function MenuTrigger({ className, children, ...props }: MenuPrimitive.Trigger.Props) {
   return (
@@ -15,6 +18,10 @@ function MenuTrigger({ className, children, ...props }: MenuPrimitive.Trigger.Pr
       {children}
     </MenuPrimitive.Trigger>
   );
+}
+
+function ContextMenuTrigger(props: ContextMenuPrimitive.Trigger.Props) {
+  return <ContextMenuPrimitive.Trigger data-slot="context-menu-trigger" {...props} />;
 }
 
 function MenuPopup({
@@ -351,6 +358,8 @@ function MenuSubPopup({
 export {
   Menu,
   Menu as DropdownMenu,
+  ContextMenu,
+  ContextMenuTrigger,
   MenuTrigger,
   MenuTrigger as DropdownMenuTrigger,
   MenuPopup,

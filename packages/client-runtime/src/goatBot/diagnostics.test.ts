@@ -199,6 +199,16 @@ describe("diagnoseGoatBot", () => {
     expect(line(listed, "work")?.alsoAction).toBeUndefined();
   });
 
+  it("counts a listed running turn that waits on the person as waiting, not running", () => {
+    const listed = healthy({ rows: [task("turn", "running")], turnsWaiting: ["turn"] });
+    expect(line(listed, "work")).toMatchObject({
+      tone: "warn",
+      text: "1 waiting for your answer",
+      action: { kind: "open_task", taskId: "turn" },
+    });
+    expect(line(listed, "work")?.alsoAction).toBeUndefined();
+  });
+
   it("still reports a waiting turn when the task list is loading, failed or unavailable", () => {
     for (const rows of [null, "failed", "unavailable"] as const) {
       expect(line(healthy({ rows, turnsWaiting: ["turn"] }), "work")).toMatchObject({
@@ -402,6 +412,40 @@ describe("goatBotTurnsWaiting", () => {
       notification({ taskId: "work-a", kind: "work", ...asking }),
     ];
     expect(goatBotTurnsWaiting(items as never)).toEqual(["turn-a"]);
+  });
+
+  it("counts a running turn whose launched work waits on the person, until it ends", () => {
+    const waitingOn = (kind: string) => ({
+      pullRequests: [],
+      needsYou: [{ kind, since: "2026-11-07T09:00:00.000Z" }],
+    });
+    const items = [
+      notification({
+        taskId: "turn-q",
+        kind: "turn",
+        status: "running",
+        observed: waitingOn("question"),
+      }),
+      notification({
+        taskId: "turn-a",
+        kind: "turn",
+        status: "running",
+        observed: waitingOn("approval"),
+      }),
+      notification({
+        taskId: "turn-done",
+        kind: "turn",
+        status: "completed",
+        observed: waitingOn("question"),
+      }),
+      notification({
+        taskId: "turn-free",
+        kind: "turn",
+        status: "running",
+        observed: { pullRequests: [], needsYou: [] },
+      }),
+    ];
+    expect(goatBotTurnsWaiting(items as never)).toEqual(["turn-q", "turn-a"]);
   });
 
   it("treats an older chip without a kind as a turn when the bot's session ran it", () => {

@@ -59,3 +59,65 @@ it.effect.each([
     );
   }).pipe(Effect.provide(Fixture.layer)),
 );
+it.effect(
+  "a launched thread's end wake answers for the run that launched it, with its own status",
+  () =>
+    Effect.gen(function* () {
+      yield* Fixture.seed;
+      const sql = yield* SqlClient.SqlClient;
+      const gate = yield* SessionReceiptGate.SessionReceiptGate;
+      const wakeFor = (launched: string) =>
+        "message:launch-watch:" +
+        [Fixture.threadId, "", launched].map(encodeURIComponent).join(":") +
+        ":run:run:" +
+        launched +
+        ":1";
+      yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (
+      'child-work:receipt-task:probe',
+      ${JSON.stringify({
+        taskId: "receipt-task",
+        childWorkId: "probe",
+        generation: 1,
+        callerThreadId: Fixture.threadId,
+        callerRunId: Fixture.runId,
+        surface: "thread_launch",
+        destination: { threadId: "thread:probe" },
+        state: "completed",
+      })},
+      '1970-01-01')`;
+      const addWake = (id: RunId, ordinal: number, launched: string) =>
+        sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+      SELECT ${id}, thread_id, ${ordinal}, provider, 'running', requested_at,
+        json_set(payload_json, '$.id', ${id}, '$.userMessageId', ${wakeFor(launched)}, '$.restartContinuationOfRunId', NULL)
+      FROM orchestration_v2_projection_runs WHERE run_id = ${Fixture.runId}`;
+      const wake = RunId.make("receipt-wake");
+      yield* addWake(wake, 2, "thread:probe");
+      const held = yield* gate.inspect(Fixture.threadId, wake);
+      expect(held.state).toBe("held");
+      expect(held.state === "held" ? held.status : undefined).toBe("running");
+      yield* Fixture.settle;
+      expect((yield* gate.inspect(Fixture.threadId, wake)).state).toBe("settled");
+      const stray = RunId.make("receipt-stray-wake");
+      yield* addWake(stray, 3, "thread:unrecorded");
+      expect((yield* gate.inspect(Fixture.threadId, stray)).state).toBe("absent");
+    }).pipe(Effect.provide(Fixture.layer)),
+);
+it.effect("a background command's notice run answers for the run that started the command", () =>
+  Effect.gen(function* () {
+    yield* Fixture.seed;
+    const sql = yield* SqlClient.SqlClient;
+    const gate = yield* SessionReceiptGate.SessionReceiptGate;
+    const notice = RunId.make("receipt-notice");
+    yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+      SELECT ${notice}, thread_id, 2, provider, 'running', requested_at,
+        json_set(payload_json, '$.id', ${notice}, '$.userMessageId', 'notice-message', '$.restartContinuationOfRunId', NULL)
+      FROM orchestration_v2_projection_runs WHERE run_id = ${Fixture.runId}`;
+    yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+      VALUES ('notice-message', ${Fixture.threadId}, 'user', 0, '1970-01-01', '1970-01-01',
+        ${JSON.stringify({ notification: { source: { kind: "command" }, outcome: "completed", summary: "Command ended", aboutRunId: Fixture.runId } })})`;
+    yield* Fixture.settle;
+    expect((yield* gate.inspect(Fixture.threadId, notice)).state).toBe("settled");
+    yield* sql`UPDATE channel_tasks SET status = 'cancelled' WHERE task_id = 'receipt-task'`;
+    expect((yield* gate.inspect(Fixture.threadId, notice)).state).toBe("invalid");
+  }).pipe(Effect.provide(Fixture.layer)),
+);

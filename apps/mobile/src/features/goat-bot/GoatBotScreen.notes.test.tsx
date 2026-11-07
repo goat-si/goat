@@ -1,16 +1,19 @@
-import { act, type ReactNode } from "react";
+import { act, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { GoatBotRow, GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import {
+  BotProfile,
   EnvironmentId,
   goatBotChangeNoteMessage,
   goatBotForgetNoteMessage,
   ThreadId,
 } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 
 const session = vi.hoisted(() => ({
   rows: [] as GoatBotRow[],
+  canSend: true,
   onSend: vi.fn(() => true),
   notes: [] as Array<{ index: number; date: string | null; text: string }>,
   refresh: vi.fn(),
@@ -42,13 +45,16 @@ vi.mock("react-native", () => ({
     value,
     onChangeText,
     accessibilityLabel,
+    accessibilityState,
   }: {
     value?: string;
     onChangeText?: (text: string) => void;
     accessibilityLabel?: string;
+    accessibilityState?: { disabled?: boolean };
   }) => (
     <textarea
       aria-label={accessibilityLabel}
+      aria-disabled={accessibilityState?.disabled}
       value={value}
       onChange={(event) => onChangeText?.(event.currentTarget.value)}
     />
@@ -102,10 +108,15 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
 vi.mock("./useMobileGoatBotSession", () => ({
-  useMobileGoatBotSession: () => ({
+  // Like the real session, a deleted member's chat cannot send.
+  useMobileGoatBotSession: (
+    _visible: boolean,
+    _taskId: unknown,
+    member: { state?: string } | null = null,
+  ) => ({
     availability: "ready",
     rows: session.rows,
-    canSend: true,
+    canSend: session.canSend && member?.state !== "deleted",
     attachmentSupport: null,
     onSend: session.onSend,
     onRetryInput: () => {},
@@ -194,6 +205,7 @@ async function render() {
   };
 }
 function setup() {
+  session.canSend = true;
   session.rows = [];
   session.notes = [note];
   session.onSend.mockClear();
@@ -307,5 +319,80 @@ it("the open Memory tab reads the notes again after the answer and after the tas
   await press(view.container, "Close");
   await openMemory(view.container);
   expect(session.refresh).toHaveBeenCalledTimes(opened + 4);
+  await view.unmount();
+});
+const decodeBotProfile = Schema.decodeUnknownSync(BotProfile);
+const scout = (state: "active" | "deleted") =>
+  decodeBotProfile({
+    botId: "scout",
+    role: "member",
+    name: "Scout",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId: "env",
+    sessionThreadId: "thread-scout",
+    createdAt: "2026-11-07T00:00:00.000Z",
+    updatedAt: "2026-11-07T00:00:00.000Z",
+    state,
+  });
+/**
+ * Shaped like GoatBotRouteScreen: Restore is offered while the profile is deleted, and a
+ * successful restore re-reads the bot list, which brings back the active profile.
+ */
+function DeletedScoutRoute(props: { readonly restoreWorks: boolean }) {
+  const [member, setMember] = useState(() => scout("deleted"));
+  return (
+    <GoatBotScreen
+      visible
+      member={member}
+      onRestoreMember={
+        member.state === "deleted"
+          ? async () => {
+              if (props.restoreWorks) setMember(scout("active"));
+              return props.restoreWorks;
+            }
+          : undefined
+      }
+    />
+  );
+}
+async function renderDeletedScout(restoreWorks: boolean) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<DeletedScoutRoute restoreWorks={restoreWorks} />));
+  return {
+    container,
+    // VoiceOver hears a composer it cannot type into as dimmed.
+    composerDisabled: () =>
+      container.querySelector('[aria-label="Message Scout"]')?.getAttribute("aria-disabled"),
+    unmount: async () => {
+      await act(async () => root.unmount());
+      container.remove();
+    },
+  };
+}
+
+it("restoring a deleted member from its banner drops the banner and lets the person type again", async () => {
+  setup();
+  const view = await renderDeletedScout(true);
+  expect(view.container.textContent).toContain("Scout was deleted");
+  expect(view.composerDisabled()).toBe("true");
+  await press(view.container, "Restore");
+  expect(view.container.textContent).not.toContain("Scout was deleted");
+  expect(buttonIn(view.container, "Restore")).toBeUndefined();
+  expect(view.composerDisabled()).toBe("false");
+  await view.unmount();
+});
+
+it("a failed restore keeps the deleted banner, its Restore button and the disabled composer", async () => {
+  setup();
+  const view = await renderDeletedScout(false);
+  await press(view.container, "Restore");
+  expect(view.container.textContent).toContain("Scout was deleted");
+  expect(buttonIn(view.container, "Restore")?.disabled).toBe(false);
+  expect(view.composerDisabled()).toBe("true");
   await view.unmount();
 });

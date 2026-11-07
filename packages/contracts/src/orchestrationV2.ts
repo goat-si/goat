@@ -7,6 +7,11 @@ export * from "./orchestrationV2Attribution.ts";
 import { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 export { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
+import {
+  kindUnionWithFallback,
+  OrchestrationV2Notification,
+} from "./orchestrationV2Notification.ts";
+export * from "./orchestrationV2Notification.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
 import { Handoff, HandoffJson, HandoffActor } from "./handoff.ts";
@@ -18,7 +23,6 @@ import {
 } from "./memory.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import { withRecordIdTable } from "./orchestrationV2IdTable.ts";
-import { kindUnionWithFallback } from "./kindUnion.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -82,7 +86,7 @@ import {
   TurnItemId,
 } from "./baseSchemas.ts";
 import { ChannelMessageMeta } from "./channelCommon.ts";
-import { ChannelTaskChip, ChannelTimelineRecord } from "./channelLedger.ts";
+import { ChannelTimelineRecord } from "./channelLedger.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import { OrchestrationV2CloudTask } from "./cloudTask.ts";
 import { ThreadGuestShare } from "./guestShare.ts";
@@ -1221,71 +1225,6 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
   respondedBy: Schema.optional(UserInputRespondedBy),
 });
 export type OrchestrationV2RuntimeRequest = typeof OrchestrationV2RuntimeRequest.Type;
-
-const SubagentNotificationSource = Schema.Struct({
-  kind: Schema.Literal("subagent"),
-  childThreadId: Schema.optional(ThreadId),
-});
-const CommandNotificationSource = Schema.Struct({ kind: Schema.Literal("command") });
-
-/** Encode legacy background_command/background_task shapes first so older clients accept command/subagent sources. */
-export const OrchestrationV2NotificationSource = kindUnionWithFallback(
-  [
-    Schema.Struct({
-      kind: Schema.Literal("delegated_task"),
-      taskIds: Schema.Array(NodeId),
-      childThreadId: Schema.optional(ThreadId),
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("background_task"),
-      work: Schema.Literal("subagent"),
-      childThreadId: Schema.optional(ThreadId),
-    }).pipe(
-      Schema.decodeTo(Schema.toType(SubagentNotificationSource), {
-        decode: SchemaGetter.transform(({ childThreadId }) =>
-          childThreadId === undefined
-            ? { kind: "subagent" as const }
-            : { kind: "subagent" as const, childThreadId },
-        ),
-        encode: SchemaGetter.transform(({ childThreadId }) => ({
-          kind: "background_task" as const,
-          work: "subagent" as const,
-          ...(childThreadId === undefined ? {} : { childThreadId }),
-        })),
-      }),
-    ),
-    Schema.Struct({ kind: Schema.Literal("background_command").transform("command") }),
-    SubagentNotificationSource,
-    CommandNotificationSource,
-    Schema.Struct({ kind: Schema.Literal("monitor") }),
-    Schema.Struct({
-      kind: Schema.Literal("question"),
-      threadId: ThreadId,
-      requestId: RuntimeRequestId,
-      humanRequired: Schema.Boolean,
-    }),
-    Schema.Struct({ kind: Schema.Literal("background_task") }),
-    Schema.Struct({ kind: Schema.Literal("system") }),
-    Schema.Struct({ kind: Schema.Literal("goat_bot_event") }),
-  ],
-  (kind) => Schema.Struct({ kind }),
-  () => ({ kind: "background_task" }),
-);
-export type OrchestrationV2NotificationSource = typeof OrchestrationV2NotificationSource.Type;
-
-export const OrchestrationV2Notification = Schema.Struct({
-  source: OrchestrationV2NotificationSource,
-  outcome: Schema.Literals(["completed", "failed", "cancelled", "updated", "unknown"]),
-  summary: TrimmedNonEmptyString,
-  detail: Schema.optional(Schema.String),
-  /**
-   * The channel ledger task this notification shows, for GOAT bot task chips. The status here
-   * is the task's; the item status only says the record exists. A chip this build cannot read
-   * decodes as absent, leaving the plain notification.
-   */
-  ledgerTask: ForwardCompatibleOptional(ChannelTaskChip),
-});
-export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Type;
 
 /** Why GOAT compacted a thread on its own, on the `/compact` it sent. */
 export const OrchestrationV2IdleCompaction = Schema.Literals(["beforeCacheExpires", "onReturn"]);

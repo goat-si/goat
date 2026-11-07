@@ -24,6 +24,7 @@ function flushMeasurements() {
   while (roster.pending.length > 0) roster.pending.shift()?.();
 }
 vi.mock("react-native", () => ({
+  Platform: { OS: "ios" },
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   ScrollView: ({
     children,
@@ -56,6 +57,7 @@ vi.mock("react-native", () => ({
     accessibilityState,
     accessibilityLabel,
     onAccessibilityAction,
+    accessibilityActions,
   }: {
     children?: ReactNode;
     ref?: React.Ref<{ measureInWindow: Measure }>;
@@ -65,6 +67,7 @@ vi.mock("react-native", () => ({
     accessibilityState?: { selected?: boolean; expanded?: boolean };
     accessibilityLabel?: string;
     onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
+    accessibilityActions?: ReadonlyArray<{ name: string; label?: string }>;
   }) => {
     React.useImperativeHandle(ref, () => measurer(() => roster.rowRect));
     if (onLayout) roster.rowLayout = onLayout;
@@ -75,6 +78,7 @@ vi.mock("react-native", () => ({
         aria-pressed={accessibilityState?.selected}
         aria-expanded={accessibilityState?.expanded}
         aria-label={accessibilityLabel}
+        data-actions={accessibilityActions?.map((action) => action.label ?? action.name).join(",")}
         onKeyDown={(event) => onAccessibilityAction?.({ nativeEvent: { actionName: event.key } })}
       >
         {children}
@@ -105,6 +109,10 @@ vi.mock("./useMobileMemberStatus", () => ({
 vi.mock("../../state/use-thread-detail", () => ({
   useThreadVisibleTurnItems: () => face.items,
 }));
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 0 }),
+}));
+vi.mock("../workspace/WorkspaceTabsContext", () => ({ useWorkspaceTabs: () => null }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({ themeAppearance: "light" }),
 }));
@@ -116,14 +124,16 @@ vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => <span /> }))
 vi.mock("../../components/ui/Button", () => ({
   Button: ({
     label,
+    accessibilityLabel,
     disabled,
     onPress,
   }: {
     label: string;
+    accessibilityLabel?: string;
     disabled?: boolean;
     onPress?: () => void;
   }) => (
-    <button disabled={disabled} onClick={onPress}>
+    <button aria-label={accessibilityLabel} disabled={disabled} onClick={onPress}>
       {label}
     </button>
   ),
@@ -507,7 +517,7 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
   const gone = profile("gone", "Gone", { state: "deleted" });
   const open = vi.fn();
   const newBot = vi.fn();
-  const pressDeleted = vi.fn();
+  const restoreDeleted = vi.fn();
   root = createRoot(container);
   await act(async () =>
     root?.render(
@@ -530,7 +540,8 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
           canCreate: true,
           onNewBot: newBot,
           onLongPressBot: () => {},
-          onPressDeleted: pressDeleted,
+          canRestore: true,
+          onRestoreDeleted: restoreDeleted,
         }}
       />,
     ),
@@ -548,6 +559,62 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
   await act(async () => button("Hidden bots (1)")?.click());
   await act(async () => button("Quiet")?.click());
   expect(open).toHaveBeenCalledWith({ kind: "member", profile: quiet });
-  await act(async () => button("Restore")?.click());
-  expect(pressDeleted).toHaveBeenCalledWith(gone);
+  // A deleted bot opens its archived conversation; Restore is its own button so VoiceOver reaches it.
+  const deletedRow = button("Gone");
+  expect(deletedRow?.textContent).toContain("Deleted");
+  expect(deletedRow?.textContent).not.toContain("Restore");
+  await act(async () => deletedRow?.click());
+  expect(open).toHaveBeenLastCalledWith({ kind: "member", profile: gone });
+  const restore = container.querySelector<HTMLButtonElement>('button[aria-label="Restore Gone"]');
+  expect(restore?.textContent).toBe("Restore");
+  await act(async () => restore?.click());
+  expect(restoreDeleted).toHaveBeenCalledWith(gone);
+  expect(open).toHaveBeenCalledTimes(2);
+});
+
+it("offers no restore on a deleted bot to someone who cannot manage bots", async () => {
+  const gone = decodeProfile({
+    botId: "gone",
+    role: "member",
+    name: "Gone",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId: "env",
+    sessionThreadId: "thread-gone",
+    createdAt: at,
+    updatedAt: at,
+    state: "deleted",
+  });
+  root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <MobileBotRosterView
+        bots={[{ kind: "main", profile: null }]}
+        rows={[]}
+        hasMore={false}
+        slackEnabled={false}
+        onOpenBot={() => {}}
+        onOpenChild={() => {}}
+        onLongPressTask={() => {}}
+        onShowMore={() => {}}
+        members={{
+          hidden: [],
+          deleted: [gone],
+          canCreate: false,
+          onNewBot: () => {},
+          onLongPressBot: () => {},
+          canRestore: false,
+          onRestoreDeleted: () => {},
+        }}
+      />,
+    ),
+  );
+  const deletedRow = [...container.querySelectorAll("button")].find((element) =>
+    element.textContent?.includes("Gone"),
+  );
+  expect(deletedRow).toBeDefined();
+  expect(container.querySelector('button[aria-label="Restore Gone"]')).toBeNull();
+  expect(container.textContent).not.toContain("Restore");
 });

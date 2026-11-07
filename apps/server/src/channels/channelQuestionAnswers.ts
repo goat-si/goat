@@ -11,6 +11,9 @@ import * as Effect from "effect/Effect";
 
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import type * as ChannelLedger from "./ChannelLedger.ts";
+import { isSkillProposalAnswer } from "./channelSkillProposalText.ts";
+
+export { mayAnswerTask, questionTextForModel } from "./channelSkillProposalText.ts";
 
 type StoredTask = NonNullable<
   Effect.Success<ReturnType<ChannelLedger.ChannelLedger["Service"]["getTask"]>>
@@ -20,6 +23,7 @@ type Checked =
   | { readonly stored?: undefined; readonly refused: ChannelReceptionResult };
 
 const unmatched = "I couldn't match that to an open question. Which task do you mean?";
+const proposalAnswer = "Answer Save or Not now.";
 
 /** The task holding the open question, or the reply that says why the answer was not passed on. */
 export const openQuestionTask = Effect.fn("channelQuestionAnswers.openQuestionTask")(function* (
@@ -28,13 +32,24 @@ export const openQuestionTask = Effect.fn("channelQuestionAnswers.openQuestionTa
     readonly taskId: ChannelTaskId;
     readonly questionId: ChannelQuestionId;
     readonly conversationId: ChannelConversationId;
+    readonly answer?: string;
   },
 ): Effect.fn.Return<Checked, ChannelLedger.ChannelLedgerError> {
   const stored = yield* ledger.getTask(target.taskId);
   if (stored === undefined || stored.task.conversationId !== target.conversationId)
     return { refused: { replyText: unmatched, action: { type: "clarify", question: unmatched } } };
-  if (stored.task.openQuestions.some((question) => question.questionId === target.questionId))
-    return { stored };
+  const open = stored.task.openQuestions.some(
+    (question) => question.questionId === target.questionId,
+  );
+  if (
+    open &&
+    stored.task.skillProposal !== undefined &&
+    !isSkillProposalAnswer(target.answer ?? "")
+  )
+    return {
+      refused: { replyText: proposalAnswer, action: { type: "clarify", question: proposalAnswer } },
+    };
+  if (open) return { stored };
   const answered = (yield* ledger.recentAnswers(stored.task.taskId, 20)).some(
     (event) => event.payload.questionId === target.questionId,
   );

@@ -208,7 +208,8 @@ export function GoatBotHeaderFace(props: {
   );
   return (
     <NativeStackScreenOptions
-      options={{ headerTitle: renderTitle }}
+      // The title is also the navigation bar's accessible name; the stack's default says GOAT Bot.
+      options={{ title, headerTitle: renderTitle }}
       optionsVersion={`${title}:${state}:${motion === null ? "still" : "moving"}`}
     />
   );

@@ -29,6 +29,7 @@ import {
   type ChannelOutboundMessage,
   type ChannelReplyAddress,
   type ChannelRequester,
+  type ChannelTask,
   type ChatAttachment,
   getProviderAttachmentLimitError,
   type RuntimeMode,
@@ -42,6 +43,7 @@ import * as Option from "effect/Option";
 
 import type * as AttachmentFileLeases from "../assets/AttachmentFileLeases.ts";
 import type * as ServerConfig from "../config.ts";
+import { captureMemoryGrantCeiling, MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 import * as AttachmentClaims from "../orchestration-v2/AttachmentClaims.ts";
 import type * as DocumentText from "../provider/DocumentText.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
@@ -125,15 +127,47 @@ export const lowerRuntimeMode = (left: RuntimeMode, right: RuntimeMode): Runtime
 
 /**
  * Whether someone may answer a task's question. An answer steers work that runs under the asker's
- * ceiling, so the answerer needs to be allowed to run work and at least as far as the asker.
+ * ceiling, so the answerer needs to be allowed to run work, at least as far and with at least the
+ * memory of the asker. The asker themself (sameIdentity: the same person on the same connection)
+ * is held to their current memory where their runs start, so is not compared on memory here.
  * A linked channel account is a person, whom handoffs/HumanStepAuthority.ts lets resolve every
  * human step; this adds the channel's own owner, scope and ceiling checks for the target.
  */
-export const mayAnswerFor = (answerer: ChannelRequester, asker: ChannelRequester): boolean =>
+export const mayAnswerFor = (
+  answerer: ChannelRequester,
+  asker: ChannelRequester,
+  sameIdentity = false,
+): boolean =>
   answerer.ownerId === asker.ownerId &&
   answerer.grantedScopes.includes("orchestration:operate") &&
   lowerRuntimeMode(answerer.runtimeModeCeiling, asker.runtimeModeCeiling) ===
-    asker.runtimeModeCeiling;
+    asker.runtimeModeCeiling &&
+  (sameIdentity ||
+    MEMORY_GRANT_RANK[captureMemoryGrantCeiling(answerer.grantedScopes, false)] >=
+      MEMORY_GRANT_RANK[captureMemoryGrantCeiling(asker.grantedScopes, false)]);
+
+/** The connection a task came in on; GOAT tasks all share the one GOAT connection. */
+export const originConnectionOf = (task: ChannelTask) =>
+  task.originAddress.kind === "goat" ? GOAT_CONNECTION_ID : task.originAddress.connectionId;
+
+/** The task's requester themself: the same person, account and connection. */
+export const isSameIdentity = (
+  sender: ChannelRequester,
+  connectionId: string | undefined,
+  task: ChannelTask,
+) =>
+  sender.principalId === task.requester.principalId &&
+  sender.originKind === task.requester.originKind &&
+  sender.externalActorId === task.requester.externalActorId &&
+  connectionId !== undefined &&
+  connectionId === originConnectionOf(task);
+
+/** mayAnswerFor with the requester exemption decided by identity, connection included. */
+export const mayDirect = (
+  sender: ChannelRequester,
+  connectionId: string | undefined,
+  task: ChannelTask,
+) => mayAnswerFor(sender, task.requester, isSameIdentity(sender, connectionId, task));
 
 /** What a linked account may do: the connection's ceiling and the link's, whichever is lower. */
 export const effectiveRequester = (
@@ -418,7 +452,7 @@ const make = Effect.gen(function* () {
         requester !== undefined &&
         target.ownerId === requester.ownerId &&
         target.task.conversationId === result.conversationId &&
-        mayAnswerFor(requester, target.task.requester)
+        mayDirect(requester, input.connectionId, target.task)
           ? target.task.taskId
           : undefined;
       const sequence = yield* timeline.record({

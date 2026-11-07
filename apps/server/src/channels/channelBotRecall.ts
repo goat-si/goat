@@ -13,6 +13,8 @@ import type {
 } from "@goat/contracts";
 import { channelEvidenceLabels } from "@goat/shared/channelEvidence";
 
+import { questionTextForModel } from "./channelSkillProposalText.ts";
+
 /** Each read result is cut to this many characters before a pass sees it. */
 export const RECALL_RESULT_CHARS = 4_000;
 /** At most this many tasks answer one work read. */
@@ -154,7 +156,9 @@ export const taskDigest = (task: ChannelTask): string => {
       : []),
     ...(prs.length === 0 ? [] : ["  pull requests: " + prs.join(", ")]),
     ...channelEvidenceLabels(task.observed?.result).map((label) => "  " + label),
-    ...task.openQuestions.map((question) => "  open question: " + question.text),
+    ...task.openQuestions.map(
+      (question) => "  open question: " + questionTextForModel(task, question),
+    ),
     ...(task.completedAt === undefined ? [] : ["  ended " + task.completedAt.slice(0, 16)]),
   ];
   return lines.join("\n");

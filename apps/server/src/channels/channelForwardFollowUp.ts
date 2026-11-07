@@ -2,6 +2,7 @@ import { ProjectId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
 import {
   type DispatchModeRefusal,
   DispatchModeLimit,
@@ -9,9 +10,11 @@ import {
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
-import { requesterForDispatch } from "./channelDispatchAuthority.ts";
+import { rejected } from "./channelBotSessionRecords.ts";
+import { steersInto } from "./channelBotSessionRuns.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
 import { toolSteerIdsFor, turnSteerIdsFor } from "./channelIds.ts";
+import { refuseSenderFollowUp, requesterForDelivery } from "./channelSenderAuthority.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 
 export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(function* () {
@@ -77,10 +80,12 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
       yield* ledger.completeForward({ owner, sequence: pending.sequence });
       return;
     }
-    const requester = yield* requesterForDispatch(stored.task).pipe(
+    // The requester and, for someone else's follow-up, its sender, as they stand now.
+    const authority = yield* requesterForDelivery(stored.task, event.payload.sender).pipe(
       Effect.provideService(ChannelLedger.ChannelLedger, ledger),
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
     );
+    const requester = authority._tag === "allowed" ? authority.requester : undefined;
     let acceptedRun = undefined;
     if (requester === undefined) {
       const projection = yield* threads
@@ -93,6 +98,16 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
           own.includes(run.userMessageId) || (message !== undefined && run.id === message.runId),
       );
       if (message !== undefined && acceptedRun === undefined) return;
+      if (acceptedRun === undefined && authority._tag === "sender_changed") {
+        yield* refuseSenderFollowUp(ledger, stored, {
+          eventId: event.eventId,
+          name: authority.name,
+          owner,
+          sequence: pending.sequence,
+          own,
+        });
+        return;
+      }
       if (acceptedRun === undefined) {
         yield* refuseForward(
           ledger,
@@ -115,6 +130,13 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
       }
     }
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
+    // Steer only the run read above, and only while it holds no more memory than the requester
+    // has now; a run that started since, or one that holds more, gets a queued turn instead.
+    const steerInto =
+      requester !== undefined &&
+      steersInto(newest, false, captureMemoryGrantCeiling(requester.grantedScopes, false))
+        ? newest
+        : undefined;
     const send = (attempt: "first" | "queued") => {
       if (requester === undefined) return Effect.die("Cannot send without current authority");
       const ids = idsFor(attempt);
@@ -126,9 +148,10 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
           messageId: ids.messageId,
           text: "Follow-up from " + event.payload.from + ": " + event.payload.text,
           attachments: [],
-          // First into the running run when it can take steering; the second attempt only
-          // queues, which the thread accepts whatever its run is doing.
-          mode: attempt === "first" ? "auto" : "queue",
+          // The second attempt only queues, which the thread accepts whatever its run is doing.
+          ...(attempt === "first" && steerInto !== undefined
+            ? { mode: "steer" as const, targetRunId: steerInto.id }
+            : { mode: "queue" as const }),
           createdBy: "user",
           creationSource: "server",
         })
@@ -141,9 +164,6 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
           Effect.result,
         );
     };
-    const rejected = (failure: { readonly _tag: string }) =>
-      failure._tag === "OrchestratorCommandRejectedError" ||
-      failure._tag === "OrchestratorCommandPreviouslyRejectedError";
     let sent =
       acceptedRun === undefined
         ? yield* send("first")

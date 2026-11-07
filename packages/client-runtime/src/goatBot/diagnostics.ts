@@ -1,4 +1,5 @@
 import {
+  isChannelTaskTerminal,
   isGoatBotSessionThreadId,
   type BotThreadRow,
   type ChannelTaskChip,
@@ -190,7 +191,8 @@ function modelLine(
 
 /**
  * The bot's own turns that ask the person a question, from the newest chip of each task in its
- * conversation. Turns never appear in the task list, so this is where such a question shows.
+ * conversation. The task list shows a turn only while work it launched still runs, so the chat is
+ * where such a question is always found.
  */
 export function goatBotTurnsWaiting(
   items: ReadonlyArray<GoatBotFaceTaskItem>,
@@ -210,7 +212,12 @@ export function goatBotTurnsWaiting(
       (chip.kind === undefined &&
         chip.worker !== undefined &&
         isGoatBotSessionThreadId(chip.worker.threadId));
-    if (turn && chip.status === "waiting_input" && chip.openQuestionCount > 0)
+    if (!turn || isChannelTaskTerminal(chip.status)) continue;
+    // Its own question, or one in work it launched that the server lifted onto it.
+    if (
+      (chip.status === "waiting_input" && chip.openQuestionCount > 0) ||
+      (chip.observed?.needsYou.length ?? 0) > 0
+    )
       waiting.push(chip.taskId);
   }
   return waiting;
@@ -252,12 +259,16 @@ function workLine(
     return { key: "work", tone: "warn", text: "Couldn't load work", action: null };
   if (rows === null) return { key: "work", tone: "pending", text: "Loading work…", action: null };
   const tasks = rows.flatMap((row) => (row.kind === "task" ? [row.task] : []));
-  const running = tasks.filter((task) => task.status === "running").length;
+  // A listed turn whose chat says it waits on the person is waiting, whatever its row status.
+  const waitingTurns = new Set(turnsWaitingIds);
+  const running = tasks.filter(
+    (task) => task.status === "running" && !waitingTurns.has(task.taskId),
+  ).length;
   const starting = tasks.filter(
     (task) => task.status === "received" || task.status === "dispatching",
   ).length;
   const waiting = tasks
-    .filter((task) => task.status === "waiting_input")
+    .filter((task) => task.status === "waiting_input" || waitingTurns.has(task.taskId))
     .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   const waitingCount = waiting.length + turnsWaiting;
   const parts = [
