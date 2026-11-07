@@ -67,7 +67,7 @@ export function GoatBotTimeline({
   readonly onRetry: (clientKey: string) => void;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
-  readonly onPick?: ((answer: string) => void) | undefined;
+  readonly onPick?: ((answer: string, taskId?: string) => void) | undefined;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const member = useGoatBotMember();
@@ -351,7 +351,7 @@ export function GoatBotTimeline({
                               type="button"
                               key={option}
                               disabled={onPick === undefined}
-                              onClick={() => onPick?.(option)}
+                              onClick={() => onPick?.(option, row.answerTaskId)}
                               className="rounded-full border border-goat-bubble-out/40 px-3 py-1 text-sm text-goat-bubble-out hover:bg-goat-bubble-out/8 disabled:opacity-50"
                             >
                               {option}

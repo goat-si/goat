@@ -743,6 +743,14 @@ export function useMobileGoatBotSession(
     },
     [canSend, sendBot, queue, session, taskId],
   );
+  const onAnswer = useCallback(
+    (answer: string, answerTask?: ChannelTaskId) => {
+      if (!canSend || !sendBot || !queue || !session) return false;
+      session.retain(queue.submit(answer, sendBot, [], answerTask ?? taskId ?? undefined), []);
+      return true;
+    },
+    [canSend, sendBot, queue, session, taskId],
+  );
   const onRetryInput = useCallback(
     (key: string) => {
       if (canSend) queue?.retry(key);
@@ -784,6 +792,7 @@ export function useMobileGoatBotSession(
           ? member.name + " runs on another computer."
           : null,
     onSend,
+    onAnswer,
     onRetryInput,
     onDiscardInput: (key: string) => queue?.discard(key),
     onRetryAvailability,

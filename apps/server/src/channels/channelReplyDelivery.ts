@@ -1,6 +1,7 @@
 import type {
   ChannelInputId,
   ChannelOutboundKind,
+  ChannelQuestionId,
   ChannelReplyAddress,
   ChannelTask,
 } from "@goat/contracts";
@@ -28,6 +29,7 @@ export const replyDelivery = (input: {
   readonly task?: ChannelTask | undefined;
   readonly mentionActorId?: string | undefined;
   readonly options?: ReadonlyArray<string> | undefined;
+  readonly questionId?: ChannelQuestionId | undefined;
 }): ChannelLedger.ChannelOutboxInsert => {
   const deliveryId = deliveryIdFor(input.causeKey);
   const options = input.options === undefined || input.options.length === 0 ? [] : input.options;
@@ -56,6 +58,7 @@ export const replyDelivery = (input: {
         : { taskId: input.task.taskId, taskVersion: input.task.version }),
       ...(input.mentionActorId === undefined ? {} : { mentionActorId: input.mentionActorId }),
       ...(keepOptions ? { options } : {}),
+      ...(input.questionId === undefined ? {} : { questionId: input.questionId }),
     },
   };
 };

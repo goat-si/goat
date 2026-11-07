@@ -649,6 +649,110 @@ describe("buildGoatBotTimeline", () => {
   });
 });
 
+describe("questions a task asks in the main chat", () => {
+  const proposal = (
+    revision: number,
+    openQuestionIds?: ReadonlyArray<string>,
+  ): GoatBotTaskCard => ({
+    ...card("proposal", revision, "Waiting for your answer"),
+    askInChat: true,
+    ...(openQuestionIds === undefined ? {} : { openQuestionIds }),
+  });
+  const asked: GoatBotMessagePresentation = {
+    tone: "question",
+    readAt: null,
+    requestKey: null,
+    taskId: "proposal",
+    questionId: "q-save",
+    options: ["Save", "Not now"],
+  };
+  const optionsIn = (
+    taskId: string | null,
+    items: OrchestrationV2TurnItem[],
+    cards: Record<string, GoatBotTaskCard>,
+    messages: Record<string, GoatBotMessagePresentation> = { b1: asked },
+  ) =>
+    content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf(items),
+        pendingInputs: [],
+        readers: readers(messages, cards),
+        taskId,
+      }),
+    ).flatMap((row) => (row.kind === "bot" ? [[row.id, row.options] as const] : []));
+
+  it("shows a skill proposal's question with its choices in the main chat and its own view", () => {
+    const items = [
+      bot("b1", "2026-10-12T12:00:00Z", "Save this as a skill? deploy-check"),
+      bot("b2", "2026-10-12T12:00:01Z", "Working on it"),
+      notice("n1", "2026-10-12T12:00:02Z"),
+      notice("n2", "2026-10-12T12:00:03Z"),
+    ];
+    const cards = { n1: proposal(1, ["q-save"]), n2: card("other", 1) };
+    const messages = { b1: asked, b2: { ...asked, taskId: "other", options: [] } };
+    // Another task's messages stay in that task's view.
+    expect(optionsIn(null, items, cards, messages)).toEqual([["b1", ["Save", "Not now"]]]);
+    expect(optionsIn("proposal", items, cards, messages)).toEqual([["b1", ["Save", "Not now"]]]);
+  });
+
+  it("retires a question's choices everywhere once its task's newest card no longer has it open", () => {
+    // The answer was sent from the other view, so neither view has a later message of its own.
+    const items = [
+      bot("b1", "2026-10-12T12:00:00Z", "Save this as a skill? deploy-check"),
+      notice("n1", "2026-10-12T12:00:01Z"),
+      notice("n2", "2026-10-12T12:00:05Z"),
+    ];
+    const cards = { n1: proposal(1, ["q-save"]), n2: proposal(2, []) };
+    expect(optionsIn(null, items, cards)).toEqual([["b1", []]]);
+    expect(optionsIn("proposal", items, cards)).toEqual([["b1", []]]);
+  });
+
+  it("keeps an open question's choices after the person answers a different question", () => {
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      bot("b1", "2026-10-12T12:00:01Z", "Save this as a skill? deploy-check"),
+      user("u1", "2026-10-12T12:00:02Z", "Release"),
+    ];
+    expect(optionsIn(null, items, { n1: proposal(1, ["q-save"]) })).toEqual([
+      ["b1", ["Save", "Not now"]],
+    ]);
+    // A card from a server that does not list open questions keeps the later-message rule.
+    expect(optionsIn(null, items, { n1: proposal(1) })).toEqual([["b1", []]]);
+  });
+
+  it("sends a pressed answer to the question's task, and shows that send in the main chat", () => {
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      bot("b1", "2026-10-12T12:00:01Z", "Save this as a skill? deploy-check"),
+    ];
+    const answerTasks = (cards: Record<string, GoatBotTaskCard>) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: rowsOf(items),
+          pendingInputs: [
+            {
+              clientKey: "c1",
+              taskId: "proposal",
+              text: "Save",
+              createdAt: "2026-10-12T12:00:02Z",
+              state: "sending",
+              requestKey: null,
+            },
+          ],
+          readers: readers({ b1: asked }, cards),
+          taskId: null,
+        }),
+      ).map((row) => (row.kind === "bot" ? [row.id, row.answerTaskId] : [row.id]));
+    expect(answerTasks({ n1: proposal(1, ["q-save"]) })).toEqual([
+      ["n1"],
+      ["b1", "proposal"],
+      ["pending:c1"],
+    ]);
+    // A server that does not name open questions may not route an answer sent to a task.
+    expect(answerTasks({ n1: proposal(1) })).toEqual([["n1"], ["b1", undefined], ["pending:c1"]]);
+  });
+});
+
 describe("goatBotReplyingSince", () => {
   const read = (requestKey: string, readAt: string): GoatBotMessagePresentation => ({
     tone: "reply",

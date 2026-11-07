@@ -204,7 +204,8 @@ function GoatBotTaskSummary(props: {
 export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly row: GoatBotRow;
   readonly canSend: boolean;
-  readonly onSend: (answer: string) => boolean;
+  /** Sends an answer, to the task whose question offered it when the row names one. */
+  readonly onSend: (answer: string, taskId?: ChannelTaskId) => boolean;
   readonly onRetry: (key: string) => void;
   readonly onDiscard?: (key: string) => void;
   readonly onSelectThread: (thread: ThreadSelection) => void;
@@ -362,8 +363,14 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
               key={answer}
               accessibilityRole="button"
               disabled={!props.canSend}
-              onPress={() => props.onSend(answer)}
-              className="rounded-full border px-3 py-2"
+              onPress={() =>
+                props.onSend(
+                  answer,
+                  row.answerTaskId === undefined ? undefined : ChannelTaskId.make(row.answerTaskId),
+                )
+              }
+              // 44pt touch target; min-h-11 is only 38.5pt at the app's 14pt rem.
+              className="min-h-[44px] justify-center rounded-full border px-3 py-2"
               style={{ borderColor: outgoingColor }}
             >
               <Text className="text-sm" style={{ color: outgoingColor }}>
@@ -479,7 +486,7 @@ export function GoatBotScreen(props: {
       <GoatBotTimelineRow
         row={item}
         canSend={session.canSend}
-        onSend={session.onSend}
+        onSend={session.onAnswer}
         onRetry={session.onRetryInput}
         onDiscard={session.onDiscardInput}
         onSelectThread={onSelectThread}
@@ -490,7 +497,7 @@ export function GoatBotScreen(props: {
     ),
     [
       session.canSend,
-      session.onSend,
+      session.onAnswer,
       session.onRetryInput,
       session.onDiscardInput,
       onSelectThread,

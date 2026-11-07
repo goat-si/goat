@@ -1,5 +1,5 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import type { EnvironmentId } from "@goat/contracts";
+import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
 
@@ -59,6 +59,8 @@ export interface GoatBotChatViewProps {
     text: string,
     attachments?: ReadonlyArray<GoatBotDraftAttachment>,
   ) => boolean | void;
+  /** Sends an answer to the task whose question offered it. */
+  readonly onSendToTask?: ((taskId: ChannelTaskId, text: string) => boolean | void) | undefined;
   /** What GOAT Bot's server takes with a message; null when it takes no files. */
   readonly attachmentSupport?: GoatBotAttachmentSupport | null | undefined;
   readonly onRetryInput: (clientKey: string) => void;
@@ -92,6 +94,7 @@ export function GoatBotChatView({
   rows,
   replyingSince = null,
   onSend,
+  onSendToTask,
   attachmentSupport = null,
   onRetryInput,
   onDiscardInput,
@@ -264,7 +267,14 @@ export function GoatBotChatView({
               replyingSince={removed ? null : replyingSince}
               onRetry={onRetryInput}
               onDiscard={onDiscardInput}
-              onPick={canSend ? (answer) => onSend(answer) : undefined}
+              onPick={
+                canSend
+                  ? (answer, taskId) =>
+                      taskId !== undefined && onSendToTask !== undefined
+                        ? onSendToTask(ChannelTaskId.make(taskId), answer)
+                        : onSend(answer)
+                  : undefined
+              }
             />
           ) : removal !== null ? (
             <GoatBotRemovedNotice

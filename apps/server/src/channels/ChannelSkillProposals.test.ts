@@ -4,6 +4,7 @@ import {
   type ChannelSkillProposal,
   type ChannelTask,
   ChannelTaskEventId,
+  ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -13,6 +14,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -27,6 +29,7 @@ import {
   goatInput,
   linkSlackUser,
   makeHarness,
+  owner,
   ownerId,
   rpcContext,
   setupBot,
@@ -496,4 +499,122 @@ describe("GOAT Bot skill proposals", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  const chipsOf = (taskId: string) =>
+    Effect.map(botMessages, (records) =>
+      records.turnItems.flatMap((item) =>
+        item.type === "notification" && item.ledgerTask?.taskId === taskId ? [item.ledgerTask] : [],
+      ),
+    );
+
+  it.effect.each([
+    ["Save", "session"],
+    ["Not now", "session"],
+    ["Save", "reception"],
+  ] as const)(
+    "%s pressed in the proposal's own task view answers it once (%s routing), and its card asks in the chat",
+    ([answer, routing]) => {
+      const { harness } = harnessCapturing();
+      return Effect.gen(function* () {
+        yield* finishWith(harness);
+        const asked = (yield* proposalTask)!;
+        const questionId = asked.openQuestions[0]!.questionId;
+        const card = (yield* chipsOf(asked.taskId)).at(-1);
+        assert.isTrue(card?.askInChat);
+        assert.deepStrictEqual(card?.openQuestionIds, [questionId]);
+        // The question's message names its question, so a client can retire its buttons.
+        const questionMeta = (yield* botMessages).turnItems.flatMap((item) =>
+          item.type === "assistant_message" && item.channel?.taskId === asked.taskId
+            ? [item.channel]
+            : [],
+        );
+        assert.deepStrictEqual(
+          questionMeta.map((meta) => [meta.questionId, meta.options]),
+          [[questionId, ["Save", "Not now"]]],
+        );
+        if (routing === "reception")
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            goatBotSessionRouting: "reception",
+          });
+        yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          { ...goatInput(answer, "task-view-" + answer), taskId: asked.taskId },
+          rpcContext,
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        const shown = (yield* botMessages).messages.map((message) => message.text);
+        assert.notInclude(shown, "That task isn't available here. Send it in the main chat.");
+        const done = yield* proposalTask;
+        assert.strictEqual(done?.status, "completed");
+        assert.strictEqual(
+          done?.resultSummary,
+          answer === "Save" ? "Saved the skill deploy-check." : "Not saved.",
+        );
+        assert.lengthOf(yield* completions(done!.taskId), 1);
+        assert.deepStrictEqual((yield* chipsOf(asked.taskId)).at(-1)?.openQuestionIds, []);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        assert.strictEqual(
+          yield* fs.exists(path.join(yield* skillsDir, "deploy-check.md")),
+          answer === "Save",
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a teammate's Save in the proposal's task view is refused and saves nothing", () => {
+    const { harness } = harnessCapturing();
+    return Effect.gen(function* () {
+      yield* finishWith(harness);
+      const asked = (yield* proposalTask)!;
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        { ...goatInput("Save", "teammate-save"), taskId: asked.taskId },
+        { ...rpcContext, principalId: "teammate", displayName: "Teammate" },
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      assert.strictEqual((yield* proposalTask)?.status, "waiting_input");
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      assert.isFalse(yield* fs.exists(path.join(yield* skillsDir, "deploy-check.md")));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("an agent's Save naming the proposal task does not answer it", () => {
+    const { harness } = harnessCapturing();
+    return Effect.gen(function* () {
+      yield* finishWith(harness);
+      const asked = (yield* proposalTask)!;
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        {
+          kind: "mcp",
+          connectionId: "mcp",
+          conversationKey: "default",
+          externalMessageId: "agent-save",
+          idempotencyKey: "agent-save",
+          actor: { senderThreadId: ThreadId.make("thread:some-agent") },
+          replyAddress: {
+            kind: "mcp",
+            connectionId: "mcp",
+            requestNamespace: "ns-1",
+            conversationKey: "default",
+          },
+          text: "Save",
+          taskId: asked.taskId,
+          attachments: [],
+          receivedAt: "2026-10-12T00:00:00.000Z",
+          intent: "message",
+        },
+        {
+          ...owner,
+          principalId: "mcp:ns-1",
+          grantedScopes: ["orchestration:read", "orchestration:operate"],
+          caller: { type: "mcp", requestNamespace: "ns-1" },
+        },
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      assert.strictEqual((yield* proposalTask)?.status, "waiting_input");
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      assert.isFalse(yield* fs.exists(path.join(yield* skillsDir, "deploy-check.md")));
+    }).pipe(Effect.provide(harness.layer));
+  });
 });

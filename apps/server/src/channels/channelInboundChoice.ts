@@ -108,6 +108,37 @@ export const makeInboundChoices = (ledger: ChannelLedger.ChannelLedger["Service"
     return matched === undefined ? undefined : { type: "question" as const, ...matched };
   });
 
+  /**
+   * A choice pressed in a task's own view of the GOAT app, for a question nobody runs to forward
+   * it to (no worker): it answers that task's one matching question. Who may answer is checked
+   * where the answer is recorded.
+   */
+  const taskViewChoice = Effect.fn("channel.taskViewChoice")(function* (
+    stored: ChannelLedger.ChannelStoredInput,
+  ) {
+    const message = stored.message;
+    if (message.intent !== "message" || message.kind !== "goat" || message.taskId === undefined)
+      return undefined;
+    const target = yield* ledger.getTask(message.taskId);
+    if (
+      target === undefined ||
+      target.ownerId !== stored.ownerId ||
+      target.task.conversationId !== stored.snapshot.conversationId ||
+      target.task.status !== "waiting_input" ||
+      target.task.worker !== undefined
+    )
+      return undefined;
+    const matched = singleQuestionChoice(
+      message.text,
+      target.task.openQuestions.map((question) => ({
+        taskId: target.task.taskId,
+        questionId: question.questionId,
+        options: question.options,
+      })),
+    );
+    return matched === undefined ? undefined : { type: "question" as const, ...matched };
+  });
+
   const isDeterministicReply = Effect.fn("ChannelReceptionService.isDeterministicReply")(function* (
     stored: ChannelLedger.ChannelStoredInput,
   ) {
@@ -118,5 +149,5 @@ export const makeInboundChoices = (ledger: ChannelLedger.ChannelLedger["Service"
     );
   });
 
-  return { inboundChoice, isDeterministicReply };
+  return { inboundChoice, isDeterministicReply, taskViewChoice };
 };
