@@ -38,6 +38,7 @@ const state = vi.hoisted(() => ({
   memberUpdatedAt: "2026-11-07T10:00:00Z",
   homeConfig: null as unknown,
   refreshRows: vi.fn(),
+  openChat: vi.fn(),
   presentations: new Map<string, unknown>(),
   slackQuery: { data: null as unknown, error: null as string | null, refresh: () => {} },
 }));
@@ -135,6 +136,8 @@ async function render(props: Partial<React.ComponentProps<typeof MobileBotStatus
         member={null}
         rows={[]}
         refreshRows={state.refreshRows}
+        turnsWaiting={0}
+        onOpenChat={state.openChat}
         onOpenTask={onOpenTask}
         {...props}
       />,
@@ -230,4 +233,26 @@ it("says Ready for a healthy main bot once its work has loaded", async () => {
   await render({ rows: [] });
   expect(container.textContent).toContain("Ready");
   expect(container.textContent).toContain("GPT-5.4 on Codex");
+});
+
+it("says the bot waits for an answer in the chat when its own turn asked a question", async () => {
+  state.homeConnected = true;
+  state.openChat.mockClear();
+  await render({ rows: [], turnsWaiting: 1 });
+  expect(container.textContent).toContain("Needs attention");
+  expect(container.textContent).toContain("1 waiting for your answer");
+  expect(container.textContent).not.toContain("Ready");
+  await act(async () => button("Open the chat")?.click());
+  expect(state.openChat).toHaveBeenCalledOnce();
+});
+
+it("offers both the waiting task and the chat when each holds a question", async () => {
+  state.homeConnected = true;
+  state.openChat.mockClear();
+  const onOpenTask = await render({ rows: [waiting], turnsWaiting: 1 });
+  expect(container.textContent).toContain("2 waiting for your answer");
+  await act(async () => button("Answer")?.click());
+  expect(onOpenTask).toHaveBeenCalledWith("ask");
+  await act(async () => button("Open the chat")?.click());
+  expect(state.openChat).toHaveBeenCalledOnce();
 });
