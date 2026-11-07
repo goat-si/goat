@@ -14,7 +14,7 @@ import type * as ChannelLedger from "./ChannelLedger.ts";
 import { replyDelivery } from "./channelReplyDelivery.ts";
 
 /** What the bot answers when a notice has nothing new for the person. */
-export const NO_REPLY = "NO_REPLY";
+const NO_REPLY = "NO_REPLY";
 const PER_PASS = 20;
 const ENDED = ["completed", "failed", "cancelled", "interrupted", "rolled_back"];
 
