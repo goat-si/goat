@@ -10,9 +10,9 @@ import {
 } from "./channelBotNoteLines.ts";
 
 /** The newest notes in force every reader gets, in characters. */
-export const NOTES_RECENT_CHARS = 6_000;
+const NOTES_RECENT_CHARS = 6_000;
 /** Older notes that match the message add at most this many characters. */
-export const NOTES_MATCHED_CHARS = 3_000;
+const NOTES_MATCHED_CHARS = 3_000;
 /** The whole notes section; a file whose notes in force fit goes in whole. */
 export const NOTES_SECTION_CHARS = NOTES_RECENT_CHARS + NOTES_MATCHED_CHARS;
 /** How much of the end of the notes file is read and searched. */
