@@ -57,17 +57,23 @@ export function goatBotModelStatus(input: {
 }): GoatBotModelStatus {
   const state = deriveGoatBotModelSettings(input);
   const selection = input.override ?? state.selection;
-  const choice = state.choices.find(
-    (entry) => entry.instanceId === selection.instanceId && entry.model === selection.model,
-  );
   const entry = state.entries.find((candidate) => candidate.instanceId === selection.instanceId);
+  // The picker leaves out models the person hid; a hidden model still runs, so look it up in the
+  // provider's own list too.
+  const model =
+    entry?.models.find((candidate) => candidate.slug === selection.model) ??
+    input.providers
+      .find((provider) => provider.instanceId === selection.instanceId)
+      ?.models.find((candidate) => !candidate.isCustom && candidate.slug === selection.model);
   return {
-    model:
-      choice?.label ??
-      entry?.models.find((model) => model.slug === selection.model)?.name ??
-      selection.model,
+    model: model?.name ?? selection.model,
     provider: entry?.displayName ?? null,
-    available: choice !== undefined,
+    available:
+      entry !== undefined &&
+      entry.enabled &&
+      entry.isAvailable &&
+      entry.status === "ready" &&
+      model !== undefined,
     inherited: input.override === null,
   };
 }
@@ -177,9 +183,18 @@ function workLine(rows: GoatBotDiagnosticsInput["rows"]): GoatBotDiagnosticLine 
     starting > 0 ? `${starting} starting or queued` : null,
     waiting.length > 0 ? `${waiting.length} waiting for your answer` : null,
   ].filter((part) => part !== null);
-  if (parts.length === 0) return { key: "work", tone: "ok", text: "No open work", action: null };
   // A full page can leave older open tasks out, so the counts are only a lower bound.
-  const text = (tasks.length >= BOT_THREADS_PAGE ? "At least " : "") + parts.join(" · ");
+  const full = tasks.length >= BOT_THREADS_PAGE;
+  if (parts.length === 0)
+    return full
+      ? {
+          key: "work",
+          tone: "warn",
+          text: `Can't count open work: the newest ${BOT_THREADS_PAGE} tasks are finished`,
+          action: null,
+        }
+      : { key: "work", tone: "ok", text: "No open work", action: null };
+  const text = (full ? "At least " : "") + parts.join(" · ");
   const oldest = waiting[0];
   return oldest === undefined
     ? { key: "work", tone: "ok", text, action: null }

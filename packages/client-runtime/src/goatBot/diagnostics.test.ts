@@ -156,6 +156,18 @@ describe("diagnoseGoatBot", () => {
     expect(line(healthy({ rows: rows(99) }), "work")?.text).toBe("99 running");
   });
 
+  it("does not call a full page of finished tasks no open work", () => {
+    const finished = Array.from({ length: 100 }, (_, index) => task(String(index), "completed"));
+    const result = healthy({ rows: finished });
+    expect(line(result, "work")).toMatchObject({
+      tone: "warn",
+      text: "Can't count open work: the newest 100 tasks are finished",
+    });
+    expect(diagnoseGoatBot(result).verdict).not.toBe("ready");
+    const fewer = healthy({ rows: finished.slice(1) });
+    expect(line(fewer, "work")?.text).toBe("No open work");
+  });
+
   it("waits for the rows before saying anything about work", () => {
     const loading = healthy({ rows: null });
     expect(line(loading, "work")).toMatchObject({ tone: "pending", text: "Loading work…" });
@@ -239,6 +251,21 @@ describe("goatBotModelStatus", () => {
         providers: [provider({ instanceId: "codex", status: "error", models: ["gpt-5.4"] })],
       }).available,
     ).toBe(false);
+  });
+
+  it("still runs a model the person hid from the picker", () => {
+    const hidden: ServerSettings = {
+      ...settings,
+      providerModelPreferences: {
+        [ProviderInstanceId.make("codex")]: { hiddenModels: ["gpt-5.4"], modelOrder: [] },
+      },
+    };
+    expect(
+      goatBotModelStatus({
+        settings: hidden,
+        providers: [provider({ instanceId: "codex", models: ["gpt-5.4"] })],
+      }),
+    ).toEqual({ model: "GPT-5.4", provider: "Codex", available: true, inherited: false });
   });
 
   it("judges a member's own model by its selection and marks a missing one inherited", () => {

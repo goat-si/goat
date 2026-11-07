@@ -1,8 +1,7 @@
-import { channelEnvironment } from "~/state/channels";
-import { useEnvironment } from "~/state/environments";
-import { useEnvironmentQuery } from "~/state/query";
 import { GoatBotStatusCard } from "../goatBot/GoatBotStatusCard";
+import { useBotThreads } from "../goatBot/useBotRoster";
 import { useGoatBotHomeSettings } from "../goatBot/useGoatBotHome";
+import { useEnvironment } from "~/state/environments";
 import { SettingsSection } from "./settingsLayout";
 
 /** The main bot's status, here too when its home machine is offline and the chat cannot open. */
@@ -10,14 +9,11 @@ export function GoatBotStatusSettings() {
   const { supported: homeSupported, resolution } = useGoatBotHomeSettings();
   const environmentId = resolution.state === "claimed" ? resolution.claim.environmentId : null;
   const presentation = useEnvironment(environmentId);
-  const connected = presentation?.connection.phase === "connected";
   const listsTasks =
-    connected && presentation?.serverConfig?.environment.capabilities.goatBotTaskThreads === true;
-  const threads = useEnvironmentQuery(
-    environmentId !== null && listsTasks
-      ? channelEnvironment.listBotThreads({ environmentId, input: {} })
-      : null,
-  );
+    presentation?.connection.phase === "connected" &&
+    presentation.serverConfig?.environment.capabilities.goatBotTaskThreads === true;
+  // The same task list the sidebar reads, refreshed when the bot's conversation records work.
+  const threads = useBotThreads(environmentId, null);
   if (!homeSupported) return null;
   return (
     <SettingsSection id="goat-bot-status" title="Status">
@@ -25,7 +21,7 @@ export function GoatBotStatusSettings() {
         className="px-3 py-3 sm:px-4"
         environmentId={environmentId}
         member={null}
-        rows={listsTasks ? (threads.data?.rows ?? null) : "unavailable"}
+        rows={!listsTasks ? "unavailable" : threads.loaded ? threads.rows : null}
       />
     </SettingsSection>
   );
