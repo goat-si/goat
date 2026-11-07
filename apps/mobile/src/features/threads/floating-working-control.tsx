@@ -102,8 +102,7 @@ export function FloatingWorkingControl(props: {
   const availableLabelWidth = Math.max(
     0,
     Math.min(overlayWidth, windowWidth) -
-      CONTROL_HEIGHT -
-      32 -
+      (props.showScrollToEnd ? CONTROL_HEIGHT + 32 : 16) -
       (action !== null ? actionWidth : 0) -
       (hasQueue ? queueWidth : 0) -
       (hasAgents ? agentsWidth : 0) -

@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
   prepare: vi.fn<(locale: string) => Promise<string>>(),
   transcribe: vi.fn<(audio: ArrayBufferLike, locale: string) => Promise<TranscriptionResult>>(),
   readAudio: vi.fn<() => Promise<ArrayBuffer>>(),
+  languages: [] as unknown,
 }));
+
+vi.mock("react-native", () => ({ Settings: { get: () => mocks.languages } }));
 
 vi.mock("@react-native-ai/apple/src/NativeAppleTranscription", () => ({
   default: {
@@ -46,6 +49,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.languages = [];
   mocks.isAvailable.mockReturnValue(true);
   mocks.prepare.mockResolvedValue("sv-SE");
   mocks.readAudio.mockResolvedValue(audio);
@@ -57,6 +61,80 @@ afterEach(() => {
 });
 
 describe("getLocalVoiceTranscriber", () => {
+  it("tries preferred languages in order before the app locale", async () => {
+    mocks.languages = ["gsw-CH", "ko-KR", "en-US"];
+    mocks.prepare.mockImplementation(async (locale) => {
+      if (locale === "gsw-CH")
+        throw Object.assign(new Error("unsupported"), {
+          code: "AppleTranscriptionUnsupportedLocale",
+        });
+      return locale;
+    });
+    const prepared = await getLocalVoiceTranscriber()!.prepare({
+      signal: new AbortController().signal,
+    });
+    expect(prepared.locale).toBe("ko-KR");
+    expect(mocks.prepare.mock.calls.map(([locale]) => locale)).toEqual(["gsw-CH", "ko-KR"]);
+  });
+
+  it("tries the app locale after unsupported preferred languages", async () => {
+    mocks.languages = ["gsw-CH"];
+    const appLocale = Intl.DateTimeFormat().resolvedOptions().locale;
+    mocks.prepare.mockImplementation(async (locale) => {
+      if (locale === "gsw-CH") {
+        throw Object.assign(new Error("unsupported"), {
+          code: "AppleTranscriptionUnsupportedLocale",
+        });
+      }
+      return locale;
+    });
+    const prepared = await getLocalVoiceTranscriber()!.prepare({
+      signal: new AbortController().signal,
+    });
+    expect(prepared.locale).toBe(appLocale);
+    expect(mocks.prepare.mock.calls.map(([locale]) => locale)).toEqual(["gsw-CH", appLocale]);
+  });
+
+  it("falls back to the environment after all preferred languages are unsupported", async () => {
+    mocks.languages = ["gsw-CH", "yi"];
+    mocks.prepare.mockRejectedValue(
+      Object.assign(new Error("unsupported"), { code: "AppleTranscriptionUnsupportedLocale" }),
+    );
+    const remote = {
+      prepare: vi.fn(async () => ({ locale: "en", transcribe: async () => "remote" })),
+    };
+    const prepared = await getVoiceTranscriber(remote)!.prepare({
+      signal: new AbortController().signal,
+    });
+    expect(
+      await prepared.transcribe("file:///voice.m4a", { signal: new AbortController().signal }),
+    ).toBe("remote");
+    expect(mocks.prepare.mock.calls.map(([locale]) => locale).slice(0, 2)).toEqual([
+      "gsw-CH",
+      "yi",
+    ]);
+    expect(remote.prepare).toHaveBeenCalledOnce();
+  });
+
+  it("does not try another language after cancellation or a model failure", async () => {
+    mocks.languages = ["ko-KR", "ja-JP"];
+    mocks.prepare.mockRejectedValue(new Error("download failed"));
+    await expect(
+      getLocalVoiceTranscriber()!.prepare({ signal: new AbortController().signal }),
+    ).rejects.toMatchObject({ code: "preparation-failed" });
+    expect(mocks.prepare).toHaveBeenCalledTimes(1);
+    const controller = new AbortController();
+    mocks.prepare.mockImplementation(async () => {
+      controller.abort();
+      throw Object.assign(new Error("unsupported"), {
+        code: "AppleTranscriptionUnsupportedLocale",
+      });
+    });
+    await expect(
+      getLocalVoiceTranscriber()!.prepare({ signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "cancelled" });
+    expect(mocks.prepare).toHaveBeenCalledTimes(2);
+  });
   it("reports the device that actually transcribes, including the fallback to the environment", async () => {
     const options = { signal: new AbortController().signal };
     const environment = {

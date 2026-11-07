@@ -25,6 +25,8 @@ const native = vi.hoisted(() => ({
   readAudio: vi.fn<() => Promise<ArrayBuffer>>(),
 }));
 
+vi.mock("react-native", () => ({ Settings: { get: () => [] } }));
+
 vi.mock("@react-native-ai/apple/src/NativeAppleTranscription", () => ({
   default: {
     isAvailable: native.isAvailable,
