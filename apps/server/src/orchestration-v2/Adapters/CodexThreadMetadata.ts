@@ -57,20 +57,30 @@ const LoadedThreadPage = Schema.Struct({
 const LoadedThread = Schema.Struct({
   thread: Schema.Struct({
     parentThreadId: Schema.optionalKey(Schema.NullOr(Schema.String)),
-    status: Schema.optionalKey(Schema.Struct({ type: Schema.String })),
+    status: Schema.Struct({ type: Schema.String }),
+    updatedAt: Schema.Number,
   }),
 });
 const decodeLoadedThreadPage = Schema.decodeUnknownEffect(LoadedThreadPage);
 const decodeLoadedThread = Schema.decodeUnknownEffect(LoadedThread);
+const QUIET = new Set(["idle", "notLoaded", "systemError"]);
+
+type Raw = Pick<CodexClient.CodexAppServerClient["Service"]["raw"], "request">;
+type Survivor = { readonly threadId: string; readonly status: string; readonly updatedAt: number };
+
+const readLoaded = (raw: Raw, threadId: string) =>
+  raw
+    .request("thread/read", { threadId, includeTurns: false })
+    .pipe(Effect.flatMap(decodeLoadedThread));
 
 /**
- * Adds to a held conversation the loaded threads that descend from its root, with the status Codex
- * reports for each. Subagents that survived a restart are unknown to this session, and GOAT does
- * not hear their status, so it asks Codex at every turn. False when Codex could not tell.
+ * Adds to a held conversation the loaded threads that descend from its root and records the status
+ * Codex reports for each. Subagents that survived a restart are unknown to this session, and GOAT
+ * does not hear their status, so it asks Codex at every turn. Undefined when Codex could not tell.
  */
 const addSurvivingDescendants = Effect.fn("CodexAdapterV2.addSurvivingDescendants")(
   function* (
-    raw: Pick<CodexClient.CodexAppServerClient["Service"]["raw"], "request">,
+    raw: Raw,
     statuses: { readonly record: (threadId: string, status: string) => void },
     conversation: Array<string>,
   ) {
@@ -83,35 +93,57 @@ const addSurvivingDescendants = Effect.fn("CodexAdapterV2.addSurvivingDescendant
       loaded.push(...page.data);
       cursor = page.nextCursor;
     } while (cursor != null);
-    const parents = new Map<string, { readonly parent: string; readonly status: string }>();
+    const children = new Map<string, Survivor & { readonly parent: string }>();
     for (const threadId of loaded) {
       if (conversation.includes(threadId)) continue;
-      const { thread } = yield* raw
-        .request("thread/read", { threadId, includeTurns: false })
-        .pipe(Effect.flatMap(decodeLoadedThread));
+      const { thread } = yield* readLoaded(raw, threadId);
       if (thread.parentThreadId != null)
-        parents.set(threadId, { parent: thread.parentThreadId, status: thread.status?.type ?? "" });
+        children.set(threadId, {
+          threadId,
+          parent: thread.parentThreadId,
+          status: thread.status.type,
+          updatedAt: thread.updatedAt,
+        });
     }
+    const survivors: Array<Survivor> = [];
     for (let grew = true; grew;) {
       grew = false;
-      for (const [threadId, { parent, status }] of parents)
-        if (!conversation.includes(threadId) && conversation.includes(parent)) {
-          statuses.record(threadId, status);
-          conversation.push(threadId);
+      for (const child of children.values())
+        if (!conversation.includes(child.threadId) && conversation.includes(child.parent)) {
+          statuses.record(child.threadId, child.status);
+          conversation.push(child.threadId);
+          survivors.push(child);
           grew = true;
         }
     }
-    return true;
+    return survivors;
   },
   // An older Codex without the method holds no subagents it could list.
   (effect) =>
     effect.pipe(
       Effect.catchTags({
-        CodexAppServerRequestError: (error) => Effect.succeed(error.code === -32601),
+        CodexAppServerRequestError: (error) =>
+          Effect.succeed(error.code === -32601 ? [] : undefined),
       }),
-      Effect.orElseSucceed(() => false),
+      Effect.orElseSucceed(() => undefined),
     ),
 );
+
+/** Whether each survivor is still quiet and unchanged since it was first read. */
+const survivorsUnchanged = (raw: Raw, survivors: ReadonlyArray<Survivor>) =>
+  Effect.forEach(survivors, (survivor) =>
+    readLoaded(raw, survivor.threadId).pipe(
+      Effect.map(
+        ({ thread }) =>
+          QUIET.has(thread.status.type) &&
+          thread.status.type === survivor.status &&
+          thread.updatedAt === survivor.updatedAt,
+      ),
+    ),
+  ).pipe(
+    Effect.map((unchanged) => unchanged.every(Boolean)),
+    Effect.orElseSucceed(() => false),
+  );
 
 /**
  * Whether a reload must wait for this conversation. A held conversation first gains the surviving
@@ -125,6 +157,8 @@ export const conversationBusy = Effect.fn("CodexAdapterV2.conversationBusy")(fun
   options: { readonly held: boolean; readonly terminals: boolean },
 ) {
   if (!options.held) return yield* statuses.busy(client, conversation, options.terminals);
-  if (!(yield* addSurvivingDescendants(client.raw, statuses, conversation))) return true;
-  return yield* statuses.busy(client, conversation, false);
+  const survivors = yield* addSurvivingDescendants(client.raw, statuses, conversation);
+  if (survivors === undefined || (yield* statuses.busy(client, conversation, false))) return true;
+  // GOAT hears nothing from survivors, so one that worked during the check is caught by a re-read.
+  return !(yield* survivorsUnchanged(client.raw, survivors));
 });

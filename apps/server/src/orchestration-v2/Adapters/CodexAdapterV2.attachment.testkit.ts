@@ -7,6 +7,7 @@ import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as CodexClient from "effect-codex-app-server/client";
+import type * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -68,11 +69,29 @@ export const unusedRegistry = {
 
 /** Subagent threads Codex still holds after a restart, by id: their parent and status answers. */
 type Survivors = Readonly<
-  Record<string, { readonly parent: string; readonly statuses: Array<string> }>
+  Record<
+    string,
+    {
+      readonly parent: string;
+      readonly statuses: Array<string>;
+      readonly updates?: Array<number>;
+      /** Codex answers its reads without a status. */
+      readonly malformed?: boolean;
+    }
+  >
 >;
 
+/** What Codex holds after a restart: the root's status answers and anything it lists with it. */
+export interface HeldReplay {
+  readonly statuses: ReadonlyArray<string>;
+  readonly survivors?: Survivors;
+  /** How Codex refuses thread/loaded/list, if it does. */
+  readonly listError?: CodexErrors.CodexAppServerRequestError;
+  readonly threadId?: ThreadId;
+}
+
 // The next answer of a sequence; the last one repeats.
-const nextOf = (answers: Array<string>) => (answers.length > 1 ? answers.shift() : answers[0]);
+const nextOf = <A>(answers: Array<A>) => (answers.length > 1 ? answers.shift() : answers[0]);
 
 /**
  * Opens one replayed Codex session and records the thread requests the adapter sends. With
@@ -82,22 +101,30 @@ const nextOf = (answers: Array<string>) => (answers.length > 1 ? answers.shift()
  */
 const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   transcript: CodexReplay.CodexAppServerReplayTranscript,
-  heldAs?: ReadonlyArray<string>,
-  survivors: Survivors = {},
+  held?: HeldReplay,
 ) {
+  const heldAs = held?.statuses;
   const statuses = [...(heldAs ?? [])];
+  const survivors = held?.survivors ?? {};
   const answerHeld = (method: string, params: unknown) => {
     if (method === "thread/loaded/list")
-      return { data: [transcript.scenario, ...Object.keys(survivors)], nextCursor: null };
+      return held?.listError === undefined
+        ? Effect.succeed({
+            data: [transcript.scenario, ...Object.keys(survivors)],
+            nextCursor: null,
+          })
+        : Effect.fail(held.listError);
     const threadId = (params as { threadId: string }).threadId;
     const survivor = survivors[threadId];
-    return {
+    if (survivor?.malformed) return Effect.succeed({ thread: { id: threadId } });
+    return Effect.succeed({
       thread: {
         id: threadId,
         ...(survivor === undefined ? {} : { parentThreadId: survivor.parent }),
         status: { type: nextOf(survivor?.statuses ?? statuses) },
+        updatedAt: nextOf(survivor?.updates ?? [1]),
       },
-    };
+    });
   };
   const driver = yield* CodexReplay.makeReplayDriver(transcript);
   const threadConfigs: Array<Record<string, unknown>> = [];
@@ -138,7 +165,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
                       Effect.andThen(
                         heldAs !== undefined &&
                           (method === "thread/read" || method === "thread/loaded/list")
-                          ? Effect.succeed(answerHeld(method, params))
+                          ? answerHeld(method, params)
                           : client.raw.request(method, params),
                       ),
                     ),
@@ -160,7 +187,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     idAllocator: yield* IdAllocator.IdAllocatorV2,
     serverConfig: yield* makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie),
   });
-  const threadId = ThreadId.make(`thread-${transcript.scenario}`);
+  const threadId = held?.threadId ?? ThreadId.make(`thread-${transcript.scenario}`);
   const runtime = yield* adapter.openSession({
     threadId,
     providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
@@ -490,21 +517,23 @@ export const fixture = (scenario: string) => {
           readonly computerUse: boolean;
           readonly screenCode: boolean;
           readonly reloadedAfterRestart?: boolean;
+          /** The turn runs without GOAT's MCP server. */
+          readonly detached?: boolean;
         },
     deferred = false,
     thread = nativeThreadId,
     text = `turn-${ordinal}`,
   ) =>
     Effect.gen(function* () {
-      const { computerUse, screenCode, reloadedAfterRestart } =
+      const { computerUse, screenCode, reloadedAfterRestart, detached } =
         typeof skills === "boolean" ? { computerUse: skills, screenCode: false } : skills;
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
         nativeThreadId: thread,
         codexInput: [{ type: "text", text }],
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
         modelSelection: CODEX_TEST_MODEL_SELECTION,
-        hasGoatMcp: true,
-        browserToolsAvailable: false,
+        hasGoatMcp: detached !== true,
+        browserToolsAvailable: detached === true,
         computerUse,
         computerUseDeferred: deferred,
         reloadedAfterRestart: reloadedAfterRestart === true,
@@ -565,12 +594,9 @@ export const fixture = (scenario: string) => {
       Effect.provideService(McpSessionRegistry.McpSessionRegistry, registry),
     );
   const open = openWith(unusedRegistry);
-  const openResumed = (...heldAs: ReadonlyArray<string>) =>
-    openReplay(makeCodexReplayTranscript({ scenario, entries }), heldAs).pipe(
-      Effect.provideService(McpSessionRegistry.McpSessionRegistry, unusedRegistry),
-    );
-  const openSurviving = (survivors: Survivors, ...heldAs: ReadonlyArray<string>) =>
-    openReplay(makeCodexReplayTranscript({ scenario, entries }), heldAs, survivors).pipe(
+  const openResumed = (...heldAs: ReadonlyArray<string>) => openHeld({ statuses: heldAs });
+  const openHeld = (held: HeldReplay) =>
+    openReplay(makeCodexReplayTranscript({ scenario, entries }), held).pipe(
       Effect.provideService(McpSessionRegistry.McpSessionRegistry, unusedRegistry),
     );
   return {
@@ -593,7 +619,7 @@ export const fixture = (scenario: string) => {
     open,
     openWith,
     openResumed,
-    openSurviving,
+    openHeld,
   };
 };
 
