@@ -51,14 +51,18 @@ const targetKey = (target: AgentSessionTarget) =>
  * keeps that session's XCTest runner until it is closed. Every session GOAT drops, for whatever
  * reason, waits here until its close succeeds or agent-device confirms it is gone.
  */
-export const makePendingAgentCloses = Effect.fn("AgentSessionRelease.make")(function* (
-  close: AgentSessionClose,
-) {
+export const makePendingAgentCloses = (close: AgentSessionClose) => {
   const pending = new Map<string, AgentSessionTarget>();
   // Sessions reuse one agent-device name per thread and device, so a close must not overlap a reopen.
-  const admission = yield* Semaphore.make(1);
+  const admissions = new Map<string, Semaphore.Semaphore>();
+  const admit = (target: AgentSessionTarget) => {
+    const key = targetKey(target);
+    const admission = admissions.get(key) ?? Semaphore.makeUnsafe(1);
+    admissions.set(key, admission);
+    return admission;
+  };
   const settle = (target: AgentSessionTarget, open: Effect.Effect<ReadonlyArray<DeviceSession>>) =>
-    admission.withPermit(
+    admit(target).withPermit(
       Effect.gen(function* () {
         const key = targetKey(target);
         // A reopened session owns the name again; closing it would end the live session.
@@ -68,7 +72,8 @@ export const makePendingAgentCloses = Effect.fn("AgentSessionRelease.make")(func
       }),
     );
   return {
-    exclusive: admission.withPermit,
+    exclusive: <A, E, R>(target: AgentSessionTarget, effect: Effect.Effect<A, E, R>) =>
+      admit(target).withPermit(effect),
     track: (previous: ReadonlyArray<DeviceSession>, next: ReadonlyArray<DeviceSession>) => {
       if (previous === next) return;
       const kept = new Set(next.map(targetKey));
@@ -81,24 +86,22 @@ export const makePendingAgentCloses = Effect.fn("AgentSessionRelease.make")(func
           });
       }
     },
-    /** Retries every pending close; only this thread's failures fail the call. */
+    /** Closes this thread's pending sessions; a failure stays pending for its next close or release. */
     flush: Effect.fn("AgentSessionRelease.flush")(function* (
       threadId: ThreadId,
       open: Effect.Effect<ReadonlyArray<DeviceSession>>,
     ) {
-      const results = yield* Effect.forEach([...pending.values()], (target) =>
-        settle(target, open).pipe(
-          Effect.result,
-          Effect.map((result) => ({ target, result })),
-        ),
+      const targets = [...pending.values()].filter((target) => target.threadId === threadId);
+      const results = yield* Effect.forEach(
+        targets,
+        (target) => settle(target, open).pipe(Effect.result),
+        { concurrency: 4 },
       );
-      const failure = results.find(
-        ({ target, result }) => result._tag === "Failure" && target.threadId === threadId,
-      )?.result;
+      const failure = results.find((result) => result._tag === "Failure");
       if (failure?._tag === "Failure") return yield* failure.failure;
     }),
   };
-});
+};
 
 /** Reads `agent-device close --json`; an unreachable daemon is not yet proof the session is gone. */
 export function classifyAgentClose(result: {
@@ -165,9 +168,10 @@ export const makeAgentSessionClose = Effect.gen(function* () {
       // A local daemon that no longer runs took its sessions and runners with it.
       if (outcome === "unreachable" && target.hostId === LOCAL_DEVICE_HOST_ID) {
         const daemonFile = path.join(agentDeviceStateDir(path, config.stateDir), "daemon.json");
+        // Only a recorded daemon process that has exited proves it; a missing record proves nothing.
         const recorded = yield* fs.readFileString(daemonFile).pipe(Effect.option);
         const daemon = Option.flatMap(recorded, decodeDaemonPid);
-        if (Option.isNone(daemon) || !isProcessAlive(daemon.value.pid)) return "absent" as const;
+        if (Option.isSome(daemon) && !isProcessAlive(daemon.value.pid)) return "absent" as const;
       }
       return yield* failed(
         new Error(`agent-device close exited ${result.code}: ${result.stdout.slice(0, 400)}`),

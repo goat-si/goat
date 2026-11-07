@@ -193,7 +193,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   installTool?: (tool: "hub" | "agent") => Effect.Effect<unknown, DeviceError>,
   closeAgentSession: AgentSessionClose = () => Effect.succeed("absent"),
 ) {
-  const agentCloses = yield* makePendingAgentCloses(closeAgentSession);
+  const agentCloses = makePendingAgentCloses(closeAgentSession);
   const settings = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
   const lifecycleLock = yield* Semaphore.make(1);
@@ -654,6 +654,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         openedAt,
       };
       yield* agentCloses.exclusive(
+        session,
         lifecycleLock.withPermit(
           Effect.gen(function* () {
             if (!(yield* readDeviceSettings).enabled)

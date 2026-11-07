@@ -159,22 +159,6 @@ describe("DeviceService.releaseThread", () => {
       ),
   );
 
-  it.effect(
-    "a close that failed earlier is retried by any later release, even another thread's",
-    () =>
-      Effect.gen(function* () {
-        const { service, closes } = yield* makeService(1);
-        yield* open(service, lane, phone);
-        expect(Exit.isFailure(yield* Effect.exit(service.close({ threadId: lane })))).toBe(true);
-
-        yield* service.releaseThread(other);
-        expect(closes.map((target) => [target.threadId, target.deviceId])).toEqual([[lane, phone]]);
-      }).pipe(
-        Effect.provide(ServerSettings.layerTest({ enableDeviceSupport: true })),
-        Effect.scoped,
-      ),
-  );
-
   it.effect("a pending close is dropped, not run, once its session is reopened", () =>
     Effect.gen(function* () {
       const { service, closes } = yield* makeService(1);
