@@ -5186,6 +5186,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                           },
                         ]),
                         detail: payload.item.command,
+                        ...(context.projectionRunId === null
+                          ? {}
+                          : { aboutRunId: context.projectionRunId }),
                       },
                     });
                   }

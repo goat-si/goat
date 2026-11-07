@@ -139,3 +139,28 @@ it.effect("a launched thread's end wake belongs to the task whose run launched t
     );
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+it.effect("a background command's notification run belongs to the task whose run started it", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const sql = yield* SqlClient.SqlClient;
+    for (const [message, task] of [
+      ["message:a", taskA],
+      ["message:b", taskB],
+    ] as const) {
+      yield* sql`INSERT INTO channel_bot_session_runs
+        (thread_id, message_id, task_id, task_generation, kind, created_at)
+        VALUES (${thread}, ${message}, ${task.taskId}, 0, 'task', '2026-10-29T00:00:00.000Z')`;
+    }
+    // A started a command and finished; B ran and failed; the command's end woke the session.
+    const records = {
+      runs: [run("a", 1, "completed"), run("b", 2, "failed"), run("notice", 3, "completed")],
+      messages: [{ id: "message:notice", notification: { aboutRunId: RunId.make("a") } }],
+    };
+    const ids = (runs: ReadonlyArray<OrchestrationV2Run>) => runs.map((owned) => owned.id);
+    assert.deepStrictEqual(ids(yield* sessionTaskRuns(sql, thread, records, taskA)), [
+      "a",
+      "notice",
+    ]);
+    assert.deepStrictEqual(ids(yield* sessionTaskRuns(sql, thread, records, taskB)), ["b"]);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

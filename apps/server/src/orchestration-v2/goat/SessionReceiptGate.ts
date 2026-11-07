@@ -62,11 +62,12 @@ const make = Effect.gen(function* () {
         SELECT r.run_id, json_extract(r.payload_json, '$.userMessageId'), r.payload_json, a.depth + 1
           FROM ancestry a LEFT JOIN orchestration_v2_projection_messages m ON m.message_id = a.message_id AND m.thread_id = ${threadId}
           JOIN orchestration_v2_projection_runs r ON r.thread_id = ${threadId} AND r.run_id = COALESCE(
-            json_extract(m.payload_json, '$.delegatedCompletion.parentRunId'), json_extract(a.payload, '$.restartContinuationOfRunId'))
+            json_extract(m.payload_json, '$.delegatedCompletion.parentRunId'), json_extract(a.payload, '$.restartContinuationOfRunId'),
+            json_extract(m.payload_json, '$.notification.aboutRunId'))
           WHERE a.depth < 31 AND NOT EXISTS (SELECT 1 FROM channel_bot_session_runs own
             WHERE own.thread_id = ${threadId} AND own.message_id = a.message_id)
       ) SELECT i.task_id, i.task_generation, a.message_id, COALESCE(json_extract(m.payload_json, '$.delegatedCompletion.parentRunId'),
-        json_extract(a.payload, '$.restartContinuationOfRunId')) AS parent FROM ancestry a
+        json_extract(a.payload, '$.restartContinuationOfRunId'), json_extract(m.payload_json, '$.notification.aboutRunId')) AS parent FROM ancestry a
         LEFT JOIN channel_bot_session_runs i ON i.thread_id = ${threadId} AND i.message_id = a.message_id
         LEFT JOIN orchestration_v2_projection_messages m ON m.thread_id = ${threadId} AND m.message_id = a.message_id ORDER BY a.depth`;
     const intent = intents.find((row) => row.task_id !== null);

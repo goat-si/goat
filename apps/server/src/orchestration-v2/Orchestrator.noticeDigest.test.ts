@@ -186,3 +186,65 @@ it.effect(
       expect(last!.text).toBe(later.text);
     }).pipe(Effect.provide(layer)),
 );
+it.effect("command notices each wait as their own turn and keep the run they report on", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create"),
+      threadId: supervisor,
+      projectId: ProjectId.make("project:notice-digest"),
+      title: "Supervisor",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("work"),
+      threadId: supervisor,
+      messageId: MessageId.make("message:work"),
+      text: "Run the commands in the background.",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const commandEnd = (key: string, run: string) =>
+      notice({
+        commandId: "command-" + key,
+        messageId: "message:command-" + key,
+        text: "Command " + key + " ended.",
+        notification: {
+          source: { kind: "command" },
+          outcome: "completed",
+          summary: "Command " + key + " ended",
+          aboutRunId: RunId.make(run),
+        },
+      });
+    yield* orchestrator.dispatch(commandEnd("a1", "run:logistics"));
+    yield* orchestrator.dispatch(commandEnd("a2", "run:logistics"));
+    yield* orchestrator.dispatch(commandEnd("b", "run:question-a"));
+
+    const projection = yield* store.getThreadProjection(supervisor);
+    const queued = queuedRunsInDeliveryOrder(projection).map((run) =>
+      projection.messages.find((message) => message.id === run.userMessageId)!,
+    );
+    expect(queued.map((message) => message.id)).toEqual([
+      "message:command-a1",
+      "message:command-a2",
+      "message:command-b",
+    ]);
+    expect(queued.map((message) => message.notification?.aboutRunId)).toEqual([
+      "run:logistics",
+      "run:logistics",
+      "run:question-a",
+    ]);
+  }).pipe(Effect.provide(layer)),
+);

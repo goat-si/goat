@@ -35,6 +35,7 @@ type Records = {
   readonly messages: ReadonlyArray<{
     readonly id: string;
     readonly delegatedCompletion?: { readonly parentRunId: RunId } | undefined;
+    readonly notification?: { readonly aboutRunId?: RunId | undefined } | undefined;
   }>;
 };
 
@@ -89,6 +90,7 @@ export const resolveSessionRun = Effect.fn("ChannelBotSession.resolveSessionRun"
     const parent =
       message?.delegatedCompletion?.parentRunId ??
       current.restartContinuationOfRunId ??
+      message?.notification?.aboutRunId ??
       (yield* launchWakeParentRun(sql, threadId, current.userMessageId));
     if (parent === undefined || parent === null) return undefined;
     run = records.runs.find((candidate) => candidate.id === parent);
