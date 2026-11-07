@@ -408,8 +408,12 @@ export const make = Effect.gen(function* () {
           thread.projectId,
         ).settings;
         const decisionNow = yield* DateTime.now;
+        // A project that turned automatic settlement off keeps its finished lanes too.
+        const lanesSettle =
+          currentSettings.sidebarAutoSettleOnMerge ||
+          currentSettings.sidebarAutoSettleAfterDays !== null;
         const settledAt =
-          (yield* delegatedLaneSettledAt(thread)) ??
+          (lanesSettle ? yield* delegatedLaneSettledAt(thread) : null) ??
           resolveAutoSettlementAt({
             thread,
             pullRequest,

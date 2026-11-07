@@ -1,3 +1,4 @@
+import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
 import * as Effect from "effect/Effect";
 
 import * as Orchestrator from "../Orchestrator.ts";
@@ -5,7 +6,15 @@ import * as ProjectionStore from "../ProjectionStore.ts";
 
 type Lane = Pick<
   ProjectionStore.ProjectionSettlementCandidate,
-  "id" | "status" | "latestRunId" | "latestRunCompletedAt" | "lineage" | "forkedFrom"
+  | "id"
+  | "status"
+  | "latestRunId"
+  | "latestRunCompletedAt"
+  | "lineage"
+  | "forkedFrom"
+  | "pullRequests"
+  | "linkedPullRequest"
+  | "branchPullRequest"
 >;
 
 /**
@@ -24,7 +33,11 @@ export const makeDelegatedLaneSettlement = Effect.gen(function* () {
       lane.forkedFrom?.type !== "node" ||
       lane.status !== "completed" ||
       lane.latestRunId === null ||
-      lane.latestRunCompletedAt === null
+      lane.latestRunCompletedAt === null ||
+      // A lane with a pull request settles by the pull request rules instead.
+      visibleThreadPullRequests(lane.pullRequests ?? []).length > 0 ||
+      lane.linkedPullRequest != null ||
+      lane.branchPullRequest != null
     )
       return null;
     if (yield* orchestrator.delegatedTaskResultPending(lane.id)) return null;

@@ -60,6 +60,7 @@ interface Scenario {
   readonly resultRunId?: RunId | null;
   readonly queued?: boolean;
   readonly appOwned?: boolean;
+  readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
 }
 
 // The real settlement sweep over one candidate; stores answer only what the child rule reads.
@@ -128,7 +129,7 @@ const sweep = Effect.fn("sweep")(function* (
         Layer.mock(PullRequestService.PullRequestService)({
           subscribeMerges: PubSub.subscribe(merges).pipe(Effect.map(Stream.fromSubscription)),
         }),
-        ServerSettings.layerTest(),
+        ServerSettings.layerTest(scenario.settings),
         Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
         Layer.succeed(
           Crypto.Crypto,
@@ -231,6 +232,28 @@ it.effect("the parent's later result for the lane's latest run settles it", () =
         settled(commands).map((command) => command.threadId),
         [childId],
       );
+    }),
+  ),
+);
+
+it.effect("a lane keeps its project's opt-out and its pull request rules", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const optedOut = {
+        projectSettingsOverrides: {
+          project: { sidebarAutoSettleOnMerge: false, sidebarAutoSettleAfterDays: null },
+        },
+      };
+      assert.deepEqual(settled(yield* sweep({ lane: child(), settings: optedOut })), []);
+      const withPullRequest = child({
+        linkedPullRequest: {
+          projectId: ProjectId.make("project"),
+          repository: "o/r",
+          number: 7,
+          url: "https://example.test/o/r/pull/7",
+        },
+      });
+      assert.deepEqual(settled(yield* sweep({ lane: withPullRequest })), []);
     }),
   ),
 );
