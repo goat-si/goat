@@ -241,6 +241,10 @@ export function openCodeToolStatus(part: ToolPart): {
         ? { node: "failed", item: "failed" }
         : { node: "completed", item: "completed" };
     case "error":
-      return { node: "failed", item: "failed" };
+      return part.state.metadata?.["interrupted"] === true ||
+        part.state.error === "Tool execution aborted" ||
+        (part.tool === "task" && part.state.error === "Task cancelled")
+        ? { node: "interrupted", item: "interrupted" }
+        : { node: "failed", item: "failed" };
   }
 }

@@ -7,7 +7,12 @@ import {
 import type { ToolPart } from "@opencode-ai/sdk/v2";
 import * as DateTime from "effect/DateTime";
 
-import { openCodeFileUris, openCodeToolStateResult, openCodeToolTurnItem } from "./toolItems.ts";
+import {
+  openCodeFileUris,
+  openCodeToolStateResult,
+  openCodeToolStatus,
+  openCodeToolTurnItem,
+} from "./toolItems.ts";
 
 const oversize = "A".repeat(MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH + 4);
 // An image, a non-image, a file path, an oversize image, then more images than one output keeps.
@@ -99,4 +104,33 @@ it("keeps file-named MCP tools as dynamic output instead of file edits", () => {
     { type: "text", text: "Captured the screen" },
     { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
   ]);
+});
+
+describe("OpenCode interrupted tools", () => {
+  it("distinguishes interrupted tools and tasks from failures", () => {
+    for (const [tool, error, metadata, expected] of [
+      ["bash", "Interrupted", { interrupted: true }, "interrupted"],
+      ["bash", "Tool execution aborted", undefined, "interrupted"],
+      ["task", "Task cancelled", undefined, "interrupted"],
+      ["task", "Task failed", undefined, "failed"],
+      ["bash", "Command failed", undefined, "failed"],
+    ] as const) {
+      const part = {
+        id: "part",
+        sessionID: "session",
+        messageID: "message",
+        type: "tool",
+        callID: "call",
+        tool,
+        state: {
+          status: "error",
+          input: {},
+          error,
+          time: { start: 1, end: 2 },
+          ...(metadata ? { metadata } : {}),
+        },
+      } satisfies ToolPart;
+      assert.deepEqual(openCodeToolStatus(part), { node: expected, item: expected });
+    }
+  });
 });
