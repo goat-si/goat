@@ -5,6 +5,8 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as HostProcess from "@goat/shared/HostProcess";
+
 import type * as Electron from "electron";
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
@@ -23,6 +25,7 @@ function layerElectronApp(
   appListeners: Map<string, (...args: readonly unknown[]) => void>,
   quit: Effect.Effect<void> = Effect.void,
   exit: (code: number) => Effect.Effect<void> = () => Effect.void,
+  relaunch: (options: Electron.RelaunchOptions) => Effect.Effect<void> = () => Effect.void,
 ) {
   const registerListener = (eventName: string, listener: (...args: readonly unknown[]) => void) =>
     Effect.acquireRelease(
@@ -43,7 +46,7 @@ function layerElectronApp(
     requestSingleInstanceLock: Effect.succeed(true),
     quit,
     exit,
-    relaunch: () => Effect.void,
+    relaunch,
     setPath: () => Effect.void,
     setName: () => Effect.void,
     setAboutPanelOptions: () => Effect.void,
@@ -540,6 +543,7 @@ describe("DesktopLifecycle", () => {
           appListeners.get("before-quit")?.(event);
 
           yield* Deferred.await(shutdownRequested);
+          assert.equal(yield* Ref.get((yield* DesktopState.DesktopState).stopReason), "quit");
           const eventsBeforeCleanup = [...events];
           yield* Deferred.succeed(allowShutdown, undefined);
           yield* Deferred.await(quitRequested);
@@ -548,6 +552,82 @@ describe("DesktopLifecycle", () => {
           assert.deepEqual(events, ["flush", "destroy", "request", "quit"]);
         }),
       ).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("relaunch marks the backend stop reason before shutdown", () =>
+    Effect.gen(function* () {
+      const requested = yield* Deferred.make<void>();
+      const layer = Layer.mergeAll(
+        DesktopLifecycle.layer,
+        DesktopState.layer,
+        layerElectronApp(new Map()),
+        layerElectronTheme,
+        layerElectronWindow(),
+        layerDesktopWindow(),
+        Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+          platform: "darwin",
+          isDevelopment: true,
+        } as DesktopEnvironment.DesktopEnvironment["Service"]),
+        Layer.succeed(DesktopShutdown.DesktopShutdown, {
+          request: Deferred.succeed(requested, undefined).pipe(Effect.asVoid),
+          awaitRequest: Deferred.await(requested),
+          markComplete: Effect.void,
+          awaitComplete: Effect.void,
+          isComplete: Effect.succeed(true),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const state = yield* DesktopState.DesktopState;
+        assert.equal(yield* Ref.get(state.stopReason), "quit");
+        yield* (yield* DesktopLifecycle.DesktopLifecycle).relaunch("test");
+        yield* Deferred.await(requested);
+        assert.equal(yield* Ref.get(state.stopReason), "relaunch");
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("relaunches without the app link that launched it", () =>
+    Effect.gen(function* () {
+      const relaunched = yield* Deferred.make<Electron.RelaunchOptions>();
+      const layerEnvironment = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+        platform: "linux",
+        isDevelopment: false,
+      } as DesktopEnvironment.DesktopEnvironment["Service"]);
+      const layer = DesktopLifecycle.layer.pipe(
+        Layer.provideMerge(
+          layerElectronApp(
+            new Map(),
+            Effect.void,
+            () => Effect.void,
+            (options) => Deferred.succeed(relaunched, options).pipe(Effect.asVoid),
+          ),
+        ),
+        Layer.provideMerge(layerElectronTheme),
+        Layer.provideMerge(layerElectronWindow()),
+        Layer.provideMerge(layerDesktopWindow()),
+        Layer.provideMerge(layerEnvironment),
+        Layer.provideMerge(DesktopShutdown.layer),
+        Layer.provideMerge(DesktopState.layer),
+      );
+
+      const options = yield* Effect.gen(function* () {
+        const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+        yield* (yield* DesktopShutdown.DesktopShutdown).markComplete;
+        yield* lifecycle.relaunch("network access changed");
+        return yield* Deferred.await(relaunched);
+      }).pipe(
+        Effect.provide(layer),
+        Effect.provideService(HostProcess.ExecutablePath, "/opt/GOAT/goat"),
+        Effect.provideService(HostProcess.Arguments, [
+          "/opt/GOAT/goat",
+          "--no-sandbox",
+          "GOAT://pair?token=spent",
+          "t3code://new?prompt=hello",
+        ]),
+      );
+
+      assert.deepEqual(options, { execPath: "/opt/GOAT/goat", args: ["--no-sandbox"] });
     }),
   );
 

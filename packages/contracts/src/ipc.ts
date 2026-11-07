@@ -10,7 +10,7 @@ import type {
   BrowserImportSource,
   BrowserImportSourceId,
 } from "./browserImport.ts";
-import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
+import { AuthAccessTokenResult, AuthSessionState } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import type { DesktopBridgeParts } from "./desktopBridgeParts.ts";
 import type { SystemSettingsPane } from "./desktopPermissions.ts";
@@ -26,6 +26,9 @@ import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
 import type { DesktopPreviewCaptureEvent, DesktopPreviewCursorEvent } from "./desktopBrowser.ts";
+import { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
+import type { AnnotationVoiceBridge, AnnotationVoicePick } from "./previewAnnotationVoice.ts";
+export { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
 
 import type {
   DesktopAppActivationRequest,
@@ -770,10 +773,6 @@ export interface DesktopPreviewTabState {
   updatedAt: string;
 }
 
-export const DesktopPreviewTabIdSchema = Schema.String.check(Schema.isTrimmed()).check(
-  Schema.isNonEmpty(),
-);
-
 export interface DesktopPreviewOpenLinkEvent {
   tabId: string;
   url: string;
@@ -1258,7 +1257,7 @@ export interface DesktopBridge extends DesktopBridgeParts {
   issueSshWebSocketTicket: (
     httpBaseUrl: string,
     bearerToken: string,
-  ) => Promise<AuthWebSocketTicketResult>;
+  ) => Promise<{ readonly ticket: string; readonly expiresAt: string }>;
   onSshPasswordPrompt: (listener: (request: DesktopSshPasswordPromptRequest) => void) => () => void;
   resolveSshPasswordPrompt: (requestId: string, password: string | null) => Promise<void>;
   getServerExposureState: () => Promise<DesktopServerExposureState>;
@@ -1336,8 +1335,7 @@ export interface DesktopBridge extends DesktopBridgeParts {
 
 /** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */
 export const DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER = "__t3DesktopPreviewRecordingCapture";
-
-export interface DesktopPreviewBridge {
+export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   setForwardedShortcuts?: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) => Promise<void>;
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
@@ -1353,6 +1351,8 @@ export interface DesktopPreviewBridge {
   hardReload: (tabId: string) => Promise<void>;
   setColorScheme: (tabId: string, colorScheme: DesktopPreviewColorScheme) => Promise<void>;
   setAudioMuted: (tabId: string, audioMuted: boolean) => Promise<void>;
+  /** Tells the tab's server whether its webview is on screen. */
+  setShown: (tabId: string, shown: boolean) => Promise<void>;
   openDevTools: (tabId: string) => Promise<void>;
   clearCookies: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;
   clearCache: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;
@@ -1375,7 +1375,7 @@ export interface DesktopPreviewBridge {
   setAnnotationTheme: (theme: DesktopPreviewAnnotationTheme) => Promise<void>;
   setAnnotationSendEnabled: (tabId: string, enabled: boolean) => Promise<void>;
   /** Resolves with the annotation and attach/send intent, or null on cancellation. Rejects if activation fails. */
-  pickElement: (tabId: string) => Promise<PreviewAnnotationSubmissionResult | null>;
+  pickElement: AnnotationVoicePick;
   cancelPickElement: (tabId: string) => Promise<void>;
   captureScreenshot: (
     tabId: string,

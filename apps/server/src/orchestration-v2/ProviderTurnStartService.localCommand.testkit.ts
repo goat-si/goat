@@ -1,3 +1,4 @@
+import { AgentScope } from "@goat/shared/AgentScope";
 /** The native-account-command harness for ProviderTurnStartService tests. */
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
 import { expect, vi } from "vite-plus/test";
@@ -31,6 +32,7 @@ import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
+import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -53,8 +55,12 @@ export const layerWorktreeLocation = (worktreesDir = managedWorktreesDir) =>
   );
 
 export function makeLocalCommandHarness(input: {
+  readonly oomKilled?: boolean;
   readonly text: string;
+  readonly ensureCodexAdmission?: CodexSurvivors.CodexSurvivors["Service"]["ensureAdmission"];
   readonly worktreePath?: string;
+  /** Where the thread points by the time the start takes its workspace lease. */
+  readonly reboundWorktreePath?: string;
   readonly worktreesDir?: string;
   readonly workspaceRoot?: string;
   readonly gitWorkflow?: GitWorkflow.GitWorkflowService["Service"];
@@ -67,6 +73,7 @@ export function makeLocalCommandHarness(input: {
   readonly openFailure?: unknown;
   readonly ensureThreadFailure?: unknown;
   readonly historyReadFailureAfterFallback?: unknown;
+  readonly resumeFailure?: ProviderAdapter.ProviderAdapterV2Error;
   readonly interruptOpen?: boolean;
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
@@ -77,7 +84,8 @@ export function makeLocalCommandHarness(input: {
     readonly currentRun?: () => RunId | undefined;
   };
   readonly previousTurn?: {
-    readonly runStatus: "failed" | "completed";
+    readonly runStatus: "failed" | "completed" | "interrupted";
+    readonly terminationCause?: "person_stop" | "agent_stop";
     readonly turnStatus: "running" | "completed" | "interrupted";
     readonly differentThread?: boolean;
     readonly liveSession?: boolean;
@@ -257,7 +265,7 @@ export function makeLocalCommandHarness(input: {
     checkpoints: [],
     updatedAt: now,
   };
-  if ("historyReadFailureAfterFallback" in input) {
+  if ("historyReadFailureAfterFallback" in input || "resumeFailure" in input) {
     const nativeThreadRef = {
       driver: providerThread.driver,
       nativeId: "native-resume-thread",
@@ -285,6 +293,9 @@ export function makeLocalCommandHarness(input: {
           id: previousRunId,
           ordinal: 1,
           status: input.previousTurn.runStatus,
+          ...(input.previousTurn.terminationCause === undefined
+            ? {}
+            : { terminationCause: { kind: input.previousTurn.terminationCause } }),
           rootNodeId: NodeId.make("previous-root"),
           activeAttemptId: previousAttemptId,
           providerThreadId: previousProviderThreadId,
@@ -318,7 +329,7 @@ export function makeLocalCommandHarness(input: {
     };
   }
   let providerBusy =
-    input.previousTurn?.runStatus === "failed" &&
+    input.previousTurn !== undefined &&
     input.previousTurn.turnStatus === "running" &&
     !input.previousTurn.differentThread &&
     input.previousTurn.liveSession !== false;
@@ -364,22 +375,24 @@ export function makeLocalCommandHarness(input: {
       ),
     ),
   );
+  const fallbackEnsureThread = vi.fn(() => Effect.succeed(providerThread));
   const resumeFallbackSession = {
     driver: providerThread.driver,
     resumeThread: () =>
       Effect.fail(
-        new ProviderAdapter.ProviderAdapterEventStreamError({
-          driver: providerThread.driver,
-          providerSessionId,
-          cause: "native thread is gone",
-        }),
+        input.resumeFailure ??
+          new ProviderAdapter.ProviderAdapterEventStreamError({
+            driver: providerThread.driver,
+            providerSessionId,
+            cause: "native thread is gone",
+          }),
       ),
-    ensureThread: () => Effect.succeed(providerThread),
+    ensureThread: fallbackEnsureThread,
   };
   const open = vi.fn(() =>
     input.interruptOpen === true
       ? Effect.interrupt
-      : "historyReadFailureAfterFallback" in input
+      : "historyReadFailureAfterFallback" in input || "resumeFailure" in input
         ? Effect.succeed(resumeFallbackSession as never)
         : "ensureThreadFailure" in input
           ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
@@ -435,24 +448,27 @@ export function makeLocalCommandHarness(input: {
       : Effect.void,
   );
   // Refuses a sign-out no person wrote, as ProviderAuthService does.
-  const tryHandlePromptCommand = vi.fn((request: { readonly byPerson: boolean }) =>
-    !request.byPerson
-      ? Effect.fail(
-          new ProviderSetupError({
-            instanceId: oldInstanceId,
-            operation: "logout",
-            detail: "Only a person can sign out of a provider.",
-          }),
-        )
-      : input.logoutFailure === undefined
-        ? Effect.succeed(true)
-        : Effect.fail(
-            new ProviderSetupError({
-              instanceId: oldInstanceId,
-              operation: "logout",
-              detail: input.logoutFailure,
-            }),
-          ),
+  const tryHandlePromptCommand = vi.fn(
+    (request: { readonly byPerson: boolean; readonly text: string }) =>
+      request.text.trim() !== "/logout"
+        ? Effect.succeed(false)
+        : !request.byPerson
+          ? Effect.fail(
+              new ProviderSetupError({
+                instanceId: oldInstanceId,
+                operation: "logout",
+                detail: "Only a person can sign out of a provider.",
+              }),
+            )
+          : input.logoutFailure === undefined
+            ? Effect.succeed(true)
+            : Effect.fail(
+                new ProviderSetupError({
+                  instanceId: oldInstanceId,
+                  operation: "logout",
+                  detail: input.logoutFailure,
+                }),
+              ),
   );
   const writeIfRunCurrent = vi.fn(({ events: incoming, activeAttemptId, expectedStatus }) =>
     "writeFailure" in input
@@ -501,6 +517,15 @@ export function makeLocalCommandHarness(input: {
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.succeed(AgentScope, {
+          ...AgentScope.defaultValue(),
+          oomKilled: () => Effect.succeed(input.oomKilled === true),
+        }),
+        input.ensureCodexAdmission === undefined
+          ? Layer.empty
+          : Layer.mock(CodexSurvivors.CodexSurvivors)({
+              ensureAdmission: input.ensureCodexAdmission,
+            }),
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
           prepareProviderHandoff: () => Effect.die("history read must fail first"),
         }),
@@ -529,6 +554,9 @@ export function makeLocalCommandHarness(input: {
           getThreadShell: () =>
             Effect.succeed({
               ...projection.thread,
+              ...(input.reboundWorktreePath === undefined
+                ? {}
+                : { worktreePath: input.reboundWorktreePath }),
               activityRunStatus: "running" as const,
               activeRunId:
                 input.memory?.currentRun === undefined
@@ -595,6 +623,7 @@ export function makeLocalCommandHarness(input: {
     resolveRuntimePolicy,
     createWorktree,
     open,
+    fallbackEnsureThread,
     writeIfRunCurrent,
     startRootRun,
     interruptTurn,

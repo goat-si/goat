@@ -1,3 +1,4 @@
+import { isPreviewRefreshShortcut } from "./previewRefresh.ts";
 import { admitAgentPointer, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
 import * as NodeZlib from "node:zlib";
 import {
@@ -5,13 +6,13 @@ import {
   DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER,
 } from "@goat/contracts";
 import type {
+  AnnotationVoiceConfig,
+  AnnotationVoiceState,
   DesktopPreviewAnnotationTheme,
   DesktopPreviewColorScheme,
   DesktopPreviewFavicon,
   DesktopPreviewOpenLinkEvent,
   DesktopPreviewCursorEvent,
-  PreviewAnnotationPayload,
-  PreviewAnnotationRect,
   PreviewAnnotationSubmissionResult,
   DesktopPreviewRecordingArtifact,
   DesktopPreviewRecordingFrame,
@@ -57,9 +58,16 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
-import { PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
+import {
+  PREVIEW_ANNOTATION_VOICE_EVENT_CHANNEL,
+  PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL,
+} from "../ipc/channels.ts";
+import { makeAnnotationVoiceRelay } from "./AnnotationVoiceRelay.ts";
+import { cropAnnotationScreenshot, normalizeCaptureRect } from "./AnnotationCapture.ts";
 import { forwardPreviewCommand } from "./workspaceFocus.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
+import { makeTabVisibility } from "./TabVisibility.ts";
+import { artifactSiteSlug } from "./artifactSiteSlug.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
@@ -129,7 +137,6 @@ const PICTURE_IN_PICTURE_INITIAL_HEIGHT = 320;
 const PICTURE_IN_PICTURE_MIN_WIDTH = 240;
 const PICTURE_IN_PICTURE_MIN_HEIGHT = 160;
 const PICTURE_IN_PICTURE_ASPECT_RATIO_EPSILON = 0.002;
-const MAX_ARTIFACT_SITE_SLUG_LENGTH = 80;
 const requestRecordingCaptureExpression = (tabId: string): string =>
   `globalThis[${JSON.stringify(DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER)}]?.(${JSON.stringify(tabId)}) === true`;
 const DEFAULT_ANNOTATION_THEME: DesktopPreviewAnnotationTheme = {
@@ -206,21 +213,6 @@ const recordingFileExtension = (mimeType: string): string => {
   return extension || "video";
 };
 
-const artifactSiteSlug = (rawUrl: string): string => {
-  try {
-    const url = new URL(rawUrl);
-    const slug = url.hostname
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, MAX_ARTIFACT_SITE_SLUG_LENGTH)
-      .replace(/-+$/g, "");
-    return slug || "site";
-  } catch {
-    return "site";
-  }
-};
-
 export const PreviewAutomationSelectorKind = Schema.Literals([
   "focused-element",
   "selector",
@@ -242,82 +234,6 @@ interface PreviewOperationContext {
   readonly webContentsId?: number;
   readonly artifactPath?: string;
 }
-
-const normalizeCaptureRect = (value: unknown): PreviewAnnotationRect | null => {
-  if (typeof value !== "object" || value === null) return null;
-  const rect = value as Record<string, unknown>;
-  const x = rect["x"];
-  const y = rect["y"];
-  const width = rect["width"];
-  const height = rect["height"];
-  if (
-    typeof x !== "number" ||
-    !Number.isFinite(x) ||
-    typeof y !== "number" ||
-    !Number.isFinite(y) ||
-    typeof width !== "number" ||
-    !Number.isFinite(width) ||
-    typeof height !== "number" ||
-    !Number.isFinite(height) ||
-    width <= 0 ||
-    height <= 0
-  ) {
-    return null;
-  }
-  return { x, y, width, height };
-};
-
-// capturePage returns a 1x NativeImage containing device pixels, so crop() uses
-// CSS coordinates scaled by the guest's devicePixelRatio (including page zoom).
-const cropAnnotationScreenshot = (
-  image: Electron.NativeImage,
-  cropRect: PreviewAnnotationRect | null,
-  devicePixelRatio: number,
-  targetRects: ReadonlyArray<PreviewAnnotationRect>,
-): PreviewAnnotationPayload["screenshot"] => {
-  const full = image.getSize();
-  if (full.width <= 0 || full.height <= 0) return null;
-  const scale = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
-  // Padding or a union of offscreen targets can overlap an empty viewport area.
-  // A zero-width/height SVG line can still paint at the top or left edge.
-  if (
-    targetRects.length > 0 &&
-    !targetRects.some(
-      (rect) =>
-        (rect.width > 0 || rect.height > 0) &&
-        rect.x * scale < full.width &&
-        rect.y * scale < full.height &&
-        (rect.width === 0 ? rect.x >= 0 : rect.x + rect.width > 0) &&
-        (rect.height === 0 ? rect.y >= 0 : rect.y + rect.height > 0),
-    )
-  ) {
-    return null;
-  }
-  if (!cropRect) {
-    return {
-      dataUrl: image.toDataURL(),
-      width: full.width,
-      height: full.height,
-      cropRect: { x: 0, y: 0, width: full.width, height: full.height },
-    };
-  }
-  const x = Math.max(0, Math.floor(cropRect.x * scale));
-  const y = Math.max(0, Math.floor(cropRect.y * scale));
-  const right = Math.min(full.width, Math.ceil((cropRect.x + cropRect.width) * scale));
-  const bottom = Math.min(full.height, Math.ceil((cropRect.y + cropRect.height) * scale));
-  // A target scrolled out of view has no pixels in this capture. Clamping its
-  // origin onto the edge would attach an unrelated strip as a successful crop.
-  if (right <= x || bottom <= y) return null;
-  const cropped = image.crop({
-    x,
-    y,
-    width: right - x,
-    height: bottom - y,
-  });
-  const size = cropped.getSize();
-  if (size.width <= 0 || size.height <= 0) return null;
-  return { dataUrl: cropped.toDataURL(), width: size.width, height: size.height, cropRect };
-};
 
 // An invalid color space skips costly P3-to-sRGB conversion; fingerprints need no color accuracy.
 const FINGERPRINT_BITMAP_OPTIONS: Electron.ToBitmapOptions = {
@@ -401,6 +317,7 @@ interface PendingRecording {
 
 interface PickSession {
   readonly cancel: Effect.Effect<void>;
+  readonly voice?: ReturnType<typeof makeAnnotationVoiceRelay> | undefined;
 }
 
 interface BrowserControlSession {
@@ -437,13 +354,6 @@ export const previewWindowOpenAction = (details: {
     ? "new-tab"
     : "popup";
 };
-
-const isPreviewRefreshShortcut = (input: Electron.Input): boolean =>
-  input.type === "keyDown" &&
-  input.key.toLowerCase() === "r" &&
-  (input.meta || input.control) &&
-  !input.shift &&
-  !input.alt;
 
 export const isPreviewEditingShortcut = (
   input: Electron.Input,
@@ -510,6 +420,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const annotationSendEnabled = new Map<string, boolean>();
   const mainWindowRef = yield* Ref.make<Option.Option<BrowserWindow>>(Option.none());
   const tabsRef = yield* SynchronizedRef.make<ReadonlyMap<string, PreviewTabState>>(new Map());
+  const { setShown, hideDestroyedGuest } = makeTabVisibility(tabsRef, browserHost);
   const attachedRef = yield* Ref.make<ReadonlyMap<number, ManagedListeners>>(new Map());
   const listenersRef = yield* Ref.make<ReadonlySet<Listener>>(new Set());
   const pointerEventListenersRef = yield* Ref.make<ReadonlySet<PointerEventListener>>(new Set());
@@ -1473,7 +1384,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         if (!input.isAutoRepeat) forwardPreviewCommand(host, forwarded.command);
         return;
       }
-      if (isPreviewRefreshShortcut(input)) {
+      if (isPreviewRefreshShortcut(input, hostPlatform)) {
         event.preventDefault();
         runFork(
           attempt({ operation: "shortcut.refresh", tabId, webContentsId: wc.id }, () =>
@@ -1666,6 +1577,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
     if (Option.isNone(tab)) return;
     const closedTab = tab.value;
+    if (closedTab.serverTab) browserHost.setShown(closedTab.serverTab, undefined);
     if (closedTab.webContentsId != null) {
       yield* Effect.all(
         [
@@ -1874,6 +1786,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     yield* rendererHistory.register(wc, { surface: "preview" });
     const webContentsId = wc.id;
     wc.once("destroyed", () => {
+      runFork(hideDestroyedGuest(webContentsId));
       runFork(detachControlSession(webContentsId));
     });
     yield* ensureControlSession(wc).pipe(
@@ -2053,16 +1966,52 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
   });
 
-  const pickElement = Effect.fn("PreviewManager.pickElement")(function* (tabId: string) {
+  const updateAnnotationVoice = Effect.fn("PreviewManager.updateAnnotationVoice")(function* (
+    state: AnnotationVoiceState,
+  ) {
+    const session = (yield* Ref.get(pickSessionsRef)).get(state.tabId);
+    yield* attempt({ operation: "annotationVoice.update", tabId: state.tabId }, () =>
+      session?.voice?.update(state),
+    );
+  });
+  const pickElement = Effect.fn("PreviewManager.pickElement")(function* (
+    tabId: string,
+    voice?: AnnotationVoiceConfig,
+  ) {
     const wc = yield* requireWebContents(tabId);
     yield* cancelPickElement(tabId);
     const annotationTheme = yield* Ref.get(annotationThemeRef);
     return yield* Effect.callback<PreviewAnnotationSubmissionResult | null, PreviewManagerError>(
       (resume) => {
-        const session: PickSession = { cancel: Effect.suspend(() => cancelPickSession()) };
+        let settled = false;
+        const relay = voice
+          ? makeAnnotationVoiceRelay({
+              guest: wc,
+              voice,
+              forward: (event) => {
+                if (settled) return;
+                const window = Ref.getUnsafe(mainWindowRef);
+                if (Option.isNone(window) || window.value.isDestroyed()) return;
+                try {
+                  window.value.webContents.send(
+                    PREVIEW_ANNOTATION_VOICE_EVENT_CHANNEL,
+                    tabId,
+                    event,
+                  );
+                } catch (error) {
+                  runFork(Effect.logWarning("Annotation voice event failed", error));
+                }
+              },
+            })
+          : undefined;
+        const session: PickSession = {
+          voice: relay,
+          cancel: Effect.suspend(() => cancelPickSession()),
+        };
         const cleanup = Effect.fn("PreviewManager.cleanupPickElement")(function* () {
           yield* attempt({ operation: "pickElement.cleanup", tabId, webContentsId: wc.id }, () => {
             wc.ipc.removeListener(ELEMENT_PICKED_CHANNEL, onMessage);
+            relay?.dispose();
             wc.off("destroyed", onDestroyed);
             wc.off("did-start-navigation", onNavigated);
           }).pipe(Effect.ignore);
@@ -2075,7 +2024,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               : sessions,
           );
         });
-        let settled = false;
         const claimSettle = (): boolean => {
           if (settled) return false;
           settled = true;
@@ -2170,11 +2118,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             ),
           );
         };
-        const onDestroyed = () => settle(null);
+        const onDestroyed = () => {
+          relay?.deactivate();
+          settle(null);
+        };
         const onNavigated = (
           event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
         ) => {
-          if (event.isMainFrame) settle(null);
+          if (event.isMainFrame) {
+            relay?.deactivate();
+            settle(null);
+          }
         };
         const registerPickElement = Effect.fn("PreviewManager.registerPickElement")(function* () {
           // Atomically swap/cancel overlapping picks so another pick cannot claim a transient empty slot.
@@ -2189,10 +2143,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           if (settled) return;
           yield* attempt({ operation: "pickElement.register", tabId, webContentsId: wc.id }, () => {
             wc.ipc.on(ELEMENT_PICKED_CHANNEL, onMessage);
+            relay?.register();
             wc.once("destroyed", onDestroyed);
             wc.on("did-start-navigation", onNavigated);
             if (!wc.isFocused()) wc.focus();
-            wc.send(START_PICK_CHANNEL, annotationTheme, annotationSendEnabled.get(tabId) === true);
+            wc.send(
+              START_PICK_CHANNEL,
+              annotationTheme,
+              annotationSendEnabled.get(tabId) === true,
+              voice,
+            );
           });
         });
         runFork(
@@ -3281,6 +3241,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     openPictureInPicture,
     openDevTools,
     pickElement,
+    updateAnnotationVoice,
     prepareWebview,
     reapplyZoom,
     refresh,
@@ -3293,6 +3254,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setAnnotationTheme,
     setAnnotationSendEnabled,
     setAudioMuted,
+    setShown,
     setColorScheme,
     setMainWindow,
     setForwardedShortcuts: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) =>
@@ -3500,6 +3462,7 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       audioMuted: boolean,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly setShown: (tabId: string, shown: boolean) => Effect.Effect<void>;
     readonly openDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly clearCookies: (
       partitions?: ReadonlyArray<string>,
@@ -3521,7 +3484,11 @@ export class PreviewManager extends Context.Service<
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly pickElement: (
       tabId: string,
+      voice?: AnnotationVoiceConfig,
     ) => Effect.Effect<PreviewAnnotationSubmissionResult | null, PreviewManagerError>;
+    readonly updateAnnotationVoice: (
+      state: AnnotationVoiceState,
+    ) => Effect.Effect<void, PreviewManagerError>;
     readonly cancelPickElement: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly captureScreenshot: (
       tabId: string,
@@ -3643,6 +3610,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     setColorScheme: operations.setColorScheme,
     setZoomFactor: operations.setZoomFactor,
     setAudioMuted: operations.setAudioMuted,
+    setShown: operations.setShown,
     openDevTools: operations.openDevTools,
     clearCookies: Effect.fn("PreviewManager.clearCookies")(function* (partitions) {
       yield* browserSession
@@ -3674,6 +3642,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     setAnnotationTheme: operations.setAnnotationTheme,
     setAnnotationSendEnabled: operations.setAnnotationSendEnabled,
     pickElement: operations.pickElement,
+    updateAnnotationVoice: operations.updateAnnotationVoice,
     cancelPickElement: operations.cancelPickElement,
     captureScreenshot: operations.captureScreenshot,
     revealArtifact: operations.revealArtifact,

@@ -108,37 +108,39 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
           },
         });
 
-        yield* Queue.offer(
-          input,
-          yield* encodeJsonl(SessionUpdateNotification, {
-            jsonrpc: "2.0",
-            method: "session/update",
-            params: {
-              sessionId: "session-1",
-              update: {
-                sessionUpdate: "plan",
-                entries: [
-                  {
-                    content: "Inspect repository",
-                    priority: "high",
-                    status: "in_progress",
-                  },
-                ],
-              },
+        const updateFrame = yield* encodeJsonl(SessionUpdateNotification, {
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "session-1",
+            update: {
+              sessionUpdate: "plan",
+              entries: [
+                {
+                  content: "Inspect repository",
+                  priority: "high",
+                  status: "in_progress",
+                },
+              ],
             },
-          }),
-        );
+          },
+        });
+        const completionFrame = yield* encodeJsonl(ElicitationCompleteNotification, {
+          jsonrpc: "2.0",
+          method: "elicitation/complete",
+          params: {
+            elicitationId: "elicitation-1",
+          },
+        });
 
-        yield* Queue.offer(
-          input,
-          yield* encodeJsonl(ElicitationCompleteNotification, {
-            jsonrpc: "2.0",
-            method: "elicitation/complete",
-            params: {
-              elicitationId: "elicitation-1",
-            },
-          }),
-        );
+        // Frames split across reads, with one read ending one frame and starting the next.
+        const wire = new Uint8Array([...updateFrame, ...completionFrame]);
+        const splits = [10, updateFrame.length + 10, wire.length];
+        let start = 0;
+        for (const end of splits) {
+          yield* Queue.offer(input, wire.subarray(start, end));
+          start = end;
+        }
 
         const [update, completion] = yield* Deferred.await(notifications);
         assert.equal(update?._tag, "SessionUpdate");
@@ -339,6 +341,22 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         },
       });
       assert.notInclude(encodeUnknownJsonString(event), secret);
+    }),
+  );
+
+  it.effect("terminates when an unterminated ACP frame exceeds its size limit", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const termination = yield* Deferred.make<AcpError.AcpError>();
+      yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
+      });
+      const chunk = new Uint8Array(1024 * 1024).fill(97);
+      for (let index = 0; index < 17; index++) yield* Queue.offer(input, chunk);
+      const error = yield* Deferred.await(termination);
+      assert.equal(error._tag, "AcpProtocolParseError");
     }),
   );
 
@@ -882,8 +900,8 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         .request("x/test", { hello: "world" })
         .pipe(Effect.flip, Effect.orDie, Effect.forkScoped);
       yield* Queue.take(output);
+      yield* Queue.offer(input, encoder.encode('{"jsonrpc":"2.0","id":1,"result":'));
       yield* Queue.end(input);
-
       const error = yield* Deferred.await(termination);
       assert.instanceOf(error, AcpError.AcpInputStreamEndedError);
       assert.strictEqual(yield* Fiber.join(pending), error);

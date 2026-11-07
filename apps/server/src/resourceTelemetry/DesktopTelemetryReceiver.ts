@@ -1,7 +1,9 @@
+import { makeApplyDesktopShellEnvironmentSnapshot } from "./DesktopShellEnvironmentReceiver.ts";
 import { makeDesktopControlWriter } from "./DesktopControlWriter.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 import * as NodeStream from "@effect/platform-node/NodeStream";
 import {
@@ -22,6 +24,7 @@ import {
   type ResourceTelemetrySourceStatus,
 } from "@goat/contracts";
 import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -403,6 +406,9 @@ export function requireDesktopTelemetryWriteProgress(
 /** @public */
 export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")(function* () {
   const config = yield* ServerConfig.ServerConfig;
+  const environment = yield* HostProcess.Environment;
+  const platform = yield* HostProcess.Platform;
+  const applyShellSnapshot = makeApplyDesktopShellEnvironmentSnapshot(environment, platform);
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const latest = yield* Ref.make(Option.none<DesktopHostTelemetrySnapshot>());
   const receiverStartedAt = yield* DateTime.now;
@@ -577,7 +583,9 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
     // The parent waits before closing; use cancellable socket reads so filesystem reads cannot block exit.
     const readable = yield* Effect.acquireRelease(
       Effect.try({
-        try: () => new NodeNet.Socket({ fd, readable: true, writable: false }),
+        // fromReadable reports errors while reading; the socket is destroyed on release.
+        try: () =>
+          guardErrors(new NodeNet.Socket({ fd, readable: true, writable: false }), () => {}),
         catch: (cause) => new DesktopTelemetryStreamFailed({ fd, cause }),
       }),
       (stream) =>
@@ -649,6 +657,10 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
               ),
             ),
           );
+        }
+
+        if (message.type === "shellEnvironment") {
+          return recordContact.pipe(Effect.andThen(applyShellSnapshot(message)));
         }
 
         if (message.type === "desktopUpdateStatus") {

@@ -1,4 +1,5 @@
 import * as NodeNet from "node:net";
+import { guardErrors } from "./errorGuards.ts";
 
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -46,7 +47,6 @@ export class NetService extends Context.Service<NetService, NetServiceShape>()(
 export const make = () => {
   const canListenOnHost = (port: number, host: string): Effect.Effect<boolean> =>
     Effect.callback<boolean>((resume) => {
-      const server = NodeNet.createServer();
       let settled = false;
 
       const settle = (value: boolean) => {
@@ -55,9 +55,7 @@ export const make = () => {
         resume(Effect.succeed(value));
       };
 
-      server.unref();
-
-      server.once("error", (cause) => {
+      const server = guardErrors(NodeNet.createServer(), (cause) => {
         // Missing IPv6 addresses or kernel support do not mean the port is occupied.
         if (
           isErrnoExceptionWithCode(cause) &&
@@ -68,6 +66,7 @@ export const make = () => {
         }
         settle(false);
       });
+      server.unref();
 
       server.once("listening", () => {
         server.close(() => {
@@ -84,7 +83,6 @@ export const make = () => {
 
   const hasListenerOnHost = (port: number, host: string): Effect.Effect<boolean> =>
     Effect.callback<boolean>((resume) => {
-      const socket = NodeNet.createConnection({ host, port });
       let settled = false;
 
       const settle = (value: boolean) => {
@@ -93,14 +91,12 @@ export const make = () => {
         socket.destroy();
         resume(Effect.succeed(value));
       };
+      const socket = guardErrors(NodeNet.createConnection({ host, port }), () => settle(false));
 
       socket.unref();
       socket.setTimeout(250);
       socket.once("connect", () => {
         settle(true);
-      });
-      socket.once("error", () => {
-        settle(false);
       });
       socket.once("timeout", () => {
         settle(false);
@@ -138,7 +134,6 @@ export const make = () => {
     exclusive: boolean,
   ): Effect.Effect<number, NetError> =>
     Effect.callback<number, NetError>((resume) => {
-      const probe = NodeNet.createServer();
       let settled = false;
 
       const settle = (effect: Effect.Effect<number, NetError>) => {
@@ -147,7 +142,7 @@ export const make = () => {
         resume(effect);
       };
 
-      probe.once("error", (cause) => {
+      const probe = guardErrors(NodeNet.createServer(), (cause) => {
         closeServer(probe);
         settle(Effect.fail(new NetError({ message: "Failed to reserve loopback port", cause })));
       });

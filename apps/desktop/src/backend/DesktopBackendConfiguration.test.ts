@@ -9,8 +9,8 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
-
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
@@ -19,15 +19,14 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
-
 const layerShellEnvironment = (prepared = true) =>
   Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
     installIntoProcess: Effect.succeed(prepared),
+    awaitDiscovery: Effect.succeed(prepared),
+    updates: Stream.empty,
   });
-
 const layerBackendConfiguration = (prepared = true) =>
   DesktopBackendConfiguration.layer.pipe(Layer.provide(layerShellEnvironment(prepared)));
-
 const layerServerExposure = Layer.succeed(DesktopServerExposure.DesktopServerExposure, {
   getState: Effect.die("unexpected getState"),
   backendConfig: Effect.succeed({
@@ -42,7 +41,6 @@ const layerServerExposure = Layer.succeed(DesktopServerExposure.DesktopServerExp
   setTailscaleServeEnabled: () => Effect.die("unexpected setTailscaleServeEnabled"),
   getAdvertisedEndpoints: Effect.succeed([]),
 } satisfies DesktopServerExposure.DesktopServerExposure["Service"]);
-
 function layerEnvironment(
   baseDir: string,
   options?: {
@@ -88,7 +86,6 @@ function layerEnvironment(
     ),
   );
 }
-
 const restoreEnv = (name: string, value: string | undefined) => {
   if (value === undefined) {
     delete process.env[name];
@@ -96,7 +93,6 @@ const restoreEnv = (name: string, value: string | undefined) => {
     process.env[name] = value;
   }
 };
-
 const withHarness = <A, E, R>(
   effect: Effect.Effect<
     A,
@@ -113,7 +109,6 @@ const withHarness = <A, E, R>(
     const baseDir = yield* fileSystem.makeTempDirectoryScoped({
       prefix: "goat-desktop-backend-config-test-",
     });
-
     return yield* effect.pipe(
       Effect.provide(
         layerBackendConfiguration(prepared).pipe(
@@ -126,7 +121,6 @@ const withHarness = <A, E, R>(
       ),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
-
 interface PackagedWslHarnessContext {
   readonly baseDir: string;
   readonly archivePath: string;
@@ -292,6 +286,14 @@ describe("DesktopBackendConfiguration", () => {
 
         const first = yield* configuration.resolvePrimary;
         const second = yield* configuration.resolvePrimary;
+        assert.equal(
+          environment.path.dirname(first.bootstrap.desktopStopIntentPath ?? ""),
+          environment.path.join(environment.stateDir, "runtime", "desktop-stop-intent"),
+        );
+        assert.notEqual(
+          first.bootstrap.desktopStopIntentPath,
+          second.bootstrap.desktopStopIntentPath,
+        );
 
         assert.equal(first.executablePath, process.execPath);
         assert.deepEqual(first.args.slice(0, 3), [
@@ -303,6 +305,7 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.cwd, environment.backendCwd);
         assert.equal(first.captureOutput, true);
         assert.equal(first.env.ELECTRON_RUN_AS_NODE, "1");
+        assert.equal(first.env.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING, "1");
         assert.equal(
           first.env.GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR,
           environment.path.join(environment.resourcesPath, "ssh-runtime", "archives"),
@@ -743,6 +746,7 @@ describe("DesktopBackendConfiguration", () => {
           { concurrency: "unbounded" },
         );
 
+        assert.isUndefined(wsl.bootstrap.desktopStopIntentPath);
         assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
       }),
     ),

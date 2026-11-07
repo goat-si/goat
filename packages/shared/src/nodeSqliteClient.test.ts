@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Exercises guarded child pipes during SQLite startup.
 import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 
@@ -7,6 +8,7 @@ import * as Logger from "effect/Logger";
 import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as NodeSqlite from "node:sqlite";
+import * as NodeChildProcess from "node:child_process";
 import type * as NodeWorkerThreads from "node:worker_threads";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -21,6 +23,7 @@ import type * as Tracer from "effect/Tracer";
 import { vi } from "vite-plus/test";
 
 import * as SqliteClient from "./nodeSqliteClient.ts";
+import { guardChild } from "./errorGuards.ts";
 
 const startedWorkers = vi.hoisted((): Array<NodeWorkerThreads.Worker> => []);
 const silentWorkers = vi.hoisted(() => ({ on: false, readyOnTerminate: false }));
@@ -80,6 +83,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 
 const withReaderClient = <A, E>(
   use: (sql: SqlClient.SqlClient) => Effect.Effect<A, E, SqlClient.SqlClient>,
+  config: Partial<SqliteClient.SqliteClientConfig> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -92,7 +96,7 @@ const withReaderClient = <A, E>(
       yield* sql`CREATE TABLE entries(name TEXT NOT NULL)`;
       yield* sql`INSERT INTO entries VALUES ('first')`;
       return yield* use(sql);
-    }).pipe(Effect.provide(SqliteClient.layer({ filename, readerWorker: true })));
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, readerWorker: true, ...config })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 const countEntries = (sql: SqlClient.SqlClient) =>
@@ -203,6 +207,91 @@ const makeTempDatabase = Effect.gen(function* () {
   });
   return { filename, other };
 });
+
+it.effect("configures the writer lock wait before probing the checkpoint database", () =>
+  Effect.gen(function* () {
+    const { filename } = yield* makeTempDatabase;
+    const original = NodeSqlite.DatabaseSync.prototype.prepare;
+    let initialWait: number | undefined;
+    using _probe = vi
+      .spyOn(NodeSqlite.DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: NodeSqlite.DatabaseSync, query) {
+        if (query === "SELECT sqlite_version() AS version") {
+          initialWait = Number(original.call(this, "PRAGMA busy_timeout").get()?.timeout);
+        }
+        return original.call(this, query);
+      });
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepEqual(yield* sql`SELECT value FROM counters`.values, [[0]]);
+      assert.equal(initialWait, 5000);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true })));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live("opens a checkpoint database after another process releases its lock", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-sqlite-open-" });
+    const filename = path.join(directory, "state.sqlite");
+    const seed = new NodeSqlite.DatabaseSync(filename);
+    seed.exec("PRAGMA journal_mode = WAL; CREATE TABLE entries(name TEXT NOT NULL)");
+    seed.close();
+    const failed = Promise.withResolvers<never>();
+    const holder = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        guardChild(
+          NodeChildProcess.spawn(
+            process.execPath,
+            [
+              "-e",
+              `
+          const db = new (require("node:sqlite").DatabaseSync)(process.argv[1]);
+          db.exec("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE");
+          process.stdout.write("held\\n");
+          process.stdin.once("data", () => { db.close(); process.exit(0); });
+        `,
+              filename,
+            ],
+            { stdio: ["pipe", "pipe", "pipe"] },
+          ),
+          (error) => failed.reject(error),
+        ),
+      ),
+      (child) =>
+        Effect.sync(() => {
+          child.stdin.end();
+          child.kill();
+        }),
+    );
+    yield* Effect.promise(() =>
+      Promise.race([
+        new Promise<void>((resolve, reject) => {
+          holder.stdout.once("data", () => resolve());
+          holder.once("exit", (code) =>
+            reject(new Error(`lock holder exited before ready: ${code}`)),
+          );
+        }),
+        failed.promise,
+      ]),
+    );
+    const original = NodeSqlite.DatabaseSync.prototype.prepare;
+    using _probe = vi
+      .spyOn(NodeSqlite.DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: NodeSqlite.DatabaseSync, query) {
+        if (query === "SELECT sqlite_version() AS version") {
+          assert.equal(Number(original.call(this, "PRAGMA busy_timeout").get()?.timeout), 5000);
+          holder.stdin.write("release\n");
+        }
+        return original.call(this, query);
+      });
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepEqual(yield* sql`SELECT COUNT(*) FROM entries`.values, [[0]]);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect("keeps another connection from committing between a transaction's read and write", () =>
   Effect.gen(function* () {
@@ -456,6 +545,8 @@ const workerRecovery = vi.hoisted(() => ({
         point: "statement" | "initialize";
         codes: Array<number>;
         repeat?: boolean;
+        // Each reader slot's worker injects the codes on its own.
+        expected?: number;
       }
     | undefined,
   onFailure: undefined as ((errcode: number) => void) | undefined,
@@ -472,9 +563,8 @@ const withWorkerRecovery = <A, E, R>(
 ) =>
   Effect.suspend(() => {
     const failures: Array<number> = [];
-    const milestones = Array.from({ length: config.repeat ? 501 : config.codes.length }, () =>
-      Deferred.makeUnsafe<void>(),
-    );
+    const length = config.repeat ? 501 : (config.expected ?? config.codes.length);
+    const milestones = Array.from({ length }, () => Deferred.makeUnsafe<void>());
     return Effect.acquireUseRelease(
       Effect.sync(() => {
         workerRecovery.config = config;
@@ -535,26 +625,22 @@ it.effect("waits for reader statement recovery with each request's result mode",
   }),
 );
 
-it.effect("serializes a reader's recovery wait against another transaction and result mode", () =>
+it.effect("a slot's recovery wait does not hold back a read on another slot", () =>
   withWorkerRecovery({ point: "statement", codes: [261] }, (_, attempted) =>
     withReaderClient((sql) =>
       Effect.gen(function* () {
-        const select = sql`SELECT 42 AS recovery_value`;
-        const entered = yield* Deferred.make<void>();
-        const values = yield* select.values.pipe(SqliteClient.readOnly, Effect.forkChild);
+        const values = yield* sql`SELECT 42 AS recovery_value`.values.pipe(
+          SqliteClient.readOnly,
+          Effect.forkChild,
+        );
         yield* attempted();
-        const transaction = yield* sql
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(entered, undefined);
-              return yield* select;
-            }),
-          )
-          .pipe(SqliteClient.readOnly, Effect.forkChild({ startImmediately: true }));
-        assert.equal(yield* Deferred.isDone(entered), false);
+        // The clock has not advanced, so this completes only on a slot the recovery wait does not hold.
+        const other = yield* sql
+          .withTransaction(sql<{ readonly value: number }>`SELECT 7 AS value`)
+          .pipe(SqliteClient.readOnly);
+        assert.deepEqual(other, [{ value: 7 }]);
         yield* TestClock.adjust("10 millis");
         assert.deepEqual(yield* Fiber.join(values), [[42]]);
-        assert.deepEqual(yield* Fiber.join(transaction), [{ recovery_value: 42 }]);
       }),
     ),
   ),
@@ -641,47 +727,53 @@ it.effect("stops reader recovery retry on a changed error and never retries othe
 
 it.effect("releases reader requests and connection permits when recovery is interrupted", () =>
   withWorkerRecovery({ point: "statement", codes: [261] }, (_, attempted) =>
-    withReaderClient((sql) =>
-      Effect.gen(function* () {
-        const select = sql`SELECT 42 AS recovery_value`;
-        const values = yield* sql
-          .withTransaction(select.values)
-          .pipe(SqliteClient.readOnly, Effect.forkChild);
-        yield* attempted();
-        const waiter = yield* select.pipe(
-          SqliteClient.readOnly,
-          Effect.forkChild({ startImmediately: true }),
-        );
-        yield* Fiber.interrupt(waiter);
-        yield* Fiber.interrupt(values);
-        workerRecovery.config = undefined;
-        yield* TestClock.adjust("250 millis");
-        assert.deepEqual(yield* select.pipe(SqliteClient.readOnly), [{ recovery_value: 42 }]);
-        assert.deepEqual(yield* sql.withTransaction(select).pipe(SqliteClient.readOnly), [
-          { recovery_value: 42 },
-        ]);
-      }),
+    withReaderClient(
+      (sql) =>
+        Effect.gen(function* () {
+          const select = sql`SELECT 42 AS recovery_value`;
+          const values = yield* sql
+            .withTransaction(select.values)
+            .pipe(SqliteClient.readOnly, Effect.forkChild);
+          yield* attempted();
+          const waiter = yield* select.pipe(
+            SqliteClient.readOnly,
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* Fiber.interrupt(waiter);
+          yield* Fiber.interrupt(values);
+          workerRecovery.config = undefined;
+          yield* TestClock.adjust("250 millis");
+          assert.deepEqual(yield* select.pipe(SqliteClient.readOnly), [{ recovery_value: 42 }]);
+          assert.deepEqual(yield* sql.withTransaction(select).pipe(SqliteClient.readOnly), [
+            { recovery_value: 42 },
+          ]);
+        }),
+      // One slot queues the waiter behind the transaction that is in recovery.
+      { readerPoolSize: 1 },
     ),
   ),
 );
 
-it.effect("keeps concurrent reader acquires on one startup through WAL recovery", () => {
+it.effect("recovers startup once on each concurrently started reader slot", () => {
   const { warnings, layer: logs } = captureWarnings();
-  return withWorkerRecovery({ point: "initialize", codes: [261] }, (failures, attempted) =>
+  const config = { point: "initialize" as const, codes: [261], expected: 2 };
+  return withWorkerRecovery(config, (failures, attempted) =>
     withReaderClient((sql) =>
       Effect.gen(function* () {
         const before = startedWorkers.length;
         const first = yield* countEntries(sql).pipe(SqliteClient.readOnly, Effect.forkChild);
         yield* attempted();
+        // The first slot is still starting, so the second read starts the next slot.
         const second = yield* countEntries(sql).pipe(
           SqliteClient.readOnly,
           Effect.forkChild({ startImmediately: true }),
         );
+        yield* attempted(1);
         yield* TestClock.adjust("10 millis");
         assert.equal(yield* Fiber.join(first), 1);
         assert.equal(yield* Fiber.join(second), 1);
-        assert.deepEqual(failures, [261]);
-        assert.equal(startedWorkers.length, before + 1);
+        assert.deepEqual(failures, [261, 261]);
+        assert.equal(startedWorkers.length, before + 2);
         const error = yield* sql`INSERT INTO entries VALUES ('forbidden')`.pipe(
           SqliteClient.readOnly,
           Effect.flip,
@@ -1022,38 +1114,6 @@ it.effect("does not retry a stale WAL snapshot or unrelated SQLite errors", () =
       );
     }
   }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))),
-);
-
-it.effect("serializes reader requests through their replies without leaking values mode", () =>
-  withReaderClient((sql) =>
-    Effect.gen(function* () {
-      // Finish startup before holding requests at the worker transport boundary.
-      yield* countEntries(sql).pipe(SqliteClient.readOnly);
-      const worker = startedWorkers[startedWorkers.length - 1]!;
-      const send = worker.postMessage.bind(worker);
-      const requests: Array<() => void> = [];
-      const postMessage = vi.spyOn(worker, "postMessage").mockImplementation((...args) => {
-        requests.push(() => send(...args));
-      });
-      yield* Effect.gen(function* () {
-        const select = sql`SELECT name FROM entries`;
-        const values = yield* Effect.forkChild(select.values.pipe(SqliteClient.readOnly), {
-          startImmediately: true,
-        });
-        const objects = yield* Effect.forkChild(select.pipe(SqliteClient.readOnly), {
-          startImmediately: true,
-        });
-        // A pending reply holds the connection so a retry cannot be overtaken
-        // by another request or a transaction on the same worker.
-        assert.lengthOf(requests, 1);
-        postMessage.mockRestore();
-        for (const request of requests) request();
-        assert.deepEqual(yield* Fiber.join(values), [["first"]]);
-        assert.deepEqual(yield* Fiber.join(objects), [{ name: "first" }]);
-        assert.deepEqual(yield* select.pipe(SqliteClient.readOnly), [{ name: "first" }]);
-      }).pipe(Effect.ensuring(Effect.sync(() => postMessage.mockRestore())));
-    }),
-  ),
 );
 
 it.effect("recovers checkpoint worker startup before handing checkpoints off", () => {

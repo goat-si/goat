@@ -15,11 +15,13 @@ import {
 } from "./browserClaims.ts";
 
 export const BROWSER_CLAIMS_WS_METHODS = {
+  browserClaimsWindows: "browserClaims.windows",
   browserClaimsClaim: "browserClaims.claim",
   browserClaimsAnswer: "browserClaims.answer",
   browserClaimsRevoke: "browserClaims.revoke",
   browserClaimsEnd: "browserClaims.end",
   browserClaimsList: "browserClaims.list",
+  browserClaimsSubscribe: "browserClaims.subscribe",
 } as const;
 
 export class BrowserClaimsRpcError extends Schema.TaggedError<BrowserClaimsRpcError>()(
@@ -28,7 +30,10 @@ export class BrowserClaimsRpcError extends Schema.TaggedError<BrowserClaimsRpcEr
 ) {}
 const errors = Schema.Union([BrowserClaimsRpcError, EnvironmentAuthorizationError]);
 export const BrowserClaimsPersonSnapshot = Schema.Struct({
-  claims: Schema.Array(LiveTabClaim),
+  supported: Schema.optionalKey(Schema.Boolean),
+  claims: Schema.Array(
+    Schema.Struct({ ...LiveTabClaim.fields, windowTitle: Schema.optionalKey(Schema.String) }),
+  ),
   grants: Schema.Array(BrowserOriginGrant),
   pending: Schema.Array(
     Schema.Struct({
@@ -46,7 +51,29 @@ const answer = Schema.Struct({
   agentResult: BrowserClaimResult,
   personMessage: Schema.optionalKey(Schema.String),
 });
+export const BrowserClaimWindows = Schema.Struct({
+  windows: Schema.Array(
+    Schema.Struct({
+      pid: PositiveInt,
+      windowId: PositiveInt,
+      title: Schema.String,
+      app: Schema.String,
+    }),
+  ),
+  refused: Schema.Array(
+    Schema.Struct({
+      pid: PositiveInt,
+      app: Schema.String,
+      reason: Schema.Literals(["browser_process_protected", "outside_manifest"]),
+    }),
+  ),
+});
 export const BrowserClaimsRpcs = RpcGroup.make(
+  Rpc.make(BROWSER_CLAIMS_WS_METHODS.browserClaimsWindows, {
+    payload: Schema.Struct({}),
+    success: BrowserClaimWindows,
+    error: errors,
+  }),
   Rpc.make(BROWSER_CLAIMS_WS_METHODS.browserClaimsClaim, {
     payload: BrowserClaimRequestInput,
     success: answer,
@@ -71,5 +98,11 @@ export const BrowserClaimsRpcs = RpcGroup.make(
     payload: Schema.Struct({}),
     success: BrowserClaimsPersonSnapshot,
     error: errors,
+  }),
+  Rpc.make(BROWSER_CLAIMS_WS_METHODS.browserClaimsSubscribe, {
+    payload: Schema.Struct({}),
+    success: BrowserClaimsPersonSnapshot,
+    error: errors,
+    stream: true,
   }),
 );

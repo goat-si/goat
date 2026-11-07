@@ -16,7 +16,8 @@ and modes you choose in a draft keep their permissions.
 | **Full access**       | Allows commands and edits without approval prompts.                                   |
 
 Approve or reject requests in the conversation to let the agent continue. Permission modes do
-not prevent the agent from asking questions about the task.
+not prevent the agent from asking questions about the task. Subagent approval requests appear in
+the parent conversation with the subagent's name, so you can respond without switching threads.
 
 ## Provider differences
 

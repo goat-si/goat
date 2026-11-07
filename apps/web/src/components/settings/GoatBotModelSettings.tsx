@@ -97,6 +97,20 @@ function GoatBotModelRow({ environmentId }: { environmentId: EnvironmentId }) {
         status={message ? <span role="alert">{message}</span> : undefined}
       />
       <SettingsRow
+        {...searchableSetting("goat-bot-session-routing")}
+        description="Use the bot session to understand and answer messages. Turn off to use reception first."
+        control={
+          <Switch
+            aria-label="Answer with the bot session"
+            checked={settings.goatBotSessionRouting === "session"}
+            disabled={!allowed}
+            onCheckedChange={(checked) =>
+              save({ goatBotSessionRouting: checked ? "session" : "reception" })
+            }
+          />
+        }
+      />
+      <SettingsRow
         {...searchableSetting("channel-auto-placement")}
         description="Let channel workers use connected SSH computers with the same repository and requested model, based on quota and active work. Worker instructions, notes and named skills go to the selected computer. Off keeps unnamed work here."
         control={

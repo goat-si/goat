@@ -7,6 +7,8 @@ import {
   NoteConflictError,
   NoteDocument,
   NoteError,
+  NotesAttachInput,
+  NotesAttachResult,
   NotesDeleteInput,
   NotesDeleteResult,
   NotesEvent,
@@ -36,6 +38,7 @@ export const NOTES_WS_METHODS = {
   notesStartWork: "notes.startWork",
   notesWorkTargets: "notes.workTargets",
   notesWorkTargetProjects: "notes.workTargetProjects",
+  notesAttach: "notes.attach",
 } as const;
 
 const NoteRpcErrors = Schema.Union([NoteError, NoteConflictError, EnvironmentAuthorizationError]);
@@ -91,6 +94,11 @@ const WsNotesWorkTargetProjectsRpc = Rpc.make(NOTES_WS_METHODS.notesWorkTargetPr
   success: NotesWorkTargetProjectsResult,
   error: NoteRpcErrors,
 });
+const WsNotesAttachRpc = Rpc.make(NOTES_WS_METHODS.notesAttach, {
+  payload: NotesAttachInput,
+  success: NotesAttachResult,
+  error: NoteRpcErrors,
+});
 
 /** rpc.ts adds scope authorization, which lives there, when it publishes WsNotesRpcGroup. */
 export const NotesRpcs = RpcGroup.make(
@@ -104,4 +112,5 @@ export const NotesRpcs = RpcGroup.make(
   WsNotesStartWorkRpc,
   WsNotesWorkTargetsRpc,
   WsNotesWorkTargetProjectsRpc,
+  WsNotesAttachRpc,
 );

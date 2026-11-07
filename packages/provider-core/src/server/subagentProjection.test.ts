@@ -2,7 +2,14 @@ import { expect, it } from "@effect/vitest";
 import { NodeId, OrchestrationV2AppThread, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
-import { makeSubagentChildThread } from "./subagentProjection.ts";
+import { makeSubagentChildThread, subagentThreadTitle } from "./subagentProjection.ts";
+
+it("clips a long prompt without splitting a surrogate pair", () => {
+  const title = (prompt: string) =>
+    subagentThreadTitle({ parentTitle: "Parent", prompt, ordinal: 1 });
+  expect(title(`${"a".repeat(68)}😀 and more work.`)).toBe(`${"a".repeat(68)}...`);
+  expect(title(`${"a".repeat(67)}😀 and more work.`)).toBe(`${"a".repeat(67)}😀...`);
+});
 
 const decodeAppThread = Schema.decodeUnknownSync(OrchestrationV2AppThread);
 

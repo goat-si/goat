@@ -85,11 +85,15 @@ export function parseComposerContextHref(
 }
 
 export function sanitizeComposerContextLabel(label: string, kind: ComposerContextKind): string {
-  const cleaned = label
+  const normalized = label
     .replace(/[[\]\\\r\n]/g, " ")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, COMPOSER_CONTEXT_LABEL_MAX_CHARS);
+    .trim();
+  let end = COMPOSER_CONTEXT_LABEL_MAX_CHARS;
+  const before = normalized.charCodeAt(end - 1);
+  const after = normalized.charCodeAt(end);
+  if (before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff) end--;
+  const cleaned = normalized.slice(0, end);
   return cleaned.length > 0 ? cleaned : kind;
 }
 
@@ -141,6 +145,24 @@ export const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
 /** Claude's ultrathink effort sends the prompt as `Ultrathink:\n<prompt>`. */
 export function isAttachmentOnlyBootstrapPrompt(text: string): boolean {
   return text.replace(/^Ultrathink:\s*/i, "") === ATTACHMENT_ONLY_BOOTSTRAP_PROMPT;
+}
+
+export function stripAttachmentOnlyBootstrapPrompt(text: string): string {
+  return isAttachmentOnlyBootstrapPrompt(text)
+    ? text.slice(0, -ATTACHMENT_ONLY_BOOTSTRAP_PROMPT.length).trimEnd()
+    : text;
+}
+
+export function restoreAttachmentOnlyBootstrapPrompt(
+  text: string,
+  hasAttachments: boolean,
+): string {
+  if (!hasAttachments) return text;
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return ATTACHMENT_ONLY_BOOTSTRAP_PROMPT;
+  return /^Ultrathink:\s*$/i.test(trimmed)
+    ? `Ultrathink:\n${ATTACHMENT_ONLY_BOOTSTRAP_PROMPT}`
+    : text;
 }
 
 export function isImageReferencesOnly(text: string): boolean {
@@ -238,18 +260,23 @@ function formatElementDetails(element: ElementContextDetails): string[] {
  * attached, or not, by the same gates as every other turn, so the note says what to do when
  * they are missing instead of leaving the request silently unmet.
  */
+const WEB_PAGE_ROUTING =
+  "Web pages, even in a browser the user names such as Chrome, go through GOAT's browser: screen.tab() or screen.openTab() in goat_screen_run, or the GOAT preview tools. screen.app() is for native apps and a browser's own dialogs, never for page content.";
+
 function turnCapabilityProviderNote(capability: TurnCapability): string {
   switch (capability) {
     case "computer-use":
       return [
         "capability: computer-use",
         "The user asked you to use computer use for this turn: see and operate apps on this computer with the computer use tools, following the computer use guidance in your instructions.",
+        WEB_PAGE_ROUTING,
         `If those tools are not in your tool list, do not work around it with scripts or other input tools. Tell the user computer use is unavailable for this turn and that they can set it up in Settings > Computer, or ask for admission with ${goatCallText("computer_use.request")} when this thread runs unattended.`,
       ].join("\n");
     case "browser":
       return [
         "capability: browser",
-        "The user asked you to use GOAT's built-in browser for this turn: open, read and operate web pages with the GOAT preview tools so the user can watch the page in the preview.",
+        "The user asked you to use GOAT's built-in browser for this turn: open, read and operate web pages in it so the user can watch the page in the preview.",
+        WEB_PAGE_ROUTING,
         "If the preview tools are not in your tool list, tell the user the built-in browser is unavailable for this turn instead of using another browser.",
       ].join("\n");
   }
@@ -266,9 +293,10 @@ function formatComposerContextProviderPayload(record: KnownComposerContextRecord
         `attachmentId: ${record.attachmentId}`,
       ].join("\n");
     case "terminal": {
+      const lineCount = Math.max(0, record.lineEnd - record.lineStart + 1);
       const lines = record.text
         .split("\n")
-        .slice(0, record.lineEnd - record.lineStart + 1)
+        .slice(0, lineCount)
         .map((line, index) => `${record.lineStart + index} | ${line}`);
       return [`terminal: ${record.terminalLabel}`, ...lines].join("\n");
     }
@@ -301,7 +329,7 @@ function formatComposerContextProviderPayload(record: KnownComposerContextRecord
       ];
       if (record.text.trim()) lines.push("comment:", indent(record.text.trim()));
       if (record.diff.trim()) {
-        lines.push(`${record.fenceLanguage ?? "diff"}:`, indent(record.diff.trimEnd()));
+        lines.push(`${record.fenceLanguage ?? "diff"}:`, indent(record.diff.replace(/\n+$/, "")));
       }
       return lines.join("\n");
     }

@@ -17,7 +17,8 @@ import {
   type SourceControlCliDiscoverySpec,
   type SourceControlManagedCliDiscoverySpec,
 } from "@goat/source-control-core/server/discovery";
-import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
+import { randomUuidV4 } from "@goat/shared/randomUuid";
+import { isSshRemoteUrl } from "@goat/shared/sourceControl";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import { parsePullRequestUrl } from "../shared/definition.ts";
@@ -115,6 +116,22 @@ export const makeDiscovery = Effect.gen(function* () {
             process: { run: (input) => process.run({ ...input, env: { ...input.env, ...env } }) },
           }),
         ),
+        Effect.catch(() =>
+          probeSourceControlProvider({
+            cwd,
+            process,
+            spec: {
+              ...cliDiscovery,
+              authArgs: ["--version"],
+              parseAuth: () =>
+                providerAuth({
+                  status: "unknown",
+                  host: AUTH_HOST,
+                  detail: "Could not read saved credential.",
+                }),
+            },
+          }),
+        ),
       ),
     refineUnknownRemote: () => Effect.succeed(null),
   } satisfies SourceControlManagedCliDiscoverySpec;
@@ -165,7 +182,7 @@ const cloneUrls = (target: Target) => ({
 });
 
 const isSshRemote = (remoteUrl: string | undefined) =>
-  remoteUrl !== undefined && (/^ssh:\/\//iu.test(remoteUrl) || /^[^/:]+@[^/:]+:/u.test(remoteUrl));
+  remoteUrl !== undefined && isSshRemoteUrl(remoteUrl);
 
 export const make = Effect.gen(function* () {
   const api = yield* GitCafeApi.GitCafeApi;

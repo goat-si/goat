@@ -1,9 +1,6 @@
 import * as Schema from "effect/Schema";
 import { ComputerUseLeaseCallOutcome } from "./computerUseLeaseHistory.ts";
 export { ComputerUseLeaseCallOutcome } from "./computerUseLeaseHistory.ts";
-import * as SchemaAST from "effect/SchemaAST";
-import * as SchemaParser from "effect/SchemaParser";
-import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import {
   ForwardCompatibleOptional,
@@ -416,6 +413,9 @@ export const DesktopCuaDriverReport = Schema.Union([
     type: Schema.Literal("cuaDriverReport"),
     requestId: TrimmedNonEmptyString,
     status: Schema.Literal("ready"),
+    hostGeneration: Schema.optionalKey(
+      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+    ),
     mcp: CuaDriverMcpConfiguration,
   }),
   Schema.Struct({
@@ -423,6 +423,9 @@ export const DesktopCuaDriverReport = Schema.Union([
     type: Schema.Literal("cuaDriverReport"),
     requestId: TrimmedNonEmptyString,
     status: Schema.Literals(["stopped", "unavailable"]),
+    hostGeneration: Schema.optionalKey(
+      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+    ),
     message: Schema.optionalKey(Schema.String),
     /** Set when the reason is one of the typed ones; older desktops send only the message. */
     block: ForwardCompatibleOptional(CuaAgentBlock),
@@ -722,6 +725,7 @@ export const ComputerUseRefusalDetail = Schema.Literals([
    * permission_denied, as for a missing macOS grant; no grant the person gives changes it.
    */
   "outside_manifest",
+  "blocked_url",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 
@@ -757,78 +761,7 @@ export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
 export const COMPUTER_USE_PRIMITIVE_REPLY_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-replies`;
 export const COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-control-ready`;
 export const COMPUTER_USE_PRIMITIVE_CONTROL_CUTOFF_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-control-cutoff`;
-const ComputerUseCallOwner = {
-  controlId: TrimmedNonEmptyString,
-  connectionId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
-};
-
-// Validation carries only ticket identity; replacement call authority is never accepted.
-const ticketValidation = Schema.Struct({
-  ...ComputerUseCallOwner,
-  action: Schema.Literal("validate"),
-  reservationId: TrimmedNonEmptyString,
-});
-const strictTicketValidation = Schema.declareConstructor<
-  typeof ticketValidation.Type,
-  typeof ticketValidation.Encoded
->()(
-  [ticketValidation],
-  ([codec]) => {
-    const decode = SchemaParser.decodeUnknownEffect(codec);
-    return (input, _ast, options) => decode(input, { ...options, onExcessProperty: "error" });
-  },
-  {
-    toCodec: ([codec]) => new SchemaAST.Link(codec.ast, SchemaTransformation.passthrough()),
-    toCodecJson: () => undefined,
-  },
-);
-
-/**
- * The app a call's pid runs as the driver's answers named it, so the timeline can show that
- * app's name and icon. Display only: scope checks never read it.
- */
-export const ComputerUseCallAppLabel = Schema.Struct({
-  bundleId: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
-  name: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
-});
-export type ComputerUseCallAppLabel = typeof ComputerUseCallAppLabel.Type;
-
-/** A proxy reserves execution before dispatch, and closes a driver generation after cutoff. */
-export const ComputerUseCallReservation = Schema.Union([
-  Schema.Struct({
-    ...ComputerUseCallOwner,
-    action: Schema.Literal("reserve"),
-    callId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
-    interruptions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-    idleEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-    name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
-    args: Schema.Unknown,
-    foregroundGrantId: Schema.optionalKey(TurnItemId),
-    /** The app the proxy judged this call to act on, by the id its scope check uses (#1484). */
-    app: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(500))),
-    safetyApps: Schema.optionalKey(
-      Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(500))).check(
-        Schema.isMaxLength(100),
-      ),
-    ),
-    appLabel: Schema.optionalKey(ComputerUseCallAppLabel),
-  }),
-  strictTicketValidation,
-  Schema.Struct({
-    ...ComputerUseCallOwner,
-    action: Schema.Literal("release"),
-    reservationId: TrimmedNonEmptyString,
-    /**
-     * The driver answered this call. A driver runs one connection's calls in order, so every
-     * earlier call of that connection has ended too (D17).
-     */
-    completed: Schema.optionalKey(Schema.Boolean),
-    /** Nothing of this call reached the app: GOAT or the driver refused it (D17 app lease). */
-    notSent: Schema.optionalKey(Schema.Boolean),
-  }),
-  Schema.Struct({ ...ComputerUseCallOwner, action: Schema.Literal("close") }),
-]);
-export type ComputerUseCallReservation = typeof ComputerUseCallReservation.Type;
+export { ComputerUseCallAppLabel, ComputerUseCallReservation } from "./cuaCallReservation.ts";
 
 export const ComputerUseCallAdmission = Schema.Union([
   Schema.Struct({

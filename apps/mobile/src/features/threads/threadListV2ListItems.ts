@@ -44,6 +44,11 @@ export interface ThreadListV2PriorityHeaderListItem {
   readonly foldedUnseen: ReadonlyArray<ThreadListV2FoldedUnseen>;
 }
 
+export interface ThreadListV2ThreadsHeaderListItem {
+  readonly type: "v2-threads-header";
+  readonly key: "v2-threads-header";
+}
+
 export interface ThreadListV2WorkingShelfListItem {
   readonly type: "v2-working-shelf";
   readonly key: "v2-working-shelf";
@@ -92,6 +97,7 @@ export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2PriorityHeaderListItem
+  | ThreadListV2ThreadsHeaderListItem
   | ThreadListV2WorkingShelfListItem
   | ThreadListV2SnoozedShelfListItem
   | ThreadListV2SettledShelfListItem
@@ -105,6 +111,7 @@ export function isThreadListV2ListItem(value: {
     value.type === "v2-thread" ||
     value.type === "v2-pending" ||
     value.type === "v2-priority-header" ||
+    value.type === "v2-threads-header" ||
     value.type === "v2-working-shelf" ||
     value.type === "v2-snoozed-shelf" ||
     value.type === "v2-settled-shelf" ||
@@ -163,6 +170,8 @@ export function threadListV2ListItemsAreEqual(
             entry.rowKey === item.foldedUnseen[index]?.rowKey,
         )
       );
+    case "v2-threads-header":
+      return previous.type === "v2-threads-header";
     case "v2-working-shelf":
       return (
         previous.type === "v2-working-shelf" &&
@@ -335,7 +344,11 @@ export function buildThreadListV2ListItems(input: {
     });
     result.push(...threadItems.slice(0, priorityCount).flat());
   }
-  result.push(...pendingItems, ...threadItems.slice(priorityCount, activeEnd).flat());
+  const activeRows = threadItems.slice(priorityCount, activeEnd).flat();
+  if (priorityCount > 0 && (pendingItems.length > 0 || activeRows.length > 0)) {
+    result.push({ type: "v2-threads-header", key: "v2-threads-header" });
+  }
+  result.push(...pendingItems, ...activeRows);
   const shelfDisabled = input.shelfPreferencesLoading === true;
   if (workingShelfHeaderIndex !== null && workingCount > 0) {
     result.push({

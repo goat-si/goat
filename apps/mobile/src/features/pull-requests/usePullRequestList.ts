@@ -17,10 +17,11 @@ import {
   nextPullRequestListInput,
   pullRequestListHead,
   patchPullRequestListEntry,
-  pullRequestStatKey as statKey,
+  pullRequestStatOf,
   withShownPullRequestStats,
   retainPullRequestStatsAnswers,
   scopedPullRequestListKey,
+  pullRequestListErrorMessages,
   type EnvironmentPullRequestListEntry,
 } from "./pullRequestList";
 
@@ -50,7 +51,10 @@ const sessionsFamily = Atom.family((scopeKey: string) =>
   ),
 );
 
-export function usePullRequestList(targets: readonly ListTarget[]) {
+export function usePullRequestList(
+  targets: readonly ListTarget[],
+  environmentLabels: ReadonlyMap<EnvironmentId, string>,
+) {
   const registry = use(RegistryContext);
   const scopeKey = JSON.stringify(targets);
   const activeScope = useRef(scopeKey);
@@ -201,7 +205,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
                   pages: {
                     ...pages,
                     entries: pages.entries.map((entry) => {
-                      const stat = stats.stats.get(statKey(entry));
+                      const stat = pullRequestStatOf(stats.stats, entry);
                       return stat
                         ? { ...entry, additions: stat.additions, deletions: stat.deletions }
                         : entry;
@@ -311,11 +315,25 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
       sources.flatMap(({ target, result }) => {
         if (result._tag !== "Failure") return [];
         const cause = Cause.squash(result.cause);
+        const unreachable =
+          typeof cause === "object" &&
+          cause !== null &&
+          "_tag" in cause &&
+          (cause._tag === "EnvironmentRpcUnavailableError" ||
+            (cause._tag === "ConnectionTransientError" &&
+              "reason" in cause &&
+              (cause.reason === "network" ||
+                cause.reason === "timeout" ||
+                cause.reason === "transport" ||
+                cause.reason === "endpoint-unavailable" ||
+                cause.reason === "relay-unavailable" ||
+                cause.reason === "host-unreachable")));
         return [
           {
             environmentId: target.environmentId,
             projectTitle: "",
             message: cause instanceof Error ? cause.message : "Couldn't load pull requests.",
+            ...(unreachable ? { unreachable: true as const } : {}),
           },
         ];
       }),
@@ -328,7 +346,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
   return {
     data: listing,
     entries,
-    error: errors.map((error) => error.message).join("\n") || null,
+    error: pullRequestListErrorMessages(errors, environmentLabels, false).join("\n") || null,
     isPending: sources.some(({ result }) => result.waiting) && !data.entries.length,
     continued: data.continued,
     loadMore,

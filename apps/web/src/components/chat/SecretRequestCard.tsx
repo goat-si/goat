@@ -5,6 +5,7 @@ import {
   secretRequestDisplay,
   secretRequestFailureMessage,
   secretRequestPrivacyNote,
+  secretRequestProviders,
   type SecretRequestItem,
 } from "@goat/client-runtime/secret-request";
 import {
@@ -20,6 +21,15 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { WorkLogRow } from "./WorkLog";
+
+const EMPTY_CARD = { number: "", expiryMonth: "", expiryYear: "", cvc: "", name: "" };
+const CARD_FIELDS = [
+  ["number", "Card number"],
+  ["expiryMonth", "Expiry month"],
+  ["expiryYear", "Expiry year"],
+  ["cvc", "CVC"],
+  ["name", "Name on card"],
+] as const;
 
 export function SecretRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -74,6 +84,8 @@ function PendingSecretRequestForm(props: {
     }
   };
   const inputId = useId();
+  const passwordId = useId();
+  const setupKeyId = useId();
   const errorId = useId();
   const privacyId = useId();
   const answer = useAtomCommand(serverEnvironment.answerSecretRequest, {
@@ -82,15 +94,26 @@ function PendingSecretRequestForm(props: {
     reportFailure: false,
     reportDefect: false,
   });
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const providers = config?.secretRequestReferences
+    ? secretRequestProviders(settings?.secretProviders)
+    : [];
+  const [providerId, setProviderId] = useState("");
+  const selectedProvider = providers.find((provider) => provider.id === providerId);
   const [secret, setSecret] = useState("");
+  const [username, setUsername] = useState("");
+  const [setupKey, setSetupKey] = useState("");
+  const [cardValues, setCardValues] = useState(EMPTY_CARD);
+  const login = item.requestKind === "login";
+  const card = item.requestKind === "card";
+  const cardReply = { type: "save_card" as const, ...cardValues };
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Enter and click can both submit before a render.
   const inFlight = useRef(false);
 
-  const send = async (
-    reply: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
-  ) => {
+  const send = async (reply: Parameters<typeof secretRequestAnswerInput>[1]) => {
     const input = secretRequestAnswerInput(item, reply);
     if (input === null || inFlight.current) return;
     inFlight.current = true;
@@ -102,6 +125,9 @@ function PendingSecretRequestForm(props: {
     });
     if (result._tag === "Success") {
       setSecret("");
+      setUsername("");
+      setSetupKey("");
+      setCardValues(EMPTY_CARD);
       return;
     }
     if (!isAtomCommandInterrupted(result)) {
@@ -111,7 +137,15 @@ function PendingSecretRequestForm(props: {
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void send({ type: "save", secret });
+    void send(
+      card
+        ? cardReply
+        : login
+          ? { type: "save_login", username, password: secret, authenticatorSetupKey: setupKey }
+          : selectedProvider
+            ? { type: "reference", reference: { provider: selectedProvider.id, reference: secret } }
+            : { type: "save", secret },
+    );
   };
 
   return (
@@ -126,24 +160,87 @@ function PendingSecretRequestForm(props: {
       // leaves it alone so the reason can still be copied.
       onClick={(event) => {
         if (!(event.target instanceof Element)) return;
-        if (event.target.closest("input, button, a")) return;
+        if (event.target.closest("input, button, a, select, option")) return;
         if (window.getSelection()?.isCollapsed === false) return;
         document.getElementById(inputId)?.focus();
       }}
     >
       <div className="flex min-w-0 flex-col gap-1">
-        <label htmlFor={inputId} className="text-sm font-medium text-foreground">
-          {item.label}
-        </label>
+        {login || card ? (
+          <div className="text-sm font-medium text-foreground">{item.label}</div>
+        ) : (
+          <label htmlFor={inputId} className="text-sm font-medium text-foreground">
+            {item.label}
+          </label>
+        )}
         {item.reason.trim() ? <p className="text-sm text-muted-foreground">{item.reason}</p> : null}
       </div>
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1">
+      {!login && !card && providers.length > 0 ? (
+        <label>
+          Secret source
+          <select
+            aria-label="Secret source"
+            value={providerId}
+            onChange={(event) => {
+              setProviderId(event.currentTarget.value);
+              setSecret("");
+            }}
+            disabled={!canAnswer || submitting}
+          >
+            <option value="">Enter value</option>
+            {providers.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {card ? (
+        <div className="flex min-w-0 flex-col gap-2">
+          {CARD_FIELDS.map(([key, label]) => {
+            const id = key === "number" ? inputId : `${inputId}-${key}`;
+            return (
+              <div key={key} className="flex min-w-0 flex-col gap-1">
+                <label htmlFor={id} className="text-sm text-foreground">
+                  {label}
+                </label>
+                <Input
+                  id={id}
+                  type={key === "cvc" ? "password" : "text"}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  data-1p-ignore
+                  data-lpignore="true"
+                  data-bwignore
+                  value={cardValues[key]}
+                  disabled={!canAnswer || submitting}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setCardValues((previous) => ({ ...previous, [key]: value }));
+                  }}
+                />
+              </div>
+            );
+          })}
+          <Button
+            type="submit"
+            disabled={
+              !canAnswer || submitting || secretRequestAnswerInput(item, cardReply) === null
+            }
+          >
+            Save securely
+          </Button>
+        </div>
+      ) : login ? (
+        <div className="flex min-w-0 flex-col gap-2">
+          <label htmlFor={inputId} className="text-sm text-foreground">
+            Username
+          </label>
           <Input
             id={inputId}
-            // Password fields prompt to save credentials; this secret is not a login.
-            type="text"
-            className="[-webkit-text-security:disc]"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -151,18 +248,97 @@ function PendingSecretRequestForm(props: {
             data-1p-ignore
             data-lpignore="true"
             data-bwignore
-            placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
+            value={username}
+            disabled={!canAnswer || submitting}
+            onChange={(event) => setUsername(event.currentTarget.value)}
+          />
+          <label htmlFor={passwordId} className="text-sm text-foreground">
+            Password
+          </label>
+          <Input
+            id={passwordId}
+            type="password"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore
             value={secret}
             disabled={!canAnswer || submitting}
             aria-invalid={error !== null || undefined}
             aria-describedby={error !== null ? `${privacyId} ${errorId}` : privacyId}
             onChange={(event) => setSecret(event.currentTarget.value)}
           />
+          <label htmlFor={setupKeyId} className="text-sm text-foreground">
+            Authenticator setup key (optional)
+          </label>
+          <Input
+            id={setupKeyId}
+            type="password"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore
+            value={setupKey}
+            disabled={!canAnswer || submitting}
+            onChange={(event) => setSetupKey(event.currentTarget.value)}
+          />
+          <Button
+            type="submit"
+            disabled={
+              !canAnswer || submitting || username.trim().length === 0 || secret.trim().length === 0
+            }
+          >
+            Save securely
+          </Button>
         </div>
-        <Button type="submit" disabled={!canAnswer || submitting || secret.trim().length === 0}>
-          Save securely
-        </Button>
-      </div>
+      ) : (
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <Input
+              id={inputId}
+              type="password"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              data-1p-ignore
+              data-lpignore="true"
+              data-bwignore
+              placeholder={
+                selectedProvider
+                  ? "op://vault/item/field"
+                  : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
+              }
+              value={secret}
+              disabled={!canAnswer || submitting}
+              aria-invalid={error !== null || undefined}
+              aria-describedby={error !== null ? `${privacyId} ${errorId}` : privacyId}
+              onChange={(event) => setSecret(event.currentTarget.value)}
+            />
+          </div>
+          <Button
+            type="submit"
+            disabled={
+              !canAnswer ||
+              submitting ||
+              (selectedProvider
+                ? secretRequestAnswerInput(item, {
+                    type: "reference",
+                    reference: { provider: selectedProvider.id, reference: secret },
+                  }) === null
+                : secret.trim().length === 0)
+            }
+          >
+            Save securely
+          </Button>
+        </div>
+      )}
       {error !== null ? (
         <p id={errorId} role="alert" className="text-xs text-destructive">
           {error}

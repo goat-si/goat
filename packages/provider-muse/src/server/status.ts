@@ -14,7 +14,9 @@ import {
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
-  isCommandMissingCause,
+  classifySpawnFailure,
+  safeProcessCwd,
+  spawnFailureMessage,
   providerModelsFromSettings,
   spawnAndCollect,
   type ProviderProbeResult,
@@ -70,6 +72,7 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
       slashCommands: [COMPACT_SLASH_COMMAND],
       probe,
     });
+  const spawnCwd = cwd ?? safeProcessCwd();
   const versionResult = yield* Effect.gen(function* () {
     const spawnCommand = yield* resolveSpawnCommand(settings.binaryPath, ["--version"], {
       env: museEnvironment,
@@ -79,13 +82,17 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         env: museEnvironment,
         shell: spawnCommand.shell,
-        ...(cwd ? { cwd } : {}),
+        ...(spawnCwd ? { cwd: spawnCwd } : {}),
       }),
     );
   }).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(versionResult)) {
-    const missing = isCommandMissingCause(versionResult.failure);
+    const failure = classifySpawnFailure(versionResult.failure, spawnCwd, undefined, {
+      binary: settings.binaryPath,
+      env: museEnvironment,
+    });
+    const missing = failure === "missing";
     return snapshot({
       installed: !missing,
       version: null,
@@ -93,7 +100,8 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
       auth: { status: "unknown" },
       message: missing
         ? "Muse Code CLI (`muse`) was not found. Install Muse Code and run `muse login` on this GOAT server host."
-        : "Failed to execute Muse Code CLI. Check its binary path on this GOAT server host.",
+        : (spawnFailureMessage(failure, spawnCwd, settings.binaryPath) ??
+          "Failed to execute Muse Code CLI. Check its binary path on this GOAT server host."),
     });
   }
   if (Option.isNone(versionResult.success)) {

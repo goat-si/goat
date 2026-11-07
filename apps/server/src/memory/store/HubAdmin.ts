@@ -1,4 +1,5 @@
 import * as M from "@goat/contracts";
+import { environmentIdFitsForgetRecords } from "../MemoryCheckpointBound.ts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -182,6 +183,8 @@ export const makeHubAdmin = (
     )
       return yield* new MemoryStoreConflict({ code: "identity_mismatch" });
     const old = yield* readHubMember(input.memorySpaceId, input.environmentId);
+    if (!old && !environmentIdFitsForgetRecords(input.environmentId))
+      return yield* new MemoryStoreConflict({ code: "payload_too_large" });
     const expectedAction =
       input.next === "revoked"
         ? "revokeMember"

@@ -13,8 +13,8 @@ import {
 const MAX_DOTS = 8;
 const DOT_CLASS: Record<LaunchChildState, string> = {
   working: "bg-info",
-  attention: "bg-amber-500 dark:bg-amber-300/90",
-  finished: "bg-emerald-500 dark:bg-emerald-300/90",
+  attention: "bg-warning",
+  finished: "bg-success",
 };
 const LINE_CLASS =
   "flex h-5.5 w-full min-w-0 items-center gap-1 rounded-md text-left text-xs text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";

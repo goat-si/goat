@@ -354,9 +354,6 @@ export function unreachableHostStatus(
   };
 }
 
-/** How long a status read waits before probing provider CLIs again. */
-export const HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS = 60_000;
-
 export function quotaRefreshDue(
   limits: ServerProviderUsageLimits | undefined,
   nowMs: number,
@@ -385,7 +382,6 @@ export function hostStatusQuotas(
   providers: ReadonlyArray<
     Pick<ServerProvider, "instanceId" | "driver" | "displayName" | "usageLimits">
   >,
-  refreshed: ReadonlySet<string>,
 ): Array<HostStatusQuota> {
   return providers.flatMap((provider) => {
     if (provider.usageLimits === undefined) return [];
@@ -396,7 +392,8 @@ export function hostStatusQuotas(
         driver: provider.driver,
         ...(provider.displayName === undefined ? {} : { displayName: provider.displayName }),
         limits: provider.usageLimits,
-        fromCache: !refreshed.has(provider.instanceId),
+        // Reads answer from the last provider reading and refresh in the background.
+        fromCache: true,
         ...(note === undefined ? {} : { note }),
       },
     ];

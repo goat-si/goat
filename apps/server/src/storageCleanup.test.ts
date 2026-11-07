@@ -1,72 +1,61 @@
-import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 // @effect-diagnostics nodeBuiltinImport:off - seeds another GOAT app's database the way its server writes it.
 import * as NodeSqlite from "node:sqlite";
 
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
-import * as Context from "effect/Context";
+
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import type * as Scope from "effect/Scope";
+
 import * as Stream from "effect/Stream";
 import { SCAN_CACHE_FILE_NAME } from "./usage/usageScanCache.ts";
 import { TestClock } from "effect/testing";
-import * as SqlClient from "effect/sql/SqlClient";
+
 import {
   DEFAULT_SERVER_SETTINGS,
-  ProjectId,
   RunId,
   RuntimeRequestId,
   ThreadId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
-  type WorktreeKeepWhen,
-  type StorageCleanupSettings,
-  type TerminalMetadataStreamEvent,
-  type TerminalSummary,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as ServerConfig from "./config.ts";
-import * as StorageCleanup from "./storageCleanup.ts";
+
 import * as AutomationHold from "./automationHold.ts";
-import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
-import * as GitManager from "./git/GitManager.ts";
-import * as Settings from "./serverSettings.ts";
-import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
-import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
-import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
-import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
-import * as TerminalManager from "./terminal/Manager.ts";
+
 import { CodexProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/CodexAdapterV2.ts";
-import { ServerActivation } from "./serverActivation.ts";
+
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import { storageCleanupActivityAt, storageCleanupThreadIdle } from "./storageCleanup.ts";
 import { storageCleanupPullRequestMerged } from "./storageCleanupPullRequest.ts";
 import { NOW_MS, DAY_MS, at, shell, allocatedBytes } from "./storageCleanup.testFixtures.ts";
+import {
+  LEGACY_WORKTREE_RULES,
+  cleanupFixture,
+  cleanupTestLayer,
+  pausedMeasurementFixture,
+  runCleanupTest,
+} from "./storageCleanup.testkit.ts";
 
 describe("V2 storage cleanup eligibility", () => {
   const candidate = () => shell({ branch: "feature", worktreePath: "/worktrees/feature" });
-
   it("allows an idle worktree and rejects the project checkout", () => {
-    expect(storageCleanupThreadIdle(candidate(), NOW_MS)).toBe(true);
-    expect(storageCleanupThreadIdle(shell(), NOW_MS)).toBe(false);
+    expect(storageCleanupThreadIdle(candidate(), NOW_MS, DEFAULT_SERVER_SETTINGS)).toBe(true);
+    expect(storageCleanupThreadIdle(shell(), NOW_MS, DEFAULT_SERVER_SETTINGS)).toBe(false);
   });
-
   it.each(["running", "starting", "preparing", "waiting", "queued"] as const)(
     "retains a worktree while its thread is %s",
     (status) => {
-      expect(storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS)).toBe(false);
+      expect(
+        storageCleanupThreadIdle(candidateWithStatus(status), NOW_MS, DEFAULT_SERVER_SETTINGS),
+      ).toBe(false);
     },
   );
-
   it.each(["completed", "interrupted", "cancelled", "rolled_back"] as const)(
     "retains %s while background work is pending",
     (status) => {
@@ -77,11 +66,11 @@ describe("V2 storage cleanup eligibility", () => {
             pendingBackgroundTasks: [{ taskId: "task-1", kind: "command" }],
           },
           NOW_MS,
+          DEFAULT_SERVER_SETTINGS,
         ),
       ).toBe(false);
     },
   );
-
   it.each(["completed", "interrupted", "cancelled", "rolled_back"] as const)(
     "retains %s while a runtime request is pending",
     (status) => {
@@ -96,22 +85,87 @@ describe("V2 storage cleanup eligibility", () => {
             },
           },
           NOW_MS,
+          DEFAULT_SERVER_SETTINGS,
         ),
       ).toBe(false);
     },
   );
-
   it("retains an active run even if the shell status is idle", () => {
     expect(
-      storageCleanupThreadIdle({ ...candidate(), activeRunId: RunId.make("run") }, NOW_MS),
+      storageCleanupThreadIdle(
+        { ...candidate(), activeRunId: RunId.make("run") },
+        NOW_MS,
+        DEFAULT_SERVER_SETTINGS,
+      ),
     ).toBe(false);
   });
-
   it("retains a queued prompt before the new run has been projected", () => {
     expect(
-      storageCleanupThreadIdle({ ...candidate(), latestUserMessageAt: at(-1_000) }, NOW_MS),
+      storageCleanupThreadIdle(
+        { ...candidate(), latestUserMessageAt: at(-1_000) },
+        NOW_MS,
+        DEFAULT_SERVER_SETTINGS,
+      ),
     ).toBe(false);
   });
+  it.each([
+    { name: "snoozed until a future reset", snooze: true, resetIn: DAY_MS, idle: false },
+    { name: "set to auto-resume", autoResume: true, resetIn: DAY_MS, idle: false },
+    { name: "with recovery turned off", resetIn: DAY_MS, idle: true },
+    { name: "auto-resuming after the reset", autoResume: true, resetIn: -1_000, idle: false },
+    { name: "snoozed past its reset", snooze: true, resetIn: -1_000, idle: true },
+    {
+      name: "settled with an auto-resume pending",
+      autoResume: true,
+      settled: true,
+      resetIn: -1_000,
+      idle: true,
+    },
+    { name: "not yet armed by the recovery worker", armed: false, resetIn: DAY_MS, idle: false },
+    {
+      name: "not yet armed, auto-resume after reset",
+      armed: false,
+      autoResumeSetting: true,
+      resetIn: -1_000,
+      idle: false,
+    },
+    {
+      name: "not armed with recovery settings off",
+      armed: false,
+      settingsOff: true,
+      resetIn: DAY_MS,
+      idle: true,
+    },
+  ])(
+    "treats a usage-limited thread $name as idle: $idle",
+    ({
+      autoResume = false,
+      snooze = false,
+      armed = true,
+      autoResumeSetting = false,
+      settled,
+      settingsOff,
+      resetIn,
+      idle,
+    }) => {
+      const runId = RunId.make("run-1");
+      const resetAt = DateTime.formatIso(at(resetIn));
+      expect(
+        storageCleanupThreadIdle(
+          {
+            ...candidateWithStatus("failed"),
+            latestRunId: runId,
+            lastErrorClass: "usage_limit",
+            usageLimitResetAt: resetAt,
+            settledOverride: settled ? "settled" : null,
+            limitRecovery: armed ? { runId, resetAt, autoResume, snooze } : null,
+          },
+          NOW_MS,
+          { autoResumeLimitedThreads: autoResumeSetting, snoozeLimitedThreads: !settingsOff },
+        ),
+      ).toBe(idle);
+    },
+  );
 
   it("uses V2 run activity instead of metadata refreshes for retention", () => {
     const thread = candidate();
@@ -171,299 +225,6 @@ describe("merged pull request cleanup", () => {
     expect(storageCleanupPullRequestMerged(pullRequest({ state: "open" }), integrated)).toBe(false);
   });
 });
-
-const cleanupFixture = (
-  storageCleanup: StorageCleanupSettings = {
-    ...DEFAULT_SERVER_SETTINGS.storageCleanup,
-    worktreeAfterDays: 8,
-    worktreeOnDelete: true,
-  },
-) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const config = yield* ServerConfig.ServerConfig;
-    const git = yield* GitVcsDriver.GitVcsDriver;
-    const repo = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-repo-" }));
-    const command = (cwd: string, args: string[]) =>
-      git.execute({ operation: "cleanup-test", cwd, args });
-    yield* command(repo, ["init", "-b", "main"]);
-    yield* command(repo, ["config", "user.email", "cleanup@example.test"]);
-    yield* command(repo, ["config", "user.name", "Cleanup test"]);
-    yield* fs.writeFileString(`${repo}/tracked.txt`, "original\n");
-    yield* fs.writeFileString(`${repo}/.gitignore`, ".env\ndist/\nnode_modules/\n");
-    yield* command(repo, ["add", "."]);
-    yield* command(repo, ["commit", "-m", "initial"]);
-    yield* fs.makeDirectory(config.worktreesDir, { recursive: true });
-    const worktree = path.join(config.worktreesDir, "feature");
-    yield* command(repo, ["worktree", "add", "-b", "feature", worktree]);
-    let settings: import("@goat/contracts").ServerSettings = {
-      ...DEFAULT_SERVER_SETTINGS,
-      storageCleanup,
-    };
-    let threads = [shell({ branch: "feature", worktreePath: worktree })];
-    let deletedThreads: OrchestrationV2ThreadShell[] = [];
-    let storedWorktreePaths: string[] = [worktree];
-    let projectRoots = [repo];
-    let editBeforeRemoval = false;
-    let openSessionCwd: string | null = null;
-    let sessionLive = true;
-    let onLiveCheck: Effect.Effect<void> = Effect.void;
-    let outboxStatus: string | null = null;
-    let fullStatusCalls = 0;
-    let snapshotReads = 0;
-    let terminalListener: ((event: TerminalMetadataStreamEvent) => Effect.Effect<void>) | undefined;
-    let events: Stream.Stream<OrchestrationV2DomainEvent> = Stream.empty;
-    const activated = yield* Deferred.make<void>();
-    const cleanupLayer = StorageCleanup.layer.pipe(Layer.provide(AuxiliarySqlite.layer));
-    const context = yield* Layer.build(cleanupLayer).pipe(
-      Effect.provideService(GitVcsDriver.GitVcsDriver, {
-        ...git,
-        execute: (input) =>
-          Effect.gen(function* () {
-            if (
-              editBeforeRemoval &&
-              (input.args.includes("remove") || input.args.includes("--porcelain"))
-            )
-              yield* fs.writeFileString(`${worktree}/tracked.txt`, "late edit\n");
-            return yield* git.execute(input);
-          }),
-        statusDetailsLocal: (...args) => {
-          fullStatusCalls++;
-          return git.statusDetailsLocal(...args);
-        },
-      }),
-      Effect.provideService(Settings.ServerSettingsService, {
-        getSettings: Effect.sync(() => settings),
-        subscribeChanges: Effect.succeed(Stream.empty),
-      } as unknown as Settings.ServerSettingsService["Service"]),
-      Effect.provideService(ProjectStore.ProjectStoreV2, {
-        list: () => Effect.sync(() => projectRoots.map((workspaceRoot) => ({ workspaceRoot }))),
-        listShells: () =>
-          Effect.sync(() =>
-            projectRoots.map((workspaceRoot, index) => ({
-              id: ProjectId.make(`project-${index + 1}`),
-              workspaceRoot,
-            })),
-          ),
-      } as unknown as ProjectStore.ProjectStoreV2["Service"]),
-      Effect.provideService(ProjectionStore.ProjectionStoreV2, {
-        getShellSnapshot: (input?: { location?: string }) =>
-          Effect.sync(() => {
-            snapshotReads++;
-            const visible = threads.filter((thread) => thread.deletedAt === null);
-            return {
-              threads:
-                input?.location === "archive"
-                  ? []
-                  : visible.filter((thread) => thread.archivedAt === null),
-              archivedThreads:
-                input?.location === "active"
-                  ? []
-                  : visible.filter((thread) => thread.archivedAt !== null),
-            };
-          }),
-        getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
-        getThreadWorktreePaths: (input?: { includeArchived?: boolean }) =>
-          Effect.sync(() =>
-            threads.flatMap((thread) =>
-              thread.deletedAt === null &&
-              (input?.includeArchived === true || thread.archivedAt === null) &&
-              thread.worktreePath !== null
-                ? [{ threadId: thread.id, worktreePath: thread.worktreePath }]
-                : [],
-            ),
-          ),
-        getThreadShell: (threadId: ThreadId) =>
-          Effect.sync(() => threads.find((thread) => thread.id === threadId) ?? null),
-      } as unknown as ProjectionStore.ProjectionStoreV2["Service"]),
-      Effect.provideService(ProviderSessionManager.ProviderSessionManagerV2, {
-        isLive: () =>
-          Effect.sync(() => sessionLive).pipe(Effect.tap(() => Effect.suspend(() => onLiveCheck))),
-      } as unknown as ProviderSessionManager.ProviderSessionManagerV2["Service"]),
-      Effect.provideService(Orchestrator.OrchestratorV2, {
-        streamDomainEvents: Stream.suspend(() => events),
-      } as unknown as Orchestrator.OrchestratorV2["Service"]),
-      Effect.provideService(SqlClient.SqlClient, ((strings: TemplateStringsArray) =>
-        Effect.sync(() =>
-          openSessionCwd !== null && strings.join("").includes("projection_provider_sessions")
-            ? [
-                {
-                  payload_json: JSON.stringify({
-                    id: "session-1",
-                    driver: "codex",
-                    providerInstanceId: "codex",
-                    status: "ready",
-                    cwd: openSessionCwd,
-                    model: null,
-                    capabilities: CodexProviderCapabilitiesV2,
-                    createdAt: "2026-06-01T12:00:00.000Z",
-                    updatedAt: "2026-06-01T12:00:00.000Z",
-                    lastError: null,
-                  }),
-                },
-              ]
-            : outboxStatus !== null && strings.join("").includes("orchestration_v2_effect_outbox")
-              ? [{ status: outboxStatus }]
-              : strings.join("").includes("deleted_at IS NOT NULL")
-                ? deletedThreads.map((thread) => ({
-                    payload_json: JSON.stringify(thread),
-                    workspaceRoot: repo,
-                  }))
-                : strings.join("").includes('AS "worktreePath"')
-                  ? [
-                      ...threads.flatMap((thread) => thread.worktreePath ?? []),
-                      ...storedWorktreePaths,
-                    ].map((worktreePath) => ({ worktreePath }))
-                  : [],
-        )) as unknown as SqlClient.SqlClient),
-      Effect.provideService(GitManager.GitManager, {
-        invalidateStatus: () => Effect.void,
-      } as unknown as GitManager.GitManager["Service"]),
-      Effect.provideService(TerminalManager.TerminalManager, {
-        subscribeMetadata: (
-          listener: (event: TerminalMetadataStreamEvent) => Effect.Effect<void>,
-        ) =>
-          Effect.sync(() => {
-            terminalListener = listener;
-            return () => {};
-          }),
-      } as unknown as TerminalManager.TerminalManager["Service"]),
-      Effect.provideService(ServerActivation, Deferred.await(activated)),
-    );
-    return {
-      service: Context.get(context, StorageCleanup.StorageCleanup),
-      repo,
-      setTerminals: (terminals: TerminalSummary[]) =>
-        terminalListener?.({ type: "snapshot", terminals }) ?? Effect.void,
-      editBeforeRemoval: () => {
-        editBeforeRemoval = true;
-      },
-      fs,
-      path,
-      worktree,
-      config,
-      command,
-      enableFiles: () => {
-        settings = {
-          ...settings,
-          storageCleanup: {
-            ...settings.storageCleanup,
-            browserArtifactsAfterDays: 8,
-            logsAfterDays: 8,
-          },
-        };
-      },
-      setSettings: (next: Partial<typeof settings>) => {
-        settings = { ...settings, ...next };
-      },
-      setPolicy: (worktreeKeepWhen: WorktreeKeepWhen) => {
-        settings = {
-          ...settings,
-          storageCleanup: { ...settings.storageCleanup, worktreeKeepWhen },
-        };
-      },
-      disable: () => {
-        settings = {
-          ...settings,
-          storageCleanup: {
-            ...settings.storageCleanup,
-            worktreeAfterDays: null,
-            worktreeOnDelete: false,
-          },
-        };
-      },
-      setThreads: (next: typeof threads) => {
-        threads = next;
-      },
-      setOnLiveCheck: (hook: Effect.Effect<void>) => {
-        onLiveCheck = hook;
-      },
-      setOutboxStatus: (status: string | null) => {
-        outboxStatus = status;
-      },
-      setDeletedThreads: (next: OrchestrationV2ThreadShell[]) => {
-        deletedThreads = next;
-      },
-      setStoredWorktreePaths: (paths: string[]) => {
-        storedWorktreePaths = paths;
-      },
-      setProjectRoots: (roots: string[]) => {
-        projectRoots = roots;
-      },
-      setSessionLive: (live: boolean) => {
-        sessionLive = live;
-      },
-      setOpenSessionCwd: (cwd: string | null) => {
-        openSessionCwd = cwd;
-      },
-      openTerminal: (paths: { cwd: string; worktreePath: string | null }) =>
-        terminalListener?.({
-          type: "upsert",
-          terminal: {
-            threadId: "thread-1",
-            terminalId: "terminal-1",
-            status: "running",
-            pid: 1,
-            exitCode: null,
-            exitSignal: null,
-            hasRunningSubprocess: false,
-            label: "Terminal",
-            updatedAt: "2026-06-10T12:00:00.000Z",
-            ...paths,
-          },
-        }) ?? Effect.void,
-      fullStatusCalls: () => fullStatusCalls,
-      snapshotReads: () => snapshotReads,
-      activate: (domainEvents: Stream.Stream<OrchestrationV2DomainEvent>) => {
-        events = domainEvents;
-        return Deferred.succeed(activated, undefined);
-      },
-    };
-  });
-const pausedMeasurementFixture = (storageCleanup?: StorageCleanupSettings) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const measuring = yield* Deferred.make<void>();
-    const resume = yield* Deferred.make<void>();
-    let measuredPath: string | undefined;
-    const fixture = yield* cleanupFixture(storageCleanup).pipe(
-      Effect.provideService(FileSystem.FileSystem, {
-        ...fs,
-        readDirectory: (directory, options) =>
-          Effect.gen(function* () {
-            if (directory === measuredPath) {
-              yield* Deferred.succeed(measuring, undefined);
-              yield* Deferred.await(resume);
-            }
-            return yield* fs.readDirectory(directory, options);
-          }),
-      }),
-    );
-    measuredPath = yield* fs.realPath(fixture.worktree);
-    return { ...fixture, measuring, resume };
-  });
-const cleanupTestLayer = GitVcsDriver.layer.pipe(
-  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "storage-cleanup-" })),
-  Layer.provideMerge(NodeServices.layer),
-);
-const runCleanupTest = <A, E>(
-  effect: Effect.Effect<
-    A,
-    E,
-    | FileSystem.FileSystem
-    | ServerConfig.ServerConfig
-    | GitVcsDriver.GitVcsDriver
-    | Path.Path
-    | Scope.Scope
-  >,
-) =>
-  effect.pipe(
-    // Never the developer's home: cleanup reads other local GOAT apps' databases from it.
-    Effect.provideService(HostProcess.HomeDirectory, "/nonexistent/goat-cleanup-test-home"),
-    Effect.provide(cleanupTestLayer),
-    Effect.scoped,
-  );
 
 const submoduleCleanupFixture = () =>
   Effect.gen(function* () {
@@ -676,6 +437,7 @@ describe("subagent worktree ownership", () => {
       fixture.setSettings({
         storageCleanup: {
           ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...LEGACY_WORKTREE_RULES,
           worktreeSettledAfterDays: scenario === "recent-inactive" ? null : 8,
           worktreeAfterDays: scenario === "recent-inactive" ? 8 : null,
         },
@@ -869,6 +631,7 @@ describe("deleted thread worktrees", () => {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
           ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...LEGACY_WORKTREE_RULES,
           worktreeAfterDays: null,
           worktreeOnDelete: true,
         });
@@ -890,6 +653,7 @@ describe("deleted thread worktrees", () => {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
         ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...LEGACY_WORKTREE_RULES,
         worktreeAfterDays: 8,
         worktreeOnDelete: false,
       });
@@ -971,6 +735,7 @@ describe("deleted thread worktrees", () => {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
         ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...LEGACY_WORKTREE_RULES,
         worktreeAfterDays: null,
         worktreeOnDelete: true,
       });
@@ -993,6 +758,7 @@ describe("deleted thread worktrees", () => {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
         ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...LEGACY_WORKTREE_RULES,
         worktreeAfterDays: null,
         worktreeOnDelete: true,
       });
@@ -1025,6 +791,7 @@ describe("deleted thread worktrees", () => {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
           ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...LEGACY_WORKTREE_RULES,
           worktreeAfterDays: null,
           worktreeOnDelete: true,
         });
@@ -1071,6 +838,7 @@ describe("deleted thread worktrees", () => {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
           ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...LEGACY_WORKTREE_RULES,
           worktreeAfterDays: null,
           worktreeOnDelete: true,
         });
@@ -1102,6 +870,7 @@ describe("deleted thread worktrees", () => {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
         ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...LEGACY_WORKTREE_RULES,
         worktreeAfterDays: null,
         worktreeOnDelete: true,
       });
@@ -1126,6 +895,7 @@ describe("deleted thread worktrees", () => {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
           ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...LEGACY_WORKTREE_RULES,
           worktreeAfterDays: null,
           worktreeOnDelete: true,
         });
@@ -1156,6 +926,7 @@ describe("deleted thread worktrees", () => {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
           ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...LEGACY_WORKTREE_RULES,
           worktreeAfterDays: null,
           worktreeOnDelete: true,
         });
@@ -1228,6 +999,7 @@ describe("deleted thread worktrees", () => {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
         ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...LEGACY_WORKTREE_RULES,
         worktreeAfterDays: null,
         worktreeOnDelete: true,
       });
@@ -1991,6 +1763,37 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
+  it.live.each([
+    ["unchanged", "removed", "No commits beyond the project branch"],
+    ["unmerged", "kept", "Has commits beyond the project branch"],
+    ["detached", "kept", "Project branch is unavailable"],
+    ["merged-only", "kept", "No remote is configured for merged-worktree cleanup"],
+  ] as const)("cleans archived local-only worktrees: %s", ([state, outcome, reason]) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, repo, worktree, command, setThreads } = yield* cleanupFixture({
+          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...LEGACY_WORKTREE_RULES,
+          worktreeUnchanged: state !== "merged-only",
+          worktreeOnMerge: true,
+        });
+        yield* command(repo, ["branch", "-m", "main", "trunk"]);
+        setThreads([shell({ branch: "feature", worktreePath: worktree, archivedAt: at(-DAY_MS) })]);
+        if (state === "unmerged") {
+          yield* fs.writeFileString(`${worktree}/tracked.txt`, "unmerged work\n");
+          yield* command(worktree, ["commit", "-am", "unmerged work"]);
+        }
+        if (state === "detached") yield* command(repo, ["checkout", "--detach"]);
+
+        const report = yield* service.runNow;
+        expect(report.entries[0]).toMatchObject({ outcome, reason });
+        expect(yield* fs.exists(worktree)).toBe(outcome === "kept");
+        expect(
+          (yield* command(repo, ["show-ref", "--verify", "refs/heads/feature"])).stdout,
+        ).not.toBe("");
+      }),
+    ),
+  );
   it.live(
     "discovers trunk without a remote HEAD or tracking ref and removes an integrated worktree",
     () =>
@@ -1998,6 +1801,7 @@ describe("storage cleanup reports and local file policies", () => {
         Effect.gen(function* () {
           const { service, fs, repo, worktree, command } = yield* cleanupFixture({
             ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            ...LEGACY_WORKTREE_RULES,
             worktreeUnchanged: true,
           });
           const remote = yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-remote-" });
@@ -2023,6 +1827,7 @@ describe("storage cleanup reports and local file policies", () => {
         Effect.gen(function* () {
           const { service, fs, repo, worktree, command } = yield* cleanupFixture({
             ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            ...LEGACY_WORKTREE_RULES,
             worktreeUnchanged: true,
           });
           const remote = yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-remote-" });
@@ -2051,6 +1856,7 @@ describe("storage cleanup reports and local file policies", () => {
       Effect.gen(function* () {
         const { service, fs, repo, worktree, command } = yield* cleanupFixture({
           ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...LEGACY_WORKTREE_RULES,
           worktreeUnchanged: true,
         });
         const remote = yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-remote-" });
@@ -2220,6 +2026,33 @@ describe("storage cleanup reports and local file policies", () => {
 });
 
 describe("settled worktree rechecks", () => {
+  it.live.each(["autoResumeLimitedThreads", "snoozeLimitedThreads"] as const)(
+    "keeps a usage-limited checkout when %s is enabled during measurement",
+    (preference) =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const fixture = yield* pausedMeasurementFixture();
+          fixture.setSettings({ autoResumeLimitedThreads: false, snoozeLimitedThreads: false });
+          fixture.setThreads([
+            shell({
+              branch: "feature",
+              worktreePath: fixture.worktree,
+              status: "failed",
+              latestRunId: RunId.make("limited-run"),
+              lastErrorClass: "usage_limit",
+              usageLimitResetAt: DateTime.formatIso(at(DAY_MS)),
+            }),
+          ]);
+          const run = yield* fixture.service.runNow.pipe(Effect.forkChild);
+          yield* Deferred.await(fixture.measuring);
+          fixture.setSettings({ [preference]: true });
+          yield* Deferred.succeed(fixture.resume, undefined);
+          const report = yield* Fiber.join(run);
+          expect(report.entries[0]?.outcome).toBe("kept");
+          expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+        }),
+      ),
+  );
   it.live.each([{ settledAt: null }, { settledAt: at(DAY_MS) }])(
     "keeps a checkout changed during measurement (%j)",
     (change) =>
@@ -2234,6 +2067,7 @@ describe("settled worktree rechecks", () => {
           fixture.setSettings({
             storageCleanup: {
               ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+              ...LEGACY_WORKTREE_RULES,
               worktreeSettledAfterDays: 0,
             },
           });
@@ -2257,7 +2091,11 @@ it.live("keeps saved usage data when removing a settled checkout", () =>
     Effect.gen(function* () {
       const fixture = yield* cleanupFixture();
       fixture.setSettings({
-        storageCleanup: { ...DEFAULT_SERVER_SETTINGS.storageCleanup, worktreeSettledAfterDays: 0 },
+        storageCleanup: {
+          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...LEGACY_WORKTREE_RULES,
+          worktreeSettledAfterDays: 0,
+        },
       });
       fixture.setThreads([
         shell({ branch: "feature", worktreePath: fixture.worktree, settledAt: at(0) }),

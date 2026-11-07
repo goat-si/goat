@@ -12,6 +12,7 @@ import {
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { availableScratchWorkspaceRoot } from "@goat/client-runtime/operations/projects";
 import { isScratchProject } from "@goat/client-runtime/state/projects";
+import { pickableProjectGroups } from "@goat/client-runtime/state/project-grouping";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -176,7 +177,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
   const screenTitle = incomingShare ? "Start a task" : "Choose project";
   const projectEmptyState = deriveProjectEmptyState(catalogState);
   const serverConfigs = useServerConfigs();
-  const listScopes = projectScopes.filter(
+  const listScopes = pickableProjectGroups(projectScopes).filter(
     (scope) =>
       !scope.projects.every((project) =>
         isScratchProject(project, serverConfigs.get(project.environmentId)?.scratchWorkspaceRoot),

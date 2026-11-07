@@ -44,10 +44,12 @@ const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 export const GOAT_MEMORY_TOOLS = [
   "goat_memory_list",
   "goat_memory_search",
+  "goat_memory_recall",
   "goat_memory_read",
   "goat_memory_history",
   "goat_memory_sync_status",
   "goat_memory_source_read",
+  "goat_memory_remember",
   "goat_memory_upsert",
   "goat_memory_forget",
   "goat_memory_revert_resolution",
@@ -70,8 +72,14 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
 ) {
   const driver = yield* CodexReplay.makeReplayDriver(transcript);
   const threadConfigs: Array<Record<string, unknown>> = [];
+  const requests: Array<string> = [];
+  // Each turn/interrupt the adapter sends, by turn, for tests that await one sent in the background.
+  const interrupts = yield* Queue.unbounded<string>();
   const record = (method: string, params: unknown) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
+      requests.push(method);
+      if (method === "turn/interrupt")
+        yield* Queue.offer(interrupts, (params as { turnId: string }).turnId);
       const config = (params as { config?: Record<string, unknown> } | undefined)?.config;
       if ((method === "thread/start" || method === "thread/resume") && config !== undefined)
         threadConfigs.push(config);
@@ -128,29 +136,64 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     modelSelection: CODEX_TEST_MODEL_SELECTION,
     runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
   });
-  const terminals = yield* Queue.unbounded<void>();
+  const terminals = yield* Queue.unbounded<{
+    readonly providerTurnId: string;
+    readonly status: string;
+  }>();
   const goalTokens = yield* Queue.unbounded<number>();
   // Every status a subagent task was given, in order.
   const subagentStatuses: Array<string> = [];
   // Every status each execution node was given, in order.
   const nodeStatuses = new Map<string, Array<string>>();
+  // Each provider turn the adapter reported, latest state last.
+  type ReportedTurn = {
+    readonly id: string;
+    readonly runAttemptId: string | null;
+    readonly nativeId: string | null;
+    readonly status: string;
+  };
+  const providerTurns: Array<ReportedTurn> = [];
+  const turnListeners = new Set<() => void>();
+  // Waits until the adapter has reported a provider turn that matches.
+  const providerTurn = (matches: (turn: ReportedTurn) => boolean) =>
+    Effect.callback<ReportedTurn>((resume) => {
+      const check = () => {
+        const found = providerTurns.findLast(matches);
+        if (found === undefined) return;
+        turnListeners.delete(check);
+        resume(Effect.succeed(found));
+      };
+      turnListeners.add(check);
+      check();
+      return Effect.sync(() => void turnListeners.delete(check));
+    });
   yield* runtime.events.pipe(
     Stream.runForEach((event) =>
       event.type === "turn.terminal"
-        ? Queue.offer(terminals, undefined)
-        : event.type === "subagent.updated"
-          ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
-          : event.type === "node.updated"
-            ? Effect.sync(
-                () =>
-                  void nodeStatuses.set(event.node.id, [
-                    ...(nodeStatuses.get(event.node.id) ?? []),
-                    event.node.status,
-                  ]),
-              )
-            : event.type === "provider_thread.updated" && event.providerThread.goal
-              ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
-              : Effect.void,
+        ? Queue.offer(terminals, { providerTurnId: event.providerTurnId, status: event.status })
+        : event.type === "provider_turn.updated"
+          ? Effect.sync(() => {
+              providerTurns.push({
+                id: event.providerTurn.id,
+                runAttemptId: event.providerTurn.runAttemptId,
+                nativeId: event.providerTurn.nativeTurnRef?.nativeId ?? null,
+                status: event.providerTurn.status,
+              });
+              for (const listener of turnListeners) listener();
+            })
+          : event.type === "subagent.updated"
+            ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
+            : event.type === "node.updated"
+              ? Effect.sync(
+                  () =>
+                    void nodeStatuses.set(event.node.id, [
+                      ...(nodeStatuses.get(event.node.id) ?? []),
+                      event.node.status,
+                    ]),
+                )
+              : event.type === "provider_thread.updated" && event.providerThread.goal
+                ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
+                : Effect.void,
     ),
     Effect.forkScoped,
   );
@@ -174,12 +217,17 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     });
   return {
     threadConfigs,
+    requests,
+    interrupted: Queue.take(interrupts),
     startTurn,
     terminal: Queue.take(terminals),
     goalTokens: Queue.take(goalTokens),
     goalUpdates: Stream.fromQueue(goalTokens),
     subagentStatuses,
     nodeStatuses,
+    providerTurns,
+    providerTurn,
+    threadId,
     runtime,
     providerThread,
   };
@@ -328,6 +376,34 @@ export const fixture = (scenario: string) => {
   };
   // Each helper below drives the fixture's thread unless given another native thread. A turn on a
   // prepared attachment session also carries the screen-code guide that session lists.
+  // A run's message steered into a turn it adopts carries the context its turn/start would.
+  const turnSteer = (id: number, expectedTurnId: string, text: string, thread = nativeThreadId) =>
+    Effect.gen(function* () {
+      const { additionalContext } = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: thread,
+        codexInput: [{ type: "text", text }],
+        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        modelSelection: CODEX_TEST_MODEL_SELECTION,
+        hasGoatMcp: true,
+        browserToolsAvailable: false,
+        computerUse: false,
+        computerUseDeferred: false,
+        screenCode: false,
+      });
+      entries.push({
+        type: "expect_outbound",
+        frame: {
+          id,
+          method: "turn/steer",
+          params: {
+            threadId: thread,
+            expectedTurnId,
+            input: [{ type: "text", text }],
+            ...(additionalContext === undefined ? {} : { additionalContext }),
+          },
+        },
+      });
+    });
   const turnStart = (
     id: number,
     ordinal: number,
@@ -418,6 +494,7 @@ export const fixture = (scenario: string) => {
     resume,
     reload,
     turnStart,
+    turnSteer,
     turnCompleted,
     status,
     open,

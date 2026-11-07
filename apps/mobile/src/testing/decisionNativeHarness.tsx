@@ -8,7 +8,15 @@ vi.mock("../native/NativeScrollViewMarker", () => ({
   NativeScrollView: Box,
   NativeScrollViewMarker: Box,
 }));
+vi.mock("../features/threads/useEnvironmentHues", () => ({ useEnvironmentHues: () => new Map() }));
 vi.mock("../features/home/ThreadUndoNotice", () => ({ ThreadUndoNotice: () => null }));
+// The Bots | Threads switch pulls in GOAT Bot's native roster, which this DOM harness can't load.
+vi.mock("../features/goat-bot/MobileBotList", () => ({
+  MobileBotList: () => null,
+  MobileHomeModeSegments: () => null,
+}));
+// Launcher family reads go through the live connection runtime.
+vi.mock("../features/threads/remoteLauncherReads", () => ({ useRemoteLauncherReads: () => {} }));
 vi.mock("react-native-reanimated", () => ({
   default: { View: Box },
   Easing: { out: (value: unknown) => value, cubic: "cubic" },

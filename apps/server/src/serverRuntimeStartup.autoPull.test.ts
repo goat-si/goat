@@ -27,6 +27,7 @@ import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
 import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
+import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
@@ -38,6 +39,9 @@ import { layerMemoryDefaultStarted } from "./server.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
+import * as CodexSurvivors from "./provider/CodexSurvivors.ts";
+import * as DesktopStopIntentReader from "./desktopStopIntent.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -91,6 +95,7 @@ it.effect.each([
         const dependencies: Layer.Layer<
           Layer.Services<ReturnType<typeof ServerRuntimeStartup.layerWithOptions>>
         > = Layer.mergeAll(
+          DesktopStopIntentReader.layerNone,
           Layer.mock(ServerConfig.ServerConfig)({
             ...(yield* ServerConfig.deriveServerPaths(cwd, undefined).pipe(
               Effect.provide(Path.layer),
@@ -132,10 +137,19 @@ it.effect.each([
           }),
           Layer.mock(ProviderRuntimeRecovery.ProviderRuntimeRecoveryService)({
             recover: Effect.succeed(recovery),
-            prepareForShutdown: Effect.void,
+            prepareForShutdown: Effect.succeed({ candidates: 0, continued: 0 }),
+            prepareForShutdownWithStopKind: () => Effect.succeed({ candidates: 0, continued: 0 }),
             reconcile: () => Effect.succeed(recovery),
           }),
           Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),
+          Layer.mock(CodexSurvivors.CodexSurvivors)({}),
+          Layer.mock(CodexDetachedAppServerLive.CodexDetachedAppServers)({
+            cleanup: Effect.succeed([]),
+            loadRecords: Effect.succeed([]),
+            beginServerShutdown: Effect.void,
+            socketTransportEnabled: false,
+          }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             shutdown: Effect.void,
           }),
@@ -145,6 +159,7 @@ it.effect.each([
             runGeneralOnce: Effect.never,
             runControlOnce: Effect.never,
             runCleanupOnce: Effect.never,
+            runStartOnce: Effect.never,
           }),
           Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
             publish: (event) => Effect.succeed({ ...event, sequence: 1 }),

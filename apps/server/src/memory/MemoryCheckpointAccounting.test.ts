@@ -6,12 +6,12 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import migration from "../persistence/Migrations/078_Memory.ts";
-import hub from "../persistence/Migrations/079_MemoryHubSync.ts";
-import lineage from "../persistence/Migrations/082_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/083_MemoryCheckpointAccounting.ts";
-import lifecycleMigration from "../persistence/Migrations/090_MemoryCheckpointLifecycle.ts";
-import revisionSizeMigration from "../persistence/Migrations/095_MemoryRevisionCheckpointSize.ts";
+import migration from "../persistence/Migrations/088_Memory.ts";
+import hub from "../persistence/Migrations/089_MemoryHubSync.ts";
+import lineage from "../persistence/Migrations/092_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/093_MemoryCheckpointAccounting.ts";
+import lifecycleMigration from "../persistence/Migrations/100_MemoryCheckpointLifecycle.ts";
+import revisionSizeMigration from "../persistence/Migrations/105_MemoryRevisionCheckpointSize.ts";
 import {
   CheckpointAccountingError,
   refreshCheckpointAccounting,
@@ -27,6 +27,7 @@ import {
 } from "./MemoryCheckpointInventory.ts";
 import {
   checkpointBound,
+  checkpointPages,
   CHECKPOINT_PAGE_OVERHEAD,
   futureForgetReserve,
 } from "./MemoryCheckpointBound.ts";
@@ -305,10 +306,7 @@ it.effect.each([0, 1, 100, 101])(
         actual += new TextEncoder().encode(encoded).length;
       }
       assert.isTrue(actual <= checkpointBound(size.bytes, size.rows));
-      assert.strictEqual(
-        checkpointBound(size.bytes, size.rows),
-        size.bytes + Math.max(1, count) * CHECKPOINT_PAGE_OVERHEAD,
-      );
+      assert.isAtMost(Math.ceil(Math.max(1, count) / 100), checkpointPages(size.bytes, size.rows));
     }),
 );
 

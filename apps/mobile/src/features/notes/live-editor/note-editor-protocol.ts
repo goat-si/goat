@@ -52,7 +52,13 @@ export type NoteEditorInbound =
   | { readonly type: "config"; readonly config: NoteEditorConfig }
   | { readonly type: "command"; readonly command: NoteEditorCommand }
   /** `id` names one recovery; the page echoes it so a late reply to an older one is ignored. */
-  | { readonly type: "requestDoc"; readonly id: number };
+  | { readonly type: "requestDoc"; readonly id: number }
+  /** Signed URLs for attachment images the page asked about; `missing` will never load. */
+  | {
+      readonly type: "imageUrls";
+      readonly urls: Readonly<Record<string, string>>;
+      readonly missing: ReadonlyArray<string>;
+    };
 
 export type NoteEditorOutbound =
   | { readonly type: "ready"; readonly bootMs: number }
@@ -78,7 +84,16 @@ export type NoteEditorOutbound =
   | { readonly type: "focus"; readonly focused: boolean }
   | { readonly type: "source"; readonly source: boolean }
   | { readonly type: "link"; readonly href: string }
+  /** `renew` asks again for an href whose URL stopped loading. */
+  | {
+      readonly type: "resolveImages";
+      readonly hrefs: ReadonlyArray<string>;
+      readonly renew: boolean;
+    }
   | { readonly type: "error"; readonly message: string };
+
+export const RESOLVE_IMAGES_BATCH = 50;
+const MAX_HREF_LENGTH = 2048;
 
 const isCount = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -133,6 +148,18 @@ export function parseNoteEditorMessage(data: string): NoteEditorOutbound | null 
       return typeof message.href === "string" && message.href.length > 0
         ? { type, href: message.href }
         : null;
+    case "resolveImages": {
+      const { hrefs, renew } = message;
+      return Array.isArray(hrefs) &&
+        hrefs.length > 0 &&
+        hrefs.length <= RESOLVE_IMAGES_BATCH &&
+        hrefs.every(
+          (href) => typeof href === "string" && href.length > 0 && href.length <= MAX_HREF_LENGTH,
+        ) &&
+        typeof renew === "boolean"
+        ? { type, hrefs: [...new Set<string>(hrefs)], renew }
+        : null;
+    }
     case "error":
       return typeof message.message === "string" ? { type, message: message.message } : null;
     default:

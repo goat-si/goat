@@ -315,3 +315,10 @@ export function makeTurnInput(input: {
     runtimePolicy: input.runtimePolicy,
   };
 }
+
+export function acpMcpAuthorization(input: AcpAdapterV2RuntimeInput | undefined) {
+  const server = input?.mcpServers[0];
+  const environment =
+    server !== undefined && "env" in server && Array.isArray(server.env) ? server.env : undefined;
+  return environment?.find((variable) => variable.name === "GOAT_ACP_MCP_AUTHORIZATION")?.value;
+}

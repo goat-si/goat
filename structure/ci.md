@@ -1,48 +1,33 @@
 # CI
 
-goat-si/goat keeps three workflows active: `.github/workflows/goat-ci.yml` runs CI, `goat-nightly.yml` publishes
+goat-si/goat keeps two core workflows active: `.github/workflows/goat-ci.yml` runs CI, and `goat-nightly.yml` publishes
 nightlies after a manual goat-ci run on `dev` and promotes soaked nightlies to stable
-([stable promotion](../docs/internals/release-channels.md#stable-promotion)), and `close-outside-prs.yml` closes pull requests from
-forks whose authors lack write access. Every upstream workflow is disabled on GitHub. The pre-push hook
+([stable promotion](../docs/internals/release-channels.md#stable-promotion)). Every upstream workflow is disabled on GitHub. The pre-push hook
 `.vite-hooks/goat-workflow-guard.mjs` refuses a push that carries any other enabled workflow, and
 holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate`, `result`, `republish`,
 `refresh-republished` and `connect-auth-postgres`, the pinned
-`ubuntu-24.04` image, the EPYC self-hosted labels, or the trusted-run expressions below, the `push`, `pull_request`, and
+`ubuntu-24.04` image (or `windows-2025` for the Windows matrix entry), the `push`, `pull_request`, and
 `workflow_dispatch` triggers, and an allowlist of actions.
 A new check is therefore a matrix task of `ci`. Any other new workflow, a
-`pull_request_target` trigger outside `close-outside-prs.yml`, or
-`actions/github-script` does not pass the guard.
+`pull_request_target` trigger, or `actions/github-script` does not pass the guard.
 
-Every goat-ci job picks its runner with a `runs-on` expression. A manual run, or a pull request whose head
-branch lives in goat-si/goat, runs on the EPYC self-hosted runners; a pull request from a fork runs
-on GitHub-hosted `ubuntu-24.04`, so fork code never reaches EPYC. The free plan caps hosted
-concurrency at about 20 jobs, which a few full pull request runs saturate, while EPYC carries two
-dozen runners. The trust test lives in that expression, so the guard pins its exact text. EPYC
-runners persist between jobs and give jobs no sudo: each keeps its caches in its own HOME, and the
-steps that install packages or unlock the runner account for the test sshd run on hosted runners
-only.
+Every goat-ci job runs on GitHub-hosted runners: `ubuntu-24.04`, and `windows-2025` for the
+`test-windows` matrix entry. The EPYC self-hosted pool (`goat-epyc-01`..`24`, labels `epyc` and
+`epyc-light`) ran on a client's machine and was retired in November 2026. Hosted runners are
+discarded after each job, so steps may install packages through sudo. The steps still branch on
+`RUNNER_ENVIRONMENT`, so a future self-hosted pool needs only new `runs-on` values and guard rules.
+The free plan caps hosted concurrency at about 20 jobs, so a few full runs at once queue.
 
-Each `ci` matrix entry carries a `runner` pool from `.github/scripts/goat-ci-scope.cjs`. The
-heavy tasks (`test`, `test-changed`, `test-ssh`, `test-desktop`, `test-memory-growth`, `build`
-and the server shards) take runners labelled `epyc`, for the cores, native headers, browsers and
-persistent caches. The short Node-only tasks in `HOSTED_TASKS` (`check`, `typecheck` and the
-small package suites) take `ubuntu-24.04` in every run: on EPYC a one-minute suite waited up to two
-hours behind half-hour server shards during bursts of full runs. They cost hosted concurrency, so
-keep long or native work off that list. `goat-scope`, `goat-screenshot-gate` and
-`goat-ci-result` take the same expression with the label `epyc-light`, which
-`goat-epyc-23` and `goat-epyc-24` carry instead of `epyc`. A matrix job never lands on them, so
-these short jobs start within seconds even while every matrix runner is busy; on the shared pool
-`goat-ci-result` waited half an hour for one. The guard holds the gate jobs to that expression
-or `ubuntu-24.04` and keeps the matrix off it. Custom labels live on GitHub, so a runner
-re-registered with its default labels rejoins the matrix pool; restore one with
-`gh api -X PUT repos/goat-si/goat/actions/runners/<id>/labels -f 'labels[]=goat' -f 'labels[]=epyc-light'`.
+Each `ci` matrix entry carries a `runner` pool from `.github/scripts/goat-ci-scope.cjs`: `windows`
+for `test-windows`, `hosted` for the short Node-only tasks in `HOSTED_TASKS` (`check`, `typecheck`
+and the small package suites), and `linux` for the heavy tasks (`test`, `test-packages`,
+`test-changed`, `test-ssh`, `test-desktop`, `test-memory-growth`, `build` and the server shards).
+`hosted` and `linux` both take `ubuntu-24.04` today; the split marks which work a self-hosted pool
+would take. `goat-scope`, `goat-screenshot-gate` and `goat-ci-result` run on `ubuntu-24.04`, and the
+guard pins every `runs-on` value.
 
-`close-outside-prs.yml` is the one `pull_request_target` workflow. It runs from the repository's default branch (`dev`)
-with a write token, so the guard pins it to the `opened` and `reopened` events and to
-`pull-requests: write`, and pins its single `close` job by a hash of the reviewed job. A
-command blocklist cannot prove that a script never fetches or runs pull request code, so any edit
-to that job, including its step names, scripts and env, fails until someone reviews it and
-updates the hash in the guard.
+goat-ci skips pull requests from forks for now, so a fork's pull request gets no `goat-ci-result`.
+To check one, a maintainer pushes its head to a branch in goat-si/goat and runs goat-ci there.
 
 ## When goat-ci runs
 
@@ -84,7 +69,7 @@ changes reach, `ci:server` adds the full server suite, `ci:memory` the memory gr
 `test-windows` runs the path and process sensitive suites (`WINDOWS_SUITES` in
 `goat-ci-scope.cjs`) on hosted `windows-2025`, the only CI that sees Windows-only failures
 (#1385). It runs in `lane=all`, in the `windows` lane, with `ci:windows`, and on a pull request
-that changes a file under one of those suites. Its job stops at 30 minutes and never runs on EPYC.
+that changes a file under one of those suites. Its job stops at 30 minutes.
 Retargeting a pull request onto `dev` or `goat/**` starts a run against the new base and supersedes
 the old one. Any other label, and any edit that keeps the base, runs no task, but GitHub still
 creates a goat-ci suite for it and reads the required `goat-ci-result` from the newest suite on the

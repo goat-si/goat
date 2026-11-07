@@ -1,4 +1,5 @@
 import { repairSchedule } from "../retryJitter.ts";
+import { makeMemoryProviderAuthority } from "./MemoryProviderAuthority.ts";
 import { isReleasedRuntimeRequest } from "./ReleasedRuntimeRequest.ts";
 import * as CodexRoute from "../provider/CodexRouteService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
@@ -76,7 +77,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import { makeScopeCloser } from "./ProviderSessionScopeClose.ts";
+import { makeScopeCloser, type ReopenLatch } from "./ProviderSessionScopeClose.ts";
 import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
 import { instanceUrlOpener } from "../urlOpener/UrlOpenerShim.ts";
 
@@ -581,59 +582,26 @@ export const layerWithOptions = (
       };
       const isMcpCredentialReserved = (threadId: ThreadId, mcpCredentialId: string) =>
         (mcpCredentialReservations.get(mcpReservationKey(threadId, mcpCredentialId)) ?? 0) > 0;
-      const isCurrentAttachment = (
-        config: import("@goat/provider-core/server/mcpSession").McpProviderSessionConfig,
-      ) =>
-        Effect.gen(function* () {
-          const threadId = config.threadId;
-          const prepared = memoryPrepareInputs.get(threadId);
-          const holdsCurrentAuthority = mcpSessions
-            .read(threadId)
-            .pipe(
-              Effect.map(
-                (current) =>
-                  current?.providerSessionId === config.providerSessionId &&
-                  current.credentialGeneration === config.credentialGeneration,
-              ),
-            );
-          if (!prepared || !(yield* holdsCurrentAuthority)) return false;
-          const attached =
-            isMcpCredentialReserved(threadId, config.providerSessionId) ||
-            Array.from((yield* Ref.get(sessions)).values()).some(
-              (entry) =>
-                entry.runtime.instanceId === prepared.providerInstanceId &&
-                entry.attachedThreadIds.has(threadId) &&
-                entry.mcpCredentialIdByThread.get(threadId) === config.providerSessionId,
-            );
-          if (!attached) return false;
-          const thread = yield* projectionStore.getThread(threadId).pipe(Effect.option);
-          return (
-            Option.isSome(thread) &&
-            thread.value.deletedAt === null &&
-            thread.value.archivedAt === null &&
-            thread.value.providerInstanceId === prepared.providerInstanceId &&
-            // Authority can be replaced under the same id while the thread is read.
-            (yield* holdsCurrentAuthority)
-          );
-        });
-      const currentMemoryPolicy = (threadId: ThreadId) =>
-        Effect.gen(function* () {
-          const committed = Option.isSome(memoryPolicy)
-            ? yield* memoryPolicy.value.read
-            : undefined;
-          const denied = { grant: "none" as const, policyEpoch: committed?.epoch ?? 0 };
-          if (!committed?.policyReady || !committed.enableAgentMemoryAccess) return denied;
-          const config = yield* mcpSessions.read(threadId);
-          if (!config) return denied;
-          const policy = yield* (
-            mcpSessionRegistry.currentMemoryPolicy?.(config.providerSessionId) ??
-              Effect.succeed(undefined)
-          );
-          // Denied credentials never need the attachment's thread projection.
-          if (!policy || policy.grant === "none" || policy.policyEpoch !== committed.epoch)
-            return denied;
-          return (yield* isCurrentAttachment(config)) ? policy : denied;
-        });
+      const { isCurrentAttachment, currentMemoryPolicy } = makeMemoryProviderAuthority({
+        policy: memoryPolicy,
+        readConfig: (threadId) => mcpSessions.read(threadId),
+        registry: mcpSessionRegistry,
+        projection: projectionStore,
+        prepared: (threadId) => memoryPrepareInputs.get(threadId),
+        attached: (config, prepared) =>
+          Ref.get(sessions).pipe(
+            Effect.map(
+              (entries) =>
+                isMcpCredentialReserved(config.threadId, config.providerSessionId) ||
+                Array.from(entries.values()).some(
+                  (entry) =>
+                    entry.runtime.instanceId === prepared.providerInstanceId &&
+                    entry.attachedThreadIds.has(config.threadId) &&
+                    entry.mcpCredentialIdByThread.get(config.threadId) === config.providerSessionId,
+                ),
+            ),
+          ),
+      });
       if (Option.isSome(admission))
         yield* admission.value.bind(currentMemoryPolicy, isCurrentAttachment);
       const mcpPrepareLock = yield* KeyedLock.make<ThreadId>();
@@ -1386,6 +1354,8 @@ export const layerWithOptions = (
         closeWithin: closeScopeWithin,
         trackRelease,
         awaitPendingReleases,
+        holdReopen,
+        awaitReopen,
       } = makeScopeCloser(RELEASE_SCOPE_CLOSE_TIMEOUT_MS);
 
       const releaseEntryNow = (input: {
@@ -1397,9 +1367,12 @@ export const layerWithOptions = (
         readonly onlyIfIdleGeneration?: number;
         readonly keepIfBusyOtherThan?: ReadonlyArray<string>;
         readonly gracefulSubscribers?: boolean;
+        readonly latch: ReopenLatch;
       }) =>
         Effect.acquireUseRelease(
-          removeLiveEntry(input),
+          removeLiveEntry(input).pipe(
+            Effect.tap(([entry]) => input.latch.keepFor(Option.getOrUndefined(entry))),
+          ),
           ([entry, releasedAt]) =>
             Option.match(entry, {
               onNone: () => Effect.void,
@@ -1428,6 +1401,7 @@ export const layerWithOptions = (
                   const closeExit = yield* closeScopeWithin(entry.scope, {
                     providerSessionId: input.providerSessionId,
                     reason: input.reason,
+                    latch: input.latch,
                   });
                   const records = {
                     entry,
@@ -1502,8 +1476,10 @@ export const layerWithOptions = (
             ),
           ),
         );
-      const releaseEntry = (input: Parameters<typeof releaseEntryNow>[0]) =>
-        trackRelease(releaseEntryNow(input));
+      const releaseEntry = (input: Omit<Parameters<typeof releaseEntryNow>[0], "latch">) =>
+        holdReopen(sessionKey(input.providerSessionId), (latch) =>
+          trackRelease(releaseEntryNow({ ...input, latch })),
+        );
 
       const releaseIfStillIdle = Effect.fn("ProviderSessionManager.releaseIfStillIdle")(
         function* (input: {
@@ -1528,10 +1504,18 @@ export const layerWithOptions = (
               : yield* probedRuntime.hasPendingBackgroundWork.pipe(
                   Effect.catchCause(() => Effect.succeed(false)),
                 );
-          if (hasPendingWork) {
-            const now = yield* Clock.currentTimeMillis;
-            const pinnedSinceMs = entry.pinnedSinceMs ?? now;
-            if (now - pinnedSinceMs < maxIdlePinMs) {
+          const now = yield* Clock.currentTimeMillis;
+          const pinnedSinceMs = entry.pinnedSinceMs ?? now;
+          const pastPinCeiling = now - pinnedSinceMs >= maxIdlePinMs;
+          // Live work holds past the ceiling; a probe that cannot answer counts as held.
+          const held =
+            (!hasPendingWork || pastPinCeiling) &&
+            probedRuntime.holdsLiveWork !== undefined &&
+            (yield* probedRuntime
+              .holdsLiveWork({ pastPinCeiling })
+              .pipe(Effect.catchCause(() => Effect.succeed(true))));
+          if (hasPendingWork || held) {
+            if (!pastPinCeiling || held) {
               const shouldContinuePin = yield* Ref.modify(sessions, (latest) => {
                 const latestEntry = latest.get(key);
                 if (
@@ -1549,10 +1533,12 @@ export const layerWithOptions = (
               if (!shouldContinuePin) {
                 return;
               }
-              yield* Effect.logInfo("orchestration-v2.driver-session.idle-release-deferred", {
-                providerSessionId: input.providerSessionId,
-                pinnedForMs: now - pinnedSinceMs,
-              });
+              yield* Effect.logInfo(
+                held
+                  ? "orchestration-v2.driver-session.idle-release-held"
+                  : "orchestration-v2.driver-session.idle-release-deferred",
+                { providerSessionId: input.providerSessionId, pinnedForMs: now - pinnedSinceMs },
+              );
               // Recheck on this fiber; scheduleIdleReleaseInternal would interrupt it and self-deadlock.
               yield* Effect.sleep(Duration.millis(idleTimeoutMs));
               return yield* releaseIfStillIdle(input);
@@ -2641,7 +2627,17 @@ export const layerWithOptions = (
                   }
                 }
                 const key = sessionKey(input.providerSessionId);
-                const existing = (yield* Ref.get(sessions)).get(key);
+                const settled = yield* awaitReopen(
+                  key,
+                  Ref.get(sessions).pipe(Effect.map((current) => current.get(key))),
+                );
+                if (Option.isNone(settled))
+                  return yield* new ProviderSessionOpenError({
+                    instanceId: input.modelSelection.instanceId,
+                    providerSessionId: input.providerSessionId,
+                    cause: "The previous session for this thread is still stopping.",
+                  });
+                const existing = settled.value;
                 if (existing !== undefined) {
                   const attached = existing.attachedThreadIds.has(input.threadId);
                   if (!attached && !existing.supportsMultipleProviderThreads) {
@@ -3077,38 +3073,38 @@ export const layerWithOptions = (
             }
             const unloadThread = detached.value.exposedRuntime.unloadThread;
             if (detached.value.supportsMultipleProviderThreads && unloadThread !== undefined) {
-              // Serialize unload with attachment so attached threads stay loaded and later attaches resume after unload.
-              yield* threadAttachment.withLock(
-                threadAttachmentKey(input),
-                Effect.gen(function* () {
-                  const entry = (yield* Ref.get(sessions)).get(key);
-                  if (
-                    entry?.runtime !== detached.value.runtime ||
-                    entry.attachedThreadIds.has(input.threadId)
-                  ) {
-                    return;
-                  }
-                  yield* Effect.forEach(
-                    detachedProviderThreads.filter((thread) => thread.nativeThreadRef !== null),
-                    (providerThread) =>
-                      unloadThread({ providerThread }).pipe(
-                        Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
-                        Effect.catchCause((cause) =>
-                          Effect.logWarning(
-                            "orchestration-v2.driver-session.detach-unload-failed",
-                            {
-                              providerSessionId: input.providerSessionId,
-                              threadId: input.threadId,
-                              providerThreadId: providerThread.id,
-                              cause,
-                            },
-                          ),
-                        ),
+              // The projection includes native children owned by other app threads;
+              // lock each owner so an attached child stays loaded and later attaches wait.
+              for (const providerThread of detachedProviderThreads) {
+                if (providerThread.nativeThreadRef === null) continue;
+                const ownerThreadId = providerThread.appThreadId ?? input.threadId;
+                yield* threadAttachment.withLock(
+                  threadAttachmentKey({
+                    providerSessionId: input.providerSessionId,
+                    threadId: ownerThreadId,
+                  }),
+                  Effect.gen(function* () {
+                    const entry = (yield* Ref.get(sessions)).get(key);
+                    if (
+                      entry?.runtime !== detached.value.runtime ||
+                      entry.attachedThreadIds.has(ownerThreadId)
+                    ) {
+                      return;
+                    }
+                    yield* unloadThread({ providerThread }).pipe(
+                      Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning("orchestration-v2.driver-session.detach-unload-failed", {
+                          providerSessionId: input.providerSessionId,
+                          threadId: ownerThreadId,
+                          providerThreadId: providerThread.id,
+                          cause,
+                        }),
                       ),
-                    { concurrency: 1, discard: true },
-                  );
-                }),
-              );
+                    );
+                  }),
+                );
+              }
             }
             yield* scheduleIdleRelease(input.providerSessionId);
           },

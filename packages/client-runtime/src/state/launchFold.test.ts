@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { foldLaunchedThreads, launchAncestorKeys, summarizeLaunchGroup } from "./launchFold.ts";
-import { HOME, NOW, OTHER, ids, key, thread } from "./launchFold.fixtures.ts";
+import { HOME, NOW, OTHER, ids, key, remoteTask, thread } from "./launchFold.fixtures.ts";
 import type { LaunchFoldThread } from "./launchFold.ts";
 
 function fold(visible: readonly LaunchFoldThread[], hidden: readonly LaunchFoldThread[] = []) {
@@ -79,6 +79,31 @@ describe("foldLaunchedThreads", () => {
     });
     expect(ids(fold([thread("coordinator"), remote]).roots)).toEqual(["coordinator"]);
     expect(ids(fold([remote]).roots)).toEqual(["remote-lane"]);
+  });
+
+  it("folds a task.create child on another machine under its parent, lifting only its requests", () => {
+    const result = fold([
+      thread("parent"),
+      remoteTask("running", { status: "running" }),
+      remoteTask("done"),
+    ]);
+    expect(ids(result.roots)).toEqual(["parent"]);
+    expect(ids(result.childrenByParentKey.get(key("parent")) ?? [])).toEqual(["running", "done"]);
+    expect(result.liftByKey.has(key("parent"))).toBe(false);
+    const asking = fold([thread("parent"), remoteTask("asking", { approval: true })]);
+    expect(asking.liftByKey.get(key("parent"))).toBe("approval");
+    expect(ids(fold([remoteTask("orphan", { status: "running" })]).roots)).toEqual(["orphan"]);
+  });
+
+  it("keeps a remote task.create child under a snoozed or settled parent unless a person must answer it", () => {
+    const snoozed = fold([
+      thread("parent", { snoozedUntil: "2026-10-28T00:00:00.000Z" }),
+      remoteTask("running", { status: "running" }),
+      remoteTask("asking", { input: true }),
+    ]);
+    expect(ids(snoozed.roots)).toEqual(["parent", "asking"]);
+    const settled = fold([thread("parent", { settled: true }), remoteTask("done")]);
+    expect(ids(settled.roots)).toEqual(["parent"]);
   });
 
   it("keeps a pinned launched thread where the person put it", () => {

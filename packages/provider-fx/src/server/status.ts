@@ -19,8 +19,9 @@ import {
 import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
-  DEFAULT_TIMEOUT_MS,
-  isCommandMissingCause,
+  classifySpawnFailure,
+  safeProcessCwd,
+  spawnFailureMessage,
   nonEmptyTrimmed,
   parseGenericCliVersion,
   type ProviderProbeResult,
@@ -110,6 +111,7 @@ const runFxCli = Effect.fn("runFxCli")(function* (
   settings: FxSettings,
   args: ReadonlyArray<string>,
   environment: NodeJS.ProcessEnv,
+  cwd?: string,
 ) {
   const command = settings.binaryPath || "fx";
   const spawnCommand = yield* resolveSpawnCommand(command, args, { env: environment });
@@ -118,6 +120,7 @@ const runFxCli = Effect.fn("runFxCli")(function* (
     ChildProcess.make(spawnCommand.command, spawnCommand.args, {
       env: environment,
       shell: spawnCommand.shell,
+      ...(cwd ? { cwd } : {}),
     }),
   );
 });
@@ -134,6 +137,8 @@ const FxModels = Schema.fromJsonString(
   Schema.Struct({ ids: Schema.optional(Schema.Array(Schema.String)) }),
 );
 const decodeFxModels = Schema.decodeUnknownOption(FxModels);
+
+const VERSION_PROBE_TIMEOUT_MS = 10_000;
 
 function fxAuth(auth: string | undefined): ServerProviderAuth {
   const method = nonEmptyTrimmed(auth);
@@ -162,18 +167,28 @@ export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function
     });
   }
 
-  const versionResult = yield* runFxCli(settings, ["--version"], environment).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+  const spawnCwd = safeProcessCwd();
+  const versionResult = yield* runFxCli(settings, ["--version"], environment, spawnCwd).pipe(
+    Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
     Effect.result,
   );
   if (Result.isFailure(versionResult) || Option.isNone(versionResult.success)) {
-    const missing = Result.isFailure(versionResult) && isCommandMissingCause(versionResult.failure);
+    const failure = Result.isFailure(versionResult)
+      ? classifySpawnFailure(versionResult.failure, spawnCwd, undefined, {
+          binary: settings.binaryPath || "fx",
+          env: environment,
+        })
+      : "unknown";
+    const missing = failure === "missing";
     return snapshot(settings, checkedAt, {
       installed: !missing,
       version: null,
       status: "error",
       auth: { status: "unknown" },
-      message: missing ? "fx is not installed or not on PATH." : "Failed to run `fx --version`.",
+      message: missing
+        ? "fx is not installed or not on PATH."
+        : (spawnFailureMessage(failure, spawnCwd, settings.binaryPath || "fx") ??
+          "Failed to run `fx --version`."),
     });
   }
   const versionOutput = versionResult.success.value;

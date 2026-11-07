@@ -21,7 +21,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Keyboard, Platform, Pressable, Text, useWindowDimensions, View } from "react-native";
+import { Keyboard, Platform, useWindowDimensions, View } from "react-native";
 import { KeyboardController, useKeyboardState } from "react-native-keyboard-controller";
 import Animated, {
   runOnJS,
@@ -47,6 +47,7 @@ import type { ThreadListFilters } from "../../persistence/mobile-preferences";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useProjects } from "../../state/entities";
 import { environmentThreadShells } from "../../state/threads";
+import { withKnownPullRequestSummary } from "../../state/use-thread-pr";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import {
   DEFAULT_MOBILE_PROJECT_GROUPING_SETTINGS,
@@ -89,7 +90,8 @@ import {
 } from "../../native/v5-workspace-context";
 
 import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
-import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
+import { useMobileGoatBotHomeMode } from "../goat-bot/useMobileGoatBotHomeMode";
+import { MobileBotList } from "../goat-bot/MobileBotList";
 import { AndroidHingeObserver } from "../../native/AndroidHingeObserver";
 import { WindowHingeContext } from "../../native/window-hinge-context";
 import { useAndroidWorkspaceRoot } from "../workspace/AndroidWorkspaceTabsProvider";
@@ -102,6 +104,7 @@ import {
 import { workspaceTabNavigationState } from "../workspace/workspace-tab-navigation";
 import type { WorkspaceTab } from "../workspace/workspace-tabs-state";
 import { workspaceRoutesOf } from "./workspace-overlay-routes";
+import { useAndroidContentStyles } from "./android-content-styles";
 
 export { useAdaptiveWorkspaceLayout };
 
@@ -200,7 +203,7 @@ function AdaptiveWorkspaceLayoutContent(
     readonly savedThreadListFilters?: ThreadListFilters | undefined;
   },
 ) {
-  const botHome = useMobileGoatBotModeButton();
+  const botHome = useMobileGoatBotHomeMode();
   const projectGroupingMode = props.projectGroupingMode;
   const nativeWorkspace = use(NativeWorkspaceModeContext);
   const usesPresentationHost = use(WorkspacePresentationHostContext);
@@ -487,6 +490,7 @@ function AdaptiveWorkspaceLayoutContent(
         columns: Platform.OS === "ios" && (options?.columns ?? layout.usesSplitView),
         check: workspaceSelectionCheck,
         overlays,
+        seedPullRequest: withKnownPullRequestSummary,
       },
     );
     if (layout.primarySidebarOverlaysContent) {
@@ -506,7 +510,7 @@ function AdaptiveWorkspaceLayoutContent(
       if (layout.primarySidebarOverlaysContent) setPrimarySidebarVisible(false);
       workspace?.dispatch({
         type: "select",
-        tab: detail.name === "Thread" ? "threads" : "pullRequests",
+        tab: detail.name === "PullRequest" ? "pullRequests" : "threads",
       });
       startOpeningDetail(detail);
       navigation.dispatch(selectWorkspaceDetail(detail, sheet));
@@ -754,9 +758,14 @@ function AdaptiveWorkspaceLayoutContent(
       0,
       viewportWidth -
         renderedRailWidth.value -
-        renderedSidebarWidth.value -
+        (workspacePage ? 0 : renderedSidebarWidth.value) -
         renderedInspectorWidth.value,
     ),
+  );
+  const { androidContentSlotStyle, androidNavigatorLimit } = useAndroidContentStyles(
+    layout.usesSplitView,
+    renderedContentWidth,
+    contentTargetWidth,
   );
 
   const handleSelectThread = (thread: EnvironmentThreadShell) => {
@@ -830,11 +839,11 @@ function AdaptiveWorkspaceLayoutContent(
     >
       <AndroidHingeObserver onChange={handleHingeChange} />
       {shouldRenderNavigationRail ? (
-        <Animated.View className="self-stretch" style={railAnimatedStyle} />
+        <Animated.View className="shrink self-stretch" style={railAnimatedStyle} />
       ) : null}
       {shouldRenderPrimarySidebar && layout.listPaneWidth !== null ? (
         <Animated.View
-          className="self-stretch overflow-hidden"
+          className="self-stretch overflow-hidden android:shrink"
           accessibilityElementsHidden={!panes.primarySidebarVisible}
           collapsable={false}
           importantForAccessibility={panes.primarySidebarVisible ? "auto" : "no-hide-descendants"}
@@ -861,61 +870,54 @@ function AdaptiveWorkspaceLayoutContent(
                 onRequestVisibility={revealPrimarySidebar}
                 selectedPullRequestKey={props.selectedPullRequestKey ?? null}
               >
-                <AndroidHomeFabLayout sidebar onStartNewTask={handleStartNewTask}>
-                  <ThreadNavigationSidebar
-                    width={layout.listPaneWidth}
-                    visible={panes.primarySidebarVisible}
-                    onRequestVisibility={revealPrimarySidebar}
-                    selectedThreadKey={selectedThreadKey}
-                    onOpenDecisions={handleOpenDecisions}
-                    onOpenSettings={handleOpenSettings}
-                    onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
-                    onNewThreadInProject={handleNewThreadInProject}
-                    onNewThreadOnBranch={handleNewThreadOnBranch}
-                    onOpenPendingTask={handleOpenPendingTask}
-                    onSelectThread={handleSelectThread}
-                    onOpenThreadPullRequests={handleOpenThreadPullRequests}
-                    onSearchQueryChange={setPrimarySidebarSearchQuery}
-                    searchQuery={primarySidebarSearchQuery}
-                  />
-                </AndroidHomeFabLayout>
+                {botHome.mode === "bot" ? (
+                  <MobileBotList />
+                ) : (
+                  <AndroidHomeFabLayout sidebar onStartNewTask={handleStartNewTask}>
+                    <ThreadNavigationSidebar
+                      width={layout.listPaneWidth}
+                      visible={panes.primarySidebarVisible}
+                      onRequestVisibility={revealPrimarySidebar}
+                      selectedThreadKey={selectedThreadKey}
+                      onOpenDecisions={handleOpenDecisions}
+                      onOpenSettings={handleOpenSettings}
+                      onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
+                      onNewThreadInProject={handleNewThreadInProject}
+                      onNewThreadOnBranch={handleNewThreadOnBranch}
+                      onOpenPendingTask={handleOpenPendingTask}
+                      onSelectThread={handleSelectThread}
+                      onOpenThreadPullRequests={handleOpenThreadPullRequests}
+                      onSearchQueryChange={setPrimarySidebarSearchQuery}
+                      searchQuery={primarySidebarSearchQuery}
+                    />
+                  </AndroidHomeFabLayout>
+                )}
               </AndroidWorkspaceSidebar>
-              {Platform.OS === "ios" && botHome.known ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={botHome.toggle}
-                  className="border-t border-border bg-drawer px-4 py-3"
-                >
-                  <Text className="text-sm font-semibold text-foreground">
-                    {botHome.mode === "bot" && !botHome.threadOpen
-                      ? "Show threads"
-                      : "Show GOAT Bot"}
-                  </Text>
-                </Pressable>
-              ) : null}
             </RenderErrorBoundary>
           </Animated.View>
         </Animated.View>
       ) : null}
-      <View
+      <Animated.View
         className={
           Platform.OS === "android"
-            ? "flex-1 overflow-hidden bg-header"
+            ? "max-w-full shrink-0 overflow-hidden bg-header"
             : "flex-1 overflow-hidden bg-screen"
         }
+        style={Platform.OS === "android" ? androidContentSlotStyle : undefined}
         collapsable={false}
       >
-        <View
+        <Animated.View
           collapsable={false}
-          style={
+          style={[
             contentTargetWidth !== null
               ? {
                   flex: 1,
                   width: contentTargetWidth,
                   alignSelf: contentAnchor.end ? "flex-end" : "flex-start",
                 }
-              : { flex: 1 }
-          }
+              : { flex: 1 },
+            Platform.OS === "android" ? androidNavigatorLimit : undefined,
+          ]}
         >
           {/* Android holds the content still, so its floating controls keep its width. */}
           <WorkspaceContentWidthContext
@@ -935,8 +937,8 @@ function AdaptiveWorkspaceLayoutContent(
               ) : null}
             </WorkspaceSettledContentWidthContext>
           </WorkspaceContentWidthContext>
-        </View>
-      </View>
+        </Animated.View>
+      </Animated.View>
       <WorkspaceInspectorPane
         pathname={props.pathname}
         renderedInspectorWidth={renderedInspectorWidth}
@@ -947,11 +949,14 @@ function AdaptiveWorkspaceLayoutContent(
         onClosed={handleWorkspaceInspectorClosed}
       />
       {shouldRenderNavigationRail && navigationRailWidth > 0 ? (
-        // The rail reserves its slot above and draws over the panes, so it can widen over
-        // the list in place. It takes the whole workspace only while it is open.
+        // Its trailing inset clips the old rail as soon as Android fits the workspace to a cover display.
         <View
-          className="absolute inset-y-0 left-0"
-          style={railOverlay ? { right: 0 } : { width: navigationRailWidth }}
+          className="absolute inset-y-0 left-0 overflow-hidden"
+          style={
+            railOverlay
+              ? { right: 0 }
+              : { right: viewportWidth - navigationRailWidth, maxWidth: navigationRailWidth }
+          }
         >
           <AndroidWorkspaceNavigation
             onNewThread={handleStartNewTask}

@@ -107,12 +107,27 @@ export function ThreadDetailsPrRow({
   const supportsPullRequests =
     serverConfigs.get(environmentId)?.environment.capabilities.pullRequests === true;
   const repository = sourceControlClients.repositorySelector(project?.repositoryIdentity);
+  const detected =
+    pr === null ? undefined : sourceControlClients.parseChangeRequestUrl(pr.url)?.link;
+  const detectedRepository =
+    detected &&
+    project?.repositoryIdentity?.provider &&
+    sourceControlClients
+      .get(project.repositoryIdentity.provider)
+      .isChangeRequestInRepository(project.repositoryIdentity, detected)
+      ? repository
+      : (detected?.repository ?? repository);
   const reference: PullRequestRef | null =
     supportsPullRequests && project !== null
       ? linkedReference
         ? { ...linkedReference, projectId: project.id as ProjectId }
-        : repository !== null
-          ? { projectId: project.id as ProjectId, repository, number }
+        : detectedRepository != null
+          ? {
+              projectId: project.id as ProjectId,
+              repository: detectedRepository,
+              number,
+              ...(detected === undefined ? {} : { host: detected.authority ?? detected.host }),
+            }
           : null
       : null;
   const detailAtom =
@@ -161,7 +176,6 @@ export function ThreadDetailsPrRow({
     reference,
     terminology,
     onSuccess: () => {
-      detailQuery.refresh();
       checksQuery.refresh();
       onActed?.();
     },

@@ -5,6 +5,7 @@ import {
   BoundedThreadSnapshotLoader,
   ThreadHistoryController,
 } from "@goat/client-runtime/state/threads";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Atom } from "effect/reactivity";
 
@@ -36,7 +37,20 @@ type ConnectionLayerSource =
 
 const layerProvidedClientConnection = layerSnapshotLoader.pipe(
   Layer.provideMerge(
-    Connection.layerWithOptions({ usageLimitSources: true, usageLimitsCommand: true }),
+    Connection.layerWithOptions({
+      drainIo: Effect.callback<void>((resume) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const immediate = setImmediate(() => {
+          timer = setTimeout(() => resume(Effect.void), 0);
+        });
+        return Effect.sync(() => {
+          clearImmediate(immediate);
+          if (timer !== undefined) clearTimeout(timer);
+        });
+      }),
+      usageLimitSources: true,
+      usageLimitsCommand: true,
+    }),
   ),
   Layer.provideMerge(
     Layer.mergeAll(

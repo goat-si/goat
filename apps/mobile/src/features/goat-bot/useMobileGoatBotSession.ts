@@ -24,7 +24,7 @@ import {
 import { goatBotIngestInput } from "@goat/client-runtime/state/channels";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type { ChannelBotRef, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
+import type { ChannelBotRef, ChannelTaskId, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import {
   useCallback,
@@ -36,13 +36,20 @@ import {
 } from "react";
 
 import { environmentCatalog } from "../../connection/catalog";
+import type { DraftComposerAttachment } from "../../lib/composerImages";
+import {
+  composerAttachmentFileReferenceKey,
+  retainComposerAttachmentFile,
+  retainComposerAttachmentUpload,
+} from "../../lib/composerAttachmentFiles";
 import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
+import { useEnvironmentQuery } from "../../state/query";
 import { updateMobilePreferencesAtom } from "../../state/preferences";
 import { environmentThreadDetails } from "../../state/threads";
 import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
-import { useThreadShell } from "../../state/entities";
+import { useServerConfigs, useThreadShell } from "../../state/entities";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { useReplying } from "./useReplying";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
@@ -61,8 +68,10 @@ interface Session {
   readonly bot: ChannelBotRef | null;
   readonly connected: boolean;
   readonly canOperate: boolean;
-  readonly queue: ReturnType<typeof createGoatBotSendQueue>;
+  readonly queue: ReturnType<typeof createGoatBotSendQueue<DraftComposerAttachment>>;
   readonly pending: ReadonlyArray<GoatBotPendingInput>;
+  readonly retain: (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => void;
+  readonly dispose: () => void;
 }
 
 const sessions = new Map<EnvironmentId, Session>();
@@ -81,8 +90,112 @@ function update(environmentId: EnvironmentId, session: Session) {
   for (const listener of listeners) listener();
 }
 
+export async function disposeMobileGoatBotEnvironment(environmentId: EnvironmentId): Promise<void> {
+  const session = sessions.get(environmentId);
+  if (!session) return;
+  session.dispose();
+  sessions.delete(environmentId);
+  for (const listener of listeners) listener();
+}
+
 function newSession(environmentId: EnvironmentId): Session {
-  const queue = createGoatBotSendQueue({
+  // A message's uploads, by its key, so a retry names the same files as the first attempt.
+  const uploads = new Map<string, ReadonlyArray<DraftComposerAttachment>>();
+  const retained = new Map<
+    string,
+    ReadonlyArray<{ readonly fileKey: string | null; readonly release: () => void }>
+  >();
+  const retainedUploadKeys = new Map<string, Set<string>>();
+  let cleanupModule: Promise<typeof import("../../state/use-composer-drafts")> | undefined;
+  let activeUpload: {
+    readonly controller: AbortController;
+    readonly clientKey: string;
+    transfer: Promise<void> | null;
+    fileKey: string | null;
+  } | null = null;
+  let disposed = false;
+  const retainUploads = (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => {
+    const releases = [...(retained.get(key) ?? [])];
+    const ids = retainedUploadKeys.get(key) ?? new Set<string>();
+    for (const attachment of attachments) {
+      if (
+        attachment.uploadEnvironmentId === undefined ||
+        attachment.uploadedAttachmentId === undefined
+      )
+        continue;
+      const id = JSON.stringify([attachment.uploadEnvironmentId, attachment.uploadedAttachmentId]);
+      if (ids.has(id)) continue;
+      ids.add(id);
+      releases.push({
+        fileKey: null,
+        release: retainComposerAttachmentUpload(
+          attachment.uploadEnvironmentId,
+          attachment.uploadedAttachmentId,
+        ),
+      });
+    }
+    retained.set(key, releases);
+    retainedUploadKeys.set(key, ids);
+  };
+  const cleanup = (files: ReadonlyArray<DraftComposerAttachment>) => {
+    cleanupModule ??= import("../../state/use-composer-drafts").catch((error: unknown) => {
+      cleanupModule = undefined;
+      throw error;
+    });
+    void cleanupModule
+      .then(({ releaseUnusedComposerAttachmentFiles }) =>
+        releaseUnusedComposerAttachmentFiles(
+          disposed
+            ? files.map(({ uploadedAttachmentId: _id, uploadEnvironmentId: _env, ...file }) => file)
+            : files,
+        ),
+      )
+      .catch((error) => console.warn("[goat-bot] could not release attachment files", error));
+  };
+  const forget = (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => {
+    const files = uploads.get(key) ?? attachments;
+    uploads.delete(key);
+    const upload = disposed && activeUpload?.clientKey === key ? activeUpload : null;
+    const heldKey = upload?.transfer ? upload.fileKey : null;
+    const held = (retained.get(key) ?? []).filter(
+      (item) => heldKey !== null && item.fileKey === heldKey,
+    );
+    for (const item of retained.get(key) ?? []) if (!held.includes(item)) item.release();
+    retained.delete(key);
+    retainedUploadKeys.delete(key);
+    const heldFiles =
+      heldKey === null
+        ? []
+        : files.filter(
+            (file) =>
+              file.fileUri !== undefined &&
+              composerAttachmentFileReferenceKey(file.fileUri) === heldKey,
+          );
+    const otherFiles =
+      heldKey === null
+        ? files
+        : files.filter(
+            (file) =>
+              file.fileUri === undefined ||
+              composerAttachmentFileReferenceKey(file.fileUri) !== heldKey,
+          );
+    if (otherFiles.length > 0 || files.length === 0) cleanup(otherFiles);
+    if (upload?.transfer && held.length > 0) {
+      // A transfer that ignores abort keeps only its own file while it is still in use.
+      void upload.transfer
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .then(() => {
+          for (const item of held) item.release();
+          cleanup(heldFiles);
+        })
+        .catch((error) => console.warn("[goat-bot] could not release attachment files", error));
+    }
+  };
+  const queue = createGoatBotSendQueue<DraftComposerAttachment>({
+    onForget: forget,
     makeKey: uuidv4,
     onChange: () => {
       const current = sessions.get(environmentId);
@@ -91,6 +204,7 @@ function newSession(environmentId: EnvironmentId): Session {
     canDispatch: (bot) => {
       const current = sessions.get(environmentId);
       return (
+        !disposed &&
         current?.connected === true &&
         current.canOperate &&
         current.machine.ensure.state === "confirmed" &&
@@ -98,7 +212,7 @@ function newSession(environmentId: EnvironmentId): Session {
         current.bot.threadId === bot.threadId
       );
     },
-    send: async ({ clientKey, text, receivedAt, bot }) => {
+    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId }) => {
       const fullBot = sessions.get(environmentId)?.bot;
       if (
         !fullBot ||
@@ -107,11 +221,70 @@ function newSession(environmentId: EnvironmentId): Session {
       ) {
         throw new Error("GOAT Bot isn't available");
       }
+      // Upload code loads only for messages that carry files.
+      let files;
+      if (attachments.length === 0) {
+        files = [];
+      } else {
+        const controller = new AbortController();
+        const upload: NonNullable<typeof activeUpload> = {
+          controller,
+          clientKey,
+          transfer: null,
+          fileKey: null,
+        };
+        activeUpload = upload;
+        const settled = import("./goatBotAttachments").then(({ uploadGoatBotAttachments }) =>
+          uploadGoatBotAttachments({
+            environmentId,
+            signal: controller.signal,
+            onLocalTransfer: (transfer, attachment) => {
+              upload.transfer = transfer;
+              upload.fileKey =
+                attachment.fileUri === undefined
+                  ? null
+                  : composerAttachmentFileReferenceKey(attachment.fileUri);
+              const clear = () => {
+                if (upload.transfer === transfer) {
+                  upload.transfer = null;
+                  upload.fileKey = null;
+                }
+              };
+              void transfer.then(clear, clear);
+            },
+            attachments: uploads.get(clientKey) ?? attachments,
+            remember: (uploaded) => {
+              if (disposed) {
+                cleanup(uploaded);
+                return;
+              }
+              uploads.set(clientKey, uploaded);
+              retainUploads(clientKey, uploaded);
+            },
+          }),
+        );
+        try {
+          files = await settled;
+        } finally {
+          activeUpload = null;
+        }
+      }
+      if (disposed) throw new Error("GOAT Bot environment was removed");
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.ingest, {
         environmentId,
-        input: goatBotIngestInput({ bot: fullBot, text, clientMessageId: clientKey, receivedAt }),
+        input: goatBotIngestInput({
+          bot: fullBot,
+          text,
+          attachments: files,
+          clientMessageId: clientKey,
+          receivedAt,
+          ...(taskId === undefined ? {} : { taskId }),
+        }),
       });
       if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      if (attachments.length > 0) {
+        forget(clientKey, attachments);
+      }
       return {
         requestKey: result.value.inputId,
         ...(result.value.state === "rejected"
@@ -128,6 +301,27 @@ function newSession(environmentId: EnvironmentId): Session {
     canOperate: false,
     queue,
     pending: EMPTY_PENDING,
+    retain: (key, attachments) => {
+      retained.set(
+        key,
+        attachments.flatMap((attachment) =>
+          attachment.fileUri === undefined
+            ? []
+            : [
+                {
+                  fileKey: composerAttachmentFileReferenceKey(attachment.fileUri),
+                  release: retainComposerAttachmentFile(attachment.fileUri, () => {}),
+                },
+              ],
+        ),
+      );
+      retainUploads(key, attachments);
+    },
+    dispose: () => {
+      disposed = true;
+      activeUpload?.controller.abort();
+      queue.dispose();
+    },
   };
 }
 
@@ -147,12 +341,27 @@ function useResidentThreadProjection(ref: ScopedThreadRef | null) {
   return thread?.projection ?? null;
 }
 
-export function useMobileGoatBotSession(visible: boolean) {
+export function useMobileGoatBotSession(visible: boolean, requestedTaskId?: ChannelTaskId | null) {
   const home = useMobileGoatBotHomeMode();
   const environment = home.home.supported
     ? pickGoatBotEnvironment(home.environments, home.botRef)
     : pickMobileGoatBotEnvironment(home.environments, home.botRef);
   const environmentId = environment?.environmentId ?? null;
+  const configs = useServerConfigs();
+  const capabilities =
+    environmentId === null ? undefined : configs.get(environmentId)?.environment.capabilities;
+  const supportsTaskThreads = capabilities?.goatBotTaskThreads === true;
+  const taskId = supportsTaskThreads ? requestedTaskId : null;
+  const threads = useEnvironmentQuery(
+    environmentId !== null && environment?.connected && supportsTaskThreads
+      ? channelEnvironment.listBotThreads({ environmentId, input: {} })
+      : null,
+  );
+  const knownTaskIds = useMemo(
+    () =>
+      (threads.data?.rows ?? []).flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+    [threads.data],
+  );
   const connection = useAtomValue(
     environmentId === null ? NO_CONNECTION : environmentCatalog.stateAtom(environmentId),
   );
@@ -385,8 +594,15 @@ export function useMobileGoatBotSession(visible: boolean) {
   }, [visible, queue, visibleTurnItems]);
   const pendingInputs = session?.pending ?? EMPTY_PENDING;
   const rows = useMemo(
-    () => buildGoatBotTimeline({ visibleTurnItems, pendingInputs, readers: goatBotItemReaders }),
-    [visibleTurnItems, pendingInputs],
+    () =>
+      buildGoatBotTimeline({
+        visibleTurnItems,
+        pendingInputs,
+        readers: goatBotItemReaders,
+        knownTaskIds,
+        ...(taskId === undefined ? {} : { taskId }),
+      }),
+    [visibleTurnItems, pendingInputs, taskId, knownTaskIds],
   );
   const replyingSince = useMemo(
     () => goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
@@ -434,13 +650,19 @@ export function useMobileGoatBotSession(visible: boolean) {
       : resolved.kind;
   const canSend =
     visible && homeReady && canSendToGoatBot(resolved, canOperate) && confirmedBot !== null;
+  const attachmentSupport =
+    capabilities?.goatBotAttachments === true && capabilities.attachmentUploads === true
+      ? { maxUploadBytes: capabilities.fileAttachments?.maxUploadBytes ?? null }
+      : null;
   const onSend = useCallback(
-    (text: string) => {
-      if (!canSend || !confirmedBot || !text.trim()) return false;
-      queue?.submit(text.trim(), confirmedBot);
+    (text: string, attachments: ReadonlyArray<DraftComposerAttachment> = []) => {
+      if (!canSend || !confirmedBot || (!text.trim() && attachments.length === 0)) return false;
+      if (!queue || !session) return false;
+      const key = queue.submit(text.trim(), confirmedBot, attachments, taskId ?? undefined);
+      session.retain(key, attachments);
       return true;
     },
-    [canSend, confirmedBot, queue],
+    [canSend, confirmedBot, queue, session, taskId],
   );
   const onRetryInput = useCallback(
     (key: string) => {
@@ -461,17 +683,21 @@ export function useMobileGoatBotSession(visible: boolean) {
   }, [environmentId, homeKey, settingsSnapshot]);
   return {
     rows,
+    supportsTaskThreads,
     /** The environment of the bot whose history is shown; before a move confirms, the old one. */
     historyEnvironmentId: bot?.environmentId ?? null,
     replyingSince,
     activity,
     canSend,
+    /** Null when this server's GOAT Bot cannot take files. */
+    attachmentSupport,
     availability,
     homeKnown: resolved.kind === "home_offline" ? resolved.known : false,
     homeLabel: resolved.kind === "home_offline" ? resolved.label : null,
     error: ensure.state === "failed" ? ensure.message : null,
     onSend,
     onRetryInput,
+    onDiscardInput: (key: string) => queue?.discard(key),
     onRetryAvailability,
   };
 }

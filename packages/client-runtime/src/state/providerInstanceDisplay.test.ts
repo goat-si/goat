@@ -54,6 +54,10 @@ describe("providerAccentForegroundColor", () => {
 });
 
 describe("shouldShowInstanceBadge", () => {
+  it("ignores invalid accent colors for a single account (#24898)", () => {
+    const entry = { driverKind: codex, accentColor: "  invalid  ", enabled: true };
+    expect(shouldShowInstanceBadge(entry, [entry])).toBe(false);
+  });
   it("hides badges for distinct ACP agents sharing the registry driver", () => {
     const mistral = { driverKind: acpRegistry, acpRegistryAgentId: "mistral-vibe", enabled: true };
     const devin = { driverKind: acpRegistry, acpRegistryAgentId: "devin", enabled: true };

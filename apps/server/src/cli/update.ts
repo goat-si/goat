@@ -29,6 +29,8 @@ import {
   pinnedRuntimeCommand,
   PinnedRuntimeInstallError,
   pinnedRuntimePaths,
+  pinnedRuntimeVersionsDir,
+  recordPinnedRuntimeLauncher,
   prunePinnedRuntimes,
   windowsShimTarget,
 } from "../cloud/pinnedRuntime.ts";
@@ -237,7 +239,7 @@ export const resolveNewestVersion = (input: Parameters<typeof resolveNewestRelea
  */
 export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function* (input: {
   readonly launchedAs: string | undefined;
-  readonly versionsDir: string;
+  readonly baseDir: string;
   readonly targetEntryPath: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -245,7 +247,13 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   const platform = yield* HostProcess.Platform;
   if (input.launchedAs === undefined) return Option.none<string>();
   const ownsTarget = (candidate: string) =>
-    launcherOwnsVersionsDir(path, input.versionsDir, candidate);
+    launcherOwnsVersionsDir(path, pinnedRuntimeVersionsDir(path, input.baseDir), candidate);
+  const remember = (launcher: string) =>
+    recordPinnedRuntimeLauncher({ baseDir: input.baseDir, launcher }).pipe(
+      Effect.mapError(
+        () => new CliUpdateError({ reason: `Could not record the goat launcher at ${launcher}.` }),
+      ),
+    );
 
   if (platform === "win32") {
     const shimPath = yield* findWindowsShim(input.launchedAs);
@@ -253,6 +261,7 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
     const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
     const quoted = Option.isSome(current) ? windowsShimTarget(current.value) : undefined;
     if (quoted === undefined || !ownsTarget(quoted)) return Option.none<string>();
+    yield* remember(shimPath);
     yield* fs
       .writeFileString(shimPath, `@echo off\r\n"${input.targetEntryPath}" %*`)
       .pipe(
@@ -268,6 +277,7 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   if (Option.isNone(linkTarget)) return Option.none<string>();
   const resolvedTarget = path.resolve(path.dirname(input.launchedAs), linkTarget.value);
   if (!ownsTarget(resolvedTarget)) return Option.none<string>();
+  yield* remember(input.launchedAs);
   const tempLink = `${input.launchedAs}.${process.pid}.tmp`;
   yield* fs.symlink(input.targetEntryPath, tempLink).pipe(
     Effect.andThen(fs.rename(tempLink, input.launchedAs)),
@@ -433,6 +443,20 @@ const belongsToBootService = Effect.fn("cli.update.belongs_to_boot_service")(fun
   }
   return false;
 });
+
+export function backgroundServiceRunningMessage(
+  serviceVersion: string | undefined,
+  restartPending: boolean,
+  targetVersion: string,
+): string {
+  const running =
+    serviceVersion === undefined
+      ? "an unknown version"
+      : restartPending
+        ? `the version before ${serviceVersion}`
+        : serviceVersion;
+  return `  Background service still running ${running}. Run \`goat service restart\` when you are ready to switch it to ${targetVersion}.`;
+}
 
 const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly baseDir: string;
@@ -622,7 +646,7 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   const launchedAs = (yield* HostProcess.IsExecutable) ? yield* resolveLauncherPath : undefined;
   const repointed = yield* repointLauncher({
     launchedAs,
-    versionsDir: path.dirname(runtime.versionDir),
+    baseDir: input.baseDir,
     targetEntryPath: runtime.entryPath,
   });
 
@@ -688,7 +712,7 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     yield* Console.log(`  Background service already on ${targetVersion}`);
   } else if (serviceInstalled) {
     yield* Console.log(
-      `  Background service still running ${serviceVersion ?? "an unknown version"}. Run \`goat service restart\` when you are ready to switch it to ${targetVersion}.`,
+      backgroundServiceRunningMessage(serviceVersion, restartPending, targetVersion),
     );
   } else if (!servesThisHome && (status.installed || status.installedBaseDir !== undefined)) {
     yield* Console.log(

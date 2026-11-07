@@ -1,3 +1,4 @@
+import { projectRepositories } from "../pullRequest/projectRepositories.ts";
 import {
   CommandId,
   type OrchestrationProjectShell,
@@ -7,13 +8,13 @@ import {
   type ThreadLinkedPullRequest,
 } from "@goat/contracts";
 import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -48,16 +49,18 @@ function samePullRequest(
   );
 }
 
-function pullRequestMatchesProject(
+function pullRequestRepository(
   pullRequest: GitManager.GitBranchPullRequest,
   project: OrchestrationProjectShell,
-): boolean {
-  return (
-    pullRequest.repositoryKey !== null &&
-    project.repositoryIdentity != null &&
-    sourceControlDefinitions.canonicalRepositoryKey(pullRequest.repositoryKey) ===
-      sourceControlDefinitions.canonicalRepositoryKey(project.repositoryIdentity.canonicalKey)
+): string | null {
+  if (pullRequest.repositoryKey === null) return null;
+  const key = sourceControlDefinitions.canonicalRepositoryKey(pullRequest.repositoryKey);
+  const match = projectRepositories([project]).find(
+    ({ identity }) =>
+      identity != null &&
+      sourceControlDefinitions.canonicalRepositoryKey(identity.canonicalKey) === key,
   );
+  return sourceControlDefinitions.repositorySelector(match?.identity);
 }
 
 const resolveProjectForPullRequestDiscovery = Effect.fn(
@@ -73,7 +76,6 @@ const resolveProjectForPullRequestDiscovery = Effect.fn(
   });
   return {
     project: { ...project, repositoryIdentity },
-    repository: sourceControlDefinitions.repositorySelector(repositoryIdentity),
   };
 });
 
@@ -102,6 +104,7 @@ export const make = Effect.gen(function* () {
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const pendingBackfill = new Map<ThreadId, number>();
 
@@ -118,19 +121,9 @@ export const make = Effect.gen(function* () {
   };
 
   const readThreadSnapshot = ({ threadId, backfill }: RefreshRequest) =>
-    threadId === null
-      ? orchestrator
-          .getShellSnapshot({
-            location: "active",
-            unsettledOnly: !(backfill || pendingBackfill.size > 0),
-          })
-          .pipe(NodeSqliteClient.readOnly)
-      : Effect.gen(function* () {
-          // Read sequence first so guarded sync rejects intervening changes.
-          const snapshotSequence = yield* orchestrator.getThreadEventSequence(threadId);
-          const thread = yield* orchestrator.getThreadShell(threadId);
-          return { snapshotSequence, threads: thread === null ? [] : [thread] };
-        });
+    orchestrator.getPullRequestSnapshot(
+      threadId === null ? { unsettledOnly: !(backfill || pendingBackfill.size > 0) } : { threadId },
+    );
 
   const synchronize = Effect.fn("ThreadPullRequestServiceV2.synchronize")(function* (
     request: RefreshRequest,
@@ -183,13 +176,20 @@ export const make = Effect.gen(function* () {
           const first = group[0]!;
           const project = projects.get(first.projectId);
           if (project === undefined) return finishBackfill(group);
-          const { project: resolvedProject, repository } =
-            yield* resolveProjectForPullRequestDiscovery(project, repositoryIdentities, {
+          const { project: resolvedProject } = yield* resolveProjectForPullRequestDiscovery(
+            project,
+            repositoryIdentities,
+            {
               refresh: request.refresh,
-            });
-          if (first.branch !== null && repository === null) return finishBackfill(group);
+            },
+          );
+          if (first.branch !== null && resolvedProject.repositoryIdentity == null)
+            return finishBackfill(group);
           const worktreeExists =
-            first.worktreePath !== null && (yield* fileSystem.exists(first.worktreePath));
+            first.worktreePath !== null &&
+            (yield* fileSystem
+              .exists(path.join(first.worktreePath, ".git"))
+              .pipe(Effect.orElseSucceed(() => true)));
           const cwd =
             worktreeExists && first.worktreePath !== null
               ? first.worktreePath
@@ -201,9 +201,8 @@ export const make = Effect.gen(function* () {
                   { cwd, branch: first.branch },
                   { refresh: request.refresh },
                 );
-          if (detected !== null && !pullRequestMatchesProject(detected, resolvedProject)) {
-            return finishBackfill(group);
-          }
+          const repository =
+            detected === null ? null : pullRequestRepository(detected, resolvedProject);
           const detectedReference =
             detected !== null && repository !== null
               ? {
@@ -218,6 +217,7 @@ export const make = Effect.gen(function* () {
             Effect.gen(function* () {
               let branchPullRequest = detectedReference;
               if (
+                detected === null &&
                 branchPullRequest === null &&
                 thread.branch !== null &&
                 thread.worktreePath === null &&
@@ -288,10 +288,10 @@ export const make = Effect.gen(function* () {
               current.url !== detected.url ||
               current.state !== detected.state ||
               current.repositoryKey !== detected.repositoryKey ||
-              !pullRequestMatchesProject(current, {
+              pullRequestRepository(current, {
                 ...project,
                 repositoryIdentity: currentIdentity,
-              })
+              }) !== repository
             ) {
               return failBackfill(updates.map((update) => update.thread));
             }

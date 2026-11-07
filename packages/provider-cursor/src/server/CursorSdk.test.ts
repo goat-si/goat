@@ -5,14 +5,12 @@ import { vi } from "vite-plus/test";
 
 import * as CursorSdk from "./CursorSdk.ts";
 
-vi.mock("./sdk.ts", () => ({ Agent: {}, createAgentPlatform: {}, SqliteLocalAgentStore: {} }));
-
 // Shaped like the SDK's minified class: the constructor is not named after the error.
 class o extends Error {
   override name = "WriteIterableClosedError";
 }
 
-// Calls the guard directly, with Vitest's own listener detached so the guard does not defer to it.
+// Calls the process net's rejection listener directly, with Vitest's own listener detached so it does not defer.
 const rejectThroughGuard = (reason: unknown) =>
   Effect.gen(function* () {
     const others = process.listeners("unhandledRejection");
@@ -20,7 +18,6 @@ const rejectThroughGuard = (reason: unknown) =>
     const guard = process.listeners("unhandledRejection").find((l) => !others.includes(l));
     assert.isDefined(guard);
     using exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-    using _log = vi.spyOn(console, "error").mockImplementation(() => {});
     for (const listener of others) process.off("unhandledRejection", listener);
     try {
       guard(reason, Promise.resolve());
@@ -37,11 +34,56 @@ describe("CursorSdk unhandled rejection guard", () => {
     }),
   );
 
+  it.effect("keeps the server running when the SDK writes after its request stream ended", () =>
+    Effect.gen(function* () {
+      // Shaped like `ConnectError.from(e, Code.Aborted)` from the SDK's connect-node body pump.
+      const cause = Object.assign(new Error("write after end"), {
+        code: "ERR_STREAM_WRITE_AFTER_END",
+      });
+      const reason = Object.assign(new Error("[aborted] write after end", { cause }), {
+        name: "ConnectError",
+        code: 10,
+        rawMessage: "write after end",
+      });
+      assert.deepStrictEqual(yield* rejectThroughGuard(reason), []);
+    }),
+  );
+
   it.effect("still exits on other rejections", () =>
     Effect.gen(function* () {
       assert.deepStrictEqual(yield* rejectThroughGuard(new Error("WritableIterable is closed")), [
         [1],
       ]);
+    }),
+  );
+
+  it.effect("exits on a Cursor shell spawn failure, which reaches GOAT's adapter too", () =>
+    Effect.gen(function* () {
+      const spawnFailure = Object.assign(new Error("spawn /bin/zsh ENOENT"), {
+        code: "ENOENT",
+        syscall: "spawn /bin/zsh",
+        spawnargs: ["-c", "dump_zsh_state >&4"],
+      });
+      assert.deepStrictEqual(yield* rejectThroughGuard(spawnFailure), [[1]]);
+    }),
+  );
+
+  it.effect("releases its rejection listener with the layer", () =>
+    Effect.gen(function* () {
+      const before = process.listenerCount("unhandledRejection");
+      yield* Layer.build(CursorSdk.layer).pipe(Effect.scoped);
+      assert.strictEqual(process.listenerCount("unhandledRejection"), before);
+    }),
+  );
+
+  it.effect("still exits on aborted requests other than a write after end", () =>
+    Effect.gen(function* () {
+      const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+      const reason = Object.assign(new Error("[aborted] socket hang up", { cause }), {
+        name: "ConnectError",
+        code: 10,
+      });
+      assert.deepStrictEqual(yield* rejectThroughGuard(reason), [[1]]);
     }),
   );
 });

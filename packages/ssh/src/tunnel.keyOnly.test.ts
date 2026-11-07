@@ -115,3 +115,112 @@ describe.each([
     );
   });
 });
+
+it.effect.each([
+  [
+    'sign_and_send_pubkey: signing failed for ED25519 "id" from agent: communication with agent failed\nPermission denied (publickey,password).',
+    0,
+  ],
+  [
+    'sign_and_send_pubkey: signing failed for ED25519 "id": device not found\nPermission denied (publickey,password).',
+    1,
+  ],
+  ["Permission denied (publickey,password).", 1],
+] as const)(
+  "preserves agent signing errors and prompts for ordinary rejection",
+  ([stderr, expected]) => {
+    let prompts = 0;
+    const spawner = ChildProcessSpawner.make((command) =>
+      Effect.succeed(
+        commandArgs(command).includes("-G")
+          ? makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n")
+          : {
+              ...makeSuccessfulProcess(""),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(255)),
+              stderr: Stream.make(encoder.encode(stderr)),
+            },
+      ),
+    );
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      const error = yield* manager.ensureEnvironment(uploadTarget).pipe(Effect.flip);
+      assert.equal(prompts, expected);
+      if (expected === 0) assert.include(error.message, "signing failed");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Layer.succeed(HttpClient.HttpClient, testHttpClient),
+          Layer.succeed(NetService.NetService, testNetService),
+          Layer.succeed(SshAuth.SshPasswordPrompt, {
+            isAvailable: true,
+            request: () =>
+              Effect.sync(() => {
+                prompts++;
+                return null;
+              }),
+          }),
+          SshTunnel.SshEnvironmentManager.layer({
+            resolveCliRunner: Effect.succeed(NODE_SCRIPT),
+            leaveRemoteServerRunning: true,
+          }),
+        ),
+      ),
+      Effect.scoped,
+    );
+  },
+);
+
+it.effect("clears a cached password after an SSH agent signing failure", () => {
+  const secrets: Array<string | undefined> = [];
+  let prompts = 0;
+  const spawner = ChildProcessSpawner.make((command) =>
+    Effect.sync(() => {
+      if (commandArgs(command).includes("-G"))
+        return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
+      if (command._tag !== "StandardCommand") return makeSuccessfulProcess("");
+      secrets.push(command.options.env?.T3_SSH_AUTH_SECRET);
+      const stderr =
+        secrets.length === 1
+          ? "Permission denied (publickey,password)."
+          : 'sign_and_send_pubkey: signing failed for ED25519 "id" from agent: communication with agent failed\nPermission denied (publickey,password).';
+      return {
+        ...makeSuccessfulProcess(""),
+        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(255)),
+        stderr: Stream.make(encoder.encode(stderr)),
+      };
+    }),
+  );
+  return Effect.gen(function* () {
+    const manager = yield* SshTunnel.SshEnvironmentManager;
+    const first = yield* manager.ensureEnvironment(uploadTarget).pipe(Effect.flip);
+    assert.include(first.message, "signing failed");
+    const second = yield* manager.ensureEnvironment(uploadTarget).pipe(Effect.flip);
+    assert.include(second.message, "signing failed");
+    assert.deepEqual(secrets, [undefined, "fixture-password", undefined]);
+    assert.equal(prompts, 1);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Layer.succeed(HttpClient.HttpClient, testHttpClient),
+        Layer.succeed(NetService.NetService, testNetService),
+        Layer.succeed(SshAuth.SshPasswordPrompt, {
+          isAvailable: true,
+          request: () =>
+            Effect.sync(() => {
+              prompts++;
+              return "fixture-password";
+            }),
+        }),
+        SshTunnel.SshEnvironmentManager.layer({
+          resolveCliRunner: Effect.succeed(NODE_SCRIPT),
+          leaveRemoteServerRunning: true,
+        }),
+      ),
+    ),
+    Effect.scoped,
+  );
+});

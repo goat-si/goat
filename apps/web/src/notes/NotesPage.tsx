@@ -27,16 +27,24 @@ import { useEnvironmentQuery } from "../state/query";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { NoteLoader } from "./NoteDetail";
 import { NoteList } from "./NoteList";
+import {
+  focusNotesListToggle,
+  NotesListToggle,
+  useNotesListHidden,
+  useNotesListKeyboard,
+} from "./notesListCollapse";
 import { markNotesPageOpen } from "./notesPageVisibility";
 import { noteErrorMessage } from "./noteState";
 import { useCreateNote } from "./useCreateNote";
 
 export function NotesPage(props: { path?: string; create?: boolean }) {
   const environmentId = usePrimaryEnvironmentId();
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   return (
     <SidebarInset>
       <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
         <WorkspacePageHeader electron={isElectron}>
+          {environmentId ? <NotesListToggle keybindings={keybindings} /> : null}
           <h1>Notes</h1>
         </WorkspacePageHeader>
         {environmentId ? (
@@ -81,6 +89,8 @@ function EnvironmentNotes(props: {
   const notes = list.data?.notes ?? [];
   const ready = list.data?.ready === true;
   const createNote = useCreateNote(props.environmentId, notes);
+  const collapsedOnWide = useNotesListHidden();
+  useNotesListKeyboard(keybindings);
   const select = (path: string | undefined, options?: { replace?: boolean }) => {
     if (path && path === props.path) retryFailedNoteRead(registry, props.environmentId, path);
     setFocusPath(null);
@@ -129,15 +139,6 @@ function EnvironmentNotes(props: {
         event.preventDefault();
         event.stopPropagation();
         create();
-      } else if (
-        event.key === "/" &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        !isEditableFocused(event.target)
-      ) {
-        event.preventDefault();
-        focusSearch();
       }
     };
     // Capture runs before the app-wide new-thread handler, which shares mod+n by default.
@@ -154,6 +155,8 @@ function EnvironmentNotes(props: {
   const exitEditor = () => {
     const path = props.path;
     if (!path) return;
+    // A list the person hid on a wide screen stays hidden; the toggle is the way back to it.
+    if (collapsedOnWide && focusNotesListToggle()) return;
     const row = rowFor(path);
     const listHidden =
       document.querySelector<HTMLElement>("nav[aria-label=Notes]")?.offsetParent === null;
@@ -190,6 +193,7 @@ function EnvironmentNotes(props: {
         onOpenEditor={openEditor}
         onCreate={canCreate ? create : null}
         createShortcut={createShortcut}
+        hidden={collapsedOnWide}
         className={
           props.path
             ? "w-full shrink-0 max-md:hidden md:w-80 md:border-e"

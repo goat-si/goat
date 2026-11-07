@@ -17,9 +17,15 @@ import {
   encodeOptionalPayload,
   runHandler,
 } from "./_internal/shared.ts";
+import {
+  makeMessageChannelStdio,
+  type CodexAppServerMessageChannel,
+} from "./_internal/messageChannel.ts";
+export type { CodexAppServerMessageChannel } from "./_internal/messageChannel.ts";
 import { makeChildStdio, makeStderrTail, makeTerminationError } from "./_internal/stdio.ts";
 
 export interface CodexAppServerClientOptions {
+  readonly maxOutgoingMessageBytes?: number;
   readonly logIncoming?: boolean;
   readonly logOutgoing?: boolean;
   readonly logger?: (
@@ -53,6 +59,12 @@ export class CodexAppServerClient extends Context.Service<
       method: M,
       payload: CodexRpc.ClientNotificationParamsByMethod[M],
     ) => Effect.Effect<void, CodexError.CodexAppServerError>;
+    readonly setRequestGuard: (
+      guard: (
+        method: string,
+        params: unknown,
+      ) => Effect.Effect<void, CodexError.CodexAppServerError>,
+    ) => Effect.Effect<void>;
     readonly handleServerRequest: <M extends CodexRpc.ServerRequestMethod>(
       method: M,
       handler: (
@@ -98,6 +110,13 @@ const V2TurnStartParamsWithCollaborationMode = CodexSchema.V2TurnStartParams.pip
     ),
   }),
 );
+const V2TurnSteerParamsWithAdditionalContext = CodexSchema.V2TurnSteerParams.pipe(
+  Schema.fieldsAssign({
+    additionalContext: Schema.optionalKey(
+      Schema.Record(Schema.String, CodexSchema.V2TurnSteerParams__AdditionalContextEntry),
+    ),
+  }),
+);
 
 export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(function* (
   stdio: Stdio.Stdio,
@@ -109,6 +128,10 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
   let unknownRequestHandler:
     | ((method: string, params: unknown) => Effect.Effect<unknown, CodexError.CodexAppServerError>)
     | undefined;
+  let requestGuard: (
+    method: string,
+    params: unknown,
+  ) => Effect.Effect<void, CodexError.CodexAppServerError> = () => Effect.void;
   let unknownNotificationHandler:
     | ((method: string, params: unknown) => Effect.Effect<void, CodexError.CodexAppServerError>)
     | undefined;
@@ -135,7 +158,9 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
     | undefined =>
     method === "turn/start"
       ? (V2TurnStartParamsWithCollaborationMode as never)
-      : (CodexRpc.CLIENT_REQUEST_PARAMS[method] as never);
+      : method === "turn/steer"
+        ? (V2TurnSteerParamsWithAdditionalContext as never)
+        : (CodexRpc.CLIENT_REQUEST_PARAMS[method] as never);
 
   const getClientRequestResponseSchema = <M extends CodexRpc.ClientRequestMethod>(
     method: M,
@@ -207,26 +232,34 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
   const dispatchRequest = (
     request: CodexProtocol.CodexAppServerIncomingRequest,
   ): Effect.Effect<unknown, CodexError.CodexAppServerError> => {
-    if (request.method in CodexRpc.SERVER_REQUEST_PARAMS) {
-      const method = request.method as CodexRpc.ServerRequestMethod;
-      const payloadSchema = getServerRequestParamSchema(method);
-      const responseSchema = getServerRequestResponseSchema(method);
-      const handler = requestHandlers.get(method);
+    const dispatch = () => {
+      if (request.method in CodexRpc.SERVER_REQUEST_PARAMS) {
+        const method = request.method as CodexRpc.ServerRequestMethod;
+        const payloadSchema = getServerRequestParamSchema(method);
+        const responseSchema = getServerRequestResponseSchema(method);
+        const handler = requestHandlers.get(method);
 
-      return decodeOptionalPayload(method, payloadSchema, request.params).pipe(
-        Effect.flatMap((decoded) => runHandler(handler, decoded, method)),
-        Effect.flatMap((result) => encodeOptionalPayload(method, responseSchema, result)),
-      );
-    }
+        return decodeOptionalPayload(method, payloadSchema, request.params).pipe(
+          Effect.flatMap((decoded) => runHandler(handler, decoded, method)),
+          Effect.flatMap((result) => encodeOptionalPayload(method, responseSchema, result)),
+        );
+      }
 
-    return unknownRequestHandler
-      ? unknownRequestHandler(request.method, request.params)
-      : Effect.fail(CodexError.CodexAppServerRequestError.methodNotFound(request.method));
+      return unknownRequestHandler
+        ? unknownRequestHandler(request.method, request.params)
+        : Effect.fail(CodexError.CodexAppServerRequestError.methodNotFound(request.method));
+    };
+    return requestGuard(request.method, request.params).pipe(
+      Effect.andThen(Effect.suspend(dispatch)),
+    );
   };
 
   const terminated = yield* Deferred.make<CodexError.CodexAppServerError>();
   const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
     stdio,
+    ...(options.maxOutgoingMessageBytes !== undefined
+      ? { maxOutgoingMessageBytes: options.maxOutgoingMessageBytes }
+      : {}),
     ...(terminationError ? { terminationError } : {}),
     ...(options.logIncoming !== undefined ? { logIncoming: options.logIncoming } : {}),
     ...(options.logOutgoing !== undefined ? { logOutgoing: options.logOutgoing } : {}),
@@ -270,6 +303,11 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
       respondError: transport.respondError,
     },
     terminated: Deferred.await(terminated),
+    setRequestGuard: Effect.fn("CodexAppServerClient.setRequestGuard")((guard) =>
+      Effect.sync(() => {
+        requestGuard = guard;
+      }),
+    ),
     request,
     notify,
     handleServerRequest: Effect.fn("CodexAppServerClient.handleServerRequest")(
@@ -321,3 +359,19 @@ const makeChildProcessClient = Effect.fn(
     makeTerminationError(handle, stderrTail.read),
   );
 });
+
+// Codex's socket listener accepts messages up to tungstenite's 64 MiB default.
+const SOCKET_MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
+
+export const layerMessageChannel = (
+  channel: CodexAppServerMessageChannel,
+  options: CodexAppServerClientOptions = {},
+): Layer.Layer<CodexAppServerClient> =>
+  Layer.effect(
+    CodexAppServerClient,
+    make(
+      makeMessageChannelStdio(channel),
+      { maxOutgoingMessageBytes: SOCKET_MAX_MESSAGE_BYTES, ...options },
+      channel.closed,
+    ),
+  );

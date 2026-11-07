@@ -2,9 +2,44 @@ import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 
 class WindowMissing extends Schema.TaggedError<WindowMissing>()("WindowMissing", {}) {}
 import { makeTestBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
+
+it.effect("person subscription emits the initial snapshot and each subsequent revision", () =>
+  Effect.gen(function* () {
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.void,
+      bind: () => Effect.die("must not bind"),
+    });
+    const snapshots = yield* Queue.unbounded<Effect.Success<ReturnType<typeof service.listAll>>>();
+    yield* service.subscribe().pipe(
+      Stream.runForEach((snapshot) => Queue.offer(snapshots, snapshot)),
+      Effect.forkChild,
+    );
+    assert.deepEqual(yield* Queue.take(snapshots), {
+      supported: true,
+      claims: [],
+      grants: [],
+      pending: [],
+    });
+    const result = yield* service.request({
+      threadId: ThreadId.make("thread:one"),
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (result.status !== "pending") return assert.fail("expected pending");
+    assert.equal((yield* Queue.take(snapshots)).pending[0]?.claimId, result.claimId);
+    yield* service.answer(result.claimId, false);
+    assert.lengthOf((yield* Queue.take(snapshots)).pending, 0);
+  }),
+);
 
 it.effect(
   "person listing exposes pending requests across threads without binding or granting",
@@ -81,6 +116,8 @@ it.effect("person claim and end attach once and keep the approved grant", () =>
     });
     if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
     assert.equal(binds, 1);
+    assert.equal((yield* service.listAll()).claims[0]?.windowTitle, "Browser");
+    assert.equal((yield* service.listAll()).claims[0]?.title, "Site");
     assert.isTrue(yield* service.endPerson(answer.agentResult.claim.claimId));
     assert.deepEqual((yield* service.list(threadId)).claims, []);
     assert.lengthOf((yield* service.list(threadId)).grants, 1);
@@ -120,5 +157,26 @@ it.effect("agent requests use the observed window title and refuse missing windo
       "Failure",
     );
     assert.equal(reads, 2);
+  }),
+);
+
+it.effect("person subscription reports capability changes without polling", () =>
+  Effect.gen(function* () {
+    let supported = false;
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => supported,
+      publish: () => Effect.void,
+      bind: () => Effect.die("must not bind"),
+    });
+    const snapshots = yield* Queue.unbounded<Effect.Success<ReturnType<typeof service.listAll>>>();
+    yield* service.subscribe().pipe(
+      Stream.runForEach((snapshot) => Queue.offer(snapshots, snapshot)),
+      Effect.forkChild,
+    );
+    assert.isFalse((yield* Queue.take(snapshots)).supported);
+    supported = true;
+    yield* service.capabilityChanged;
+    assert.isTrue((yield* Queue.take(snapshots)).supported);
   }),
 );

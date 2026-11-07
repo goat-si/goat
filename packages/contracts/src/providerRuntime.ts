@@ -326,6 +326,7 @@ const TurnTokenUsageCommonFields = {
   cacheCreationTokens: Schema.optional(NonNegativeInt),
   reasoningTokens: Schema.optional(NonNegativeInt),
   hasSubagents: Schema.Boolean,
+  models: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
 };
 export const TurnTokenUsage = Schema.Union([
   Schema.Struct({

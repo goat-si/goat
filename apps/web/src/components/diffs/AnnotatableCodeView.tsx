@@ -7,7 +7,7 @@ import type {
   SelectedLineRange,
 } from "@pierre/diffs";
 import type { CodeViewHandle } from "@pierre/diffs/react";
-import type { ScopedThreadRef } from "@goat/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@goat/contracts";
 import { useState, type ReactNode, type Ref } from "react";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
@@ -72,6 +72,7 @@ function appendAnnotationEntry(
 }
 
 interface AnnotatableCodeViewProps {
+  environmentId?: EnvironmentId | undefined;
   codeViewKey: string;
   files: ReadonlyArray<{
     fileDiff: FileDiffMetadata;
@@ -104,6 +105,7 @@ interface DiffSelectionContext {
 }
 
 export function AnnotatableCodeView({
+  environmentId,
   codeViewKey,
   files,
   pendingFiles,
@@ -291,6 +293,7 @@ export function AnnotatableCodeView({
           >
             {annotation.metadata.entries.map((entry) => (
               <DiffCommentAnnotation
+                environmentId={environmentId}
                 key={entry.id}
                 kind={entry.kind}
                 rangeLabel={entry.rangeLabel}

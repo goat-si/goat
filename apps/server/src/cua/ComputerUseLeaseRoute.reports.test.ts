@@ -8,6 +8,10 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import * as Scheduler from "effect/Scheduler";
 import * as Layer from "effect/Layer";
 import * as Tracer from "effect/Tracer";
 import { HttpMiddleware, HttpRouter } from "effect/http";
@@ -23,6 +27,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
+import { admissionFixture, threadFixture } from "./ComputerUseLeaseRoute.browserClaims.testkit.ts";
 
 const threadId = ThreadId.make("thread:bot");
 const outcomes = {
@@ -30,6 +35,160 @@ const outcomes = {
   "control:agents": "agents",
   "control:old": "refused",
 } as const;
+
+it.effect("validation and an approved bind do not deadlock across admission", () =>
+  Effect.gen(function* () {
+    const { leases, control } = yield* admissionFixture();
+    const binding = yield* Deferred.make<void>();
+    const releaseBind = yield* Deferred.make<void>();
+    const bindReserving = yield* Deferred.make<void>();
+    const validating = yield* Deferred.make<void>();
+    const judged = yield* Deferred.make<void>();
+    let reserveBind = (_claimId: string): Effect.Effect<void> =>
+      Effect.die("bind route unavailable");
+    const grants = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.void,
+      bind: (input) =>
+        Effect.gen(function* () {
+          if (input.windowId === 8) {
+            yield* Deferred.succeed(binding, undefined);
+            yield* Deferred.await(releaseBind);
+            yield* reserveBind(input.claimId);
+          }
+          return {
+            targetId: "target-1",
+            tabId: input.windowId === 7 ? "tab" : "tab-two",
+            title: "Site",
+            url: input.origin,
+            driverGeneration: 1,
+          };
+        }),
+    });
+    const first = yield* grants.claim({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (first.agentResult.status !== "attached") return assert.fail("expected claim");
+    const wrappedLeases = {
+      ...leases,
+      callReservation: (...args: Parameters<typeof leases.callReservation>) => {
+        const [thread, request, judge] = args;
+        const result = leases.callReservation(
+          thread,
+          request,
+          request.action === "validate" && judge !== undefined
+            ? (call) =>
+                Deferred.succeed(validating, undefined).pipe(
+                  Effect.andThen(judge(call)),
+                  Effect.tap(() => Deferred.succeed(judged, undefined)),
+                )
+            : judge,
+        );
+        return request.action === "reserve" && request.authority === "claimBind"
+          ? Deferred.succeed(bindReserving, undefined).pipe(Effect.andThen(result))
+          : result;
+      },
+    };
+    const route = yield* threadFixture({
+      grants: { ...grants, setDriverCapability: () => Effect.void },
+      leases: wrappedLeases,
+    });
+    const reserved = yield* route.postCall({
+      action: "reserve",
+      controlId: control.controlId,
+      connectionId: "driver:1",
+      callId: "claimed",
+      name: "browser_click",
+      args: {
+        tab_id: "tab",
+        target_id: "target-1",
+        session: "goat-claim:" + first.agentResult.claim.claimId,
+        origin_scope: ["https://example.test"],
+      },
+      interruptions: 0,
+      idleEpoch: 0,
+    });
+    if (
+      typeof reserved !== "object" ||
+      reserved === null ||
+      !("reservationId" in reserved) ||
+      typeof reserved.reservationId !== "string"
+    )
+      return assert.fail("expected reservation");
+    reserveBind = (claimId) =>
+      route
+        .postCall({
+          action: "reserve",
+          controlId: control.controlId,
+          connectionId: "driver:1",
+          callId: "bind",
+          name: "get_browser_state",
+          authority: "claimBind",
+          args: {
+            pid: 42,
+            window_id: 8,
+            session: "goat-claim:" + claimId,
+            origin_scope: ["https://example.test"],
+          },
+          interruptions: 0,
+          idleEpoch: 0,
+        })
+        .pipe(
+          Effect.tap((result) =>
+            Effect.sync(() =>
+              assert.equal(
+                typeof result === "object" &&
+                  result !== null &&
+                  "status" in result &&
+                  result.status,
+                "admitted",
+              ),
+            ),
+          ),
+          Effect.asVoid,
+          Effect.scoped,
+          Effect.orDie,
+        );
+    const second = yield* grants.request({
+      threadId,
+      pid: 42,
+      windowId: 8,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (second.status !== "pending") return assert.fail("expected pending");
+    const answer = yield* grants
+      .answer(second.claimId, true)
+      .pipe(Effect.forkDetach({ startImmediately: true }));
+    yield* Deferred.await(binding);
+    const validation = yield* route
+      .postCall({
+        action: "validate",
+        controlId: control.controlId,
+        connectionId: "driver:1",
+        reservationId: reserved.reservationId,
+      })
+      .pipe(Effect.forkDetach({ startImmediately: true }));
+    yield* Deferred.await(validating);
+    yield* Deferred.succeed(releaseBind, undefined);
+    yield* Deferred.await(bindReserving);
+    assert.isTrue(
+      Option.isSome(yield* Deferred.poll(judged)),
+      "validation must finish without waiting for the bind lock",
+    );
+    const result = yield* Fiber.join(validation);
+    assert.equal(
+      typeof result === "object" && result !== null && "status" in result && result.status,
+      "admitted",
+    );
+    assert.equal((yield* Fiber.join(answer)).agentResult.status, "attached");
+  }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true), Effect.scoped),
+);
 
 describe("ComputerUseLeaseRoute reports", () => {
   it.effect("a physical Escape ends browser claims without an approval handoff", () =>

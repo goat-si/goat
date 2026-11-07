@@ -95,6 +95,8 @@ const group: SidebarProjectSnapshot = {
   allRemoteMembersAreDesktopLocal: false,
   allRemoteMembersAreWsl: false,
   remoteEnvironmentLabels: [server.label, laptop.label],
+  pinned: false,
+  archived: false,
 };
 const project = resolveSettingsScope({ project: group.projectKey }, [group], environments);
 const checkout = resolveSettingsScope(
@@ -156,6 +158,9 @@ describe("scoped settings writes", () => {
             worktreeOnMerge: true,
             worktreeUnchanged: false,
             worktreeKeepWhen: "uncommitted-changes",
+            worktreeOnArchive: false,
+            worktreeSnapshotChanges: false,
+            worktreeKeepRecent: null,
           },
         },
       },
@@ -173,6 +178,11 @@ describe("scoped settings writes", () => {
         null,
       ),
     );
+    const off = {
+      worktreeOnArchive: false,
+      worktreeSnapshotChanges: false,
+      worktreeKeepRecent: null,
+    };
     expect(policies).toEqual([
       {
         worktreeAfterDays: 12,
@@ -181,6 +191,7 @@ describe("scoped settings writes", () => {
         worktreeOnMerge: true,
         worktreeUnchanged: false,
         worktreeKeepWhen: "uncommitted-changes",
+        ...off,
       },
       {
         worktreeAfterDays: null,
@@ -189,6 +200,7 @@ describe("scoped settings writes", () => {
         worktreeOnMerge: false,
         worktreeUnchanged: false,
         worktreeKeepWhen: "uncommitted-changes",
+        ...off,
       },
     ]);
   });
@@ -419,6 +431,9 @@ describe("scoped settings writes", () => {
                 worktreeOnMerge: true,
                 worktreeUnchanged: false,
                 worktreeKeepWhen: "uncommitted-changes",
+                worktreeOnArchive: false,
+                worktreeSnapshotChanges: false,
+                worktreeKeepRecent: null,
               },
             },
           },
@@ -450,6 +465,9 @@ describe("scoped settings writes", () => {
               worktreeOnMerge: true,
               worktreeUnchanged: false,
               worktreeKeepWhen: "uncommitted-changes",
+              worktreeOnArchive: false,
+              worktreeSnapshotChanges: false,
+              worktreeKeepRecent: null,
             },
           },
         },
@@ -465,6 +483,9 @@ describe("scoped settings writes", () => {
               worktreeOnMerge: false,
               worktreeUnchanged: false,
               worktreeKeepWhen: "uncommitted-changes",
+              worktreeOnArchive: true,
+              worktreeSnapshotChanges: true,
+              worktreeKeepRecent: 15,
             },
           },
         },

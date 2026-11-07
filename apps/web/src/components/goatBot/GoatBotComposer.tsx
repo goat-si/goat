@@ -1,32 +1,116 @@
-import { ArrowUpIcon } from "~/components/solar";
-import { type FormEvent, type KeyboardEvent, useState } from "react";
+import { ArrowUpIcon, FileIcon, XIcon } from "~/components/solar";
+import {
+  type ClipboardEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  type Ref,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 
 import { cn } from "~/lib/utils";
+import { ComposerAttachAction } from "../chat/ComposerAttachAction";
+import { toastManager } from "../ui/toast";
+import {
+  releaseGoatBotAttachments,
+  releaseUnownedGoatBotAttachments,
+  retainGoatBotAttachments,
+  stageGoatBotFiles,
+  type GoatBotAttachmentSupport,
+  type GoatBotDraftAttachment,
+} from "./goatBotAttachments";
+
+export interface GoatBotComposerHandle {
+  addFiles(files: File[]): void;
+}
 
 /**
- * GOAT Bot's message box. It clears as soon as a message is handed off, so a
- * double Enter cannot send the same message twice. Work in progress never
- * blocks it: the bot takes new messages while workers run. The box starts one
- * line tall and grows with its text up to a cap, with the send button inside
- * it, so nothing shifts or resizes by hand.
+ * GOAT Bot's message box. It clears as soon as a message is handed off, so a double Enter
+ * cannot send it twice, and running work never blocks it. It grows with its text up to a cap.
  */
 export function GoatBotComposer({
+  ref,
   disabled,
   placeholder,
   initialText = "",
+  attachmentSupport = null,
   onSend,
 }: {
+  readonly ref?: Ref<GoatBotComposerHandle>;
   readonly disabled: boolean;
   readonly placeholder: string;
   readonly initialText?: string;
-  readonly onSend: (text: string) => void;
+  readonly attachmentSupport?: GoatBotAttachmentSupport | null;
+  /** Returns false when the message was not taken, so the draft stays. */
+  readonly onSend: (
+    text: string,
+    attachments: ReadonlyArray<GoatBotDraftAttachment>,
+  ) => boolean | void;
 }) {
   const [text, setText] = useState(initialText);
+  const [attachments, setDraftAttachments] = useState<ReadonlyArray<GoatBotDraftAttachment>>([]);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const draftRef = useRef(attachments);
+  const lifetime = useRef<AbortController | null>(null);
+  const setAttachments = (
+    update: (
+      current: ReadonlyArray<GoatBotDraftAttachment>,
+    ) => ReadonlyArray<GoatBotDraftAttachment>,
+  ) =>
+    setDraftAttachments((current) => {
+      const next = update(current);
+      draftRef.current = next;
+      return next;
+    });
+  // oxlint-disable-next-line goat/react-effect-budget -- unsent previews are browser object URLs.
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    return () => {
+      controller.abort();
+      lifetime.current = null;
+      releaseGoatBotAttachments(draftRef.current);
+    };
+  }, [draftRef]);
   const trimmed = text.trim();
+  const canSubmit = !disabled && (trimmed.length > 0 || attachments.length > 0);
   const submit = () => {
-    if (disabled || trimmed.length === 0) return;
-    onSend(trimmed);
+    if (!canSubmit) return;
+    if (onSend(trimmed, attachments) === false) return;
     setText("");
+    draftRef.current = [];
+    setDraftAttachments([]);
+    releaseGoatBotAttachments(attachments);
+  };
+  const addFiles = async (files: ReadonlyArray<File>) => {
+    if (attachmentSupport === null || files.length === 0) return false;
+    const signal = lifetime.current?.signal;
+    if (!signal) return false;
+    const { staged, error } = await stageGoatBotFiles(files, {
+      existingCount: draftRef.current.length,
+      support: attachmentSupport,
+    });
+    if (signal.aborted) {
+      releaseUnownedGoatBotAttachments(staged);
+      return false;
+    }
+    if (staged.length > 0) {
+      retainGoatBotAttachments(staged);
+      setAttachments((current) => [...current, ...staged]);
+    }
+    if (error !== null) toastManager.add({ type: "error", title: error });
+    return false;
+  };
+  useImperativeHandle(ref, () => ({
+    addFiles(files) {
+      void addFiles(files).then(() => textareaRef.current?.focus());
+    },
+  }));
+  const remove = (id: string) => {
+    releaseGoatBotAttachments(attachments.filter((attachment) => attachment.id === id));
+    setAttachments((current) => current.filter((attachment) => attachment.id !== id));
   };
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -38,36 +122,77 @@ export function GoatBotComposer({
     event.preventDefault();
     submit();
   };
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files);
+    if (attachmentSupport === null || files.length === 0) return;
+    event.preventDefault();
+    void addFiles(files);
+  };
 
   return (
     <form onSubmit={handleSubmit} className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
-      <div
-        className={cn(
-          "goat-composer-field flex items-end gap-2 py-1 pr-1 pl-3.5",
-          disabled && "opacity-64",
-        )}
-      >
-        <textarea
-          rows={1}
-          aria-label="Message GOAT Bot"
-          placeholder={placeholder}
-          value={text}
-          disabled={disabled}
-          onChange={(event) => setText(event.currentTarget.value)}
-          onKeyDown={handleKeyDown}
-          className="field-sizing-content max-h-48 min-h-7 flex-1 resize-none self-center bg-transparent py-1 font-(family-name:--font-composer,var(--font-sans)) text-(length:--font-size-prompt,var(--text-sm)) text-foreground outline-none placeholder:text-muted-foreground max-sm:pointer-coarse:text-(length:--font-size-prompt-touch)"
-        />
-        <button
-          type="submit"
-          aria-label="Send"
-          disabled={disabled || trimmed.length === 0}
-          className={cn(
-            "goat-bubble-out-fill flex size-7 shrink-0 items-center justify-center rounded-full text-goat-bubble-out-foreground",
-            trimmed.length === 0 && "invisible",
-          )}
-        >
-          <ArrowUpIcon className="size-4" />
-        </button>
+      <div className={cn("goat-composer-field flex flex-col py-1 pr-1", disabled && "opacity-64")}>
+        {attachments.length > 0 ? (
+          <ul aria-label="Attachments" className="flex flex-wrap gap-1.5 pt-1.5 pb-1 pl-2">
+            {attachments.map((attachment) => (
+              <li
+                key={attachment.id}
+                className="flex h-9 max-w-48 items-center gap-1.5 rounded-lg border border-border bg-background/60 pr-1 pl-1"
+              >
+                {attachment.type === "image" ? (
+                  <img
+                    src={attachment.previewUrl}
+                    alt=""
+                    className="size-7 shrink-0 rounded-md object-cover"
+                  />
+                ) : (
+                  <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className="min-w-0 truncate text-xs">{attachment.name}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${attachment.name}`}
+                  onClick={() => remove(attachment.id)}
+                  className="flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <XIcon className="size-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <div className={cn("flex items-end gap-2", attachmentSupport === null ? "pl-3.5" : "pl-1")}>
+          {attachmentSupport !== null && !disabled ? (
+            <ComposerAttachAction
+              addComposerAttachments={addFiles}
+              focusComposer={() => textareaRef.current?.focus()}
+            />
+          ) : null}
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            data-goat-bot-composer=""
+            aria-label="Message GOAT Bot"
+            placeholder={placeholder}
+            value={text}
+            disabled={disabled}
+            onChange={(event) => setText(event.currentTarget.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            className="field-sizing-content max-h-48 min-h-7 flex-1 resize-none self-center bg-transparent py-1 font-(family-name:--font-composer,var(--font-sans)) text-(length:--font-size-prompt,var(--text-sm)) text-foreground outline-none placeholder:text-muted-foreground max-sm:pointer-coarse:text-(length:--font-size-prompt-touch)"
+          />
+          <button
+            type="submit"
+            aria-label="Send"
+            disabled={!canSubmit}
+            className={cn(
+              "goat-bubble-out-fill flex size-7 shrink-0 items-center justify-center rounded-full text-goat-bubble-out-foreground",
+              trimmed.length === 0 && attachments.length === 0 && "invisible",
+            )}
+          >
+            <ArrowUpIcon className="size-4" />
+          </button>
+        </div>
       </div>
     </form>
   );

@@ -1,3 +1,5 @@
+import { PullRequestFiltersMenuInSidebarOrder } from "./PullRequestFiltersMenuInSidebarOrder";
+import { getShortcutContext } from "./pullRequestShortcutContext";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { applyPullRequestDraftFilterChange } from "@goat/client-runtime/pull-request-query";
 import { Spinner } from "~/components/ui/spinner";
@@ -5,7 +7,6 @@ import type { PullRequestSpeedActionResult } from "~/components/pullRequest/Pull
 import { usePullRequestCloseBatch } from "~/components/pullRequest/usePullRequestActions";
 import { SidebarPointerSensor } from "~/components/Sidebar.pointer";
 import { resolveSidebarSweepKeys } from "~/components/Sidebar.logic";
-import { sortProjectsByGroupOrder } from "@goat/client-runtime/state/project-grouping";
 import { resolveEnvironmentMachineKind } from "@goat/contracts";
 import type {
   EnvironmentId,
@@ -16,11 +17,12 @@ import type {
   PullRequestListInput,
   PullRequestListResult,
   PullRequestListState,
+  PullRequestSummary,
 } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowDownUpIcon, LayersIcon, PlugIcon as Plug2Icon } from "~/components/solar";
-import { useEffect, useEffectEvent, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   collectPullRequestListFacets,
@@ -43,6 +45,7 @@ import {
   pullRequestOverrideAfterAction,
   reusePullRequestEntries,
   settlePullRequestOverrides,
+  comparePullRequestsByRecency,
   largestPullRequestReadCount,
 } from "./pullRequestList.logic";
 import {
@@ -53,7 +56,6 @@ import {
 import { environmentMachineIcon } from "../EnvironmentMachineIcon";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import {
-  PullRequestFiltersMenu,
   PullRequestSearchInput,
   pullRequestHostLabel,
   pullRequestProjectKey,
@@ -63,6 +65,7 @@ import { PullRequestCompactFilterMenu } from "./PullRequestCompactFilterMenu";
 import { INVOLVEMENT_TABS, SORT_OPTIONS, STATE_TABS } from "./pullRequestListOptions";
 import { PullRequestsColumn } from "./PullRequestsColumn";
 import { PullRequestListGroups } from "./PullRequestListGroups";
+import * as pullRequestPrefetch from "./usePullRequestIntentPrefetch";
 import {
   usePullRequestDisplayGroups,
   usePullRequestQueryFilters,
@@ -76,9 +79,7 @@ import { type PullRequestRowTarget } from "./PullRequestRow";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { RightPanelTabs } from "../RightPanelTabs";
 import { isCommandPaletteOpen } from "~/commandPaletteBus";
-import { isElectron } from "~/env";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
-import { isTerminalFocused } from "~/lib/terminalFocus";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "../chat/PanelLayoutControls";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
@@ -96,7 +97,6 @@ import {
   useRightPanelStore,
   type PullRequestSurface,
 } from "~/rightPanelStore";
-import { useSidebarProjectGroups } from "~/hooks/useSidebarProjectGroups";
 import {
   pullRequestEnvironment,
   usePullRequestList,
@@ -110,18 +110,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
-
-function getShortcutContext() {
-  return {
-    terminalFocus: isTerminalFocused(),
-    terminalOpen: false,
-    previewFocus: false,
-    previewOpen: false,
-    modelPickerOpen: false,
-    isWeb: !isElectron,
-    isDesktop: isElectron,
-  };
-}
 
 /**
  * One whole page from the host and no more: every provider asks for one row beyond the page as
@@ -210,25 +198,18 @@ export function PullRequestsPage() {
       search: (previous: PullRequestsSearch): PullRequestsSearch => {
         const next = { ...previous, ...patch };
         return {
-          involvement: next.involvement ?? previous.involvement,
-          state: next.state ?? previous.state,
-          ...(next.sort && next.sort !== "ready" ? { sort: next.sort } : {}),
+          ...pullRequestListPreferences({
+            ...next,
+            involvement: next.involvement ?? previous.involvement,
+            state: next.state ?? previous.state,
+          }),
           ...(next.repository ? { repository: next.repository } : {}),
           ...(next.number ? { number: next.number } : {}),
-          ...(next.projectId ? { projectId: next.projectId } : {}),
-          ...(next.environmentId ? { environmentId: next.environmentId } : {}),
-          ...(next.host ? { host: next.host } : {}),
           ...(next.selectedHost ? { selectedHost: next.selectedHost } : {}),
           ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
           ...(next.selectedEnvironmentId
             ? { selectedEnvironmentId: next.selectedEnvironmentId }
             : {}),
-          ...(next.q ? { q: next.q } : {}),
-          ...(next.draft ? { draft: next.draft } : {}),
-          ...(next.review ? { review: next.review } : {}),
-          ...(next.checks ? { checks: next.checks } : {}),
-          ...(next.author ? { author: next.author } : {}),
-          ...(next.labels && next.labels.length > 0 ? { labels: next.labels } : {}),
         };
       },
       replace: true,
@@ -273,7 +254,12 @@ export function PullRequestsPage() {
   const turnRefreshToken = turnRefreshes
     .map(([environmentId, revision]) => `${environmentId}:${revision}`)
     .join("|");
-  const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
+  const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}:${search.upstream ?? ""}`;
+  const listScope = {
+    ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+    ...(search.host ? { host: search.host } : {}),
+    ...(search.upstream ? { includeUpstream: true } : {}),
+  };
   const filterKey = `${scopeKey}:${sentQuery}`;
   const statsScope: PullRequestStatsScope = { key: filterKey, policy: statsPolicy };
   const [page, setPage] = useState<{
@@ -307,9 +293,8 @@ export function PullRequestsPage() {
           state: search.state,
           involvement: search.involvement,
           limit: pageSize,
-          ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+          ...listScope,
           ...(projectIds ? { projectIds } : {}),
-          ...(search.host ? { host: search.host } : {}),
           ...(hasFilters ? { filters } : {}),
           ...(sentParsed.text ? { query: sentParsed.text } : {}),
           ...(cursors === undefined ? {} : { cursors }),
@@ -330,9 +315,8 @@ export function PullRequestsPage() {
       state: search.state,
       involvement: search.involvement,
       limit: PAGE_SIZE,
-      ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+      ...listScope,
       ...(projectIds ? { projectIds } : {}),
-      ...(search.host ? { host: search.host } : {}),
       ...(menuFiltered ? { filters: menuFilters } : {}),
     } satisfies PullRequestListInput,
   }));
@@ -350,9 +334,8 @@ export function PullRequestsPage() {
         state: "all",
         involvement: search.involvement,
         limit: PAGE_SIZE,
-        ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+        ...listScope,
         ...(projectIds ? { projectIds } : {}),
-        ...(search.host ? { host: search.host } : {}),
       } satisfies PullRequestListInput,
     }));
   })();
@@ -360,9 +343,8 @@ export function PullRequestsPage() {
   const filterOptionScope = environmentQueries.map(({ environmentId, projectIds }) => ({
     environmentId,
     input: {
-      ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+      ...listScope,
       ...(projectIds ? { projectIds } : {}),
-      ...(search.host ? { host: search.host } : {}),
     },
   }));
   const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;
@@ -384,9 +366,8 @@ export function PullRequestsPage() {
           state: search.state,
           involvement,
           limit: PAGE_SIZE,
-          ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+          ...listScope,
           ...(projectIds ? { projectIds } : {}),
-          ...(search.host ? { host: search.host } : {}),
           ...(menuFiltered ? { filters: menuFilters } : {}),
         } satisfies PullRequestListInput,
       }));
@@ -420,9 +401,10 @@ export function PullRequestsPage() {
   const overrideEntry = (
     entry: EnvironmentPullRequestEntry,
     action: PullRequestAction,
+    reply?: PullRequestSummary,
   ): number | null => {
     const token = ++overrideToken.current;
-    const override = pullRequestOverrideAfterAction(entry, action, new Date(), token);
+    const override = pullRequestOverrideAfterAction(entry, action, new Date(), token, reply);
     if (override === null) return null;
     setOverrides((current) => new Map(current).set(pullRequestEntryKey(entry), override));
     return token;
@@ -437,13 +419,17 @@ export function PullRequestsPage() {
     });
   };
   const detailOverrideTokens = useRef(new Map<string, number | null>());
-  const onSpeedAction = useStableCallback(({ entry, action }: PullRequestSpeedActionResult) => {
-    // Some hosts accept a merge before it completes. Let the next host read declare it merged.
-    if (action !== "merge") overrideEntry(entry, action);
-  });
-  const onBatchClosed = useStableCallback((entry: EnvironmentPullRequestEntry) => {
-    onSpeedAction({ entry, action: "close" });
-  });
+  const onSpeedAction = useStableCallback(
+    ({ entry, action, reply }: PullRequestSpeedActionResult) => {
+      // Some hosts accept a merge before it completes. Without a reply, let the next read say so.
+      if (reply !== undefined || action !== "merge") overrideEntry(entry, action, reply);
+    },
+  );
+  const onBatchClosed = useStableCallback(
+    (entry: EnvironmentPullRequestEntry, reply: PullRequestSummary | undefined) => {
+      onSpeedAction({ entry, action: "close", reply });
+    },
+  );
   const { close: closeBatch, closingKeys } = usePullRequestCloseBatch(onBatchClosed);
   const [snapshotEnvironmentKey, setSnapshotEnvironmentKey] = useState("");
   if (environmentKey.length > 0 && snapshotEnvironmentKey !== environmentKey) {
@@ -555,7 +541,7 @@ export function PullRequestsPage() {
       const held = new Set(ordered.entries.map(pullRequestEntryKey));
       const arrived = answered.entries.filter((entry) => !held.has(pullRequestEntryKey(entry)));
       const appended = rankPullRequestMatches(
-        arrived.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+        arrived.toSorted(comparePullRequestsByRecency),
         sentParsed.text,
       );
       setOrdered({ key: filterKey, source: answered, entries: [...ordered.entries, ...appended] });
@@ -1062,6 +1048,9 @@ export function PullRequestsPage() {
     ),
   );
 
+  const prefetchEntry = pullRequestPrefetch.usePullRequestIntentPrefetch((entry) =>
+    listedPullRequestsBySurface.has(pullRequestListEntryId(entry)),
+  );
   const selectEntry = (entry: PullRequestRowTarget) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().openPullRequest(rightPanelRef, entry);
@@ -1166,6 +1155,7 @@ export function PullRequestsPage() {
           showProvider={showProvider}
           statsRef={registerStatsRow}
           onSelect={selectEntry}
+          onIntent={prefetchEntry}
           hostActionsOf={hostActionsOf}
           onActed={onSpeedAction}
           closingKeys={closingKeys}
@@ -1280,6 +1270,10 @@ export function PullRequestsPage() {
       projects={scopedProjects}
       projectId={scopedProjectId}
       projectEnvironmentId={scopedProject?.environmentId}
+      includeUpstream={search.upstream === "include"}
+      onIncludeUpstream={(include) =>
+        updateListScope({ upstream: include ? "include" : undefined })
+      }
       unavailable={unavailableProjects}
       onProject={(projectId, environmentId) =>
         updateListScope(environmentId === undefined ? { projectId } : { projectId, environmentId })
@@ -1509,14 +1503,10 @@ export function PullRequestsPage() {
                   selectedEnvironmentId: panelEnvironmentId,
                 });
               }}
-              reference={{
+              reference={pullRequestPrefetch.pullRequestPanelReference({
+                ...renderedPullRequestSurface,
                 projectId: renderedPullRequestSurface.projectId as ProjectId,
-                repository: renderedPullRequestSurface.repository,
-                number: renderedPullRequestSurface.number,
-                ...(renderedPullRequestSurface.host
-                  ? { host: renderedPullRequestSurface.host }
-                  : {}),
-              }}
+              })}
               listEntry={
                 listedPullRequestsBySurface.get(
                   pullRequestListEntryId(renderedPullRequestSurface),
@@ -1524,12 +1514,19 @@ export function PullRequestsPage() {
               }
               refreshToken={detailRefreshToken}
               tabOnPage
-              onActed={(action, phase = "done") => {
+              onActed={(action, phase = "done", reply) => {
                 // From every row held, not the ones on screen: a pull request closed from an open
                 // list has left the screen, and reopening it has to find it anyway.
                 const acted = heldPullRequestsBySurface.get(
                   pullRequestListEntryId(renderedPullRequestSurface),
                 );
+                if (reply !== undefined) {
+                  if (acted !== undefined) {
+                    if (action !== undefined) overrideEntry(acted, action, reply);
+                    detailOverrideTokens.current.delete(pullRequestEntryKey(acted));
+                  }
+                  return;
+                }
                 const stateOnly =
                   action !== undefined &&
                   acted !== undefined &&
@@ -1557,12 +1554,4 @@ export function PullRequestsPage() {
       </div>
     </SidebarInset>
   );
-}
-
-function PullRequestFiltersMenuInSidebarOrder(
-  props: ComponentProps<typeof PullRequestFiltersMenu>,
-) {
-  const sidebarProjectGroups = useSidebarProjectGroups();
-  const projects = sortProjectsByGroupOrder(props.projects, sidebarProjectGroups);
-  return <PullRequestFiltersMenu {...props} projects={projects} />;
 }

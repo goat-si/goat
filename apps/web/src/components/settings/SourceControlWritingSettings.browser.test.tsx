@@ -99,6 +99,7 @@ describe("mixed source control instructions", () => {
       customInstructions,
     }));
 
+    await expect.element(resetButton("change request templates")).toBeInViewport({ ratio: 1 });
     await userEvent.click(resetButton("change request templates"));
 
     expect(state.updateSettings).toHaveBeenCalledTimes(1);

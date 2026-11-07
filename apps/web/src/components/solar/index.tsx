@@ -265,6 +265,7 @@ export const PackagePlusIcon = /* @__PURE__ */ solarIcon(solar.boxMinimalistic, 
 export const PaintbrushIcon = /* @__PURE__ */ solarIcon(solar.paintBrush, "PaintbrushIcon");
 export const PaletteIcon = /* @__PURE__ */ solarIcon(solar.palette, "PaletteIcon");
 export const PanelBottomIcon = /* @__PURE__ */ solarIcon(solar.panelBottom, "PanelBottomIcon");
+export const PanelLeftIcon = /* @__PURE__ */ solarIcon(solar.panelLeft, "PanelLeftIcon");
 export const PanelRightIcon = /* @__PURE__ */ solarIcon(solar.panelRight, "PanelRightIcon");
 export const PaperclipIcon = /* @__PURE__ */ solarIcon(solar.paperclip, "PaperclipIcon");
 export const PenLineIcon = /* @__PURE__ */ solarIcon(solar.pen2, "PenLineIcon");

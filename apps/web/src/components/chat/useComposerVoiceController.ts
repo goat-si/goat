@@ -1,9 +1,16 @@
-import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  DEFAULT_SPEECH_CONFIGURATION,
+  type EnvironmentId,
+  type ProviderInstanceId,
+  type ThreadId,
+} from "@goat/contracts";
 import {
   prewarmEnvironmentVoice,
   resolveTranscriptCommit,
   resolveVoiceTranscriptionRoute,
   transcribeEnvironmentVoice,
+  transcribeLocalModel,
   voiceInputBlocksSubmission,
   voiceTranscriptionRequest,
   type EnvironmentVoiceRequestContext,
@@ -18,8 +25,25 @@ import { ManagedRelay } from "@goat/client-runtime/relay";
 import { RemoteEnvironmentAuthorization } from "@goat/client-runtime/authorization/service";
 import { createRuntimeCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { toastManager } from "../ui/toast";
 import { composerTargetKey, useComposerDraftStore } from "../../composerDraftStore";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  readEnvironmentProxiedByHub,
+  readEnvironmentScope,
+  useEnvironmentScope,
+  usePreparedConnection,
+  useEnvironmentsWithScope,
+} from "../../state/session";
+import {
+  chooseEnvironmentSpeech,
+  isEnvironmentSpeechGrantCurrent,
+  useEnvironmentSpeechGrant,
+  type EnvironmentSpeechGrant,
+} from "../../speech/voiceConsent";
+import * as Option from "effect/Option";
+import { useAtomValue } from "@effect/atom-react";
+import { serverEnvironment } from "../../state/server";
 import type { ComposerPromptEditorHandle } from "../ComposerPromptEditor";
 import { expandCollapsedComposerCursor } from "../../composer-logic";
 import { collectInlineContextIds } from "../../lib/composerContextReferences";
@@ -35,13 +59,14 @@ import {
 export interface ComposerVoiceTarget {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId | null;
-  readonly providerInstanceId: ProviderInstanceId;
+  readonly providerInstanceId: ProviderInstanceId | null;
   readonly ownerKey: string;
   readonly cwd: string | null;
   readonly locale: string;
   readonly enabled: boolean;
   /** Where this composer's audio is transcribed; see resolveVoiceTranscriptionRoute. */
   readonly route: VoiceTranscriptionRoute;
+  readonly localModelGrant?: EnvironmentSpeechGrant | null;
 }
 
 interface VoiceControllerState extends VoiceInputState {
@@ -54,7 +79,7 @@ export interface ComposerVoiceDependencies {
   readonly cancelRecording: () => Promise<void>;
   readonly readDraft: () => VoiceDraftSnapshot | null;
   readonly commitDraft: (text: string, selection: VoiceDraftSnapshot["selection"]) => void;
-  readonly onSubmit: (text: string) => void;
+  readonly onSubmit?: ((text: string) => void) | undefined;
   readonly prewarm: (target: ComposerVoiceTarget, signal: AbortSignal) => Promise<unknown>;
   readonly transcribe: (
     target: ComposerVoiceTarget,
@@ -112,6 +137,7 @@ export class ComposerVoiceController {
       previous.cwd !== target.cwd ||
       previous.locale !== target.locale ||
       routeKey(previous.route) !== routeKey(target.route) ||
+      previous.localModelGrant?.id !== target.localModelGrant?.id ||
       (previous.enabled && !target.enabled)
     ) {
       this.cancel();
@@ -137,6 +163,11 @@ export class ComposerVoiceController {
 
   readonly start = async (): Promise<void> => {
     if (!this.target.enabled || this.blocksSubmission()) return;
+    if (
+      this.target.localModelGrant &&
+      !isEnvironmentSpeechGrantCurrent(this.target.localModelGrant)
+    )
+      return;
     if (this.target.route.kind === "unavailable") {
       this.publish({
         ...IDLE,
@@ -166,7 +197,8 @@ export class ComposerVoiceController {
     try {
       await this.dependencies.startRecording({
         onStreamingChunk: (payload) => {
-          if (generation === this.generation) this.enqueuePreview(payload);
+          if (!target.localModelGrant && generation === this.generation)
+            this.enqueuePreview(payload);
         },
         onLimitReached: () => {
           if (generation === this.generation) void this.confirm();
@@ -240,6 +272,7 @@ export class ComposerVoiceController {
   readonly send = () => this.finish(true);
 
   private async finish(send: boolean): Promise<boolean> {
+    if (send && !this.dependencies.onSubmit) return false;
     if (this.state.phase !== "recording" || !this.captured || !this.abort) return false;
     const generation = this.generation;
     const target = this.target;
@@ -276,7 +309,7 @@ export class ComposerVoiceController {
       this.captured = null;
       this.publish(IDLE);
       this.dependencies.commitDraft(commit.text, commit.selection);
-      if (send && commit.text.trim() && isCurrent()) this.dependencies.onSubmit(commit.text);
+      if (send && commit.text.trim() && isCurrent()) this.dependencies.onSubmit?.(commit.text);
       return true;
     } catch (error) {
       if (isCurrent()) this.fail(error);
@@ -288,7 +321,7 @@ export class ComposerVoiceController {
 export interface UseComposerVoiceControllerOptions extends ComposerVoiceTarget {
   readonly readDraft: ComposerVoiceDependencies["readDraft"];
   readonly commitDraft: ComposerVoiceDependencies["commitDraft"];
-  readonly onSubmit: ComposerVoiceDependencies["onSubmit"];
+  readonly onSubmit?: ComposerVoiceDependencies["onSubmit"];
   readonly onStart?: () => void;
   readonly subscribeDraft?: (listener: () => void) => () => void;
   readonly resolveContext?: (
@@ -319,7 +352,7 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
       flushSync(() => options.commitDraft(text, selection));
     },
   );
-  const onSubmit = useStableCallback(options.onSubmit);
+  const onSubmit = useStableCallback((text: string) => options.onSubmit?.(text));
   const resolveContext = useStableCallback(options.resolveContext ?? resolveComposerVoiceContext);
   const [controller] = useState(
     () =>
@@ -329,8 +362,9 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
         cancelRecording: recorder.cancelRecording,
         readDraft,
         commitDraft,
-        onSubmit,
+        ...(options.onSubmit ? { onSubmit } : {}),
         prewarm: async (target, signal) => {
+          if (target.localModelGrant) return;
           const request = voiceTranscriptionRequest(target.route, target);
           if (!request) return;
           const context = await resolveContext(request.environmentId);
@@ -343,6 +377,20 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
           const context = await resolveContext(request.environmentId);
           signal.throwIfAborted();
           if (!context) throw new Error("Connect to an environment before transcribing voice.");
+          if (target.localModelGrant) {
+            const grant = target.localModelGrant;
+            return transcribeLocalModel(
+              context,
+              { ...payload, locale: target.locale },
+              {
+                signal,
+                canSend: () =>
+                  isEnvironmentSpeechGrantCurrent(grant) &&
+                  readEnvironmentScope(request.environmentId, AuthOrchestrationOperateScope) &&
+                  !readEnvironmentProxiedByHub(request.environmentId),
+              },
+            );
+          }
           return transcribeEnvironmentVoice(
             context,
             { ...payload, ...request.routing, locale: target.locale },
@@ -430,16 +478,43 @@ export function useChatComposerVoiceController(
   },
 ) {
   const ownerKey = composerTargetKey(options.draftTarget);
+  const grant = useEnvironmentSpeechGrant();
+  const selectedGrant = grant;
+  const destinationId = selectedGrant?.environmentId ?? options.environmentId;
+  const { environments } = useEnvironments();
+  const permitted = useEnvironmentsWithScope(environments, AuthOrchestrationOperateScope);
+  const destinations = environments.filter(
+    (environment) =>
+      environment.connection.phase === "connected" &&
+      permitted.has(environment.environmentId) &&
+      environment.entry.target._tag !== "HubProxyConnectionTarget",
+  );
+  const hasScope = useEnvironmentScope(destinationId, AuthOrchestrationOperateScope);
+  const connection = usePreparedConnection(destinationId);
+  const isProxied =
+    Option.isSome(connection) && connection.value.target._tag === "HubProxyConnectionTarget";
+  const environmentLabel = useEnvironment(destinationId)?.label ?? "this environment";
+  const canManage = useAtomValue(
+    serverEnvironment.updateSettings.permissionAtom(destinationId, {
+      patch: { speech: DEFAULT_SPEECH_CONFIGURATION },
+    }),
+  );
+  const localEnvironmentId = usePrimaryEnvironmentId();
   // The desktop app transcribes on its own machine; a browser or phone uses the thread's server.
-  const route = resolveVoiceTranscriptionRoute({
-    requiresLocalRuntime: typeof window !== "undefined" && window.desktopBridge !== undefined,
-    localEnvironmentId: usePrimaryEnvironmentId(),
-    threadEnvironmentId: options.environmentId,
-  });
-  return useComposerVoiceController({
+  const route = selectedGrant
+    ? { kind: "environment" as const, environmentId: destinationId }
+    : resolveVoiceTranscriptionRoute({
+        requiresLocalRuntime: typeof window !== "undefined" && window.desktopBridge !== undefined,
+        localEnvironmentId,
+        threadEnvironmentId: options.environmentId,
+      });
+  const controller = useComposerVoiceController({
     ...options,
     ownerKey,
     route,
+    localModelGrant: selectedGrant,
+    enabled:
+      options.enabled && (!selectedGrant || (hasScope && Option.isSome(connection) && !isProxied)),
     locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
     subscribeDraft: useComposerDraftStore.subscribe,
     readDraft: () => {
@@ -461,6 +536,47 @@ export function useChatComposerVoiceController(
       });
     },
   });
+  return {
+    ...controller,
+    voiceControl: {
+      ...controller.voiceControl,
+      environmentSpeech: {
+        label: environmentLabel,
+        selected: selectedGrant !== null,
+        environmentId: destinationId,
+        canManage: canManage && Option.isSome(connection) && !isProxied,
+        resolveContext: resolveComposerVoiceContext,
+        destinations: destinations.map(({ environmentId, label }) => ({ environmentId, label })),
+        enable: (id: EnvironmentId) => {
+          if (
+            readEnvironmentScope(id, AuthOrchestrationOperateScope) &&
+            !readEnvironmentProxiedByHub(id)
+          )
+            reportVoiceChoice(chooseEnvironmentSpeech(id));
+        },
+        disable: () => reportVoiceChoice(chooseEnvironmentSpeech(null)),
+      },
+    },
+  };
+}
+
+function reportVoiceChoice(result: ReturnType<typeof chooseEnvironmentSpeech>) {
+  if (result === "saved") return;
+  toastManager.add(
+    result === "unsupported"
+      ? {
+          type: "error",
+          title: "This browser can't use environment dictation",
+          description:
+            "It can't turn dictation off in your other tabs, so existing voice input stays on.",
+        }
+      : {
+          type: "error",
+          title: "Could not save the dictation choice",
+          description:
+            "Environment dictation is off in open tabs. A reload may restore the previous choice.",
+        },
+  );
 }
 
 const routeKey = (route: VoiceTranscriptionRoute) =>

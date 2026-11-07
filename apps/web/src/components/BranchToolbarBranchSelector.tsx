@@ -1,3 +1,4 @@
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
@@ -18,7 +19,6 @@ import {
 } from "@goat/contracts";
 import { ChevronDownIcon, GitBranchIcon } from "~/components/solar";
 import {
-  useDeferredValue,
   useEffect,
   useImperativeHandle,
   useOptimistic,
@@ -220,7 +220,6 @@ export function BranchToolbarBranchSelector({
 
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
-  const deferredBranchQuery = useDeferredValue(branchQuery);
 
   const branchStatusQuery = useEnvironmentQuery(
     branchCwd === null
@@ -230,19 +229,27 @@ export function BranchToolbarBranchSelector({
           input: { cwd: branchCwd },
         }),
   );
+  const projectStatusQuery = useEnvironmentQuery(
+    activeProjectCwd === null
+      ? null
+      : vcsEnvironment.status({ environmentId, input: { cwd: activeProjectCwd } }),
+  );
+  const activeProjectCheckoutRoot = projectStatusQuery.data?.workingTree?.rootPath;
+  const trimmedBranchQuery = branchQuery.trim();
   const branchRefState = usePaginatedBranches({
     environmentId,
     cwd: branchCwd,
     // Substring search needs sanitized names to detect new-branch collisions; refs cannot contain ASCII
     // spaces.
-    query: sanitizeNewRefName(deferredBranchQuery.trim()),
+    query: sanitizeNewRefName(trimmedBranchQuery),
   });
-  const trimmedBranchQuery = branchQuery.trim();
-  const deferredTrimmedBranchQuery = deferredBranchQuery.trim();
   const refs = branchRefState.refs;
   const branchByName = new Map(refs.map((refName) => [refName.name, refName] as const));
-  const normalizedDeferredBranchQuery = deferredTrimmedBranchQuery.toLowerCase();
-  const prReference = parsePullRequestReference(trimmedBranchQuery);
+  const normalizedBranchQuery = trimmedBranchQuery.toLowerCase();
+  const prReference = parsePullRequestReference(
+    trimmedBranchQuery,
+    branchStatusQuery.data?.sourceControlProvider,
+  );
   const isSelectingWorktreeBase =
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
   const checkoutPullRequestItemValue =
@@ -264,12 +271,12 @@ export function BranchToolbarBranchSelector({
     ...(pickerCreateBranchItemValue ? [pickerCreateBranchItemValue] : []),
   ];
   const filteredBranchPickerItems =
-    normalizedDeferredBranchQuery.length === 0
+    normalizedBranchQuery.length === 0
       ? branchPickerItems
       : branchPickerItems.filter((itemValue) =>
           shouldIncludeBranchPickerItem({
             itemValue,
-            normalizedQuery: normalizedDeferredBranchQuery,
+            normalizedQuery: normalizedBranchQuery,
             createBranchItemValue: pickerCreateBranchItemValue,
             checkoutPullRequestItemValue,
           }),
@@ -398,6 +405,7 @@ export function BranchToolbarBranchSelector({
 
     const selectionTarget = resolveBranchSelectionTarget({
       activeProjectCwd,
+      activeProjectCheckoutRoot,
       activeWorktreePath,
       refName,
     });
@@ -571,6 +579,21 @@ export function BranchToolbarBranchSelector({
   );
   const prNumber = currentLinkedPr?.number ?? displayedPr?.number;
   const prUrl = currentLinkedPr?.url ?? displayedPr?.url;
+  const storedReference =
+    currentLinkedPr ??
+    (!supportsMultiplePullRequests ? serverThread?.linkedPullRequest : null) ??
+    serverThread?.branchPullRequest;
+  const storedLink = storedReference
+    ? sourceControlClients.parseChangeRequestUrl(storedReference.url)?.link
+    : undefined;
+  const storedHost = storedLink?.authority ?? storedLink?.host;
+  const rowReference =
+    prUrl && storedReference && sourceControlClients.isSameChangeRequest(prUrl, storedReference.url)
+      ? {
+          ...storedReference,
+          ...(storedHost === undefined ? {} : { host: storedHost }),
+        }
+      : null;
   const openPrLink = useOpenPrLink(threadRef);
   const panelPrLabel =
     prNumber === undefined
@@ -643,6 +666,7 @@ export function BranchToolbarBranchSelector({
             (!activeProjectCwd ||
               !resolveBranchSelectionTarget({
                 activeProjectCwd,
+                activeProjectCheckoutRoot,
                 activeWorktreePath,
                 refName,
               }).reuseExistingWorktree))
@@ -662,7 +686,7 @@ export function BranchToolbarBranchSelector({
       onSelectItem={selectPickerItem}
       value={resolvedActiveBranch}
       query={branchQuery}
-      resultsQuery={deferredTrimmedBranchQuery}
+      resultsQuery={trimmedBranchQuery}
       onQueryChange={setBranchQuery}
       hasNextPage={hasNextPage}
       isFetchingNextPage={isFetchingNextPage}
@@ -754,7 +778,7 @@ export function BranchToolbarBranchSelector({
             environmentId={environmentId}
             pr={displayedPr}
             number={prNumber}
-            reference={currentLinkedPr}
+            reference={rowReference}
             status={displayedPrStatus}
             project={activeProject}
             label={panelPrLabel}

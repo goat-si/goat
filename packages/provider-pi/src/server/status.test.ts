@@ -1,7 +1,13 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- creates a real executable fixture.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- constructs a native executable fixture path.
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
@@ -9,8 +15,12 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 
+import { vi } from "vite-plus/test";
 import { checkPiProviderStatus, MINIMUM_PI_VERSION } from "./status.ts";
+import { OMO_PROFILE } from "./profile.ts";
 
 const encoder = new TextEncoder();
 const decodeRpcRequest = Schema.decodeSync(
@@ -22,19 +32,22 @@ function processHandle(input: {
   readonly stdout?: string;
   readonly stderr?: string;
   readonly exitCode?: number;
+  /** Holds stdout and the exit back until it completes, like a CLI slow to answer. */
+  readonly answered?: Effect.Effect<void>;
 }) {
+  const answered = input.answered ?? Effect.void;
   const bytes = (value: string | undefined) =>
     value === undefined || value.length === 0
       ? Stream.empty
       : Stream.succeed(encoder.encode(value));
   return ChildProcessSpawner.makeHandle({
     pid: ChildProcessSpawner.ProcessId(900_000_001),
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(input.exitCode ?? 0)),
+    exitCode: Effect.as(answered, ChildProcessSpawner.ExitCode(input.exitCode ?? 0)),
     isRunning: Effect.succeed(false),
     kill: () => Effect.void,
     unref: Effect.succeed(Effect.void),
     stdin: Sink.drain,
-    stdout: bytes(input.stdout),
+    stdout: Stream.unwrap(Effect.as(answered, bytes(input.stdout))),
     stderr: bytes(input.stderr),
     all: Stream.empty,
     getInputFd: () => Sink.drain,
@@ -60,6 +73,7 @@ const piDiscoverySpawner = (
     readonly version?: string;
     readonly state?: unknown;
     readonly authCheck?: string | undefined;
+    readonly versionOutput?: string;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -95,7 +109,9 @@ const piDiscoverySpawner = (
     return lazyChildProcessSpawner((command) => {
       const args = ChildProcess.isStandardCommand(command) ? command.args : [];
       if (args.includes("--version")) {
-        return Effect.succeed(processHandle({ stdout: `pi ${options.version ?? "0.84.3"}\n` }));
+        return Effect.succeed(
+          processHandle({ stdout: options.versionOutput ?? `pi ${options.version ?? "0.84.3"}\n` }),
+        );
       }
       if (args[0] === "auth") {
         const expected = ["auth", "check", "--provider", "openai", "--json", "--no-refresh"];
@@ -123,6 +139,84 @@ const settings = {
 } as const;
 
 describe("PiProvider", () => {
+  it.effect("probes OmO's version and checks its active model credentials", () =>
+    Effect.gen(function* () {
+      const spawner = yield* piDiscoverySpawner(
+        { models: [{ provider: "anthropic", id: "sonnet" }] },
+        {
+          versionOutput: "omo 5.1.40 (engine: senpi 2026.10.19-2)\n",
+          state: { model: { provider: "openai", id: "gpt-5" } },
+          authCheck: '{"reason":"credentials_not_configured"}',
+        },
+      );
+      const snapshot = yield* checkPiProviderStatus(
+        { ...settings, binaryPath: "omo" },
+        {},
+        undefined,
+        OMO_PROFILE,
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      assert.equal(snapshot.version, "5.1.40");
+      assert.include(snapshot.message ?? "", "OmO default (openai/gpt-5) has no credentials");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+  it.effect("reports a deleted process cwd as a working directory failure", () =>
+    Effect.gen(function* () {
+      using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+      });
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "ENOENT" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkPiProviderStatus(settings, {}).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      assert.equal(snapshot.installed, true);
+      assert.include(snapshot.message ?? "", "working directory");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+  it.live("reports an installed executable whose interpreter is missing", () =>
+    Effect.gen(function* () {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pi-shebang-"));
+      try {
+        const binaryPath = NodePath.join(dir, "pi");
+        NodeFS.writeFileSync(binaryPath, "#!/nonexistent/interpreter\n", { mode: 0o755 });
+        const snapshot = yield* checkPiProviderStatus({ ...settings, binaryPath });
+        assert.equal(snapshot.installed, true);
+        assert.include(snapshot.message ?? "", "could not be started");
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true });
+      }
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+  it.effect("uses the inherited spawn cwd instead of the project cwd to diagnose permissions", () =>
+    Effect.gen(function* () {
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "PermissionDenied",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "EACCES" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkPiProviderStatus(
+        settings,
+        {},
+        "/goat-test-missing-project-4381",
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      assert.equal(snapshot.installed, true);
+      assert.include(snapshot.message ?? "", "permission");
+      assert.notInclude(snapshot.message ?? "", "goat-test-missing-project");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("requires the first published Pi version with entries and settlement hooks", () =>
     Effect.gen(function* () {
       const snapshot = yield* checkPiProviderStatus(settings).pipe(
@@ -146,6 +240,48 @@ describe("PiProvider", () => {
         ["default"],
       );
       assert.include(snapshot.message ?? "", "could not refresh its models and commands");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each([
+    {
+      label: "answers after 6 s",
+      versionDelay: "6 seconds",
+      status: "ready",
+      version: "0.84.3",
+      message: "could not refresh its models and commands",
+      probesAfterVersion: true,
+    },
+    {
+      label: "never answers",
+      versionDelay: "Infinity",
+      status: "error",
+      version: null,
+      message: "Pi CLI is installed but timed out while running `pi --version`.",
+      probesAfterVersion: false,
+    },
+  ] as const)("gives `pi --version` 10 s when it $label", (row) =>
+    Effect.gen(function* () {
+      const spawned: Array<string> = [];
+      const spawner = ChildProcessSpawner.make((command) => {
+        const args = ChildProcess.isStandardCommand(command) ? command.args : [];
+        spawned.push(args.join(" "));
+        return Effect.succeed(
+          args.includes("--version")
+            ? processHandle({ stdout: "pi 0.84.3\n", answered: Effect.sleep(row.versionDelay) })
+            : processHandle({ stderr: "RPC startup failed", exitCode: 1 }),
+        );
+      });
+      const fiber = yield* checkPiProviderStatus(settings).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("10 seconds");
+      const snapshot = yield* Fiber.join(fiber);
+      assert.equal(snapshot.status, row.status);
+      assert.equal(snapshot.version, row.version);
+      assert.include(snapshot.message ?? "", row.message);
+      assert.equal(spawned.length > 1, row.probesAfterVersion);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

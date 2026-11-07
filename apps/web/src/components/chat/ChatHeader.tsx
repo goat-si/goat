@@ -32,7 +32,6 @@ import { useAtomValue } from "@effect/atom-react";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { GoatBotModeButton } from "../goatBot/GoatBotModeButton";
 import { ThreadNotesButton } from "../../notes/ThreadNotesButton";
 import { AgentScreenCardsToggle } from "../preview/sessions/AgentScreenCardsToggle";
 import {
@@ -222,7 +221,10 @@ export const ChatHeader = memo(function ChatHeader({
   const commitRename = (title: string) => {
     setRenaming(null);
     if (!readEnvironmentScope(activeThreadEnvironmentId, AuthOrchestrationOperateScope)) return;
-    const resolution = resolveRenameCommit({ title, originalTitle: activeThreadTitle });
+    const resolution = resolveRenameCommit({
+      title,
+      originalTitle: renamingTitle ?? activeThreadTitle,
+    });
     if (resolution.action === "reject-empty") {
       toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
       return;
@@ -513,11 +515,6 @@ export const ChatHeader = memo(function ChatHeader({
             Side chat{sideChatShortcutLabel ? ` (${sideChatShortcutLabel})` : ""}
           </TooltipPopup>
         </Tooltip>
-      ) : null}
-      {globalAgent ? (
-        <div className="flex shrink-0 items-center">
-          <GoatBotModeButton to="bot" />
-        </div>
       ) : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>

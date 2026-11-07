@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
+import { acpPermissionDisposition } from "@goat/provider-acp/server/clientPolicy";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import { FX_SUPPORTED_RUNTIME_MODES } from "@goat/provider-fx/testing";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
@@ -61,9 +62,11 @@ function makeThread(input: {
   };
 }
 
+const antigravityInstanceId = ProviderInstanceId.make("antigravity");
 const grokInstanceId = ProviderInstanceId.make("grok");
 const fxInstanceId = ProviderInstanceId.make("fx");
 const supportedRuntimeModesByInstance = new Map<ProviderInstanceId, ReadonlyArray<RuntimeMode>>([
+  [antigravityInstanceId, ["approval-required", "auto-accept-edits", "full-access"]],
   [grokInstanceId, ["approval-required", "auto", "full-access"]],
   [fxInstanceId, FX_SUPPORTED_RUNTIME_MODES],
 ]);
@@ -99,6 +102,8 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
           faviconPath: null,
           projectIcon: null,
           scripts: [],
+          pinnedAt: null,
+          archivedAt: null,
           createdAt: "2026-06-21T00:00:00.000Z",
           updatedAt: "2026-06-21T00:00:00.000Z",
           deletedAt: null,
@@ -108,6 +113,28 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
 );
 
 it.layer(layerTest)("RuntimePolicyV2", (it) => {
+  it.effect("asks for Antigravity command approval when a stored Auto thread falls back", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const resolve = (runtimeMode: RuntimeMode) =>
+        policy.resolve({
+          thread: makeThread({ now, worktreePath: null, runtimeMode }),
+          modelSelection: { instanceId: antigravityInstanceId, model: "test-model" },
+        });
+      const request = {
+        sessionId: "session-1",
+        toolCall: { toolCallId: "command-1", title: "Run command", kind: "execute" as const },
+        options: [{ optionId: "allow", name: "Allow", kind: "allow_once" as const }],
+      };
+      const auto = yield* resolve("auto");
+      assert.equal(auto.runtimeMode, "approval-required");
+      assert.equal(acpPermissionDisposition(auto, request), "ask");
+      assert.equal(acpPermissionDisposition(yield* resolve("auto-accept-edits"), request), "ask");
+      assert.equal(acpPermissionDisposition(yield* resolve("full-access"), request), "allow");
+    }),
+  );
+
   it.effect("runs a mode the provider does not offer in Supervised", () =>
     Effect.gen(function* () {
       const policy = yield* RuntimePolicy.RuntimePolicyV2;

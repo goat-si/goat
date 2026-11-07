@@ -70,6 +70,7 @@ Acceptance:
 - An eligible session-first message creates a queued turn item atomically with its claim. Its
   session receives the message and writes the receipt afterwards. Other new work is created in
   the same commit as reception's first reply, before dispatch.
+- A task-thread message reaches its running or waiting local task as a text follow-up; attachments stay on the timeline and are not forwarded. A message for a terminal task starts a session turn with that task as context, while an unavailable or unauthorized task is refused.
 - A follow-up to an open item extends that item: no new item, and the item stays in progress until
   the reply covering the follow-up is delivered. Linking a new item to finished work and reusing
   its worker remains a gap: reception currently refuses follow-ups naming finished work and asks
@@ -92,11 +93,14 @@ Acceptance:
 
 ## 2. First reply before acting
 
-- An ordinary message MUST go directly to the requester's idle Codex or Claude session when its
-  conversation has no open work: nothing queued, running, waiting on the person, or awaiting
-  result or failure delivery. The requester must have current permission and capacity to start
-  work. A busy session, a provider without per-run identity, or existing open work MUST keep
-  reception routing. Explicit answers and reports MUST keep their existing checked paths.
+- Each accepted ordinary message MUST go to the requester's GOAT Bot session for classification.
+  Open work, pending delivery, worker capacity and a busy session do not prevent a claim; a busy
+  session queues a distinct run. Reception remains the fallback when the input or requester is
+  unavailable, the requester lacks permission, this is not home, the bot or its project is missing,
+  or the provider lacks per-run identity. Link commands, MCP-origin inputs, deterministic option
+  and approval replies, explicit task answers and worker reports retain their checked paths.
+- Setting `goatBotSessionRouting` to `reception` sends new inputs to reception; existing session
+  claims continue and recover normally.
 - The same read-only session that receives an eligible request MUST begin with one line naming
   its concrete first step, before any tool call, or with the answer itself when no work is needed.
   Its first sealed assistant line is the receipt. Read-only lookups may proceed while it reaches
@@ -123,7 +127,8 @@ Acceptance:
 Acceptance:
 
 - An eligible request calls no reception model; its delivered receipt is the session's first line.
-- Open work, a busy session, unsupported providers and requester admission failures keep reception.
+- Open work, a busy session and worker capacity do not block session claims. Unsupported providers
+  and requester admission failures keep reception.
 - A silent session gets acknowledgment-only reception at 20 seconds, or the session fixed line at
   55 seconds if that call hangs. It gets exactly one receipt and its task remains running.
 - Any number of hung receipt transports leave another input's receipt able to start and settle
@@ -392,9 +397,8 @@ Acceptance:
 - With a suitable idle SSH host connected, a research turn may delegate there after settlement,
   and its answer identifies which machine did the work.
 
-**Next: the session classifies every input (model B).** Extending session-first routing to
-conversations with open work, busy sessions and explicit routing intents is the next step;
-reception and the existing answer/report paths remain in this model.
+The session classifies each ordinary message, including when the conversation has open work.
+Reception remains the fallback and the existing checked answer and report paths remain in use.
 
 ## Comparison with other bots
 
@@ -423,7 +427,7 @@ did not show it, not that it is absent. "GOAT now" is dev at
 | Unattended deny                      | Not distinguished                                                                                  | Interval routines skip overlaps | Deny by default                  | Routines as creator           | Never routes to chat                           | **Match**: deny by default, reported                                                                                                          |
 | Routines / tell-me-when              | Through a worker calling `goat_schedule_create`                                                    | Routines and triggers           | Cron                             | Routines with floors and caps | Cron sessions                                  | **Match**: create, list, cancel from chat; watches stop after firing                                                                          |
 | Decision cards                       | Buttons in GOAT, list in Slack/iMessage                                                            | Cards                           | Buttons on some platforms        | Cards via OpenTag             | Native approval clients                        | **Match**: Slack buttons, numbered replies in iMessage                                                                                        |
-| Attachments                          | Refused on GOAT bot input                                                                          | Not in notes                    | Platform media                   | Not in notes                  | Platform media                                 | **Match**                                                                                                                                     |
+| Attachments                          | GOAT app uploads reach the session turn; Slack and iMessage media not yet                          | Not in notes                    | Platform media                   | Not in notes                  | Platform media                                 | **Match**                                                                                                                                     |
 | Model per bot                        | Text generation model only                                                                         | Per bot engine                  | `/model` per channel             | Per bot                       | Per agent                                      | **Match**: picker like a main thread                                                                                                          |
 | Audit of trigger                     | Requester recorded per task                                                                        | Inspector                       | Logs                             | Audit row with trigger        | Logs                                           | **Match**: person / routine / delegation on every action                                                                                      |
 
@@ -445,6 +449,6 @@ did not show it, not that it is absent. "GOAT now" is dev at
 8. **Model picker** per bot in web, desktop and mobile settings.
 9. **Routines and tell-me-when** from chat, with unattended deny.
 10. **Slack buttons and iMessage numbered replies** for decision cards.
-11. **Attachments** in and out.
+11. **Attachments** out, and in from Slack and iMessage.
 12. **Trigger audit** on every action.
 13. **Marked resend** of Slack and iMessage results left ambiguous by a crash.

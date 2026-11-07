@@ -31,6 +31,8 @@ describe("splitMarkdownBlocks", () => {
     "| a | b |\n| - | - |\n| 1 | 2 |\n\nAfter the table.",
     "para\n\n    indented code\n\nnext",
     "Setext\n===\n\nnext\n---\n\n- [ ] task\n- [x] done",
+    "- a\n\n  ```\n  x\n\n```\n\nb",
+    "- a\n\n  ```\n  x\n\ny\n\n  ```\n\nb",
   ])("renders each block as the whole text renders it, at every streamed prefix: %j", (text) => {
     for (let end = 0; end <= text.length; end++) {
       const source = text.slice(0, end);
@@ -48,8 +50,25 @@ describe("splitMarkdownBlocks", () => {
     ]);
   });
 
+  it("renders a blockquote definition correctly at every streamed prefix", () => {
+    const text = "See [x]\n\n> [x]: https://example.com";
+    for (let end = 0; end <= text.length; end++) {
+      const source = text.slice(0, end);
+      const blocks = splitMarkdownBlocks(source);
+      expect(blocks?.map(html).join("") ?? html(source)).toBe(html(source));
+    }
+  });
+
   it.each([
     "[ref]\n\n[ref]: /later",
+    "See [x]\n\n> [x]: https://example.com",
+    "See [x]\n\n> > [x]: /a",
+    "See [x]\n\n- [x]: /a",
+    "See [x]\n\n1. item\n\n   [x]: /a",
+    "- a\n  - b\n\n    [x]: /a\n\nSee [x]",
+    "See [x]\n\n> - [x]: /a",
+    "See [a b]\n\n> [a\n> b]: /a",
+    "See [a\\]b]\n\n> [a\\]b]: /a",
     "a[^x]\n\n[^x]: note",
     "<details>\n\nbody\n\n</details>",
     ":::note\n\ncontent\n\n:::",

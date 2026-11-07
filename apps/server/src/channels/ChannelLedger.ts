@@ -1,3 +1,5 @@
+import { countBusyTasks } from "./channelBusyTasks.ts";
+import { forwardQueries } from "./channelForwardQueries.ts";
 import { deliveryLedger } from "./channelDeliveryLedger.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Option from "effect/Option";
@@ -302,6 +304,7 @@ export class ChannelLedger extends Context.Service<
       readonly cursor?: number | undefined;
       /** Changes the task's remote worker state in the same transaction. */
       readonly remoteWorker?: RemoteWorkerStateUpdate | undefined;
+      readonly completeForwardSequence?: number | undefined;
     }) => Effect.Effect<number, ChannelLedgerError>;
     /** Marks why a finished run is not reported yet; the owner scan re-checks held tasks. */
     readonly setCompletionHold: (input: {
@@ -418,9 +421,11 @@ export class ChannelLedger extends Context.Service<
       readonly taskId: ChannelTaskId;
       readonly sequence: number;
     }) => Effect.Effect<boolean, ChannelLedgerError>;
+    readonly isForwardPending: (sequence: number) => Effect.Effect<boolean, ChannelLedgerError>;
     readonly completeForward: (input: {
       readonly owner: string;
       readonly sequence: number;
+      readonly clearPendingAnswerMessageId?: string | undefined;
     }) => Effect.Effect<void, ChannelLedgerError>;
     readonly enqueueDeliveries: (
       deliveries: ReadonlyArray<ChannelOutboxInsert>,
@@ -1284,6 +1289,14 @@ const make = Effect.gen(function* () {
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
+            if (input.completeForwardSequence !== undefined) {
+              const pending = yield* sql<{ readonly sequence: number }>`
+                UPDATE channel_task_events SET forward_state = 'done'
+                WHERE sequence = ${input.completeForwardSequence} AND task_id = ${input.write.next.taskId}
+                  AND forward_state = 'pending' RETURNING sequence
+              `;
+              if (pending.length === 0) return 0;
+            }
             const sequence = yield* writeTaskEvent(input.write);
             yield* insertDeliveries(input.deliveries, input.write.event.occurredAt);
             if (input.cursor !== undefined) {
@@ -1540,23 +1553,7 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("listOpenWorkerRuns")),
       ),
 
-    countBusyTasks: (input) =>
-      sql<{ readonly busy: number }>`
-        SELECT COUNT(*) AS busy FROM channel_tasks
-        WHERE owner_id = ${input.ownerId}
-          AND json_extract(task_json, '$.requester.principalId') = ${input.principalId}
-          AND (status IN ('dispatching', 'running')
-            OR (status = 'waiting_input' AND json_extract(task_json, '$.worker') IS NOT NULL)
-            -- Stopped, but its worker may still run until the stop goes through.
-            OR (status = 'cancelled' AND EXISTS (
-              SELECT 1 FROM channel_task_events AS stop
-              WHERE stop.task_id = channel_tasks.task_id AND stop.type = 'task.cancelled'
-                AND stop.forward_state = 'pending'
-            )))
-      `.pipe(
-        Effect.map((rows) => rows[0]?.busy ?? 0),
-        Effect.mapError(toLedgerError("countBusyTasks")),
-      ),
+    countBusyTasks: (input) => countBusyTasks(sql, input),
 
     outcomeDeliveries: (taskIds) =>
       taskIds.length === 0
@@ -1588,36 +1585,7 @@ const make = Effect.gen(function* () {
             Effect.mapError(toLedgerError("outcomeDeliveries")),
           ),
 
-    hasPendingForward: (taskId) =>
-      sql<{ readonly found: number }>`
-        SELECT 1 AS found FROM channel_task_events
-        WHERE task_id = ${taskId} AND forward_state = 'pending' LIMIT 1
-      `.pipe(
-        Effect.map((rows) => rows.length > 0),
-        Effect.mapError(toLedgerError("hasPendingForward")),
-      ),
-
-    hasEarlierPendingForward: (input) =>
-      sql<{ readonly found: number }>`
-        SELECT 1 AS found FROM channel_task_events
-        WHERE task_id = ${input.taskId} AND forward_state = 'pending'
-          AND sequence < ${input.sequence}
-        LIMIT 1
-      `.pipe(
-        Effect.map((rows) => rows.length > 0),
-        Effect.mapError(toLedgerError("hasEarlierPendingForward")),
-      ),
-
-    completeForward: (input) =>
-      sql
-        .withTransaction(
-          fence(input.owner).pipe(
-            Effect.andThen(
-              sql`UPDATE channel_task_events SET forward_state = 'done' WHERE sequence = ${input.sequence}`,
-            ),
-          ),
-        )
-        .pipe(Effect.asVoid, Effect.mapError(toLedgerError("completeForward"))),
+    ...forwardQueries(sql, toLedgerError, fence),
 
     enqueueDeliveries: (deliveries, now) =>
       insertDeliveries(deliveries, now).pipe(Effect.mapError(toLedgerError("enqueueDeliveries"))),

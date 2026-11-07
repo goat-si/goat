@@ -8,6 +8,7 @@ import { useAndroidControlSizing } from "./ui/useAndroidControlSizing";
 export function BrandChannelPill(props: {
   readonly channel: BrandChannel;
   readonly allowFontScaling?: boolean;
+  readonly maxFontSizeMultiplier?: number;
 }) {
   const { scale } = useAndroidControlSizing();
   const label = BRAND_CHANNEL_LABEL[props.channel];
@@ -28,6 +29,7 @@ export function BrandChannelPill(props: {
     >
       <Text
         allowFontScaling={props.allowFontScaling}
+        maxFontSizeMultiplier={props.maxFontSizeMultiplier}
         className={
           props.channel === "dev"
             ? "font-goat-bold text-channel-dev uppercase"

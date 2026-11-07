@@ -115,7 +115,9 @@ skipped with a pointer to **Repair**. Codex restarts to pick up the models only
 on a machine with nothing running. On a busy hub the models are written, but
 Codex keeps its old list until it restarts or you sync again once the work
 finishes; a busy Child is skipped until you sync again. GOAT also syncs each
-machine right after a managed OpenCodex update moves it.
+machine right after an OpenCodex update moves it. Adopted installs are updated when their
+OpenCodex supports orchestrated updates and otherwise receive advice; a stuck update window clears
+once the member is back on its previous version, reinstalled with its own installer.
 
 Each action lists its steps and their results. Some changes wait for a person: a
 host key GOAT has not pinned or that changed, re-linking a device, or removing
@@ -132,12 +134,11 @@ request to launch or steer threads, work on other machines, manage the fleet or
 change settings when its profile does not allow it. Agents allowed to create
 worktrees, such as those under **worker** and **manager**, can also add and clone
 projects; changing or deleting a project still needs permission to change settings.
-Pull requests are opened and merged from the agent's own terminal, which profiles
-do not control; GOAT only refuses to start a merge manager for an agent whose
-profile cannot merge. A supervisor whose own profile allows merging can still
-start one for a thread that cannot merge, unless the limits that thread was started
-with, such as ones forwarded from another machine, leave merging out. Turn it on in
-**Settings → Hub**.
+An agent needs `pr.merge` to use GOAT's pull request merge and close tools. A
+supervisor can start a merge manager only when its own grant allows merging;
+otherwise, it asks a person through the decision inbox. Profiles do not control an
+agent's own terminal: an agent with repository credentials can still open or merge
+a pull request from there. Turn permission profiles on in **Settings → Hub**.
 
 A profile's lane limit (`maxLanes`) also covers the subagents a coding agent
 starts by itself. Codex and Claude run no more of them at once than the limit;

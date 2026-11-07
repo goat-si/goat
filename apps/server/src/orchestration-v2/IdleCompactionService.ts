@@ -16,7 +16,7 @@ import * as Stream from "effect/Stream";
 
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { idleCompactionWindow } from "./IdleCompaction.ts";
+import { idleCompactionWindow, latestIdleCompactionRun } from "./IdleCompaction.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
@@ -32,8 +32,9 @@ export const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
 
   const compactWhenDue = Effect.fn("IdleCompactionService.compactWhenDue")(
-    function* (threadId: ThreadId, runId: RunId) {
-      // Loops once after the wait: the thread may have moved on.
+    function* (threadId: ThreadId, completedRunId: RunId) {
+      let runId = completedRunId;
+      // Loops after the wait or a retarget: the thread may have moved on.
       while (true) {
         if (yield* AutomationHold.isHeld) return;
         const current = yield* settings.getSettings;
@@ -51,6 +52,8 @@ export const make = Effect.gen(function* () {
           )
         )
           return;
+        const activeProviderThreadIds =
+          thread.activeProviderThreadId === null ? [] : [thread.activeProviderThreadId];
         const records = yield* projections.getThreadRecords(
           threadId,
           [
@@ -62,7 +65,20 @@ export const make = Effect.gen(function* () {
             "turnItems",
             "contextTransfers",
           ],
-          { messageRunIds: [runId], turnItemStatuses: ["pending", "running", "waiting"] },
+          {
+            messageRunIds: [runId],
+            turnItemStatuses: ["pending", "running", "waiting"],
+            // The latest run, active runs that hold background work, and rolled-back runs whose
+            // items it ignores.
+            runStatuses: ["preparing", "starting", "running", "rolled_back"],
+            includeLatestRun: true,
+            // Without an active provider thread there is no session to compact.
+            providerThreadIds: activeProviderThreadIds,
+            providerTurnThreadIds: activeProviderThreadIds,
+            latestProviderTurnUsageOnly: true,
+            runtimeRequestStatuses: ["pending"],
+            contextTransferStatuses: ["pending"],
+          },
         );
         if (
           resolveIdleCompaction(current, records.thread.providerInstanceId) !==
@@ -74,6 +90,12 @@ export const make = Effect.gen(function* () {
           )
         )
           return;
+        const latestRun = latestIdleCompactionRun(records.runs);
+        // A late update for an earlier run replaced the latest run's timer, so take it over.
+        if (latestRun?.status === "completed" && latestRun.id !== runId) {
+          runId = latestRun.id;
+          continue;
+        }
         const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
         const window = idleCompactionWindow(records, nowMs);
         if (window?.runId !== runId) return;

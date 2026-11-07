@@ -3,7 +3,9 @@ import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import {
   isListedSettledThread,
   settledShelfFrontier,
+  sortOlderSettledScopes,
   unloadedOlderSettledCount,
+  unloadedListedOlderSettledCount,
   wantedOlderSettledPages,
   type OlderSettledScope,
 } from "@goat/client-runtime/state/threads";
@@ -27,10 +29,11 @@ export function useOlderSettledShelf(input: {
   /** Rows the shelf shows; pages are read until it lists that many. */
   readonly visibleCount: number;
 }) {
-  const scopeKey = JSON.stringify(input.scopes);
+  const scopes = sortOlderSettledScopes(input.scopes);
+  const scopeKey = JSON.stringify(scopes);
   const [requested, setRequested] = useState({ scopeKey, pages: NO_PAGES });
   const pages = requested.scopeKey === scopeKey && input.expanded ? requested.pages : NO_PAGES;
-  const shelfScopes = input.scopes.map((scope) => ({
+  const shelfScopes = scopes.map((scope) => ({
     scope,
     pages: pages.get(scope.environmentId) ?? 0,
   }));
@@ -66,7 +69,7 @@ export function useOlderSettledShelf(input: {
     isListed: (thread: EnvironmentThreadShell) => isListedSettledThread(thread.source, frontier),
     /** Older settled threads in scope that are not local; add it to the local Settled rows. */
     unloadedCount: (threads: ReadonlyArray<EnvironmentThreadShell>) =>
-      unloadedOlderSettledCount({ olderSettled: olderOf, scopes: input.scopes, threads }),
+      unloadedOlderSettledCount({ olderSettled: olderOf, scopes, threads }),
     loading: loaded.some(({ scope }) => pagesOf(scope.environmentId)?.status === "pending"),
     failed: loaded.some(({ scope }) => pagesOf(scope.environmentId)?.status === "failed"),
     retry: () => {
@@ -98,12 +101,12 @@ export function useOlderSettledShelfGrowth(
  * Threads of these projects that this client does not hold (older settled threads), for counts
  * shown outside the shelf, such as a removal confirm.
  */
-export function readUnloadedThreadCount(
+function unloadedCountInput(
   members: ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly id: ProjectId }>,
   threads: ReadonlyArray<EnvironmentThreadShell>,
-): number {
-  return unloadedOlderSettledCount({
-    olderSettled: (environmentId) =>
+) {
+  return {
+    olderSettled: (environmentId: EnvironmentId) =>
       appAtomRegistry.get(olderSettledThreads.olderSettledAtom(environmentId)),
     scopes: [...new Set(members.map((member) => member.environmentId))].map((environmentId) => ({
       environmentId,
@@ -116,5 +119,19 @@ export function readUnloadedThreadCount(
         (member) => member.environmentId === thread.environmentId && member.id === thread.projectId,
       ),
     ),
-  });
+  };
+}
+
+export function readUnloadedThreadCount(
+  members: Parameters<typeof unloadedCountInput>[0],
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): number {
+  return unloadedOlderSettledCount(unloadedCountInput(members, threads));
+}
+
+export function readUnloadedListedThreadCount(
+  members: Parameters<typeof unloadedCountInput>[0],
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): number | null {
+  return unloadedListedOlderSettledCount(unloadedCountInput(members, threads));
 }

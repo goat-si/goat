@@ -31,6 +31,7 @@ export interface OlderSettled {
   readonly before: string;
   readonly beforeMs: number;
   readonly counts: ReadonlyMap<ProjectId, number>;
+  readonly sideChatCounts?: ReadonlyMap<ProjectId, number>;
 }
 
 /** The scope's projects in one environment, or null for all of them. */
@@ -54,12 +55,27 @@ const NO_PAGES: OlderSettledPages = { reads: [], frontier: null, status: "ready"
 
 type OlderSettledRow = Pick<
   OrchestrationV2ThreadShell,
-  "id" | "projectId" | "lineage" | "settledOverride" | "settledAt"
+  "id" | "projectId" | "lineage" | "settledOverride" | "settledAt" | "sideChatOf"
 >;
 
 export interface OlderSettledShelfEnvironment {
   readonly older: OlderSettled | null;
   readonly pages: OlderSettledPages;
+}
+
+/**
+ * Scopes in one order, so a shelf keyed on them keeps its pages when the caller's project order
+ * changes. Loading a page can reorder the sidebar's projects, which would otherwise drop the page.
+ */
+export function sortOlderSettledScopes(
+  scopes: ReadonlyArray<OlderSettledScope>,
+): ReadonlyArray<OlderSettledScope> {
+  return scopes
+    .map((scope) => ({
+      environmentId: scope.environmentId,
+      projectIds: scope.projectIds === null ? null : [...scope.projectIds].sort(),
+    }))
+    .sort((left, right) => left.environmentId.localeCompare(right.environmentId));
 }
 
 /**
@@ -173,6 +189,38 @@ export function unloadedOlderSettledCount(input: {
   return Math.max(0, unloaded);
 }
 
+/** Listed older rows missing from the shell, or null when a server supplies only legacy totals. */
+export function unloadedListedOlderSettledCount(input: {
+  readonly olderSettled: (environmentId: EnvironmentId) => OlderSettled | null;
+  readonly scopes: ReadonlyArray<OlderSettledScope>;
+  readonly threads: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly source: OlderSettledRow;
+  }>;
+}): number | null {
+  let unloaded = 0;
+  for (const scope of input.scopes) {
+    const older = input.olderSettled(scope.environmentId);
+    if (older === null) continue;
+    const projects = scope.projectIds ?? [...older.counts.keys()];
+    for (const projectId of projects) {
+      const total = older.counts.get(projectId) ?? 0;
+      if (total > 0 && older.sideChatCounts === undefined) return null;
+      unloaded += Math.max(0, total - (older.sideChatCounts?.get(projectId) ?? 0));
+    }
+    for (const { environmentId, source } of input.threads) {
+      if (
+        environmentId === scope.environmentId &&
+        (scope.projectIds === null || scope.projectIds.includes(source.projectId)) &&
+        source.sideChatOf == null &&
+        isOlderSettledThreadShell(source, older.beforeMs)
+      )
+        unloaded -= 1;
+    }
+  }
+  return Math.max(0, unloaded);
+}
+
 /**
  * The pages each environment should read: while the shelf lists fewer than `visibleCount` rows,
  * one more for each environment whose frontier is the shelf's, once its pages have loaded. A
@@ -254,7 +302,17 @@ export function createOlderSettledThreadAtoms<R, ER, E>(
 
   const countsOf = (source: {
     readonly counts: OrchestrationV2OlderSettledThreadsPage["counts"];
-  }) => new Map(source.counts.map(({ projectId, count }) => [projectId, count] as const));
+    readonly sideChatCounts?: OrchestrationV2OlderSettledThreadsPage["sideChatCounts"];
+  }) => ({
+    counts: new Map(source.counts.map(({ projectId, count }) => [projectId, count] as const)),
+    ...(source.sideChatCounts === undefined
+      ? {}
+      : {
+          sideChatCounts: new Map(
+            source.sideChatCounts.map(({ projectId, count }) => [projectId, count] as const),
+          ),
+        }),
+  });
 
   const olderSettledAtom = Atom.family((environmentId: EnvironmentId) => {
     let generation = -1;
@@ -274,7 +332,7 @@ export function createOlderSettledThreadAtoms<R, ER, E>(
         fromSnapshot = {
           before: cut.before,
           beforeMs: DateTime.toEpochMillis(DateTime.makeUnsafe(cut.before)),
-          counts: countsOf(cut),
+          ...countsOf(cut),
         };
       }
       // Most shell updates move only the cursor; the key needs new rows or removals.
@@ -299,7 +357,11 @@ export function createOlderSettledThreadAtoms<R, ER, E>(
       );
       if (read !== null && read !== lastReadPage) {
         lastReadPage = read;
-        lastRead = { ...fromSnapshot, counts: countsOf(read) };
+        lastRead = {
+          before: fromSnapshot.before,
+          beforeMs: fromSnapshot.beforeMs,
+          ...countsOf(read),
+        };
       }
       return lastRead ?? fromSnapshot;
     }).pipe(Atom.withLabel(`environment-older-settled:${environmentId}`));

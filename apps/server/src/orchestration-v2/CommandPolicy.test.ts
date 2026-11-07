@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   MessageId,
+  type OrchestrationV2Command,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ThreadProjection,
   ProviderInstanceId,
@@ -244,6 +245,32 @@ it.each(["/compact", " /LOGOUT "])("queues a steer sent while %s runs", (text) =
   );
 });
 
+const channelMessage = {
+  type: "message.dispatch",
+  commandId,
+  threadId,
+  messageId: userMessageId,
+  text: "Continue",
+  attachments: [],
+  dispatchMode: { type: "start_immediately" },
+  createdBy: "user",
+  creationSource: "server",
+} satisfies Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
+
+it.each([
+  "usageLimitContinuationOfRunId",
+  "automatedContinuationOfRunId",
+  "restartContinuationOfRunId",
+] as const)("preserves the saved active order for a user-attributed %s", (field) => {
+  assert.isFalse(
+    CommandPolicy.shouldClearActiveOrder({ ...channelMessage, [field]: activeRunId }, "a"),
+  );
+});
+
+it("clears the saved active order for a server-delivered channel prompt", () => {
+  assert.isTrue(CommandPolicy.shouldClearActiveOrder(channelMessage, "a"));
+});
+
 const layer = it.layer(CommandPolicy.layer);
 
 layer("CommandPolicyV2", (it) => {
@@ -266,3 +293,37 @@ layer("CommandPolicyV2", (it) => {
     }),
   );
 });
+
+it.effect("refuses steering or restarting a survivor while its native turn runs", () =>
+  Effect.gen(function* () {
+    const policy = yield* CommandPolicy.CommandPolicyV2;
+    const projection = {
+      ...dispatchProjection(baseCapabilities),
+      thread: {
+        id: threadId,
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt" },
+      },
+      providerTurns: [
+        {
+          runAttemptId: activeAttemptId,
+          status: "running",
+          survivingRestart: { nativeStartedAt: null },
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection;
+    for (const type of ["steer_active", "restart_active"] as const) {
+      const error = yield* policy
+        .decideMessageDispatch({
+          commandId,
+          projection,
+          requestedMode: { type, targetRunId: activeRunId },
+          capabilities: baseCapabilities,
+        })
+        .pipe(Effect.flip);
+      assert.equal(
+        error.message,
+        "This Codex turn is still running from before the server restarted. Stop it or wait for it to finish before steering.",
+      );
+    }
+  }).pipe(Effect.provide(CommandPolicy.layer)),
+);

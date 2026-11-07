@@ -11,7 +11,17 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildGoatBotTimeline } from "./rows.ts";
-import { goatBotItemReaders, presentTaskChip } from "./readers.ts";
+import { goatBotItemReaders, presentTaskChip, presentTaskStatus } from "./readers.ts";
+
+describe("presentTaskStatus", () => {
+  it("names a task the person marked done as done while its run is still going", () => {
+    expect(presentTaskStatus("running", "2026-11-04T10:00:00.000Z")).toEqual({
+      label: "Done",
+      tone: "success",
+    });
+    expect(presentTaskStatus("waiting_input", null).label).toBe("Needs your input");
+  });
+});
 
 const chip = (overrides: Partial<ChannelTaskChip> = {}): ChannelTaskChip => ({
   taskId: ChannelTaskId.make("task-1"),
@@ -395,6 +405,32 @@ describe("goatBotItemReaders", () => {
     });
     expect(goatBotItemReaders.taskCard(plain)).toBeNull();
     expect(goatBotItemReaders.taskCard(unknownStatus)).toBeNull();
+  });
+
+  it("shows coding work as a card but not GOAT Bot's own turns in its session", () => {
+    const notification = (ledgerTask: ChannelTaskChip) => {
+      const item = decodeItem({
+        ...baseJson,
+        type: "notification",
+        source: { kind: "background_task" },
+        outcome: "updated",
+        summary: "Work updated",
+        ledgerTask,
+      });
+      if (item.type !== "notification") throw new Error("expected a notification");
+      return item;
+    };
+    const session = {
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("goat-bot-session:abc"),
+    };
+    expect(goatBotItemReaders.taskCard(notification(chip({ kind: "work" })))).not.toBeNull();
+    expect(goatBotItemReaders.taskCard(notification(chip()))).not.toBeNull();
+    expect(goatBotItemReaders.taskCard(notification(chip({ kind: "turn" })))).toBeNull();
+    const { worker: _worker, ...unbound } = chip({ kind: "turn" });
+    expect(goatBotItemReaders.taskCard(notification(unbound))).toBeNull();
+    // Chips stored before chips carried their kind still name the session as their worker.
+    expect(goatBotItemReaders.taskCard(notification(chip({ worker: session })))).toBeNull();
   });
 });
 

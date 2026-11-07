@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FiberMap from "effect/FiberMap";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
@@ -45,6 +46,7 @@ export interface CodexAppServerPatchedProtocolOptions {
   readonly logOutgoing?: boolean;
   // Test override; production uses MAX_INCOMING_MESSAGE_BYTES.
   readonly maxIncomingMessageBytes?: number;
+  readonly maxOutgoingMessageBytes?: number;
   readonly logger?: (event: CodexAppServerProtocolLogEvent) => Effect.Effect<void, never>;
   readonly onNotification?: (
     notification: CodexAppServerIncomingNotification,
@@ -138,12 +140,14 @@ const normalizeIncomingError = (
   error: unknown,
   operation: CodexError.CodexAppServerTransportOperation,
 ): CodexError.CodexAppServerError =>
-  isCodexAppServerError(error)
-    ? error
-    : new CodexError.CodexAppServerTransportError({
-        operation,
-        cause: error,
-      });
+  PlatformError.isPlatformError(error) && isCodexAppServerError(error.reason.cause)
+    ? error.reason.cause
+    : isCodexAppServerError(error)
+      ? error
+      : new CodexError.CodexAppServerTransportError({
+          operation,
+          cause: error,
+        });
 
 const toProtocolMessage = (
   requestId: string | number,
@@ -240,6 +244,17 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
           payload: message,
         });
         const encoded = yield* encodeWireMessage(message);
+        if (options.maxOutgoingMessageBytes !== undefined) {
+          const bytes = Buffer.byteLength(encoded, "utf8") - (encoded.endsWith("\n") ? 1 : 0);
+          if (bytes > options.maxOutgoingMessageBytes) {
+            return yield* new CodexError.CodexAppServerTransportError({
+              operation: "encode-outgoing-message",
+              cause: new Error(
+                `Message is ${bytes} bytes; the Codex socket accepts at most ${options.maxOutgoingMessageBytes}.`,
+              ),
+            });
+          }
+        }
         yield* logProtocol({
           direction: "outgoing",
           stage: "raw",
@@ -479,7 +494,15 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       Effect.forkScoped,
     );
 
-    yield* Stream.fromQueue(outgoing).pipe(Stream.run(options.stdio.stdout()), Effect.forkScoped);
+    yield* Stream.fromQueue(outgoing).pipe(
+      Stream.run(options.stdio.stdout()),
+      Effect.catch((error) =>
+        handleTermination(() =>
+          Effect.succeed(normalizeIncomingError(error, "write-output-stream")),
+        ),
+      ),
+      Effect.forkScoped,
+    );
 
     const request = Effect.fn("CodexAppServerProtocol.request")(function* (
       method: string,
@@ -489,17 +512,30 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
         nextRequestId,
         (current) => [current, current + 1] as const,
       );
+      const attributes = {
+        "rpc.system": "jsonrpc",
+        "rpc.method": method,
+        "rpc.request_id": requestId,
+      };
+      yield* Effect.annotateCurrentSpan(attributes);
       const deferred = yield* Deferred.make<unknown, CodexError.CodexAppServerError>();
-      yield* Ref.update(pending, (current) =>
-        new Map(current).set(String(requestId), { deferred, method }),
-      );
-      yield* offerOutgoing({
-        id: requestId,
-        method,
-        ...(payload !== undefined ? { params: payload } : {}),
-      }).pipe(Effect.tapError(() => removePending(String(requestId))));
-      return yield* Deferred.await(deferred).pipe(
-        Effect.onInterrupt(() => removePending(String(requestId))),
+      return yield* Effect.acquireUseRelease(
+        Ref.update(pending, (current) =>
+          new Map(current).set(String(requestId), { deferred, method }),
+        ),
+        () =>
+          Effect.gen(function* () {
+            yield* offerOutgoing({
+              id: requestId,
+              method,
+              ...(payload !== undefined ? { params: payload } : {}),
+            }).pipe(Effect.withSpan("CodexAppServerProtocol.request.enqueue", { attributes }));
+            // Includes queue/stdin delivery, Codex work and response routing, not just app-server CPU.
+            return yield* Deferred.await(deferred).pipe(
+              Effect.withSpan("CodexAppServerProtocol.request.awaitResponse", { attributes }),
+            );
+          }),
+        () => removePending(String(requestId)),
       );
     });
 

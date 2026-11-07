@@ -9,9 +9,11 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import { HttpClient } from "effect/http";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as NodeOS from "node:os";
 
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -34,6 +36,7 @@ const TAILSCALE_ENDPOINT_TIMEOUT = Duration.seconds(3);
 export class DirectEndpoints extends Context.Service<
   DirectEndpoints,
   {
+    readonly resolveAvailable: () => Effect.Effect<ReadonlyArray<ServerDirectEndpoint>>;
     readonly resolve: () => Effect.Effect<ReadonlyArray<ServerDirectEndpoint>>;
   }
 >()("goat/environment/DirectEndpoints") {}
@@ -96,11 +99,6 @@ const CLOUD_METADATA_ADDRESS = "169.254.169.254";
 const CLOUD_METADATA_TIMEOUT_MS = 300;
 
 const probeCloudMetadata = Effect.callback<boolean>((resume) => {
-  const socket = NodeNet.connect({
-    host: CLOUD_METADATA_ADDRESS,
-    port: 80,
-    timeout: CLOUD_METADATA_TIMEOUT_MS,
-  });
   let settled = false;
   const settle = (found: boolean) => {
     if (settled) return;
@@ -108,9 +106,16 @@ const probeCloudMetadata = Effect.callback<boolean>((resume) => {
     socket.destroy();
     resume(Effect.succeed(found));
   };
+  const socket = guardErrors(
+    NodeNet.connect({
+      host: CLOUD_METADATA_ADDRESS,
+      port: 80,
+      timeout: CLOUD_METADATA_TIMEOUT_MS,
+    }),
+    () => settle(false),
+  );
   socket.once("connect", () => settle(true));
   socket.once("timeout", () => settle(false));
-  socket.once("error", () => settle(false));
   return Effect.sync(() => socket.destroy());
 });
 
@@ -128,7 +133,8 @@ export const make = Effect.gen(function* () {
     : Effect.succeed(false);
   yield* Effect.forkDetach(onCloudVm);
 
-  const resolve = Effect.gen(function* () {
+  const servedEndpoint = yield* Ref.make<Option.Option<string>>(Option.none());
+  const resolveAvailable = Effect.fn("DirectEndpoints.resolveAvailable")(function* () {
     const endpoints = [
       ...resolveBoundEndpoints({
         platform,
@@ -138,6 +144,12 @@ export const make = Effect.gen(function* () {
         onCloudVm: yield* onCloudVm,
       }),
     ];
+    const servedUrl = yield* Ref.get(servedEndpoint);
+    if (Option.isSome(servedUrl)) endpoints.push({ kind: "tailnet", httpBaseUrl: servedUrl.value });
+    return endpoints;
+  });
+
+  const resolve = Effect.gen(function* () {
     // Serve setup can fail without stopping startup; advertise only after it answers as this server.
     if (config.tailscaleServeEnabled) {
       const servedUrl = yield* readTailscaleStatus.pipe(
@@ -158,14 +170,13 @@ export const make = Effect.gen(function* () {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(HttpClient.HttpClient, httpClient),
       );
-      if (Option.isSome(servedUrl)) {
-        endpoints.push({ kind: "tailnet", httpBaseUrl: servedUrl.value });
-      }
+      yield* Ref.set(servedEndpoint, servedUrl);
     }
-    return endpoints;
+    return yield* resolveAvailable();
   });
 
   return DirectEndpoints.of({
+    resolveAvailable,
     resolve: Effect.fn("DirectEndpoints.resolve")(function () {
       return resolve;
     }),

@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import * as NodeFS from "node:fs";
-import { vi } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 import { readBootstrapEnvelope } from "./bootstrap.ts";
 
 const openSyncInterceptor = vi.hoisted(() => ({
@@ -129,3 +129,21 @@ it.layer(NodeServices.layer)("readBootstrapEnvelope", (it) => {
 
   // Needs a FIFO, which mkfifo creates; Windows has neither.
 });
+
+// Live: the read's timeout must run on the real clock. Windows cannot open a directory as a file.
+it.live.skipIf(windowsHost)(
+  "a read error on the bootstrap fd fails the read instead of the process",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      // A directory fd passes fstat, then its first read fails with EISDIR.
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-bootstrap-" });
+      const fd = yield* openBootstrapInputFd(directory);
+
+      const result = yield* readBootstrapEnvelope(TestEnvelopeSchema, fd, { timeoutMs: 100 }).pipe(
+        Effect.result,
+      );
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure._tag).toBe("BootstrapEnvelopeReadError");
+    }).pipe(Effect.provide(NodeServices.layer)),
+);

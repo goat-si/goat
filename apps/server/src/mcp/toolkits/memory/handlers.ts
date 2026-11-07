@@ -2,6 +2,7 @@ import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as MemoryAccess from "../../../memory/MemoryAccess.ts";
+import * as MemoryRecall from "../../../memory/MemoryRecall.ts";
 import * as MemoryService from "../../../memory/MemoryService.ts";
 import * as MemorySyncService from "../../../memory/MemorySyncService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -149,6 +150,7 @@ export const memoryFailure =
       : Effect.fail(mapped);
   };
 
+const decodeRecall = argumentsOf("memory_recall", M.MemoryRecallInput);
 const decodeSearch = argumentsOf("memory_search", M.MemorySearchInput);
 const decodeList = argumentsOf("memory_list", M.MemoryListInput);
 const decodeReadSource = argumentsOf("memory_read_source", M.MemoryReadSourceInput);
@@ -156,6 +158,7 @@ const decodeRead = argumentsOf("memory_read", M.MemoryReadInput);
 const decodeHistory = argumentsOf("memory_history", M.MemoryHistoryInput);
 const decodeSyncStatus = argumentsOf("memory_sync_status", M.MemorySyncStatusInput);
 const decodeUpsert = argumentsOf("memory_upsert", M.MemoryUpsertInput);
+const decodeRemember = argumentsOf("goat_memory_remember", M.MemoryRememberInput);
 const decodeForget = argumentsOf("memory_forget", M.MemoryForgetInput);
 const decodeRevertResolution = argumentsOf(
   "memory_revert_resolution",
@@ -168,12 +171,31 @@ const callerThread = Effect.gen(function* () {
     ? { environmentId: caller.environmentId, threadId: caller.thread.threadId }
     : undefined;
 });
+/** Read tools default to this server's memory space, so a query or id alone is enough. */
+const withCurrentSpace = (input: unknown) =>
+  Effect.gen(function* () {
+    if (typeof input !== "object" || input === null || "memorySpaceId" in input) return input;
+    const sync = yield* MemorySyncService.MemorySyncService;
+    const { memorySpaceId } = yield* sync.readLocalReadiness();
+    if (!memorySpaceId) return yield* new M.MemoryRpcError({ code: "hub_disabled" });
+    return { ...input, memorySpaceId };
+  });
 const handlers = {
+  memory_recall: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryRecall.MemoryRecall;
+      return yield* service.recall(
+        yield* decodeRecall(input),
+        yield* invocationPermit("read"),
+        yield* callerThread,
+      );
+    }).pipe(Effect.catch(memoryFailure("memory_recall"))),
+  ),
   memory_search: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;
       return yield* service.search(
-        yield* decodeSearch(input),
+        yield* decodeSearch(yield* withCurrentSpace(input)),
         yield* invocationPermit("read"),
         yield* callerThread,
       );
@@ -183,7 +205,7 @@ const handlers = {
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;
       return yield* service.list(
-        yield* decodeList(input),
+        yield* decodeList(yield* withCurrentSpace(input)),
         yield* invocationPermit("read"),
         yield* callerThread,
       );
@@ -193,7 +215,7 @@ const handlers = {
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;
       return yield* service.read(
-        yield* decodeRead(input),
+        yield* decodeRead(yield* withCurrentSpace(input)),
         yield* invocationPermit("read"),
         yield* callerThread,
       );
@@ -213,7 +235,7 @@ const handlers = {
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;
       return yield* service.history(
-        yield* decodeHistory(input),
+        yield* decodeHistory(yield* withCurrentSpace(input)),
         yield* invocationPermit("read"),
         yield* callerThread,
       );
@@ -243,6 +265,35 @@ const handlers = {
         )
         .pipe(Effect.flatMap((stored) => receipt(stored.receipt)));
     }).pipe(Effect.catch(memoryFailure("memory_upsert"))),
+  ),
+  goat_memory_remember: McpToolAccess.writesWithCapability((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryService.MemoryService;
+      const value = yield* decodeRemember(yield* withCurrentSpace(input));
+      const memorySpaceId = value.memorySpaceId;
+      if (!memorySpaceId) return yield* new M.MemoryRpcError({ code: "hub_disabled" });
+      return yield* service
+        .remember(
+          { ...value, memorySpaceId },
+          yield* invocationPermit("write"),
+          yield* callerThread,
+        )
+        .pipe(
+          Effect.catchTags({
+            MemoryRememberScopeUnavailable: (error) =>
+              Effect.fail(
+                new M.OrchestratorMcpFailure({
+                  code: "invalid_request",
+                  message:
+                    error.scope === "project"
+                      ? "This conversation has no project memory, so nothing was saved. Save it with scope user or thread."
+                      : "Thread memory needs a conversation, so nothing was saved. Save it with scope user.",
+                }),
+              ),
+          }),
+          Effect.flatMap((stored) => receipt(stored.receipt)),
+        );
+    }).pipe(Effect.catch(memoryFailure("goat_memory_remember"))),
   ),
   memory_forget: McpToolAccess.destructive(
     McpToolAccess.writesWithCapability((input) =>

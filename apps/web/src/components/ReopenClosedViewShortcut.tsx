@@ -40,6 +40,7 @@ import {
 import { toastManager } from "./ui/toast";
 
 const PREVIEW_FORWARDED_LAYOUT_COMMANDS = [
+  "preview.focusUrl",
   "workspace.focusNext",
   "workspace.focusPrevious",
   "sidebar.toggle",

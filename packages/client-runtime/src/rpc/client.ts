@@ -7,6 +7,7 @@ import {
   type EnvironmentId,
   type MemoryHistoryInput,
   type ClientGuardedRpcTag,
+  type ThreadId,
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   SLACK_CHANNEL_WS_METHODS,
@@ -26,6 +27,7 @@ import { RpcClientError, type RpcClient } from "effect/rpc";
 import type { Atom, AtomRegistry } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "../state/commandPermissions.ts";
+import { resolveThreadTextAppends } from "../state/threadTextAppends.ts";
 
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
@@ -64,6 +66,7 @@ export type EnvironmentRpcTag = keyof EnvironmentProtocolClient & string;
 type RpcMethod<TTag extends EnvironmentRpcTag> = EnvironmentProtocolClient[TTag];
 
 export type EnvironmentSubscriptionRpcTag =
+  | typeof WS_METHODS.browserClaimsSubscribe
   | typeof WS_METHODS.notesSubscribe
   | typeof WS_METHODS.memoryChanges
   | typeof WS_METHODS.connectionCatalogServe
@@ -368,6 +371,7 @@ export function runStreamGuarded<TTag extends EnvironmentStreamCommandRpcTag>(
 }
 
 interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
+  /** Reports defects; the subscription then waits for the next session or resubscribe. */
   readonly onDefect?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
@@ -536,6 +540,11 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                           Stream.concat(subscribeToSession()),
                         );
                       }
+                      // A reported defect parks until the next session or resubscribe. Failing would
+                      // end the whole subscription, so a mounted screen never syncs again.
+                      if (options?.onDefect !== undefined && Cause.hasDies(cause)) {
+                        return Stream.empty;
+                      }
                       return Stream.failCause(cause);
                     }),
                   ),
@@ -563,6 +572,29 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
   EnvironmentSupervisor.EnvironmentSupervisor
 > {
   return subscribeDynamicMapped(tag, makeInput, (_session, stream) => stream, options);
+}
+
+/** Opts into live text appends and resolves them inside each subscription attempt. */
+export function subscribeThreadItems(
+  threadId: ThreadId,
+  makeInput: (
+    session: RpcSession,
+  ) => Effect.Effect<EnvironmentRpcInput<typeof ORCHESTRATION_V2_WS_METHODS.subscribeThread>>,
+  options?: SubscriptionOptions<typeof ORCHESTRATION_V2_WS_METHODS.subscribeThread>,
+) {
+  let acceptTextAppends = true;
+  return subscribeDynamicMapped(
+    ORCHESTRATION_V2_WS_METHODS.subscribeThread,
+    (session) =>
+      Effect.map(makeInput(session), ({ acceptTextAppends: _ignored, ...input }) =>
+        acceptTextAppends ? { ...input, acceptTextAppends: true as const } : input,
+      ),
+    (_session, stream) =>
+      resolveThreadTextAppends(threadId, stream, () => {
+        acceptTextAppends = false;
+      }),
+    options,
+  );
 }
 
 /** Tags each value before `switchMap` can buffer it across a session change. */

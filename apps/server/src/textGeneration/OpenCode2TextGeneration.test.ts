@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderInstanceId } from "@goat/contracts";
+import { ChatAttachmentId, ChatImageAttachment, ProviderInstanceId } from "@goat/contracts";
+import * as NodeURL from "node:url";
 import * as M from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Queue from "effect/Queue";
@@ -11,6 +12,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as OpenCode2AdapterV2Testkit from "../orchestration-v2/Adapters/OpenCode2AdapterV2.testkit.ts";
 import * as OpenCode2Server from "@goat/provider-opencode/server/v2/OpenCode2Server";
@@ -43,6 +45,57 @@ it.layer(layer)("OpenCode2TextGeneration", (it) => {
       });
       assert.equal(title.title, "Fix OAuth Login Redirect Loop");
     }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([false, true] as const)(
+    "sends only reachable supported images (external: %s)",
+    (external) =>
+      Effect.gen(function* () {
+        const host = yield* ProviderHost.ProviderHost;
+        const fs = yield* FileSystem.FileSystem;
+        const image = (id: string, name: string, mimeType: string) =>
+          ChatImageAttachment.make({
+            type: "image",
+            id: ChatAttachmentId.make(id),
+            name,
+            mimeType,
+            sizeBytes: 4,
+          });
+        const screenshot = image("oc2-screen", "screen.png", "image/png");
+        const missing = image("oc2-missing", "missing.png", "image/png");
+        const unsupported = image("oc2-svg", "diagram.svg", "image/svg+xml");
+        const path = host.resolveAttachmentPath(screenshot)!;
+        yield* fs.writeFileString(path, "data");
+        yield* fs.writeFileString(host.resolveAttachmentPath(unsupported)!, "<svg/>");
+        const prompts: Array<unknown> = [];
+        const server = yield* OpenCode2AdapterV2Testkit.replayServer(
+          {
+            provider: "opencode",
+            protocol: OpenCode2AdapterV2Testkit.OPENCODE2_HTTP_PROTOCOL,
+            version: "2.0.18",
+            scenario: "opencode2_title_generation",
+            entries: [...OPENCODE2_TITLE_GENERATION, { type: "runtime_exit", status: "success" }],
+          },
+          { external, onPrompt: (input) => prompts.push(input) },
+        );
+        const generator = yield* OpenCode2TextGeneration.make().pipe(
+          Effect.provideService(OpenCode2Server.OpenCode2Server, server),
+        );
+        yield* generator.generateThreadTitle({
+          cwd: process.cwd(),
+          message: "fix the login redirect loop after oauth",
+          attachments: [screenshot, missing, unsupported],
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("opencode"),
+            model: "opencode/big-pickle",
+          },
+        });
+        if (external) assert.notProperty(prompts[0], "files");
+        else
+          assert.deepInclude(prompts[0], {
+            files: [{ uri: NodeURL.pathToFileURL(path).href, name: "screen.png" }],
+          });
+      }).pipe(Effect.scoped),
   );
 
   it.effect("keeps a provider's own error message out of the caller-visible detail", () =>

@@ -10,10 +10,10 @@ import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import bindingsMigration from "../persistence/Migrations/071_RemoteReports.ts";
-import dispatchMigration from "../persistence/Migrations/072_RemoteDispatches.ts";
-import relayMigration from "../persistence/Migrations/076_RemoteReportRelay.ts";
-import fencesMigration from "../persistence/Migrations/107_RemoteReportFences.ts";
+import bindingsMigration from "../persistence/Migrations/081_RemoteReports.ts";
+import dispatchMigration from "../persistence/Migrations/082_RemoteDispatches.ts";
+import relayMigration from "../persistence/Migrations/086_RemoteReportRelay.ts";
+import fencesMigration from "../persistence/Migrations/117_RemoteReportFences.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const readKey = "2".repeat(64);

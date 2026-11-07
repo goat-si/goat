@@ -7,7 +7,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { isElectron } from "../env";
 import { NoProjectsHero } from "../components/NoProjectsHero";
-import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
+import { selectMostRecentOpenProject } from "../globalAgentProject";
 import { Button } from "../components/ui/button";
 import { HostedEmptyState } from "../components/HostedEmptyState";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
@@ -98,9 +98,7 @@ function IndexDraftLanding() {
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
   const attempt = startState.retryRequest;
 
-  const mostRecentProject = bootstrapped
-    ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
-    : null;
+  const mostRecentProject = bootstrapped ? selectMostRecentOpenProject(projects, threads) : null;
   // Read at the end of an async run, after a confirm wait during which a project may arrive.
   const readMostRecentProject = useEffectEvent(() => mostRecentProject);
 

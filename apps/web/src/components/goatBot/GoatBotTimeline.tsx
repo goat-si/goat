@@ -6,8 +6,14 @@ import {
   type GoatBotActivity,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import type { EnvironmentId } from "@goat/contracts";
-import { BellIcon, CircleAlertIcon, MessageCircleQuestionIcon } from "~/components/solar";
+import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import { Link } from "@tanstack/react-router";
+import {
+  BellIcon,
+  CircleAlertIcon,
+  MessageCircleQuestionIcon,
+  PaperclipIcon,
+} from "~/components/solar";
 import {
   createContext,
   Fragment,
@@ -29,6 +35,7 @@ import { formatShortTimestamp } from "~/timestampFormat";
 import { MemorySettingsEntry } from "../settings/MemorySettings";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
+import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
 /** How close to the bottom still counts as "following" new messages. */
 const FOLLOW_THRESHOLD_PX = 48;
@@ -41,17 +48,25 @@ export function GoatBotTimeline({
   environmentId = null,
   replyingSince = null,
   onRetry,
+  onDiscard,
   onPick,
+  taskDetails = false,
+  taskThreads = false,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
+  readonly taskDetails?: boolean;
+  /** Task chips become task-thread pills; the caller knows whether the server supports them. */
+  readonly taskThreads?: boolean;
   /** The environment whose history these rows show; links in bot text resolve there. */
   readonly environmentId?: EnvironmentId | null;
   readonly replyingSince?: string | null;
   readonly onRetry: (clientKey: string) => void;
+  readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string) => void) | undefined;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
+  const taskFocus = getTaskPaneFocus();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Messages sent while this view is mounted, by send key, and the server id each one received.
   // A committed row reuses its pending row's element, so the send motion plays once and never
@@ -105,13 +120,20 @@ export function GoatBotTimeline({
       element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_THRESHOLD_PX;
     updateEdges();
   };
+  // Messages finish laying out after they render (Markdown, highlighting, images), and the
+  // column can get its height after mounting; a reader following the newest message stays there.
+  const followResize = useStableCallback(() => {
+    const scroll = scrollRef.current;
+    if (scroll !== null && followingRef.current) scroll.scrollTop = scroll.scrollHeight;
+    updateEdges();
+  });
   useLayoutEffect(() => {
     updateEdges();
     const scroll = scrollRef.current;
     const list = listRef.current;
     if (!scroll || !list) return;
-    return observeResize([scroll, list], updateEdges);
-  }, [updateEdges]);
+    return observeResize([scroll, list], followResize);
+  }, [updateEdges, followResize]);
   // New rows and the activity bubble keep the view pinned to the latest message unless the
   // reader scrolled up.
   useLayoutEffect(() => {
@@ -192,6 +214,15 @@ export function GoatBotTimeline({
                           )}
                         >
                           {row.text}
+                          {row.attachments?.map((file) => (
+                            <span
+                              key={file.id}
+                              className="flex items-center gap-1 text-sm opacity-80"
+                            >
+                              <PaperclipIcon className="size-3.5 shrink-0" aria-hidden />
+                              <span className="truncate">{file.name}</span>
+                            </span>
+                          ))}
                         </div>
                         {!failed ? (
                           <time
@@ -215,10 +246,15 @@ export function GoatBotTimeline({
                         </button>
                       ) : null}
                     </div>
-                    {row.delivery.state === "failed" ? (
-                      <span className="mt-1 text-xs leading-4 font-medium text-destructive-foreground">
-                        {row.delivery.rejectionReason ?? "Not Delivered"}
-                      </span>
+                    {delivery.state === "failed" ? (
+                      <div className="mt-1 flex items-center gap-2 text-xs leading-4 font-medium text-destructive-foreground">
+                        <span>{delivery.rejectionReason ?? "Not Delivered"}</span>
+                        {onDiscard ? (
+                          <button type="button" onClick={() => onDiscard(delivery.clientKey)}>
+                            Discard
+                          </button>
+                        ) : null}
+                      </div>
                     ) : row.showReceipt ? (
                       <span
                         className="mt-1 text-xs leading-4 font-medium text-muted-foreground"
@@ -317,10 +353,42 @@ export function GoatBotTimeline({
                       index > 1 && (row.firstInGroup ? "mt-3" : "mt-1"),
                     )}
                   >
-                    <GoatBotTaskChip
-                      card={row.card}
-                      tail={row.groupPosition === "last" || row.groupPosition === "single"}
-                    />
+                    {taskDetails || !taskThreads ? (
+                      <GoatBotTaskChip
+                        card={row.card}
+                        tail={row.groupPosition === "last" || row.groupPosition === "single"}
+                      />
+                    ) : (
+                      <div>
+                        <details>
+                          <summary className="text-xs text-muted-foreground">Task details</summary>
+                          <GoatBotTaskChip card={row.card} tail={false} />
+                        </details>
+                        <Link
+                          to="/bot"
+                          search={{ task: ChannelTaskId.make(row.card.key) }}
+                          data-task-opener={`pill:${row.id}`}
+                          onClick={(event) => {
+                            if (
+                              !event.metaKey &&
+                              !event.ctrlKey &&
+                              !event.shiftKey &&
+                              !event.altKey &&
+                              event.button === 0
+                            )
+                              recordTaskOpener(
+                                taskFocus,
+                                event.currentTarget,
+                                row.card.key,
+                                `pill:${row.id}`,
+                              );
+                          }}
+                          className="inline-flex max-w-full rounded-full border border-border px-3 py-1.5 text-sm whitespace-normal break-words hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+                        >
+                          Task thread · {row.card.title}
+                        </Link>
+                      </div>
+                    )}
                   </li>
                 );
             }

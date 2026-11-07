@@ -4,6 +4,10 @@ import { SecretRef, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
 
 export const OrchestratorMcpRequestSecretInput = Schema.Struct({
+  kind: Schema.optional(Schema.Literals(["login", "card"])).annotate({
+    description:
+      "Request a login or payment card for a browser site; requires origin. Omit for one secret.",
+  }),
   label: TrimmedNonEmptyString.annotate({
     description: "Card title, such as 'GitHub webhook secret'.",
   }),
@@ -17,7 +21,7 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
   }),
   origin: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2048))).annotate({
     description:
-      "For a browser sign-in: the page's origin, such as https://github.com (a URL is reduced to its origin). The card shows it, and only goat_preview_fill_secret can use the ref, on that origin. Not with delivery file.",
+      "For a browser sign-in: the page's origin, such as https://github.com (a URL is reduced to its origin). The card shows it; use the matching browser fill tool on that origin. Not with delivery file.",
   }),
   timeoutMs: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 60 * 60 * 1_000 })),
@@ -59,8 +63,9 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
   Schema.Struct({
     status: Schema.Literals(["declined", "cancelled", "timed_out"]).annotate({
       description:
-        "declined: user chose not to. cancelled: ended with the run. timed_out: no answer in time. Ask again with a new `clientRequestId` if still needed.",
+        "declined: user chose not to. cancelled: ended with the run. timed_out: no answer in time.",
     }),
+    note: Schema.optionalKey(Schema.String),
   }),
 ]);
 export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;

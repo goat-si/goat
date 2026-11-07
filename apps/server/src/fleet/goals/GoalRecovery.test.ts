@@ -186,6 +186,8 @@ const project = (world: World) =>
         faviconPath: null,
         projectIcon: null,
         scripts: [],
+        pinnedAt: null,
+        archivedAt: null,
         createdAt: "2026-10-20T00:00:00.000Z",
         updatedAt: "2026-10-20T00:00:00.000Z",
         deletedAt: null,

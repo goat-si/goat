@@ -1,3 +1,7 @@
+import { resolvePastedPath } from "@goat/shared/path";
+import { ProviderUpdateChecksSetting } from "./ProviderUpdateChecksSetting";
+import { AgentMemoryLimitSetting } from "./AgentMemoryLimitSetting";
+import { RestartContinuationSettings } from "./RestartContinuationSettings";
 import { SettingsGroup } from "./SettingsGroup";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
@@ -25,6 +29,7 @@ import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import { HAS_MOBILE_BETA_LINK, IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
 import { AboutVersionTitle } from "./AboutVersionTitle";
+import { GhqCloneLayoutSetting } from "./GhqCloneLayoutSetting";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
 import {
@@ -142,14 +147,12 @@ function AboutVersionSection() {
   const [isChangingUpdatePolicy, setIsChangingUpdatePolicy] = useState(false);
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
-
   const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
   const selectedUpdateChannel = updateState?.channel ?? "latest";
   // Show the beta app links as soon as someone picks Nightly, before the update installs.
   const showNightlyMobileBeta =
     HAS_MOBILE_BETA_LINK &&
     (IS_NIGHTLY_BUILD || (hasDesktopBridge && selectedUpdateChannel === "nightly"));
-
   const handleUpdateChannelChange = (channel: DesktopUpdateChannel) => {
     const bridge = window.desktopBridge;
     if (
@@ -159,7 +162,6 @@ function AboutVersionSection() {
     ) {
       return;
     }
-
     setIsChangingUpdateChannel(true);
     void bridge
       .setUpdateChannel(channel)
@@ -176,13 +178,10 @@ function AboutVersionSection() {
         setIsChangingUpdateChannel(false);
       });
   };
-
   const handleButtonClick = async () => {
     const bridge = window.desktopBridge;
     if (!bridge) return;
-
     const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
-
     if (action === "download") {
       void bridge.downloadUpdate().catch((error: unknown) => {
         toastManager.add(
@@ -195,7 +194,6 @@ function AboutVersionSection() {
       });
       return;
     }
-
     if (action === "install") {
       if (isUpdateActionPending) return;
       setIsUpdateActionPending(true);
@@ -235,7 +233,6 @@ function AboutVersionSection() {
         .finally(() => setIsUpdateActionPending(false));
       return;
     }
-
     if (typeof bridge.checkForUpdate !== "function") return;
     void bridge
       .checkForUpdate()
@@ -261,14 +258,12 @@ function AboutVersionSection() {
         );
       });
   };
-
   const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
   const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState) : null;
   const buttonDisabled =
     action === "none"
       ? !canCheckForUpdate(updateState)
       : isDesktopUpdateButtonDisabled(updateState);
-
   const actionLabel: Record<string, string> = { download: "Download", install: "Install" };
   const statusLabel: Record<string, string> = {
     checking: "Checking…",
@@ -427,6 +422,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   } = useTheme();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const { connectedEnvironments } = useSettingsScope();
   const [botThreadsShown, setBotThreadsShown] = useShowBotThreads();
 
   const isTextGenerationModelDirty = !Equal.equals(
@@ -522,7 +518,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       : []),
     ...(settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? ["Diff layout"] : []),
     ...(settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled
-      ? ["Proactive panels"]
+      ? ["Open pull requests and changes panels proactively"]
       : []),
     ...(settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu
       ? ["Show skills in slash menu"]
@@ -553,7 +549,15 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
       ? ["Continue threads after restarts"]
       : []),
+    ...(settings.codexTurnsSurviveServerStop !==
+    DEFAULT_UNIFIED_SETTINGS.codexTurnsSurviveServerStop
+      ? ["Keep Codex turns running"]
+      : []),
+    ...(settings.codexAppServerIsolation !== DEFAULT_UNIFIED_SETTINGS.codexAppServerIsolation
+      ? ["Codex app-servers"]
+      : []),
     ...(isBackgroundActivityDirty ? ["Background activity"] : []),
+    ...(settings.agentMemoryLimitGiB !== null ? ["Agent memory limit"] : []),
     ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
       ? ["New thread mode"]
       : []),
@@ -563,6 +567,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       : []),
     ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
       ? ["Add project base directory"]
+      : []),
+    ...(settings.ghqCloneLayout !== DEFAULT_UNIFIED_SETTINGS.ghqCloneLayout
+      ? ["Clone into host folders"]
       : []),
     ...(settings.confirmThreadUnpin !== DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin
       ? ["Unpin confirmation"]
@@ -674,6 +681,19 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       automaticServerUpdates: DEFAULT_UNIFIED_SETTINGS.automaticServerUpdates,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
+      agentMemoryLimitGiB: DEFAULT_UNIFIED_SETTINGS.agentMemoryLimitGiB,
+      ...(connectedEnvironments.length > 0 &&
+      connectedEnvironments.every(
+        (target) => target.serverConfig?.environment.capabilities.codexTurnSurvival === true,
+      )
+        ? { codexTurnsSurviveServerStop: DEFAULT_UNIFIED_SETTINGS.codexTurnsSurviveServerStop }
+        : {}),
+      ...(connectedEnvironments.length > 0 &&
+      connectedEnvironments.every(
+        (target) => target.serverConfig?.environment.capabilities.codexAppServerIsolation === true,
+      )
+        ? { codexAppServerIsolation: DEFAULT_UNIFIED_SETTINGS.codexAppServerIsolation }
+        : {}),
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
@@ -681,6 +701,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
+      ghqCloneLayout: DEFAULT_UNIFIED_SETTINGS.ghqCloneLayout,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
@@ -845,11 +866,6 @@ export function GeneralSettingsPanel() {
   const supportsAutoSettlementScope = connectedEnvironments.every(
     (target) => target.serverConfig?.environment.capabilities.threadAutoSettlementScope === true,
   );
-  const supportsRestartContinuation =
-    connectedEnvironments.length > 0 &&
-    connectedEnvironments.every(
-      (target) => target.serverConfig?.environment.capabilities.threadRestartContinuation === true,
-    );
   const supportsAutomaticServerUpdates =
     connectedEnvironmentsSupportAutomaticServerUpdates(connectedEnvironments);
 
@@ -1269,35 +1285,8 @@ export function GeneralSettingsPanel() {
       <ComposerSettingsSection />
 
       <SettingsSection id="updates" title="Updates and background">
-        <SettingsRow
-          serverScoped
-          settingKeys={["enableProviderUpdateChecks"]}
-          {...searchableSetting("provider-update-checks")}
-          description="Check installed provider CLIs for newer available versions and fetch model catalog updates. When off, new models may not appear."
-          resetAction={
-            settings.enableProviderUpdateChecks !==
-            DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks ? (
-              <SettingResetButton
-                label="provider update checks"
-                onClick={() =>
-                  updateSettings({
-                    enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <ScopedSwitch
-              settingKeys={["enableProviderUpdateChecks"]}
-              checked={settings.enableProviderUpdateChecks}
-              onCheckedChange={(checked) =>
-                updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
-              }
-              aria-label="Check provider versions"
-            />
-          }
-        />
+        <ProviderUpdateChecksSetting />
+        <AgentMemoryLimitSetting />
 
         <SettingsRow
           {...searchableSetting("automatic-server-updates")}
@@ -1335,43 +1324,7 @@ export function GeneralSettingsPanel() {
           }
         />
 
-        <SettingsRow
-          {...searchableSetting("continue-threads-after-server-update")}
-          serverScoped
-          settingKeys={["continueThreadsAfterServerUpdate"]}
-          description="Automatically resume interrupted threads after an update, crash, or machine restart on the selected environments."
-          status={
-            !supportsRestartContinuation
-              ? "All selected connected environments must support restart continuation."
-              : undefined
-          }
-          resetAction={
-            supportsRestartContinuation &&
-            settings.continueThreadsAfterServerUpdate !==
-              DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate ? (
-              <SettingResetButton
-                label="continue threads after restarts"
-                onClick={() =>
-                  updateSettings({
-                    continueThreadsAfterServerUpdate:
-                      DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <ScopedSwitch
-              settingKeys={["continueThreadsAfterServerUpdate"]}
-              checked={settings.continueThreadsAfterServerUpdate}
-              disabled={!supportsRestartContinuation}
-              onCheckedChange={(checked) =>
-                updateSettings({ continueThreadsAfterServerUpdate: Boolean(checked) })
-              }
-              aria-label="Continue threads after restarts"
-            />
-          }
-        />
+        <RestartContinuationSettings />
 
         <BackgroundActivitySettingsRow />
       </SettingsSection>
@@ -1431,11 +1384,16 @@ export function GeneralSettingsPanel() {
               className="w-full sm:w-72"
               value={mixedAddProjectBaseDirectory ? "" : settings.addProjectBaseDirectory}
               onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
+              normalizeDraft={resolvePastedPath}
               placeholder={mixedAddProjectBaseDirectory ? "Mixed" : "~/"}
               spellCheck={false}
               aria-label="Add project base directory"
             />
           }
+        />
+        <GhqCloneLayoutSetting
+          checked={settings.ghqCloneLayout}
+          onChange={(value) => updateSettings({ ghqCloneLayout: value })}
         />
       </SettingsSection>
 

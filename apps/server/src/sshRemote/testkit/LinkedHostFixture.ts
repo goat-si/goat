@@ -114,6 +114,7 @@ export const withLinkedHost = <A, E, R>(
       list: Effect.succeed([link.host]),
       find: (name) => Effect.succeed(name === "box" ? Option.some(link) : Option.none()),
       names: Effect.succeed(["box"]),
+      refreshLabel: () => Effect.void,
       link: () => Effect.die("unused"),
       unlink: () => Effect.die("unused"),
     });

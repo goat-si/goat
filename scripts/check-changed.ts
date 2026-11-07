@@ -20,11 +20,13 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { guardChild } from "../packages/shared/src/errorGuards.ts";
 import { decide, readWorkspace } from "../.github/scripts/ci-changes.cjs";
+import { isChangedCode, lintChangedArgs, vitePlusCommand } from "./check-changed-command.ts";
 import { testsForChanges } from "./lib/changed-tests.ts";
+import { splitTests } from "./lib/split-tests.ts";
 
 const root = NodePath.resolve(import.meta.dirname, "..");
-const CODE = /\.[cm]?[jt]sx?$/;
 
 // quotePath=false keeps non-ASCII paths as real paths instead of quoted escapes.
 const git = (...args: Array<string>) =>
@@ -135,9 +137,9 @@ if (cached?.key === key) {
 }
 
 const present = files.filter((file) => NodeFS.existsSync(NodePath.join(root, file)));
-const code = present.filter((file) => CODE.test(file));
+const code = present.filter((file) => isChangedCode(file));
 // Deleted files still select suites; see testsForChanges.
-const changedCode = files.filter((file) => CODE.test(file));
+const changedCode = files.filter((file) => isChangedCode(file));
 const packages = readWorkspace();
 const { affected, outputs } = decide(files, packages, false);
 
@@ -147,7 +149,8 @@ const tests = testsForChanges(root, changedCode, files);
 // export, or dependency unused (removing the last import of a helper does), so
 // it runs whenever code or a manifest changes.
 const runKnip = files.some(
-  (file) => CODE.test(file) || NodePath.basename(file) === "package.json" || file === "knip.jsonc",
+  (file) =>
+    isChangedCode(file) || NodePath.basename(file) === "package.json" || file === "knip.jsonc",
 );
 // CI runs knip:check as one script of `knip ... && knip ...` passes. The passes
 // do not depend on each other, so they run side by side here.
@@ -198,11 +201,12 @@ const checkPatches = (): boolean => {
     for (const extra of ["apps/mobile/deps", "patches", ".pnpmfile.cjs"]) {
       if (NodeFS.existsSync(NodePath.join(root, extra))) copy(extra);
     }
-    const { status, stdout, stderr, error } = NodeChildProcess.spawnSync(
-      "vp",
-      ["install", "--lockfile-only", "--ignore-scripts"],
-      { cwd: temp, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-    );
+    const [command, args] = vitePlusCommand(["install", "--lockfile-only", "--ignore-scripts"]);
+    const { status, stdout, stderr, error } = NodeChildProcess.spawnSync(command, args, {
+      cwd: temp,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
     if (status === 0) return true;
     if (stdout) console.log(stdout);
     if (stderr) console.error(stderr);
@@ -227,6 +231,7 @@ const graphql = ["apps/server", "packages/source-control-github"].filter((dir) =
 );
 
 const filters = (names: ReadonlyArray<string>) => names.flatMap((name) => ["--filter", name]);
+const { vitestTests, nodeTests } = splitTests(tests);
 const steps = [
   // Runs first; it takes about a second.
   runPatchCheck && { name: "unused patches", run: checkPatches },
@@ -234,7 +239,7 @@ const steps = [
     name: "format",
     args: ["fmt", "--check", "--no-error-on-unmatched-pattern", ...present],
   },
-  code.length > 0 && { name: "lint", args: ["lint", ...code] },
+  code.length > 0 && { name: "lint", args: lintChangedArgs(code) },
   ...(runKnip ? knipPasses : []),
   ...graphql.map((dir) => ({
     name: `graphql (${dir})`,
@@ -255,9 +260,13 @@ const steps = [
     ],
   },
   // From the repo root, the root vite.config.ts hands each file to its package's config.
-  tests.size > 0 && {
-    name: `test (${tests.size} files)`,
-    args: ["test", "run", "--passWithNoTests", ...tests],
+  vitestTests.length > 0 && {
+    name: `test (${vitestTests.length} files)`,
+    args: ["test", "run", "--passWithNoTests", ...vitestTests],
+  },
+  nodeTests.length > 0 && {
+    name: `node --test (${nodeTests.length} files)`,
+    args: ["exec", "node", "--test", ...nodeTests],
   },
 ].filter((step) => step !== false);
 
@@ -278,12 +287,18 @@ const results = await Promise.all(
         // takes about a second, so the commands start right after it.
         if ("run" in step) return finish(step.run());
         const output: Array<Buffer> = [];
-        const child = NodeChildProcess.spawn("vp", step.args, { cwd: root, env });
+        const [command, args] = vitePlusCommand(step.args);
+        let childFailed = false;
+        const child = guardChild(
+          NodeChildProcess.spawn(command, args, { cwd: root, env }),
+          (error) => {
+            childFailed = true;
+            output.push(Buffer.from(`${error.message}\n`));
+          },
+        );
         child.stdout.on("data", (chunk: Buffer) => output.push(chunk));
         child.stderr.on("data", (chunk: Buffer) => output.push(chunk));
-        // A failed spawn emits "error", then "close" with a nonzero code.
-        child.on("error", (error) => output.push(Buffer.from(`${error.message}\n`)));
-        child.on("close", (status) => finish(status === 0, Buffer.concat(output)));
+        child.on("close", (status) => finish(status === 0 && !childFailed, Buffer.concat(output)));
       }),
   ),
 );

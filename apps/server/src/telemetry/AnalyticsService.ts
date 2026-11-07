@@ -5,10 +5,12 @@
  * endpoint instead. Each event carries a uuid, so a retried copy can be told
  * from a new event.
  */
+import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import * as HostProcess from "@goat/shared/HostProcess";
 import type { ClientOs } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -131,14 +133,34 @@ function serverOsFromNodePlatform(platform: string): ClientOs {
 }
 
 /** @public */
-/** @public */
 export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
+  const hostEnvironment = yield* HostProcess.Environment;
+  const awaitingShellConsent = hostEnvironment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING === "1";
+  // A cached PATH does not establish consent from the current login shell.
+  const telemetryEnabled = Effect.suspend(() => {
+    if (!telemetryConfig.enabled) return Effect.succeed(false);
+    if (!awaitingShellConsent) return Effect.succeed(true);
+    if (hostEnvironment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING === "1") return Effect.succeed(false);
+    const preference =
+      hostEnvironment.GOAT_TELEMETRY_ENABLED ?? hostEnvironment.T3CODE_TELEMETRY_ENABLED; // goat-rename: legacy
+    return Config.Boolean("GOAT_TELEMETRY_ENABLED").pipe(
+      Config.withDefault(true),
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromEnv({
+          env: preference === undefined ? {} : { GOAT_TELEMETRY_ENABLED: preference },
+        }),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
+  });
   const httpClient = yield* HttpClient.HttpClient;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const { distinctId, installId } = yield* getTelemetryIdentity;
   const crypto = yield* Crypto.Crypto;
   const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
+  const inFlightRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
   const deliveryRef = yield* Ref.make<DeliveryState>({
     failedBatch: [],
     batchAttempts: 0,
@@ -190,7 +212,7 @@ export const make = Effect.gen(function* () {
   const sendBatch = Effect.fn("AnalyticsService.sendBatch")(function* (
     events: ReadonlyArray<BufferedAnalyticsEvent>,
   ) {
-    if (!telemetryConfig.enabled || !distinctId) return;
+    if (!(yield* telemetryEnabled) || !distinctId) return;
 
     const payload = {
       api_key: telemetryConfig.posthogKey,
@@ -240,7 +262,9 @@ export const make = Effect.gen(function* () {
         return;
       }
 
+      yield* Ref.set(inFlightRef, batch);
       const sent = yield* Effect.result(sendBatch(batch));
+      yield* Ref.set(inFlightRef, []);
       if (Result.isSuccess(sent)) {
         yield* Ref.set(deliveryRef, {
           failedBatch: [],
@@ -302,7 +326,7 @@ export const make = Effect.gen(function* () {
 
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {
-      if (!telemetryConfig.enabled || !distinctId) return;
+      if (!(yield* telemetryEnabled) || !distinctId) return;
 
       // Catch Node UUID defects too; best-effort telemetry drops events without UUIDs.
       const uuid = yield* Effect.exit(crypto.randomUUIDv7());
@@ -345,7 +369,23 @@ export const make = Effect.gen(function* () {
     disableYield: true,
   }).pipe(Effect.forkScoped);
 
-  yield* Effect.addFinalizer(() => flush);
+  yield* Effect.addFinalizer(() =>
+    timedShutdownPhase(
+      "analyticsFlush",
+      Effect.gen(function* () {
+        const result = yield* flush.pipe(Effect.timeoutOption("1 second"));
+        const buffered = yield* Ref.get(bufferRef);
+        const delivery = yield* Ref.get(deliveryRef);
+        const inFlight = yield* Ref.get(inFlightRef);
+        const dropped = buffered.length + Math.max(delivery.failedBatch.length, inFlight.length);
+        if (dropped > 0 || Option.isNone(result)) {
+          yield* Effect.logWarning("Dropped telemetry events at shutdown deadline", {
+            events: dropped,
+          });
+        }
+      }),
+    ),
+  );
 
   return AnalyticsService.of({ record, flush, recordOwners });
 });

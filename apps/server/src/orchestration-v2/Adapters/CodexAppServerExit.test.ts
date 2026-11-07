@@ -10,6 +10,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import { makeCodexSessionEvents } from "./CodexAppServerExit.ts";
+import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
 
 import packageJson from "../../../package.json" with { type: "json" };
 import * as ProviderSessionManager from "../ProviderSessionManager.ts";
@@ -293,6 +294,228 @@ it.effect("retires a silent initialize before the provider can be reused", () =>
           { name: "codex-silent-initialize" },
           CodexAdapterV2Testkit.layerWithClientFactory({
             scenario: "codex-silent-initialize",
+            clientFactory,
+          }),
+          { runEffectWorker: false },
+        ),
+      ),
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a config/read deadline does not terminate a responsive shared client", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const ended = yield* Deferred.make<void>();
+    const client = {
+      request: (method: string, payload: { cwd?: string | null }) =>
+        method === "config/read" && payload.cwd === "/stalled"
+          ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.succeed({}),
+      terminated: Effect.never,
+      raw: {},
+    } as unknown as CodexClient.CodexAppServerClient["Service"];
+    const guarded = yield* withCodexRequestDeadlines(client);
+    yield* guarded.terminated.pipe(
+      Effect.andThen(Deferred.succeed(ended, undefined)),
+      Effect.forkScoped,
+    );
+    const request = yield* guarded
+      .request("config/read", { cwd: "/stalled", includeLayers: false })
+      .pipe(Effect.exit, Effect.forkScoped);
+    yield* Deferred.await(entered);
+    yield* TestClock.adjust("31 seconds");
+    assert.equal((yield* Fiber.join(request))._tag, "Failure");
+    assert.isFalse(yield* Deferred.isDone(ended));
+    yield* guarded.request("config/read", { cwd: "/other", includeLayers: false });
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a late original answer proves liveness while the probe is silent", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const probed = yield* Deferred.make<void>();
+    const answer = yield* Deferred.make<void>();
+    const ended = yield* Deferred.make<void>();
+    const client = {
+      request: (_method: string, payload: { cwd?: string | null }) =>
+        payload.cwd === null
+          ? Deferred.succeed(probed, undefined).pipe(Effect.andThen(Effect.never))
+          : Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(answer)),
+              Effect.as({}),
+            ),
+      terminated: Effect.never,
+      raw: {},
+    } as unknown as CodexClient.CodexAppServerClient["Service"];
+    const guarded = yield* withCodexRequestDeadlines(client);
+    yield* guarded.terminated.pipe(
+      Effect.andThen(Deferred.succeed(ended, undefined)),
+      Effect.forkScoped,
+    );
+    const request = yield* guarded
+      .request("config/read", { cwd: "/stalled", includeLayers: false })
+      .pipe(Effect.exit, Effect.forkScoped);
+    yield* Deferred.await(entered);
+    yield* TestClock.adjust("31 seconds");
+    assert.equal((yield* Fiber.join(request))._tag, "Failure");
+    yield* Deferred.await(probed);
+    yield* Deferred.succeed(answer, undefined);
+    yield* TestClock.adjust("61 seconds");
+    assert.isFalse(yield* Deferred.isDone(ended));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a silent liveness probe retires the shared client after its window", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const probed = yield* Deferred.make<void>();
+    const client = {
+      request: (_method: string, payload: { cwd?: string | null }) =>
+        Deferred.succeed(payload.cwd === null ? probed : entered, undefined).pipe(
+          Effect.andThen(Effect.never),
+        ),
+      terminated: Effect.never,
+      raw: {},
+    } as unknown as CodexClient.CodexAppServerClient["Service"];
+    const guarded = yield* withCodexRequestDeadlines(client);
+    const ended = yield* Deferred.make<void>();
+    yield* guarded.terminated.pipe(
+      Effect.andThen(Deferred.succeed(ended, undefined)),
+      Effect.forkScoped,
+    );
+    const request = yield* guarded
+      .request("config/read", { cwd: "/stalled", includeLayers: false })
+      .pipe(Effect.exit, Effect.forkScoped);
+    yield* Deferred.await(entered);
+    yield* TestClock.adjust("31 seconds");
+    assert.equal((yield* Fiber.join(request))._tag, "Failure");
+    yield* Deferred.await(probed);
+    assert.isFalse(yield* Deferred.isDone(ended));
+    yield* TestClock.adjust("61 seconds");
+    assert.isTrue(yield* Deferred.isDone(ended));
+    assert.equal(
+      (yield* Effect.exit(guarded.request("config/read", { cwd: "/other", includeLayers: false })))
+        ._tag,
+      "Failure",
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.effect.each([
+  {
+    probeReplies: true,
+    behavior: "a stalled thread start leaves the shared app-server serving another thread",
+  },
+  {
+    probeReplies: false,
+    behavior: "a silent app-server probe releases the session and the next open respawns it",
+  },
+])("$behavior", ({ probeReplies }) =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const probed = yield* Deferred.make<void>();
+    const released = yield* Deferred.make<void>();
+    const first = appServerProcess({ nativeThreadId: "stalled", stopsAfterThreadStart: false });
+    const second = appServerProcess({
+      nativeThreadId: "healthy",
+      stopsAfterThreadStart: false,
+    });
+    const secondStart = second.entries[4];
+    if (secondStart?.type !== "emit_inbound") return yield* Effect.die("missing thread response");
+    const firstTranscript: CodexReplay.CodexAppServerReplayTranscript = {
+      ...first,
+      entries: [
+        ...first.entries.slice(0, 4),
+        {
+          type: "expect_outbound",
+          frame: { id: 3, method: "config/read", params: { cwd: null, includeLayers: false } },
+        },
+        ...(probeReplies
+          ? [
+              {
+                type: "emit_inbound" as const,
+                frame: { id: 3, error: { code: -32601, message: "probe reply" } },
+              },
+              {
+                type: "expect_outbound" as const,
+                frame: {
+                  id: 4,
+                  method: "thread/start",
+                  params: { config: CodexAdapterV2.CODEX_THREAD_CONFIG },
+                },
+              },
+              { ...secondStart, frame: { ...(secondStart.frame as object), id: 4 } },
+            ]
+          : []),
+      ],
+    };
+    let spawns = 0;
+    const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
+      open: (input) =>
+        Effect.gen(function* () {
+          const spawn = ++spawns;
+          if (spawn === 1) yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
+          const driver = yield* CodexReplay.makeReplayDriver(
+            spawn === 1 ? firstTranscript : second,
+          );
+          const context = yield* Layer.build(CodexReplay.layerReplayWithDriver(driver)).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+                  providerSessionId: input.providerSessionId,
+                  cause,
+                }),
+            ),
+          );
+          const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+            Effect.provide(context),
+          );
+          return CodexClient.CodexAppServerClient.of({
+            ...client,
+            request: (method, payload) =>
+              (method === "thread/start" && spawn === 1
+                ? Deferred.succeed(entered, undefined)
+                : method === "config/read" && spawn === 1
+                  ? Deferred.succeed(probed, undefined)
+                  : Effect.succeed(false)
+              ).pipe(Effect.andThen(client.request(method, payload))),
+          });
+        }),
+    };
+    yield* Effect.gen(function* () {
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const ensure = (threadId: ThreadId) =>
+        manager
+          .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+          .pipe(
+            Effect.flatMap((runtime) =>
+              runtime.ensureThread({ threadId, modelSelection, runtimePolicy }),
+            ),
+          );
+      const stalled = yield* ensure(ThreadId.make("thread:deadline-stalled")).pipe(
+        Effect.exit,
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust("91 seconds");
+      assert.equal((yield* Fiber.join(stalled))._tag, "Failure");
+      yield* Deferred.await(probed);
+      if (!probeReplies) {
+        yield* TestClock.adjust("61 seconds");
+        yield* Deferred.await(released);
+      }
+      const healthy = yield* ensure(ThreadId.make("thread:deadline-healthy"));
+      assert.equal(healthy.nativeThreadRef?.nativeId, "healthy");
+      assert.equal(spawns, probeReplies ? 1 : 2);
+      if (probeReplies) assert.isFalse(yield* Deferred.isDone(released));
+    }).pipe(
+      Effect.provide(
+        ProviderReplayHarness.layerWithRegistry(
+          { name: "codex-deadline-session" },
+          CodexAdapterV2Testkit.layerWithClientFactory({
+            scenario: "codex-deadline-session",
             clientFactory,
           }),
           { runEffectWorker: false },

@@ -49,7 +49,7 @@ function pullRequestStatusTone(state: string | undefined): string {
     case "closed":
       return "text-zinc-500 dark:text-zinc-400/80";
     case "open":
-      return "text-emerald-600 dark:text-emerald-300/90";
+      return "text-success-foreground";
     default:
       return "text-muted-foreground";
   }
@@ -86,8 +86,11 @@ export function PullRequestThreadDialog({
   const terminology = sourceControlPresentation.terminology;
   const SourceControlIcon = sourceControlPresentation.Icon;
 
-  const parsedReference = parsePullRequestReference(reference);
-  const parsedDebouncedReference = parsePullRequestReference(debouncedReference);
+  const parsedReference = parsePullRequestReference(reference, gitStatus?.sourceControlProvider);
+  const parsedDebouncedReference = parsePullRequestReference(
+    debouncedReference,
+    gitStatus?.sourceControlProvider,
+  );
   const pullRequestResolution = usePullRequestResolution({
     environmentId,
     cwd,

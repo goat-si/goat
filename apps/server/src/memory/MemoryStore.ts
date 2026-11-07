@@ -15,6 +15,7 @@ import { makeFtsIndex } from "./store/FtsIndex.ts";
 import { makeImportLineage } from "./store/ImportLineage.ts";
 import { makeImports } from "./store/Imports.ts";
 import { makeApplyDecision } from "./store/ApplyDecision.ts";
+import { makeRecallStore } from "./store/Recall.ts";
 import { makeSearch } from "./store/Search.ts";
 import { makeWorkQueue } from "./store/WorkQueue.ts";
 import { makeOutbox } from "./store/Outbox.ts";
@@ -156,6 +157,7 @@ const make = Effect.gen(function* () {
     importLineage,
   );
   const { applyDecision, pendingReceived, readParked } = applyDecisionModule;
+  const recallStore = makeRecallStore(kernel);
   const searchModule = makeSearch(kernel, coreReads);
   const { readCursor, withReceivedCursor, list, searchCoverage, search } = searchModule;
   const workQueue = makeWorkQueue(kernel, itemWrites);
@@ -355,6 +357,18 @@ const make = Effect.gen(function* () {
   );
   const { appendHubEntryTx, readHubTailTx, transitionHubLeaseTx, settleMetadataEntryTx } = hubWrite;
 
+  // The first delete of a known identity always lands, even past capacity: a member builds it
+  // from its own reservation, which may cover evidence the hub never reserved. Later forgets
+  // of that identity, and forgets of identities the hub never saw, are budgeted like writes.
+  const baseDelete = (op: Parameters<MemoryStoreShape["appendHubEntryTx"]>[0]["operation"]) =>
+    op.kind !== "forget"
+      ? Effect.succeed(false)
+      : Effect.map(
+          loadAggregate(op.memorySpaceId, op.memoryId, {}, {}),
+          (a) =>
+            a.identity !== undefined &&
+            (!a.tombstone || a.tombstone.deleteOperationId === op.operationId),
+        );
   return MemoryStore.of({
     readAccess,
     historyPage,
@@ -401,11 +415,15 @@ const make = Effect.gen(function* () {
     requireHubMemberTx,
     readHubReceiptTx,
     appendHubEntryTx: (input) =>
-      input.operation.kind === "forget"
-        ? appendHubEntryTx(input)
-        : withHubBudget(appendHubEntryTx(input)),
+      Effect.flatMap(baseDelete(input.operation), (base) =>
+        base ? appendHubEntryTx(input) : withHubBudget(appendHubEntryTx(input)),
+      ),
     readHubTailTx,
-    transitionHubLeaseTx: (input) => withHubBudget(transitionHubLeaseTx(input)),
+    // Invalidating the lease is part of a deletion and must land with it.
+    transitionHubLeaseTx: (input) =>
+      input.action.kind === "invalidate" && input.action.reason === "forget"
+        ? transitionHubLeaseTx(input)
+        : withHubBudget(transitionHubLeaseTx(input)),
     readHubRetentionTx,
     readHubUsageTx,
     readHubInventoryTx,
@@ -443,8 +461,12 @@ const make = Effect.gen(function* () {
     loadAggregate: (space, id, payloads, history) =>
       transact(loadAggregate(space, id, payloads, history)),
     apply: (decision) =>
-      decision.admission.kind === "hubAdmission" && decision.operation.kind !== "forget"
-        ? transact(withHubBudget(applyDecision(decision)))
+      decision.admission.kind === "hubAdmission"
+        ? transact(
+            Effect.flatMap(baseDelete(decision.operation), (base) =>
+              base ? applyDecision(decision) : withHubBudget(applyDecision(decision)),
+            ),
+          )
         : applyDecision(decision),
     reconnectParked: (decision, generation) => applyDecision(decision, generation),
     readAncestry: (space, id, parents) => transact(readAncestry(space, id, parents)),
@@ -469,6 +491,7 @@ const make = Effect.gen(function* () {
         return yield* transact(search(filter, text, mode));
       }),
     searchCoverage: (filter) => transact(searchCoverage(filter)),
+    ...recallStore,
     dueWork,
     readWork,
     retryWork,

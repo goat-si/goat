@@ -1,3 +1,10 @@
+import { parseUnifiedCgroupPath, isSafeCgroupPath, parseCgroup2Mounts } from "./cgroupPaths.ts";
+export {
+  parseUnifiedCgroupPath,
+  isSafeCgroupPath,
+  parseCgroup2Mounts,
+  parseCgroup2Mount,
+} from "./cgroupPaths.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -29,7 +36,12 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@goat/shared/shell";
-import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@goat/shared/AgentScope";
+import {
+  AgentScope,
+  AgentScopeThreadId,
+  RAISE_OOM_SCORE_LINE,
+  handleAgentProcess,
+} from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
 import * as WindowsTaskkill from "@goat/provider-core/server/windowsTaskkill";
@@ -126,7 +138,12 @@ export interface AcpSessionRuntimeOptions {
   /** Authenticate before opening: Antigravity selects its credential source from the method. */
   readonly authenticateEagerly?: boolean;
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  /** Sent on every session/new, load, resume and fork; omitting them clears an agent's stored roots. */
   readonly additionalDirectories?: ReadonlyArray<string>;
+  /** Session `_meta`, chosen from the negotiated agent before each session setup or activation. */
+  readonly sessionMeta?: (
+    initializeResult: EffectAcpSchema.InitializeResponse,
+  ) => EffectAcpSchema.NewSessionRequest["_meta"] | undefined;
   readonly transformStdout?: EffectAcpClient.AcpClientOptions["transformStdout"];
   readonly transformSessionUpdate?: (
     notification: EffectAcpSchema.SessionNotification,
@@ -212,48 +229,6 @@ export interface AcpLinuxCgroupController {
 export interface AcpPosixOwnershipRoot {
   captureAttempted?: boolean;
   value: AcpOwnedPosixProcess | undefined;
-}
-
-function decodeMountInfoPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-}
-
-export function parseUnifiedCgroupPath(contents: string): string | undefined {
-  const matches = [...contents.matchAll(/^0::(\/.*)$/gm)];
-  return matches.length === 1 ? matches[0]![1] : undefined;
-}
-
-export function isSafeCgroupPath(value: string): boolean {
-  return (
-    value.startsWith("/") &&
-    !value.includes("(deleted)") &&
-    NodePath.posix.normalize(value) === value
-  );
-}
-
-export function parseCgroup2Mounts(
-  contents: string,
-): ReadonlyArray<{ readonly mountPoint: string; readonly root: string }> {
-  const mounts: Array<{ readonly mountPoint: string; readonly root: string }> = [];
-  for (const line of contents.split("\n")) {
-    const [mount, filesystem] = line.split(" - ");
-    if (mount === undefined || filesystem?.split(" ")[0] !== "cgroup2") continue;
-    const fields = mount.split(" ");
-    if (fields.length < 5) continue;
-    mounts.push({
-      mountPoint: decodeMountInfoPath(fields[4]!),
-      root: decodeMountInfoPath(fields[3]!),
-    });
-  }
-  return mounts;
-}
-
-export function parseCgroup2Mount(
-  contents: string,
-): { readonly mountPoint: string; readonly root: string } | undefined {
-  return parseCgroup2Mounts(contents)[0];
 }
 
 export function wrapCommandForLinuxCgroup(
@@ -1425,6 +1400,11 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       ),
     );
 
+  yield* agentScope.watch({
+    process: handleAgentProcess(child),
+    threadId: yield* AgentScopeThreadId,
+  });
+
   // Detached children can keep stdout open, delaying protocol termination.
   if (scopeUnit !== undefined) {
     yield* child.exitCode.pipe(
@@ -2066,6 +2046,16 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     return activationOptions?.mcpServers ?? options.mcpServers ?? [];
   };
 
+  const sessionSetupFields = (initializeResult: EffectAcpSchema.InitializeResponse) => {
+    const meta = options.sessionMeta?.(initializeResult);
+    return {
+      ...(options.additionalDirectories?.length
+        ? { additionalDirectories: options.additionalDirectories }
+        : {}),
+      ...(meta == null ? {} : { _meta: meta }),
+    };
+  };
+
   const startOnce = Effect.gen(function* () {
     const initializeResult = yield* initialize;
 
@@ -2121,9 +2111,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         | EffectAcpSchema.LoadSessionResponse
         | EffectAcpSchema.NewSessionResponse
         | EffectAcpSchema.ResumeSessionResponse;
-      const additionalDirectories = options.additionalDirectories?.length
-        ? { additionalDirectories: options.additionalDirectories }
-        : {};
+      const additionalDirectories = sessionSetupFields(initializeResult);
       if (options.resumeSessionId) {
         sessionId = options.resumeSessionId;
         if (
@@ -2366,6 +2354,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           const requestPayload = {
             sessionId,
             cwd: options.cwd,
+            ...sessionSetupFields(started.initializeResult),
             mcpServers: sessionMcpServers(started.initializeResult, activationOptions),
           } satisfies EffectAcpSchema.LoadSessionRequest;
           return runLoadSessionWithReplayIdle(requestPayload, started.initializeResult);
@@ -2378,6 +2367,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           const requestPayload = {
             sessionId,
             cwd: options.cwd,
+            ...sessionSetupFields(started.initializeResult),
             mcpServers: sessionMcpServers(started.initializeResult, activationOptions),
           } satisfies EffectAcpSchema.ResumeSessionRequest;
           return runLoggedRequest(
@@ -2394,6 +2384,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           const requestPayload = {
             sessionId,
             cwd: options.cwd,
+            ...sessionSetupFields(started.initializeResult),
             mcpServers: sessionMcpServers(started.initializeResult, activationOptions),
           } satisfies EffectAcpSchema.ForkSessionRequest;
           return runLoggedRequest(

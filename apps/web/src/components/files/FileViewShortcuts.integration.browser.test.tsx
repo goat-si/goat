@@ -179,8 +179,17 @@ function ChatStandIn() {
   return null;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 async function renderView(readResult: ProjectReadFileResult | null = READ) {
-  return render(
+  const attached = deferred<void>();
+  const screen = await render(
     <div data-preview-panel-mode="inline">
       <ChatStandIn />
       <div
@@ -203,6 +212,7 @@ async function renderView(readResult: ProjectReadFileResult | null = READ) {
             <File
               file={{ name: "index.ts", contents: CONTENTS }}
               edit
+              editorOptions={{ onAttach: () => attached.resolve() }}
               options={{ disableFileHeader: true }}
             />
           </EditProvider>
@@ -223,6 +233,7 @@ async function renderView(readResult: ProjectReadFileResult | null = READ) {
     </div>,
     { router: false /* nothing here links */ },
   );
+  return Object.assign(screen, { editorAttached: attached.promise });
 }
 
 function editorRoot(container: HTMLElement): ShadowRoot {
@@ -231,15 +242,13 @@ function editorRoot(container: HTMLElement): ShadowRoot {
   return host!.shadowRoot!;
 }
 
-async function editorContent(container: HTMLElement): Promise<HTMLElement> {
-  await vi.waitFor(() =>
-    expect(
-      editorRoot(container).querySelector('[role="textbox"][contenteditable="true"]'),
-    ).not.toBeNull(),
-  );
-  return editorRoot(container).querySelector<HTMLElement>(
+async function editorContent(screen: { container: HTMLElement; editorAttached: Promise<void> }) {
+  await screen.editorAttached;
+  const content = editorRoot(screen.container).querySelector<HTMLElement>(
     '[role="textbox"][contenteditable="true"]',
-  )!;
+  );
+  expect(content).not.toBeNull();
+  return content!;
 }
 
 const findMode = (container: HTMLElement) =>
@@ -265,7 +274,7 @@ describe.each<Order>(["persisted", "new-install"])(
     it("opens the editor's find from its text and from the view, never thread find", async () => {
       setup([], order);
       await using screen = await renderView();
-      (await editorContent(screen.container)).focus();
+      (await editorContent(screen)).focus();
       await userEvent.keyboard(chord([MOD], "f"));
       await vi.waitFor(() => expect(findMode(screen.container)).toBe("find"));
       expect(state.threadFind).not.toHaveBeenCalled();
@@ -274,7 +283,7 @@ describe.each<Order>(["persisted", "new-install"])(
     it("forwards find from the view root to the editor", async () => {
       setup([], order);
       await using screen = await renderView();
-      await editorContent(screen.container);
+      await editorContent(screen);
       view(screen.container).focus();
       await userEvent.keyboard(chord([MOD], "f"));
       await vi.waitFor(() => expect(findMode(screen.container)).toBe("find"));
@@ -287,7 +296,7 @@ describe("find ownership", () => {
   it("lets a person's own chat.find rule on the same key run thread find", async () => {
     setup([{ key: "mod+f", command: "chat.find", when: "fileViewFocus" }]);
     await using screen = await renderView();
-    (await editorContent(screen.container)).focus();
+    (await editorContent(screen)).focus();
     await userEvent.keyboard(chord([MOD], "f"));
     await vi.waitFor(() => expect(state.threadFind).toHaveBeenCalledTimes(1));
     expect(findMode(screen.container)).toBeNull();
@@ -296,7 +305,7 @@ describe("find ownership", () => {
   it("opens find, not Pierre's replace, when files.find is rebound onto the editor's replace key", async () => {
     setup([{ key: "mod+alt+f", command: "files.find", when: "fileViewFocus" }]);
     await using screen = await renderView();
-    (await editorContent(screen.container)).focus();
+    (await editorContent(screen)).focus();
     await userEvent.keyboard(chord([MOD, "Alt"], "f"));
     await vi.waitFor(() => expect(findMode(screen.container)).toBe("find"));
   });
@@ -307,7 +316,7 @@ describe("find ownership", () => {
       { key: "mod+alt+f", command: "files.find", when: "fileViewFocus" },
     ]);
     await using screen = await renderView();
-    await editorContent(screen.container);
+    await editorContent(screen);
     view(screen.container).focus();
     await userEvent.keyboard(chord([MOD, "Alt"], "f"));
     await vi.waitFor(() => expect(findMode(screen.container)).toBe("find"));
@@ -363,7 +372,7 @@ describe("go to line", () => {
   it("keeps find-next in the editor text while its find bar is open, and opens from the header", async () => {
     setup();
     await using screen = await renderView();
-    const content = await editorContent(screen.container);
+    const content = await editorContent(screen);
     content.focus();
     await userEvent.keyboard(chord([MOD], "f"));
     await vi.waitFor(() => expect(findMode(screen.container)).toBe("find"));
@@ -410,7 +419,7 @@ describe("go to line", () => {
 
 describe("tree and viewer focus", () => {
   /** Swaps its editor for each opened file, as FilePreviewPanel keys its editor by path. */
-  function SwitchingView(props: { loaded?: boolean }) {
+  function SwitchingView(props: { loaded?: boolean; onAttach: (path: string) => void }) {
     const [openPath, setOpenPath] = useState("src/index.ts");
     const surface = useRef<HTMLDivElement>(null);
     return (
@@ -426,7 +435,12 @@ describe("tree and viewer focus", () => {
                 key={openPath}
                 file={{ name: openPath, contents: `// ${openPath}\n` }}
                 edit
-                editorOptions={{ onAttach: () => claimAwaitedEditorFocus(surface.current) }}
+                editorOptions={{
+                  onAttach: () => {
+                    claimAwaitedEditorFocus(surface.current);
+                    props.onAttach(openPath);
+                  },
+                }}
                 options={{ disableFileHeader: true }}
               />
             </EditProvider>
@@ -449,11 +463,22 @@ describe("tree and viewer focus", () => {
 
   it("gives a newly opened file's editor the focus once it replaces the old one", async () => {
     setup();
-    await using screen = await render(<SwitchingView />, { router: false /* nothing links */ });
-    const first = await editorContent(screen.container);
+    const attached = new Map([
+      ["src/index.ts", deferred<void>()],
+      ["notes.md", deferred<void>()],
+    ]);
+    const onAttach = (path: string) => attached.get(path)?.resolve();
+    await using screen = await render(<SwitchingView onAttach={onAttach} />, {
+      router: false /* nothing links */,
+    });
+    const first = await editorContent({
+      ...screen,
+      editorAttached: attached.get("src/index.ts")!.promise,
+    });
     await vi.waitFor(() => expect(treeRow(screen.container, "notes.md")).not.toBeNull());
     treeRow(screen.container, "notes.md")!.focus();
     await userEvent.keyboard(chord([MOD], "{ArrowDown}"));
+    await attached.get("notes.md")!.promise;
     await vi.waitFor(() =>
       expect(editorRoot(screen.container).activeElement?.textContent).toContain("// notes.md"),
     );
@@ -462,8 +487,11 @@ describe("tree and viewer focus", () => {
 
   it("focuses the open file's editor at once when Cmd/Ctrl+Down names that file", async () => {
     setup();
-    await using screen = await render(<SwitchingView />, { router: false /* nothing links */ });
-    const content = await editorContent(screen.container);
+    const attached = deferred<void>();
+    await using screen = await render(<SwitchingView onAttach={() => attached.resolve()} />, {
+      router: false /* nothing links */,
+    });
+    const content = await editorContent({ ...screen, editorAttached: attached.promise });
     await vi.waitFor(() => expect(treeRow(screen.container, "src/index.ts")).not.toBeNull());
     treeRow(screen.container, "src/index.ts")!.focus();
     await userEvent.keyboard(chord([MOD], "{ArrowDown}"));
@@ -475,15 +503,17 @@ describe("tree and viewer focus", () => {
     ["the focus toggle", [MOD, "Alt"]],
   ] as const)("waits for an editor that is still loading after %s", async (_, modifiers) => {
     setup();
-    await using screen = await render(<SwitchingView loaded={false} />, {
+    const attached = deferred<void>();
+    const onAttach = () => attached.resolve();
+    await using screen = await render(<SwitchingView loaded={false} onAttach={onAttach} />, {
       router: false /* nothing links */,
     });
     await vi.waitFor(() => expect(treeRow(screen.container, "src/index.ts")).not.toBeNull());
     treeRow(screen.container, "src/index.ts")!.focus();
     await userEvent.keyboard(chord([...modifiers], modifiers.length === 1 ? "{ArrowDown}" : "e"));
     await vi.waitFor(() => expect(document.activeElement).toBe(view(screen.container)));
-    await screen.rerender(<SwitchingView loaded />);
-    const content = await editorContent(screen.container);
+    await screen.rerender(<SwitchingView loaded onAttach={onAttach} />);
+    const content = await editorContent({ ...screen, editorAttached: attached.promise });
     await vi.waitFor(() => expect(editorRoot(screen.container).activeElement).toBe(content));
   });
 
@@ -492,7 +522,7 @@ describe("tree and viewer focus", () => {
     await using screen = await renderView();
     await vi.waitFor(() => expect(treeRow(screen.container, "src/")).not.toBeNull());
     await userEvent.click(treeRow(screen.container, "src/")!);
-    const content = await editorContent(screen.container);
+    const content = await editorContent(screen);
     content.focus();
     await userEvent.keyboard(chord([MOD, "Alt"], "e"));
     await vi.waitFor(() =>

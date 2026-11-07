@@ -1,7 +1,7 @@
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
 import { copyThreadReference } from "~/lib/copyThreadReference";
-import { attachSidebarTree, SIDEBAR_TREE_PROPS } from "../lib/sidebarTree";
+import { attachSidebarTree } from "../lib/sidebarTree";
 import type { EnvironmentServerConfig } from "@goat/client-runtime/connection";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import { threadContextDragListProps, useThreadContextDrag } from "./sidebar/useThreadContextDrag";
@@ -53,7 +53,6 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import type { OlderSettledScope } from "@goat/client-runtime/state/threads";
-
 import { ChevronDownIcon, PlusIcon } from "~/components/solar";
 import {
   Fragment,
@@ -91,6 +90,7 @@ import { isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { selectProjectGroupingSettings } from "../logicalProject";
+import { pickableProjectGroups } from "@goat/client-runtime/state/project-grouping";
 import {
   projectGroupsSpanEnvironments,
   resolveSidebarProjectScopeKeys,
@@ -108,11 +108,12 @@ import {
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useStartChatNew } from "../hooks/useStartChatNew";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
-import { startNewThreadFromContext, startNewThreadFromLastWork } from "../lib/chatThreadActions";
+import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -125,7 +126,6 @@ import {
 } from "../state/environments";
 import {
   readThreadShell,
-  readThreadShells,
   useAllEnvironmentProjectSnapshotsReady,
   useProjects,
   useServerConfigs,
@@ -201,7 +201,6 @@ import {
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
   searchSidebarThreads,
-  shouldCreateNewThreadInCurrentProject,
   shouldNavigateAfterThreadPark,
   sidebarListItemId,
   sidebarThreadKeyAtY,
@@ -235,7 +234,7 @@ import {
 } from "./sidebar/routeReveal";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
-import { GoatBotSidebarRow } from "./goatBot/GoatBotSidebarRow";
+import { GoatBotSidebarTabs, useBotSidebarSelected } from "./goatBot/GoatBotSidebarTabs";
 import { DecisionInboxSidebarRow } from "./decisions/DecisionInboxSidebarRow";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
@@ -244,39 +243,17 @@ import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import {
   SidebarSearchResultRow,
-  SortableThreadRow,
   type SidebarProviderEntry,
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
+import { LazySortableThreadRow } from "./sidebar/SidebarLazyThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
+import { sameSidebarProviderEntries } from "./sidebar/sidebarProviderEquality";
 import {
   SidebarDragBoundary,
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
 } from "./sidebar/SidebarListMarkers";
-
-function sameSidebarProviderEntries(
-  left: ReadonlyMap<string, SidebarProviderEntry>,
-  right: ReadonlyMap<string, SidebarProviderEntry>,
-): boolean {
-  if (left.size !== right.size) return false;
-  for (const [instanceId, entry] of right) {
-    const other = left.get(instanceId);
-    if (
-      other === undefined ||
-      other.driverKind !== entry.driverKind ||
-      other.enabled !== entry.enabled ||
-      other.displayName !== entry.displayName ||
-      other.accentColor !== entry.accentColor ||
-      other.acpRegistryAgentId !== entry.acpRegistryAgentId ||
-      other.acpRegistryIconUrl !== entry.acpRegistryIconUrl ||
-      other.models !== entry.models
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
 
 // Resolve providers per environment because default instance ids collide across environments.
 const sidebarProviderEntriesAtom = Atom.make((get) => {
@@ -324,6 +301,10 @@ function sameHolds(left: SidebarPriorityHolds, right: SidebarPriorityHolds): boo
     if (!right.has(key) || right.get(key) !== settledOverride) return false;
   }
   return true;
+}
+
+function scrollSidebarToTop(content: HTMLElement | null) {
+  content?.closest("[data-slot=scroll-area-viewport]")?.scrollTo({ top: 0 });
 }
 
 function threadShellKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
@@ -756,6 +737,7 @@ function readRouteThreadKey(router: AnyRouter): string | null {
 }
 
 export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
+  const botSelected = useBotSidebarSelected();
   const {
     projects,
     serverConfigs,
@@ -854,6 +836,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const newThreadContext = useHandleNewThread();
+  const startChatNew = useStartChatNew();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -878,7 +861,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const setPersistedProjectScopeKeys = useUiStateStore((store) => store.setSidebarProjectScopeKeys);
   const allProjectSnapshotsReady = useAllEnvironmentProjectSnapshotsReady();
   const allProjectConfigsReady = useAtomValue(environmentProjects.projectConfigsReadyAtom);
-  const headerSearchRef = useRef<HTMLDivElement | null>(null);
   // Hold dropped rows until server placement is confirmed; block another pickup from replacing the hold.
   const [optimisticDrop, setOptimisticDrop] = useState<SidebarOptimisticDrop | null>(null);
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -902,6 +884,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [renamingTitle, setRenamingTitle] = useState("");
   const settlingThreadKeysRef = useRef(new Set<string>());
   const threadListRef = useRef<HTMLUListElement | null>(null);
+  const sidebarContentRef = useRef<HTMLDivElement | null>(null);
   const dragLabelOffsetRef = useRef(0);
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
   const [dragState, setDragState] = useState<{
@@ -929,19 +912,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const openSubagent = openSubagentEntry?.thread ?? null;
 
   // A selection made under one scope can hold threads the next scope hides.
+  // The viewport outlives the scope and does not anchor, so a new list starts at the top.
   const setProjectScopeKeys = (keys: readonly string[]) => {
     clearSelection();
     setPersistedProjectScopeKeys(keys);
+    scrollSidebarToTop(sidebarContentRef.current);
   };
   // A scope whose project is gone reads as all projects once every snapshot has
   // loaded. The stored key is left alone, so the scope returns with its project.
   const chosenProjectScopeKeys = resolveSidebarProjectScopeKeys({
-    groups: projectGroups,
+    groups: pickableProjectGroups(projectGroups),
     keys: persistedProjectScopeKeys,
     settings: projectGroupingSettings,
     canClearMissingScope: allProjectSnapshotsReady && allProjectConfigsReady,
   });
-  const chosenProjectGroups = projectGroups.filter((project) =>
+  const chosenProjectGroups = pickableProjectGroups(projectGroups).filter((project) =>
     chosenProjectScopeKeys.includes(project.projectKey),
   );
   const chosenScopeProjectKeys =
@@ -2503,12 +2488,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 AuthOrchestrationOperateScope,
               ),
               branch: thread.branch ?? null,
-              projectFilter: threadProjectGroup
-                ? {
-                    label: threadProjectGroup.displayName,
-                    isActive: projectScopeKeys.includes(threadProjectGroup.projectKey),
-                  }
-                : null,
+              projectFilter:
+                threadProjectGroup && !threadProjectGroup.archived
+                  ? {
+                      label: threadProjectGroup.displayName,
+                      isActive: projectScopeKeys.includes(threadProjectGroup.projectKey),
+                    }
+                  : null,
               isPinned,
               isSettled,
               autoSettleEnabled: thread.autoSettleDisabledAt == null,
@@ -2798,8 +2784,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const showJumpHints = useThreadJumpHintsVisible(shouldShowJumpHintsNow);
 
-  // Plain compose opens a draft in the last project and workspace mode the
-  // user wrote in. Shift+click keeps the current-project action.
+  // Shift+click keeps the current-project action.
   const handleNewThreadClick = (event?: ReactMouseEvent) => {
     if (isMobile) setOpenMobile(false);
     if (event?.shiftKey) {
@@ -2808,36 +2793,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         activeThread: newThreadContext.activeThread ?? undefined,
         defaultProjectRef: newThreadContext.defaultProjectRef,
         handleNewThread,
+      }).then((started) => {
+        if (!started) openCommandPalette({ open: "new-thread-in" });
       });
       return;
     }
-    void (async () => {
-      if (
-        await startNewThreadFromLastWork({
-          threads: readThreadShells(),
-          projects,
-          handleNewThread: newThreadContext.handleNewThread,
-        })
-      ) {
-        return;
-      }
-      if (shouldCreateNewThreadInCurrentProject(false, projectGroups.length)) {
-        await startNewThreadFromContext({
-          activeDraftThread: newThreadContext.activeDraftThread,
-          activeThread: newThreadContext.activeThread ?? undefined,
-          defaultProjectRef: newThreadContext.defaultProjectRef,
-          handleNewThread: newThreadContext.handleNewThread,
-        });
-      } else {
-        openCommandPalette({ open: "new-thread-in" });
-      }
-    })();
+    void startChatNew();
   };
 
-  // The button mirrors chat.new. With no last work, multi-project setups
-  // open the project picker; single-project setups create in context.
-  // chat.newLocal remains the shortcut for the contextual action, even with
-  // one project, where its workspace mode can differ from last work.
+  // The button mirrors chat.new; chat.newLocal keeps the contextual action.
   const newThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.new");
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
@@ -2845,14 +2809,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       <ThreadContextDragGhost />
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
+        hidden={botSelected}
+        ref={sidebarContentRef}
         className="min-h-full"
         fixedHeader={
           <>
             {/* Lifted above the stage backdrop, whose fade bleeds below the
                 header and would otherwise paint across the search row's outline. */}
-            <SidebarGroup className="z-[1]">
+            <GoatBotSidebarTabs />
+            <SidebarGroup hidden={botSelected} className="z-[1]">
               <SidebarThreadHeader
-                searchFieldRef={headerSearchRef}
                 hasProjects={projectGroups.length > 0}
                 projectScope={
                   <SidebarProjectScope
@@ -2864,7 +2830,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     showProjectEnvironments={showProjectEnvironments}
                     primaryEnvironmentId={primaryEnvironmentId}
                     environmentMachineById={environmentMachineById}
-                    headerSearchRef={headerSearchRef}
                   />
                 }
                 onNewProject={openAddProjectCommandPalette}
@@ -2886,7 +2851,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 onClearSearch={clearThreadSearch}
               />
             </SidebarGroup>
-            <GoatBotSidebarRow />
           </>
         }
       >
@@ -3004,11 +2968,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   <ul
                     ref={attachTreeRef}
                     {...threadContextDragListProps()}
-                    {...SIDEBAR_TREE_PROPS}
+                    role="presentation"
                     className={cn(
                       "relative flex flex-col gap-px",
                       sidebarListItems.length > 0 && "flex-1",
                       actionSweep !== null && "**:pointer-events-none",
+                      dragState !== null &&
+                        "after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-30 after:h-px after:content-['']",
                     )}
                   >
                     {(() => {
@@ -3028,7 +2994,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         });
                         const rowVariant = resolveNestedRowVariant(section, parentVariant);
                         const launched = launchFold.childrenByParentKey.get(threadKey);
-                        const Row = nested ? SidebarNestedThreadRow : SortableThreadRow;
+                        const Row = nested ? SidebarNestedThreadRow : LazySortableThreadRow;
                         return (
                           <Row
                             key={threadKey}
@@ -3350,8 +3316,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       <li className="list-none">
                         <button
                           type="button"
-                          role="treeitem"
-                          tabIndex={-1}
                           data-sidebar-row="settled:more"
                           data-sidebar-parent="shelf:settled"
                           disabled={olderSettledShelf.loading}

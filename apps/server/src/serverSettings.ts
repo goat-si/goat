@@ -1,4 +1,5 @@
 import * as ServerSettingsWatcher from "./serverSettingsWatcher.ts";
+import * as NodeUtil from "node:util";
 import * as ConnectHubSettings from "./auth/ConnectHubSettings.ts";
 import { settingsLayers } from "./serverSettingsLayers.ts";
 import { cleanAllowedApps, rejectProtectedAllowedApps } from "./serverSettingsAllowedApps.ts";
@@ -34,6 +35,7 @@ import {
   type ProviderInstanceMutation,
   resolveProviderInstanceEnabled,
   ResponseStreamingMode,
+  SecretProviderConfigWrite,
   ServerSettingsError,
   type ServerSettingsPatch,
   globalIdleCompaction,
@@ -86,6 +88,8 @@ import {
   rejectAgentWorkspaceTerminalPolicyChange,
 } from "./AgentWorkspaceTerminalPolicy.ts";
 import { makeCheckpointReplicationAdmission } from "./serverSettingsCheckpointAdmission.ts";
+import { preserveSecretReferences } from "./provider/preserveSecretReferences.ts";
+import { makeCuaCommittedPolicy, type CuaCommittedPolicy } from "./cuaCommittedPolicy.ts";
 
 import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
 import { makeSettingsSecretMaterializer } from "./settingsSecretMaterialization.ts";
@@ -101,6 +105,8 @@ export {
 } from "@goat/shared/serverSettings";
 
 import { MemoryHubProvenance, MemoryHubSettingsSnapshot } from "./memory/MemoryHubSettings.ts";
+
+const isSecretProviderConfigWrite = Schema.is(SecretProviderConfigWrite);
 
 const ServerSettings = Schema.Struct({
   ...ClientServerSettings.fields,
@@ -205,11 +211,33 @@ export function redactServerSettingsForClient(
 ): ClientServerSettings {
   // Persistence-only origin must not reach settings snapshots or streams.
   const { memoryHubProvenance: _provenance, ...clientSettings } = settings as ServerSettings;
-  return mapSettingsSecrets(clientSettings, (secret) =>
+  const redacted = mapSettingsSecrets(clientSettings, (secret) =>
     secret.sensitive
       ? { value: "", redacted: secret.redacted || secret.value.length > 0 }
       : { value: secret.value, redacted: false },
   );
+  return {
+    ...redacted,
+    secretProviders: Object.fromEntries(
+      Object.entries(redacted.secretProviders).map(([id, entry]) => {
+        const config = entry.config;
+        const account =
+          typeof config === "object" && config !== null && "account" in config
+            ? config.account
+            : undefined;
+        return [
+          id,
+          {
+            kind: entry.kind,
+            label: entry.label,
+            ...(entry.kind === "one_password" && typeof account === "string"
+              ? { config: { account } }
+              : {}),
+          },
+        ];
+      }),
+    ),
+  };
 }
 
 export function applyProviderInstanceMutation(
@@ -218,7 +246,10 @@ export function applyProviderInstanceMutation(
 ): ServerSettings {
   const providerInstances = { ...settings.providerInstances };
   if (mutation.operation === "upsert" || mutation.operation === "create") {
-    providerInstances[mutation.instanceId] = mutation.instance;
+    providerInstances[mutation.instanceId] =
+      mutation.operation === "upsert"
+        ? preserveSecretReferences(providerInstances[mutation.instanceId], mutation.instance)
+        : mutation.instance;
   } else {
     delete providerInstances[mutation.instanceId];
   }
@@ -801,6 +832,7 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+    readonly committedPolicy?: Effect.Effect<CuaCommittedPolicy>;
     readonly blockedBrowserHostsSnapshot?: Effect.Effect<
       ReadonlyArray<string>,
       ServerSettingsError
@@ -894,6 +926,8 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       : {}),
   });
   const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
+  const cuaPolicy = yield* makeCuaCommittedPolicy;
+  yield* cuaPolicy.publish(initialSettings, Option.none());
   const providerPolicy = yield* makeMemoryProviderPolicy;
   const ownerPublication = yield* makeOwnerPolicyPublication;
   yield* ownerPublication.initialize(initialSettings);
@@ -916,6 +950,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       Effect.tap((nextSettings) =>
         Effect.uninterruptible(
           Ref.set(currentSettingsRef, nextSettings).pipe(
+            Effect.andThen(cuaPolicy.publish(nextSettings, Option.none())),
             Effect.andThen(hubConsent.committed(nextSettings.hub)),
             Effect.andThen(providerPolicy.publish(nextSettings.enableAgentMemoryAccess)),
             Effect.andThen(ownerPublication.publish(ownerProjection(nextSettings))),
@@ -989,6 +1024,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    committedPolicy: cuaPolicy.read,
     blockedBrowserHostsSnapshot: Ref.get(currentSettingsRef).pipe(
       Effect.map((settings) => settings.blockedBrowserHosts),
     ),
@@ -1287,6 +1323,8 @@ const make = Effect.gen(function* () {
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const sql = yield* SqlClient.SqlClient;
   const writeSemaphore = yield* Semaphore.make(1);
+  const cuaPolicy = yield* makeCuaCommittedPolicy;
+  const publishCua = cuaPolicy.commit;
   const checkpointAdmission = makeCheckpointReplicationAdmission();
   const routeState = yield* Effect.serviceOption(CodexRoute.CodexRouteState);
   const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
@@ -1466,7 +1504,8 @@ const make = Effect.gen(function* () {
           rename: (from, to) =>
             fs.rename(from, to).pipe(
               Effect.tap(() =>
-                publishCommittedHub(settings).pipe(
+                publishCua(settings).pipe(
+                  Effect.andThen(publishCommittedHub(settings)),
                   Effect.andThen(providerPolicy.publish(settings.enableAgentMemoryAccess)),
                   Effect.andThen(ownerPublication.publish(ownerProjection(settings))),
                 ),
@@ -1713,7 +1752,6 @@ const make = Effect.gen(function* () {
   );
 
   const materializeSettingsSecrets = yield* makeSettingsSecretMaterializer;
-
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
       Stream.mapEffect((settings) =>
@@ -1880,7 +1918,7 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
     Effect.gen(function* () {
       if (beforeCommit) yield* beforeCommit;
-      const { settings: current, parseFailure } = yield* reloadSettings;
+      const { settings: current, parseFailure } = yield* cuaPolicy.loaded(reloadSettings);
       if (Option.isSome(parseFailure)) {
         return yield* new ServerSettingsError({
           settingsPath,
@@ -1889,6 +1927,17 @@ const make = Effect.gen(function* () {
         });
       }
       const updated = yield* update(current);
+      for (const [id, provider] of Object.entries(updated.secretProviders)) {
+        if (
+          !NodeUtil.isDeepStrictEqual(
+            provider,
+            current.secretProviders[id as keyof typeof current.secretProviders],
+          ) &&
+          !isSecretProviderConfigWrite(provider)
+        ) {
+          return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
+        }
+      }
       yield* rejectProtectedAllowedApps(current, updated);
       if (Option.isSome(routeState)) yield* routeState.value.validate(current, updated);
       if (CodexRoute.instanceFingerprint(current) === CodexRoute.instanceFingerprint(updated))
@@ -1946,7 +1995,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         // Reloading publishes Connect policy, so a denied caller must not reach it.
         if (beforeCommit) yield* beforeCommit;
-        const { settings: current, parseFailure } = yield* reloadSettings;
+        const { settings: current, parseFailure } = yield* cuaPolicy.loaded(reloadSettings);
         if (Option.isSome(parseFailure))
           return yield* new ServerSettingsError({
             settingsPath,
@@ -2032,9 +2081,9 @@ const make = Effect.gen(function* () {
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
       yield* refreshCommittedHub;
-      const { settings } = yield* reloadSettings;
+      const { settings } = yield* cuaPolicy.loaded(reloadSettings);
       yield* emitChange(settings);
-    }),
+    }).pipe(Effect.tapError(() => cuaPolicy.unavailable)),
   );
 
   const start = Effect.gen(function* () {
@@ -2052,7 +2101,7 @@ const make = Effect.gen(function* () {
       yield* connectAccess.startup(
         writeSemaphore.withPermits(1)(
           Effect.gen(function* () {
-            const loaded = yield* loadSettingsFromDisk(false);
+            const loaded = yield* cuaPolicy.loaded(loadSettingsFromDisk(false));
             yield* connectAccess.commit(
               loaded.settings.hub,
               Cache.set(settingsCache, cacheKey, loaded).pipe(
@@ -2086,6 +2135,7 @@ const make = Effect.gen(function* () {
     ownerPolicyAdministration: ownerServices.administration,
     start,
     ready: Deferred.await(startedDeferred),
+    committedPolicy: cuaPolicy.read,
     getSettings: getSettingsFromCache.pipe(
       Effect.flatMap(materializeSettingsSecrets),
       Effect.map(resolveTextGenerationProvider),

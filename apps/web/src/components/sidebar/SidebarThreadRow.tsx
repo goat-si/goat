@@ -1,3 +1,4 @@
+import { sidebarWorkingLabel } from "./sidebarWorkingLabel";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
@@ -11,7 +12,6 @@ import {
   hasQueuedTurnStart,
   QUEUED_TURN_START_GRACE_MS,
 } from "@goat/client-runtime/state/thread-settled";
-
 import { resolveSettledThreadTimestamp } from "@goat/client-runtime/state/thread-sort";
 import { type EnvironmentThreadSearchMatch } from "@goat/client-runtime/state/thread-search";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
@@ -572,7 +572,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     threadId: thread.id,
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
-  const terminalProcessCount = runningTerminalIds.length;
   const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !props.isRouteThread;
   const handleDiscardDraftClick = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -624,7 +623,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const topStatus =
     status === "working"
       ? {
-          label: thread.goal?.status === "active" ? "Goal" : "Working",
+          label: sidebarWorkingLabel(thread.runtime?.status, thread.goal?.status === "active"),
           icon: "working" as const,
           className: "text-muted-foreground",
         }
@@ -715,7 +714,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       modelLabel={modelLabel}
       branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
-      terminalProcessCount={terminalProcessCount}
+      terminalProcessCount={runningTerminalIds.length}
     />
   );
 
@@ -1050,8 +1049,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             render={
               <div
                 ref={rowRef}
-                role="treeitem"
-                tabIndex={-1}
+                role="button"
+                tabIndex={0}
                 data-sidebar-row={threadKey}
                 data-sidebar-parent={props.navigationParent}
                 aria-label={accessibility.label}
@@ -1221,8 +1220,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
           render={
             <div
               ref={rowRef}
-              role="treeitem"
-              tabIndex={-1}
+              role="button"
+              tabIndex={0}
               data-sidebar-row={threadKey}
               data-sidebar-parent={props.navigationParent}
               aria-label={accessibility.label}
@@ -1261,6 +1260,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               {externalLauncherBadge}
               {historyArchiveHint}
               {pinIndicator}
+              {terminalStatusIcon}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
                   Regenerating title

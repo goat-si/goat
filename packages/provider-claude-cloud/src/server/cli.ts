@@ -9,7 +9,7 @@ import * as Scope from "effect/Scope";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
-import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
+import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import { parseGenericCliVersion } from "@goat/provider-core/server/snapshotProbe";
 import {
   ClaudeCloudError,

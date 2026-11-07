@@ -270,6 +270,23 @@ export const LinkPullRequestResult = Schema.Struct({
 });
 export type LinkPullRequestResult = typeof LinkPullRequestResult.Type;
 
+const PullRequestNumbersByRepository = Schema.Array(
+  Schema.Struct({
+    host: Schema.String,
+    repository: Schema.String,
+    numbers: Schema.Array(Schema.Int),
+  }),
+);
+
+export const LinkPullRequestsResult = Schema.Struct({
+  linked: PullRequestNumbersByRepository,
+  alreadyLinked: PullRequestNumbersByRepository,
+  linkedCount: Schema.Int,
+  invalidUrls: Schema.optional(Schema.Array(Schema.String)),
+  next: Schema.optional(Schema.String),
+});
+export type LinkPullRequestsResult = typeof LinkPullRequestsResult.Type;
+
 export const UnlinkPullRequestResult = Schema.Struct({
   host: Schema.String,
   repository: Schema.String,
@@ -277,6 +294,20 @@ export const UnlinkPullRequestResult = Schema.Struct({
   wasLinked: Schema.Boolean,
 });
 export type UnlinkPullRequestResult = typeof UnlinkPullRequestResult.Type;
+
+export const UnlinkPullRequestsResult = Schema.Struct({
+  unlinked: Schema.Array(
+    Schema.Struct({
+      host: Schema.String,
+      repository: Schema.String,
+      state: PullRequestState,
+      numbers: Schema.Array(Schema.Int),
+    }),
+  ),
+  unlinkedCount: Schema.Int,
+  remaining: Schema.Int,
+});
+export type UnlinkPullRequestsResult = typeof UnlinkPullRequestsResult.Type;
 
 export const WatchPullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
@@ -325,6 +356,17 @@ const LinkPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.link"].
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.link"]));
 
+const LinkPullRequestsTool = Tool.make(agentSurfaceRegistry["pull_request.link_many"].name, {
+  description: agentSurfaceRegistry["pull_request.link_many"].description,
+  parameters: Schema.Struct({
+    threadId: Schema.optional(ThreadId.annotate({ description: "Thread. Default: this thread." })),
+    urls: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1)),
+  }),
+  success: LinkPullRequestsResult,
+  failure: PullRequestToolError,
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.link_many"]));
+
 const UnlinkPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.unlink"].name, {
   description: agentSurfaceRegistry["pull_request.unlink"].description,
   parameters: PullRequestTargetInput,
@@ -332,6 +374,17 @@ const UnlinkPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.unlin
   failure: PullRequestToolError,
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.unlink"]));
+
+const UnlinkPullRequestsTool = Tool.make(agentSurfaceRegistry["pull_request.unlink_many"].name, {
+  description: agentSurfaceRegistry["pull_request.unlink_many"].description,
+  parameters: Schema.Struct({
+    threadId: Schema.optional(ThreadId.annotate({ description: "Thread. Default: this thread." })),
+    states: Schema.Array(PullRequestState).check(Schema.isMinLength(1)),
+  }),
+  success: UnlinkPullRequestsResult,
+  failure: PullRequestToolError,
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.unlink_many"]));
 
 const ListThreadPullRequestsTool = Tool.make(agentSurfaceRegistry["pull_request.list"].name, {
   description: agentSurfaceRegistry["pull_request.list"].description,
@@ -505,6 +558,7 @@ const PullRequestSearchTool = Tool.make(agentSurfaceRegistry["pull_request.searc
     involvement: PullRequestListInput.fields.involvement,
     filters: PullRequestListInput.fields.filters,
     projectId: PullRequestListInput.fields.projectId,
+    includeUpstream: PullRequestListInput.fields.includeUpstream,
     query: PullRequestListInput.fields.query,
     limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 }))),
     cursors: PullRequestListInput.fields.cursors,
@@ -550,7 +604,9 @@ const PullRequestFilterOptionsTool = Tool.make(
 export const PullRequestsToolkit = Toolkit.make(
   ...makeWriteTools(GuideTarget.fields, PullRequestToolError),
   LinkPullRequestTool,
+  LinkPullRequestsTool,
   UnlinkPullRequestTool,
+  UnlinkPullRequestsTool,
   ListThreadPullRequestsTool,
   WatchPullRequestTool,
   UnwatchPullRequestTool,

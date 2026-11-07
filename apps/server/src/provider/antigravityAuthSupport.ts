@@ -16,7 +16,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as AcpErrors from "effect-acp/errors";
 
-import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
+import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import {
   antigravityUserSkillDirectories,

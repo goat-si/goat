@@ -156,7 +156,7 @@ export function resolveThreadListV2SnoozeGateExpiryMs(
   >,
   options: { readonly now: string },
 ): number | null {
-  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return null;
+  if (thread.hasPendingApprovals) return null;
   if (thread.pendingSubagentRequest != null) return null;
   if (!hasQueuedTurnStart(thread, options)) return null;
   const messageAtMs = Date.parse(thread.latestUserMessageAt ?? "");
@@ -207,6 +207,8 @@ export function sortThreadsForListV2<
     readonly id: string;
     readonly createdAt: string;
     readonly unsettledAt?: string | null | undefined;
+    readonly latestUserMessageAt?: string | null | undefined;
+    readonly latestUserAuthoredMessageAt?: string | null | undefined;
     readonly activeOrderKey?: string | null | undefined;
     readonly environmentId?: string | undefined;
   },
@@ -303,6 +305,7 @@ export {
   type ThreadListV2SettledShelfListItem,
   type ThreadListV2SnoozedShelfListItem,
   type ThreadListV2ThreadListItem,
+  type ThreadListV2ThreadsHeaderListItem,
   type ThreadListV2WorkingShelfListItem,
 } from "./threadListV2ListItems";
 
@@ -575,9 +578,14 @@ export function buildThreadListV2Items(input: {
     routeAncestorKeys.includes(parentKey)
       ? groups?.routeCollapsed.has(parentKey) !== true
       : groups?.expanded[parentKey] === true;
-  const childItem = (thread: EnvironmentThreadShell, depth: number): ThreadListV2Item => {
+  const childItem = (
+    thread: EnvironmentThreadShell,
+    depth: number,
+    parent: ThreadListV2Item,
+  ): ThreadListV2Item => {
     const childSnoozed = threadListV2Snoozed(thread, lifecycle);
-    const slim = childSnoozed || threadListV2Settled(thread, lifecycle);
+    const slim =
+      childSnoozed || (threadListV2Settled(thread, lifecycle) && parent.variant === "slim");
     return {
       thread,
       variant: slim ? "slim" : "card",

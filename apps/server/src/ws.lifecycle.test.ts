@@ -1,5 +1,8 @@
+import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
+import * as ChannelBotProfiles from "./channels/ChannelBotProfiles.ts";
+import * as ChannelBotThreads from "./channels/ChannelBotThreads.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
@@ -34,6 +37,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerConfigModule from "./config.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -98,6 +102,7 @@ import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import { ThreadWorkspaceService } from "./orchestration-v2/goat/ThreadWorkspaceService.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -152,6 +157,8 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
   Layer.mock(ChannelBotDirectory.ChannelBotDirectory)({}),
   Layer.mock(ChannelBotRegistry.ChannelBotRegistry)({}),
+  Layer.mock(ChannelBotProfiles.ChannelBotProfiles)({}),
+  Layer.mock(ChannelBotThreads.ChannelBotThreads)({}),
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelIdentityService.ChannelIdentityService)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),
@@ -187,6 +194,7 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(AntigravityInstallation.AntigravityInstallation)({ managedDirectory: "/unused" }),
   Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
   Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
+  Layer.mock(NativeChildWorkQuery.NativeChildWorkQuery)({}),
   Layer.mock(CloudProviderAutoSetup.CloudProviderAutoSetup)({ apply: Effect.succeed([]) }),
   Layer.mock(CommandOutputHub.CommandOutputHub)({}),
   Layer.mock(CodexInstallation.CodexInstallation)({ managedDirectory: "/unused" }),
@@ -232,6 +240,7 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
+  Layer.mock(ThreadWorkspaceService)({}),
   Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(AttachmentFileLeases.AttachmentFileLeases)({}),
@@ -247,6 +256,7 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(LaunchWatchService.LaunchWatchService)({}),
   Layer.mock(ThreadManagement.ThreadManagementService)({}),
+  Layer.mock(ShellSnapshotLoads.ShellSnapshotLoads)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(UsageService.UsageService)({}),
   Layer.mock(VcsProvisioningService.VcsProvisioningService)({}),

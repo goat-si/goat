@@ -1,8 +1,15 @@
+import { useAtomValue } from "@effect/atom-react";
+import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId } from "@goat/contracts";
 import { useState } from "react";
 import { Text } from "react-native";
 
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { channelEnvironment } from "../../state/channels";
+import { useEnvironments } from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
+import { MobileBotProfileSheet } from "../goat-bot/MobileBotProfileSheet";
 import { useMobileGoatBotHomeSettings } from "../goat-bot/useMobileGoatBotHomeSettings";
 import { useMobileGoatBotModel } from "../goat-bot/useMobileGoatBotModel";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
@@ -78,6 +85,12 @@ export function SettingsGoatBotRouteScreen() {
                 ))}
             </SettingsSection>
             {resolution.state === "claimed" && resolution.homeConnected ? (
+              <GoatBotProfileSection
+                key={"profile:" + resolution.claim.environmentId}
+                environmentId={resolution.claim.environmentId}
+              />
+            ) : null}
+            {resolution.state === "claimed" && resolution.homeConnected ? (
               <GoatBotModelSection
                 key={resolution.claim.environmentId}
                 environmentId={resolution.claim.environmentId}
@@ -88,6 +101,60 @@ export function SettingsGoatBotRouteScreen() {
         )}
       </ScreenScrollView>
     </SettingsScreen>
+  );
+}
+
+/** The main bot's name, avatar and purpose on its home computer. */
+function GoatBotProfileSection({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const { presentationById } = useEnvironments();
+  const supported =
+    presentationById.get(environmentId)?.serverConfig?.environment.capabilities
+      .goatBotProfileEdit === true;
+  const profiles = useEnvironmentQuery(
+    supported ? channelEnvironment.listBots({ environmentId, input: {} }) : null,
+  );
+  const canEdit = useAtomValue(channelEnvironment.updateBot.permissionAtom(environmentId));
+  const [editing, setEditing] = useState(false);
+  if (!supported) return null;
+  const main = profiles.data?.bots.find((bot) => bot.role === "main");
+  return (
+    <SettingsSection title="Profile">
+      <SettingsRow
+        icon="person.crop.circle"
+        label={main === undefined ? "GOAT Bot" : [main.avatar, main.name].filter(Boolean).join(" ")}
+        value={
+          profiles.error
+            ? "Couldn't load"
+            : main === undefined
+              ? "Not started yet"
+              : canEdit
+                ? "Edit"
+                : "Permission required"
+        }
+        disabled={main === undefined || !canEdit}
+        onPress={() => setEditing(true)}
+      />
+      {main?.purpose ? (
+        <Text className="px-4 py-2 text-foreground-muted">{main.purpose}</Text>
+      ) : null}
+      {editing && main !== undefined ? (
+        <MobileBotProfileSheet
+          mode="edit"
+          initial={main}
+          canSubmit={canEdit}
+          onClose={() => setEditing(false)}
+          onSubmit={async (changes) => {
+            const result = await runAtomCommand(appAtomRegistry, channelEnvironment.updateBot, {
+              environmentId,
+              input: { botId: main.botId, ...changes },
+            });
+            if (result._tag === "Success") return null;
+            const failure = squashAtomCommandFailure(result);
+            return failure instanceof Error ? failure.message : "Couldn't save the profile.";
+          }}
+        />
+      ) : null}
+    </SettingsSection>
   );
 }
 
@@ -105,6 +172,17 @@ function GoatBotModelSection({
 
   return (
     <>
+      <SettingsSection title="Messages">
+        <SettingsSwitchRow
+          label="Answer with the bot session"
+          subtitle="Use the bot session to understand and answer messages. Turn off to use reception first."
+          value={settings.goatBotSessionRouting === "session"}
+          disabled={!allowed}
+          onValueChange={(value) =>
+            save({ goatBotSessionRouting: value ? "session" : "reception" })
+          }
+        />
+      </SettingsSection>
       <SettingsSection title="Workers">
         <SettingsSwitchRow
           label="Automatically choose a worker computer"

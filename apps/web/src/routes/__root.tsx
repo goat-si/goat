@@ -37,6 +37,7 @@ import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAp
 import { DesktopWebLinkCoordinator } from "../components/desktop/DesktopWebLinkCoordinator";
 import { DesktopTrayNewThread } from "../components/desktop/DesktopTrayNewThread";
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
+import { WorktreeCleanupNotice } from "../components/WorktreeCleanupNotice";
 import { DiskPressureNotificationCoordinator } from "../components/DiskPressureNotificationCoordinator";
 import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
@@ -266,6 +267,7 @@ function RootRouteBranch() {
         <SshPasswordPromptDialog />
         <SnapShotCoordinator />
         <DiskPressureNotificationCoordinator />
+        <WorktreeCleanupNotice />
         <ReopenClosedViewShortcut />
         <ConfirmDialogHost />
         <CustomSnoozeDialogHost />

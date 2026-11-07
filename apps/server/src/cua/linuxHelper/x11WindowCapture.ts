@@ -2,6 +2,7 @@
 // @effect-diagnostics globalTimers:off -- One bounded exchange at a socket callback boundary.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeZlib from "node:zlib";
@@ -229,7 +230,7 @@ export function rgbToPng(rgb: Uint8Array, width: number, height: number): Uint8A
  * failed. After a failure every later ask resolves undefined at once, so nothing waits on a
  * connection that is gone.
  */
-function connection(socket: NodeNet.Socket) {
+function connection(socket: NodeNet.Socket, installFail: (fail: () => void) => void) {
   let buffer = new Uint8Array(0);
   let closed = false;
   let setup: ((reply: Uint8Array | undefined) => void) | undefined;
@@ -243,7 +244,7 @@ function connection(socket: NodeNet.Socket) {
     setup = undefined;
     for (const wake of waiting.splice(0)) wake(undefined);
   };
-  socket.on("error", fail);
+  installFail(fail);
   socket.on("close", fail);
   socket.on("data", (chunk: Buffer) => {
     const next = new Uint8Array(buffer.length + chunk.length);
@@ -345,8 +346,14 @@ export async function captureX11Window(
     (bytes) => xauthorityCookie(bytes, display),
     () => null,
   );
-  const socket = NodeNet.createConnection(options.socketPath ?? "/tmp/.X11-unix/X" + display);
-  const x = connection(socket);
+  let fail = () => {};
+  const socket = guardErrors(
+    NodeNet.createConnection(options.socketPath ?? "/tmp/.X11-unix/X" + display),
+    () => fail(),
+  );
+  const x = connection(socket, (route) => {
+    fail = route;
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<undefined>((resolve) => {
     timer = setTimeout(() => {

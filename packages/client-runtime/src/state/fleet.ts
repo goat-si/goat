@@ -1,18 +1,26 @@
-import type {
-  CloudMachine,
-  EnvironmentId,
-  EnvironmentMachineKind,
-  ExecutionEnvironmentPlatformOs,
-  OrchestrationV2ThreadShell,
-  ProviderDriverKind,
-  RemoteLaunch,
-  ScopedThreadRef,
+import {
+  isCloudMachineAlias,
+  type CloudMachine,
+  type EnvironmentId,
+  type EnvironmentMachineKind,
+  type ExecutionEnvironmentPlatformOs,
+  type OrchestrationV2ThreadShell,
+  type ProviderDriverKind,
+  type RemoteLaunch,
+  type ScopedThreadRef,
 } from "@goat/contracts";
+import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 
-import { identifyBoatMachine, type BoatMachineIdentity } from "../cloudMachines.ts";
-import { scopeThreadRef } from "../environment/scoped.ts";
+import {
+  identifyBoatMachine,
+  type BoatMachineIdentity,
+  type BoatMachineStatus,
+} from "../cloudMachines.ts";
+import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
+import { foldLaunchedThreads, type LaunchFoldThread } from "./launchFold.ts";
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { findRemoteShell, presentRemoteLaunches } from "./remoteLaunches.ts";
 
@@ -28,25 +36,26 @@ import { findRemoteShell, presentRemoteLaunches } from "./remoteLaunches.ts";
 /** "attention" is a pending approval or question: the thread needs the user. */
 export type FleetThreadState = "running" | "attention";
 
-export type FleetShell = Pick<
-  EnvironmentThreadShell,
-  | "environmentId"
-  | "id"
-  | "title"
-  | "providerInstanceId"
-  | "runtime"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "pendingSubagentRequest"
-  | "pendingBackgroundTasks"
-  | "nativeSubagents"
-  | "archivedAt"
-  | "deletedAt"
-  | "sideChatOf"
-  | "lineage"
-  | "createdAt"
-  | "updatedAt"
-> & { readonly source: Pick<OrchestrationV2ThreadShell, "launchedBy"> };
+export type FleetShell = LaunchFoldThread &
+  Pick<
+    EnvironmentThreadShell,
+    | "environmentId"
+    | "id"
+    | "title"
+    | "providerInstanceId"
+    | "runtime"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "pendingSubagentRequest"
+    | "pendingBackgroundTasks"
+    | "nativeSubagents"
+    | "archivedAt"
+    | "deletedAt"
+    | "sideChatOf"
+    | "lineage"
+    | "createdAt"
+    | "updatedAt"
+  > & { readonly source: Pick<OrchestrationV2ThreadShell, "launchedBy" | "pendingRuntimeRequest"> };
 
 /**
  * Whether a thread is in the Fleet now; null means it has finished or never
@@ -96,6 +105,81 @@ export function classifyFleetThread(
     return "running";
   }
   return null;
+}
+
+export function fleetThreadStates<
+  T extends LaunchFoldThread &
+    Pick<FleetShell, "archivedAt" | "deletedAt" | "sideChatOf" | "pendingSubagentRequest">,
+>(
+  shells: readonly T[],
+  options?: { readonly additionalAttention?: (shell: T) => boolean },
+): ReadonlyMap<string, FleetThreadState | null> {
+  const visible = shells.filter(
+    (shell) =>
+      shell.archivedAt === null &&
+      shell.deletedAt === null &&
+      shell.sideChatOf == null &&
+      shell.lineage.relationshipToParent !== "subagent",
+  );
+  const key = (shell: T) => scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id));
+  const states = new Map(visible.map((shell) => [key(shell), classifyFleetThread(shell)]));
+  const remoteChildren = visible.filter((child) =>
+    isRemoteDelegatedChild({ lineage: child.lineage, launchedBy: child.source.launchedBy }),
+  );
+  if (remoteChildren.length === 0) return states;
+  const delegatedAttentionByKey = new Map(
+    visible.flatMap((shell) =>
+      shell.pendingSubagentRequest == null
+        ? []
+        : [
+            [
+              key(shell),
+              shell.pendingSubagentRequest === "approval"
+                ? ("approval" as const)
+                : ("input" as const),
+            ] as const,
+          ],
+    ),
+  );
+  const fold = foldLaunchedThreads({
+    visible,
+    all: shells,
+    now: DateTime.formatIso(DateTime.nowUnsafe()),
+    delegatedAttentionByKey,
+  });
+  const remoteParents = new Map<string, string>();
+  for (const child of remoteChildren) {
+    const childKey = key(child);
+    const parentKey = fold.parentKeyByKey.get(childKey);
+    if (parentKey === undefined) continue;
+    remoteParents.set(childKey, parentKey);
+    states.delete(childKey);
+  }
+  const byKey = new Map(remoteChildren.map((child) => [key(child), child]));
+  const roots = new Map<string, string>();
+  const rootOf = (start: string) => {
+    const path: string[] = [];
+    let target = start;
+    while (!roots.has(target)) {
+      const next = remoteParents.get(target);
+      if (next === undefined) break;
+      path.push(target);
+      target = next;
+    }
+    const root = roots.get(target) ?? target;
+    for (const item of path) roots.set(item, root);
+    return root;
+  };
+  for (const [childKey, parentKey] of remoteParents) {
+    const child = byKey.get(childKey);
+    if (
+      fold.stateByKey.get(childKey) !== "attention" &&
+      (child === undefined || options?.additionalAttention?.(child) !== true)
+    )
+      continue;
+    states.set(rootOf(parentKey), "attention");
+  }
+  return states;
 }
 
 export interface FleetEnvironment {
@@ -207,12 +291,16 @@ export function summarizeFleet(
   );
   let running = 0;
   let attention = 0;
+  const liveIds = new Set(
+    environments.filter((env) => env.connected !== false).map((env) => env.environmentId),
+  );
+  const states = fleetThreadStates(shells.filter((shell) => liveIds.has(shell.environmentId)));
   for (const shell of shells) {
     const owner = owners.get(shell.environmentId);
     const machine = owner === undefined ? undefined : counts.get(owner);
     if (machine === undefined) continue;
-    const state = classifyFleetThread(shell);
-    if (state === null) continue;
+    const state = states.get(scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id)));
+    if (state == null) continue;
     machine[state] += 1;
     if (state === "running") running += 1;
     else attention += 1;
@@ -346,6 +434,18 @@ export interface FleetSnapshot {
     /** Answering GOAT servers, the same number the rail counts. */
     readonly machines: number;
   };
+  /**
+   * Boat machines Fleet leaves out because nothing uses them: by alias, which names one sandbox
+   * whichever server reports it, and by each route a server reached them through.
+   */
+  readonly hiddenCloudAliases: ReadonlyArray<string>;
+  readonly hiddenRoutes: ReadonlyArray<{ readonly via: EnvironmentId; readonly alias: string }>;
+  /** Running Boat machines nothing runs on, with the server whose cloud machine list owns each. */
+  readonly idleCloudMachines: ReadonlyArray<{
+    readonly machineId: string;
+    readonly owner: EnvironmentId;
+    readonly ownerLabel: string;
+  }>;
 }
 
 export interface FleetRemoteSource {
@@ -356,6 +456,14 @@ export interface FleetRemoteSource {
 
 const UNKNOWN_AGENT = "unknown";
 const UNKNOWN_AGENT_LABEL = "Unknown agent";
+
+/** Boat states that bill or need the user, so Fleet keeps the machine even with nothing on it. */
+const BOAT_IN_USE: ReadonlySet<BoatMachineStatus> = new Set([
+  "running",
+  "starting",
+  "stopping",
+  "failed",
+]);
 
 /**
  * Oldest first, so a new thread joins at the end and a status change or a
@@ -428,6 +536,8 @@ export function buildFleet(input: {
   }
   const nodeOf = (environmentId: EnvironmentId) =>
     machines.get(machineId(owners.get(environmentId) ?? environmentId));
+  const recordOwners = new Map<string, EnvironmentId>();
+  const hiddenCloudAliases = new Set<string>();
   const connectedIds = new Set(
     input.environments
       .filter((environment) => environment.connected !== false)
@@ -486,9 +596,10 @@ export function buildFleet(input: {
   const scopeOf = (environmentId: EnvironmentId) =>
     scopes.get(environmentId) ?? "environment:" + environmentId;
 
+  const states = fleetThreadStates(connectedShells);
   for (const shell of connectedShells) {
-    const state = classifyFleetThread(shell);
-    if (state === null) continue;
+    const state = states.get(scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id)));
+    if (state == null) continue;
     const machine = nodeOf(shell.environmentId);
     if (machine === undefined) continue;
     const agent = agentOf(shell, machine);
@@ -539,6 +650,15 @@ export function buildFleet(input: {
       if (cached !== null && !resolvedHosts.has(key)) resolvedHosts.set(key, cached.environmentId);
     }
   }
+  // A Boat alias names one sandbox in every SSH config, so a server it resolves to anywhere is it.
+  const boatServers = new Map<string, EnvironmentId>();
+  for (const [alias, environmentId] of environmentBySshAlias)
+    if (isCloudMachineAlias(alias)) boatServers.set(alias, environmentId);
+  for (const [key, environmentId] of resolvedHosts) {
+    const alias = (JSON.parse(key) as [string, string])[1];
+    if (isCloudMachineAlias(alias) && !boatServers.has(alias))
+      boatServers.set(alias, environmentId);
+  }
 
   for (const { source, groups } of reports) {
     const dispatcher = source.dispatcherEnvironmentId;
@@ -550,7 +670,8 @@ export function buildFleet(input: {
       scopeOf(dispatcher) === scopeOf(input.primaryEnvironmentId);
     const resolveAlias = (alias: string) =>
       resolvedHosts.get(hostKey(dispatcher, alias)) ??
-      (sharesClientAliases ? environmentBySshAlias.get(alias) : undefined);
+      (sharesClientAliases ? environmentBySshAlias.get(alias) : undefined) ??
+      boatServers.get(alias);
     const hostMachine = (alias: string, kind: "ssh" | "cloud", label: string) => {
       const named = (machine: MutableMachine) => {
         if (
@@ -564,8 +685,11 @@ export function buildFleet(input: {
       const environmentId = resolveAlias(alias);
       const node = environmentId === undefined ? undefined : nodeOf(environmentId);
       if (node !== undefined) return named(node);
-      // One alias in one SSH config is one host, whichever server reading it dispatched there.
-      const id = JSON.stringify(["ssh", scopeOf(dispatcher), alias]);
+      // One alias in one SSH config is one host, whichever server reading it dispatched there. A
+      // Boat alias names one sandbox in every config, so its record and launches meet on one node.
+      const id = isCloudMachineAlias(alias)
+        ? JSON.stringify(["boat", alias])
+        : JSON.stringify(["ssh", scopeOf(dispatcher), alias]);
       const existing = machines.get(id);
       if (existing !== undefined) return named(existing);
       const viaLabel = labelOf.get(dispatcherOwner) ?? dispatcherLabel;
@@ -594,14 +718,14 @@ export function buildFleet(input: {
       if (cloud.deletePending || cloud.presence === "not_found") {
         // No node for a machine on its way out, but a connected one still says why it is going.
         const environmentId = resolveAlias(cloud.alias);
-        if (environmentId !== undefined) {
-          const node = nodeOf(environmentId);
-          if (node !== undefined) node.boat = identifyBoatMachine({ record: cloud, aliases: [] });
-        }
+        const node = environmentId === undefined ? undefined : nodeOf(environmentId);
+        if (node === undefined) hiddenCloudAliases.add(cloud.alias);
+        else node.boat = identifyBoatMachine({ record: cloud, aliases: [] });
         continue;
       }
       const machine = hostMachine(cloud.alias, "cloud", cloud.label);
       machine.boat = identifyBoatMachine({ record: cloud, aliases: [] });
+      if (!recordOwners.has(machine.id)) recordOwners.set(machine.id, dispatcher);
       if (machine.kind === "environment" && machine.label !== cloud.label) {
         machine.subtitle = cloud.label;
       }
@@ -656,6 +780,28 @@ export function buildFleet(input: {
     if (machine.boat !== null && machine.kind === "ssh") machine.kind = "cloud";
   }
 
+  // A Boat machine shows while it bills, needs the user, answers, or runs work; Settings keeps the rest.
+  const hiddenRoutes: Array<{ via: EnvironmentId; alias: string }> = [];
+  const idleCloudMachines: Array<{ machineId: string; owner: EnvironmentId; ownerLabel: string }> =
+    [];
+  for (const [id, machine] of machines) {
+    if (machine.boat === null) continue;
+    const busy = machine.running + machine.attention + machine.reported > 0;
+    const owner = recordOwners.get(id);
+    if (!busy && machine.boat.status === "running" && owner !== undefined)
+      idleCloudMachines.push({ machineId: id, owner, ownerLabel: labelOf.get(owner) ?? owner });
+    if (busy || machine.answering || BOAT_IN_USE.has(machine.boat.status)) continue;
+    machines.delete(id);
+    hiddenRoutes.push(...machine.reportedAliases);
+    const environmentAliases =
+      machine.environmentId === null ? [] : (aliasesOf.get(machine.environmentId) ?? []);
+    for (const alias of [
+      ...machine.reportedAliases.map((route) => route.alias),
+      ...environmentAliases,
+    ])
+      if (isCloudMachineAlias(alias)) hiddenCloudAliases.add(alias);
+  }
+
   threads.sort(compareFleetThreads);
   const list = [...machines.values()].map(({ agents, ...machine }): FleetMachine => ({
     ...machine,
@@ -670,6 +816,9 @@ export function buildFleet(input: {
       reported: list.reduce((sum, machine) => sum + machine.reported, 0),
       machines: list.filter((machine) => machine.answering).length,
     },
+    hiddenCloudAliases: [...hiddenCloudAliases],
+    hiddenRoutes,
+    idleCloudMachines,
   };
 }
 

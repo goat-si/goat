@@ -14,6 +14,7 @@ export interface EncodedMonoPcm16Wav {
 
 export interface ValidatedVoiceWav {
   readonly bytes: Uint8Array;
+  readonly dataOffset: number;
   readonly dataBytes: number;
   readonly sampleCount: number;
   readonly sampleRateHz: number;
@@ -257,6 +258,7 @@ export function validateCanonicalVoiceWav(
     ok: true,
     value: {
       bytes,
+      dataOffset,
       dataBytes,
       sampleCount,
       sampleRateHz: VOICE_TRANSCRIPTION_SAMPLE_RATE_HZ,

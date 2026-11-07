@@ -15,6 +15,7 @@ const {
   SOURCE_SCANNING_TESTS,
   readWorkspace,
   readServerWeights,
+  packageSuites,
   planServerTests,
   reachesMemoryGrowth,
   selectTasks,
@@ -45,6 +46,19 @@ function fakeGraph(files, edges = []) {
 }
 
 describe("selectTasks", () => {
+  it("runs every package when the shared provider environment scrubber changes", () => {
+    const file = "packages/shared/src/testing/providerEnv.ts";
+    const legacy = require("./ci-changes.cjs").decide(
+      [file],
+      require("./ci-changes.cjs").readWorkspace(),
+      false,
+    );
+    assert.equal(legacy.outputs.test_packages, "");
+    const result = select(file);
+    assert.equal(result.full, true);
+    assert.equal(result.server.mode, "full");
+  });
+
   it("runs only check for documentation", () => {
     assert.deepEqual(
       tasksFor("docs/user/memory.md", "devlog/_chase/README.md", "AGENTS.md", "structure/ci.md"),
@@ -180,9 +194,8 @@ describe("selectTasks", () => {
     );
   });
 
-  it("typechecks infra and the lint plugin without running suites", () => {
+  it("typechecks infra and apps without suites", () => {
     assert.deepEqual(tasksFor("infra/unrelated/src/index.ts"), ["check", "typecheck"]);
-    assert.deepEqual(tasksFor("oxlint-plugin-goat/rules/no-restyle.js"), ["check", "typecheck"]);
     assert.deepEqual(tasksFor("apps/marketing/src/pages/index.astro"), ["check", "typecheck"]);
   });
 
@@ -196,6 +209,48 @@ describe("selectTasks", () => {
     }
     assert.ok(tasksFor("packages/shared/src/analyticsAllowlist.ts").includes("test-ingest"));
     assert.ok(!tasksFor("packages/shared/src/format.ts").includes("test-ingest"));
+  });
+
+  it("runs every package suite that no other task owns, and their dependents' with provider-core", () => {
+    const suites = packageSuites(root);
+    for (const name of [
+      "@goat/provider-core",
+      "@goat/provider-pi",
+      "@goat/provider-muse",
+      "@goat/provider-fx",
+      "@goat/provider-devin-cloud",
+      "@goat/provider-claude-cloud",
+      "@goat/provider-acp-registry",
+      "@goat/source-control-github",
+      "@goat/source-control-gitcafe",
+      "effect-acp",
+      "effect-codex-app-server",
+      "@goat/tailscale",
+      "@t3tools/task-cache",
+    ]) {
+      assert.ok(suites.includes(name), name);
+    }
+    for (const owned of ["@goat/web", "goat", "@goat/shared", "@goat/ssh", "goat-relay"]) {
+      assert.ok(!suites.includes(owned), owned);
+    }
+    assert.ok(
+      tasksFor("packages/provider-core/src/server/randomUuid.ts").includes("test-packages"),
+    );
+    assert.ok(!tasksFor("apps/web/src/components/ChatView.tsx").includes("test-packages"));
+    const workflow = fs.readFileSync(path.join(root, ".github/workflows/goat-ci.yml"), "utf8");
+    const step = workflow.match(/- name: Test packages\n([\s\S]*?)(?=\n\s*- name:)/)?.[1];
+    assert.ok(step);
+    assert.match(step, /if: matrix\.task == 'test-packages'/);
+    assert.match(step, /packageSuites\("\."\)/);
+  });
+
+  it("runs package suites for task-cache and the lint plugin", () => {
+    for (const file of [
+      "infra/task-cache/src/index.ts",
+      "oxlint-plugin-goat/rules/no-restyle.js",
+    ]) {
+      assert.deepEqual(tasksFor(file), ["check", "typecheck", "test-packages"], file);
+    }
   });
 
   it("always includes check", () => {
@@ -357,7 +412,7 @@ describe("matrixFor", () => {
         shard,
         shard_count: 4,
         related: false,
-        runner: "epyc",
+        runner: "linux",
       })),
     ]);
   });
@@ -370,7 +425,7 @@ describe("matrixFor", () => {
         shard: 1,
         shard_count: 2,
         related: true,
-        runner: "epyc",
+        runner: "linux",
       },
       {
         task: "test-server",
@@ -378,29 +433,30 @@ describe("matrixFor", () => {
         shard: 2,
         shard_count: 2,
         related: true,
-        runner: "epyc",
+        runner: "linux",
       },
     ]);
   });
 
-  it("lists nineteen jobs for a full run including relay, Windows, the Linux smoke and four server shards", () => {
-    assert.equal(matrixFor(TASKS).include.length, 19);
+  it("lists twenty jobs for a full run including package suites, relay, Windows, the Linux smoke and four server shards", () => {
+    assert.equal(matrixFor(TASKS).include.length, 20);
   });
 
   it("runs the changed tests as one job after typecheck", () => {
     assert.deepEqual(matrixFor(["test-changed", "typecheck", "check"]).include, [
       { task: "check", title: "check", runner: "hosted" },
       { task: "typecheck", title: "typecheck", runner: "hosted" },
-      { task: "test-changed", title: "test-changed", runner: "epyc" },
+      { task: "test-changed", title: "test-changed", runner: "linux" },
     ]);
   });
 
-  it("keeps the browser, native, ssh, relay and server work on EPYC and sends the rest to hosted runners", () => {
+  it("marks the browser, native, ssh, relay and server work linux and sends the rest to hosted runners", () => {
     const pools = Object.fromEntries(matrixFor(TASKS).include.map((e) => [e.task, e.runner]));
     assert.deepEqual(
-      Object.keys(pools).filter((task) => pools[task] === "epyc"),
+      Object.keys(pools).filter((task) => pools[task] === "linux"),
       [
         "test",
+        "test-packages",
         "test-ssh",
         "test-desktop",
         "test-relay",
@@ -560,6 +616,18 @@ describe("planRun", () => {
     assert.equal(result.server.mode, "related");
     assert.ok(result.tasks.includes("test-server"));
     assert.ok(!result.tasks.includes("test-changed"));
+  });
+
+  it("includes package suites for task-cache and the lint plugin only in affected runs", async () => {
+    for (const file of [
+      "infra/task-cache/src/index.ts",
+      "oxlint-plugin-goat/rules/no-restyle.js",
+    ]) {
+      const affected = await plan(pr(), labels([AFFECTED_LABEL]), [file]);
+      assert.deepEqual(affected.tasks, ["check", "typecheck", "test-packages"], file);
+      const quick = await plan(pr(), labels([]), [file]);
+      assert.ok(!quick.tasks.includes("test-packages"), file);
+    }
   });
 
   it("widens a quick run with ci:server and ci:memory, drafts included", async () => {

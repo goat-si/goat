@@ -7,7 +7,7 @@ import {
   getTraitSelectChange,
   replaceDescriptorCurrentValue,
   selectableProviderOptionChoices,
-  REASONING_SELECT_DESCRIPTOR_IDS,
+  isReasoningSelect,
 } from "@goat/client-runtime/model-traits";
 import {
   type ModelSelection,
@@ -268,9 +268,7 @@ export function getReasoningTraitStep(input: {
     input.planModeEnabled,
   );
   if (selected.modelIsUnavailable || selected.ultrathinkInBodyText) return null;
-  const descriptor = selected.selectDescriptors.find((entry) =>
-    REASONING_SELECT_DESCRIPTOR_IDS.has(entry.id),
-  );
+  const descriptor = selected.selectDescriptors.find((entry) => isReasoningSelect(entry));
   const choices = descriptor ? selectableProviderOptionChoices(descriptor) : [];
   if (!descriptor || choices.length < 2) return null;
   const isPrimary = descriptor.id === selected.primarySelectDescriptor?.id;
@@ -787,13 +785,15 @@ function ComposerTraitsPicker({
             data-chat-composer-traits-trigger="true"
             size={size}
             className={cn(
-              "min-w-0 max-w-40 shrink-0 font-normal text-muted-foreground sm:max-w-48",
+              "min-w-0 max-w-40 shrink-0 text-muted-foreground sm:max-w-48",
               triggerClassName,
             )}
           />
         }
       >
-        <span className="min-w-0 truncate">{triggerLabel}</span>
+        <span className="min-w-0 truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1.5">
+          {triggerLabel}
+        </span>
       </PopoverTrigger>
       <PopoverPopup
         {...composerFloatingLayerProps}

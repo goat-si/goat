@@ -1,6 +1,16 @@
+import {
+  OrchestrationV2Actor,
+  OrchestrationV2CreationSource,
+  OrchestrationV2ThreadHistoryOrigin,
+} from "./orchestrationV2Attribution.ts";
+export * from "./orchestrationV2Attribution.ts";
+import { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
+export { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
+import * as Restart from "./codexTurnSurvival.ts";
 export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
-import { Handoff, HandoffJson, HandoffActor, HandoffState } from "./handoff.ts";
+import { Handoff, HandoffJson, HandoffActor } from "./handoff.ts";
+import { HandoffTransitionCommand } from "./handoffTransitionCommand.ts";
 import {
   MemoryCurrentAccess,
   MemoryProviderCapabilities,
@@ -27,6 +37,8 @@ import {
   OrchestrationV2WorkflowAgentTranscriptFields,
 } from "./orchestrationV2ThreadFields.ts";
 export * from "./orchestrationV2ThreadFields.ts";
+import { OrchestrationV2SubscribeThreadInput } from "./orchestrationV2ThreadSubscription.ts";
+export * from "./orchestrationV2ThreadSubscription.ts";
 import {
   OrchestrationV2ReviewContinueCommand,
   ReviewLedgerEntry,
@@ -116,21 +128,6 @@ import {
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 
 export * from "./providerReplay.ts";
-export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
-export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
-
-export const OrchestrationV2CreationSource = Schema.Literals([
-  "web",
-  "mobile",
-  "mcp",
-  "provider",
-  "server",
-]);
-export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource.Type;
-
-export const OrchestrationV2ThreadHistoryOrigin = Schema.Literals(["native", "v1_import"]);
-export type OrchestrationV2ThreadHistoryOrigin = typeof OrchestrationV2ThreadHistoryOrigin.Type;
-
 const OrchestrationV2CreationFields = {
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
@@ -753,6 +750,8 @@ export const OrchestrationV2Run = Schema.Struct({
   ),
   delegatedCompletion: Schema.optional(OrchestrationV2DelegatedCompletionCohort),
   workspacePreparation: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
+  /** Starts a new provider conversation; earlier runs stay visible but never reach the provider. */
+  freshContext: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
@@ -917,11 +916,8 @@ export const OrchestrationV2Subagent = Schema.Struct({
   parentModelSelection: Schema.optional(ModelSelection),
   reviewLedger: Schema.optional(Schema.Array(ReviewLedgerEntry)),
   continuedFrom: Schema.optional(NodeId),
-  // Parent-wake policy for app-owned tasks: "always" offers a continuation on
-  // every terminal (async delegations; queue_after_active sequences it behind
-  // a live parent run), "settled_only" offers only when the parent has no
-  // live run (wait-mode delegations, whose result returns through the
-  // blocking tool call). Absent on legacy records; treated as settled_only.
+  // "always" offers a continuation on every terminal, queued behind an active parent;
+  // "settled_only" (the legacy default) requires no live run; wait-mode uses the blocking tool call.
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
   /**
@@ -1214,6 +1210,7 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   ]),
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
+  ...Restart.SurvivingRestartFields,
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   turnTokenUsage: Schema.optional(TurnTokenUsage),
 });
@@ -1586,6 +1583,13 @@ export type OrchestrationV2UserMessageInputIntent =
 export const OrchestrationV2NoticeSeverity = Schema.Literals(["info", "warning"]);
 export type OrchestrationV2NoticeSeverity = typeof OrchestrationV2NoticeSeverity.Type;
 
+/** A same-harness model or effort change that took effect with this message. */
+export const OrchestrationV2ModelSwitch = Schema.Struct({
+  from: ModelSelection,
+  to: ModelSelection,
+});
+export type OrchestrationV2ModelSwitch = typeof OrchestrationV2ModelSwitch.Type;
+
 const OrchestrationV2TurnItemBaseFields = {
   /** Wire-only cursor for collapsed work; persisted items keep their complete history. */
   deferredWork: Schema.optionalKey(
@@ -1650,6 +1654,7 @@ const OrchestrationV2SecretRequestFields = {
   secretStatus: OrchestrationV2SecretRequestStatus,
   handoff: Schema.optional(Handoff),
   siteOrigin: Schema.optional(Schema.String),
+  requestKind: Schema.optional(Schema.Literals(["login", "card"])),
 } as const;
 
 export const OrchestrationV2TurnItem = Schema.Union([
@@ -1675,12 +1680,14 @@ export const OrchestrationV2TurnItem = Schema.Union([
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
+    freshContext: OrchestrationV2Run.fields.freshContext,
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     /** Same as the text of message `messageId`. */
     textOmitted: DedupedBodyMarker,
     context: Schema.optional(OrchestrationMessageContext),
     attachments: Schema.Array(ChatAttachment),
+    modelSwitch: Schema.optional(OrchestrationV2ModelSwitch),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2258,7 +2265,6 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2ThreadShell = typeof OrchestrationV2ThreadShell.Type;
-
 const LIVE_SHELL_STATUSES: ReadonlySet<OrchestrationV2ShellThreadStatus> = new Set([
   "queued",
   "preparing",
@@ -2266,7 +2272,6 @@ const LIVE_SHELL_STATUSES: ReadonlySet<OrchestrationV2ShellThreadStatus> = new S
   "running",
   "waiting",
 ]);
-
 /**
  * A subagent child that can still need the user or hold its parent. Shells that omit idle children
  * keep these, so every reader of live child rows (pending requests, working parents, background
@@ -2285,7 +2290,6 @@ export function isLiveSubagentShell(
     (thread.pendingBackgroundTasks?.length ?? 0) > 0
   );
 }
-
 /**
  * A settled top-level thread settled before `beforeMs`. Shells that omit older settled threads
  * count every such thread, so the server and clients share this one rule.
@@ -2317,6 +2321,7 @@ export const OrchestrationV2OlderSettledThreads = Schema.Struct({
   before: IsoDateTime,
   asOfSequence: NonNegativeInt,
   counts: Schema.Array(OrchestrationV2OlderSettledCount),
+  sideChatCounts: Schema.optionalKey(Schema.Array(OrchestrationV2OlderSettledCount)),
 });
 export type OrchestrationV2OlderSettledThreads = typeof OrchestrationV2OlderSettledThreads.Type;
 
@@ -2496,6 +2501,7 @@ export type OrchestrationV2ContextTransferJson = typeof OrchestrationV2ContextTr
 
 export const OrchestrationV2ProviderTurnJson = OrchestrationV2ProviderTurn.mapFields((fields) => ({
   ...fields,
+  ...Restart.SurvivingRestartJsonFields,
   startedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   completedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
@@ -2562,10 +2568,12 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
+    freshContext: OrchestrationV2Run.fields.freshContext,
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     context: Schema.optional(OrchestrationMessageContext),
     attachments: Schema.Array(ChatAttachment),
+    modelSwitch: Schema.optional(OrchestrationV2ModelSwitch),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -3303,6 +3311,7 @@ export const OrchestrationV2Command = Schema.Union([
     /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
     senderRunId: Schema.optional(RunId),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
+    freshContext: Schema.optional(Schema.Boolean),
     commandId: CommandId,
     threadId: ThreadId,
     messageId: MessageId,
@@ -3594,15 +3603,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     nodeId: NodeId,
     handoff: Handoff,
   }),
-  Schema.Struct({
-    type: Schema.Literal("handoff.transition"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    handoffId: TurnItemId,
-    state: HandoffState,
-    actor: HandoffActor,
-    computerUseScope: Schema.optionalKey(Schema.Literals(["session", "always"])),
-  }),
+  HandoffTransitionCommand,
   Schema.Struct({
     type: Schema.Literal("delegated_task.remote.register"),
     role: Schema.optional(OrchestrationV2TaskRole),
@@ -3748,6 +3749,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
     secretStatus: OrchestrationV2SecretRequestStatus,
     siteOrigin: Schema.optional(Schema.String),
+    requestKind: Schema.optional(Schema.Literals(["login", "card"])),
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
@@ -3767,6 +3769,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getOlderSettledThreads: "orchestration.getOlderSettledThreads",
   getThreadProjection: "orchestration.getThreadProjection",
   getWorkflowScript: "orchestration.getWorkflowScript",
+  getNativeChildWork: "orchestration.getNativeChildWork",
   stopWorkflow: "orchestration.stopWorkflow",
   forceStopThread: "orchestration.forceStopThread",
   getTurnItem: "orchestration.getTurnItem",
@@ -3891,11 +3894,6 @@ export const OrchestrationV2SubscribeShellInput = Schema.Struct({
 });
 export type OrchestrationV2SubscribeShellInput = typeof OrchestrationV2SubscribeShellInput.Type;
 
-export const OrchestrationV2GetThreadFamilyInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type OrchestrationV2GetThreadFamilyInput = typeof OrchestrationV2GetThreadFamilyInput.Type;
-
 /**
  * The active threads that share the requested thread's `lineage.rootThreadId`: the root, its
  * forks, and their whole subagent trees, in any run state. An unknown thread has an empty family;
@@ -3904,6 +3902,7 @@ export type OrchestrationV2GetThreadFamilyInput = typeof OrchestrationV2GetThrea
 export const OrchestrationV2ThreadFamily = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   threads: Schema.Array(OrchestrationV2ThreadShell),
+  lookupTitles: Schema.optionalKey(Schema.Record(ThreadId, Schema.String)),
 });
 export type OrchestrationV2ThreadFamily = typeof OrchestrationV2ThreadFamily.Type;
 
@@ -3963,6 +3962,7 @@ export const OrchestrationV2OlderSettledThreadsPage = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   threads: Schema.Array(OrchestrationV2ThreadShell),
   counts: Schema.Array(OrchestrationV2OlderSettledCount),
+  sideChatCounts: Schema.optionalKey(Schema.Array(OrchestrationV2OlderSettledCount)),
 });
 export type OrchestrationV2OlderSettledThreadsPage =
   typeof OrchestrationV2OlderSettledThreadsPage.Type;
@@ -3972,19 +3972,6 @@ export const OrchestrationV2WorktreeThreadIds = Schema.Struct({
   threadIds: Schema.Array(ThreadId),
 });
 export type OrchestrationV2WorktreeThreadIds = typeof OrchestrationV2WorktreeThreadIds.Type;
-
-export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
-  threadId: ThreadId,
-  afterSequence: Schema.optionalKey(NonNegativeInt),
-  requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
-  acceptBoundedSnapshot: Schema.optionalKey(Schema.Boolean),
-  acceptDeferredWork: Schema.optionalKey(Schema.Boolean),
-  acceptCompactTurnItems: Schema.optionalKey(Schema.Boolean),
-  /** The client restores `*Omitted` bodies from records it already holds. */
-  acceptDedupedBodies: Schema.optionalKey(Schema.Boolean),
-  acceptCompactIds: Schema.optionalKey(Schema.Boolean),
-});
-export type OrchestrationV2SubscribeThreadInput = typeof OrchestrationV2SubscribeThreadInput.Type;
 
 /**
  * Server-side only: set it on a response for a client that opted in, and the
@@ -4104,11 +4091,22 @@ export const OrchestrationV2ThreadStreamItem = withRecordIdTable(
       sequence: NonNegativeInt,
       event: OrchestrationV2DomainEvent,
     }),
+    /** Live only, for `acceptTextAppends`: `event.payload.text` is what follows `offset`. */
+    Schema.Struct({
+      kind: Schema.Literal("text-append"),
+      sequence: NonNegativeInt,
+      offset: NonNegativeInt,
+      event: OrchestrationV2DomainEvent,
+    }),
     OrchestrationV2UnknownThreadStreamEvent,
   ]),
   (item) => (item.kind === "snapshot" ? "projection" : undefined),
 );
 export type OrchestrationV2ThreadStreamItem = typeof OrchestrationV2ThreadStreamItem.Type;
+export type OrchestrationV2ResolvedThreadStreamItem = Exclude<
+  OrchestrationV2ThreadStreamItem,
+  { readonly kind: "text-append" }
+>;
 
 export class OrchestrationV2DispatchCommandError extends Schema.TaggedError<OrchestrationV2DispatchCommandError>()(
   "OrchestrationV2DispatchCommandError",
@@ -4236,6 +4234,53 @@ export const OrchestrationV2GetWorkflowScriptResult = Schema.Struct({
 });
 export type OrchestrationV2GetWorkflowScriptResult =
   typeof OrchestrationV2GetWorkflowScriptResult.Type;
+
+/** Names a provider-native subagent's child thread. */
+export const OrchestrationV2GetNativeChildWorkInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationV2GetNativeChildWorkInput =
+  typeof OrchestrationV2GetNativeChildWorkInput.Type;
+
+export const OrchestrationV2NativeChildStep = Schema.Struct({
+  index: NonNegativeInt,
+  type: Schema.String,
+  status: Schema.NullOr(Schema.String),
+  text: Schema.NullOr(Schema.String),
+  toolCalls: Schema.Array(Schema.Struct({ name: Schema.String, input: Schema.String })),
+});
+export type OrchestrationV2NativeChildStep = typeof OrchestrationV2NativeChildStep.Type;
+
+/** Read-only: native children cannot take messages. */
+export const OrchestrationV2NativeChildWork = Schema.Struct({
+  conversationId: TrimmedNonEmptyString,
+  role: Schema.String,
+  prompt: Schema.String,
+  /** Null when the provider has no readable transcript for this child. */
+  steps: Schema.NullOr(Schema.Array(OrchestrationV2NativeChildStep)),
+  /** Earlier steps were left out to keep the read bounded. */
+  truncated: Schema.Boolean,
+});
+export type OrchestrationV2NativeChildWork = typeof OrchestrationV2NativeChildWork.Type;
+
+/** Empty when the provider's records do not prove which children the subagent launched. */
+export const OrchestrationV2GetNativeChildWorkResult = Schema.Struct({
+  children: Schema.Array(OrchestrationV2NativeChildWork),
+});
+export type OrchestrationV2GetNativeChildWorkResult =
+  typeof OrchestrationV2GetNativeChildWorkResult.Type;
+
+export class OrchestrationV2GetNativeChildWorkError extends Schema.TaggedError<OrchestrationV2GetNativeChildWorkError>()(
+  "OrchestrationV2GetNativeChildWorkError",
+  {
+    threadId: ThreadId,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return "Failed to read the subagent's work.";
+  }
+}
 
 const WORKFLOW_FILE_ERROR_MESSAGES = {
   "invalid-path": "Workflow files must be absolute paths with the expected extension.",
@@ -4415,6 +4460,10 @@ export const OrchestrationV2RpcSchemas = {
   getWorkflowScript: {
     input: OrchestrationV2GetWorkflowScriptInput,
     output: OrchestrationV2GetWorkflowScriptResult,
+  },
+  getNativeChildWork: {
+    input: OrchestrationV2GetNativeChildWorkInput,
+    output: OrchestrationV2GetNativeChildWorkResult,
   },
   getTurnItem: {
     input: OrchestrationV2GetTurnItemInput,

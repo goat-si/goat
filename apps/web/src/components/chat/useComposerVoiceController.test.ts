@@ -7,6 +7,7 @@ import {
   type VoiceRecordingPayload,
 } from "../../lib/voiceRecorder";
 import { ComposerVoiceController, type ComposerVoiceTarget } from "./useComposerVoiceController";
+import { chooseEnvironmentSpeech, readEnvironmentSpeechGrant } from "../../speech/voiceConsent";
 
 const payload: VoiceRecordingPayload = {
   audioBase64: "fixture",
@@ -83,6 +84,56 @@ function setup(overrides: Partial<ComposerVoiceTarget> = {}) {
 }
 
 describe("composer voice controller", () => {
+  it("keeps the selected voice environment when the thread is on another machine", async () => {
+    const destination = EnvironmentId.make("voice-env-a");
+    chooseEnvironmentSpeech(destination);
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    using session = setup({
+      environmentId: EnvironmentId.make("voice-env-b"),
+      route: { kind: "environment", environmentId: destination },
+      localModelGrant: grant,
+    });
+    await session.controller.start();
+    expect(await session.controller.confirm()).toBe(true);
+    expect(session.transcribe.mock.calls[0]?.[0].route).toEqual({
+      kind: "environment",
+      environmentId: destination,
+    });
+    chooseEnvironmentSpeech(null);
+  });
+
+  it("does not send preview chunks to a local speech model", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    using session = setup({ localModelGrant: grant });
+    await session.controller.start();
+    session.chunk("preview");
+    expect(session.transcribe).not.toHaveBeenCalled();
+    chooseEnvironmentSpeech(null);
+  });
+
+  it("discards a transcription after the device grant is revoked", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    using session = setup({ localModelGrant: grant });
+    const started = deferred<void>();
+    const result = deferred<{ text: string }>();
+    session.transcribe.mockImplementation(() => {
+      started.resolve();
+      return result.promise;
+    });
+    await session.controller.start();
+    const pending = session.controller.send();
+    await started.promise;
+    chooseEnvironmentSpeech(null);
+    session.controller.setTarget({ ...session.target, localModelGrant: null });
+    result.resolve({ text: "late" });
+    expect(await pending).toBe(false);
+    expect(session.commitDraft).not.toHaveBeenCalled();
+  });
   it("offers System Settings only for a macOS denial and leaves the draft alone", async () => {
     using session = setup();
     session.startRecording.mockRejectedValueOnce(

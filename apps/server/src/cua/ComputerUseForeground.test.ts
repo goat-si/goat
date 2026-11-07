@@ -49,12 +49,16 @@ describe("foreground approval authority", () => {
         });
         const admission = yield* leases.state(thread, background.handoffId);
         if (admission._tag !== "active") return assert.fail("expected background admission");
-        const control = yield* leases.control(thread, Option.some(admission.lease));
+        const control = Option.getOrThrow(
+          yield* leases.control(thread, Option.some(admission.lease)),
+        );
         const grant = yield* foregroundGrant(thread, "handoff:turn-foreground");
         assert.isTrue(yield* leases.foregroundAvailable(thread, "Check the build status"));
         assert.isTrue(yield* leases.turnEnded(thread));
         assert.isFalse(yield* leases.turnEnded(thread));
-        const resumed = yield* leases.control(thread, Option.some(admission.lease));
+        const resumed = Option.getOrThrow(
+          yield* leases.control(thread, Option.some(admission.lease)),
+        );
         assert.equal(resumed.controlId, control.controlId);
         assert.isFalse(yield* leases.foregroundAvailable(thread, "Check the build status"));
         yield* leases.approveForeground(grant, yield* leases.foregroundApprovalEpoch);
@@ -94,14 +98,18 @@ describe("foreground approval authority", () => {
       });
       const admission = yield* leases.state(thread, background.handoffId);
       if (admission._tag !== "active") return assert.fail("expected background admission");
-      const control = yield* leases.control(thread, Option.some(admission.lease));
+      const control = Option.getOrThrow(
+        yield* leases.control(thread, Option.some(admission.lease)),
+      );
       const old = yield* foregroundGrant(thread, "handoff:pending-old", { minutes: 5 });
       const pending = yield* foregroundGrant(thread, "handoff:pending-new");
       assert.isTrue(yield* leases.turnEnded(thread));
       yield* leases.approveForeground(old, yield* leases.foregroundApprovalEpoch);
       const nextAdmission = yield* leases.state(thread, pending.handoffId);
       if (nextAdmission._tag !== "active") return assert.fail("expected next admission");
-      const next = yield* leases.control(thread, Option.some(nextAdmission.lease));
+      const next = Option.getOrThrow(
+        yield* leases.control(thread, Option.some(nextAdmission.lease)),
+      );
       assert.notEqual(next.controlId, control.controlId);
       const state = yield* leases.controlState(thread, next.controlId);
       if (state._tag !== "active") return assert.fail("expected next control");
@@ -161,7 +169,7 @@ describe("foreground approval authority", () => {
           (yield* reserve(leases, control.controlId, grant.handoffId)).status,
           "admitted",
         );
-        const second = yield* leases.control(other, Option.none());
+        const second = Option.getOrThrow(yield* leases.control(other, Option.none()));
         assert.deepEqual(yield* reserve(leases, second.controlId, grant.handoffId, other), {
           status: "refused",
           detail: "foreground_not_approved",
@@ -184,7 +192,7 @@ describe("foreground approval authority", () => {
       const b = yield* foregroundGrant(thread, "handoff:second", { purpose: "Second task" });
       const state = yield* leases.state(thread, b.handoffId);
       if (state._tag !== "active") return assert.fail("expected completed admission");
-      const control = yield* leases.control(thread, Option.some(state.lease));
+      const control = Option.getOrThrow(yield* leases.control(thread, Option.some(state.lease)));
       const current = yield* leases.controlState(thread, control.controlId);
       if (current._tag !== "active") return assert.fail("expected live control");
       assert.deepEqual(
@@ -210,7 +218,7 @@ describe("foreground approval authority", () => {
         else if (action === "pause") yield* leases.pause("takeover");
         else yield* leases[action];
         const grant = yield* foregroundGrant(thread, "handoff:pending", { observedEpoch: epoch });
-        const control = yield* leases.control(thread, Option.none());
+        const control = Option.getOrThrow(yield* leases.control(thread, Option.none()));
         assert.deepEqual(yield* reserve(leases, control.controlId, grant.handoffId), {
           status: "refused",
           detail: "foreground_not_approved",
@@ -246,15 +254,17 @@ describe("foreground approval authority", () => {
         const grant = yield* foregroundGrant(thread, "handoff:old");
         const admission = yield* leases.state(thread, grant.handoffId);
         if (admission._tag !== "active") return assert.fail("expected live admission");
-        const replaced = yield* leases.control(thread, Option.some(admission.lease));
+        const replaced = Option.getOrThrow(
+          yield* leases.control(thread, Option.some(admission.lease)),
+        );
         assert.notEqual(control.controlId, replaced.controlId);
         assert.isFalse(yield* leases.foregroundAvailable(thread, "Check the build status"));
         yield* leases.stop(thread);
-        yield* leases.control(thread, Option.none());
+        Option.getOrThrow(yield* leases.control(thread, Option.none()));
         assert.isFalse(yield* leases.foregroundAvailable(thread, "Check the build status"));
         yield* Effect.gen(function* () {
           const restarted = yield* ComputerUseLeases.ComputerUseLeases;
-          const next = yield* restarted.control(thread, Option.none());
+          const next = Option.getOrThrow(yield* restarted.control(thread, Option.none()));
           assert.deepEqual(yield* reserve(restarted, next.controlId, grant.handoffId), {
             status: "refused",
             detail: "foreground_not_approved",

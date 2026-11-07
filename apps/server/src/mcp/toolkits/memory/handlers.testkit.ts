@@ -11,24 +11,26 @@ import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentS
 import { ToolDispatch } from "../../ToolDispatch.ts";
 import { dispatchEnvelope } from "../agentSurface/dispatchEnvelope.ts";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
-import profileMigration from "../../../persistence/Migrations/099_PermissionProfiles.ts";
-import migration from "../../../persistence/Migrations/078_Memory.ts";
-import searchMigration from "../../../persistence/Migrations/080_MemorySearchCounters.ts";
-import hubMigration from "../../../persistence/Migrations/079_MemoryHubSync.ts";
-import lineageMigration from "../../../persistence/Migrations/082_MemoryImportLineage.ts";
-import checkpointMigration from "../../../persistence/Migrations/083_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../../../persistence/Migrations/095_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../../../persistence/Migrations/084_MemoryReportLifecycle.ts";
-import usageMigration from "../../../persistence/Migrations/085_MemoryUsageCounters.ts";
-import revertMigration from "../../../persistence/Migrations/086_MemoryRevertResults.ts";
-import readyMigration from "../../../persistence/Migrations/088_MemoryLastReadySpace.ts";
-import administeredMigration from "../../../persistence/Migrations/089_MemoryHubAdministered.ts";
+import profileMigration from "../../../persistence/Migrations/109_PermissionProfiles.ts";
+import migration from "../../../persistence/Migrations/088_Memory.ts";
+import searchMigration from "../../../persistence/Migrations/090_MemorySearchCounters.ts";
+import hubMigration from "../../../persistence/Migrations/089_MemoryHubSync.ts";
+import lineageMigration from "../../../persistence/Migrations/092_MemoryImportLineage.ts";
+import checkpointMigration from "../../../persistence/Migrations/093_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../../../persistence/Migrations/105_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../../../persistence/Migrations/094_MemoryReportLifecycle.ts";
+import usageMigration from "../../../persistence/Migrations/095_MemoryUsageCounters.ts";
+import revertMigration from "../../../persistence/Migrations/096_MemoryRevertResults.ts";
+import readyMigration from "../../../persistence/Migrations/098_MemoryLastReadySpace.ts";
+import administeredMigration from "../../../persistence/Migrations/099_MemoryHubAdministered.ts";
 import * as RepositoryResolver from "../../../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Store from "../../../memory/MemoryStore.ts";
 import * as Quota from "../../../memory/MemoryQuotaService.ts";
 import * as Service from "../../../memory/MemoryService.ts";
+import * as Recall from "../../../memory/MemoryRecall.ts";
+import * as Projection from "../../../orchestration-v2/ProjectionStore.ts";
 import * as Sync from "../../../memory/MemorySyncService.ts";
 import * as MemorySettings from "../../../memory/MemorySettingsService.ts";
 import * as Hub from "../../../memory/MemoryHubService.ts";
@@ -63,6 +65,8 @@ const makeCore = <E, R>(
   serviceLayer: typeof Service.layer,
   databaseLayer: Layer.Layer<SqlClient.SqlClient, E, R>,
   environmentLayer = identity,
+  resolve: RepositoryResolver.RepositoryIdentityResolver["Service"]["resolve"] = () =>
+    Effect.succeed(null),
 ) =>
   serviceLayer.pipe(
     Layer.provide(
@@ -80,11 +84,16 @@ const makeCore = <E, R>(
     Layer.provide(environmentLayer),
     Layer.provide(
       Layer.mock(RepositoryResolver.RepositoryIdentityResolver)({
-        resolve: () => Effect.succeed(null),
+        resolve,
       }),
     ),
   );
 export const core = makeCore(Service.layer, database);
+/** For toolkit tests that never call memory_recall. */
+export const layerRecallUnused = Layer.mock(Recall.MemoryRecall)({});
+export const coreWithResolver = (
+  resolve: RepositoryResolver.RepositoryIdentityResolver["Service"]["resolve"],
+) => makeCore(Service.layer, database, identity, resolve);
 const settings = Settings.layerTest({}, "memoryHub");
 const admin = Layer.effect(Hub.MemoryHubAdministrator, Hub.makeAdministrator).pipe(
   Layer.provideMerge(storage),
@@ -96,56 +105,84 @@ const admin = Layer.effect(Hub.MemoryHubAdministrator, Hub.makeAdministrator).pi
     ),
   ),
 );
-const sync = Layer.unwrap(
-  Effect.gen(function* () {
-    const administrator = yield* Hub.MemoryHubAdministrator;
-    return Layer.mock(Sync.MemorySyncService)({
-      syncStatus: (_input, permit) =>
-        permit.pipe(Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "hub_disabled" })))),
-      hubDiagnostics: (_input, permit) =>
-        permit.pipe(
-          Effect.as({
-            version: 1,
-            publication: { state: "current" as const },
-            readiness: "ready" as const,
-            connection: "connected" as const,
-            recoverableHolds: ["availability" as const],
-            permanentHolds: [],
-            reconcile: "available" as const,
-          }),
-        ),
-      reconcileHub: (input, permit) =>
-        permit.pipe(
-          Effect.as({ version: input.expectedVersion, rearmedClasses: ["availability" as const] }),
-        ),
-      updateHubSettings: (input, permit) =>
-        administrator.update(
-          input,
-          permit.pipe(Effect.mapError(() => new M.MemoryHubForbiddenError({}))),
-        ),
-    });
-  }),
-).pipe(Layer.provide(admin));
+type Readiness = Effect.Success<
+  ReturnType<Sync.MemorySyncService["Service"]["readLocalReadiness"]>
+>;
+const syncWith = (readiness: Readiness = { memorySpaceId: space, bootstrap: "ready" }) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const administrator = yield* Hub.MemoryHubAdministrator;
+      return Layer.mock(Sync.MemorySyncService)({
+        readLocalReadiness: () => Effect.succeed(readiness),
+        syncStatus: (_input, permit) =>
+          permit.pipe(Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "hub_disabled" })))),
+        hubDiagnostics: (_input, permit) =>
+          permit.pipe(
+            Effect.as({
+              version: 1,
+              publication: { state: "current" as const },
+              readiness: "ready" as const,
+              connection: "connected" as const,
+              recoverableHolds: ["availability" as const],
+              permanentHolds: [],
+              reconcile: "available" as const,
+            }),
+          ),
+        reconcileHub: (input, permit) =>
+          permit.pipe(
+            Effect.as({
+              version: input.expectedVersion,
+              rearmedClasses: ["availability" as const],
+            }),
+          ),
+        updateHubSettings: (input, permit) =>
+          administrator.update(
+            input,
+            permit.pipe(Effect.mapError(() => new M.MemoryHubForbiddenError({}))),
+          ),
+      });
+    }),
+  ).pipe(Layer.provide(admin));
 
 const makeLayer = <E, R, E2, R2>(
   serviceCore: Layer.Layer<Layer.Success<typeof core>, E, R>,
   profiles: Layer.Layer<Profiles.PermissionProfiles, E2, R2>,
   threads = McpToolAccessTestkit.liveThreadsLayer,
+  sync = syncWith(),
 ) =>
   Layer.mergeAll(
     McpHttpServer.layerMemoryToolkit,
     McpHttpServer.layerMemoryAdministrationToolkit,
   ).pipe(
+    Layer.provide(Recall.layer),
     Layer.provideMerge(profiles),
     Layer.provideMerge(serviceCore),
     Layer.provideMerge(
       MemorySettings.layer.pipe(Layer.provideMerge(sync), Layer.provideMerge(settings)),
+    ),
+    Layer.provide(Layer.mock(Projection.ProjectionStoreV2)({})),
+    Layer.provide(identity),
+    Layer.provide(
+      Layer.succeed(Settings.MemoryHubCommittedSettings, {
+        read: Effect.succeed({
+          provenance: null,
+          settings: { mode: "hub" as const, memorySpaceId: space },
+          version: 1,
+        }),
+      }),
     ),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(threads),
     Layer.provide(NodeServices.layer),
   );
 export const layer = makeLayer(core, McpToolAccessTestkit.layerPermissionProfilesOff);
+/** No memory space is bound on this server. */
+export const unboundLayer = makeLayer(
+  core,
+  McpToolAccessTestkit.layerPermissionProfilesOff,
+  McpToolAccessTestkit.liveThreadsLayer,
+  syncWith({ memorySpaceId: null, bootstrap: "unbound" }),
+);
 export const planLayer = makeLayer(
   core,
   McpToolAccessTestkit.layerPermissionProfilesOff,
@@ -197,6 +234,7 @@ export const layerForThreadEnvironment = <E, R>(
   databaseLayer: Layer.Layer<SqlClient.SqlClient, E, R>,
 ) =>
   McpHttpServer.layerMemoryToolkit.pipe(
+    Layer.provide(Layer.mock(Recall.MemoryRecall)({})),
     Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provideMerge(
       makeCore(

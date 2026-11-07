@@ -23,6 +23,7 @@ import {
   ChannelTaskId,
 } from "./channelCommon.ts";
 import { ChannelTaskBrief, ChannelTaskMemoryDelivered } from "./channelBrief.ts";
+import { ChatAttachment } from "./chatAttachment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { MemoryTaskGrantCeiling } from "./memory.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
@@ -354,6 +355,7 @@ export const ChannelTaskEvent = Schema.Union([
    */
   taskEvent("task.followup.received", {
     inputId: ChannelInputId,
+    forwardKey: Schema.optional(TrimmedNonEmptyString),
     text: Schema.String,
     from: TrimmedNonEmptyString,
     /** The generation it was written to; a later generation's worker never receives it. */
@@ -402,6 +404,8 @@ export type ChannelTaskEvent = typeof ChannelTaskEvent.Type;
  */
 export const ChannelTaskChip = Schema.Struct({
   taskId: ChannelTaskId,
+  /** Copied from the task; GOAT Bot's own turns are not shown as cards. Missing on older chips. */
+  kind: Schema.optional(ChannelTaskKind),
   conversationId: ChannelConversationId,
   /** Newer chips replace older ones; an update with a lower version is ignored. */
   taskVersion: PositiveInt,
@@ -442,6 +446,8 @@ export const ChannelTimelineRecord = Schema.Struct({
       type: Schema.Literal("message"),
       role: Schema.Literals(["user", "assistant"]),
       text: Schema.String,
+      /** Files the person sent with the message, already stored for the bot thread. */
+      attachments: Schema.optional(Schema.Array(ChatAttachment)),
       meta: ChannelMessageMeta,
     }),
     Schema.Struct({

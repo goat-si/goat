@@ -1,6 +1,6 @@
+import { settingsSecretLiteral } from "@goat/contracts";
 import * as NodeAssert from "node:assert/strict";
 import * as NodeSqlite from "node:sqlite";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -14,7 +14,6 @@ import * as Tracer from "effect/Tracer";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { beforeEach } from "vite-plus/test";
-
 import { OpenCodeSettings } from "../settings.ts";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
@@ -32,9 +31,7 @@ import {
   replayOpenCodeServer,
 } from "./probeResponses.fixture.ts";
 const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
-
 const DEFAULT_VERSION_STDOUT = "opencode 1.14.19\n";
-
 it.effect("reads Go limits with the instance's XDG credentials and preserves reset times", () =>
   Effect.gen(function* () {
     const resetsAt = "2026-09-17T12:00:00.000Z";
@@ -94,7 +91,6 @@ it.effect("reads Go limits with the instance's XDG credentials and preserves res
     );
   }),
 );
-
 it.effect(
   "uses the selected public Console key for Go limits, falling back only on auth rejection",
   () =>
@@ -225,7 +221,6 @@ it.effect(
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
-
 it.effect("prefers the selected stored Go key over the auth.json key OpenCode 2 imported", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -294,7 +289,6 @@ it.effect("prefers the selected stored Go key over the auth.json key OpenCode 2 
     }
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
-
 it.effect("does not read local credentials for external or disabled OpenCode instances", () =>
   Effect.gen(function* () {
     for (const settings of [
@@ -318,7 +312,6 @@ it.effect("does not read local credentials for external or disabled OpenCode ins
     }
   }),
 );
-
 it.effect("keeps Go entitlement absence distinct from failed or malformed usage responses", () =>
   Effect.gen(function* () {
     for (const [status, reason] of [
@@ -353,7 +346,6 @@ it.effect("keeps Go entitlement absence distinct from failed or malformed usage 
     }
   }),
 );
-
 const runtimeMock = {
   state: {
     runVersionError: null as Error | null,
@@ -392,7 +384,6 @@ const runtimeMock = {
     };
   },
 };
-
 const OpenCodeRuntimeTestDouble: OpenCodeRuntime.OpenCodeRuntime["Service"] = {
   startOpenCodeServerProcess: ({ serverPassword, environment }) =>
     Effect.gen(function* () {
@@ -484,15 +475,12 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntime.OpenCodeRuntime["Service"] = {
   loadOpenCodeSkills: () => Effect.succeed([]),
   loadSkillsFromCli: () => Effect.succeed([]),
 };
-
 beforeEach(() => {
   runtimeMock.reset();
 });
-
 const layerTest = Layer.succeed(OpenCodeRuntime.OpenCodeRuntime, OpenCodeRuntimeTestDouble).pipe(
   Layer.provideMerge(NodeServices.layer),
 );
-
 const makeOpenCodeSettings = (overrides?: Partial<OpenCodeSettings>): OpenCodeSettings =>
   decodeOpenCodeSettings({
     enabled: true,
@@ -502,12 +490,14 @@ const makeOpenCodeSettings = (overrides?: Partial<OpenCodeSettings>): OpenCodeSe
     customModels: [],
     ...overrides,
   });
-
 const checkProvider = Effect.fn("checkProvider")(function* (
   settings: OpenCodeSettings,
   cwd = process.cwd(),
   environment?: NodeJS.ProcessEnv,
-  server = replayOpenCodeServer(OPENCODE_1_RESPONSES, settings.serverPassword),
+  server = replayOpenCodeServer(
+    OPENCODE_1_RESPONSES,
+    settingsSecretLiteral(settings.serverPassword),
+  ),
   openCode2Models: Effect.Effect<
     ReadonlyArray<OpenCode2Model>,
     OpenCodeRuntime.OpenCodeRuntimeError
@@ -518,10 +508,15 @@ const checkProvider = Effect.fn("checkProvider")(function* (
       const serverOwner = yield* OpenCodeServerOwner.make({
         binaryPath: settings.binaryPath,
         directory: cwd,
-        ...(settings.serverPassword ? { serverPassword: settings.serverPassword } : {}),
+        ...(settings.serverPassword
+          ? { serverPassword: settingsSecretLiteral(settings.serverPassword) }
+          : {}),
         ...(environment ? { environment } : {}),
       });
-      const probe = probeOpenCodeRuntime(settings, environment).pipe(
+      const probe = probeOpenCodeRuntime(
+        { ...settings, serverPassword: settingsSecretLiteral(settings.serverPassword) },
+        environment,
+      ).pipe(
         Effect.provideService(HttpClient.HttpClient, server),
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, OpenCodeRuntimeTestDouble),
       );
@@ -531,7 +526,6 @@ const checkProvider = Effect.fn("checkProvider")(function* (
     }),
   );
 });
-
 it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
   it.effect.each(["version", "inventory", "models", "empty-v1", "empty-v2"] as const)(
     "records %s discovery failures in the existing trace and logger",
@@ -581,7 +575,6 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
           ),
           Effect.provide(Logger.layer([Logger.tracerLogger], { mergeWithExisting: false })),
         );
-
         const diagnostics = spans.flatMap((span) =>
           span.events
             .filter(([name]) => name === "OpenCode discovery failed")
@@ -609,7 +602,6 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
         NodeAssert.ok(!JSON.stringify(attributes).includes("private-password"));
       }),
   );
-
   it.effect("keeps an empty legacy catalog retryable until connected providers list models", () =>
     Effect.gen(function* () {
       const upstream = { id: "openai", name: "OpenAI", models: {} };
@@ -623,7 +615,6 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
       NodeAssert.equal(empty.status, "warning");
       NodeAssert.equal(empty.auth.status, "unknown");
       NodeAssert.deepEqual(empty.models, []);
-
       upstream.models = {
         "gpt-5.4": { id: "gpt-5.4", name: "GPT-5.4", variants: {} },
       };
@@ -773,10 +764,16 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
             const snapshot = yield* checkOpenCodeProviderStatus(
               settings,
               process.cwd(),
-              probeOpenCodeRuntime(settings).pipe(
+              probeOpenCodeRuntime({
+                ...settings,
+                serverPassword: settingsSecretLiteral(settings.serverPassword),
+              }).pipe(
                 Effect.provideService(
                   HttpClient.HttpClient,
-                  replayOpenCodeServer(OPENCODE_1_RESPONSES, settings.serverPassword),
+                  replayOpenCodeServer(
+                    OPENCODE_1_RESPONSES,
+                    settingsSecretLiteral(settings.serverPassword),
+                  ),
                 ),
                 Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, OpenCodeRuntimeTestDouble),
               ),

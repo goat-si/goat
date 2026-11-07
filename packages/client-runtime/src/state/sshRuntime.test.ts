@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
+import { it as effectIt } from "@effect/vitest";
 
 import {
   createSshRuntimeState,
@@ -33,6 +34,34 @@ function harness(reply: SshHostResult = waiting) {
 }
 
 describe("Desktop SSH runtime state", () => {
+  effectIt.effect("shows the server detail for a blocked newer unowned runtime", () =>
+    Effect.sync(() => {
+      const detail =
+        "A GOAT server that this app didn't start is running on box. Stop it on the host, then reconnect.";
+      expect(
+        sshRuntimeStatusText({
+          host: "box",
+          state: "update_blocked",
+          runtimeVersion: "1.2.4",
+          requestedVersion: "1.2.3",
+          detail,
+        }),
+      ).toBe(detail);
+    }),
+  );
+  effectIt.effect("keeps an older runtime label when it cannot be updated", () =>
+    Effect.sync(() => {
+      expect(
+        sshRuntimeStatusText({
+          host: "box",
+          state: "ready",
+          runtimeVersion: "1.2.2",
+          requestedVersion: "1.2.3",
+          detail: "This runtime cannot be replaced.",
+        }),
+      ).toBe("Kept · Runtime 1.2.2");
+    }),
+  );
   it.each([
     ["0.4.2", "0.4.3", "Update available", null, -1],
     ["0.5.0", "0.4.3", "Newer than this app", "Update this app to manage it.", 1],
@@ -108,27 +137,24 @@ describe("Desktop SSH runtime state", () => {
     ).toBe(text);
   });
 
-  it("compares runtime builds instead of guessing blocked state from detail", () => {
+  it("compares runtime builds when blocked status has no detail", () => {
     const base = {
       host: "vps-1",
       state: "update_blocked",
       runtimeVersion: "0.5.0",
       requestedVersion: "0.4.3",
     } as const;
-    expect(sshRuntimeStatusText({ ...base, detail: "external" })).toBe(
+    expect(sshRuntimeStatusText(base)).toBe(
       "vps-1 runs a newer GOAT (0.5.0). Update this app from the update button next to Settings.",
     );
     const external =
       "A GOAT server that this app didn't start is running on vps-1. Stop it on the host, then reconnect.";
-    expect(sshRuntimeStatusText({ ...base, runtimeVersion: "0.4.2", detail: "newer" })).toBe(
-      external,
-    );
+    expect(sshRuntimeStatusText({ ...base, runtimeVersion: "0.4.2" })).toBe(external);
     expect(
       sshRuntimeStatusText({
         ...base,
         runtimeVersion: "0.4.3-dev.abc",
         requestedVersion: "0.4.3-dev.def",
-        detail: "newer",
       }),
     ).toBe(external);
     expect(sshRuntimeStatusText({ ...base, runtimeVersion: null })).toBe(external);
@@ -469,4 +495,15 @@ it.each([
       requestedVersion: "1.0.0",
     }),
   ).toBe(text);
+});
+
+it("shows a compatible runtime's update detail in recovery", () => {
+  const base = {
+    host: "box",
+    runtimeVersion: "1.2.2",
+    requestedVersion: "1.2.3",
+    detail: "Update on host",
+  } as const;
+  expect(sshRuntimeRecoveryText({ ...base, state: "ready" })).toBe("Update on host");
+  expect(sshRuntimeRecoveryText({ ...base, state: "providers_not_ready" })).toBe("Update on host");
 });

@@ -115,6 +115,18 @@ To add a scenario, point a `SCENARIOS` entry at a generic ACP replay fixture
 The agent replays session updates, permission requests, and questions. It drops session setup
 and vendor frames, so Grok and fx recordings lose their vendor-only behavior.
 
+### Codex socket transport
+
+`GOAT_CODEX_APP_SERVER_TRANSPORT=socket` runs each Codex provider instance's app-server outside the server process, connected over a WebSocket on a private Unix socket (macOS and Linux; Windows keeps stdio). It exists to test the transport before Codex turns can survive server restarts; the server still stops the process when it shuts down. GOAT records each process under `<state>/codex-app-servers` and, at startup, stops anything a crashed run left there before any Codex session opens. A leftover it cannot identify blocks Codex for that provider with an error naming the process group, until the group exits.
+
+### Profiling dev startup
+
+Run `vp run profile:startup` with normal dev flags to capture the first 20 seconds under
+`.goat/startup-profiles/<timestamp>`, or set `GOAT_STARTUP_PROFILE_DIR` to choose a directory.
+The `.cpuprofile` and `.modules.json` files open in Chrome DevTools. The `.process.json` file
+records dropped events if the 100,000-event limit is reached. The profiler changes loader behavior
+and disables Node snapshots, so compare startup latency with an uninstrumented `vp run dev` run.
+
 ### Sharing and remote debugging
 
 `vp run dev --share` publishes the web port over the machine's tailnet and prints a pairing URL
@@ -336,7 +348,9 @@ The C toolchain, pkg-config, and libsecret headers are also needed for Linux des
 ### macOS DMG prerequisites
 
 Install the Xcode Command Line Tools with `xcode-select --install` and install Rust.
-For a cross-architecture or universal build, add the requested Rust targets:
+macOS x64 desktop builds on Apple Silicon prepare server bytecode under Rosetta. Without Rosetta,
+as on GOAT's Mac Studio release runner, the build logs the skip and ships that target without
+prepared bytecode. For a cross-architecture or universal build, add the requested Rust targets:
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin

@@ -4,6 +4,7 @@ import type {
   FileManagerRevealKind,
   ServerConfig as ClientServerConfig,
   ServerConfigStreamEvent,
+  ServerDirectEndpoint,
   ServerProvider,
   ServerWorktreeCheckoutHealth,
 } from "@goat/contracts";
@@ -27,20 +28,42 @@ const resolveDiscoveryForConfig = <A, E, R>(
     Effect.map(Option.getOrElse(onTimeout)),
   );
 
-export const resolveAvailableEditorsForConfig = <A, E, R>(
+const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
 ) => resolveDiscoveryForConfig(discovery, () => []);
 
-export const resolveFileManagerRevealKindForConfig = <E, R>(
+const resolveFileManagerRevealKindForConfig = <E, R>(
   discovery: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
 ) => resolveDiscoveryForConfig(discovery, () => undefined);
+
+export const resolveOpenDiscoveryForConfig = <T, D, E1, R1, E2, R2, E3, R3, E4, R4>(discovery: {
+  readonly editors: Effect.Effect<ReadonlyArray<EditorId>, E1, R1>;
+  readonly fileManagerRevealKind: Effect.Effect<FileManagerRevealKind | undefined, E2, R2>;
+  readonly remoteOpenTargets: Effect.Effect<ReadonlyArray<T>, E3, R3>;
+  readonly directEndpoints: Effect.Effect<ReadonlyArray<D>, E4, R4>;
+}) =>
+  Effect.all(
+    {
+      editorConfig: resolveAvailableEditorsForConfig(discovery.editors).pipe(
+        Effect.flatMap((editors) =>
+          resolveEditorConfig(
+            editors,
+            resolveFileManagerRevealKindForConfig(discovery.fileManagerRevealKind),
+          ),
+        ),
+      ),
+      remoteOpenTargets: resolveAvailableEditorsForConfig(discovery.remoteOpenTargets),
+      directEndpoints: resolveAvailableEditorsForConfig(discovery.directEndpoints),
+    },
+    { concurrency: "unbounded" },
+  ).pipe(Effect.map(({ editorConfig, ...endpoints }) => ({ ...editorConfig, ...endpoints })));
 
 type EditorDiscovery = Pick<
   ExternalLauncher.ExternalLauncher["Service"],
   "resolveAvailableEditors" | "resolveFileManagerRevealKind"
 >;
 
-export const resolveEditorConfig = Effect.fn("ws.resolveEditorConfig")(function* <E, R>(
+const resolveEditorConfig = Effect.fn("ws.resolveEditorConfig")(function* <E, R>(
   availableEditors: ReadonlyArray<EditorId>,
   revealKind: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
 ) {
@@ -66,6 +89,9 @@ export const withLateEditorConfig = <E, R>(
   checkoutHealthChanges: Stream.Stream<ServerWorktreeCheckoutHealth> = Stream.empty,
   /** The automation hold's current state first, then each change; see AutomationHold. */
   automationHoldChanges: Stream.Stream<AutomationHoldState | null> = Stream.empty,
+  lateEndpoints: Effect.Effect<ReadonlyArray<ServerDirectEndpoint>> = Effect.succeed(
+    config.directEndpoints ?? [],
+  ),
 ) => {
   const lateEditorConfig = Stream.fromEffect(launcher.resolveAvailableEditors()).pipe(
     Stream.filter(
@@ -73,8 +99,7 @@ export const withLateEditorConfig = <E, R>(
         editors.join() !== config.availableEditors.join() ||
         (editors.includes("file-manager") && config.shellRevealInFileManagerKind === undefined),
     ),
-    // Unbounded, unlike the snapshot: the reveal-kind probe is not shared, so
-    // a timeout here would cancel a probe that outlasts it every time.
+    // Unbounded so a slow shared probe can still update the snapshot.
     Stream.mapEffect((editors) =>
       resolveEditorConfig(editors, launcher.resolveFileManagerRevealKind()),
     ),
@@ -94,12 +119,24 @@ export const withLateEditorConfig = <E, R>(
 
   return Stream.merge(
     liveUpdates,
-    Stream.merge(lateEditorConfig, Stream.merge(lateCheckoutHealth, lateAutomationHold)),
+    Stream.merge(
+      Stream.fromEffect(lateEndpoints).pipe(
+        Stream.catchCause(() => Stream.empty),
+        Stream.map((endpoints) => ({ type: "directEndpointsResolved" as const, endpoints })),
+      ),
+      Stream.merge(lateEditorConfig, Stream.merge(lateCheckoutHealth, lateAutomationHold)),
+    ),
   ).pipe(
     Stream.mapAccum(
       (): ClientServerConfig => config,
       (current, event): readonly [ClientServerConfig, ReadonlyArray<ServerConfigStreamEvent>] => {
         switch (event.type) {
+          case "directEndpointsResolved": {
+            if (JSON.stringify(current.directEndpoints ?? []) === JSON.stringify(event.endpoints))
+              return [current, []];
+            const next = { ...current, directEndpoints: event.endpoints };
+            return [next, [{ version: 1, type: "snapshot", config: next }]];
+          }
           case "automationHoldResolved": {
             // A snapshot, so clients built before the field still apply it without a new event.
             if ((current.automationHold ?? null) === event.hold) return [current, []];

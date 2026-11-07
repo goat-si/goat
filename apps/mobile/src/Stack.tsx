@@ -25,7 +25,6 @@ import {
 import { useEffect, useRef, type ReactNode } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions } from "react-native";
 import { useResolveClassNames } from "uniwind";
-
 import { AppText as Text } from "./components/ui/AppText";
 import { androidWorkspaceDestinationAnimation } from "./lib/android-workspace-navigation";
 import { getCompactBrandHeaderOptions } from "./components/CompactBrandTitle";
@@ -136,6 +135,7 @@ import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
+import { GoatBotRouteScreen } from "./features/goat-bot/GoatBotRouteScreen";
 import { MobileGoatBotHomeWorker } from "./features/goat-bot/MobileGoatBotHomeWorker";
 import { SettingsMemoryRouteScreen } from "./features/settings/SettingsMemoryRouteScreen";
 import { SettingsGoatBotRouteScreen } from "./features/settings/SettingsGoatBotRouteScreen";
@@ -168,14 +168,11 @@ import {
   selectWorkspaceDetail,
   workspaceDetailRouter,
 } from "./features/workspace/workspace-detail-selection";
-
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
-
 type AppScreenOptions = NativeStackNavigationOptions & {
   readonly unstable_navigationItemStyle?: "editor";
   readonly unstable_headerMinimizationBehavior?: "onScrollUp" | "never";
 };
-
 const GLASS_HEADER_OPTIONS: AppScreenOptions = {
   headerBackButtonDisplayMode: "minimal",
   headerBackTitle: "",
@@ -188,7 +185,6 @@ const GLASS_HEADER_OPTIONS: AppScreenOptions = {
   scrollEdgeEffects: NATIVE_LIQUID_GLASS_SUPPORTED ? HEADER_SCROLL_EDGE_EFFECTS : undefined,
   unstable_navigationItemStyle: NATIVE_LIQUID_GLASS_SUPPORTED ? "editor" : undefined,
 };
-
 // Hiding Android's native header after mount can leave detail panes measured short.
 // These screens render their own Material toolbar, so hide it from the first layout.
 const DETAIL_HEADER_OPTIONS: AppScreenOptions = {
@@ -799,6 +795,10 @@ const RootStackConfig = createWorkspaceStackNavigator({
         sheetAllowedDetents: formSheetDetents(0.75),
         sheetGrabberVisible: true,
       },
+    }),
+    GoatBot: createNativeStackScreen({
+      screen: GoatBotRouteScreen,
+      options: { ...DETAIL_HEADER_OPTIONS, title: "GOAT Bot" },
     }),
     Thread: createNativeStackScreen({
       screen: ThreadRouteScreen,

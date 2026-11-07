@@ -23,6 +23,7 @@ describe("goat-discipline built-in skill contract", () => {
       "cursor",
       "fx",
       "grok",
+      "omo",
       "opencode",
       "pi",
     ]);

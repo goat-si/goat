@@ -53,6 +53,8 @@ const HUB_PROXY_METHOD_POLICY: Readonly<Record<string, (payload: unknown) => boo
   // Image and file follow-ups: the node mints a signed upload URL the hub forwards bytes to.
   "attachments.createUploadUrl": () => true,
   "attachments.delete": () => true,
+  // Embedding a file in a note: the bytes arrive through the upload above, then move into the notes.
+  "notes.attach": () => true,
   // A new thread on the node, in a project that exists or one made from a chosen folder.
   "orchestration.launchThread": () => true,
   "filesystem.browse": () => true,

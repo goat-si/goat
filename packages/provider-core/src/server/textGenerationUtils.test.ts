@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { classifyTextGenerationFailure, sanitizeCommitSubject } from "./textGenerationUtils.ts";
+import {
+  classifyTextGenerationFailure,
+  limitSection,
+  sanitizeCommitSubject,
+  sanitizeThreadTitle,
+} from "./textGenerationUtils.ts";
+
+it("cuts a long section without splitting an emoji", () => {
+  expect(limitSection(`${"a".repeat(9)}🚀 more`, 10)).toBe(`${"a".repeat(9)}\n\n[truncated]`);
+});
 
 describe("sanitizeCommitSubject", () => {
   // regression: #19181 truncation split grapheme clusters at the subject limit
@@ -43,5 +52,18 @@ describe("classifyTextGenerationFailure", () => {
     ["failed", "Codex CLI command failed: the prompt mentioned a 401 and a timeout and a sign in"],
   ] as const)("classifies %s: %s", (kind, detail) => {
     expect(classifyTextGenerationFailure({ detail })).toBe(kind);
+  });
+});
+
+describe("sanitizeThreadTitle", () => {
+  it.each([
+    { name: "a split surrogate pair", prefixLength: 116, character: "🚀", retained: "" },
+    { name: "a complete surrogate pair", prefixLength: 115, character: "🚀", retained: "🚀" },
+    { name: "a BMP character", prefixLength: 116, character: "界", retained: "界" },
+  ])("truncates without splitting $name", ({ prefixLength, character, retained }) => {
+    const prefix = "a".repeat(prefixLength);
+    const title = `${prefix}${character} more`;
+
+    expect(sanitizeThreadTitle(title)).toBe(`${prefix}${retained}...`);
   });
 });

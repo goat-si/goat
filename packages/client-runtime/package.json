@@ -167,6 +167,10 @@
       "types": "./src/scheduledTaskWebhook.ts",
       "default": "./src/scheduledTaskWebhook.ts"
     },
+    "./scheduledTasks": {
+      "types": "./src/scheduledTasks/index.ts",
+      "default": "./src/scheduledTasks/index.ts"
+    },
     "./connection": {
       "types": "./src/connection/index.ts",
       "default": "./src/connection/index.ts"
@@ -335,6 +339,14 @@
       "types": "./src/state/projects.ts",
       "default": "./src/state/projects.ts"
     },
+    "./provider-instance-ids": {
+      "types": "./src/providerInstanceIds.ts",
+      "default": "./src/providerInstanceIds.ts"
+    },
+    "./state/context-window": {
+      "types": "./src/state/contextWindow.ts",
+      "default": "./src/state/contextWindow.ts"
+    },
     "./state/provider-instance-display": {
       "types": "./src/state/providerInstanceDisplay.ts",
       "default": "./src/state/providerInstanceDisplay.ts"
@@ -423,6 +435,10 @@
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
     },
+    "./state/environment-hue": {
+      "types": "./src/state/environmentHue.ts",
+      "default": "./src/state/environmentHue.ts"
+    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"
@@ -491,6 +507,10 @@
       "types": "./src/state/threadCheckpoints.ts",
       "default": "./src/state/threadCheckpoints.ts"
     },
+    "./state/thread-lineage-lookup": {
+      "types": "./src/state/threadLineageLookup.ts",
+      "default": "./src/state/threadLineageLookup.ts"
+    },
     "./state/thread-execution": {
       "types": "./src/state/threadExecution.ts",
       "default": "./src/state/threadExecution.ts"
@@ -526,6 +546,10 @@
     "./state/launch-fold-fixtures": {
       "types": "./src/state/launchFold.fixtures.ts",
       "default": "./src/state/launchFold.fixtures.ts"
+    },
+    "./state/remote-launcher-families": {
+      "types": "./src/state/remoteLauncherFamilies.ts",
+      "default": "./src/state/remoteLauncherFamilies.ts"
     },
     "./state/thread-search": {
       "types": "./src/state/threadSearch.ts",
@@ -682,6 +706,10 @@
     "./pull-request-reactions": {
       "types": "./src/pullRequestReactions.ts",
       "default": "./src/pullRequestReactions.ts"
+    },
+    "./pull-request-reply": {
+      "types": "./src/pullRequestReply.ts",
+      "default": "./src/pullRequestReply.ts"
     },
     "./pull-request-query": {
       "types": "./src/pullRequestQuery.ts",

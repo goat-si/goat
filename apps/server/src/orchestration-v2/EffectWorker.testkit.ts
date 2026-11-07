@@ -1,4 +1,5 @@
 import { assert } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
   MessageId,
@@ -88,12 +89,15 @@ const heldTitleLayer = Effect.fn("EffectWorker.test.heldTitleLayer")(function* (
               faviconPath: null,
               projectIcon: null,
               scripts: [],
+              pinnedAt: null,
+              archivedAt: null,
               createdAt: "2026-01-01T00:00:00.000Z",
               updatedAt: "2026-01-01T00:00:00.000Z",
               deletedAt: null,
             }),
         }),
         ServerSettings.layerTest(),
+        NodeServices.layer,
         Layer.mock(TextGeneration.TextGeneration)({
           generateThreadTitle: () =>
             Effect.acquireUseRelease(
@@ -621,12 +625,13 @@ export const mockExecution = () => ({
   retireAdmission: () => Effect.void,
   admitClaim: () => Effect.void,
   setGeneralCapacity: () => Effect.void,
-  snapshot: Effect.succeed({
-    fullLanes: [],
-    titleThreads: [],
-    mainThreads: [],
-    stoppingThreads: [],
-  }),
+  snapshotWith: () =>
+    Effect.succeed({
+      fullLanes: [],
+      titleThreads: [],
+      mainThreads: [],
+      stoppingThreads: [],
+    }),
 });
 
 export const idleEffectWorker = () =>
@@ -635,14 +640,17 @@ export const idleEffectWorker = () =>
     awaitWork: Effect.void,
     awaitControlWork: Effect.void,
     awaitCleanupWork: Effect.void,
+    awaitStartWork: Effect.void,
     runOnce: Effect.succeed(false),
     runRecoveryOnce: Effect.succeed(false),
     runGeneralOnce: Effect.succeed(false),
     runControlOnce: Effect.succeed(false),
     runCleanupOnce: Effect.succeed(false),
+    runStartOnce: Effect.succeed(false),
     nextClaimableAt: Effect.succeedNone,
     nextGeneralClaimableAt: Effect.succeedNone,
     nextControlClaimableAt: Effect.succeedNone,
     nextCleanupClaimableAt: Effect.succeedNone,
+    nextStartClaimableAt: Effect.succeedNone,
     drain: () => Effect.succeed(0),
   });

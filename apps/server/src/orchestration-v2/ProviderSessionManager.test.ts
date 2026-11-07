@@ -103,7 +103,6 @@ import * as ComputerUseTestkit from "../cua/ComputerUseLeases.testkit.ts";
 import { askComputer, carriesSkill } from "./ComputerUseSkill.testkit.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-
 import {
   layerTestDatabase,
   layerTestStores,
@@ -114,7 +113,10 @@ import {
   layerPausingAttachEventSink,
   layerBeforeUnchangedWriteEventSink,
 } from "./ProviderSessionManager.persistence.testkit.ts";
-
+import {
+  turnStartMemoryCases,
+  type TurnStartMemoryCase,
+} from "./ProviderSessionManager.memoryCases.testkit.ts";
 const CodexCapabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
 const ExclusiveCapabilities: OrchestrationV2ProviderCapabilities = {
   ...CodexCapabilities,
@@ -123,7 +125,6 @@ const ExclusiveCapabilities: OrchestrationV2ProviderCapabilities = {
     supportsMultipleProviderThreadsPerSession: false,
   },
 };
-
 interface TestProviderRuntimeState {
   readonly openCount: number;
   readonly closeCount: number;
@@ -135,7 +136,6 @@ interface TestProviderRuntimeState {
     Queue.Queue<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>
   >;
 }
-
 const emptyState: TestProviderRuntimeState = {
   openCount: 0,
   closeCount: 0,
@@ -144,19 +144,16 @@ const emptyState: TestProviderRuntimeState = {
   unloadedNativeThreadIds: [],
   eventQueues: new Map(),
 };
-
 const modelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
   model: "gpt-5.4",
 } satisfies ModelSelection;
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
-
 const runtimePolicy = {
   runtimeMode: "full-access",
   interactionMode: "default",
   cwd: process.cwd(),
 } satisfies ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-
 function makeProviderSession(input: {
   readonly providerSessionId: ProviderSessionId;
   readonly now: DateTime.Utc;
@@ -175,7 +172,6 @@ function makeProviderSession(input: {
     lastError: null,
   };
 }
-
 function makeThreadCreatedEvent(input: {
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly threadId: ThreadId;
@@ -224,7 +220,6 @@ function makeThreadCreatedEvent(input: {
     };
   });
 }
-
 function makeProviderThread(input: {
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly threadId: ThreadId;
@@ -258,7 +253,101 @@ function makeProviderThread(input: {
     updatedAt: input.now,
   };
 }
-
+// A Codex native subagent's provider thread is owned by its child app thread
+// but reachable from the parent's projection through the subagent record.
+const makeNativeChildFixture = Effect.fnUntraced(function* () {
+  const idAllocator = yield* IdAllocator.IdAllocatorV2;
+  const eventSink = yield* EventSink.EventSinkV2;
+  const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+  const now = yield* DateTime.now;
+  const parentThreadId = ThreadId.make("native-parent");
+  const childThreadId = ThreadId.make("native-child");
+  const providerSessionId = idAllocator.derive.providerSession({
+    providerInstanceId: modelSelection.instanceId,
+  });
+  const childThreadEvent = yield* makeThreadCreatedEvent({
+    idAllocator,
+    threadId: childThreadId,
+    now,
+  });
+  const childProviderThread = makeProviderThread({
+    idAllocator,
+    threadId: childThreadId,
+    providerSessionId,
+    nativeThreadId: "native-child-thread",
+    now,
+  });
+  const parentRunId = idAllocator.derive.run({ threadId: parentThreadId, ordinal: 1 });
+  yield* eventSink.write({
+    events: [
+      yield* makeThreadCreatedEvent({ idAllocator, threadId: parentThreadId, now }),
+      {
+        ...childThreadEvent,
+        payload: {
+          ...childThreadEvent.payload,
+          createdBy: "agent",
+          creationSource: "provider",
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId,
+            relationshipToParent: "subagent",
+            rootThreadId: parentThreadId,
+          },
+        },
+      },
+      {
+        id: yield* idAllocator.allocate.event({ threadId: childThreadId }),
+        type: "provider-thread.updated",
+        threadId: childThreadId,
+        occurredAt: now,
+        payload: childProviderThread,
+      },
+      {
+        id: yield* idAllocator.allocate.event({ threadId: parentThreadId }),
+        type: "subagent.updated",
+        threadId: parentThreadId,
+        occurredAt: now,
+        payload: {
+          id: idAllocator.derive.nodeFromProviderItem({
+            driver: CODEX_DRIVER,
+            nativeItemId: "native-child-task",
+          }),
+          threadId: parentThreadId,
+          runId: parentRunId,
+          parentNodeId: idAllocator.derive.rootNode({ runId: parentRunId }),
+          origin: "provider_native",
+          createdBy: "agent",
+          driver: CODEX_DRIVER,
+          providerInstanceId: modelSelection.instanceId,
+          providerThreadId: childProviderThread.id,
+          childThreadId,
+          nativeTaskRef: {
+            driver: CODEX_DRIVER,
+            nativeId: "native-child-task",
+            strength: "strong",
+          },
+          prompt: "Reply READY",
+          title: "Native child",
+          model: null,
+          status: "completed",
+          result: "READY",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+        },
+      },
+    ],
+  });
+  const parent = { threadId: parentThreadId, providerSessionId };
+  const runtime = yield* manager.open({ ...parent, modelSelection, runtimePolicy });
+  const resumeChild = runtime.resumeThread({
+    providerThread: childProviderThread,
+    threadId: childThreadId,
+    modelSelection,
+    runtimePolicy,
+  });
+  return { manager, parent, resumeChild };
+});
 function unimplemented(detail: string) {
   return Effect.fail(
     new ProviderAdapter.ProviderAdapterProtocolError({
@@ -267,7 +356,6 @@ function unimplemented(detail: string) {
     }),
   );
 }
-
 const makeProviderAdapter = Effect.fnUntraced(function* (
   state: Ref.Ref<TestProviderRuntimeState>,
   options: {
@@ -351,7 +439,6 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
           yield* countClose;
           if (options.hangSessionScopeClose === true) yield* hangClose;
         }
-
         return {
           instanceId: ProviderInstanceId.make("codex"),
           driver: CODEX_DRIVER,
@@ -412,7 +499,6 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
       }),
   });
 });
-
 function layerTest(input: {
   readonly state: Ref.Ref<TestProviderRuntimeState>;
   readonly idleTimeoutMs: number;
@@ -586,17 +672,14 @@ function layerTest(input: {
     ),
   );
 }
-
 const fakeHttpServer = HttpServer.HttpServer.of({
   address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 43123),
   serve: (() => Effect.void) as HttpServer.HttpServer["Service"]["serve"],
 });
-
 const fakeEnvironment = ServerEnvironment.ServerEnvironment.of({
   getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-provider-session-manager")),
   getDescriptor: Effect.die("unused"),
 });
-
 const layerTestMcpRegistryWithOptions = (options: McpSessionRegistry.McpSessionRegistryOptions) =>
   Layer.effect(
     McpSessionRegistry.McpSessionRegistry,
@@ -606,9 +689,7 @@ const layerTestMcpRegistryWithOptions = (options: McpSessionRegistry.McpSessionR
     Layer.provide(Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment)),
     Layer.provide(NodeServices.layer),
   );
-
 const layerTestMcpRegistry = layerTestMcpRegistryWithOptions({});
-
 const layerPausingMcpRegistry = (pause: {
   readonly armed: Ref.Ref<boolean>;
   readonly paused: Deferred.Deferred<void>;
@@ -630,7 +711,6 @@ const layerPausingMcpRegistry = (pause: {
       });
     }),
   ).pipe(Layer.provide(layerTestMcpRegistry));
-
 function makeBrowserAccessProject(projectId: ProjectId): Project {
   return {
     id: projectId,
@@ -648,7 +728,6 @@ function makeBrowserAccessProject(projectId: ProjectId): Project {
     deletedAt: null,
   };
 }
-
 function runBrowserAccessScenario(input: {
   readonly enableAgentBrowserAccess: boolean;
   readonly projectOverride: boolean;
@@ -672,7 +751,6 @@ function runBrowserAccessScenario(input: {
             : Option.some(makeBrowserAccessProject(requestedProjectId)),
         ),
     });
-
     yield* Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -712,11 +790,9 @@ function runBrowserAccessScenario(input: {
         }),
       ),
     );
-
     return (yield* Ref.get(mcpConfigs))[0];
   });
 }
-
 function makePendingRuntimeRequestEvents(input: {
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly threadId: ThreadId;
@@ -843,7 +919,6 @@ function makePendingRuntimeRequestEvents(input: {
     return { events, providerEvents, requestId, nodeId };
   });
 }
-
 it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -857,7 +932,6 @@ it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", ()
         yield* Deferred.succeed(openNumber === 1 ? firstOpenStarted : secondOpenStarted, undefined);
         yield* Deferred.await(releaseOpens);
       });
-
     const effect = Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -873,7 +947,6 @@ it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", ()
         providerInstanceId: modelSelection.instanceId,
         threadId: secondThreadId,
       });
-
       yield* eventSink.write({
         events: [
           yield* makeThreadCreatedEvent({ idAllocator, threadId: firstThreadId, now }),
@@ -897,7 +970,6 @@ it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", ()
           runtimePolicy,
         })
         .pipe(Effect.forkScoped);
-
       yield* Deferred.await(secondOpenStarted);
       assert.equal(yield* Ref.get(openStartedCount), 2);
       yield* Deferred.succeed(releaseOpens, undefined);
@@ -908,7 +980,6 @@ it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", ()
       assert.notStrictEqual(firstRuntime, secondRuntime);
       assert.equal((yield* Ref.get(state)).openCount, 2);
     });
-
     yield* effect.pipe(
       Effect.provide(
         layerTest({
@@ -920,7 +991,6 @@ it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", ()
     );
   }),
 );
-
 it.effect("ProviderSessionManagerV2 closes every live session for a provider instance", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -939,7 +1009,6 @@ it.effect("ProviderSessionManagerV2 closes every live session for a provider ins
         providerInstanceId: modelSelection.instanceId,
         threadId: secondThreadId,
       });
-
       yield* eventSink.write({
         events: [
           yield* makeThreadCreatedEvent({ idAllocator, threadId: firstThreadId, now }),
@@ -958,14 +1027,11 @@ it.effect("ProviderSessionManagerV2 closes every live session for a provider ins
         modelSelection,
         runtimePolicy,
       });
-
       yield* manager.closeInstance(modelSelection.instanceId);
-
       assert.isTrue(Option.isNone(yield* manager.get(firstProviderSessionId)));
       assert.isTrue(Option.isNone(yield* manager.get(secondProviderSessionId)));
       assert.equal((yield* Ref.get(state)).closeCount, 2);
     });
-
     yield* effect.pipe(
       Effect.provide(
         layerTest({
@@ -976,7 +1042,6 @@ it.effect("ProviderSessionManagerV2 closes every live session for a provider ins
     );
   }),
 );
-
 it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -988,7 +1053,6 @@ it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
         Effect.tap(() => Deferred.succeed(firstOpenStarted, undefined)),
         Effect.andThen(Deferred.await(releaseOpen)),
       );
-
     const effect = Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -1005,7 +1069,6 @@ it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
         modelSelection,
         runtimePolicy,
       });
-
       yield* eventSink.write({
         events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
       });
@@ -1015,7 +1078,6 @@ it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
       yield* Effect.yieldNow;
       yield* Effect.yieldNow;
       assert.equal(yield* Ref.get(openStartedCount), 1);
-
       yield* Deferred.succeed(releaseOpen, undefined);
       const [firstRuntime, secondRuntime] = yield* Effect.all([
         Fiber.join(firstFiber),
@@ -1024,7 +1086,6 @@ it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
       assert.strictEqual(firstRuntime, secondRuntime);
       assert.equal((yield* Ref.get(state)).openCount, 1);
     });
-
     yield* effect.pipe(
       Effect.provide(
         layerTest({
@@ -1036,7 +1097,6 @@ it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
     );
   }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 starts a thread's session without its last agent's OOM kill",
   () =>
@@ -1050,7 +1110,6 @@ it.effect(
         oomKilled: (id: string) => Effect.sync(() => oomKilledThreads.has(id)),
         clear: (id: string) => Effect.sync(() => void oomKilledThreads.delete(id)),
       };
-
       const effect = Effect.gen(function* () {
         const eventSink = yield* EventSink.EventSinkV2;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -1068,23 +1127,19 @@ it.effect(
         });
         yield* manager.open({ threadId: owner, providerSessionId, modelSelection, runtimePolicy });
         assert.isFalse(yield* agentScope.oomKilled(owner));
-
         yield* manager.open({ threadId: joiner, providerSessionId, modelSelection, runtimePolicy });
         assert.isFalse(yield* agentScope.oomKilled(joiner));
-
         oomKilledThreads.add(owner);
         yield* manager.open({ threadId: owner, providerSessionId, modelSelection, runtimePolicy });
         assert.isTrue(yield* agentScope.oomKilled(owner));
         assert.equal((yield* Ref.get(state)).openCount, 1);
       });
-
       yield* effect.pipe(
         Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })),
         Effect.provideService(AgentScope, agentScope),
       );
     }),
 );
-
 it.effect("ProviderSessionManagerV2 cleans up an open interrupted mid-handshake", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -1109,7 +1164,6 @@ it.effect("ProviderSessionManagerV2 cleans up an open interrupted mid-handshake"
       yield* eventSink.write({
         events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
       });
-
       const opening = yield* manager
         .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
         .pipe(Effect.forkScoped);
@@ -1118,14 +1172,11 @@ it.effect("ProviderSessionManagerV2 cleans up an open interrupted mid-handshake"
       const token = issued?.authorizationHeader.replace(/^Bearer\s+/, "");
       assert.isDefined(token);
       assert.isDefined(yield* registry.resolve(token!));
-
       yield* Fiber.interrupt(opening);
-
       assert.equal((yield* Ref.get(state)).closeCount, 1);
       assert.isUndefined(yield* registry.resolve(token!));
       assert.isUndefined(yield* mcpSessions.read(threadId));
       assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
-
       yield* Ref.set(holdHandshake, false);
       yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
       const replacement = (yield* Ref.get(mcpConfigs)).at(-1);
@@ -1134,11 +1185,9 @@ it.effect("ProviderSessionManagerV2 cleans up an open interrupted mid-handshake"
       assert.notEqual(replacementToken, token);
       const projection = yield* projectionStore.getThreadProjection(threadId);
       assert.equal(projection.providerSessions.at(-1)?.status, "ready");
-
       yield* manager.close(providerSessionId);
       assert.isUndefined(yield* registry.resolve(replacementToken!));
     });
-
     yield* effect.pipe(
       Effect.provide(
         layerTest({
@@ -1159,7 +1208,6 @@ it.effect("ProviderSessionManagerV2 cleans up an open interrupted mid-handshake"
     );
   }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 keeps a shared session busy when another thread's start is stopped early",
   () =>
@@ -1230,15 +1278,12 @@ it.effect(
               runtimePolicy,
             });
           });
-
         yield* startTurn(threadB);
-
         yield* manager.detach({ providerSessionId, threadId: threadA });
         yield* Ref.set(holdProjectRead, true);
         const startingA = yield* startTurn(threadA).pipe(Effect.forkChild);
         yield* Deferred.await(projectReadHeld);
         yield* Fiber.interrupt(startingA);
-
         yield* TestClock.adjust("2 seconds");
         yield* Effect.yieldNow;
         assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
@@ -1257,7 +1302,6 @@ it.effect(
       );
     }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 keeps a shared session busy when a stopped start still ends its turn",
   () =>
@@ -1326,14 +1370,11 @@ it.effect(
               runtimePolicy,
             });
           });
-
         yield* startTurn(threadB);
-
         yield* Ref.set(holdStart, true);
         const startingA = yield* startTurn(threadA).pipe(Effect.forkChild);
         yield* Deferred.await(startHeld);
         yield* Fiber.interrupt(startingA);
-
         const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
         assert.isDefined(queue);
         yield* Queue.offer(queue!, {
@@ -1349,7 +1390,6 @@ it.effect(
           failure: null,
           threadDisposition: "reusable",
         });
-
         yield* TestClock.adjust("2 seconds");
         yield* Effect.yieldNow;
         assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
@@ -1371,7 +1411,6 @@ it.effect(
       );
     }),
 );
-
 it.effect("ProviderSessionManagerV2 gives up on a provider that never confirms a Stop", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -1410,7 +1449,6 @@ it.effect("ProviderSessionManagerV2 gives up on a provider that never confirms a
     );
   }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 keeps a shared session a sibling is busy on when releasing",
   () =>
@@ -1480,14 +1518,12 @@ it.effect(
             runOrdinal,
             reason: "manual_shutdown",
           });
-
         assert.isFalse(yield* release(stopping));
         // A release for an earlier run keeps a newer turn of the same provider thread.
         assert.isFalse(yield* release(sibling, 0));
         assert.isTrue(yield* manager.isLive(providerSessionId));
         assert.isTrue(yield* release(sibling));
         assert.isFalse(yield* manager.isLive(providerSessionId));
-
         // A turn that starts on a runtime released meanwhile fails instead of running on it.
         const startOnReleasedRuntime = Effect.gen(function* () {
           const lateRunId = idAllocator.derive.run({ threadId: stopping, ordinal: 1 });
@@ -1514,7 +1550,6 @@ it.effect(
           );
         });
         assert.equal((yield* startOnReleasedRuntime)._tag, "ProviderAdapterTurnStartError");
-
         // Nor may it leave its turn busy on a replacement opened under the same id.
         yield* manager.open({
           threadId: sibling,
@@ -1527,7 +1562,6 @@ it.effect(
       }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60 * 60_000 })));
     }),
 );
-
 it.effect("ProviderSessionManagerV2 stops a session still opening when its layer shuts down", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -1561,11 +1595,9 @@ it.effect("ProviderSessionManagerV2 stops a session still opening when its layer
         }),
       ),
     );
-
     assert.equal((yield* Ref.get(state)).closeCount, 1);
   }),
 );
-
 it.effect("ProviderSessionManagerV2 interrupts event subscriptions on server shutdown", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -1598,17 +1630,13 @@ it.effect("ProviderSessionManagerV2 interrupts event subscriptions on server shu
         providerSession: runtime.providerSession,
       });
       assert.isTrue(Option.isSome(yield* activeSubscription.events.pipe(Stream.runHead)));
-
       yield* manager.shutdown;
-
       const exit = yield* bufferedSubscription.events.pipe(Stream.runCollect, Effect.exit);
       assert.isTrue(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
     });
-
     yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })));
   }),
 );
-
 it.effect("ProviderSessionManagerV2 drains subscribers when the provider stops", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -1663,7 +1691,6 @@ it.effect("ProviderSessionManagerV2 drains subscribers when the provider stops",
         },
       });
       yield* Queue.end(adapterQueue!);
-
       const events = Array.from(yield* Fiber.join(collected));
       assert.deepEqual(
         events.map((event) => event.type),
@@ -1672,11 +1699,9 @@ it.effect("ProviderSessionManagerV2 drains subscribers when the provider stops",
       assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
       assert.equal((yield* Ref.get(state)).closeCount, 1);
     });
-
     yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })));
   }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 issues MCP credentials before opening and revokes them on close",
   () =>
@@ -1697,7 +1722,6 @@ it.effect(
           providerInstanceId: modelSelection.instanceId,
           threadId,
         });
-
         yield* eventSink.write({
           events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
         });
@@ -1707,7 +1731,6 @@ it.effect(
           modelSelection,
           runtimePolicy,
         });
-
         const captured = (yield* Ref.get(mcpConfigs))[0];
         assert.isDefined(captured);
         assert.equal(captured?.threadId, threadId);
@@ -1721,12 +1744,10 @@ it.effect(
           resolved?.capabilities,
           new Set(["preview", "orchestration", "worktree", "pull-requests", "screen"]),
         );
-
         yield* manager.close(providerSessionId);
         assert.isUndefined(yield* mcpSessions.read(threadId));
         assert.isUndefined(yield* registry.resolve(token!));
       });
-
       yield* effect.pipe(
         Effect.provide(
           layerTest({
@@ -1738,7 +1759,6 @@ it.effect(
       );
     }),
 );
-
 it.effect.each([
   { relationshipToParent: null, subagent: false },
   { relationshipToParent: "subagent", subagent: true },
@@ -1778,7 +1798,6 @@ it.effect.each([
           ],
         });
         yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
-
         const token = (yield* Ref.get(mcpConfigs))[0]?.authorizationHeader.replace(
           /^Bearer\s+/,
           "",
@@ -1787,11 +1806,9 @@ it.effect.each([
         assert.equal((yield* registry.resolve(token!))?.thread.subagent, subagent);
         yield* manager.close(providerSessionId);
       });
-
       yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1_000, mcpConfigs })));
     }),
 );
-
 it.effect.each([
   ["a limit", Effect.succeed(2), 2],
   [
@@ -1848,7 +1865,6 @@ it.effect.each([
       );
     }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 withholds the preview capability when agent browser access is off",
   () =>
@@ -1868,7 +1884,6 @@ it.effect(
           providerInstanceId: modelSelection.instanceId,
           threadId,
         });
-
         yield* eventSink.write({
           events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
         });
@@ -1878,7 +1893,6 @@ it.effect(
           modelSelection,
           runtimePolicy,
         });
-
         const captured = (yield* Ref.get(mcpConfigs))[0];
         assert.isDefined(captured);
         assert.equal(captured?.browserToolsAvailable, false);
@@ -1888,10 +1902,8 @@ it.effect(
           resolved?.capabilities,
           new Set(["orchestration", "worktree", "pull-requests"]),
         );
-
         yield* manager.close(providerSessionId);
       });
-
       yield* effect.pipe(
         Effect.provide(
           layerTest({
@@ -1906,7 +1918,6 @@ it.effect(
       );
     }),
 );
-
 it.effect.each([
   { name: "honors a project browser-access opt-out", expected: false },
   { name: "withholds browser tools without the project", projectExists: false, expected: false },
@@ -1925,7 +1936,6 @@ it.effect.each([
     assert.equal(captured?.browserToolsAvailable, expected);
   }),
 );
-
 it.effect("ProviderSessionManagerV2 revokes MCP credentials when release persistence fails", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -1944,7 +1954,6 @@ it.effect("ProviderSessionManagerV2 revokes MCP credentials when release persist
         providerInstanceId: modelSelection.instanceId,
         threadId,
       });
-
       yield* eventSink.write({
         events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
       });
@@ -1954,18 +1963,15 @@ it.effect("ProviderSessionManagerV2 revokes MCP credentials when release persist
         modelSelection,
         runtimePolicy,
       });
-
       const captured = (yield* Ref.get(mcpConfigs))[0];
       const token = captured?.authorizationHeader.replace(/^Bearer\s+/, "");
       assert.isDefined(token);
       assert.isDefined(yield* registry.resolve(token!));
-
       const closeError = yield* manager.close(providerSessionId).pipe(Effect.flip);
       assert.equal(closeError._tag, "ProviderSessionCloseError");
       assert.isUndefined(yield* mcpSessions.read(threadId));
       assert.isUndefined(yield* registry.resolve(token!));
     });
-
     yield* effect.pipe(
       Effect.provide(
         layerTest({
@@ -1978,7 +1984,6 @@ it.effect("ProviderSessionManagerV2 revokes MCP credentials when release persist
     );
   }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 keeps a thread attached when an earlier attach of it is interrupted",
   () =>
@@ -2020,14 +2025,12 @@ it.effect(
             nativeThreadId: "native-attach-race",
           }),
         });
-
         yield* Ref.set(armed, true);
         const first = yield* resume.pipe(Effect.forkChild({ startImmediately: true }));
         yield* Deferred.await(paused);
         const second = yield* resume.pipe(Effect.forkChild({ startImmediately: true }));
         yield* Fiber.interrupt(first);
         yield* Fiber.join(second);
-
         const config = yield* mcpSessions.read(threadId);
         assert.isDefined(config);
         const token = config!.authorizationHeader.replace(/^Bearer\s+/, "");
@@ -2039,7 +2042,6 @@ it.effect(
       );
     }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 keeps a replacement session's attachment when a stale attach is interrupted",
   () =>
@@ -2072,7 +2074,6 @@ it.effect(
           modelSelection,
           runtimePolicy,
         });
-
         yield* Ref.set(armed, true);
         const stale = yield* runtime
           .resumeThread({
@@ -2087,7 +2088,6 @@ it.effect(
           })
           .pipe(Effect.forkChild({ startImmediately: true }));
         yield* Deferred.await(paused);
-
         yield* manager.release({ providerSessionId, reason: "runtime_error" });
         const replacement = yield* manager.open({
           threadId,
@@ -2097,9 +2097,7 @@ it.effect(
         });
         const config = yield* mcpSessions.read(threadId);
         assert.isDefined(config);
-
         yield* Fiber.interrupt(stale);
-
         assert.equal(
           (yield* mcpSessions.read(threadId))?.providerSessionId,
           config!.providerSessionId,
@@ -2131,7 +2129,6 @@ it.effect(
       );
     }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 revokes a reused credential after a resume stopped while checking it",
   () =>
@@ -2178,12 +2175,10 @@ it.effect(
         const config = yield* mcpSessions.read(threadId);
         assert.isDefined(config);
         const token = config!.authorizationHeader.replace(/^Bearer\s+/, "");
-
         yield* Ref.set(armed, true);
         const stopped = yield* resume.pipe(Effect.forkChild({ startImmediately: true }));
         yield* Deferred.await(paused);
         yield* Fiber.interrupt(stopped);
-
         yield* manager.release({ providerSessionId, reason: "manual_shutdown" });
         assert.isUndefined(yield* registry.resolve(token));
       }).pipe(
@@ -2193,7 +2188,6 @@ it.effect(
       );
     }),
 );
-
 it.effect("ProviderSessionManagerV2 duplicate detach preserves replacement MCP credentials", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -2216,7 +2210,6 @@ it.effect("ProviderSessionManagerV2 duplicate detach preserves replacement MCP c
         providerInstanceId: modelSelection.instanceId,
         threadId,
       });
-
       yield* eventSink.write({
         events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
       });
@@ -2233,7 +2226,6 @@ it.effect("ProviderSessionManagerV2 duplicate detach preserves replacement MCP c
         modelSelection,
         runtimePolicy,
       });
-
       const replacement = (yield* Ref.get(mcpConfigs)).at(-1);
       assert.isDefined(replacement);
       const replacementToken = replacement?.authorizationHeader.replace(/^Bearer\s+/, "");
@@ -2242,16 +2234,13 @@ it.effect("ProviderSessionManagerV2 duplicate detach preserves replacement MCP c
         (yield* mcpSessions.read(threadId))?.providerSessionId,
         replacement?.providerSessionId,
       );
-
       yield* manager.detach({ providerSessionId: oldSessionId, threadId });
-
       assert.equal(
         (yield* mcpSessions.read(threadId))?.providerSessionId,
         replacement?.providerSessionId,
       );
       assert.equal((yield* registry.resolve(replacementToken!))?.thread.threadId, threadId);
     });
-
     yield* effect.pipe(
       Effect.provide(
         layerTest({
@@ -2264,7 +2253,6 @@ it.effect("ProviderSessionManagerV2 duplicate detach preserves replacement MCP c
     );
   }),
 );
-
 // Exercise the real DTO decorator with the manager under test and committed
 // destination state. Only the run fixture and unrelated transport ports are synthetic.
 const readPreparedRunDto = Effect.fnUntraced(function* (
@@ -2343,7 +2331,6 @@ const readPreparedRunDto = Effect.fnUntraced(function* (
     Effect.provideService(Statement.CurrentTransformer, countThreadReads),
   );
 });
-
 it.effect(
   "ProviderSessionManagerV2 keeps a thread's MCP credential stable across detach and re-attach on a shared session",
   () =>
@@ -2365,7 +2352,6 @@ it.effect(
           providerInstanceId: modelSelection.instanceId,
           threadId,
         });
-
         yield* eventSink.write({
           events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
         });
@@ -2383,24 +2369,20 @@ it.effect(
           modelSelection,
           runtimePolicy,
         });
-
         const original = (yield* Ref.get(mcpConfigs)).at(-1);
         assert.isDefined(original);
         const originalToken = original?.authorizationHeader.replace(/^Bearer\s+/, "");
         assert.isDefined(originalToken);
-
         yield* manager.detach({ providerSessionId, threadId, detail: "Workspace changed." });
         assert.equal(
           (yield* registry.resolve(originalToken!))?.thread.threadId,
           threadId,
           "detach must not revoke the credential the live provider process still holds",
         );
-
         assert.isUndefined(yield* manager.memoryAccessInputs!(threadId, modelSelection.instanceId));
         assert.isUndefined(
           (yield* readPreparedRunDto(threadId, oldRunId, oldTaskId)).currentMemoryAccess,
         );
-
         // The continuation run re-attaches the same thread to the same session;
         // the credential must be reused, not rotated, so the provider process's
         // long-lived MCP client stays authorized.
@@ -2432,14 +2414,12 @@ it.effect(
         assert.isUndefined(
           (yield* readPreparedRunDto(threadId, oldRunId, oldTaskId)).currentMemoryAccess,
         );
-
         assert.equal(
           (yield* mcpSessions.read(threadId))?.providerSessionId,
           original?.providerSessionId,
           "re-attach must reuse the existing credential, not rotate it",
         );
         assert.equal((yield* registry.resolve(originalToken!))?.thread.threadId, threadId);
-
         // A new admission with no execution IDs must not inherit the old IDs.
         yield* manager.open({
           threadId,
@@ -2452,12 +2432,10 @@ it.effect(
         const ordinary = yield* manager.memoryAccessInputs!(threadId, modelSelection.instanceId);
         assert.isUndefined(ordinary?.runId);
         assert.isUndefined(ordinary?.delegatedTaskId);
-
         // Releasing the session (provider process gone) still revokes.
         yield* manager.close(providerSessionId);
         assert.isUndefined(yield* registry.resolve(originalToken!));
       });
-
       yield* effect.pipe(
         Effect.provide(
           layerTest({
@@ -2470,7 +2448,6 @@ it.effect(
       );
     }),
 );
-
 it.effect("current memory DTO withholds access until the committed on epoch is installed", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -2593,7 +2570,6 @@ it.effect("current memory DTO withholds access until the committed on epoch is i
     );
   }),
 );
-
 it.effect.each(["resolve", "unrelated issue"] as const)(
   "current memory DTO denies idle live attachments until a call renews them, after prune by %s",
   (pruneBy) =>
@@ -2713,7 +2689,6 @@ it.effect.each(["resolve", "unrelated issue"] as const)(
       );
     }),
 );
-
 it.effect("current memory DTO denies an archived destination before a deferred detach", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -2806,7 +2781,6 @@ it.effect("current memory DTO denies an archived destination before a deferred d
     );
   }),
 );
-
 it.effect(
   "scheduled task DTO stays unknown while read-only RuntimePolicyV2 actually prepares read",
   () =>
@@ -2910,7 +2884,6 @@ it.effect(
       );
     }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 protects a reused credential from a predecessor release during open",
   () =>
@@ -2936,7 +2909,6 @@ it.effect(
           providerInstanceId: modelSelection.instanceId,
           threadId,
         });
-
         yield* eventSink.write({
           events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
         });
@@ -2945,11 +2917,9 @@ it.effect(
         const originalToken = original?.authorizationHeader.replace(/^Bearer\s+/, "");
         assert.isDefined(originalToken);
         yield* manager.detach({ providerSessionId: s1, threadId });
-
         // ACP and OpenCode consume credentials during openSession; predecessor release must not revoke them before entry publication.
         yield* Ref.set(duringOpen, manager.close(s1).pipe(Effect.orDie));
         yield* manager.open({ threadId, providerSessionId: s2, modelSelection, runtimePolicy });
-
         const slot = yield* mcpSessions.read(threadId);
         assert.equal(
           slot?.providerSessionId,
@@ -2963,7 +2933,6 @@ it.effect(
         );
         yield* manager.close(s2);
       });
-
       yield* effect.pipe(
         Effect.provide(
           layerTest({
@@ -2982,7 +2951,6 @@ it.effect(
       );
     }),
 );
-
 it.effect("ProviderSessionManagerV2 terminal detach revokes the thread's MCP credential", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -3001,7 +2969,6 @@ it.effect("ProviderSessionManagerV2 terminal detach revokes the thread's MCP cre
         providerInstanceId: modelSelection.instanceId,
         threadId,
       });
-
       yield* eventSink.write({
         events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
       });
@@ -3009,7 +2976,6 @@ it.effect("ProviderSessionManagerV2 terminal detach revokes the thread's MCP cre
       const issued = (yield* Ref.get(mcpConfigs)).at(-1);
       const token = issued?.authorizationHeader.replace(/^Bearer\s+/, "");
       assert.isDefined(yield* registry.resolve(token!));
-
       yield* manager.detach({
         providerSessionId,
         threadId,
@@ -3019,11 +2985,9 @@ it.effect("ProviderSessionManagerV2 terminal detach revokes the thread's MCP cre
       assert.isUndefined(yield* registry.resolve(token!));
       assert.isUndefined(yield* mcpSessions.read(threadId));
     });
-
     yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1_000, mcpConfigs })));
   }),
 );
-
 const openSessionWithBackgroundCommand = (fixtureName: string) =>
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
@@ -3093,7 +3057,6 @@ const openSessionWithBackgroundCommand = (fixtureName: string) =>
     });
     return { threadId, providerSessionId, providerThreads, writeProviderThread, rosters };
   });
-
 it.effect(
   "ProviderSessionManagerV2 clears the background roster of a session a detach releases",
   () =>
@@ -3105,13 +3068,10 @@ it.effect(
           "provider-session-manager-detach-roster",
         );
         assert.deepStrictEqual(yield* rosters, [["dev-server"], ["dev-server"]]);
-
         yield* manager.detach({ providerSessionId, threadId, detail: "Thread settled." });
-
         assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
         assert.deepStrictEqual(yield* rosters, [[], ["dev-server"]]);
       });
-
       yield* effect.pipe(
         Effect.provide(
           layerTest({ state, idleTimeoutMs: 60_000, capabilities: ExclusiveCapabilities }),
@@ -3119,7 +3079,6 @@ it.effect(
       );
     }),
 );
-
 it.effect("ProviderSessionManagerV2 keeps the roster of a runtime whose tasks can outlive it", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -3128,12 +3087,9 @@ it.effect("ProviderSessionManagerV2 keeps the roster of a runtime whose tasks ca
       const { providerSessionId, rosters } = yield* openSessionWithBackgroundCommand(
         "provider-session-manager-outliving-roster",
       );
-
       yield* manager.close(providerSessionId);
-
       assert.deepStrictEqual(yield* rosters, [["dev-server"], ["dev-server"]]);
     });
-
     yield* effect.pipe(
       Effect.provide(
         layerTest({ state, idleTimeoutMs: 60_000, backgroundTasksEndWithProcess: false }),
@@ -3141,7 +3097,6 @@ it.effect("ProviderSessionManagerV2 keeps the roster of a runtime whose tasks ca
     );
   }),
 );
-
 it.effect("ProviderSessionManagerV2 keeps a provider update that lands while release clears", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -3161,18 +3116,14 @@ it.effect("ProviderSessionManagerV2 keeps a provider update that lands while rel
           ],
         }).pipe(Effect.orDie),
       );
-
       yield* manager.close(providerSessionId);
-
       assert.deepStrictEqual(yield* rosters, [["replacement-task"], ["dev-server"]]);
     });
-
     yield* effect.pipe(
       Effect.provide(layerTest({ state, idleTimeoutMs: 60_000, beforeUnchangedWrite })),
     );
   }),
 );
-
 it.effect(
   "ProviderSessionManagerV2 does not idle-release a session that turns busy during the pending-work check",
   () =>
@@ -3212,7 +3163,6 @@ it.effect(
           driver: CODEX_DRIVER,
           nativeTurnId: "native-turn-busy-during-check",
         });
-
         yield* eventSink.write({
           events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
         });
@@ -3232,10 +3182,8 @@ it.effect(
           Effect.forkScoped,
         );
         const appThread = (yield* projectionStore.getThreadProjection(threadId)).thread;
-
         yield* TestClock.adjust("1 second");
         yield* Deferred.await(checkEntered);
-
         const turnFiber = yield* runtime
           .startTurn({
             appThread,
@@ -3262,10 +3210,8 @@ it.effect(
         yield* Deferred.await(busyMarked);
         yield* Deferred.succeed(checkGate, undefined);
         yield* Fiber.join(turnFiber);
-
         assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
         assert.equal((yield* Ref.get(state)).closeCount, 0);
-
         const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
         assert.isDefined(queue);
         yield* Queue.offer(queue!, {
@@ -3292,7 +3238,6 @@ it.effect(
         assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
         assert.equal((yield* Ref.get(state)).closeCount, 1);
       });
-
       yield* effect.pipe(
         Effect.provide(
           layerTest({
@@ -3316,7 +3261,6 @@ it.effect(
       );
     }),
 );
-
 it.effect("ProviderSessionManagerV2 releases sessions when provider event streams fail", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -3337,7 +3281,6 @@ it.effect("ProviderSessionManagerV2 releases sessions when provider event stream
         providerInstanceId: modelSelection.instanceId,
         threadId,
       });
-
       yield* eventSink.write({
         events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
       });
@@ -3349,11 +3292,9 @@ it.effect("ProviderSessionManagerV2 releases sessions when provider event stream
       });
       yield* runtime.events.pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
       yield* Effect.yieldNow;
-
       const liveSession = yield* manager.get(providerSessionId);
       const runtimeState = yield* Ref.get(state);
       const projection = yield* projectionStore.getThreadProjection(threadId);
-
       assert.isTrue(Option.isNone(liveSession));
       assert.equal(runtimeState.closeCount, 1);
       assert.equal(projection.providerSessions.at(-1)?.status, "error");
@@ -3362,7 +3303,6 @@ it.effect("ProviderSessionManagerV2 releases sessions when provider event stream
         "The provider event stream closed unexpectedly. Retry the turn; if it keeps failing, check the provider and server logs.",
       );
     });
-
     yield* effect.pipe(
       Effect.provide(
         layerTest({
@@ -3374,7 +3314,6 @@ it.effect("ProviderSessionManagerV2 releases sessions when provider event stream
     );
   }),
 );
-
 it.effect("ProviderSessionManagerV2 marks pending runtime requests non-live on release", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -3401,7 +3340,6 @@ it.effect("ProviderSessionManagerV2 marks pending runtime requests non-live on r
         providerSessionId,
         now,
       });
-
       yield* eventSink.write({
         events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
       });
@@ -3424,20 +3362,17 @@ it.effect("ProviderSessionManagerV2 marks pending runtime requests non-live on r
         reason: "runtime_error",
         detail: "process exited",
       });
-
       const projection = yield* projectionStore.getThreadProjection(threadId);
       const request = projection.runtimeRequests.at(-1);
       const requestNode = projection.nodes.find((node) => node.id === request?.nodeId);
       const requestTurnItem = projection.turnItems.find(
         (item) => item.type === "approval_request" && item.requestId === request?.id,
       );
-
       assert.equal(request?.status, "expired");
       assert.equal(request?.responseCapability.type, "not_resumable");
       assert.equal(requestNode?.status, "failed");
       assert.equal(requestTurnItem?.status, "failed");
     });
-
     yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
   }),
 );
@@ -4059,6 +3994,198 @@ it.effect(
 );
 
 it.effect(
+  "ProviderSessionManagerV2 keeps an attached native child loaded when its parent detaches",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      yield* Effect.gen(function* () {
+        const { manager, parent, resumeChild } = yield* makeNativeChildFixture();
+        yield* resumeChild;
+        yield* manager.detach(parent);
+
+        assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, []);
+        // The child's next turn trusts the manager's loaded cache, so the
+        // native thread must still be loaded for that turn to be heard.
+        yield* resumeChild;
+        assert.equal((yield* Ref.get(state)).resumeCount, 1);
+        assert.isTrue(yield* manager.isLive(parent.providerSessionId));
+      }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })), Effect.scoped);
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 detaching a parent keeps an attached delegated child's thread loaded",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const projectId = yield* idAllocator.allocate.project({
+          fixtureName: "provider-session-manager-delegated-child",
+        });
+        const parentThreadId = yield* idAllocator.allocate.thread({
+          fixtureName: "provider-session-manager-delegated-child-parent",
+          projectId,
+        });
+        const childThreadId = yield* idAllocator.allocate.thread({
+          fixtureName: "provider-session-manager-delegated-child-child",
+          projectId,
+        });
+        const providerSessionId = idAllocator.derive.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+        });
+        const parentProviderThread = makeProviderThread({
+          idAllocator,
+          threadId: parentThreadId,
+          providerSessionId,
+          now,
+          nativeThreadId: "native-parent",
+        });
+        const childProviderThread = makeProviderThread({
+          idAllocator,
+          threadId: childThreadId,
+          providerSessionId,
+          now,
+          nativeThreadId: "native-child",
+        });
+        const childRunId = idAllocator.derive.run({ threadId: childThreadId, ordinal: 2 });
+        const parentRunId = idAllocator.derive.run({ threadId: parentThreadId, ordinal: 1 });
+        const subagentId = idAllocator.derive.rootNode({ runId: childRunId });
+
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId: parentThreadId, now }),
+            yield* makeThreadCreatedEvent({ idAllocator, threadId: childThreadId, now }),
+            {
+              id: yield* idAllocator.allocate.event({ threadId: parentThreadId }),
+              type: "provider-thread.updated",
+              threadId: parentThreadId,
+              driver: CODEX_DRIVER,
+              occurredAt: now,
+              payload: parentProviderThread,
+            },
+            {
+              id: yield* idAllocator.allocate.event({ threadId: childThreadId }),
+              type: "provider-thread.updated",
+              threadId: childThreadId,
+              driver: CODEX_DRIVER,
+              occurredAt: now,
+              payload: childProviderThread,
+            },
+            // The delegated task record already finished; the child was then sent a
+            // follow-up and is running a later turn of its own.
+            {
+              id: yield* idAllocator.allocate.event({ threadId: parentThreadId }),
+              type: "subagent.updated",
+              threadId: parentThreadId,
+              nodeId: subagentId,
+              providerInstanceId: modelSelection.instanceId,
+              occurredAt: now,
+              payload: {
+                id: subagentId,
+                threadId: parentThreadId,
+                runId: null,
+                parentNodeId: idAllocator.derive.rootNode({ runId: parentRunId }),
+                origin: "app_owned",
+                createdBy: "agent",
+                driver: CODEX_DRIVER,
+                providerInstanceId: modelSelection.instanceId,
+                providerThreadId: childProviderThread.id,
+                childThreadId,
+                nativeTaskRef: null,
+                prompt: "Delegated work",
+                title: "Delegated child",
+                model: modelSelection.model,
+                status: "completed",
+                result: "first result",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+              },
+            },
+            {
+              id: yield* idAllocator.allocate.event({ threadId: childThreadId }),
+              type: "provider-turn.updated",
+              threadId: childThreadId,
+              runId: childRunId,
+              driver: CODEX_DRIVER,
+              occurredAt: now,
+              payload: {
+                id: idAllocator.derive.providerTurn({
+                  driver: CODEX_DRIVER,
+                  nativeTurnId: "native-child-turn",
+                }),
+                providerThreadId: childProviderThread.id,
+                nodeId: idAllocator.derive.rootNode({ runId: childRunId }),
+                runAttemptId: null,
+                nativeTurnRef: null,
+                ordinal: 2,
+                status: "running",
+                startedAt: now,
+                completedAt: null,
+              },
+            },
+          ],
+        });
+        yield* manager.open({
+          threadId: parentThreadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const childRuntime = yield* manager.open({
+          threadId: childThreadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        const subscription = yield* childRuntime.subscribeEvents!;
+        yield* manager.detach({ providerSessionId, threadId: parentThreadId });
+
+        const afterParentDetach = yield* Ref.get(state);
+        assert.equal(afterParentDetach.interruptCount, 0);
+        assert.deepEqual(afterParentDetach.unloadedNativeThreadIds, ["native-parent"]);
+
+        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+        assert.isDefined(queue);
+        const event = {
+          type: "provider_thread.updated" as const,
+          driver: CODEX_DRIVER,
+          providerThread: childProviderThread,
+        };
+        yield* Queue.offer(queue!, event);
+        assert.deepEqual(yield* subscription.events.pipe(Stream.runHead), Option.some(event));
+
+        yield* manager.detach({ providerSessionId, threadId: childThreadId });
+        assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, [
+          "native-parent",
+          "native-child",
+        ]);
+      });
+
+      yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 unloads an unattached native child when its parent detaches",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      yield* Effect.gen(function* () {
+        const { manager, parent } = yield* makeNativeChildFixture();
+        yield* manager.detach(parent);
+
+        assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, ["native-child-thread"]);
+      }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })), Effect.scoped);
+    }),
+);
+
+it.effect(
   "ProviderSessionManagerV2 re-attaching a thread waits for its in-flight unload, then reloads it",
   () =>
     Effect.gen(function* () {
@@ -4492,10 +4619,13 @@ it.effect(
         const initialAdapterRotation = yield* Queue.take(adapterChanges);
         assert.equal(initialAdapterRotation.threadId, threadId);
         assert.equal(initialAdapterRotation.providerInstanceId, modelSelection.instanceId);
+        const adapterPolicy = yield* admission.currentPolicy(threadId);
+        const managerPolicy = yield* manager.currentMemoryPolicy!(threadId);
         assert.deepEqual(
-          yield* admission.currentPolicy(threadId),
-          yield* manager.currentMemoryPolicy!(threadId),
+          { grant: adapterPolicy.grant, policyEpoch: adapterPolicy.policyEpoch },
+          { grant: managerPolicy.grant, policyEpoch: managerPolicy.policyEpoch },
         );
+        assert.isDefined(adapterPolicy.finalAuthority);
         assert.equal((yield* admission.currentPolicy(threadId)).grant, "read_write");
         const readScope = () =>
           Effect.gen(function* () {
@@ -4537,6 +4667,9 @@ it.effect(
           modelSelection,
           runtimePolicy,
         });
+        const runningPolicy = yield* admission.currentPolicy(threadId);
+        assert.isDefined(runningPolicy.finalAuthority);
+        assert.isTrue(yield* runningPolicy.finalAuthority!);
         const savedMemory = yield* MemoryToolkitFixture.call(
           "memory_upsert",
           MemoryToolkitFixture.upsert(),
@@ -4564,6 +4697,7 @@ it.effect(
             providerInstanceId: modelSelection.instanceId,
             ...(ceiling === undefined ? {} : { memoryGrantCeiling: ceiling }),
           });
+          assert.isFalse(yield* runningPolicy.finalAuthority!);
           const admitted = yield* readScope();
           assert.equal(admitted.memoryPolicy?.grant, grant);
           assert.equal(admitted.grantedScopes?.includes("orchestration:read"), true);
@@ -4601,6 +4735,8 @@ it.effect(
         yield* Queue.clear(changes);
         yield* Queue.clear(adapterChanges);
         const old = yield* configs.read(threadId);
+        const beforeRevoke = yield* admission.currentPolicy(threadId);
+        assert.isDefined(beforeRevoke.finalAuthority);
         const offReady = yield* Deferred.make<ProviderSessionManager.McpCredentialRotation>();
         yield* manager.mcpCredentialRotations!.pipe(
           Stream.filter((event) => event.memoryPolicy.grant === "none"),
@@ -4609,6 +4745,7 @@ it.effect(
           Effect.forkScoped({ startImmediately: true }),
         );
         yield* settings.updateSettings({ enableAgentMemoryAccess: false });
+        assert.isFalse(yield* beforeRevoke.finalAuthority!);
         assert.equal(
           (yield* registry.resolve(old!.authorizationHeader.replace(/^Bearer\s+/, "")))
             ?.memoryPolicy?.grant,
@@ -5084,67 +5221,6 @@ it.effect.each(["failure", "interrupt"] as const)(
 
 // Exercise recovery admission through the real turn-start service and manager.
 // The provider fixture resumes a native thread; run delivery is an explicit milestone.
-const turnStartMemoryCases = [
-  { name: "ordinary", kind: "ordinary", ceiling: undefined, expected: "read_write" },
-  { name: "channel reply", kind: "channel", ceiling: undefined, expected: "none" },
-  {
-    name: "usage-limit ordinary",
-    kind: "ordinary",
-    ceiling: undefined,
-    expected: "read_write",
-    continuation: true,
-  },
-  {
-    name: "usage-limit delegated read",
-    kind: "delegated",
-    ceiling: "read",
-    expected: "read",
-    continuation: true,
-  },
-  ...(["scheduled", "delegated"] as const).flatMap((kind) =>
-    (["none", "read", "read_write"] as const).map(
-      (ceiling) =>
-        ({
-          name: `${kind} ${ceiling}`,
-          kind,
-          ceiling,
-          expected: ceiling,
-        }) as const,
-    ),
-  ),
-  { name: "legacy task", kind: "delegated", ceiling: undefined, expected: "none" },
-  {
-    name: "read-only sandbox",
-    kind: "ordinary",
-    ceiling: undefined,
-    expected: "read",
-    readOnly: true,
-  },
-  {
-    name: "pending admission",
-    kind: "delegated",
-    ceiling: "none",
-    expected: "read",
-    pending: true,
-  },
-  {
-    name: "pending admission plus read-only sandbox",
-    kind: "delegated",
-    ceiling: "none",
-    expected: "read",
-    pending: true,
-    readOnly: true,
-  },
-  {
-    name: "missing message",
-    kind: "ordinary",
-    ceiling: undefined,
-    expected: "none",
-    missingMessage: true,
-  },
-] as const;
-
-type TurnStartMemoryCase = (typeof turnStartMemoryCases)[number];
 
 it.effect.each(turnStartMemoryCases)(
   "turn-start memory admission: $name",
@@ -5404,27 +5480,60 @@ it.effect.each(turnStartMemoryCases)(
           });
           if (testCase.kind === "channel") {
             const taskId = ChannelTaskId.make("memory-channel-task");
+            let forwardPending = true;
+            const channelTask: ChannelLedger.ChannelStoredTask = {
+              ownerId: "owner",
+              pendingAnswerMessageId: undefined,
+              completionHold: undefined,
+              task: {
+                taskId,
+                conversationId: MemoryContracts.ChannelConversationId.make("memory-conversation"),
+                originBindingId: MemoryContracts.ChannelBindingId.make("memory-binding"),
+                originInputId: MemoryContracts.ChannelInputId.make("memory-input"),
+                originAddress: {
+                  kind: "goat",
+                  environmentId: EnvironmentId.make("fixture"),
+                  threadId,
+                },
+                requester: {
+                  ownerId: "owner",
+                  principalId: "owner",
+                  displayName: "Requester",
+                  originKind: "goat",
+                  runtimeModeCeiling: "full-access",
+                  grantedScopes: ["orchestration:operate"],
+                },
+                title: "Memory channel task",
+                instruction: "Continue",
+                status: "running",
+                version: 1,
+                generation: 1,
+                openQuestions: [],
+                createdAt: DateTime.formatIso(now),
+                updatedAt: DateTime.formatIso(now),
+                worker: { environmentId: EnvironmentId.make("fixture"), threadId, generation: 1 },
+                target: {
+                  environmentId: EnvironmentId.make("fixture"),
+                  projectId: ProjectId.make("project-1"),
+                  modelSelection,
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  workspaceStrategy: { type: "root" },
+                },
+              },
+            };
             const dispatcherLayer = ChannelDispatcher.layer.pipe(
               Layer.provide(Layer.mock(UsageLimitSources.UsageLimitSources)({})),
               Layer.provide(
                 Layer.mergeAll(
                   Layer.mock(ChannelLedger.ChannelLedger)({
-                    getTask: () =>
-                      Effect.succeed({
-                        ownerId: "owner",
-                        pendingAnswerMessageId: undefined,
-                        completionHold: undefined,
-                        task: {
-                          taskId,
-                          worker: { threadId },
-                          target: { projectId: ProjectId.make("project-1") },
-                          requester: {
-                            displayName: "Requester",
-                            runtimeModeCeiling: "full-access",
-                          },
-                        },
-                      } as ChannelLedger.ChannelStoredTask),
-                    completeForward: () => Effect.void,
+                    getTask: () => Effect.succeed(channelTask),
+                    isForwardPending: (sequence) =>
+                      Effect.succeed(sequence === 1 && forwardPending),
+                    completeForward: ({ sequence }) =>
+                      Effect.sync(() => {
+                        if (sequence === 1) forwardPending = false;
+                      }),
                   }),
                   Layer.mock(ThreadManagement.ThreadManagementService)({
                     sendToThread: (input) =>
@@ -5590,7 +5699,15 @@ it.effect.each(turnStartMemoryCases)(
                 forThread: (_threadId, issued, current) =>
                   Effect.gen(function* () {
                     selections++;
-                    assert.deepEqual(issued, yield* current);
+                    const live = yield* current;
+                    assert.deepEqual(
+                      { grant: issued.grant, policyEpoch: issued.policyEpoch },
+                      { grant: live.grant, policyEpoch: live.policyEpoch },
+                    );
+                    assert.isDefined(issued.finalAuthority);
+                    assert.isDefined(live.finalAuthority);
+                    assert.isTrue(yield* issued.finalAuthority!);
+                    assert.isTrue(yield* live.finalAuthority!);
                     return frame;
                   }),
               }),
@@ -5665,9 +5782,11 @@ it.effect.each(turnStartMemoryCases)(
                 ? ["memory:read"]
                 : ["memory:read", "memory:write"];
           const admission = yield* AdapterInfrastructure.ProviderMemoryAdmission;
+          const adapterPolicy = yield* admission.currentPolicy(threadId);
+          const managerPolicy = yield* manager.currentMemoryPolicy!(threadId);
           assert.deepEqual(
-            yield* admission.currentPolicy(threadId),
-            yield* manager.currentMemoryPolicy!(threadId),
+            { grant: adapterPolicy.grant, policyEpoch: adapterPolicy.policyEpoch },
+            { grant: managerPolicy.grant, policyEpoch: managerPolicy.policyEpoch },
           );
           assert.equal((yield* admission.currentPolicy(threadId)).grant, testCase.expected);
           const fenced = yield* admission.fence(config);

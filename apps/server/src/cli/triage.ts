@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
 import * as NodeReadlinePromises from "node:readline/promises";
 
+import { guardChild, guardErrors } from "@goat/shared/errorGuards";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
 import * as Config from "effect/Config";
@@ -17,6 +18,7 @@ import { Command, Flag } from "effect/cli";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as BootService from "../cloud/bootService.ts";
+import { RELAY_CLIENT_LOG_FILE } from "../cloud/ManagedEndpointRuntime.ts";
 import * as ServerConfig from "../config.ts";
 import { resolveBaseDir } from "../os-jank.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
@@ -85,29 +87,38 @@ export const describeServerProcess = Effect.fn("triage.describeServerProcess")(f
 });
 
 const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
-  Effect.promise(async () => {
-    const readline = NodeReadlinePromises.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    try {
-      const menu = agents
-        .map((agent, index) => `  [${String(index + 1)}] ${agent.label}`)
-        .join("\n");
-      for (;;) {
-        const answer = (await readline.question(`Run triage with:\n${menu}\n> `)).trim();
-        const byNumber = agents[Number.parseInt(answer, 10) - 1];
-        if (byNumber !== undefined) {
-          return byNumber;
+  Effect.tryPromise({
+    try: async () => {
+      const broken = Promise.withResolvers<never>();
+      const readline = guardErrors(
+        NodeReadlinePromises.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        }),
+        broken.reject,
+      );
+      try {
+        const menu = agents
+          .map((agent, index) => `  [${String(index + 1)}] ${agent.label}`)
+          .join("\n");
+        for (;;) {
+          const answer = (
+            await Promise.race([readline.question(`Run triage with:\n${menu}\n> `), broken.promise])
+          ).trim();
+          const byNumber = agents[Number.parseInt(answer, 10) - 1];
+          if (byNumber !== undefined) {
+            return byNumber;
+          }
+          const byId = agents.find((agent) => agent.id === answer.toLowerCase());
+          if (byId !== undefined) {
+            return byId;
+          }
         }
-        const byId = agents.find((agent) => agent.id === answer.toLowerCase());
-        if (byId !== undefined) {
-          return byId;
-        }
+      } finally {
+        readline.close();
       }
-    } finally {
-      readline.close();
-    }
+    },
+    catch: () => new TriageAgentChoiceRequiredError(),
   });
 
 const runInteractiveSession = (input: {
@@ -117,14 +128,14 @@ const runInteractiveSession = (input: {
   readonly cwd: string;
 }) =>
   Effect.callback<number, TriageAgentSpawnError>((resume) => {
-    const child = NodeChildProcess.spawn(input.command, [...input.args], {
-      cwd: input.cwd,
-      // The Windows desktop launcher supplies terminal input through the reopened console.
-      stdio: [interactiveStdin(), "inherit", "inherit"],
-      shell: input.shell,
-    });
-    child.once("error", (cause) =>
-      resume(Effect.fail(new TriageAgentSpawnError({ command: input.command, cause }))),
+    const child = guardChild(
+      NodeChildProcess.spawn(input.command, [...input.args], {
+        cwd: input.cwd,
+        // The Windows desktop launcher supplies terminal input through the reopened console.
+        stdio: [interactiveStdin(), "inherit", "inherit"],
+        shell: input.shell,
+      }),
+      (cause) => resume(Effect.fail(new TriageAgentSpawnError({ command: input.command, cause }))),
     );
     child.once("exit", (code, signal) => resume(Effect.succeed(code ?? (signal === null ? 0 : 1))));
   });
@@ -183,6 +194,7 @@ export const triageCommand = Command.make("triage", {
             logsDir: paths.logsDir,
             serviceLogPath: path.join(paths.logsDir, BootService.BOOT_SERVICE_LOG_FILE),
             desktopBackendLogGlob: path.join(paths.logsDir, "server-child*.log*"),
+            relayClientLogPath: path.join(paths.logsDir, RELAY_CLIENT_LOG_FILE),
             serverTracePath: paths.serverTracePath,
             providerEventLogPath: paths.providerEventLogPath,
             terminalLogsDir: paths.terminalLogsDir,

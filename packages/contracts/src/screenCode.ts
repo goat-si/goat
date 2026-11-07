@@ -89,6 +89,9 @@ export const ScreenMethod = Schema.Literals([
   "tab_dialog",
   "tab_upload",
   "tab_fill_secret",
+  "tab_fill_login",
+  "tab_fill_card",
+  "tab_fill_one_time_code",
   "list_menu_bar_extras",
 ]);
 export type ScreenMethod = typeof ScreenMethod.Type;
@@ -398,6 +401,7 @@ export const ScreenRunError = Schema.Struct({
     "user_interacting",
     "screen_locked",
     "blocked_url",
+    "browser_surface_required",
     "stopped_by_person",
     "user_intervened",
     "stopped",

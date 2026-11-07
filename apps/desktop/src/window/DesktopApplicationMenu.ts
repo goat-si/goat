@@ -253,6 +253,11 @@ export const make = Effect.gen(function* () {
       {
         label: "View",
         submenu: [
+          {
+            label: "Let GOAT Use a Browser Tab…",
+            click: () => runMenuEffect("browser.claim", dispatchMenuAction("browser.claim")),
+          },
+          { type: "separator" },
           /* Native reload/DevTools/zoom roles target focused guests; these commands must target the app. */
           { label: "Reload", accelerator: "CmdOrCtrl+R", click: mainContentsClick("reload") },
           {

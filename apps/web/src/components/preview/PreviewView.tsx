@@ -1,7 +1,6 @@
 import { reportPreviewAddressError } from "./previewAddressError";
 import { scopedThreadKey } from "@goat/client-runtime/environment";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
-import { previewStreamDownloadUrl } from "@goat/client-runtime/preview/server-browser-stream";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -23,6 +22,14 @@ import {
   resolveSearchUrlTemplate,
 } from "@goat/shared/preview";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { randomUUID } from "~/lib/utils";
+import { PreviewAnnotationSpeech } from "./PreviewAnnotationSpeech";
+import {
+  previewProfileName,
+  openPreviewUrlExternally,
+  ServerTabFileNotShown,
+} from "./PreviewExternalLink";
 
 import {
   BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
@@ -32,7 +39,6 @@ import {
 } from "~/browserHistoryStore";
 import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
 import { capturePreviewAnnotationScreenshot } from "~/lib/previewAnnotation";
-import { ensureLocalApi } from "~/localApi";
 import { getClientSettings } from "~/hooks/useSettings";
 import {
   rememberPreviewUrl,
@@ -42,7 +48,6 @@ import {
   useThreadPreviewState,
 } from "~/previewStateStore";
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
-import { openEnvironmentUrlExternally } from "~/browser/openEnvironmentUrl";
 import { useEnvironmentSupportsServerBrowser } from "~/state/entities";
 import {
   useEnvironment,
@@ -50,7 +55,6 @@ import {
   usePrimaryEnvironmentId,
 } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
-import { usePreviewStreamAccess } from "~/state/previewStream";
 import { useAtomCommand } from "~/state/use-atom-command";
 import {
   selectThreadPreviewMiniPlayerTabId,
@@ -75,7 +79,7 @@ import { BROWSER_DEVICE_TOOLBAR_HEIGHT } from "~/browser/browserViewportLayout";
 import { useBrowserLayoutZoomFactor } from "~/browser/useBrowserLayoutZoomFactor";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { BrowserSettingsReadError } from "~/browser/openFileInPreview";
-import { PreviewFileNotShown, PreviewUnreachable } from "./PreviewUnreachable";
+import { PreviewUnreachable } from "./PreviewUnreachable";
 import { revealInFileExplorerLabel } from "./fileExplorerLabel";
 import { shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
 import { Badge } from "~/components/ui/badge";
@@ -109,57 +113,6 @@ interface Props {
   ) => void;
 }
 
-function previewProfileName(
-  profiles: ReadonlyArray<{ readonly id: string; readonly name: string }>,
-  profileId: string,
-): string {
-  return profiles.find((profile) => profile.id === profileId)?.name ?? "Removed profile";
-}
-
-const localApi = typeof window === "undefined" ? null : ensureLocalApi();
-
-// A server tab's URL is the environment's address; a desktop tab's URL is what this device loaded.
-function openPreviewUrlExternally(
-  environmentId: ScopedThreadRef["environmentId"],
-  url: string,
-  serverRendered: boolean,
-) {
-  const opened = serverRendered
-    ? openEnvironmentUrlExternally(environmentId, url)
-    : (localApi?.shell.openExternal(url) ?? Promise.resolve());
-  void opened.catch((error: unknown) => {
-    toastManager.add({
-      type: "error",
-      title: "Unable to open in browser",
-      description: error instanceof Error ? error.message : "An error occurred.",
-    });
-  });
-}
-
-function ServerTabFileNotShown(props: {
-  readonly threadRef: ScopedThreadRef;
-  readonly tabId: string;
-  readonly url: string;
-  readonly download: { readonly id: string; readonly fileName: string };
-}) {
-  const access = usePreviewStreamAccess(props.threadRef.environmentId);
-  return (
-    <PreviewFileNotShown
-      url={props.url}
-      fileName={props.download.fileName}
-      downloadUrl={
-        access
-          ? previewStreamDownloadUrl(
-              { access, threadId: props.threadRef.threadId, tabId: props.tabId },
-              props.download.id,
-            )
-          : null
-      }
-      onOpen={() => openPreviewUrlExternally(props.threadRef.environmentId, props.url, true)}
-    />
-  );
-}
-
 export function PreviewView({
   threadRef,
   tabId: requestedTabId,
@@ -171,6 +124,10 @@ export function PreviewView({
   const surfaces = useRightPanelStore((state) => state.byThreadKey[threadKey]?.surfaces);
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
   const [pickActive, setPickActive] = useState(false);
+  const [annotationVoice, setAnnotationVoice] = useState<{
+    sessionId: string;
+    tabId: string;
+  } | null>(null);
   const canSendAnnotation =
     useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope) &&
     Boolean(onSendAnnotation);
@@ -751,12 +708,19 @@ export function PreviewView({
     const pickRequest = { cancelled: false };
     let submitted = false;
     pickActiveRef.current = pickRequest;
-    setPickActive(true);
+    const voice = previewBridge.annotationVoice ? { sessionId: randomUUID() } : undefined;
+    flushSync(() => {
+      setPickActive(true);
+      setAnnotationVoice(voice ? { ...voice, tabId: runtimeTabId } : null);
+    });
     const finishPick = () => {
       const isCurrentPick = pickActiveRef.current === pickRequest;
       if (isCurrentPick) {
         pickActiveRef.current = null;
-        if (isMountedRef.current) setPickActive(false);
+        if (isMountedRef.current) {
+          setPickActive(false);
+          setAnnotationVoice(null);
+        }
       }
       if (
         (isCurrentPick || submitted) &&
@@ -777,12 +741,17 @@ export function PreviewView({
           readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
       );
       if (pickRequest.cancelled) return;
-      const result = await bridge.pickElement(runtimeTabId);
+      const result = voice
+        ? await bridge.pickElement(runtimeTabId, voice)
+        : await bridge.pickElement(runtimeTabId);
       if (!result || pickRequest.cancelled) return;
       // The accepted pick must survive further clicks, tab changes, and unmount; stop cancellation here.
       if (pickActiveRef.current === pickRequest) {
         pickActiveRef.current = null;
-        if (isMountedRef.current) setPickActive(false);
+        if (isMountedRef.current) {
+          setPickActive(false);
+          setAnnotationVoice(null);
+        }
         submitted = true;
       }
       const { annotation: picked, submission, screenshotFailed = false } = result;
@@ -841,7 +810,10 @@ export function PreviewView({
       if (previewBridge && runtimeTabId) {
         void previewBridge.cancelPickElement(runtimeTabId).catch(() => undefined);
       }
-      if (isMountedRef.current) setPickActive(false);
+      if (isMountedRef.current) {
+        setPickActive(false);
+        setAnnotationVoice(null);
+      }
     };
   }, [runtimeTabId]);
 
@@ -871,7 +843,14 @@ export function PreviewView({
   );
   useEffect(() => {
     if (!visible) return;
-    return subscribePreviewAction((action) => onPreviewAction(action));
+    const unsubscribeAction = subscribePreviewAction((action) => onPreviewAction(action));
+    const unsubscribeMenu = window.desktopBridge?.onMenuAction((action) => {
+      if (action === "preview.focusUrl") onPreviewAction("focus-url");
+    });
+    return () => {
+      unsubscribeAction();
+      unsubscribeMenu?.();
+    };
   }, [visible]);
 
   return (
@@ -880,6 +859,14 @@ export function PreviewView({
       className="flex min-h-0 flex-1 flex-col bg-background"
       data-thread-key={scopedThreadKey(threadRef)}
     >
+      {annotationVoice ? (
+        <PreviewAnnotationSpeech
+          key={annotationVoice.sessionId}
+          environmentId={threadRef.environmentId}
+          tabId={annotationVoice.tabId}
+          sessionId={annotationVoice.sessionId}
+        />
+      ) : null}
       <PreviewChromeRow
         addressKey={runtimeTabId ?? JSON.stringify([threadKey, "new"])}
         threadRef={threadRef}

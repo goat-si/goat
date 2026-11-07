@@ -1,11 +1,11 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
-  ORCHESTRATION_HISTORY_BUDGET_BYTES,
-  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  SecretProviderId,
+  SecretProviderKind,
   UsageLimitSourceId,
   type ServerProvider,
 } from "@goat/contracts";
@@ -124,17 +124,10 @@ describe("serverSettings helpers", () => {
         storageCleanup: { worktreeAfterDays: null },
       }).storageCleanup,
     ).toEqual({
+      ...DEFAULT_SERVER_SETTINGS.storageCleanup,
       worktreeAfterDays: null,
-      worktreeSettledAfterDays: null,
       worktreeOnMerge: true,
-      worktreeOnDelete: false,
-      worktreeUnchanged: false,
-      worktreeKeepWhen: "uncommitted-changes",
-      browserArtifactsAfterDays: null,
       logsAfterDays: 30,
-      historyBudgetBytes: ORCHESTRATION_HISTORY_BUDGET_BYTES,
-      historyArchiveAfterDays: ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
-      historyArchiveDeleteAfterDays: null,
     });
   });
   it("replaces a source control host's patched field so a cleared account pin does not survive", () => {
@@ -302,6 +295,15 @@ describe("serverSettings helpers", () => {
       otlpMetricsUrl: "http://localhost:4318/v1/metrics",
       otlpLogsUrl: "http://localhost:4318/v1/logs",
     });
+    // The server still loads a file holding the retired token streaming mode.
+    expect(
+      parsePersistedServerObservabilitySettings(
+        JSON.stringify({
+          responseStreamingMode: "token",
+          observability: { otlpTracesUrl: "http://localhost:4318/v1/traces" },
+        }),
+      ).otlpTracesUrl,
+    ).toBe("http://localhost:4318/v1/traces");
   });
 
   it("falls back cleanly when persisted settings are invalid", () => {
@@ -628,6 +630,24 @@ describe("serverSettings helpers", () => {
 
     const removed = applyServerSettingsPatch(added, { usageLimitSources: { [hubA]: null } });
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
+  });
+
+  it("merges secret provider edits without removing other providers", () => {
+    const first = SecretProviderId.make("first");
+    const second = SecretProviderId.make("second");
+    const config = {
+      kind: SecretProviderKind.make("one_password"),
+      label: "Vault",
+      config: { account: "account" },
+    };
+    const current = { ...DEFAULT_SERVER_SETTINGS, secretProviders: { [first]: config } };
+    const added = applyServerSettingsPatch(current, { secretProviders: { [second]: config } });
+    expect(Object.keys(added.secretProviders)).toEqual([first, second]);
+    expect(
+      Object.keys(
+        applyServerSettingsPatch(added, { secretProviders: { [first]: null } }).secretProviders,
+      ),
+    ).toEqual([second]);
   });
 
   it("replaces and removes individual usage prices without clobbering other models", () => {

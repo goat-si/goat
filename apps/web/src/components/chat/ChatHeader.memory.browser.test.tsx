@@ -49,7 +49,6 @@ vi.mock("../../state/use-orchestration-command", () => ({
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../../hooks/useSettings", () => ({ useClientSettings: () => undefined }));
 vi.mock("../ProjectFavicon", () => ({ ProjectFavicon: () => null }));
-vi.mock("../goatBot/GoatBotModeButton", () => ({ GoatBotModeButton: () => null }));
 vi.mock("../../notes/ThreadNotesButton", () => ({ ThreadNotesButton: () => null }));
 vi.mock("../preview/sessions/AgentScreenCardsToggle", () => ({
   AgentScreenCardsToggle: () => null,

@@ -11,6 +11,30 @@ function progress(animation: Animation) {
     : (animation.effect?.getComputedTiming().progress ?? 0);
 }
 
+// A lazily revealed row replaces its placeholder <li>; it takes over the placeholder's entry so
+// the reveal does not animate as a removal plus an arrival.
+function adoptRevealedRows<V>(
+  previous: Map<HTMLElement, V>,
+  next: ReadonlyMap<HTMLElement, unknown>,
+): Map<HTMLElement, V> {
+  const placeholders = new Map<string, HTMLElement>();
+  for (const node of previous.keys()) {
+    const key = node.dataset.threadItem;
+    if (key !== undefined && node.dataset.sidebarLazyRow !== undefined && !next.has(node)) {
+      placeholders.set(key, node);
+    }
+  }
+  if (placeholders.size === 0) return previous;
+  const revealed = new Map<HTMLElement, HTMLElement>();
+  for (const node of next.keys()) {
+    const key = node.dataset.threadItem;
+    const placeholder = key === undefined || previous.has(node) ? undefined : placeholders.get(key);
+    if (placeholder !== undefined) revealed.set(placeholder, node);
+  }
+  if (revealed.size === 0) return previous;
+  return new Map(Array.from(previous, ([node, value]) => [revealed.get(node) ?? node, value]));
+}
+
 /** Position the list so all direct children's offsetTop share an origin. */
 export function createSidebarListMotion(parent: HTMLUListElement) {
   let positions: Map<HTMLElement, RowPosition> | null = null;
@@ -133,6 +157,8 @@ export function createSidebarListMotion(parent: HTMLUListElement) {
             },
           ]),
       );
+      if (positions !== null) positions = adoptRevealedRows(positions, next);
+      if (released !== null) released = adoptRevealedRows(released, next);
       let fadeCount = 0;
       if (positions !== null) {
         for (const [node, position] of positions) {

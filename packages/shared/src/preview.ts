@@ -12,8 +12,9 @@ export { normalizeBlockedBrowserHost };
 export function isBlockedBrowserUrl(url: string, hosts: readonly string[]): boolean {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    const host = parsed.hostname.replace(/\.$/, "");
+    const target = parsed.protocol === "blob:" ? new URL(parsed.origin) : parsed;
+    if (!["http:", "https:", "ws:", "wss:"].includes(target.protocol)) return false;
+    const host = target.hostname.replace(/\.$/, "");
     return hosts.some((entry) => {
       const blocked = normalizeBlockedBrowserHost(entry);
       if (blocked === null) return false;
@@ -86,7 +87,7 @@ export class PreviewUrlNormalizationError extends Schema.TaggedError<PreviewUrlN
 ) {
   override get message(): string {
     const protocol = this.protocol === undefined ? "" : `: ${this.protocol}`;
-    return `Invalid preview URL (${this.reason}${protocol}; input length ${this.inputLength}).`;
+    return `Invalid preview URL (${this.reason}${protocol}; input length ${this.inputLength}). Use an http(s) URL or a schemeless host such as localhost:5173. With goat_preview_open, omit url when creating a new tab to open a blank tab.`;
   }
 }
 
@@ -209,6 +210,14 @@ export function normalizePreviewUrl(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   if (trimmed.length === 0) {
     throw new PreviewUrlNormalizationError({ inputLength: rawUrl.length, reason: "empty" });
+  }
+  const explicitProtocol = previewUrlProtocol(trimmed);
+  if (explicitProtocol !== undefined && KNOWN_NON_WEB_SCHEMES.has(explicitProtocol)) {
+    throw new PreviewUrlNormalizationError({
+      inputLength: rawUrl.length,
+      reason: "unsupported-protocol",
+      protocol: explicitProtocol,
+    });
   }
   const useHttp = LOOPBACK_PREFIX_PATTERN.test(trimmed);
   const candidate = URL_SCHEME_WITH_AUTHORITY_PATTERN.test(trimmed)

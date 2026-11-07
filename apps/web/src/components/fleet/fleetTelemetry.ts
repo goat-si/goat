@@ -1,5 +1,5 @@
 import { presentChildSetup } from "@goat/client-runtime/hub-devices";
-import type { FleetMachine } from "@goat/client-runtime/state/fleet";
+import type { FleetMachine, FleetSnapshot } from "@goat/client-runtime/state/fleet";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import {
   FLEET_HEAT_LABEL,
@@ -192,6 +192,11 @@ export function fleetHostRows(input: {
    * listed too. Defaults to the primary alone.
    */
   readonly sharedSshConfigEnvironmentIds?: ReadonlySet<EnvironmentId>;
+  /** Boat machines Fleet leaves out, so their readings are not listed as other hosts. */
+  readonly hidden?: {
+    readonly routes: FleetSnapshot["hiddenRoutes"];
+    readonly cloudAliases: FleetSnapshot["hiddenCloudAliases"];
+  };
 }): ReadonlyArray<FleetHostRow> {
   const matched = matchFleetHostEntries(input);
   const sourceOf = new Map<HostStatusEntry, string>();
@@ -203,6 +208,9 @@ export function fleetHostRows(input: {
   for (const machine of input.machines) {
     for (const route of machine.reportedAliases) claimed.add(hostSourceKey(route.via, route.alias));
   }
+  for (const route of input.hidden?.routes ?? [])
+    claimed.add(hostSourceKey(route.via, route.alias));
+  const hiddenAliases = new Set(input.hidden?.cloudAliases);
   const rows: FleetHostRow[] = input.machines.map((machine) => {
     const entry = matched.get(machine.id) ?? null;
     const sourceKey = entry === null ? null : (sourceOf.get(entry) ?? null);
@@ -224,7 +232,7 @@ export function fleetHostRows(input: {
     for (const entry of hosts) {
       if (entry.host === null) continue;
       const key = hostSourceKey(environmentId, entry.host);
-      if (claimed.has(key)) continue;
+      if (claimed.has(key) || hiddenAliases.has(entry.host)) continue;
       if (readsClientAliases(environmentId) && ownAliases.has(entry.host)) continue;
       claimed.add(key);
       rows.push({
@@ -332,7 +340,13 @@ export function hottestHost(
 export type FleetAlertTone = "destructive" | "warning" | "muted";
 
 /** The one next step an alert offers, run against the machine's own environment. */
-export type FleetAlertActionKind = "retry" | "compact" | "clean_up" | "memory_settings" | "storage";
+export type FleetAlertActionKind =
+  | "retry"
+  | "compact"
+  | "clean_up"
+  | "memory_settings"
+  | "storage"
+  | "cloud_machines";
 
 export interface FleetAlert {
   readonly key: string;
@@ -424,6 +438,14 @@ export function fleetAlerts(
     readonly stalls?: ReadonlyMap<EnvironmentId, ServerEventLoopStall>;
     /** The Home's Child setup for each row, from fleetChildSetups. */
     readonly childSetups?: ReadonlyMap<string, OpenCodexChildBootstrapStatus>;
+    /**
+     * Running Boat machines nothing runs on, by machine id. Settings lists the primary's cloud
+     * machines only, so a machine another server owns names that server instead of linking.
+     */
+    readonly idleBilling?: ReadonlyMap<
+      string,
+      { readonly owner: EnvironmentId; readonly ownerLabel: string; readonly ownedHere: boolean }
+    >;
   } = {},
 ): ReadonlyArray<FleetAlert> {
   const unreadable = options.unreadable ?? [];
@@ -458,6 +480,24 @@ export function fleetAlerts(
         label: row.label,
         detail: setup.label,
         ...(setup.detail === null ? {} : { lines: [setup.detail] }),
+      });
+    }
+    const billing = row.machineId === null ? undefined : options.idleBilling?.get(row.machineId);
+    if (billing !== undefined) {
+      const detail = "Running with nothing on it; Boat bills while it runs";
+      alerts.push({
+        key: row.key + ":idle-billing",
+        tone: "warning",
+        label: row.label,
+        ...(billing.ownedHere
+          ? { detail, action: { kind: "cloud_machines", environmentId: billing.owner } }
+          : {
+              detail:
+                detail +
+                ". Stop it from " +
+                billing.ownerLabel +
+                "'s Settings → Connections → Cloud machines",
+            }),
       });
     }
     const entry = row.entry;

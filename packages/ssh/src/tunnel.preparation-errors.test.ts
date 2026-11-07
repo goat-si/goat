@@ -54,6 +54,28 @@ const prepareWithProbe = (probe: () => ChildProcessSpawner.ChildProcessHandle) =
   );
 
 describe("SSH runtime preparation errors", () => {
+  it.effect("rejects a relative dev script before any remote command or publication", () =>
+    Effect.gen(function* () {
+      let spawns = 0;
+      const result = yield* Effect.result(
+        prepareRemoteRuntime(uploadTarget, {}, { nodeScriptPath: "./cli.mjs" }).pipe(
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => {
+              spawns++;
+              return Effect.succeed(makeSuccessfulProcess(""));
+            }),
+          ),
+        ),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, SshLaunchError);
+        assert.match(result.failure.message, /absolute/i);
+      }
+      assert.equal(spawns, 0);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
   it.effect.each([
     {
       stderr: "Install shasum or sha256sum to verify the retained GOAT runner.",

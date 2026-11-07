@@ -1,8 +1,11 @@
+import { memoryRun, memoryMessage } from "./RunMemoryFixtures.testkit.ts";
+import { registerAgentOomRunCases } from "./RunExecutionService.oomCases.ts";
+import { AgentScope } from "@goat/shared/AgentScope";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
-import Migration0063 from "../persistence/Migrations/072_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/074_RemoteDispatchQuestions.ts";
-import Migration0101 from "../persistence/Migrations/103_RemoteReportInboxRunId.ts";
+import Migration0063 from "../persistence/Migrations/082_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/084_RemoteDispatchQuestions.ts";
+import Migration0101 from "../persistence/Migrations/113_RemoteReportInboxRunId.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { framePendingReports } from "../remoteReports/reportFrame.ts";
 import { assert, it } from "@effect/vitest";
@@ -13,7 +16,6 @@ import {
   CommandId,
   MessageId,
   NodeId,
-  type OrchestrationV2ConversationMessage,
   ScheduledTaskId,
   type OrchestrationV2AppThread,
   type OrchestrationV2CheckpointScope,
@@ -44,6 +46,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import { CodexAppServerRequestError } from "effect-codex-app-server/errors";
 import { SqlError, classifySqliteError } from "effect/sql/SqlError";
 
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
@@ -2601,6 +2604,45 @@ it.effect("does not overwrite Stop when ownership changes after the finalization
   }),
 );
 
+it.effect.each([
+  { providerReason: undefined, requestReason: undefined, expected: "Stopped by the provider" },
+  {
+    providerReason: "preCompact hook (project): Save a checkpoint.",
+    requestReason: undefined,
+    expected: "preCompact hook (project): Save a checkpoint.",
+  },
+  {
+    providerReason: "preCompact hook (project): Save a checkpoint.",
+    requestReason: "Stopped by the user",
+    expected: "Stopped by the user",
+  },
+])(
+  "emits run_interrupt_result with $expected when finalizing the active attempt",
+  ({ providerReason, requestReason, expected }) =>
+    Effect.gen(function* () {
+      const { written, observed, committedEffects } = yield* captureRootRunTermination({
+        key: "hard-stop",
+        shouldFinalizeRun: () => Effect.succeed(true),
+        loadRunInterruptReason: () => Effect.succeed(requestReason),
+        events: (ids) =>
+          Stream.make({ ...rootTerminalEvent(ids, "interrupted"), reason: providerReason }),
+      });
+      assert.deepEqual(
+        written.map((item) => item.type),
+        ["run_interrupt_result"],
+      );
+      assert.deepEqual(observed, ["run:interrupted", "pull-requests-refreshed"]);
+      assert.equal(
+        written[0]?.type === "run_interrupt_result" ? written[0].message : undefined,
+        expected,
+      );
+      assert.deepEqual(
+        committedEffects.map((effect) => effect.request.type),
+        ["checkpoint.capture"],
+      );
+    }),
+);
+
 it.effect("records a finished run as failed when its ownership check cannot be read", () =>
   Effect.gen(function* () {
     const { observed } = yield* captureRootRunTermination({
@@ -2637,6 +2679,35 @@ it.effect("does not refresh pull requests for auxiliary or stale provider termin
         ]),
     });
     assert.deepEqual(observed, ["run:cancelled", "pull-requests-refreshed"]);
+  }),
+);
+
+it.effect("records a provider's input rejection at turn start in the terminal error", () =>
+  Effect.gen(function* () {
+    const rejection = "goal objective must be at most 4000 characters";
+    const { written, observed } = yield* captureRootRunTermination({
+      key: "start-failure:input-rejected",
+      shouldFinalizeRun: () => Effect.succeed(true),
+      events: () => Stream.never,
+      afterStart: (closed) => Deferred.succeed(closed, undefined),
+      startTurn: (turnInput) =>
+        Effect.fail(
+          new ProviderAdapter.ProviderAdapterTurnStartError({
+            driver,
+            threadId: turnInput.threadId,
+            providerThreadId: turnInput.providerThread.id,
+            runId: turnInput.runId,
+            cause: new CodexAppServerRequestError({
+              code: -32600,
+              errorMessage: rejection,
+              method: "thread/goal/set",
+            }),
+          }),
+        ),
+    });
+    assert.deepEqual(observed, ["run:failed", "pull-requests-refreshed"]);
+    const error = written.find((item) => item.type === "error");
+    assert.include(error?.failure.message ?? "", rejection);
   }),
 );
 
@@ -3136,8 +3207,9 @@ it.effect("keeps completed runs completed when pull request refresh fails", () =
   }),
 );
 
-function captureRootRunTermination(input: {
+export function captureRootRunTermination(input: {
   readonly key: string;
+  readonly oomKilled?: boolean;
   readonly shouldFinalizeRun: () => Effect.Effect<boolean, ProjectionStore.ProjectionStoreV2Error>;
   readonly rejectTerminalWrite?: boolean;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
@@ -3197,6 +3269,10 @@ function captureRootRunTermination(input: {
     const layerTest = RunExecutionService.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.succeed(AgentScope, {
+            ...AgentScope.defaultValue(),
+            oomKilled: () => Effect.succeed(input.oomKilled === true),
+          }),
           Layer.mock(McpAppModelContext.McpAppModelContext)({
             forThread: () => input.appContext ?? Effect.succeed([]),
           }),
@@ -3321,6 +3397,9 @@ function captureRootRunTermination(input: {
         attemptId: ids.attemptId,
         providerTurnOrdinal: 1,
         shouldFinalizeRun: input.shouldFinalizeRun,
+        ...(input.loadRunInterruptReason === undefined
+          ? {}
+          : { loadRunInterruptReason: input.loadRunInterruptReason }),
         ...(input.shouldStartProviderTurn === undefined
           ? {}
           : { shouldStartProviderTurn: input.shouldStartProviderTurn }),
@@ -3769,46 +3848,6 @@ it.effect.each(["accepted", "rejected", "skipped", "compact"] as const)(
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
-const memoryNow = DateTime.makeUnsafe("2026-10-15T00:00:00.000Z");
-const memoryRun = (
-  index: number,
-  fields: Partial<OrchestrationV2Run> = {},
-): OrchestrationV2Run => ({
-  id: RunId.make(`memory-run:${index}`),
-  threadId: ThreadId.make("memory-thread"),
-  ordinal: index,
-  providerInstanceId: ProviderInstanceId.make("codex"),
-  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
-  providerThreadId: null,
-  userMessageId: MessageId.make(`memory-message:${index}`),
-  rootNodeId: null,
-  activeAttemptId: null,
-  status: "starting",
-  requestedAt: memoryNow,
-  startedAt: null,
-  completedAt: null,
-  checkpointId: null,
-  contextHandoffId: null,
-  ...fields,
-});
-const memoryMessage = (
-  run: OrchestrationV2Run,
-  fields: Partial<OrchestrationV2ConversationMessage> = {},
-): OrchestrationV2ConversationMessage => ({
-  id: run.userMessageId,
-  threadId: run.threadId,
-  runId: run.id,
-  nodeId: null,
-  role: "user",
-  text: "Synthetic",
-  attachments: [],
-  streaming: false,
-  createdBy: "user",
-  creationSource: "web",
-  createdAt: memoryNow,
-  updatedAt: memoryNow,
-  ...fields,
-});
 it.each([
   { name: "web user", source: "web", expected: null },
   { name: "mobile user", source: "mobile", expected: null },
@@ -3919,3 +3958,5 @@ it.each(["usageLimitContinuationOfRunId", "restartContinuationOfRunId"] as const
     );
   },
 );
+
+registerAgentOomRunCases(captureRootRunTermination, driver);

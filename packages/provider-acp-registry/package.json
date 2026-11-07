@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./localPresets": {
+      "types": "./src/localPresets.ts",
+      "import": "./src/localPresets.ts"
+    },
     "./client": {
       "types": "./src/client.ts",
       "import": "./src/client.ts"

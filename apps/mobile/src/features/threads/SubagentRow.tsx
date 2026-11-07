@@ -1,14 +1,19 @@
 import { scheduledMemoryAccess } from "../settings/scheduledTaskPresentation";
 import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
-import { resolveProviderInstanceDisplayName } from "@goat/client-runtime/state/provider-instance-display";
+import {
+  normalizeProviderAccentColor,
+  resolveProviderInstanceDisplayName,
+  shouldShowInstanceBadge,
+} from "@goat/client-runtime/state/provider-instance-display";
 import { resolveSubagentMetadata } from "@goat/client-runtime/state/subagent-display";
+import { formatSubagentEffort } from "@goat/client-runtime/state/thread-execution";
 import type { EnvironmentId, OrchestrationV2Subagent } from "@goat/contracts";
 import type { ReactNode } from "react";
 import { View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { ProviderIcon } from "../../components/ProviderIcon";
+import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
 import { useEnvironmentServerConfig, useProject, useThreadShell } from "../../state/entities";
 import { subagentCardDetail } from "./subagent-card-presentation";
@@ -22,6 +27,7 @@ type SubagentRowSubagent = Pick<
   | "threadId"
   | "childThreadId"
   | "model"
+  | "modelSelection"
   | "driver"
   | "providerInstanceId"
   | "title"
@@ -97,9 +103,24 @@ function SubagentMetadata(props: {
 }) {
   const { environmentId, subagent } = props;
   const config = useEnvironmentServerConfig(environmentId);
-  const provider = config?.providers.find(
+  const providers = (config?.providers ?? []).map((candidate) => {
+    const rawConfig = config?.settings.providerInstances[candidate.instanceId]?.config;
+    const instanceConfig =
+      rawConfig !== null && typeof rawConfig === "object"
+        ? (rawConfig as Readonly<Record<string, unknown>>)
+        : null;
+    const agentId = instanceConfig?.source === "local" ? undefined : instanceConfig?.agentId;
+    return {
+      ...candidate,
+      driverKind: candidate.driver,
+      accentColor: normalizeProviderAccentColor(candidate.accentColor),
+      acpRegistryAgentId: typeof agentId === "string" ? agentId.trim() || undefined : undefined,
+    };
+  });
+  const provider = providers.find(
     (candidate) => candidate.instanceId === subagent.providerInstanceId,
   );
+  const showBadge = provider !== undefined && shouldShowInstanceBadge(provider, providers);
   const parent = useThreadShell(scopeThreadRef(environmentId, subagent.threadId))?.source;
   const child = useThreadShell(
     subagent.childThreadId === null ? null : scopeThreadRef(environmentId, subagent.childThreadId),
@@ -108,24 +129,39 @@ function SubagentMetadata(props: {
     parent ? scopeProjectRef(environmentId, parent.projectId) : null,
   );
   const childProject = useProject(child ? scopeProjectRef(environmentId, child.projectId) : null);
-  const { modelLabel, workspace } = resolveSubagentMetadata({
+  const selection = subagent.modelSelection;
+  const { modelLabel, modelSlug, workspace } = resolveSubagentMetadata({
     model: subagent.model,
+    modelSelection: selection,
     provider,
     parentThread: parent,
     childThread: child,
     parentProject,
     childProject,
   });
+  const effort = formatSubagentEffort({ modelSlug, modelSelection: selection, provider });
   return (
     <View className="min-w-0 flex-row items-center gap-1.5">
-      <ProviderIcon
-        provider={provider?.driver ?? subagent.driver}
-        iconUrl={provider?.iconUrl}
-        size={12}
-      />
+      {showBadge ? (
+        <ProviderInstanceIcon
+          provider={provider.driver}
+          iconUrl={provider.iconUrl}
+          size={12}
+          displayName={resolveProviderInstanceDisplayName(provider)}
+          accentColor={provider.accentColor}
+          showBadge
+        />
+      ) : (
+        <ProviderIcon
+          provider={provider?.driver ?? subagent.driver}
+          iconUrl={provider?.iconUrl}
+          size={12}
+        />
+      )}
       <Text className="min-w-0 shrink text-xs text-foreground-muted" numberOfLines={1}>
         {provider ? `${resolveProviderInstanceDisplayName(provider)} · ` : ""}
         {modelLabel}
+        {effort ? ` · ${effort}` : ""}
       </Text>
       {workspace.map(({ label, value }) => (
         // Preserve the label against flattening without making it a separate accessibility stop.

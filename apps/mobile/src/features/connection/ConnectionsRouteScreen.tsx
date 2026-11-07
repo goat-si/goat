@@ -1,4 +1,4 @@
-import { Toolbar } from "../../components/ui/Toolbar";
+import { AppBar } from "../../components/ui/AppBar";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 
 import { useNavigation } from "@react-navigation/native";
@@ -44,13 +44,17 @@ export function ConnectionsRouteScreen() {
           ]}
         />
       ) : (
-        <Toolbar placement="right">
-          <Toolbar.Button
-            icon="plus"
-            onPress={() => navigation.navigate("ConnectionsNew")}
-            separateBackground
-          />
-        </Toolbar>
+        <AppBar
+          title="Environments"
+          sidebar={false}
+          actions={[
+            {
+              accessibilityLabel: connectHubLabel,
+              icon: "plus",
+              onPress: () => navigation.navigate("ConnectionsNew"),
+            },
+          ]}
+        />
       )}
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"

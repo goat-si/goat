@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Effect has no Unix-socket client; the D-Bus handshake needs one.
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 import * as Effect from "effect/Effect";
 
@@ -186,7 +187,9 @@ export const dbusProbe = (
       socket.destroy();
       resume(Effect.succeed(result));
     };
-    const socket = NodeNet.createConnection(socketPath);
+    const socket = guardErrors(NodeNet.createConnection(socketPath), () =>
+      finish({ answered: false }),
+    );
     socket.once("connect", () => socket.write(dbusAuthLine(uid)));
     socket.on("data", (chunk: Buffer) => {
       pending = Buffer.concat([pending, chunk]);
@@ -216,7 +219,6 @@ export const dbusProbe = (
         finish({ answered: false });
       }
     });
-    socket.once("error", () => finish({ answered: false }));
     socket.once("close", () => finish({ answered: false }));
     return Effect.sync(() => socket.destroy());
   }).pipe(

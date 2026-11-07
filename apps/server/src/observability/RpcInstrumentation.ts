@@ -19,11 +19,13 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup | typeof WsHubNodesRpcGroup>[
 
 // Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
+  [WS_METHODS.browserClaimsWindows]: "browserClaims",
   [WS_METHODS.browserClaimsClaim]: "browserClaims",
   [WS_METHODS.browserClaimsAnswer]: "browserClaims",
   [WS_METHODS.browserClaimsRevoke]: "browserClaims",
   [WS_METHODS.browserClaimsEnd]: "browserClaims",
   [WS_METHODS.browserClaimsList]: "browserClaims",
+  [WS_METHODS.browserClaimsSubscribe]: "browserClaims",
   [WS_METHODS.hubNodesList]: "hubNodes",
   [WS_METHODS.hubNodesSubscribe]: "hubNodes",
   [WS_METHODS.hubNodesAdd]: "hubNodes",
@@ -41,9 +43,11 @@ const RPC_AGGREGATES = {
   [WS_METHODS.notesStartWork]: "notes",
   [WS_METHODS.notesWorkTargets]: "notes",
   [WS_METHODS.notesWorkTargetProjects]: "notes",
+  [WS_METHODS.notesAttach]: "notes",
 
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: "orchestration",
@@ -106,6 +110,9 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverResumeAutomation]: "server",
   [WS_METHODS.serverGetStorageCleanupReport]: "server",
   [WS_METHODS.serverGetWorktreesDirectoryStatus]: "server",
+  [WS_METHODS.threadGetWorkspaceStatus]: "workspace",
+  [WS_METHODS.threadRestoreWorkspace]: "workspace",
+  [WS_METHODS.serverRespondWorktreeCleanupPreview]: "server",
   [WS_METHODS.serverGetDatabaseStorage]: "server",
   [WS_METHODS.serverCompactStorage]: "server",
   [WS_METHODS.serverCleanUpStrayProcesses]: "server",
@@ -188,6 +195,11 @@ const RPC_AGGREGATES = {
   [WS_METHODS.handoffsRespond]: "handoffs",
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.listBots]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.updateBot]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.listChildWork]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.listBotThreads]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getTask]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listTasks]: "channel",
@@ -328,6 +340,9 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeServerConfig]: "server",
   [WS_METHODS.subscribeServerLifecycle]: "server",
   [WS_METHODS.subscribeAuthAccess]: "auth",
+  [WS_METHODS.authAccessCreatePairing]: "auth",
+  [WS_METHODS.authAccessRevokePairing]: "auth",
+  [WS_METHODS.authAccessRevokeClient]: "auth",
   [WS_METHODS.subscribeBackgroundPolicy]: "server",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 

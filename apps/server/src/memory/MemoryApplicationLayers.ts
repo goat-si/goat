@@ -28,6 +28,7 @@ import * as MemoryOwnerSourceReadPolicyBinding from "../memory/MemoryOwnerSource
 import * as MemoryQuota from "../memory/MemoryQuotaService.ts";
 import * as MemoryReportAdapter from "../memory/MemoryReportAdapter.ts";
 import * as MemoryReportWorker from "../memory/MemoryReportWorker.ts";
+import * as MemoryRecall from "../memory/MemoryRecall.ts";
 import * as MemoryService from "../memory/MemoryService.ts";
 import * as MemorySettings from "../memory/MemorySettingsService.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
@@ -37,6 +38,7 @@ import * as MemorySyncRuntimeLive from "../memory/MemorySyncRuntimeLive.ts";
 import * as MemorySync from "../memory/MemorySyncService.ts";
 import * as MemoryWorker from "../memory/MemoryWorker.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
+import { forkParked } from "../serverActivation.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 
 import { MemoryHubError } from "@goat/contracts";
@@ -72,6 +74,15 @@ export class MemorySourceReadBinding extends Context.Service<
     readonly bind: (sync: MemorySync.MemorySyncService["Service"]) => Effect.Effect<void>;
   }
 >()("goat/memory/MemoryApplicationLayers/MemorySourceReadBinding") {}
+
+export const layerStartWorkers = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const worker = yield* MemoryWorker.MemoryWorker;
+    yield* worker.start();
+    const reports = yield* MemoryReportWorker.MemoryReportWorker;
+    yield* forkParked(reports.start());
+  }),
+);
 
 /**
  * The memory application: core store, sync, hub, imports, snapshot and toolkits. server.ts calls
@@ -165,14 +176,7 @@ export const makeMemoryApplicationLayers = (deps: {
     Layer.provide(RuntimeIdentity.layer),
     Layer.provide(layerMemoryGenerationHold),
   );
-  const layerMemoryStarted = Layer.effectDiscard(
-    Effect.gen(function* () {
-      const worker = yield* MemoryWorker.MemoryWorker;
-      yield* worker.start();
-      const reports = yield* MemoryReportWorker.MemoryReportWorker;
-      yield* reports.start();
-    }),
-  ).pipe(Layer.provideMerge(layerMemoryWorker));
+  const layerMemoryStarted = layerStartWorkers.pipe(Layer.provideMerge(layerMemoryWorker));
 
   // These layers are also used by the real-store HTTP scenarios. Dependencies are
   // supplied by the application, so WP2 and the hub share one core and settings owner.
@@ -408,6 +412,7 @@ export const makeMemoryApplicationLayers = (deps: {
   const layerMemorySnapshot = MemorySnapshot.layer;
   const provideMemorySnapshot = MemorySnapshotBinding.provide;
   const layerMemorySnapshotWithDependencies = layerMemorySnapshot.pipe(
+    Layer.provide(layerServerSettings),
     Layer.provide(layerMemorySync),
     Layer.provide(layerMemoryService),
     Layer.provide(layerMemoryQuota),
@@ -425,7 +430,11 @@ export const makeMemoryApplicationLayers = (deps: {
     McpHttpServer.layerMemoryToolkit,
     layerMemoryAdministrationToolkit,
     // The goatclaw capability gate on every MCP registration reads the caller's profile.
-  ).pipe(Layer.provide(PermissionProfiles.layer), Layer.provide(ChannelSessionReceiptGate.layer));
+  ).pipe(
+    Layer.provide(MemoryRecall.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+    Layer.provide(PermissionProfiles.layer),
+    Layer.provide(ChannelSessionReceiptGate.layer),
+  );
 
   return {
     layerMemorySourceReadBinding,

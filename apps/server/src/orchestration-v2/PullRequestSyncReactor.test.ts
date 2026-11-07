@@ -222,6 +222,7 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
 
   const layerDependencies = Layer.mergeAll(
     Layer.mock(PullRequestService.PullRequestService)({
+      withSharedProjectReads: (effect) => effect,
       summary,
       stack,
       invalidate: options.invalidate ?? (() => Effect.void),
@@ -813,6 +814,81 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 
+  it.effect("keeps the known mergeability while the host recomputes it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const answers = yield* Ref.make<ReadonlyArray<"unknown" | "mergeable">>([
+          "unknown",
+          "mergeable",
+        ]);
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([
+            makeThread("one", {
+              pullRequests: [makeLink(42, { mergeability: "conflicting" })],
+            }),
+          ]),
+          summary: (input) =>
+            Ref.modify(answers, ([next = "mergeable", ...rest]) => [
+              makeSummary(input, { mergeability: next }),
+              rest,
+            ]),
+        });
+
+        yield* Effect.gen(function* () {
+          const reactor = yield* startAndSweep(fixture);
+          assert.deepStrictEqual(yield* Ref.get(fixture.syncCommands), []);
+
+          // An unchanged old PR uses main's five-minute quiet polling cadence.
+          yield* TestClock.adjust("5 minutes");
+          yield* Queue.take(fixture.snapshotReads);
+          yield* reactor.drain;
+          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 2);
+
+          const commands = yield* Ref.get(fixture.syncCommands);
+          assert.deepStrictEqual(
+            commands.map((command) => command.snapshot.mergeability),
+            ["mergeable"],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect.each([
+    { provider: "github" as const, updatedAt: "2026-08-28T00:00:00.000Z" },
+    { provider: "forgejo" as const, updatedAt: "2026-08-27T00:00:00.000Z" },
+  ])("persists unknown mergeability for $provider at $updatedAt", ({ provider, updatedAt }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([
+            makeThread("one", {
+              pullRequests: [makeLink(42, { mergeability: "mergeable" })],
+            }),
+          ]),
+          summary: (input) =>
+            Effect.succeed(
+              makeSummary(input, {
+                provider: SourceControlProviderKind.make(provider),
+                updatedAt,
+                mergeability: "unknown",
+              }),
+            ),
+        });
+        yield* Effect.gen(function* () {
+          yield* startAndSweep(fixture);
+          const commands = yield* Ref.get(fixture.syncCommands);
+          assert.deepStrictEqual(
+            commands.map((command) => command.snapshot.mergeability),
+            ["unknown"],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
   it.effect("refreshes closed links through each project after reopening elsewhere", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -869,18 +945,15 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 
-  it.effect("stops asking the host once a pull request is merged", () =>
+  it.effect.each([
+    { state: "merged" as const, mergedAt: "2026-08-27T00:00:00.000Z" },
+    { state: "closed" as const, closedAt: "2026-08-27T00:00:00.000Z" },
+  ])("skips a $state pull request during sweeps but reads it on explicit refresh", (snapshot) =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.parse(NOW));
         const fixture = yield* makeHarness({
-          snapshot: makeSnapshot([
-            makeThread("merged", {
-              pullRequests: [
-                makeLink(1, { state: "merged", mergedAt: "2026-08-27T00:00:00.000Z" }),
-              ],
-            }),
-          ]),
+          snapshot: makeSnapshot([makeThread("final", { pullRequests: [makeLink(1, snapshot)] })]),
         });
 
         yield* Effect.gen(function* () {

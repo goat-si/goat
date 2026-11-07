@@ -32,6 +32,8 @@ import { vcsEnvironment } from "../../state/vcs";
 import { checkoutNewTaskBranch } from "./checkout-new-task-branch";
 import { resolveNewTaskBranchWorktreePath } from "./new-task-context-presentation";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { AppBar } from "../../components/ui/AppBar";
+import { useWorkspaceBackNavigation } from "../workspace/useAndroidWorkspaceNavigation";
 
 import { ThreadScreenFallback } from "./ThreadScreenHost";
 import { NewTaskDraftScreen } from "./NewTaskDraftScreen";
@@ -83,6 +85,7 @@ const idleBranchCheckoutAtom = Atom.make(AsyncResult.initial<BranchCheckoutResul
 
 export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraftRouteParams>) {
   const currentRoute = useRoute();
+  const goBack = useWorkspaceBackNavigation("threads");
   const params = useMemo(() => route.params ?? {}, [route.params]);
   const pendingTaskId = Array.isArray(params.pendingTaskId)
     ? params.pendingTaskId[0]
@@ -184,6 +187,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       {preparingBranch ? (
         <ThreadScreenFallback>
           <NativeStackScreenOptions options={{ title: "New thread" }} />
+          <AppBar title="New thread" onBack={goBack} sidebar={false} />
           <View className="flex-1 items-center justify-center bg-screen">
             <Text className="text-foreground">Switching branch...</Text>
           </View>

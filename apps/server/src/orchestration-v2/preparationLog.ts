@@ -36,3 +36,12 @@ export function renderPreparationLog(log: PreparationLog): string | null {
   const cut = text.slice(text.length - ORCHESTRATION_V2_PROVIDER_FAILURE_LOG_MAX_CHARS + 2);
   return `…\n${cut.slice(cut.indexOf("\n") + 1)}`;
 }
+import type { OrchestrationV2ProviderFailure } from "@goat/contracts";
+
+export const withPreparationLog = (
+  failure: OrchestrationV2ProviderFailure,
+  log: PreparationLog,
+): OrchestrationV2ProviderFailure => {
+  const text = renderPreparationLog(log);
+  return text === null ? failure : { ...failure, log: text };
+};

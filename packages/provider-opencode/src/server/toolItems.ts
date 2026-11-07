@@ -1,4 +1,4 @@
-import type { OrchestrationV2TurnItem } from "@goat/contracts";
+import type { OrchestrationV2ExecutionNode, OrchestrationV2TurnItem } from "@goat/contracts";
 import { resolveGoatMcpToolId } from "@goat/shared/goatMcpToolPresentation";
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
 import { imageBlockFromDataUrl, MAX_TOOL_OUTPUT_IMAGES } from "@goat/shared/toolOutput";
@@ -52,7 +52,8 @@ export interface OpenCodeToolResult {
 function openCodeToolProjectionKind(
   toolName: string,
 ): "command_execution" | "file_change" | "file_search" | "web_search" | "dynamic_tool" {
-  if (resolveGoatMcpToolId(toolName) !== null) return "dynamic_tool";
+  if (toolName.startsWith("mcp__") || resolveGoatMcpToolId(toolName) !== null)
+    return "dynamic_tool";
   const normalized = toolName.toLowerCase();
   if (normalized === "todowrite") {
     return "dynamic_tool";
@@ -118,6 +119,16 @@ function nativeReadOutput(output: string): string {
       : /^<content>(?:\r?\n)?([\s\S]*?)\r?\n<\/content>(?=\r?\n|$)/.exec(body);
   // OpenCode can append instructions after the envelope; keep that suffix verbatim.
   return envelope === null ? output : envelope[1] + body.slice(envelope[0].length);
+}
+
+/** OpenCode's shell tool succeeds when the command exits non-zero. */
+export function openCodeCommandFailed(toolName: string, completedMetadata: unknown): boolean {
+  const exitCode = recordNumber(completedMetadata, "exit", "exitCode");
+  return (
+    openCodeToolProjectionKind(toolName) === "command_execution" &&
+    exitCode !== undefined &&
+    exitCode !== 0
+  );
 }
 
 export function openCodeToolTurnItem(
@@ -213,5 +224,23 @@ export function openCodeToolTurnItem(
         ...(cleanedOutput === undefined ? {} : { output: cleanedOutput }),
       };
     }
+  }
+}
+
+export function openCodeToolStatus(part: ToolPart): {
+  readonly node: OrchestrationV2ExecutionNode["status"];
+  readonly item: OrchestrationV2TurnItem["status"];
+} {
+  switch (part.state.status) {
+    case "pending":
+      return { node: "pending", item: "pending" };
+    case "running":
+      return { node: "running", item: "running" };
+    case "completed":
+      return openCodeCommandFailed(part.tool, part.state.metadata)
+        ? { node: "failed", item: "failed" }
+        : { node: "completed", item: "completed" };
+    case "error":
+      return { node: "failed", item: "failed" };
   }
 }

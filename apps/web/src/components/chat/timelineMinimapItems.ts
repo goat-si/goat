@@ -1,3 +1,4 @@
+import { isAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 import type { Nodes } from "mdast";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import remarkGfm from "remark-gfm";
@@ -26,7 +27,7 @@ export function deriveTimelineMinimapItems(
     items.push({
       id: row.id,
       rowIndex: index,
-      userText: row.message.text,
+      userText: isAttachmentOnlyBootstrapPrompt(row.message.text) ? "" : row.message.text,
       assistantText: resolveFinalAssistantTextForTurn(rows, index),
     });
   }

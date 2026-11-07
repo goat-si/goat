@@ -5,11 +5,7 @@ import { createCommandPermissions } from "./commandPermissions.ts";
 import { followStreamInEnvironment } from "./environmentStreams.ts";
 import { reuseUnchanged } from "./serverConfigProjection.ts";
 export { runStreamInEnvironment, followStreamInEnvironment } from "./environmentStreams.ts";
-import {
-  type ClientGuardedRpcTag,
-  EnvironmentId,
-  type EnvironmentId as EnvironmentIdType,
-} from "@goat/contracts";
+import { EnvironmentId, type EnvironmentId as EnvironmentIdType } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -30,7 +26,6 @@ import {
   type EnvironmentSubscriptionRpcTag,
   type EnvironmentUnaryRpcTag,
   EnvironmentRpcUnavailableError,
-  request,
   requestGuarded,
   RpcPermissionGuard,
   subscribe,
@@ -93,6 +88,9 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
   readonly execute: (
     input: Input,
     emit: (value: A) => Effect.Effect<void>,
+    registry: AtomRegistry.AtomRegistry,
+    environmentId: EnvironmentIdType,
+    previous: Option.Option<A>,
   ) => Effect.Effect<A, E, R>;
   readonly persistence?: QueryPersistence<A>;
   readonly staleTimeMs?: number;
@@ -478,6 +476,10 @@ export async function settlePromise<A>(
   }
 }
 
+/** Where a query's answer is persisted, so an action's reply can be saved where a read would be. */
+export const queryPersistenceKey = (label: string, input: unknown): string =>
+  JSON.stringify([label, input]);
+
 export function environmentRpcKey<Input>(target: {
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
@@ -627,7 +629,16 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
                 ? runInEnvironment(
                     target.environmentId,
                     options
-                      .execute(target.input, emit)
+                      .execute(
+                        target.input,
+                        emit,
+                        get.registry,
+                        target.environmentId,
+                        Option.flatMap(
+                          get.self<AsyncResult.AsyncResult<A, unknown>>(),
+                          AsyncResult.value,
+                        ),
+                      )
                       .pipe(pendingOnceSessionReplaced(session.value)),
                   )
                 : Effect.never;
@@ -671,7 +682,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
               );
         if (!options.persistence) return answer();
         const persistence = options.persistence;
-        const cacheKey = JSON.stringify([options.label, target.input]);
+        const cacheKey = queryPersistenceKey(options.label, target.input);
         const previous = Option.flatMap(
           get.self<AsyncResult.AsyncResult<A, unknown>>(),
           AsyncResult.value,
@@ -766,11 +777,7 @@ export function createEnvironmentCommand<R, ER, Input, A, E>(
   });
 }
 
-export function createEnvironmentRpcQueryAtomFamily<
-  R,
-  ER,
-  TTag extends Exclude<EnvironmentUnaryRpcTag, ClientGuardedRpcTag>,
->(
+export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends EnvironmentUnaryRpcTag>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
   options: {
     readonly label: string;
@@ -778,6 +785,7 @@ export function createEnvironmentRpcQueryAtomFamily<
     readonly execute?: (
       input: EnvironmentRpcInput<TTag>,
       emit: (value: EnvironmentRpcSuccess<TTag>) => Effect.Effect<void>,
+      previous: Option.Option<EnvironmentRpcSuccess<TTag>>,
     ) => Effect.Effect<
       EnvironmentRpcSuccess<TTag>,
       EnvironmentRpcFailure<TTag> | EnvironmentRpcUnavailableError,
@@ -795,6 +803,7 @@ export function createEnvironmentRpcQueryAtomFamily<
     readonly onAnswer?: QueryAnswerHandler<EnvironmentRpcInput<TTag>, EnvironmentRpcSuccess<TTag>>;
   },
 ) {
+  const permissions = createCommandPermissions(runtime, options.tag);
   return createEnvironmentQueryAtomFamily(runtime, {
     label: options.label,
     ...(options.persistence === undefined ? {} : { persistence: options.persistence }),
@@ -809,7 +818,19 @@ export function createEnvironmentRpcQueryAtomFamily<
     execute: (
       input: EnvironmentRpcInput<TTag>,
       emit: (value: EnvironmentRpcSuccess<TTag>) => Effect.Effect<void>,
-    ) => options.execute?.(input, emit) ?? request(options.tag, input),
+      registry: AtomRegistry.AtomRegistry,
+      environmentId: EnvironmentIdType,
+      previous: Option.Option<EnvironmentRpcSuccess<TTag>>,
+    ) =>
+      permissions.authorize(registry, environmentId, input).pipe(
+        Effect.andThen(
+          () => options.execute?.(input, emit, previous) ?? requestGuarded(options.tag, input),
+        ),
+        Effect.provideService(RpcPermissionGuard, {
+          authorize: (id, method, payload) =>
+            createCommandPermissions(runtime, method).authorize(registry, id, payload),
+        }),
+      ),
   });
 }
 
@@ -860,11 +881,20 @@ export function createEnvironmentRpcCommand<
   ER,
   TTag extends EnvironmentUnaryRpcTag,
   Input extends EnvironmentRpcInput<TTag> = EnvironmentRpcInput<TTag>,
+  Started = undefined,
 >(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
   options: {
     readonly label: string;
     readonly tag: TTag;
+    /** Runs once authorized, as the request starts; what it returns reaches `onSuccess`. */
+    readonly onStart?: (
+      target: {
+        readonly environmentId: EnvironmentIdType;
+        readonly input: NoInfer<Input>;
+      },
+      registry: AtomRegistry.AtomRegistry,
+    ) => Started;
     readonly execute?: (
       input: Input,
     ) => Effect.Effect<
@@ -884,6 +914,7 @@ export function createEnvironmentRpcCommand<
       },
       registry: AtomRegistry.AtomRegistry,
       result: EnvironmentRpcSuccess<TTag>,
+      started: Started | undefined,
     ) => Effect.Effect<void, never, R>;
     readonly onSettled?: (
       target: {
@@ -904,15 +935,21 @@ export function createEnvironmentRpcCommand<
         environmentId,
         input,
       };
+      let started: Started | undefined;
       // Routing requires consent on the origin as well as the actual destination.
       // The transport check below deliberately checks the destination again.
       return permissions.authorize(registry, environmentId, input).pipe(
-        Effect.andThen(() => options.execute?.(input) ?? requestGuarded(options.tag, input)),
+        Effect.andThen(() => {
+          started = options.onStart?.(target, registry);
+          return options.execute?.(input) ?? requestGuarded(options.tag, input);
+        }),
         Effect.provideService(RpcPermissionGuard, {
           authorize: (id, method, payload) =>
             createCommandPermissions(runtime, method).authorize(registry, id, payload),
         }),
-        Effect.tap((result) => options.onSuccess?.(target, registry, result) ?? Effect.void),
+        Effect.tap(
+          (result) => options.onSuccess?.(target, registry, result, started) ?? Effect.void,
+        ),
         Effect.ensuring(options.onSettled?.(target, registry) ?? Effect.void),
       );
     },

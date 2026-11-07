@@ -79,7 +79,8 @@ const CLONE_ENV = {
   // Force piped progress immediately; refuse credential prompts that would hang without a tty.
   GIT_PROGRESS_DELAY: "0",
   GIT_TERMINAL_PROMPT: "0",
-  LC_ALL: "C",
+  // English progress without overriding LC_CTYPE, which a global post-checkout hook inherits.
+  LANGUAGE: "C",
 } satisfies NodeJS.ProcessEnv;
 
 function mapRepositoryError(operation: string, provider: SourceControlProviderKind) {
@@ -501,29 +502,61 @@ export const make = Effect.gen(function* () {
         };
       }
 
-      const pushResult = yield* git.pushCurrentBranch(input.cwd, null, { remoteName }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new SourceControlRepositoryError({
-              operation: "publishRepository",
-              provider: providerKind,
-              detail: publishPushFailureDetail({
-                urls,
-                remoteName,
-                remoteUrl,
-                reason: cause.reason,
+      const push = (pushUrl: string) =>
+        git.pushCurrentBranch(input.cwd, null, { remoteName }).pipe(
+          Effect.map((result) => ({ ...result, remoteUrl: pushUrl })),
+          Effect.mapError(
+            (cause) =>
+              new SourceControlRepositoryError({
+                operation: "publishRepository",
+                provider: providerKind,
+                detail: publishPushFailureDetail({
+                  urls,
+                  remoteName,
+                  remoteUrl: pushUrl,
+                  reason: cause.reason,
+                }),
+                cause,
               }),
-              cause,
-            }),
+          ),
+        );
+
+      // Like clone, an auto-selected SSH remote switches to HTTPS when SSH is refused;
+      // otherwise the remote keeps failing every later fetch and push.
+      const canSwitchToHttps =
+        (input.protocol === undefined || input.protocol === "auto") && remoteUrl === urls.sshUrl;
+      const pushed = yield* push(remoteUrl).pipe(
+        Effect.catchIf(
+          (error) => canSwitchToHttps && isSshRejection(error),
+          () =>
+            git
+              .execute({
+                operation: "SourceControlRepositoryService.publishRepository.switchToHttps",
+                cwd: input.cwd,
+                args: ["remote", "set-url", remoteName, urls.url],
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new SourceControlRepositoryError({
+                      operation: "publishRepository",
+                      provider: providerKind,
+                      detail:
+                        "The SSH push was rejected and the remote could not be switched to HTTPS.",
+                      cause,
+                    }),
+                ),
+                Effect.andThen(push(urls.url)),
+              ),
         ),
       );
 
       return {
         repository: toRepositoryInfo(providerKind, urls),
         remoteName,
-        remoteUrl,
-        branch: pushResult.branch,
-        ...(pushResult.upstreamBranch ? { upstreamBranch: pushResult.upstreamBranch } : {}),
+        remoteUrl: pushed.remoteUrl,
+        branch: pushed.branch,
+        ...(pushed.upstreamBranch ? { upstreamBranch: pushed.upstreamBranch } : {}),
         status: "pushed" as const,
       };
     },

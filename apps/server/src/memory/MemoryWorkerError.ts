@@ -23,3 +23,16 @@ export class MemoryWorkerError extends Schema.TaggedError<MemoryWorkerError>()(
     return "Memory work failed.";
   }
 }
+
+const isFailureCode = Schema.is(M.MemoryFailureCode);
+export const safeCode = (error: unknown): M.MemoryFailureCode => {
+  if (typeof error === "object" && error !== null) {
+    if ("code" in error && isFailureCode(error.code)) return error.code;
+    if ("_tag" in error && error._tag === "TextGenerationError") {
+      // Only exact public enum codes may cross the provider's diagnostic boundary.
+      if ("detail" in error && isFailureCode(error.detail)) return error.detail;
+      return "generation_failed";
+    }
+  }
+  return "storage_failed";
+};

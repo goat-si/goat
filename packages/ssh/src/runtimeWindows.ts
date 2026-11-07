@@ -4,16 +4,18 @@ import {
   EnvironmentId,
   type RuntimeSessionRequest,
 } from "@goat/contracts";
-import { parseSemver } from "@goat/shared/semver";
+import { compareRuntimeBuilds, parseSemver } from "@goat/shared/semver";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import type { ExistingServerProbe } from "./appServer.ts";
 import type * as SshAuth from "./auth.ts";
-import { runSshCommand } from "./command.ts";
+import { REMOTE_RUNTIME_STATE_KEY, runSshCommand } from "./command.ts";
+import { SSH_READY_TIMEOUT_MS } from "./sshReadiness.ts";
 import { SshCommandError, SshLaunchError, SshPairingError } from "./errors.ts";
 import {
+  compatibleRuntimeUpdateBlocked,
   matchesSignals,
   notifyRuntimePhase,
   type PreparedRemoteRuntime,
@@ -26,6 +28,7 @@ import { readLocalRuntimeArchive } from "./runtimeArchive.ts";
 import { downloadRuntimeArchiveWithGh } from "./runtimeArchiveGh.ts";
 import { downloadRuntimeArchiveWithHttps } from "./runtimeArchiveHttp.ts";
 import { runtimePreparationError } from "./runtimePreparationErrors.ts";
+import { buildRemoteRuntimeProbeScript } from "./runtimeProbe.ts";
 import {
   powershellCommand,
   WINDOWS_DETECT,
@@ -186,6 +189,51 @@ export const inspectWindowsRuntime = Effect.fn("ssh.windows.inspect")(function* 
   return yield* parseState(result.stdout);
 });
 
+export const statusRuntimeProbe = Effect.fn("ssh.windows.statusRuntimeProbe")(function* (
+  target: DesktopSshEnvironmentTarget,
+  version: string,
+) {
+  const auth = {
+    batchMode: "yes" as const,
+    interactiveAuth: false,
+    preHostArgs: ["-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no"],
+  };
+  return yield* runSshCommand(target, {
+    ...auth,
+    remoteCommandArgs: ["sh", "-l", "-s"],
+    stdin: buildRemoteRuntimeProbeScript(version, REMOTE_RUNTIME_STATE_KEY),
+    timeoutMs: SSH_READY_TIMEOUT_MS,
+  }).pipe(
+    Effect.catchTags({
+      SshCommandError: (error) =>
+        nativeWindowsAfter(
+          target,
+          auth,
+        )(error).pipe(
+          Effect.flatMap(() => inspectWindowsRuntime(target, auth, version)),
+          Effect.map((state) => ({
+            stdout: JSON.stringify({
+              platform: "win32",
+              arch: "x64",
+              ready: state.selection !== null,
+              liveStatus: state.live ? "live" : "none",
+              ...(state.live && state.selection !== null
+                ? {
+                    liveVersion: state.selection.version,
+                    livePort: state.selection.port,
+                    liveOwned: false,
+                    liveDrain: false,
+                    liveSignals: state.signals,
+                    liveBinarySignals: state.binarySignals,
+                  }
+                : {}),
+            }),
+          })),
+        ),
+    }),
+  );
+});
+
 /**
  * Selects an installed goat.exe, or uploads this build's verified win32-x64 archive. Mirrors,
  * Node script runners and runtime replacement are refused rather than silently substituted.
@@ -259,6 +307,10 @@ export const prepareWindowsRuntime = Effect.fn("ssh.windows.prepare")(function* 
     return yield* failure(
       `GOAT ${selected?.version ?? "unknown"} on ${target.alias} cannot serve this app's protocol.`,
     );
+  const order = compareRuntimeBuilds(
+    { version: selected.version },
+    { version, commitTime: runner?.archiveCommitTime },
+  );
   return {
     ...requestedRuntime(runner),
     runner: { ...runner, archiveVersion: selected.version },
@@ -269,9 +321,16 @@ export const prepareWindowsRuntime = Effect.fn("ssh.windows.prepare")(function* 
     mayUpgradeOwnedServer: false,
     installedExecutableSha256: selected.sha256,
     nativeWindows: selected,
-    ...(selected.version === version
-      ? {}
-      : { updateBlocked: "GOAT does not replace a runtime on native Windows automatically." }),
+    ...(order === undefined || order < 0
+      ? {
+          updateBlocked: compatibleRuntimeUpdateBlocked(
+            target.alias,
+            selected.version,
+            version,
+            order,
+          ),
+        }
+      : {}),
   } satisfies PreparedRemoteRuntime;
 });
 

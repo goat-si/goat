@@ -72,6 +72,9 @@ vi.mock("react", () => ({
 vi.mock("expo-crypto", () => ({ randomUUID: () => "uuid" }));
 vi.mock("../lib/attachmentUpload", () => ({ prepareTurnAttachments: vi.fn() }));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid" }));
+vi.mock("../features/threads/useSideChatCommand", () => ({
+  useSideChatCommand: () => async () => false,
+}));
 vi.mock("./queued-run-edit", () => ({
   useQueuedRunEdit: () => null,
   getQueuedRunEdit: () => null,
@@ -205,6 +208,20 @@ beforeEach(() => {
 });
 
 describe("mobile task permissions", () => {
+  it("notifies the screen before enqueueing, and never for a refused send", async () => {
+    const events: string[] = [];
+    const onWillEnqueue = vi.fn(() => events.push("notify"));
+    const refused = useThreadComposerState();
+    await refused.onSendMessage(undefined, undefined, onWillEnqueue);
+    expect(onWillEnqueue).not.toHaveBeenCalled();
+    state.grantedEnvironments.add("secondary");
+    state.enqueue.mockImplementationOnce(async () => {
+      events.push("enqueue");
+    });
+    await useThreadComposerState().onSendMessage(undefined, undefined, onWillEnqueue);
+    expect(state.enqueue).toHaveBeenCalledOnce();
+    expect(events).toEqual(["notify", "enqueue"]);
+  });
   it("consumes an approval reply without queueing a parent message", async () => {
     state.grantedEnvironments.add("secondary");
     const composer = useThreadComposerState();
@@ -334,6 +351,7 @@ describe("mobile handoff preview and submission", () => {
       auth: { status: "authenticated" as const },
       availability: "available" as "available" | "unavailable",
       models: [{ slug: selection.model }],
+      slashCommands: [],
     };
     const projectOverride = { enabled: false };
     state.serverConfig = {

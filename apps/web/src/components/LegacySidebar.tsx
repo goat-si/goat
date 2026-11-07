@@ -269,9 +269,8 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
-import { GoatBotSidebarRow } from "./goatBot/GoatBotSidebarRow";
+import { GoatBotSidebarTabs, useBotSidebarSelected } from "./goatBot/GoatBotSidebarTabs";
 import { DecisionInboxSidebarRow } from "./decisions/DecisionInboxSidebarRow";
-import { useGoatBotPreferred } from "./goatBot/GoatBotModeButton";
 import { type SidebarRouteReveal, useActiveRowReveal } from "./sidebar/routeReveal";
 const projectsViewEnvironments = createProjectsViewEnvironmentAtoms({
   catalogAtom: environmentCatalog.catalogValueAtom,
@@ -2890,7 +2889,7 @@ interface SidebarProjectsContentProps {
 const SidebarProjectsContent = memo(function SidebarProjectsContent(
   props: SidebarProjectsContentProps,
 ) {
-  const goatBotPreferred = useGoatBotPreferred();
+  const botSelected = useBotSidebarSelected();
   const {
     showArm64IntelBuildWarning,
     arm64IntelBuildWarningDescription,
@@ -2948,7 +2947,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
   };
 
   return (
-    <SidebarContent fixedHeader={goatBotPreferred ? <GoatBotSidebarRow /> : undefined}>
+    <SidebarContent hidden={botSelected} fixedHeader={<GoatBotSidebarTabs />}>
       {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
         <SidebarGroup>
           <Alert variant="warning">

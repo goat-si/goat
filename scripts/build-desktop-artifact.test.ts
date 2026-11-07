@@ -494,8 +494,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         targetArch: "x64",
         appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
       }).pipe(Effect.provideService(HostProcess.Platform, "linux"));
-      assert.equal(WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT, 80);
-      assert.isAtMost(result.fileCount, 80);
+      assert.isAtMost(result.fileCount, WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT);
       assert.includeMembers(result.unpackedFiles, natives);
       for (const file of javascript) {
         assert.equal(extractFile(asarPath, h.path.normalize(file)).toString(), "export {};");
@@ -1621,14 +1620,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             expectWslRuntime: true,
           });
         const initial = yield* validate();
-        assert.equal(WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT, 80);
-        for (let count = initial.fileCount; count < 80; count++) {
+        const limit = WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
+        for (let count = initial.fileCount; count < limit; count++) {
           yield* fs.writeFileString(
             path.join(fixture.packagedAppDir, `padding-${count}`),
             "fixture",
           );
         }
-        assert.equal((yield* validate()).fileCount, 80);
+        assert.equal((yield* validate()).fileCount, limit);
         yield* fs.writeFileString(
           path.join(fixture.packagedAppDir, "one-file-over-budget"),
           "fixture",
@@ -1637,8 +1636,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "file-limit-exceeded");
-        assert.equal(error.fileCount, 81);
-        assert.equal(error.fileLimit, 80);
+        assert.equal(error.fileCount, limit + 1);
+        assert.equal(error.fileLimit, limit);
       }),
     ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
@@ -2218,9 +2217,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // macOS keeps only the helper's driver; Linux still uses the native SDK.
       const cuaNativeUnpack = [
         "**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}",
-        "**/node_modules/@ubjs/node-*/**/*.node",
+        "**/node_modules/{@ubjs/node-*/**/*.node,@transcribe-cpp/**/*.{dylib,so,so.*}}",
       ];
-      assert.deepStrictEqual(mac.asarUnpack, ["**/node_modules/@ubjs/node-*/**/*.node"]);
+      assert.deepStrictEqual(mac.asarUnpack, cuaNativeUnpack.slice(1));
       assert.deepStrictEqual(linux.asarUnpack, cuaNativeUnpack);
       assert.deepStrictEqual(win.asar, { smartUnpack: false });
       assert.deepStrictEqual(win.asarUnpack, [WINDOWS_NATIVE_ASAR_UNPACK_GLOB]);
@@ -2290,7 +2289,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       const linuxConfig = linux.linux as Record<string, unknown>;
       assert.strictEqual(linuxConfig.executableName, "goat-desktop");
       assert.strictEqual(linuxConfig.syncDesktopName, true);
-      assert.match(String(linux.afterPack), /link-legacy-linux-executable\.ts$/);
+      assert.match(String(linux.afterPack), /desktop-after-pack\.ts$/);
       const fpm = (linux.deb as { fpm: string[] }).fpm;
       // electron-builder appends its positional file mappings after these, so options lead.
       assert.deepStrictEqual(fpm.slice(0, 6), [

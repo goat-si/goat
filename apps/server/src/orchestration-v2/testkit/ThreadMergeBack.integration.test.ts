@@ -467,6 +467,8 @@ describe("orchestration V2 merge-back provider replay", () => {
                   ),
                 },
                 CodexHistoryReplayHarness,
+                // One recorded app-server serves the source thread and both forks.
+                { codexAppServerIsolation: "shared" },
               ).pipe(provideDeterministicTestRuntime)
             : yield* runOrchestratorV2ProviderReplayScenario(
                 {

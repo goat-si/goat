@@ -354,6 +354,9 @@ export default defineConfig(() => {
       "import.meta.env.GOAT_DESKTOP_UPDATE_REPOSITORY": JSON.stringify(
         configuredDesktopUpdateRepository,
       ),
+      "import.meta.env.GOAT_FEATURE_SECRETS": JSON.stringify(
+        process.env.GOAT_FEATURE_SECRETS?.trim() || "",
+      ),
       "import.meta.env.VITE_RELEASE_CHANNEL": JSON.stringify(configuredReleaseChannel),
       "import.meta.env.APP_VERSION": JSON.stringify(configuredAppVersion),
     },

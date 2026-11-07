@@ -133,6 +133,9 @@ const withFill = <A>(
       savedRef: () => Effect.die("unused"),
       consume: () => Effect.die("unused"),
       saveToFile: () => Effect.die("unused"),
+      useLogin: () => Effect.die("unused"),
+      useCard: () => Effect.die("unused"),
+      useOneTimeCode: () => Effect.die("unused"),
       consumeForOrigin: (input) =>
         Effect.sync(beforeConsume).pipe(
           Effect.flatMap(() =>

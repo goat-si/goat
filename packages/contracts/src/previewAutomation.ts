@@ -820,11 +820,12 @@ export class PreviewAutomationTimeoutError extends Schema.TaggedError<PreviewAut
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationOptionalRemoteDiagnosticFields,
     interceptedBy: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
+    reason: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
     const summary = `Preview automation ${this.operation} timed out after ${this.timeoutMs}ms.`;
-    return this.interceptedBy ? `${summary} ${this.interceptedBy}` : summary;
+    return [summary, this.reason, this.interceptedBy].filter(Boolean).join(" ");
   }
 }
 
@@ -887,7 +888,11 @@ export class PreviewAutomationInvalidSelectorError extends Schema.TaggedError<Pr
     if (this.matchCount !== undefined)
       return `Preview automation ${this.operation}: the selector matches ${this.matchCount} elements; input needs one. Narrow it (text=..., a parent, ">> nth=0" for the first) or use a snapshot ref.`;
     if (this.selectorKind !== undefined && this.selectorLength !== undefined) {
-      return `Preview automation ${this.operation} received an invalid ${this.selectorKind} (${this.selectorLength} characters).`;
+      const guidance =
+        this.selectorKind === "locator"
+          ? "Use aria-ref=<ref> from the latest snapshot or a Playwright role/text selector; put CSS in selector."
+          : "selector takes CSS; use locator for aria-ref=<ref>, role, or text targets.";
+      return `Preview automation ${this.operation} received an invalid ${this.selectorKind} (${this.selectorLength} characters). ${guidance}`;
     }
     return `Preview automation ${this.operation} received an invalid selector.`;
   }

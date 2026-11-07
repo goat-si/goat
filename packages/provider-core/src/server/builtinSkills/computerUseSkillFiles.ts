@@ -15,6 +15,9 @@ import {
 export const COMPUTER_USE_SKILL_DIRECTORY = "computer-use";
 export const COMPUTER_USE_SKILL_FILE = "SKILL.md";
 
+const computerUseBrowserNote = (name: string) =>
+  `${name}: for web pages use GOAT's browser via goat_preview_* or screen.tab(). Background accessibility input can drop Korean/CJK composition and the Return that loads a typed address; keep the app target for the browser's own windows and dialogs, such as permission prompts.`;
+
 /** Notes for one app, keyed by the app name the driver reports for its windows. */
 const COMPUTER_USE_APP_NOTES: Readonly<
   Partial<Record<NodeJS.Platform, Readonly<Record<string, string>>>>
@@ -42,8 +45,12 @@ const COMPUTER_USE_APP_NOTES: Readonly<
       "Preview: toolbar zoom buttons and menu shortcuts work in the background (command+plus, command+minus, command+9 fits the window). Text in a PDF page is drawn, not in the tree; use the screenshot to read it.",
     ].join("\n"),
     Safari: [
-      "Safari: setting the address field's value does not load the page. Open a URL with File > Open Location (`invoke_menu`), type it and press Return; for web pages GOAT's own browser is usually the better tool.",
+      "Safari: for web pages use GOAT's browser (screen.tab()); when the person wants Safari itself, open a URL with File > Open Location (`invoke_menu`), type it and press Return.",
     ].join("\n"),
+    "Google Chrome": computerUseBrowserNote("Google Chrome"),
+    "Brave Browser": computerUseBrowserNote("Brave Browser"),
+    "Microsoft Edge": computerUseBrowserNote("Microsoft Edge"),
+    Arc: computerUseBrowserNote("Arc"),
   },
 };
 
@@ -55,7 +62,14 @@ const COMPUTER_USE_APP_BUNDLE_IDS: Readonly<Record<string, string>> = {
   "com.apple.preview": "Preview",
   "com.apple.safari": "Safari",
   "com.apple.textedit": "TextEdit",
+  "com.google.chrome": "Google Chrome",
+  "com.brave.browser": "Brave Browser",
+  "com.microsoft.edgemac": "Microsoft Edge",
+  "company.thebrowser.browser": "Arc",
 };
+
+const screenCodeBrowserNote = (name: string) =>
+  `${name}: for web pages use GOAT's browser with goat_screen_run and screen.tab() or screen.openTab({ url }). Background accessibility input can drop Korean/CJK composition and the Return that loads a typed address; keep the app target for the browser's own windows and dialogs, such as permission prompts.`;
 
 const SCREEN_CODE_APP_NOTES: Readonly<
   Partial<Record<NodeJS.Platform, Readonly<Record<string, string>>>>
@@ -77,7 +91,11 @@ const SCREEN_CODE_APP_NOTES: Readonly<
     Preview:
       'Preview: zoom shortcuts work in the background: command-plus, command-minus, and `app.press("cmd+9")` to fit. PDF text is drawn, not in the tree; use `app.screenshot()` to read it.',
     Safari:
-      'Safari: setting the address field does not load the page. Use the GOAT browser, or `app.menu(["File", "Open Location"])`, then type the URL into the field it shows and press Enter on that field (`app.press("Enter", field)`).',
+      'Safari: for web pages use GOAT\'s browser (screen.tab()); when the person wants Safari itself, use File > Open Location (`app.menu(["File", "Open Location"])`), then type the URL and press Enter on its field (`app.press("Enter", field)`).',
+    "Google Chrome": screenCodeBrowserNote("Google Chrome"),
+    "Brave Browser": screenCodeBrowserNote("Brave Browser"),
+    "Microsoft Edge": screenCodeBrowserNote("Microsoft Edge"),
+    Arc: screenCodeBrowserNote("Arc"),
   },
 };
 

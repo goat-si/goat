@@ -1,12 +1,18 @@
 import { act, render } from "../../../test/render";
 import { RegistryProvider } from "@effect/atom-react";
-import { DEFAULT_SERVER_SETTINGS, type StorageCleanupReport } from "@goat/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type StorageCleanupReport,
+  WORKTREE_CLEANUP_OFF,
+} from "@goat/contracts";
 import { type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   settings: {} as typeof DEFAULT_SERVER_SETTINGS,
   run: vi.fn(),
+  respond: vi.fn(),
+  update: vi.fn(),
   report: null as StorageCleanupReport | null,
 }));
 
@@ -20,6 +26,11 @@ vi.mock(import("../../state/server"), async (original) => {
     serverEnvironment: {
       ...actual.serverEnvironment,
       storageCleanupReport: (() => report) as never,
+      respondWorktreeCleanupPreview: {
+        ...actual.serverEnvironment.respondWorktreeCleanupPreview,
+        permissionAtom: () => allowed,
+      },
+      updateSettings: { ...actual.serverEnvironment.updateSettings, permissionAtom: () => allowed },
       runStorageCleanup: {
         ...actual.serverEnvironment.runStorageCleanup,
         permissionAtom: () => allowed,
@@ -29,7 +40,12 @@ vi.mock(import("../../state/server"), async (original) => {
 });
 vi.mock(import("../../state/use-atom-command"), async (original) => ({
   ...(await original()),
-  useAtomCommand: (() => state.run) as never,
+  useAtomCommand: ((command: { label: string }) =>
+    command.label.includes("respond-worktree")
+      ? state.respond
+      : command.label.includes("update-settings")
+        ? state.update
+        : state.run) as never,
 }));
 vi.mock(import("./SettingsScopeContext"), async (original) => ({
   ...(await original()),
@@ -90,6 +106,8 @@ function setup() {
     storageCleanup: {
       ...DEFAULT_SERVER_SETTINGS.storageCleanup,
       worktreeKeepWhen: "uncommitted-changes",
+      worktreeKeepRecent: null,
+      worktreeOnArchive: false,
       worktreeAfterDays: null,
       worktreeSettledAfterDays: null,
       worktreeOnMerge: false,
@@ -102,6 +120,8 @@ function setup() {
   };
   state.report = null;
   state.run.mockReset();
+  state.respond.mockReset();
+  state.update.mockReset();
 }
 
 const panel = () => (
@@ -122,4 +142,70 @@ it("keeps cleanup disabled when settled retention and all other rules are off", 
   expect(button.disabled).toBe(true);
   await act(async () => button.click());
   expect(state.run).not.toHaveBeenCalled();
+});
+
+it("confirms a cleanup preview and turns off its rules", async () => {
+  setup();
+  state.report = {
+    trigger: "automatic",
+    startedAt: "2026-01-01T00:00:00Z",
+    finishedAt: "2026-01-01T00:00:00Z",
+    entries: [],
+    counts: { removed: 0, kept: 0, failed: 0 },
+    omittedCount: 0,
+    bytesFreed: 0,
+    worktreePreview: {
+      id: "preview-1",
+      plannedCount: 4,
+      startedAt: "2026-01-01T00:00:00Z",
+      seenAt: null,
+      activatesAt: null,
+      requiresConfirmation: true,
+    },
+  };
+  await using screen = await render(panel());
+  expect(screen.container.textContent).toContain("4 worktrees match the cleanup rules below.");
+  await screen.getByRole("button", { name: "Clean up now" }).click();
+  expect(state.respond).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { previewId: "preview-1", response: "confirm" },
+  });
+  await screen.getByRole("button", { name: "Turn off" }).click();
+  expect(state.update).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: {
+      patch: {
+        storageCleanup: WORKTREE_CLEANUP_OFF,
+      },
+    },
+  });
+});
+
+it("labels planned worktrees as awaiting cleanup", async () => {
+  setup();
+  state.report = {
+    trigger: "automatic",
+    startedAt: "2026-01-01T00:00:00Z",
+    finishedAt: "2026-01-01T00:00:00Z",
+    entries: [
+      {
+        kind: "worktree",
+        outcome: "kept",
+        reason: "kept",
+        path: "/tmp/work",
+        projectPath: null,
+        threadId: null,
+        threadTitle: null,
+        bytes: null,
+        files: null,
+        planned: true,
+      },
+    ],
+    counts: { removed: 0, kept: 1, failed: 0 },
+    omittedCount: 0,
+    bytesFreed: 0,
+  };
+  await using screen = await render(panel());
+  await screen.getByText("Last run").click();
+  expect(screen.container.textContent).toContain("Will be cleaned up");
 });

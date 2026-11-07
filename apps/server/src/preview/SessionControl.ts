@@ -55,7 +55,7 @@ export class SessionControl {
   private readonly listeners = new Set<() => void>();
   private tail: Promise<unknown> = Promise.resolve();
   private latestHuman: {
-    entry: { viewerId: string; key: string; run: () => Promise<void> };
+    entry: { viewerId: string; key: string; input: unknown; run: (input: never) => Promise<void> };
     result: Promise<void>;
   } | null = null;
   private pending: Promise<void> = Promise.resolve();
@@ -79,6 +79,8 @@ export class SessionControl {
   private notice: HandBackNotice | null = null;
   private readonly handoffListeners = new Set<(end: HandoffChange, requestId: string) => void>();
   private activeAgentAction: AbortController | undefined;
+  private agentRequests = 0;
+  private trackedWork = 0;
   /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
   private activeAgentCut: AbortController | undefined;
   private activeSecretAction: AbortController | undefined;
@@ -108,6 +110,10 @@ export class SessionControl {
 
   get isClosed() {
     return this.closed;
+  }
+
+  get hasAgentWork() {
+    return this.agentRequests > 0 || this.trackedWork > 0 || this.activeAgentWork !== undefined;
   }
 
   /** A secret field or passkey prompt has focus: agents neither act nor look, viewers see nothing. */
@@ -302,6 +308,12 @@ export class SessionControl {
       throw new BrowserControlInterrupted("Browser observation changed; refresh the tab snapshot.");
   }
 
+  assertSecretGeneration(expectedGeneration: number) {
+    this.assertOpen();
+    if (this.epoch !== expectedGeneration)
+      throw new BrowserControlInterrupted("Browser observation changed; refresh the tab snapshot.");
+  }
+
   private agentBlocked() {
     if (this.privateMode) return refused(PRIVATE_MESSAGE, "privateMode");
     if (this.agentStopped) return refused(STOPPED_MESSAGE, "stopped");
@@ -321,7 +333,11 @@ export class SessionControl {
 
   /** An action can respond before its navigation commits, while later actions still wait. */
   track(work: Promise<unknown>) {
-    this.pending = Promise.all([this.pending, settle(work)]).then(() => undefined);
+    this.trackedWork++;
+    const tracked = settle(work).finally(() => {
+      this.trackedWork--;
+    });
+    this.pending = Promise.all([this.pending, tracked]).then(() => undefined);
   }
 
   /** Viewer input stays responsive, but control handoffs still drain its navigations. */
@@ -385,6 +401,7 @@ export class SessionControl {
       return Promise.reject(refused("A human controls this tab.", "humanControl"));
     const blocked = this.agentBlocked();
     if (blocked) return Promise.reject(blocked);
+    this.agentRequests++;
     return this.action(
       () => this.agentMayAct(agentId) && this.owner === null && !this.agentBlocked(),
       async () => {
@@ -416,7 +433,9 @@ export class SessionControl {
         }
       },
       deadlineMs,
-    );
+    ).finally(() => {
+      this.agentRequests--;
+    });
   }
 
   agentCanActNow(agentId: string) {
@@ -522,18 +541,28 @@ export class SessionControl {
     return this.action(() => this.owner === viewerId, run);
   }
 
-  /** Replace only adjacent waiting work; the running action and intervening actions keep their order. */
-  humanLatest(viewerId: string, key: string, run: () => Promise<void>): Promise<void> {
-    if (this.closed || this.owner !== viewerId) return this.human(viewerId, run);
+  /**
+   * Merge into only adjacent waiting work with the same key; the running action and
+   * intervening actions keep their order. Work sharing a key must share its input type.
+   */
+  humanLatest<A>(
+    viewerId: string,
+    key: string,
+    input: A,
+    run: (input: A) => Promise<void>,
+    merge: (waiting: A, next: A) => A = (_waiting, next) => next,
+  ): Promise<void> {
+    if (this.closed || this.owner !== viewerId) return this.human(viewerId, () => run(input));
     const latest = this.latestHuman;
     if (latest?.entry.viewerId === viewerId && latest.entry.key === key) {
+      latest.entry.input = merge(latest.entry.input as A, input);
       latest.entry.run = run;
       return latest.result;
     }
-    const entry = { viewerId, key, run };
+    const entry = { viewerId, key, input, run };
     const result = this.human(viewerId, async () => {
       if (this.latestHuman?.entry === entry) this.latestHuman = null;
-      await entry.run();
+      await entry.run(entry.input);
     });
     this.latestHuman = { entry, result };
     return result;

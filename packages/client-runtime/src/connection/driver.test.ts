@@ -2,6 +2,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   EnvironmentId,
   type DesktopSshPreparationProgress,
+  type ServerConfig,
 } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -14,8 +15,11 @@ import * as RpcSession from "../rpc/session.ts";
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import * as Driver from "./driver.ts";
 import * as Resolver from "./resolver.ts";
+import { hubProxyRefusal } from "./hubProxyHttp.ts";
 import {
   ConnectionAttemptSuperseded,
+  ConnectionTransientError,
+  HubProxyConnectionTarget,
   SshConnectionTarget,
   type PreparedConnection,
 } from "./model.ts";
@@ -38,7 +42,7 @@ const client = {} as WsRpcProtocolClient;
 const session: RpcSession.RpcSession = {
   client,
   initialConfig: Effect.never,
-  subscribeServerConfig: (input) => client.subscribeServerConfig(input),
+  subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
   ready: Effect.void,
   probe: Effect.void,
   inboundFrames: Effect.succeed(0),
@@ -58,6 +62,38 @@ function driverWith(prepare: Resolver.ConnectionResolver["Service"]["prepare"]) 
 }
 
 describe("SSH driver routing", () => {
+  it.effect("keeps retrying an unreachable direct route and names the hub's refusal", () =>
+    Effect.gen(function* () {
+      const refusal = hubProxyRefusal({ requiredScope: "hub:proxy" });
+      const error = yield* Driver.connectOverRoutes(
+        {
+          ...entry,
+          alternateRoutes: [
+            {
+              target: new HubProxyConnectionTarget({
+                environmentId: target.environmentId,
+                label: target.label,
+                connectionId: "hub:fixture",
+              }),
+              profile: Option.none(),
+            },
+          ],
+        },
+        () => Effect.succeed("unchecked"),
+        (route) =>
+          route.target._tag === "HubProxyConnectionTarget"
+            ? Effect.fail(refusal)
+            : Effect.fail(
+                new ConnectionTransientError({ reason: "endpoint-unavailable", detail: "Offline" }),
+              ),
+      ).pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "ConnectionTransientError",
+        reason: "endpoint-unavailable",
+      });
+      expect(error.detail).toContain(refusal.detail);
+    }),
+  );
   it.effect("stops a neutral attempt before trying a fallback route", () =>
     Effect.gen(function* () {
       const routes: string[] = [];
@@ -191,3 +227,96 @@ describe("live host checks", () => {
       }),
   );
 });
+
+it.effect("identity mismatch -> no Authorization header sent, kept", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const requests: RequestInit[] = [];
+      const bearer = {
+        ...prepared,
+        httpAuthorization: { _tag: "Bearer" as const, token: "fixture-token" },
+      };
+      const driver = yield* Driver.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(Resolver.ConnectionResolver)({ prepare: () => Effect.succeed(bearer) }),
+            Layer.mock(RpcSession.RpcSessionFactory)({ connect: () => Effect.succeed(session) }),
+            RpcHttp.layerRemoteHttpClient((_url, init) => {
+              requests.push(init ?? {});
+              return Promise.resolve(
+                Response.json({
+                  environmentId: "another-environment",
+                  label: "Other",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "0.0.0-test",
+                  orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+                  capabilities: {},
+                }),
+              );
+            }),
+          ),
+        ),
+      );
+      const lease = yield* driver.connect(entry, () => Effect.void);
+      expect((yield* Effect.exit(lease.openProbeSocket))._tag).toBe("Failure");
+      expect(requests).toHaveLength(1);
+      expect(new Headers(requests[0]?.headers).has("authorization")).toBe(false);
+    }),
+  ),
+);
+
+it.effect("SSH lease opens a probe socket without re-preparing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let preparations = 0;
+      const urls: string[] = [];
+      const bearer = {
+        ...prepared,
+        socketUrl: `${prepared.socketUrl}?wsTicket=old`,
+        httpAuthorization: { _tag: "Bearer" as const, token: "fixture-token" },
+      };
+      const config = { environment: { capabilities: { connectionProbe: true } } } as ServerConfig;
+      const driver = yield* Driver.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(Resolver.ConnectionResolver)({
+              prepare: () =>
+                Effect.sync(() => {
+                  preparations++;
+                  return bearer;
+                }),
+            }),
+            Layer.mock(RpcSession.RpcSessionFactory)({
+              connect: () => Effect.succeed({ ...session, initialConfig: Effect.succeed(config) }),
+              openProbe: (fresh) =>
+                Effect.sync(() => {
+                  urls.push(fresh.socketUrl);
+                  return { probe: Effect.void, drainIo: Effect.void };
+                }),
+            }),
+            RpcHttp.layerRemoteHttpClient((url) => {
+              const address = String(url);
+              return Promise.resolve(
+                address.includes("websocket-ticket")
+                  ? Response.json({ ticket: "fresh-ticket", expiresAt: "2026-10-19T01:00:00.000Z" })
+                  : Response.json({
+                      environmentId: target.environmentId,
+                      label: "Fixture",
+                      platform: { os: "linux", arch: "x64" },
+                      serverVersion: "0.0.0-test",
+                      orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+                      capabilities: {},
+                    }),
+              );
+            }),
+          ),
+        ),
+      );
+      const lease = yield* driver.connect(entry, () => Effect.void);
+      const probe = yield* lease.openProbeSocket;
+      yield* probe.probe;
+      expect(preparations).toBe(1);
+      expect(urls).toEqual([`${prepared.socketUrl}?wsTicket=fresh-ticket`]);
+    }),
+  ),
+);

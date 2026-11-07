@@ -7,15 +7,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
-import migration from "../persistence/Migrations/078_Memory.ts";
-import hubMigration from "../persistence/Migrations/079_MemoryHubSync.ts";
-import lineageMigration from "../persistence/Migrations/082_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/083_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../persistence/Migrations/095_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../persistence/Migrations/084_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/085_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/086_MemoryRevertResults.ts";
-import searchMigration from "../persistence/Migrations/080_MemorySearchCounters.ts";
+import migration from "../persistence/Migrations/088_Memory.ts";
+import hubMigration from "../persistence/Migrations/089_MemoryHubSync.ts";
+import lineageMigration from "../persistence/Migrations/092_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/093_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/105_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/094_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/095_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/096_MemoryRevertResults.ts";
+import searchMigration from "../persistence/Migrations/090_MemorySearchCounters.ts";
 import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Store from "./MemoryStore.ts";
@@ -57,7 +57,7 @@ const makeEnvironment = Effect.fnUntraced(function* (environmentId: M.Environmen
     ),
   ).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })));
   const core = Layer.merge(Service.layer, Maintenance.layer).pipe(
-    Layer.provide(
+    Layer.provideMerge(
       Layer.succeed(Settings.MemoryHubCommittedSettings, {
         read: Effect.succeed({
           provenance: null,
@@ -90,6 +90,7 @@ const makeEnvironment = Effect.fnUntraced(function* (environmentId: M.Environmen
     ),
     Layer.provide(
       Layer.mock(Projection.ProjectionStoreV2)({
+        getRunMessage: () => Effect.sync(() => undefined),
         getThreadShell: (requested) =>
           Effect.succeed({
             id: requested,
@@ -105,6 +106,12 @@ const makeEnvironment = Effect.fnUntraced(function* (environmentId: M.Environmen
   const service = Context.get(context, Service.MemoryService);
   const sql = Context.get(context, SqlClient.SqlClient);
   yield* sql`CREATE TABLE orchestration_events(application_event_version INTEGER,aggregate_kind TEXT,stream_id TEXT,event_type TEXT,payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT PRIMARY KEY,project_id TEXT,deleted_at TEXT,archived_at TEXT,updated_at TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_runs(run_id TEXT,thread_id TEXT,ordinal INTEGER,status TEXT,payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_messages(message_id TEXT,role TEXT,payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_turn_items(thread_id TEXT,run_id TEXT,type TEXT,status TEXT)`;
+  yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES (${thread.threadId},'synthetic-project',NULL,NULL,'2026-01-01')`;
+  yield* sql`INSERT INTO orchestration_v2_projection_runs VALUES ('synthetic-run',${thread.threadId},1,'running','{}')`;
   yield* sql`CREATE TABLE projection_projects(project_id TEXT,workspace_root TEXT,deleted_at TEXT)`;
   yield* sql`INSERT INTO projection_projects VALUES ('synthetic-project','/synthetic',NULL)`;
   return {
@@ -223,7 +230,11 @@ describe("r4 authoritative lineage", () => {
             return op;
           });
           const a = yield* push(input(20));
-          const policy = { grant: "read" as const, policyEpoch: 1 };
+          const policy = {
+            grant: "read" as const,
+            policyEpoch: 1,
+            finalAuthority: Effect.succeed(true),
+          };
           assert.isDefined(
             yield* e.snapshot.forThread(thread.threadId, policy, Effect.succeed(policy)),
           );

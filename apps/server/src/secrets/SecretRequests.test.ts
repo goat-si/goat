@@ -1,140 +1,18 @@
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
-import {
-  ProjectId,
-  type OrchestrationV2ServerCommand,
-  SecretRef,
-  ThreadId,
-  TurnItemId,
-} from "@goat/contracts";
+import { ProjectId, SecretProviderId, SecretRef, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Tracer from "effect/Tracer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as PlatformError from "effect/PlatformError";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import * as SecretRequests from "./SecretRequests.ts";
-
-const threadId = ThreadId.make("thread-orchestrator");
-const turnItemId = TurnItemId.make("turn-item:secret-request:1");
-const projectId = ProjectId.make("project-1");
-
-const withService = <A, E>(
-  body: (input: {
-    readonly service: SecretRequests.SecretRequests["Service"];
-    readonly stored: Map<string, Uint8Array>;
-    readonly dispatched: Array<OrchestrationV2ServerCommand>;
-  }) => Effect.Effect<A, E>,
-  options: {
-    readonly threadId?: ThreadId;
-    readonly delivery?: "file";
-    readonly siteOrigin?: string;
-    readonly directory?: string;
-    readonly runStatus?: string;
-    readonly removeFails?: boolean;
-    readonly closedFirst?: boolean;
-    readonly failedRecords?: number;
-  } = {},
-) =>
-  Effect.gen(function* () {
-    const stored = new Map<string, Uint8Array>();
-    const dispatched: Array<OrchestrationV2ServerCommand> = [];
-    let secretStatus = "pending";
-    let failedRecords = options.failedRecords ?? 0;
-    const requestThreadId = options.threadId ?? threadId;
-    const layerDependencies = Layer.mergeAll(
-      NodeCrypto.layer,
-      NodeServices.layer,
-      Layer.succeed(
-        ServerSecretStore.ServerSecretStore,
-        ServerSecretStore.ServerSecretStore.of({
-          ...(options.directory === undefined ? {} : { directory: options.directory }),
-          get: (name) => Effect.yieldNow.pipe(Effect.as(Option.fromNullishOr(stored.get(name)))),
-          set: (name, value) => Effect.sync(() => void stored.set(name, value)),
-          create: (name, value) =>
-            stored.has(name)
-              ? Effect.fail(
-                  new ServerSecretStore.SecretStorePersistError({
-                    resource: name,
-                    cause: new PlatformError.PlatformError(
-                      new PlatformError.SystemError({
-                        _tag: "AlreadyExists",
-                        module: "FileSystem",
-                        method: "open",
-                      }),
-                    ),
-                  } as never),
-                )
-              : Effect.sync(() => void stored.set(name, value)),
-          getOrCreateRandom: (name, bytes) =>
-            Effect.sync(() => {
-              const existing = stored.get(name);
-              if (existing) return existing;
-              const value = new Uint8Array(bytes).fill(7);
-              stored.set(name, value);
-              return value;
-            }),
-          remove: (name) =>
-            options.removeFails
-              ? Effect.fail(
-                  new ServerSecretStore.SecretStorePersistError({
-                    resource: name,
-                    cause: new Error("read-only"),
-                  }),
-                )
-              : Effect.sync(() => void stored.delete(name)),
-        }),
-      ),
-      Layer.mock(ThreadManagementService.ThreadManagementService)({
-        getThreadRecords: () =>
-          Effect.succeed({
-            thread: { projectId },
-            runs: [{ id: "run-1", status: options.runStatus ?? "running" }],
-            turnItems: [
-              {
-                id: turnItemId,
-                threadId: requestThreadId,
-                runId: "run-1",
-                nodeId: "node-root",
-                type: "secret_request",
-                label: "GitHub token",
-                reason: "Used as GH_TOKEN.",
-                ...(options.delivery === undefined ? {} : { delivery: options.delivery }),
-                ...(options.siteOrigin === undefined ? {} : { siteOrigin: options.siteOrigin }),
-                secretStatus,
-              },
-            ],
-          } as never),
-        dispatch: (command) => {
-          if (command.type === "secret_request.record" && failedRecords > 0) {
-            failedRecords -= 1;
-            return Effect.fail(new Error("orchestrator unavailable") as never);
-          }
-          return Effect.sync(() => {
-            dispatched.push(command);
-            if (options.closedFirst && command.type === "secret_request.record") {
-              secretStatus = "cancelled";
-            } else if (command.type === "secret_request.record" && secretStatus === "pending") {
-              secretStatus = command.secretStatus;
-            }
-            return {} as never;
-          });
-        },
-      }),
-    );
-    return yield* Effect.gen(function* () {
-      const service = yield* SecretRequests.SecretRequests;
-      return yield* body({ service, stored, dispatched });
-    }).pipe(Effect.provide(SecretRequests.layer.pipe(Layer.provide(layerDependencies))));
-  });
+import { threadId, turnItemId, projectId, withService } from "./SecretRequests.testkit.ts";
 
 const valuesOf = (stored: Map<string, Uint8Array>) =>
   Array.from(stored.entries())
@@ -163,6 +41,120 @@ it.effect("a saved answer becomes a one-use ref, and the thread only learns it w
       assert.include(again.message, "already used");
     }),
   ),
+);
+
+it.effect("a provider answer keeps one-use and origin restrictions", () =>
+  withService(
+    ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: {
+            type: "reference",
+            reference: {
+              provider: SecretProviderId.make("vault"),
+              reference: "op://vault/item/password",
+            },
+          },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        assert.equal(
+          (yield* service
+            .consumeForOrigin({ ref, threadId, origin: "https://other.test" })
+            .pipe(Effect.flip)).reason,
+          "origin_mismatch",
+        );
+        assert.equal(
+          yield* service.consumeForOrigin({ ref, threadId, origin: "https://example.test" }),
+          "secret-value",
+        );
+        assert.equal(
+          (yield* service
+            .consumeForOrigin({ ref, threadId, origin: "https://example.test" })
+            .pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+        assert.notInclude(JSON.stringify(dispatched), "secret-value");
+      }),
+    { siteOrigin: "https://example.test", readReference: async () => "secret-value" },
+  ),
+);
+
+it.effect("an unreadable provider answer leaves the request pending for retry", () => {
+  let attempts = 0;
+  return withService(
+    ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        const input = {
+          threadId,
+          turnItemId,
+          answer: {
+            type: "reference" as const,
+            reference: {
+              provider: SecretProviderId.make("vault"),
+              reference: "op://vault/item/password",
+            },
+          },
+        };
+        assert.equal(
+          (yield* service.answer(input).pipe(Effect.flip)).reason,
+          "reference_unreadable",
+        );
+        assert.equal(dispatched.length, 0);
+        yield* service.answer(input);
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        assert.equal(yield* service.consume({ ref, projectId }), "retry-secret");
+      }),
+    {
+      readReference: async () => {
+        if (++attempts === 1) throw new Error("locked");
+        return "retry-secret";
+      },
+    },
+  );
+});
+
+it.effect("provider answers queue after eight concurrent reads", () =>
+  Effect.gen(function* () {
+    const eightStarted = yield* Deferred.make<void>();
+    const ninthStarted = yield* Deferred.make<void>();
+    const release = Promise.withResolvers<string>();
+    let started = 0;
+    yield* withService(
+      ({ service }) =>
+        Effect.gen(function* () {
+          const input = {
+            threadId,
+            turnItemId,
+            answer: {
+              type: "reference" as const,
+              reference: {
+                provider: SecretProviderId.make("vault"),
+                reference: "op://vault/item/password",
+              },
+            },
+          };
+          const fibers = yield* Effect.forEach(Array.from({ length: 9 }), () =>
+            service.answer(input).pipe(Effect.result, Effect.forkChild),
+          );
+          yield* Deferred.await(eightStarted);
+          assert.equal(started, 8);
+          release.resolve("fixture-value");
+          yield* Deferred.await(ninthStarted);
+          yield* Effect.forEach(fibers, Fiber.join, { discard: true });
+          assert.equal(started, 9);
+        }),
+      {
+        readReference: () => {
+          started++;
+          if (started === 8) Deferred.doneUnsafe(eightStarted, Effect.void);
+          if (started === 9) Deferred.doneUnsafe(ninthStarted, Effect.void);
+          return release.promise;
+        },
+      },
+    );
+  }),
 );
 
 it.effect("two concurrent uses of one ref hand the value out once", () =>
@@ -556,4 +548,309 @@ it.effect(
         }),
       { siteOrigin: "https://example.com" },
     ),
+);
+
+it.effect("rejects a single-secret answer to a login request without storing it", () =>
+  withService(
+    ({ service, stored }) =>
+      Effect.gen(function* () {
+        const error = yield* service
+          .answer({
+            threadId,
+            turnItemId,
+            answer: { type: "save", secret: "test-password" },
+          })
+          .pipe(Effect.flip);
+        assert.equal(error.reason, "answer_mismatch");
+        assert.deepEqual(valuesOf(stored), []);
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("rejects a login answer to a single-secret request without storing it", () =>
+  withService(({ service, stored }) =>
+    Effect.gen(function* () {
+      const error = yield* service
+        .answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        })
+        .pipe(Effect.flip);
+      assert.equal(error.reason, "answer_mismatch");
+      assert.deepEqual(valuesOf(stored), []);
+    }),
+  ),
+);
+
+it.effect("stores a login answer privately and refuses the single-secret consumer", () =>
+  withService(
+    ({ service, stored, dispatched }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const result = yield* service
+          .consumeForOrigin({ ref, threadId, origin: "https://example.com" })
+          .pipe(Effect.flip);
+        assert.equal(result.reason, "login_ref");
+        assert.equal(valuesOf(stored).length, 1);
+        assert.isFalse(JSON.stringify(dispatched).includes("test-user"));
+        assert.isFalse(JSON.stringify(dispatched).includes("test-password"));
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("a login item is bound to its requesting thread and origin", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const use = (owner: ThreadId, origin: string) =>
+          service.useLogin({ ref, threadId: owner, origin }, () =>
+            Effect.succeed("complete" as const),
+          );
+        assert.equal(
+          (yield* use(ThreadId.make("other-thread"), "https://example.com").pipe(Effect.flip))
+            .reason,
+          "ref_unavailable",
+        );
+        assert.equal(
+          (yield* use(threadId, "https://other.example").pipe(Effect.flip)).reason,
+          "origin_mismatch",
+        );
+        assert.equal(yield* use(threadId, "https://example.com"), "complete");
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect(
+  "a login with no delivery stays available, and concurrent complete fills use it once",
+  () =>
+    withService(
+      ({ service }) =>
+        Effect.gen(function* () {
+          yield* service.answer({
+            threadId,
+            turnItemId,
+            answer: { type: "save_login", username: "test-user", password: "test-password" },
+          });
+          const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+          const input = { ref, threadId, origin: "https://example.com" };
+          assert.equal(
+            yield* service.useLogin(input, () => Effect.succeed("none" as const)),
+            "none",
+          );
+          const results = yield* Effect.forEach(
+            [
+              service.useLogin(input, () => Effect.succeed("complete" as const)),
+              service.useLogin(input, () => Effect.succeed("complete" as const)),
+            ],
+            Effect.result,
+            { concurrency: "unbounded" },
+          );
+          assert.deepEqual(results.map((result) => result._tag).toSorted(), ["Failure", "Success"]);
+        }),
+      { requestKind: "login", siteOrigin: "https://example.com" },
+    ),
+);
+
+it.effect.each(["partial", "complete", "uncertain"] as const)(
+  "keeps a %s login unavailable if deleting its stored item fails",
+  (delivery) =>
+    withService(
+      ({ service }) =>
+        Effect.gen(function* () {
+          yield* service.answer({
+            threadId,
+            turnItemId,
+            answer: { type: "save_login", username: "test-user", password: "test-password" },
+          });
+          const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+          const input = { ref, threadId, origin: "https://example.com" };
+          const error = yield* service
+            .useLogin(input, (item) => {
+              assert.deepEqual(item, { username: "test-user", password: "test-password" });
+              return Effect.succeed(delivery);
+            })
+            .pipe(Effect.flip);
+          assert.equal(error.reason, "consume_failed");
+          assert.equal(
+            (yield* service
+              .useLogin(input, () => Effect.succeed("complete" as const))
+              .pipe(Effect.flip)).reason,
+            "ref_unavailable",
+          );
+        }),
+      { requestKind: "login", siteOrigin: "https://example.com", removeFails: true },
+    ),
+);
+
+it.effect("an uncertain login delivery remains unavailable", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        assert.equal(
+          yield* service.useLogin(input, () => Effect.fail("unknown delivery")).pipe(Effect.flip),
+          "unknown delivery",
+        );
+        assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+        assert.equal(
+          (yield* service
+            .useLogin(input, () => Effect.succeed("complete" as const))
+            .pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("a held login fill does not block an unrelated secret and reserves its own ref", () =>
+  withService(
+    ({ service, stored }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const otherRef = SecretRef.make(`secret-ref:${"a".repeat(32)}`);
+        stored.set(
+          `secret-request-${"a".repeat(32)}`,
+          new TextEncoder().encode(
+            JSON.stringify({
+              projectId,
+              value: "other-secret",
+              savedAt: 0,
+              origin: "https://example.com",
+            }),
+          ),
+        );
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const input = { ref, threadId, origin: "https://example.com" };
+        const first = yield* service
+          .useLogin(input, () =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as("complete" as const),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const other = yield* service.consumeForOrigin({
+          ref: otherRef,
+          threadId,
+          origin: "https://example.com",
+        });
+        assert.equal(other, "other-secret");
+        const duplicate = yield* service
+          .useLogin(input, () => Effect.succeed("complete" as const))
+          .pipe(Effect.flip);
+        assert.equal(duplicate.reason, "ref_unavailable");
+        yield* Deferred.succeed(release, undefined);
+        assert.equal(yield* Fiber.join(first), "complete");
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("a partially delivered login is consumed and cannot be reused", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        assert.equal(
+          yield* service.useLogin(input, () => Effect.succeed("partial" as const)),
+          "partial",
+        );
+        assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+        assert.equal(
+          (yield* service
+            .useLogin(input, () => Effect.succeed("complete" as const))
+            .pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("an explicitly uncertain login is removed and cannot be reused", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        assert.equal(
+          yield* service.useLogin(input, () => Effect.succeed("uncertain" as const)),
+          "uncertain",
+        );
+        assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+        assert.equal(
+          (yield* service
+            .useLogin(input, () => Effect.succeed("complete" as const))
+            .pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("an unexpected login failure remains unusable if deletion fails", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        assert.equal(
+          yield* service.useLogin(input, () => Effect.fail("unknown delivery")).pipe(Effect.flip),
+          "unknown delivery",
+        );
+        assert.equal(
+          (yield* service
+            .useLogin(input, () => Effect.succeed("complete" as const))
+            .pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com", removeFails: true },
+  ),
 );

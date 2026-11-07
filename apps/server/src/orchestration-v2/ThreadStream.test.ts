@@ -207,6 +207,15 @@ function pendingDecisionProjection() {
   };
 }
 
+it("stops measuring replay items only after exceeding the byte budget (#27405)", () => {
+  const later = {
+    toJSON: () => {
+      throw new Error("unneeded serialization");
+    },
+  };
+  expect(threadReplayEncodedBytes(["a", "b", later], 3)).toBe(6);
+});
+
 describe("decideThreadResume", () => {
   it("replays when the event count is within the bound", () => {
     expect(

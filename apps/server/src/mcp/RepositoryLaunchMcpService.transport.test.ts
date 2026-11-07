@@ -193,6 +193,7 @@ it.effect(
         Layer.mock(Watches.LaunchWatchService)({}),
         Layer.mock(ThreadReplica.ThreadReplicaService)({}),
         Layer.mock(ThreadResults.ThreadResultService)({}),
+        ServerSettings.layerTest(),
         dispatch,
       );
       const layer = Launch.layer.pipe(

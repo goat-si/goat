@@ -99,6 +99,7 @@ export function acpProviderOptionDescriptors(input: {
       ...base,
       type: "select",
       options: choices,
+      ...(option.category === "thought_level" ? { role: "reasoning" as const } : {}),
       ...(currentValue && choices.some((choice) => choice.id === currentValue)
         ? { currentValue }
         : {}),

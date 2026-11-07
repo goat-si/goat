@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   AuthSourceControlWriteScope,
   type EnvironmentId,
@@ -9,14 +9,19 @@ import { cn } from "~/lib/utils";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 
 import { Button } from "../ui/button";
-import { Textarea } from "../ui/textarea";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import {
+  PullRequestMarkdownTextarea,
+  type PullRequestMentionScope,
+} from "./PullRequestMarkdownTextarea";
+import { CommentSpeechControls, useCommentSpeech } from "../../speech/useCommentSpeech";
 
 export function PullRequestMarkdownEditor({
   value,
   cwd,
   environmentId,
+  mentionScope,
   threadRef = null,
   placeholder,
   label,
@@ -29,6 +34,7 @@ export function PullRequestMarkdownEditor({
   readonly value: string;
   readonly cwd: string;
   readonly environmentId: EnvironmentId;
+  readonly mentionScope: PullRequestMentionScope | null;
   readonly threadRef?: ScopedThreadRef | null;
   readonly placeholder?: string | undefined;
   readonly label: string;
@@ -41,13 +47,22 @@ export function PullRequestMarkdownEditor({
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
   const [draft, setDraft] = useState(value);
   const [preview, setPreview] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const speech = useCommentSpeech({
+    environmentId,
+    textareaRef,
+    text: draft,
+    onTextChange: setDraft,
+    disabled: saving || preview,
+  });
   const [seed, setSeed] = useState(value);
   if (seed !== value) {
     setSeed(value);
     setDraft(value);
   }
   const empty = draft.trim().length === 0;
-  const saveDisabled = !canWriteSourceControl || saving || (empty && !allowEmpty);
+  const saveDisabled =
+    !canWriteSourceControl || saving || speech.voice.blocksSubmission() || (empty && !allowEmpty);
 
   return (
     <div
@@ -102,28 +117,32 @@ export function PullRequestMarkdownEditor({
           )}
         </div>
       ) : (
-        <Textarea
+        <PullRequestMarkdownTextarea
+          ref={textareaRef}
           autoFocus
           disabled={saving}
+          mentionScope={mentionScope}
           value={draft}
           rows={6}
           placeholder={placeholder}
           aria-label={label}
-          onChange={(event) => setDraft(event.target.value)}
+          onValueChange={setDraft}
         />
       )}
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
+        {!preview ? <CommentSpeechControls speech={speech} /> : null}
         <Button size="xs" variant="ghost" disabled={saving} onClick={onCancel}>
           Cancel
         </Button>
         <Button
           size="xs"
           variant="outline"
-          disabled={!canWriteSourceControl || saving || (empty && !allowEmpty)}
+          disabled={saveDisabled}
           onClick={() => {
             if (
               !readEnvironmentScope(environmentId, AuthSourceControlWriteScope) ||
               saving ||
+              speech.voice.blocksSubmission() ||
               (empty && !allowEmpty)
             )
               return;

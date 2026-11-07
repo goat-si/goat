@@ -90,6 +90,12 @@ const RECIPES: Record<ProviderHostSyncDriver, Recipe> = {
     npmPackage: "opencode-ai",
     terminalLogin: "opencode auth login",
   },
+  omo: {
+    displayName: "OmO",
+    binary: "omo",
+    npmPackage: "omo-ai",
+    terminalLogin: "omo (then /login)",
+  },
   pi: {
     displayName: "Pi",
     binary: "pi",

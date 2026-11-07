@@ -55,6 +55,9 @@ import { useFleetSummary } from "../../state/fleet";
 import { providerReadyAtom } from "../../state/server";
 import { useEnvironmentScope } from "../../state/session";
 import { resolveThreadRouteTarget } from "../../threadRoutes";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { GoatBotMainAvatar, GoatBotSessionAvatar } from "../goatBot/GoatBotAvatar";
+import { useBotRoster } from "../goatBot/useBotRoster";
 import { useGoatBotWaitingCount } from "../goatBot/useGoatBotWaitingCount";
 import { useGoatBotReadMenu } from "../goatBot/useGoatBotReadMenu";
 import {
@@ -230,21 +233,55 @@ const FleetRailItem = memo(function FleetRailItem({ active }: { active: boolean 
 
 const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
   const botWaiting = useGoatBotWaitingCount();
+  const { roster } = useBotRoster();
+  const setMode = useGlobalAgentStore((state) => state.setMode);
   const botReadMenu = useGoatBotReadMenu(botWaiting);
   return (
-    <RailTooltip label="GOAT Bot">
-      <Link
-        to="/bot"
-        aria-label={countLabel("GOAT Bot", botWaiting)}
-        activeOptions={EXACT_MATCH}
-        aria-current={active ? "page" : undefined}
-        className={railItemClassName(active)}
-        {...botReadMenu}
-      >
-        <BotIcon aria-hidden />
-        <RailCount count={botWaiting} />
-      </Link>
-    </RailTooltip>
+    <>
+      <RailTooltip label={roster[0]?.profile?.name ?? "GOAT Bot"}>
+        <Link
+          to="/bot"
+          aria-label={
+            botWaiting
+              ? `${roster[0]?.profile?.name ?? "GOAT Bot"}, ${botWaiting} waiting for you`
+              : (roster[0]?.profile?.name ?? "GOAT Bot")
+          }
+          activeOptions={EXACT_MATCH}
+          aria-current={active ? "page" : undefined}
+          className={railItemClassName(active)}
+          {...botReadMenu}
+          onClick={() => setMode("bot")}
+        >
+          <GoatBotMainAvatar size="sm" />
+          <RailCount count={botWaiting} />
+        </Link>
+      </RailTooltip>
+      {roster.slice(1).map(
+        (entry) =>
+          entry.profile && (
+            <RailTooltip key={entry.profile.botId} label={entry.profile.name}>
+              <Link
+                to="/$environmentId/$threadId"
+                params={{
+                  environmentId: entry.profile.environmentId,
+                  threadId: entry.profile.sessionThreadId,
+                }}
+                aria-label={entry.profile.name}
+                className={railItemClassName(false)}
+                onClick={() => setMode("bot")}
+              >
+                <GoatBotSessionAvatar
+                  size="sm"
+                  threadRef={scopeThreadRef(
+                    entry.profile.environmentId,
+                    entry.profile.sessionThreadId,
+                  )}
+                />
+              </Link>
+            </RailTooltip>
+          ),
+      )}
+    </>
   );
 });
 

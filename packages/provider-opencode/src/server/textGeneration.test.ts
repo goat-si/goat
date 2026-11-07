@@ -1,3 +1,4 @@
+import { settingsSecretLiteral } from "@goat/contracts";
 import { ProviderInstanceId, TextGenerationError } from "@goat/contracts";
 import * as M from "@goat/contracts";
 import type { MemoryGenerationRunnerContext } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -23,262 +24,7 @@ import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
 import * as OpenCodeTextGeneration from "./textGeneration.ts";
 import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 
-const runtimeMock = {
-  state: {
-    environments: [] as NodeJS.ProcessEnv[],
-    startCalls: [] as string[],
-    promptUrls: [] as string[],
-    promptParts: [] as ReadonlyArray<unknown>[],
-    authHeaders: [] as Array<string | null>,
-    closeCalls: [] as string[],
-    directories: [] as string[],
-    promptInputs: [] as Array<{
-      tools?: Record<string, boolean>;
-      model?: { providerID: string; modelID: string };
-      agent?: string;
-      variant?: string;
-    }>,
-    deleted: [] as string[],
-    aborted: [] as string[],
-    denied: [] as string[],
-    eventScenario: undefined as "tool" | "permission" | undefined,
-    config: {} as { mcp?: Record<string, { enabled?: boolean }>; plugin?: string[] },
-    stall: false,
-    sessionCreateCalls: 0,
-    connectCalls: 0,
-    clientCalls: 0,
-    abortCalls: [] as string[],
-    onSessionCreate: undefined as ((signal?: AbortSignal) => Promise<never>) | undefined,
-    onPrompt: undefined as
-      | ((signal?: AbortSignal) => void | Promise<{ data: { parts: ReadonlyArray<unknown> } }>)
-      | undefined,
-    onAbort: undefined as ((signal?: AbortSignal) => Promise<never>) | undefined,
-    connectionError: undefined as Error | undefined,
-    startError: undefined as OpenCodeRuntime.OpenCodeRuntimeError | undefined,
-    sessionCreateError: undefined as unknown,
-    sessionResult: undefined as { data?: { id: string } } | undefined,
-    promptRequestError: undefined as unknown,
-    promptResult: undefined as
-      | {
-          data?: {
-            info?: { error?: unknown; modelID?: string; providerID?: string; variant?: string };
-            parts?: Array<unknown>;
-          };
-        }
-      | undefined,
-  },
-  reset() {
-    this.state.environments.length = 0;
-    this.state.startCalls.length = 0;
-    this.state.promptUrls.length = 0;
-    this.state.promptParts.length = 0;
-    this.state.authHeaders.length = 0;
-    this.state.closeCalls.length = 0;
-    this.state.directories.length = 0;
-    this.state.promptInputs.length = 0;
-    this.state.deleted.length = 0;
-    this.state.aborted.length = 0;
-    this.state.denied.length = 0;
-    this.state.eventScenario = undefined;
-    this.state.config = {};
-    this.state.stall = false;
-    this.state.sessionCreateCalls = 0;
-    this.state.connectCalls = 0;
-    this.state.clientCalls = 0;
-    this.state.abortCalls.length = 0;
-    this.state.onSessionCreate = undefined;
-    this.state.onPrompt = undefined;
-    this.state.onAbort = undefined;
-    this.state.connectionError = undefined;
-    this.state.startError = undefined;
-    this.state.sessionCreateError = undefined;
-    this.state.sessionResult = undefined;
-    this.state.promptRequestError = undefined;
-    this.state.promptResult = undefined;
-  },
-};
-
-const OpenCodeRuntimeTestDouble: OpenCodeRuntime.OpenCodeRuntime["Service"] = {
-  startOpenCodeServerProcess: ({ binaryPath, serverPassword, environment }) =>
-    Effect.gen(function* () {
-      if (runtimeMock.state.startError) return yield* runtimeMock.state.startError;
-      const index = runtimeMock.state.startCalls.length + 1;
-      const url = `http://127.0.0.1:${4_300 + index}`;
-      runtimeMock.state.startCalls.push(binaryPath);
-      runtimeMock.state.environments.push(environment ?? {});
-      // The production runtime binds server lifetime to the caller's scope.
-      // Mirror that here so the closeCalls probe observes scope close.
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          runtimeMock.state.closeCalls.push(url);
-        }),
-      );
-      const effectiveServerPassword = OpenCodeRuntime.resolveOpenCodeServerPassword({
-        external: false,
-        ...(serverPassword !== undefined ? { serverPassword } : {}),
-        ...(environment !== undefined ? { environment } : {}),
-      });
-      return {
-        url,
-        ...(effectiveServerPassword !== undefined
-          ? { serverPassword: effectiveServerPassword }
-          : {}),
-        version: "1.14.19",
-        isRunning: Effect.succeed(true),
-        exitCode: Effect.never,
-      };
-    }),
-  connectToOpenCodeServer: ({ serverUrl, serverPassword }) => {
-    runtimeMock.state.connectCalls++;
-    return runtimeMock.state.connectionError
-      ? Effect.fail(
-          new OpenCodeRuntime.OpenCodeRuntimeError({
-            operation: "global.health",
-            detail: runtimeMock.state.connectionError.message,
-            cause: runtimeMock.state.connectionError,
-          }),
-        )
-      : Effect.succeed({
-          url: serverUrl ?? "http://127.0.0.1:4301",
-          ...(serverPassword ? { serverPassword } : {}),
-          version: "1.14.19",
-          exitCode: null,
-          external: Boolean(serverUrl),
-        });
-  },
-  runOpenCodeCommand: () => Effect.succeed({ stdout: "", stderr: "", code: 0 }),
-  createOpenCodeSdkClient: ({ baseUrl, serverPassword, directory }) => {
-    runtimeMock.state.clientCalls++;
-    runtimeMock.state.directories.push(directory);
-    let begin: (() => void) | undefined;
-    let handled: (() => void) | undefined;
-    const prompting = new Promise<void>((resolve) => {
-      begin = resolve;
-    });
-    const eventsHandled = new Promise<void>((resolve) => {
-      handled = resolve;
-    });
-    return {
-      config: { get: async () => ({ data: runtimeMock.state.config }) },
-      mcp: { status: async () => ({ data: {} }) },
-      tool: { ids: async () => ({ data: ["read", "bash", "question"] }) },
-      permission: {
-        reply: async ({ requestID }: { requestID: string }) => {
-          runtimeMock.state.denied.push(requestID);
-          return { data: true };
-        },
-      },
-      event: {
-        subscribe: async (_input: unknown, options: { signal: AbortSignal }) => ({
-          stream: (async function* () {
-            const stopped = new Promise<void>((resolve) => {
-              if (options.signal.aborted) resolve();
-              else options.signal.addEventListener("abort", () => resolve(), { once: true });
-            });
-            await Promise.race([prompting, stopped]);
-            if (runtimeMock.state.eventScenario === "tool")
-              yield {
-                type: "message.part.updated",
-                properties: { part: { type: "tool", sessionID: `${baseUrl}/session` } },
-              };
-            if (runtimeMock.state.eventScenario === "permission")
-              yield {
-                type: "permission.asked",
-                properties: { id: "permission-1", sessionID: `${baseUrl}/session` },
-              };
-            handled?.();
-            await stopped;
-          })(),
-        }),
-      },
-      session: {
-        abort: async (
-          { sessionID }: { sessionID: string },
-          options?: { readonly signal?: AbortSignal },
-        ) => {
-          runtimeMock.state.aborted.push(sessionID);
-          runtimeMock.state.abortCalls.push(sessionID);
-          if (runtimeMock.state.onAbort) return runtimeMock.state.onAbort(options?.signal);
-          return { data: true };
-        },
-        delete: async ({ sessionID }: { sessionID: string }) => {
-          runtimeMock.state.deleted.push(sessionID);
-          return { data: true };
-        },
-        create: async (_input: unknown, options?: { readonly signal?: AbortSignal }) => {
-          runtimeMock.state.sessionCreateCalls += 1;
-          if (runtimeMock.state.onSessionCreate) {
-            return runtimeMock.state.onSessionCreate(options?.signal);
-          }
-          if (runtimeMock.state.sessionCreateError !== undefined) {
-            throw runtimeMock.state.sessionCreateError;
-          }
-          return runtimeMock.state.sessionResult ?? { data: { id: `${baseUrl}/session` } };
-        },
-        prompt: async (
-          input: {
-            readonly parts: ReadonlyArray<unknown>;
-            tools?: Record<string, boolean>;
-            model?: { providerID: string; modelID: string };
-            agent?: string;
-            variant?: string;
-          },
-          options?: { readonly signal?: AbortSignal },
-        ) => {
-          runtimeMock.state.promptInputs.push(input);
-          const promptOverride = runtimeMock.state.onPrompt?.(options?.signal);
-          begin?.();
-          if (runtimeMock.state.eventScenario) await eventsHandled;
-          if (runtimeMock.state.stall) await new Promise<void>(() => {});
-          runtimeMock.state.promptUrls.push(baseUrl);
-          runtimeMock.state.promptParts.push(input.parts);
-          runtimeMock.state.authHeaders.push(
-            serverPassword ? `Basic ${btoa(`opencode:${serverPassword}`)}` : null,
-          );
-          if (promptOverride !== undefined) return promptOverride;
-          if (runtimeMock.state.promptRequestError !== undefined) {
-            throw runtimeMock.state.promptRequestError;
-          }
-          return (
-            runtimeMock.state.promptResult ?? {
-              data: {
-                parts: [
-                  {
-                    type: "text",
-                    text: JSON.stringify({
-                      subject: "Improve OpenCode reuse",
-                      body: "Reuse one server for the full action.",
-                    }),
-                  },
-                ],
-              },
-            }
-          );
-        },
-      },
-    } as unknown as ReturnType<
-      OpenCodeRuntime.OpenCodeRuntime["Service"]["createOpenCodeSdkClient"]
-    >;
-  },
-  loadOpenCodeInventory: () =>
-    Effect.fail(
-      new OpenCodeRuntime.OpenCodeRuntimeError({
-        operation: "loadOpenCodeInventory",
-        detail: "OpenCodeRuntimeTestDouble.loadOpenCodeInventory not used in this test",
-        cause: null,
-      }),
-    ),
-  loadOpenCodeSkills: () => Effect.succeed([]),
-  loadInventoryFromCli: () =>
-    Effect.fail(
-      new OpenCodeRuntime.OpenCodeRuntimeError({
-        operation: "loadInventoryFromCli",
-        detail: "OpenCodeRuntimeTestDouble.loadInventoryFromCli not used in this test",
-        cause: null,
-      }),
-    ),
-  loadSkillsFromCli: () => Effect.succeed([]),
-};
+import { runtimeMock, OpenCodeRuntimeTestDouble } from "./textGeneration.testkit.ts";
 
 const DEFAULT_TEST_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make("opencode"),
@@ -335,7 +81,9 @@ function withOpenCodeTextGeneration<A, E, R>(
     const serverOwner = yield* OpenCodeServerOwner.make({
       binaryPath: settings.binaryPath,
       directory: process.cwd(),
-      ...(settings.serverPassword ? { serverPassword: settings.serverPassword } : {}),
+      ...(settings.serverPassword
+        ? { serverPassword: settingsSecretLiteral(settings.serverPassword) }
+        : {}),
       ...(environment ? { environment } : {}),
     });
     const textGeneration = yield* OpenCodeTextGeneration.makeOpenCodeTextGeneration(settings, {
@@ -375,7 +123,7 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCodeTextGeneration", (it) => {
         expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
         expect(signal?.aborted).toBe(true);
         expect(runtimeMock.state.promptUrls).toEqual([]);
-        expect(runtimeMock.state.abortCalls).toEqual([]);
+        expect(runtimeMock.state.sessionCalls).toEqual([]);
       }),
     ),
   );
@@ -411,7 +159,10 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCodeTextGeneration", (it) => {
         expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
         expect(signal?.aborted).toBe(true);
         expect(otherSignal?.aborted).toBe(false);
-        expect(runtimeMock.state.abortCalls).toEqual(["cancelled-session"]);
+        expect(runtimeMock.state.sessionCalls).toEqual([
+          "abort cancelled-session",
+          "delete cancelled-session",
+        ]);
         expect(runtimeMock.state.closeCalls).toEqual([]);
 
         otherReply.resolve({
@@ -425,7 +176,11 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCodeTextGeneration", (it) => {
           "http://127.0.0.1:4301",
           "http://127.0.0.1:4301",
         ]);
-        expect(runtimeMock.state.abortCalls).toEqual(["cancelled-session"]);
+        expect(runtimeMock.state.sessionCalls).toEqual([
+          "abort cancelled-session",
+          "delete cancelled-session",
+          "delete other-session",
+        ]);
         expect(runtimeMock.state.closeCalls).toEqual([]);
       }),
     ),
@@ -510,6 +265,83 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCodeTextGeneration", (it) => {
           textPartCount: 1,
         });
         expect(error.cause).not.toHaveProperty("cause");
+        expect(runtimeMock.state.sessionCalls).toEqual(["delete http://127.0.0.1:4301/session"]);
+      }),
+    ),
+  );
+
+  it.effect(
+    "maps OpenCode prompt errors to fixed details and keeps provider text in the cause",
+    () =>
+      Effect.forEach(
+        [
+          {
+            error: {
+              name: "APIError",
+              data: {
+                message: "Org quota secret-org exceeded",
+                statusCode: 429,
+                isRetryable: true,
+              },
+            },
+            rawText: "secret-org",
+            detail: "The model provider's usage or rate limit was reached. Try again later.",
+          },
+          {
+            error: {
+              name: "APIError",
+              data: {
+                message: "<none>",
+                statusCode: 503,
+                isRetryable: true,
+                responseBody: "<title>Upstream gateway secret-host</title>",
+              },
+            },
+            rawText: "secret-host",
+            detail: "The model provider failed the request (HTTP 503).",
+          },
+          {
+            error: { name: "UnknownError", data: { message: "Provider stack trace secret-token" } },
+            rawText: "secret-token",
+            detail: "OpenCode could not generate the text.",
+          },
+        ],
+        (testCase) =>
+          withOpenCodeTextGeneration(DEFAULT_OPENCODE_SETTINGS, (textGeneration) =>
+            Effect.gen(function* () {
+              runtimeMock.state.promptResult = {
+                data: { info: { error: testCase.error }, parts: [] },
+              };
+
+              const error = yield* textGeneration
+                .generateCommitMessage(DEFAULT_COMMIT_MESSAGE_INPUT)
+                .pipe(Effect.flip);
+
+              expect(error.detail).toBe(testCase.detail);
+              expect(error.message).not.toContain(testCase.rawText);
+              expect(error.cause).toMatchObject({
+                _tag: "OpenCodeTextGenerationPromptResponseError",
+                providerErrorName: testCase.error.name,
+                cause: testCase.error,
+              });
+              expect((error.cause as Error).message).not.toContain(testCase.rawText);
+            }),
+          ),
+        { discard: true },
+      ),
+  );
+
+  it.effect("deletes the session when the prompt request rejects", () =>
+    withOpenCodeTextGeneration(DEFAULT_OPENCODE_SETTINGS, (textGeneration) =>
+      Effect.gen(function* () {
+        runtimeMock.state.promptRequestError = new Error("prompt transport failed");
+
+        const error = yield* textGeneration
+          .generateCommitMessage(DEFAULT_COMMIT_MESSAGE_INPUT)
+          .pipe(Effect.flip);
+
+        expect(error.detail).toBe("OpenCode session.prompt request failed.");
+        expect(runtimeMock.state.sessionCalls).toEqual(["delete http://127.0.0.1:4301/session"]);
       }),
     ),
   );
@@ -597,6 +429,10 @@ it.layer(layerOpenCodeTextGenerationExistingServerTest)(
           });
 
           expect(runtimeMock.state.startCalls).toEqual([]);
+          expect(runtimeMock.state.sessionCalls).toEqual([
+            "delete http://127.0.0.1:9999/session",
+            "delete http://127.0.0.1:9999/session",
+          ]);
           expect(runtimeMock.state.promptUrls).toEqual([
             "http://127.0.0.1:9999",
             "http://127.0.0.1:9999",

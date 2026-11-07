@@ -87,9 +87,39 @@ apps this is switched off for now; see
 When an agent asks for a password for a sign-in page, the card shows the site.
 GOAT types the password into that site's password field, and the agent gets only a reference.
 
+An agent can also request a login with a username and password. The agent never sees either value;
+GOAT fills them only on the site named in the request, and each login is used once. If a fill
+stops partway, the agent needs a new login request.
+You can also add an authenticator setup key to the login request. GOAT generates the code without showing the key or code to the agent, and codes remain available for a short time after the login is filled.
+
+An agent can request payment card details for a named site. The agent never sees the values, and
+GOAT fills them only on that site. Each card is used once; if a fill stops partway, the agent needs
+a new card request.
+
 The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target
 before it tries another action.
+
+## Let an agent use a tab in your browser
+
+An agent can work in one tab of your own Chrome or Edge, signed in as you, on
+only the sites you allow for that thread. When the agent asks, its request card
+shows the window title and site; approve the card to let it use the tab. You can
+also open **Your browser** in the thread's browser panel, or choose **Let GOAT
+Use a Browser Tab…** from the desktop menu, then pick a window and site.
+A client without permission to change settings can decline a request but cannot
+approve it.
+
+An attached tab shows **Agent attached**. Use **End** to end the attachment or
+**Revoke** to remove a site's permission. **Stop**, a move to a site outside the
+allowed sites or to a blocked site, and a GOAT driver restart also end the
+attachment. Pressing Esc stops desktop control, not a claimed tab; use **End**
+or **Stop** for that tab. Blocked browser hosts apply to claimed tabs too.
+
+The picker cannot list a browser that already has a claimed tab; end that claim
+first. It also cannot list a browser that computer use does not allow. This
+option requires a Computer Use driver that supports browser claims; otherwise
+it is unavailable.
 
 ## Site notes
 

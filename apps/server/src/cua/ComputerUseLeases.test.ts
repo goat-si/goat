@@ -47,7 +47,7 @@ layer("ComputerUseLeases controls", (it) => {
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         const owner = ThreadId.make("thread-screen-locked");
         yield* Effect.addFinalizer(() => leases.resume.pipe(Effect.andThen(leases.stop(owner))));
-        const control = yield* leases.control(owner, Option.none());
+        const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
         yield* leases.callReservation(owner, {
           action: "reserve",
           controlId: control.controlId,
@@ -73,7 +73,7 @@ layer("ComputerUseLeases controls", (it) => {
         });
         yield* run(owner, "run-lock-end", 1, "completed");
         yield* leases.turnEnded(owner);
-        yield* leases.control(owner, Option.none());
+        Option.getOrThrow(yield* leases.control(owner, Option.none()));
         const listed = (yield* leases.sessions).find(
           ({ control: entry }) => entry.controlId === control.controlId,
         );
@@ -88,7 +88,7 @@ layer("ComputerUseLeases controls", (it) => {
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         const owner = ThreadId.make("thread-delayed-lock");
         yield* Effect.addFinalizer(() => leases.stop(owner));
-        const control = yield* leases.control(owner, Option.none());
+        const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
         const gate = yield* Deferred.make<void>();
         const screenLocked = leases.screenLocked;
         if (screenLocked === undefined) return yield* Effect.die("missing screenLocked");
@@ -114,12 +114,12 @@ layer("ComputerUseLeases controls", (it) => {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const owner = ThreadId.make("thread-expired-escape");
-      const control = yield* leases.control(owner, Option.none());
+      const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
       const stopAllIfCurrent = leases.stopAllIfCurrent;
       if (stopAllIfCurrent === undefined) return yield* Effect.die("missing stopAllIfCurrent");
       yield* TestClock.adjust("61 minutes");
       assert.isFalse(yield* stopAllIfCurrent(owner, control.controlId));
-      const replacement = yield* leases.control(owner, Option.none());
+      const replacement = Option.getOrThrow(yield* leases.control(owner, Option.none()));
       assert.isFalse(yield* stopAllIfCurrent(owner, control.controlId));
       assert.equal((yield* leases.controlState(owner, replacement.controlId))._tag, "active");
       yield* leases.stop(owner);
@@ -131,7 +131,7 @@ layer("ComputerUseLeases controls", (it) => {
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const owner = ThreadId.make("thread-current-control");
       assert.isTrue(Option.isNone(yield* leases.currentControl(owner)));
-      const control = yield* leases.control(owner, Option.none());
+      const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
       assert.equal(
         Option.getOrThrow(yield* leases.currentControl(owner)).controlId,
         control.controlId,
@@ -156,7 +156,7 @@ layer("ComputerUseLeases controls", (it) => {
           const leases = yield* ComputerUseLeases.ComputerUseLeases;
           const owner = ThreadId.make("thread-session-spans");
           yield* Effect.addFinalizer(() => leases.stop(owner));
-          const control = yield* leases.control(owner, Option.none());
+          const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
           assert.isTrue(yield* leases.setTarget(owner, control.controlId, { pid: 7, windowId: 3 }));
           const spans = new Map<string, number>();
           // What frame viewers, session lists, lease streams and the helper watch read on a signal.
@@ -191,7 +191,7 @@ layer("ComputerUseLeases controls", (it) => {
           const leases = yield* ComputerUseLeases.ComputerUseLeases;
           const owner = ThreadId.make("thread-cursor-at");
           yield* Effect.addFinalizer(() => leases.stop(owner));
-          const control = yield* leases.control(owner, Option.none());
+          const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
           assert.isTrue(yield* leases.setTarget(owner, control.controlId, { pid: 7, windowId: 3 }));
           const cursorAt = Effect.map(
             leases.sessions,
@@ -223,12 +223,12 @@ layer("ComputerUseLeases controls", (it) => {
         const minted = ThreadId.make("thread-minted");
         // The layer is shared: a live control left behind would pause later tests' controls.
         yield* Effect.addFinalizer(() => leases.stop(minted));
-        yield* leases.control(minted, Option.none());
+        Option.getOrThrow(yield* leases.control(minted, Option.none()));
         // A second thread's session must reach the session list without waiting for another event.
         assert.isAbove(yield* PubSub.remaining(signals), 0);
         yield* PubSub.takeAll(signals);
         // Each later call of the same turn reuses the control and says nothing new.
-        yield* leases.control(minted, Option.none());
+        Option.getOrThrow(yield* leases.control(minted, Option.none()));
         assert.equal(yield* PubSub.remaining(signals), 0);
       }),
     ),
@@ -243,7 +243,7 @@ layer("ComputerUseLeases controls", (it) => {
           const leases = yield* ComputerUseLeases.ComputerUseLeases;
           const owner = ThreadId.make("thread-acted");
           yield* Effect.addFinalizer(() => leases.stop(owner));
-          const control = yield* leases.control(owner, Option.none());
+          const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
           const acted = () =>
             leases.sessions.pipe(
               Effect.map(
@@ -272,7 +272,7 @@ layer("ComputerUseLeases controls", (it) => {
           // Idle keeps the mark, so a card a person stops between turns still shows as stopped.
           assert.isTrue(yield* acted());
           // The next turn reuses the control, and has not asked for the screen yet.
-          yield* leases.control(owner, Option.none());
+          Option.getOrThrow(yield* leases.control(owner, Option.none()));
           assert.isFalse(yield* acted());
         }),
       ),
@@ -284,7 +284,7 @@ layer("ComputerUseLeases controls", (it) => {
       Effect.gen(function* () {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        const first = yield* leases.control(turnThread, Option.none());
+        const first = Option.getOrThrow(yield* leases.control(turnThread, Option.none()));
         // A queued follow-up keeps the control its proxy already holds.
         yield* run(turnThread, "run-turn-1", 1, "completed");
         yield* run(turnThread, "run-turn-2", 2, "queued");
@@ -306,7 +306,7 @@ layer("ComputerUseLeases controls", (it) => {
         yield* leases.pause("takeover");
         assert.equal((yield* leases.controlState(turnThread, first.controlId))._tag, "active");
 
-        const next = yield* leases.control(turnThread, Option.none());
+        const next = Option.getOrThrow(yield* leases.control(turnThread, Option.none()));
         assert.equal(next.controlId, first.controlId);
         assert.isUndefined((yield* listed())?.control.idle);
       }),
@@ -319,7 +319,7 @@ layer("ComputerUseLeases controls", (it) => {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         const parent = ThreadId.make("thread-parent");
-        const control = yield* leases.control(parent, Option.none());
+        const control = Option.getOrThrow(yield* leases.control(parent, Option.none()));
         yield* run(parent, "run-parent-1", 1, "failed");
         const sql = yield* SqlClient.SqlClient;
         // Native subagents report under their child thread, nested ones under their own parent.
@@ -361,7 +361,7 @@ layer("ComputerUseLeases controls", (it) => {
     Effect.gen(function* () {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const control = yield* leases.control(offThread, Option.none());
+      const control = Option.getOrThrow(yield* leases.control(offThread, Option.none()));
       yield* leases.disable;
       assert.deepEqual(yield* leases.controlState(offThread, control.controlId), {
         _tag: "ended",
@@ -375,7 +375,7 @@ layer("ComputerUseLeases controls", (it) => {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const scoped = ThreadId.make("thread-scoped");
-      const control = yield* leases.control(scoped, Option.none());
+      const control = Option.getOrThrow(yield* leases.control(scoped, Option.none()));
       assert.equal((yield* leases.controlState(scoped, control.controlId))._tag, "active");
       yield* leases.stop(scoped);
       const listed = (yield* leases.sessions).find(
@@ -391,9 +391,12 @@ layer("ComputerUseLeases controls", (it) => {
       Effect.gen(function* () {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        const first = yield* leases.control(thread, Option.none());
+        const first = Option.getOrThrow(yield* leases.control(thread, Option.none()));
         // A second turn within the hour keeps the same control, so its proxy is not respawned.
-        assert.equal((yield* leases.control(thread, Option.none())).controlId, first.controlId);
+        assert.equal(
+          Option.getOrThrow(yield* leases.control(thread, Option.none())).controlId,
+          first.controlId,
+        );
         assert.equal((yield* leases.controlState(thread, first.controlId))._tag, "active");
         // The session list reads the controls each time, so one minted after startup is listed.
         assert.include(
@@ -407,7 +410,7 @@ layer("ComputerUseLeases controls", (it) => {
           _tag: "ended",
           reason: "stopped",
         });
-        const next = yield* leases.control(thread, Option.none());
+        const next = Option.getOrThrow(yield* leases.control(thread, Option.none()));
         assert.notEqual(next.controlId, first.controlId);
         assert.deepEqual(yield* leases.controlState(thread, first.controlId), {
           _tag: "ended",
@@ -420,7 +423,7 @@ layer("ComputerUseLeases controls", (it) => {
     Effect.gen(function* () {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const control = yield* leases.control(appsThread, Option.none());
+      const control = Option.getOrThrow(yield* leases.control(appsThread, Option.none()));
       const apps = leases
         .controlState(appsThread, control.controlId)
         .pipe(Effect.map((state) => (state._tag === "active" ? state.apps : state._tag)));
@@ -441,7 +444,7 @@ layer("ComputerUseLeases controls", (it) => {
       yield* grant(other, "handoff:bot", ["com.apple.calculator"]);
       const lease = yield* leases.active(other);
       assert.isTrue(Option.isSome(lease));
-      const control = yield* leases.control(other, lease);
+      const control = Option.getOrThrow(yield* leases.control(other, lease));
       assert.equal(control.handoffId, "handoff:bot");
       const state = yield* leases.controlState(other, control.controlId);
       assert.deepEqual(state._tag === "active" ? state.apps : state, ["com.apple.calculator"]);
@@ -457,10 +460,10 @@ layer("ComputerUseLeases controls", (it) => {
         yield* leases.stopAll;
         // A takeover with no agent on the screen pauses nothing to come.
         yield* leases.pause("takeover");
-        const mine = yield* leases.control(thread, Option.none());
+        const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
         assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
 
-        const bots = yield* leases.control(other, Option.none());
+        const bots = Option.getOrThrow(yield* leases.control(other, Option.none()));
         yield* leases.pause("takeover");
         for (const [id, control] of [
           [thread, mine],
@@ -480,7 +483,7 @@ layer("ComputerUseLeases controls", (it) => {
           reason: "stopped_all",
         });
         // With nobody left on the screen the pause is gone too.
-        const after = yield* leases.control(thread, Option.none());
+        const after = Option.getOrThrow(yield* leases.control(thread, Option.none()));
         assert.equal((yield* leases.controlState(thread, after.controlId))._tag, "active");
       }),
   );
@@ -492,8 +495,8 @@ layer("ComputerUseLeases controls", (it) => {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         yield* leases.stopAll;
-        const mine = yield* leases.control(thread, Option.none());
-        const bots = yield* leases.control(other, Option.none());
+        const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+        const bots = Option.getOrThrow(yield* leases.control(other, Option.none()));
         yield* leases.hold(mine.controlId, true);
         assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
           _tag: "paused",
@@ -518,16 +521,16 @@ it.effect(
       yield* Effect.gen(function* () {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        yield* leases.control(thread, Option.none());
+        Option.getOrThrow(yield* leases.control(thread, Option.none()));
         assert.isTrue(yield* Queue.take(sent));
         // A second agent does not change what the desktop hears.
-        yield* leases.control(other, Option.none());
+        Option.getOrThrow(yield* leases.control(other, Option.none()));
         yield* leases.stop(thread);
         assert.equal(yield* Queue.size(sent), 0);
         yield* leases.stop(other);
         assert.isFalse(yield* Queue.take(sent));
 
-        const lapsing = yield* leases.control(thread, Option.none());
+        const lapsing = Option.getOrThrow(yield* leases.control(thread, Option.none()));
         assert.isTrue(yield* Queue.take(sent));
         // An interactive control lapses after an hour without anyone ending it.
         yield* TestClock.adjust("61 minutes");
@@ -563,9 +566,9 @@ it.effect("sends the union of named approvals, updating apps while controls stay
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       // A whole-screen approval contributes nothing to the named union.
       yield* grant(other, "handoff:screen");
-      yield* leases.control(other, yield* leases.active(other));
+      Option.getOrThrow(yield* leases.control(other, yield* leases.active(other)));
       assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
-      yield* leases.control(thread, Option.none());
+      Option.getOrThrow(yield* leases.control(thread, Option.none()));
       yield* grant(thread, "handoff:first", ["com.example.notes"]);
       yield* leases.changed;
       assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
@@ -611,7 +614,7 @@ it.effect(
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         yield* grant(thread, "handoff:earlier", ["com.example.notes"]);
         yield* TestClock.adjust("30 minutes");
-        const control = yield* leases.control(thread, Option.none());
+        const control = Option.getOrThrow(yield* leases.control(thread, Option.none()));
         assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
         yield* leases.pause("takeover");
         assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "paused");
@@ -647,7 +650,7 @@ it.effect("tells the desktop again after a failed write, without waiting for it 
     yield* Effect.gen(function* () {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      yield* leases.control(thread, Option.none());
+      Option.getOrThrow(yield* leases.control(thread, Option.none()));
       assert.isTrue(yield* Queue.take(attempts));
       yield* TestClock.adjust("1 second");
       assert.isTrue(yield* Queue.take(attempts));
@@ -694,13 +697,13 @@ it.effect("after a failed write, a later control is sent even when the desktop l
     yield* Effect.gen(function* () {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      yield* leases.control(thread, Option.none());
+      Option.getOrThrow(yield* leases.control(thread, Option.none()));
       assert.isTrue(yield* Queue.take(attempts));
       failNext = true;
       yield* leases.stop(thread);
       assert.isFalse(yield* Queue.take(attempts));
       // The desktop may still be watching or may have stopped; it is told again either way.
-      yield* leases.control(thread, Option.none());
+      Option.getOrThrow(yield* leases.control(thread, Option.none()));
       assert.isTrue(yield* Queue.take(attempts));
     }).pipe(
       Effect.provide(
@@ -743,7 +746,7 @@ it.effect("stops watching when the grant behind the last control is cancelled", 
       const sql = yield* SqlClient.SqlClient;
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       yield* grant(other, "handoff:watched");
-      yield* leases.control(other, yield* leases.active(other));
+      Option.getOrThrow(yield* leases.control(other, yield* leases.active(other)));
       assert.isTrue(yield* Queue.take(sent));
       const proxies = yield* leases.subscribe;
       yield* sql`DELETE FROM orchestration_v2_projection_turn_items WHERE turn_item_id = 'handoff:watched'`;
@@ -823,7 +826,7 @@ it.effect(
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         assert.isFalse(yield* Queue.take(watched));
-        yield* leases.control(thread, Option.none());
+        Option.getOrThrow(yield* leases.control(thread, Option.none()));
         assert.isTrue(yield* Queue.take(watched));
         assert.isTrue(yield* leases.turnEnded(thread));
         assert.isFalse(yield* Queue.take(watched));
@@ -842,7 +845,7 @@ it.effect("retries a standalone manifest when an already named app is requested 
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       yield* Queue.take(watched);
-      const control = yield* leases.control(thread, Option.none());
+      const control = Option.getOrThrow(yield* leases.control(thread, Option.none()));
       yield* Queue.take(watched);
       yield* leases.nameApps(thread, control.controlId, ["editor"]);
       assert.deepEqual(yield* Queue.take(refreshed), ["editor"]);
@@ -863,7 +866,7 @@ it.effect(
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         assert.isFalse(yield* Queue.take(watched));
-        yield* leases.control(thread, Option.none());
+        Option.getOrThrow(yield* leases.control(thread, Option.none()));
         assert.isTrue(yield* Queue.take(watched));
         yield* grant(thread, "handoff:standalone-first", ["editor"]);
         yield* leases.changed;

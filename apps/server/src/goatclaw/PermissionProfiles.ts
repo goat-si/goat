@@ -1,6 +1,5 @@
 import {
-  GOATCLAW_ROLE_PROFILES,
-  GoatclawRole,
+  type GoatclawRole,
   type GoatclawSettings,
   OrchestratorMcpFailure,
   PermissionProfile,
@@ -98,30 +97,6 @@ export interface ProfileNarrowing {
 }
 export type EffectiveProfile = PermissionProfileView & { readonly narrowing?: ProfileNarrowing };
 
-/**
- * What a role launch grants: the role's stored profile within the caller's, plus what the role
- * keeps (RoleTemplates `keeps`) when the caller may launch and only its own stored profile lacked
- * it. A launch snapshot or forwarded ceiling that lacks the capability still removes it.
- */
-export const roleProfile = (
-  role: GoatclawRole,
-  named: PermissionProfile,
-  caller: EffectiveProfile,
-): PermissionProfile => {
-  const profile = intersectProfiles(named, caller.profile);
-  const ceilings = caller.narrowing?.ceilings;
-  if (ceilings === undefined || !caller.profile.capabilities.includes("threads.launch"))
-    return profile;
-  const kept = goatclawRoleTemplate(role).keeps.filter(
-    (capability) =>
-      named.capabilities.includes(capability) &&
-      !profile.capabilities.includes(capability) &&
-      ceilings.every((ceiling) => ceiling.capabilities.includes(capability)),
-  );
-  return kept.length === 0
-    ? profile
-    : { ...profile, capabilities: [...profile.capabilities, ...kept] };
-};
 export type CheckResult =
   | { readonly ok: true; readonly effective: EffectiveProfile }
   | { readonly ok: false; readonly reason: string };
@@ -382,23 +357,7 @@ export const layer = Layer.effect(
       const named = policy.profiles[profileId];
       if (named === undefined)
         return yield* refusal(`Permission profile ${profileId} does not exist.`);
-      // roleProfile keeps the role profile's id, so the child is bound under the role's profile.
-      return { named, profile: roleProfile(role, named, caller) };
-    });
-    /**
-     * What a caller grants a thread bound under `profileId` when it reaches that thread without
-     * launching it, as a send does: a role thread that keeps capabilities gets the role's grant,
-     * so a kept capability is neither read as exceeding the caller nor stripped on rebinding.
-     */
-    const reachGrant = Effect.fn("PermissionProfiles.reachGrant")(function* (
-      profileId: string | undefined,
-      caller: EffectiveProfile,
-    ) {
-      const role = GoatclawRole.literals.find(
-        (role) =>
-          GOATCLAW_ROLE_PROFILES[role] === profileId && goatclawRoleTemplate(role).keeps.length > 0,
-      );
-      return role === undefined ? caller.profile : (yield* roleGrant(role, caller)).profile;
+      return { named, profile: intersectProfiles(named, caller.profile) };
     });
     const assertTarget = Effect.fn("PermissionProfiles.assertTarget")(function* (
       scope: McpInvocationScope,
@@ -413,7 +372,6 @@ export const layer = Layer.effect(
       const within = (ceiling: PermissionProfile) =>
         encodeProfile(intersectProfiles(target.profile, ceiling)) === encodeProfile(target.profile);
       if (within(caller.profile)) return;
-      if (within(yield* reachGrant(target.narrowing?.named.id, caller))) return;
       return yield* refusal("The target thread's permission profile exceeds the caller's ceiling.");
     });
     const recheck = Effect.fn("PermissionProfiles.recheck")(function* (
@@ -639,8 +597,6 @@ export const layer = Layer.effect(
               const narrower = sources.findLast(
                 (source) => source.id !== granted.profile.id && withinAll(source),
               );
-              // A send rebinds an existing role thread under the grant assertTarget admitted it
-              // with, so the capabilities its role keeps survive the narrowing.
               const inherited =
                 previous === undefined
                   ? { ...granted.profile, ...(narrower === undefined ? {} : { id: narrower.id }) }
@@ -648,9 +604,7 @@ export const layer = Layer.effect(
                       yield* decodeProfile(previous.ceiling_json).pipe(
                         Effect.mapError(storageFailure),
                       ),
-                      input.role === undefined
-                        ? yield* reachGrant(previous.profile_id, granted)
-                        : granted.profile,
+                      granted.profile,
                     );
               yield* sql`INSERT INTO goatclaw_thread_profiles (thread_id, profile_id, ceiling_json, owner_key)
           VALUES (${input.childThreadId}, ${previous?.profile_id ?? granted.profile.id}, ${encodeProfile(inherited)}, ${owner})

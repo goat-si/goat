@@ -2,6 +2,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Socket ownership validation needs lstat to reject symlinks.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as NodeOS from "node:os";
 
 import {
@@ -114,7 +115,9 @@ async function sendDesktopAppActivationRequest(input: {
     }
   }
   return new Promise((resolve, reject) => {
-    const socket = NodeNet.createConnection(input.address.address);
+    const socket = guardErrors(NodeNet.createConnection(input.address.address), (error) =>
+      onSocketError(error),
+    );
     socket.setEncoding("utf8");
     let buffer = "";
     let settled = false;
@@ -176,7 +179,7 @@ async function sendDesktopAppActivationRequest(input: {
       }
       finish({ type: "success", response: parsed });
     });
-    socket.once("error", (error: NodeJS.ErrnoException) => {
+    const onSocketError = (error: NodeJS.ErrnoException) => {
       if (
         !settled &&
         !connected &&
@@ -198,7 +201,7 @@ async function sendDesktopAppActivationRequest(input: {
         return;
       }
       finish({ type: "failure", error });
-    });
+    };
     socket.once("end", () => {
       finish({ type: "failure", error: new Error("The desktop app closed the connection.") });
     });

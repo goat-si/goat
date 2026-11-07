@@ -4,6 +4,7 @@ import {
   GitCommandError,
   type ServerSettings,
   type ServerSettingsPatch,
+  type ServerSettingsError,
   VcsProcessExitError,
   VcsProcessSpawnError,
 } from "@goat/contracts";
@@ -21,6 +22,11 @@ export interface TestSourceControlHostOptions {
   readonly settings?: ServerSettings;
   readonly process?: Partial<SourceControlHost.SourceControlHost["Service"]["process"]>;
   readonly git?: Partial<SourceControlHost.SourceControlHost["Service"]["git"]>;
+  readonly resolveSettings?: (
+    settings: ServerSettings,
+    kind: string,
+    host?: string,
+  ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 }
 
 export class TestSourceControlHostSettings extends Context.Service<
@@ -55,8 +61,17 @@ export const layer = (
   Layer.effectContext(
     Effect.gen(function* () {
       const settings = yield* Ref.make(options.settings ?? DEFAULT_SERVER_SETTINGS);
+      const resolveSettings = options.resolveSettings;
       const host = SourceControlHost.SourceControlHost.of({
-        settings: { get: Ref.get(settings) },
+        settings: {
+          get: Ref.get(settings),
+          getWithSecrets: (kind, host) =>
+            resolveSettings
+              ? Ref.get(settings).pipe(
+                  Effect.flatMap((current) => resolveSettings(current, kind, host)),
+                )
+              : Ref.get(settings),
+        },
         process: {
           run:
             options.process?.run ??

@@ -6,8 +6,8 @@ import { AsyncResult } from "effect/reactivity";
 import {
   archiveSelectedThreadEntries,
   deleteSelectedThreadEntries,
-  getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
+  belongsInSidebarWorkingShelf,
   resolveSidebarRowThreadId,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
@@ -58,6 +58,7 @@ import {
   resolveSidebarThreadDragMode,
   shouldCancelSidebarThreadDrag,
 } from "./Sidebar.logic";
+import { selectMostRecentOpenProject } from "../globalAgentProject";
 import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
 import {
   EnvironmentId,
@@ -649,38 +650,6 @@ function makeThread(overrides: ThreadFixtureOverrides = {}): Thread {
   });
 }
 
-describe("getFallbackThreadIdAfterDelete", () => {
-  it("skips other threads being deleted in the same action", () => {
-    const fallbackThreadId = getFallbackThreadIdAfterDelete({
-      threads: [
-        makeThread({
-          id: ThreadId.make("thread-active"),
-          projectId: ProjectId.make("project-1"),
-          createdAt: "2026-03-09T10:05:00.000Z",
-          messages: [],
-        }),
-        makeThread({
-          id: ThreadId.make("thread-newest"),
-          projectId: ProjectId.make("project-1"),
-          createdAt: "2026-03-09T10:10:00.000Z",
-          messages: [],
-        }),
-        makeThread({
-          id: ThreadId.make("thread-next"),
-          projectId: ProjectId.make("project-1"),
-          createdAt: "2026-03-09T10:07:00.000Z",
-          messages: [],
-        }),
-      ],
-      deletedThreadId: ThreadId.make("thread-active"),
-      deletedThreadIds: new Set([ThreadId.make("thread-active"), ThreadId.make("thread-newest")]),
-      sortOrder: "created_at",
-    });
-
-    expect(fallbackThreadId).toBe(ThreadId.make("thread-next"));
-  });
-});
-
 describe("sortProjectsForSidebar", () => {
   it("sorts projects by the most recent user message across their threads", () => {
     const projects = [
@@ -731,6 +700,20 @@ describe("sortProjectsForSidebar", () => {
 });
 
 describe("sortScopedProjectsForSidebar", () => {
+  it("selects an open project even when an archived project has newer activity", () => {
+    const archived = makeProject({
+      id: ProjectId.make("archived"),
+      title: "Archived",
+      archivedAt: "2026-10-12T00:00:00.000Z",
+    });
+    const open = makeProject({ id: ProjectId.make("open"), title: "Open" });
+    const threads = [
+      makeThread({ projectId: archived.id, updatedAt: "2026-10-12T00:00:00.000Z" }),
+      makeThread({ projectId: open.id, updatedAt: "2026-10-11T00:00:00.000Z" }),
+    ];
+    expect(selectMostRecentOpenProject([archived, open], threads)?.id).toBe(open.id);
+    expect(selectMostRecentOpenProject([archived], threads)).toBeNull();
+  });
   it("keeps identical project ids in different environments separate", () => {
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
     const sharedProjectId = ProjectId.make("shared-project");
@@ -1047,6 +1030,22 @@ describe("Working shelf (beta)", () => {
     runtime: { ...runtime, status: "idle" as const },
     pendingBackgroundTasks: [backgroundTask],
   };
+
+  it("keeps cached working threads in Working when their environment disconnects", () => {
+    const thread = { ...idle, runtime, environmentId: localEnvironmentId };
+    expect(
+      belongsInSidebarWorkingShelf(thread, {
+        enabled: true,
+        isWorking: isSidebarThreadWorking,
+      }),
+    ).toBe(true);
+    expect(
+      belongsInSidebarWorkingShelf(thread, {
+        enabled: false,
+        isWorking: isSidebarThreadWorking,
+      }),
+    ).toBe(false);
+  });
 
   it("folds away running threads and threads waiting on background work only", () => {
     expect(isSidebarThreadWorking({ ...idle, runtime })).toBe(true);

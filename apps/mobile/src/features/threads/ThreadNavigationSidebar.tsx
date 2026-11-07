@@ -1,7 +1,12 @@
+import { MobileHomeModeSegments } from "../goat-bot/MobileBotList";
+import { useEnvironmentHues } from "./useEnvironmentHues";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
-import { resolveScratchProjectScopeKey } from "@goat/client-runtime/state/project-grouping";
+import {
+  pickableProjectGroups,
+  resolveScratchProjectScopeKey,
+} from "@goat/client-runtime/state/project-grouping";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
@@ -16,7 +21,6 @@ import { GestureDetector, useNativeGesture } from "react-native-gesture-handler"
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SearchBarCommands } from "react-native-screens";
-
 import { AppText as Text } from "../../components/ui/AppText";
 import { CompactBrandTitle } from "../../components/CompactBrandTitle";
 import { Menu } from "../../components/ui/Menu";
@@ -59,6 +63,7 @@ import { DecisionInboxRow } from "../decisions/DecisionInboxRow";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2SectionDivider,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
@@ -220,7 +225,7 @@ function ThreadNavigationSidebarPane(
       }),
     [projects, options.selectedEnvironmentId, options.projectGroupingMode],
   );
-  const projectFilterOptions = projectScopes.map((scope) => ({
+  const projectFilterOptions = pickableProjectGroups(projectScopes).map((scope) => ({
     key: scope.key,
     label: scope.title,
   }));
@@ -240,7 +245,7 @@ function ThreadNavigationSidebarPane(
     [projectScopes],
   );
   const selectedProjectScope =
-    projectScopes.find((scope) => scope.key === resolvedProjectKey) ?? null;
+    pickableProjectGroups(projectScopes).find((scope) => scope.key === resolvedProjectKey) ?? null;
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
     props.searchQuery,
@@ -290,6 +295,7 @@ function ThreadNavigationSidebarPane(
     const id = setInterval(() => setNow(new Date().toISOString()), 60_000);
     return () => clearInterval(id);
   }, []);
+  const environmentHues = useEnvironmentHues();
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
     providersByEnvironmentId,
@@ -497,6 +503,7 @@ function ThreadNavigationSidebarPane(
     projectTitleByProjectKey,
     savedConnectionsById,
     listEnvironments,
+    environmentHues,
     threadSearchMatchByKey,
     workingShelfEnabled,
   };
@@ -553,6 +560,7 @@ function ThreadNavigationSidebarPane(
                 ? (savedConnectionsById[item.pendingTask.environmentId]?.environmentLabel ?? null)
                 : null
             }
+            environmentHue={environmentHues.get(item.pendingTask.environmentId)}
             environmentMachine={machineByEnvironmentId.get(item.pendingTask.environmentId)}
             pane="sidebar"
             showPendingDivider={item.showPendingDivider}
@@ -590,6 +598,7 @@ function ThreadNavigationSidebarPane(
                   ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
                   : null
               }
+              environmentHue={environmentHues.get(thread.environmentId)}
               environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
               searchMatch={
                 // Only rows listed for their messages show one and open at it.
@@ -682,6 +691,8 @@ function ThreadNavigationSidebarPane(
             onRestore={priorityRead.restore}
           />
         );
+      case "v2-threads-header":
+        return <ThreadListV2SectionDivider label="Threads" pane="sidebar" />;
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader
@@ -947,7 +958,7 @@ function ThreadNavigationSidebarPane(
               <SidebarHeaderActions onOpenSettings={props.onOpenSettings} />
             </View>
           </View>
-
+          <MobileHomeModeSegments />
           <View className="mx-4 mt-[9px] h-[38px] flex-row items-center gap-1.5 rounded-xl bg-sidebar-search pr-2.5 pl-[11px]">
             <SymbolView
               name="magnifyingglass"

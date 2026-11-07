@@ -18,9 +18,9 @@ type CardStatus = "working" | "waiting" | "done" | "failed" | "idle";
 
 const STATUS: Record<CardStatus, { readonly label: string; readonly dot: string }> = {
   working: { label: "Working", dot: "bg-info" },
-  waiting: { label: "Waiting", dot: "bg-amber-500 dark:bg-amber-300/90" },
-  done: { label: "Done", dot: "bg-emerald-500 dark:bg-emerald-300/90" },
-  failed: { label: "Failed", dot: "bg-red-500 dark:bg-red-300/90" },
+  waiting: { label: "Waiting", dot: "bg-warning" },
+  done: { label: "Done", dot: "bg-success" },
+  failed: { label: "Failed", dot: "bg-destructive" },
   idle: { label: "Not started", dot: "bg-muted-foreground/50" },
 };
 

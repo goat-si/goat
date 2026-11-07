@@ -17,6 +17,8 @@ allowBuilds:
   electron: false
   electron-winstaller: false
   esbuild: true
+  # Loads its @koromix prebuild directly; its install script only rebuilds from source.
+  koffi: false
   msgpackr-extract: true
   msw: false
   node-pty: true
@@ -95,6 +97,12 @@ catalog:
   unified: 11.0.5
 
 minimumReleaseAgeExclude:
+  - "@cursor/sdk@1.2.0"
+  - "@cursor/sdk-darwin-arm64@1.2.0"
+  - "@cursor/sdk-darwin-x64@1.2.0"
+  - "@cursor/sdk-linux-arm64@1.2.0"
+  - "@cursor/sdk-linux-x64@1.2.0"
+  - "@cursor/sdk-win32-x64@1.2.0"
   - "@tsc-rs/*"
   - expo-glass-effect@58.0.4
   - expo-blur@58.0.4
@@ -157,8 +165,7 @@ minimumReleaseAgeExclude:
   - expo-sharing@58.0.19
   - expo-sqlite@58.0.13
   - expo-symbols@58.0.4
-  - electron@44.10.0
-  - "@anthropic-ai/claude-agent-sdk@0.3.276"
+  - electron@44.10.1
   - "@alchemy.run/cloudflare-runtime@2.0.0-beta.80"
   - "@alchemy.run/floci@2.0.0-beta.80"
   - "@alchemy.run/node-utils@2.0.0-beta.80"

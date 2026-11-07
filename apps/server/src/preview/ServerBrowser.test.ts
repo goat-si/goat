@@ -1,4 +1,5 @@
 import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
+import { assertTimedOutOpenClosed } from "./FailedOpenAssertions.testkit.ts";
 import * as NodeEvents from "node:events";
 import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
@@ -41,7 +42,14 @@ import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
-import { makeFrame, makeSession, type MockFrame, mockCopy } from "./ServerBrowserTestFixtures.ts";
+import {
+  fileChooserElement,
+  makeFrame,
+  makeSession,
+  mockCopy,
+  refClickTarget,
+  stallViewer,
+} from "./ServerBrowserTestFixtures.ts";
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
@@ -65,7 +73,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       return makeEncoderPage() as unknown as Page;
     }
     async connectDesktopPage(endpoint: string) {
-      const context = makeContext();
+      const context = makeContext(undefined, desktopPageUrl);
       context.page.viewportSize.mockReturnValue(null);
       desktopConnections.push({ endpoint, context });
       return { browser: { close: async () => {} }, page: context.page as unknown as Page };
@@ -76,24 +84,12 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
   },
 }));
 
-function fileChooserElement(accept: string) {
-  return {
-    getAttribute: async () => accept,
-    evaluate: (probe: (element: { ownerDocument: unknown }) => boolean) =>
-      Promise.resolve(
-        probe({
-          ownerDocument: (globalThis as typeof globalThis & { document?: unknown }).document,
-        }),
-      ),
-  };
-}
-
-function makeContext(onClose?: (context: BrowserContext) => void) {
+function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "about:blank") {
   const events = new NodeEvents.EventEmitter();
   const nativeFileChooser = vi.fn();
   const setChooserFiles = vi.fn(async (_files: unknown) => {});
   const sessions: ReturnType<typeof makeSession>[] = [];
-  let url = "about:blank";
+  let url = initialUrl;
   let viewport: ReturnType<Page["viewportSize"]> = { width: 1280, height: 800 };
   const cssViewport = { width: 1920, height: 1080 };
   let closed = false;
@@ -173,8 +169,9 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
     grantPermissions: vi.fn(async () => {}),
     cookies: async () => [],
     newCDPSession: async (target: unknown) => {
+      if (pageSetupFailure) throw pageSetupFailure;
       const session = makeSession(
-        target === page ? undefined : (target as MockFrame),
+        target === page ? undefined : (target as ReturnType<typeof makeFrame>),
         () => desktopSizeAnswer?.() ?? Promise.resolve({ result: { value: { ...cssViewport } } }),
       );
       sessions.push(session);
@@ -236,8 +233,10 @@ const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: numb
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
 let contextFailure: Error | null = null;
+let pageSetupFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
+let desktopPageUrl = "about:blank";
 /** Replaces the answer to the desktop page's size reads. */
 let desktopSizeAnswer: (() => Promise<Record<string, unknown>>) | null = null;
 const desktopDetaches = new NodeEvents.EventEmitter();
@@ -346,17 +345,6 @@ const viewerInput = (tabId: string, canOperate: boolean) => ({
   maxHeight: 800,
   quality: 70,
 });
-/** Fills a viewer's output with frames; resolves once every one of them is acknowledged. */
-const stallViewer = (viewer: ServerBrowser.ServerBrowserViewer) => {
-  const output = viewer.output as unknown as Queue.Queue<ServerBrowser.ServerBrowserViewerOutput>;
-  const acked = Promise.withResolvers<void>();
-  let unacked = 0;
-  const ack = Effect.sync(() => {
-    if (--unacked === 0) acked.resolve();
-  });
-  while (Queue.offerUnsafe(output, { _tag: "frame", data: Buffer.alloc(0), ack })) unacked++;
-  return Effect.promise(() => acked.promise);
-};
 const viewportSizes = (items: ReadonlyArray<ServerBrowser.ServerBrowserViewerOutput>) =>
   items.flatMap((item) => (item._tag === "viewport" ? [`${item.width}x${item.height}`] : []));
 const openDesktopViewer = Effect.gen(function* () {
@@ -380,12 +368,14 @@ beforeEach(() => {
   contextRequests.length = 0;
   contextGate = null;
   contextFailure = null;
+  pageSetupFailure = null;
   initialNavigation = null;
   mockCopy.page = "";
   mockCopy.key = "";
   mockCopy.focusedFrame = null;
   desktopTabs.clear();
   desktopRendersNext = false;
+  desktopPageUrl = "about:blank";
   desktopSizeAnswer = null;
   desktopDetachReady = Promise.withResolvers<void>();
   desktopReleased = Promise.withResolvers<void>();
@@ -542,18 +532,15 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
       expect(page.evaluate).not.toHaveBeenCalled();
       expect(page.ariaSnapshot).not.toHaveBeenCalled();
       expect(cdp.send).not.toHaveBeenCalled();
-      const box = async () => ({ x: 0, y: 0, width: 10, height: 10 });
-      const no = async () => null;
-      const element = { boundingBox: box, waitForElementState: box, dispose: box, ownerFrame: no };
-      const locator = { scrollIntoViewIfNeeded: box, boundingBox: box, click: box };
-      const handle = { elementHandle: async () => element, count: async () => 1 };
-      page.locator.mockImplementation(() => ({ ...locator, ...handle }) as never);
+      const target = refClickTarget();
+      page.locator.mockImplementation(() => target as never);
       yield* broker.invoke({
         scope,
         tabId,
         operation: "click",
         input: { locator: `aria-ref=${ref}` },
       });
+      expect(target.click.mock.calls[0]?.[0]).toMatchObject({ position: { x: 5, y: 5 } });
     }),
   ).pipe(Effect.provide(layer)),
 );
@@ -582,7 +569,7 @@ it.live("tells the desktop once per thread when its agent turns start and end", 
 it.live("preview_open reports its navigation timeout instead of the request budget", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { broker } = yield* ready;
+      const { broker, tabId } = yield* ready;
       initialNavigation = async () => {
         throw Object.assign(new Error("page.goto: Timeout 15000ms exceeded."), {
           name: "TimeoutError",
@@ -601,11 +588,7 @@ it.live("preview_open reports its navigation timeout instead of the request budg
         })
         .pipe(Effect.flip);
 
-      expect(error).toMatchObject({
-        _tag: "PreviewAutomationTimeoutError",
-        timeoutMs: 15_000,
-      });
-      expect(error.message).toBe("Preview automation open timed out after 15000ms.");
+      yield* assertTimedOutOpenClosed(scope.thread.threadId, tabId, error);
     }),
   ).pipe(Effect.provide(layer)),
 );
@@ -644,6 +627,33 @@ it.live.each(["desktop" as const, undefined])(
         expect(reused.tabId).toBe(tabId);
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a desktop page that loaded before the server attached reports its loaded title", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      desktopRendersNext = true;
+      desktopPageUrl = "https://example.com/loaded";
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { url: desktopPageUrl, reuseExistingTab: false, show: false, session: "profile" },
+      });
+      let event = yield* PubSub.take(events);
+      while (event.type !== "navigated" || event.tabId !== opened.tabId) {
+        event = yield* PubSub.take(events);
+      }
+
+      expect(event.snapshot.navStatus).toEqual({
+        _tag: "Success",
+        url: "https://example.com/loaded",
+        title: "test page",
+      });
+    }),
+  ).pipe(Effect.provide(layer)),
 );
 
 it.live.each([
@@ -1395,6 +1405,43 @@ it.live("a tab opened to a file the browser cannot show reports the file to down
   ).pipe(Effect.provide(layer)),
 );
 
+it.effect("redacts data page payloads from current and sibling tab status", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const sibling = yield* broker.invoke<PreviewAutomationStatus>({
+        scope: asSession("agent-b"),
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      yield* Effect.promise(() => contexts[1]!.page.goto("data:text/html,SIBLING-SECRET"));
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      yield* Effect.promise(() => contexts[0]!.page.goto("data:text/html,SECRET-KEY"));
+      let event = yield* PubSub.take(events);
+      while (
+        event.type !== "navigated" ||
+        event.tabId !== tabId ||
+        event.snapshot.navStatus._tag !== "Success"
+      ) {
+        event = yield* PubSub.take(events);
+      }
+      expect(event.snapshot.navStatus).toMatchObject({ url: "data:text/html,…" });
+      const status = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId,
+        operation: "status",
+        input: {},
+      });
+      expect(status.url).toBe("data:text/html,…");
+      expect(status.tabs?.find((entry) => entry.tabId === sibling.tabId)?.url).toBe(
+        "data:text/html,…",
+      );
+      expect(JSON.stringify(status)).not.toContain("SECRET");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live(
   "a late failure from a request that predates tracking leaves a newer navigation loading",
   () =>
@@ -1424,6 +1471,50 @@ it.live(
     ).pipe(Effect.provide(layer)),
 );
 
+it.effect("a navigation that fails while a load reads its title keeps its failure", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { tabId } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      const page = contexts[0]!.page;
+      const heldTitle = Promise.withResolvers<string>();
+      page.title.mockImplementationOnce(() => heldTitle.promise);
+      yield* Effect.promise(() => page.goto("https://example.com/first"));
+      const failing = {
+        redirectedFrom: () => null,
+        url: () => "https://example.com/missing",
+        method: () => "GET",
+        isNavigationRequest: () => true,
+        frame: () => page,
+        failure: () => ({ errorText: "net::ERR_NAME_NOT_RESOLVED" }),
+      };
+      page.emit("request", failing);
+      page.emit("requestfailed", failing);
+      heldTitle.resolve("Held");
+      // A load at the same await depth reports after the held one, so its Success marks the end.
+      page.emit("load");
+
+      const statuses: Array<string> = [];
+      while (!statuses.at(-1)?.startsWith("Success")) {
+        const event = yield* PubSub.take(events);
+        if (event.type === "failed" && event.tabId === tabId) {
+          statuses.push(`LoadFailed ${event.url}`);
+        } else if (event.type === "navigated" && event.tabId === tabId) {
+          const status = event.snapshot.navStatus;
+          if (status._tag === "Success") statuses.push(`Success ${status.title}`);
+          else if (status._tag === "Loading") statuses.push(`Loading ${status.url}`);
+        }
+      }
+      expect(statuses).toEqual([
+        "Loading https://example.com/missing",
+        "LoadFailed https://example.com/missing",
+        "Success test page",
+      ]);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.effect.each([
   {
     name: "hover burst before a click",
@@ -1443,6 +1534,26 @@ it.effect.each([
       { type: "mouseMoved", x: 119 },
       { type: "mousePressed", x: 119 },
       { type: "mouseReleased", x: 119 },
+    ],
+  },
+  {
+    name: "wheel burst before a click",
+    inputs: [
+      ...Array.from({ length: 120 }, () => ({
+        type: "wheel",
+        x: 100,
+        y: 200,
+        deltaX: 0,
+        deltaY: 12,
+      })),
+      { type: "mouse", action: "down", x: 100, buttons: 1, button: "left" },
+      { type: "mouse", action: "up", x: 100, buttons: 0, button: "left" },
+    ],
+    expected: [
+      { type: "mouseMoved", x: -1 },
+      { type: "mouseWheel", x: 100, y: 200, deltaX: 0, deltaY: 1440 },
+      { type: "mousePressed", x: 100 },
+      { type: "mouseReleased", x: 100 },
     ],
   },
   {
@@ -1479,11 +1590,28 @@ it.effect.each([
     expected: [
       { type: "mouseMoved", x: -1 },
       { type: "mouseMoved", x: 1 },
-      { type: "mouseWheel", deltaY: 20 },
-      { type: "mouseWheel", deltaY: 30 },
+      { type: "mouseWheel", deltaY: 50 },
       { type: "mouseMoved", x: 2 },
       { type: "keyDown", key: "a" },
       { type: "mouseMoved", x: 3 },
+    ],
+  },
+  {
+    name: "wheel position, modifier and direction boundaries",
+    inputs: [
+      { type: "wheel", x: 1, deltaX: 5, deltaY: 10 },
+      { type: "wheel", x: 1, deltaX: 5, deltaY: 10 },
+      { type: "wheel", x: 2, deltaY: 10 },
+      { type: "wheel", x: 2, deltaY: 10, modifiers: 2 },
+      { type: "wheel", x: 2, deltaY: -10, modifiers: 2 },
+      { type: "wheel", x: 2, deltaY: -10, modifiers: 2 },
+    ],
+    expected: [
+      { type: "mouseMoved", x: -1 },
+      { type: "mouseWheel", x: 1, deltaX: 10, deltaY: 20, modifiers: 0 },
+      { type: "mouseWheel", x: 2, deltaX: 0, deltaY: 10, modifiers: 0 },
+      { type: "mouseWheel", x: 2, deltaY: 10, modifiers: 2 },
+      { type: "mouseWheel", x: 2, deltaY: -20, modifiers: 2 },
     ],
   },
   {
@@ -2522,6 +2650,12 @@ it.live("failed session and browser launches release capacity, as does closing a
       // A failed launch must not leave a session a viewer can relaunch past the budget.
       expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(7);
       contextFailure = null;
+      pageSetupFailure = new Error("CDP setup failed");
+      expect(yield* open.pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+      pageSetupFailure = null;
+      expect(contexts.at(-1)!.close).toHaveBeenCalled();
+      expect(contexts.at(-1)!.page.isClosed()).toBe(true);
+      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(7);
       expect((yield* open).available).toBe(true);
       expect(yield* open.pipe(Effect.flip)).toMatchObject({ reason: "tabLimit" });
       expect(

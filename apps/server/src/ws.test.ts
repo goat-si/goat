@@ -1,5 +1,9 @@
+import { makeWorkspaceProviderFixture } from "./wsProviderFixture.testkit.ts";
+import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
+import * as ChannelBotProfiles from "./channels/ChannelBotProfiles.ts";
+import * as ChannelBotThreads from "./channels/ChannelBotThreads.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
@@ -33,8 +37,6 @@ import {
   SshWorkspaceLaunchInput,
   SshWorkspaceLaunchResult,
   ThreadId,
-  ProviderDriverKind,
-  ProviderInstanceId,
   WS_METHODS,
   WsRpcGroup,
   WsSubscribeServerConfigRpc,
@@ -73,6 +75,7 @@ import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerConfigModule from "./config.ts";
+import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -145,6 +148,7 @@ import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import { ThreadWorkspaceService } from "./orchestration-v2/goat/ThreadWorkspaceService.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -163,16 +167,13 @@ import {
   WS_RPC_SERVER_OPTIONS,
 } from "./ws.ts";
 import { withLateEditorConfig } from "./serverConfigUpdates.ts";
-
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
-
 const settingsUpdated = (settings: object): ServerConfigStreamEvent => ({
   version: 1,
   type: "settingsUpdated",
   payload: { settings: settings as ServerConfig["settings"] },
 });
-
 it.effect("resends late editors without rolling back updates already sent", () =>
   Effect.gen(function* () {
     const settingsSent = yield* Deferred.make<void>();
@@ -190,7 +191,6 @@ it.effect("resends late editors without rolling back updates already sent", () =
       ),
       Stream.runCollect,
     );
-
     const [first, second] = Array.from(events);
     assert.equal(events.length, 2);
     assert.equal(first?.type, "settingsUpdated");
@@ -202,7 +202,6 @@ it.effect("resends late editors without rolling back updates already sent", () =
     }
   }),
 );
-
 it.effect("resends a file manager reveal kind that missed the snapshot", () =>
   Effect.gen(function* () {
     const events = yield* withLateEditorConfig(
@@ -213,7 +212,6 @@ it.effect("resends a file manager reveal kind that missed the snapshot", () =>
         resolveFileManagerRevealKind: () => Effect.succeed("file-explorer"),
       },
     ).pipe(Stream.runCollect);
-
     const [late] = Array.from(events);
     assert.equal(events.length, 1);
     assert.equal(late?.type, "snapshot");
@@ -247,7 +245,6 @@ it.effect("sends a Defender result that missed the snapshot, once", () =>
     }
   }),
 );
-
 it.effect("tells config subscribers when a held copy's automation is resumed, once", () =>
   Effect.gen(function* () {
     const hold = { reason: "channel-copy" as const, heldAt: "2026-10-25T00:00:00.000Z" };
@@ -374,11 +371,9 @@ it.effect("SSH workspace handlers delegate once and preserve typed errors", () =
     assert.lengthOf(fetches, 2);
   }).pipe(Effect.scoped),
 );
-
 const ReplayTestLayer = OrchestrationEventStore.layer.pipe(
   Layer.provideMerge(SqlitePersistence.layerMemory),
 );
-
 it.live.each(["thread", "shell"] as const)(
   "%s resume skips unknown types, synchronizes, and receives the live tail",
   (scope) =>
@@ -453,6 +448,9 @@ it.live.each(["thread", "shell"] as const)(
             }).pipe(Effect.flatMap(consume));
       });
       const items = yield* subscription.pipe(
+        Effect.provideService(ShellSnapshotLoads.ShellSnapshotLoads, {
+          active: () => Effect.die("unexpected snapshot"),
+        }),
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           ensureLegacyTranscript: () => Effect.void,
           getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
@@ -586,6 +584,134 @@ it.effect("coalesces streaming replay before synchronization and the live tail",
   }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
 
+it.effect("shell groups read distinct threads once and keep each event's own sequence", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = "2026-10-27T00:00:00.000Z";
+    const insert = (aggregateKind: "thread" | "project", streamId: string, version: number) =>
+      sql<{ sequence: number }>`
+      INSERT INTO orchestration_events (
+        event_id, aggregate_kind, stream_id, stream_version, event_type,
+        occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+      ) VALUES (
+        ${`shell-group:${streamId}:${version}`}, ${aggregateKind}, ${streamId}, ${version},
+        ${aggregateKind === "thread" ? "provider-session.detached" : "project.meta-updated"},
+        ${now}, 'server', ${JSON.stringify(
+          aggregateKind === "thread"
+            ? { providerSessionId: "session:shell-group", detachedAt: now }
+            : { projectId: streamId, updatedAt: now },
+        )}, '{}', 2
+      ) RETURNING sequence
+    `.pipe(Effect.map(([row]) => row!.sequence));
+    const shell = (id: string, archivedAt: string | null = null) =>
+      ({ id: ThreadId.make(id), archivedAt }) as unknown as OrchestrationV2ThreadShell;
+    const project = {
+      id: ProjectId.make("project:group"),
+    } as unknown as OrchestrationProjectShell;
+
+    const after = yield* insert("project", "project:before", 0);
+    yield* insert("thread", "thread:active", 0);
+    const archived = yield* insert("thread", "thread:archived", 0);
+    const projectUpdated = yield* insert("project", project.id, 0);
+    const active = yield* insert("thread", "thread:active", 1);
+    const missing = yield* insert("thread", "thread:missing", 0);
+
+    const shellReads: Array<ReadonlyArray<string> | undefined> = [];
+    let batchFails = false;
+    const collect = (afterSequence: number) =>
+      subscribeOrchestrationV2Shell({ afterSequence, requestCompletionMarker: true }).pipe(
+        Effect.flatMap((stream) =>
+          stream.pipe(
+            Stream.takeUntil((item) => item.kind === "synchronized"),
+            Stream.runCollect,
+          ),
+        ),
+        Effect.provideService(ShellSnapshotLoads.ShellSnapshotLoads, {
+          active: () => Effect.die("unexpected snapshot"),
+        }),
+        Effect.provideService(ThreadManagement.ThreadManagementService, {
+          listActiveSubagentThreadIds: () => Effect.succeed([]),
+          getShellSnapshot: (options?: { readonly threadIds?: ReadonlyArray<string> }) =>
+            Effect.suspend(() => {
+              shellReads.push(options?.threadIds);
+              return batchFails
+                ? Effect.fail("batch failed")
+                : Effect.succeed({
+                    schemaVersion: 1,
+                    snapshotSequence: Number.MAX_SAFE_INTEGER,
+                    threads: [shell("thread:active")],
+                    archivedThreads: [shell("thread:archived", now)],
+                  });
+            }),
+          getThreadShell: (threadId: string) =>
+            Effect.sync(() => {
+              shellReads.push([`scalar:${threadId}`]);
+              return threadId === "thread:missing"
+                ? null
+                : shell(threadId, threadId === "thread:archived" ? now : null);
+            }),
+        } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+        Effect.provideService(ProjectStore.ProjectStoreV2, {
+          listShells: () => Effect.succeed([]),
+        } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+        Effect.provideService(ProjectService.ProjectService, {
+          getShell: () => Effect.succeedSome(project),
+        } as unknown as ProjectService.ProjectService["Service"]),
+        Effect.provideServiceEffect(
+          ProjectEnrichment.ProjectEnrichmentService,
+          PubSub.unbounded().pipe(
+            Effect.map(
+              (changes) =>
+                ({
+                  subscribeChanges: PubSub.subscribe(changes),
+                }) as unknown as ProjectEnrichment.ProjectEnrichmentService["Service"],
+            ),
+          ),
+        ),
+      );
+
+    const collectSummary = (afterSequence: number) =>
+      collect(afterSequence).pipe(
+        Effect.map((items) =>
+          items.flatMap((item): ReadonlyArray<ReadonlyArray<string | number>> =>
+            item.kind === "thread.updated"
+              ? [[item.kind, item.sequence, item.thread.id]]
+              : item.kind === "thread.removed"
+                ? [[item.kind, item.sequence, item.threadId]]
+                : item.kind === "project.updated"
+                  ? [[item.kind, item.sequence, item.project.id]]
+                  : [],
+          ),
+        ),
+      );
+    const expectedGroup = [
+      ["thread.removed", archived, "thread:archived"],
+      ["project.updated", projectUpdated, project.id],
+      ["thread.updated", active, "thread:active"],
+      ["thread.removed", missing, "thread:missing"],
+    ];
+
+    assert.deepEqual(yield* collectSummary(after), expectedGroup);
+    assert.deepEqual(shellReads, [["thread:archived", "thread:active", "thread:missing"]]);
+
+    shellReads.length = 0;
+    assert.deepEqual(yield* collectSummary(active), [
+      ["thread.removed", missing, "thread:missing"],
+    ]);
+    assert.deepEqual(shellReads, [["scalar:thread:missing"]]);
+
+    shellReads.length = 0;
+    batchFails = true;
+    assert.deepEqual(yield* collectSummary(after), expectedGroup);
+    assert.deepEqual(shellReads, [
+      ["thread:archived", "thread:active", "thread:missing"],
+      ["scalar:thread:archived"],
+      ["scalar:thread:active"],
+      ["scalar:thread:missing"],
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
+);
+
 it.effect("shell snapshots omit idle children and older settled threads only on request", () =>
   Effect.gen(function* () {
     const shell = (
@@ -625,6 +751,7 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
       subscribeOrchestrationV2Shell(input).pipe(
         Effect.flatMap((stream) => stream.pipe(Stream.take(1), Stream.runCollect)),
         Effect.map(([item]) => (item?.kind === "snapshot" ? item.snapshot : null)),
+        Effect.provide(ShellSnapshotLoads.layer),
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           readShellSnapshot: () =>
             Effect.succeed(
@@ -677,7 +804,6 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
     ]);
   }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
-
 const layerConfigEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment)({
   getEnvironmentId: Effect.succeed(EnvironmentId.make("config-test")),
   getDescriptor: Effect.succeed({
@@ -689,14 +815,16 @@ const layerConfigEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment)({
   }),
 });
 
-// Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
+  Layer.mock(ShellSnapshotLoads.ShellSnapshotLoads)({}),
   Layer.mock(MemoryService.MemoryService)({
     importPorts: {} as MemoryService.MemoryService["Service"]["importPorts"],
   }),
   Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
   Layer.mock(ChannelBotDirectory.ChannelBotDirectory)({}),
   Layer.mock(ChannelBotRegistry.ChannelBotRegistry)({}),
+  Layer.mock(ChannelBotProfiles.ChannelBotProfiles)({}),
+  Layer.mock(ChannelBotThreads.ChannelBotThreads)({}),
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelIdentityService.ChannelIdentityService)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),
@@ -733,6 +861,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
   Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
   Layer.mock(CloudProviderAutoSetup.CloudProviderAutoSetup)({ apply: Effect.succeed([]) }),
+  Layer.mock(NativeChildWorkQuery.NativeChildWorkQuery)({}),
   Layer.mock(CommandOutputHub.CommandOutputHub)({}),
   Layer.mock(CodexInstallation.CodexInstallation)({ managedDirectory: "/unused" }),
   Layer.mock(DeviceService.DeviceService)({}),
@@ -775,6 +904,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
+  Layer.mock(ThreadWorkspaceService)({}),
   Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(StrayProcesses.StrayProcesses)({}),
@@ -825,6 +955,12 @@ it.effect(
         Effect.tap(() => Deferred.succeed(settingsSubscribed, undefined)),
       );
       const initialKeybindings = (yield* keybindings.getSnapshot).keybindings;
+      const endpointStarted = yield* Deferred.make<void>();
+      const finishEndpoint = yield* Deferred.make<void>();
+      const endpoint = {
+        kind: "tailnet" as const,
+        httpBaseUrl: "https://fixture.tail1234.ts.net/",
+      };
       const discoveryStarted = yield* Deferred.make<void>();
       const finishDiscovery = yield* Deferred.make<void>();
       const responses = yield* Queue.unbounded<ServerConfigStreamEvent>();
@@ -850,7 +986,14 @@ it.effect(
         Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
           resolveTargets: () => Effect.succeed([]),
         }),
-        Layer.mock(DirectEndpoints.DirectEndpoints)({ resolve: () => Effect.succeed([]) }),
+        Layer.mock(DirectEndpoints.DirectEndpoints)({
+          resolve: () =>
+            Deferred.succeed(endpointStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(finishEndpoint)),
+              Effect.as([endpoint]),
+            ),
+          resolveAvailable: () => Effect.succeed([]),
+        }),
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
           scratchRoot: Effect.succeedNone,
           namedProjectsRoot: process.cwd(),
@@ -924,6 +1067,7 @@ it.effect(
         headers: Headers.empty,
       });
       yield* Deferred.await(discoveryStarted);
+      yield* Deferred.await(endpointStarted);
 
       const duringDiscovery = yield* settings.updateSettings({ defaultAutoPull: true });
       yield* Deferred.succeed(finishDiscovery, undefined);
@@ -931,6 +1075,7 @@ it.effect(
       assert.equal(snapshot.type, "snapshot");
       if (snapshot.type !== "snapshot") return yield* Effect.die("Missing initial snapshot");
       assert.isFalse(snapshot.config.settings.defaultAutoPull);
+      assert.deepEqual(snapshot.config.directEndpoints, []);
       assert.deepEqual(snapshot.config.keybindings, initialKeybindings);
       const duringAck = yield* keybindings.upsertKeybindingRule({
         key: "mod+alt+y",
@@ -949,7 +1094,7 @@ it.effect(
       const expectedSettings = [duringDiscovery, latestSettings].map(
         ServerSettings.redactServerSettingsForClient,
       );
-      const expectedKeybindings = [duringAck, latestKeybindings];
+      const expectedKeybindings = [duringAck.keybindings, latestKeybindings.keybindings];
       // The two sources can interleave, but each must retain its own publication order.
       for (let i = 0; i < 4; i++) {
         const event = yield* Queue.take(responses);
@@ -966,6 +1111,17 @@ it.effect(
       }
       assert.isEmpty(expectedSettings);
       assert.isEmpty(expectedKeybindings);
+      yield* Deferred.succeed(finishEndpoint, undefined);
+      const endpointSnapshot = yield* Queue.take(responses);
+      assert.equal(endpointSnapshot.type, "snapshot");
+      if (endpointSnapshot.type !== "snapshot")
+        return yield* Effect.die("Missing late endpoint snapshot");
+      assert.deepEqual(endpointSnapshot.config.directEndpoints, [endpoint]);
+      assert.deepEqual(endpointSnapshot.config.keybindings, latestKeybindings.keybindings);
+      assert.deepEqual(
+        endpointSnapshot.config.settings,
+        ServerSettings.redactServerSettingsForClient(latestSettings),
+      );
       yield* server.write(0, { _tag: "Interrupt", requestId, interruptors: [] });
     }).pipe(
       Effect.provide(
@@ -981,31 +1137,10 @@ it.effect(
 
 it.effect("on-demand clients get provider config without workspace snapshots", () =>
   Effect.gen(function* () {
-    const instanceId = ProviderInstanceId.make("claudeAgent");
-    const snapshotFor = (cwd: string, checkedAt: string) => ({
-      cwd,
-      checkedAt,
-      slashCommands: [{ name: `${cwd.slice(1)}-command` }],
-      skills: [],
-    });
-    const provider: ServerProvider = {
-      instanceId,
-      driver: ProviderDriverKind.make("claudeAgent"),
-      enabled: true,
-      installed: true,
-      version: "1.0.0",
-      status: "ready",
-      auth: { status: "authenticated" },
-      checkedAt: "2026-10-25T00:00:00.000Z",
-      models: [],
-      slashCommands: [{ name: "machine-command" }],
-      skills: [],
-      workspaceSnapshots: [
-        snapshotFor("/a", "2026-10-25T00:00:00.000Z"),
-        snapshotFor("/b", "2026-10-25T00:00:00.000Z"),
-      ],
-    };
+    const { instanceId, snapshotFor, provider } = makeWorkspaceProviderFixture();
     const providerChanges = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+    let secretGeneration = 0;
+    let observedUsageGeneration = -1;
     const pulled = yield* Queue.unbounded<void>();
     const responses = yield* Queue.unbounded<unknown>();
     const configRpcServices = Layer.mergeAll(
@@ -1021,16 +1156,27 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
           Stream.tap(() => Queue.offer(pulled, undefined)),
         ),
         refreshWorkspaceSnapshot: () => Effect.succeed([provider]),
+        reloadSecretsAndRefresh: () =>
+          Effect.sync(() => {
+            secretGeneration++;
+            return [provider];
+          }),
       }),
       Layer.mock(UsageLimitSources.UsageLimitSources)({
         current: Effect.succeed([]),
+        refresh: Effect.sync(() => {
+          observedUsageGeneration = secretGeneration;
+        }),
         streamChanges: Stream.make([]),
         projectProviders: (providers) => Effect.succeed(providers),
       }),
       Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
         resolveTargets: () => Effect.succeed([]),
       }),
-      Layer.mock(DirectEndpoints.DirectEndpoints)({ resolve: () => Effect.succeed([]) }),
+      Layer.mock(DirectEndpoints.DirectEndpoints)({
+        resolve: () => Effect.succeed([]),
+        resolveAvailable: () => Effect.succeed([]),
+      }),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         scratchRoot: Effect.succeedNone,
         namedProjectsRoot: process.cwd(),
@@ -1124,6 +1270,15 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
       refreshed.providers.map((entry) => [entry.workspaceSnapshots, entry.slashCommands]),
       [[[snapshotFor("/b", "2026-10-25T00:00:00.000Z")], []]],
     );
+    yield* server.write(0, {
+      _tag: "Request",
+      id: RpcMessage.RequestId("refresh-secrets"),
+      tag: WS_METHODS.serverRefreshProviders,
+      payload: { reloadSecrets: true },
+      headers: Headers.empty,
+    });
+    yield* Queue.take(responses);
+    assert.equal(observedUsageGeneration, 1);
     yield* server.write(0, { _tag: "Interrupt", requestId: configRequest, interruptors: [] });
   }).pipe(
     Effect.provide(

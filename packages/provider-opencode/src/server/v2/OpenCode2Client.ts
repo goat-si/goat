@@ -1,6 +1,7 @@
 import { OpenCode, type OpenCodeClient } from "@opencode/client/effect";
 import { OpenCodeEvent } from "@opencode/protocol/groups/event";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -74,6 +75,7 @@ export class OpenCode2Client extends Context.Service<
 
 // Heartbeats arrive every 10-15 seconds; longer silence means stuck, not idle.
 const SILENT_STREAM_TIMEOUT = "45 seconds";
+const SUBSCRIPTION_TIMEOUT = "10 seconds";
 
 const decodeEvent = Schema.decodeUnknownResult(Schema.fromJsonString(OpenCodeEvent));
 const decodeEnvelope = Schema.decodeUnknownOption(
@@ -142,6 +144,62 @@ const basicAuthorization = (password: string | Redacted.Redacted) => {
   return `Basic ${Buffer.from(`${OPENCODE_USERNAME}:${plain}`, "utf8").toString("base64")}`;
 };
 
+const MESSAGE_LIST_URL = /\/api\/session\/[^/?#]+\/message(?:[?#]|$)/;
+
+/** Reads only the page's shape; each message stays opaque for the real schema to judge. */
+const MessagePage = Schema.fromJsonString(
+  Schema.StructWithRest(Schema.Struct({ data: Schema.Array(Schema.Unknown) }), [
+    Schema.Record(Schema.String, Schema.Unknown),
+  ]),
+);
+const decodePage = Schema.decodeUnknownOption(MessagePage);
+const encodePage = Schema.encodeSync(MessagePage);
+
+const CompactionWithRecent = Schema.Struct({
+  type: Schema.Literal("compaction"),
+  status: Schema.Literals(["running", "completed"]),
+  metadata: Schema.optionalKey(Schema.Unknown),
+});
+const isCompactionWithRecent = Schema.is(CompactionWithRecent);
+const isLegacyMetadata = Schema.is(Schema.Struct({ recent: Schema.String }));
+
+const fillCompactionRecent = (message: unknown) =>
+  isCompactionWithRecent(message) && !("recent" in message)
+    ? { ...message, recent: isLegacyMetadata(message.metadata) ? message.metadata.recent : "" }
+    : message;
+
+/**
+ * OpenCode 2.1 dropped a compaction's `recent`, which the bundled 2.0.28 schema requires.
+ * Migrated pre-2.1 compactions keep it under `metadata.recent`; native 2.1 ones have none.
+ * GOAT never reads it, so fill the gap; every other field still validates downstream.
+ */
+const fillCompactionRecents = HttpClient.transformResponse(
+  Effect.fnUntraced(function* (
+    pending: Effect.Effect<HttpClientResponse.HttpClientResponse, HttpClientError.HttpClientError>,
+  ) {
+    const response = yield* pending;
+    const { request } = response;
+    if (
+      request.method !== "GET" ||
+      response.status !== 200 ||
+      !MESSAGE_LIST_URL.test(request.url)
+    ) {
+      return response;
+    }
+    const text = yield* response.text;
+    const page = decodePage(text);
+    // The response caches its body, so the untouched one still decodes downstream.
+    if (Option.isNone(page)) return response;
+    const filled = encodePage({ ...page.value, data: page.value.data.map(fillCompactionRecent) });
+    // The filled body is longer than the one the server measured.
+    const { "content-length": _, ...headers } = response.headers;
+    return HttpClientResponse.fromWeb(
+      request,
+      new Response(filled, { status: response.status, headers }),
+    );
+  }),
+);
+
 /** @public */
 export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
@@ -152,13 +210,26 @@ export const make = Effect.gen(function* () {
         HttpClientRequest.setHeader("Authorization", basicAuthorization(password)),
       );
       return OpenCode.make({ baseUrl }).pipe(
-        Effect.provideService(HttpClient.HttpClient, authenticated),
+        Effect.provideService(HttpClient.HttpClient, fillCompactionRecents(authenticated)),
         Effect.map((client) => ({
           client,
           events: readEvents.pipe(
             Effect.provideService(
               HttpClient.HttpClient,
-              HttpClient.mapRequest(authenticated, HttpClientRequest.prependUrl(baseUrl)),
+              HttpClient.mapRequest(authenticated, HttpClientRequest.prependUrl(baseUrl)).pipe(
+                HttpClient.transform((response, request) =>
+                  response.pipe(
+                    Effect.timeout(SUBSCRIPTION_TIMEOUT),
+                    Effect.mapError((error) =>
+                      Cause.isTimeoutError(error)
+                        ? new HttpClientError.HttpClientError({
+                            reason: new HttpClientError.TransportError({ request, cause: error }),
+                          })
+                        : error,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         })),

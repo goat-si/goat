@@ -18,10 +18,12 @@ import noMobilePullRequestGlyphLiterals from "./rules/no-mobile-pull-request-gly
 import noNativeTitleTooltip from "./rules/no-native-title-tooltip.ts";
 import reactEffectBudget from "./rules/react-effect-budget.ts";
 import requireRegisteredListScroll from "./rules/require-registered-list-scroll.ts";
+import noNegativeControlMargin from "./rules/no-negative-control-margin.ts";
 import noOutsetStateIndicators from "./rules/no-outset-state-indicators.ts";
 import noPollingLoopInTests from "./rules/no-polling-loop-in-tests.ts";
 import noRawMcpRegistration from "./rules/no-raw-mcp-registration.ts";
 import noRawResizeObserver from "./rules/no-raw-resize-observer.ts";
+import guardErrorEmitters from "./rules/guard-error-emitters.ts";
 import noRealTimeWaitInTests from "./rules/no-real-time-wait-in-tests.ts";
 import noTestInLoop from "./rules/no-test-in-loop.ts";
 import noTestTimeoutOrUnreasonedSkip from "./rules/no-test-timeout-or-unreasoned-skip.ts";
@@ -57,10 +59,12 @@ export default definePlugin({
     "no-native-title-tooltip": noNativeTitleTooltip,
     "react-effect-budget": reactEffectBudget,
     "require-registered-list-scroll": requireRegisteredListScroll,
+    "no-negative-control-margin": noNegativeControlMargin,
     "no-outset-state-indicators": noOutsetStateIndicators,
     "no-polling-loop-in-tests": noPollingLoopInTests,
     "no-raw-mcp-registration": noRawMcpRegistration,
     "no-raw-resize-observer": noRawResizeObserver,
+    "guard-error-emitters": guardErrorEmitters,
     "no-real-time-wait-in-tests": noRealTimeWaitInTests,
     "no-test-in-loop": noTestInLoop,
     "no-test-timeout-or-unreasoned-skip": noTestTimeoutOrUnreasonedSkip,

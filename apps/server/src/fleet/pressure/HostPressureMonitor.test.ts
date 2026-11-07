@@ -1,11 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import type { HostCapacitySnapshot, HostDiskUsage } from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -27,7 +29,11 @@ const reading = (loadPerCore: number): PressureSample => ({
 const layer = (samples: Array<PressureSample>, enabled = true) =>
   Layer.effect(
     HostPressureMonitor.HostPressureMonitor,
-    HostPressureMonitor.make(Effect.sync(() => samples.shift() ?? reading(0.1))),
+    HostPressureMonitor.make(
+      Effect.sync(() => samples.shift() ?? reading(0.1)),
+      // These tests take every sample themselves.
+      { background: false },
+    ),
   ).pipe(
     Layer.provide(
       ServerSettings.ServerSettingsService.layerTest({ fleet: { pressure: { enabled } } }),
@@ -252,6 +258,147 @@ describe("HostPressureMonitor", () => {
   );
 });
 
+describe("HostPressureMonitor sampling on demand", () => {
+  /** A monitor whose every reading is counted, sampling on its own as the live one does. */
+  const counted = (loadPerCore = 0.1) =>
+    Effect.gen(function* () {
+      const taken = yield* Queue.unbounded<number>();
+      const monitor = yield* HostPressureMonitor.make(
+        Effect.gen(function* () {
+          yield* Queue.offer(taken, yield* Clock.currentTimeMillis);
+          return reading(loadPerCore);
+        }),
+      );
+      return { monitor, taken };
+    });
+
+  it.effect("an idle server that nobody asks never reads its memory or disk", () =>
+    Effect.gen(function* () {
+      const free = { gib: 400 };
+      const reads = { count: 0 };
+      yield* Effect.gen(function* () {
+        yield* HostPressureMonitor.HostPressureMonitor;
+        yield* TestClock.adjust("10 minutes");
+      }).pipe(Effect.provide(onWorktreesDrive(yield* worktreesFolder, free, reads)));
+      expect(reads.count).toBe(0);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("a read answers at once, keeps sampling for two minutes, then stops", () =>
+    Effect.gen(function* () {
+      const { monitor, taken } = yield* counted();
+      expect(yield* monitor.current).toBeUndefined();
+      expect(yield* Queue.take(taken)).toBe(0);
+      for (let step = 0; step < 20; step += 1) yield* TestClock.adjust("30 seconds");
+      expect(Array.from(yield* Queue.takeAll(taken))).toEqual([30_000, 60_000, 90_000]);
+    }).pipe(Effect.provide(ServerSettings.ServerSettingsService.layerTest({}))),
+  );
+
+  it.effect("keeps sampling a raised level after the readers stop asking", () =>
+    Effect.gen(function* () {
+      const { monitor, taken } = yield* counted(9);
+      // Asked once a minute, as the pressure notices do while work runs here.
+      for (let step = 0; step < 8; step += 1) {
+        if (step % 2 === 0) yield* monitor.current;
+        yield* TestClock.adjust("30 seconds");
+      }
+      expect((yield* monitor.held)?.level).toBe("critical");
+      yield* Queue.takeAll(taken);
+      for (let step = 0; step < 4; step += 1) yield* TestClock.adjust("2 minutes");
+      expect((yield* Queue.takeAll(taken)).length).toBeGreaterThanOrEqual(4);
+    }).pipe(Effect.provide(ServerSettings.ServerSettingsService.layerTest({}))),
+  );
+
+  it.effect("held answers without asking for a sample", () =>
+    Effect.gen(function* () {
+      const { monitor, taken } = yield* counted();
+      yield* monitor.held;
+      for (let step = 0; step < 20; step += 1) yield* TestClock.adjust("30 seconds");
+      expect(yield* Queue.size(taken)).toBe(0);
+    }).pipe(Effect.provide(ServerSettings.ServerSettingsService.layerTest({}))),
+  );
+
+  it.effect("a disk watcher gets free space alone every 30 s, never memory", () =>
+    Effect.gen(function* () {
+      const full = yield* Queue.unbounded<number>();
+      const diskOnly = yield* Queue.unbounded<number>();
+      const low = (): PressureSample => ({
+        ...reading(0.1),
+        diskAvailableBytes: 40 * GIB,
+        diskTotalBytes: 2048 * GIB,
+        diskPath: "/",
+      });
+      const monitor = yield* HostPressureMonitor.make(Queue.offer(full, 0).pipe(Effect.as(low())), {
+        readDisk: Queue.offer(diskOnly, 0).pipe(Effect.as(low())),
+      });
+      const subscribed = yield* Deferred.make<void>();
+      const seen = yield* monitor.disk.pipe(
+        Stream.tap(() => Deferred.succeed(subscribed, undefined)),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(subscribed);
+      for (let step = 0; step < 7; step += 1) yield* TestClock.adjust("30 seconds");
+      const values = Array.from(yield* Fiber.join(seen));
+      expect(values.map((value) => value?.level ?? null)).toEqual([null, "ok", "elevated"]);
+      expect(yield* Queue.size(full)).toBe(0);
+      expect(yield* Queue.size(diskOnly)).toBeGreaterThanOrEqual(7);
+    }).pipe(Effect.provide(ServerSettings.ServerSettingsService.layerTest({}))),
+  );
+
+  it.effect("a failed reading frees the next one", () =>
+    Effect.gen(function* () {
+      const taken = yield* Queue.unbounded<number>();
+      const failures = { left: 1 };
+      const monitor = yield* HostPressureMonitor.make(
+        Effect.gen(function* () {
+          yield* Queue.offer(taken, yield* Clock.currentTimeMillis);
+          if (failures.left > 0) {
+            failures.left -= 1;
+            return yield* Effect.die("vm_stat vanished");
+          }
+          return reading(0.1);
+        }),
+      );
+      yield* monitor.current;
+      expect(yield* Queue.take(taken)).toBe(0);
+      yield* TestClock.adjust("30 seconds");
+      expect(yield* Queue.take(taken)).toBe(30_000);
+      expect((yield* monitor.held)?.level).toBe("ok");
+    }).pipe(Effect.provide(ServerSettings.ServerSettingsService.layerTest({}))),
+  );
+
+  it.effect("closing the server interrupts a reading in flight", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const interrupted = { value: false };
+      yield* Effect.gen(function* () {
+        const monitor = yield* HostPressureMonitor.make(
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Effect.sync(() => (interrupted.value = true))),
+          ),
+        );
+        yield* monitor.current;
+        yield* Deferred.await(started);
+      }).pipe(Effect.scoped);
+      expect(interrupted.value).toBe(true);
+    }).pipe(Effect.provide(ServerSettings.ServerSettingsService.layerTest({}))),
+  );
+
+  it.effect("readings minutes apart do not count as a level held between them", () =>
+    Effect.gen(function* () {
+      const monitor = yield* HostPressureMonitor.HostPressureMonitor;
+      yield* monitor.sample;
+      yield* TestClock.adjust("10 minutes");
+      yield* monitor.sample;
+      yield* TestClock.adjust("30 seconds");
+      expect((yield* monitor.sample)?.level).toBe("ok");
+    }).pipe(Effect.provide(layer([reading(2), reading(2), reading(2)]))),
+  );
+});
+
 const GIB = 1024 ** 3;
 
 /** Settings > Storage > Worktree location on another drive, such as a Dev Drive. */
@@ -261,7 +408,11 @@ const worktreesFolder = Effect.gen(function* () {
 });
 
 /** The live monitor with a 1000 GiB GOAT home volume 400 GiB free, and worktrees on another drive. */
-const onWorktreesDrive = (worktrees: string, free: { gib: number }) => {
+const onWorktreesDrive = (
+  worktrees: string,
+  free: { gib: number },
+  reads: { count: number } = { count: 0 },
+) => {
   const home: HostDiskUsage = {
     path: "/goat-home",
     availableBytes: 400 * GIB,
@@ -279,7 +430,10 @@ const onWorktreesDrive = (worktrees: string, free: { gib: number }) => {
   return HostPressureMonitor.layer.pipe(
     Layer.provide(
       Layer.mock(HostResources.HostResources)({
-        read: Effect.succeed(snapshot),
+        read: Effect.sync(() => {
+          reads.count += 1;
+          return snapshot;
+        }),
         diskAt: (path) =>
           Effect.sync(() =>
             path === worktrees

@@ -196,7 +196,12 @@ const supportsOperation = (
 ): boolean =>
   connection.supportedOperations.has(operation) &&
   // Only the server browser keeps secrets out of the client and opens tabs in a chosen session.
-  ((operation !== "fillSecret" && operation !== "open" && operation !== "claim") ||
+  ((operation !== "fillSecret" &&
+    operation !== "fillLogin" &&
+    operation !== "fillCard" &&
+    operation !== "fillOneTimeCode" &&
+    operation !== "open" &&
+    operation !== "claim") ||
     connection.inProcess);
 
 const supportsRequest = (
@@ -238,6 +243,14 @@ const readRemoteTimeoutMs = (detail: unknown): number | undefined => {
     ? timeoutMs
     : undefined;
 };
+
+const readRemoteReason = (detail: unknown): string | undefined =>
+  typeof detail === "object" &&
+  detail !== null &&
+  "reason" in detail &&
+  typeof detail.reason === "string"
+    ? detail.reason
+    : undefined;
 
 const MAX_REASON_CHARS = 500;
 const isReadFailure = Schema.is(PreviewAutomationReadFailure);
@@ -359,11 +372,17 @@ const classifyResponseError = (
         typeof error.detail.interceptedBy === "string"
           ? error.detail.interceptedBy.slice(0, 300)
           : undefined;
+      const remoteReason = readRemoteReason(error.detail);
+
       return new PreviewAutomationTimeoutError({
         ...context,
         ...remoteDiagnostics,
         ...notSent,
         ...(interceptedBy ? { interceptedBy } : {}),
+        ...(context.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID && remoteReason !== undefined
+          ? { reason: remoteReason.slice(0, MAX_REASON_CHARS) }
+          : {}),
+
         ...(remoteTimeoutMs === undefined
           ? {}
           : { timeoutMs: Math.min(context.timeoutMs, remoteTimeoutMs) }),

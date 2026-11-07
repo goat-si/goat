@@ -45,6 +45,7 @@ import type * as RpcGroup from "effect/rpc/RpcGroup";
 import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
 
 import { DESKTOP_BOOTSTRAP_SUBJECT } from "./PairingGrantStore.ts";
+import { makeInFlightLimit } from "./RpcInFlightLimit.ts";
 
 export const AuthorizedWsRpcGroup = WsBaseRpcGroup.merge(WsMemoryCoreRpcGroup)
   .merge(WsMemoryAdministrationRpcGroup)
@@ -69,6 +70,10 @@ export const RPC_REQUIRED_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.getTask]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.listTasks]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.listBots]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.listChildWork]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.listBotThreads]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.getInput]: AuthOrchestrationReadScope,
   [SLACK_CHANNEL_WS_METHODS.getSettings]: AuthOrchestrationReadScope,
   [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: AuthOrchestrationReadScope,
@@ -131,6 +136,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverRemoveKeybinding]: AuthSettingsWriteScope,
   [WS_METHODS.serverGetStorageCleanupReport]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetWorktreesDirectoryStatus]: AuthOrchestrationReadScope,
+  [WS_METHODS.threadGetWorkspaceStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetDatabaseStorage]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetStorageUsage]: AuthOrchestrationReadScope,
   [WS_METHODS.serverSubscribeDiskPressure]: AuthOrchestrationReadScope,
@@ -380,6 +386,15 @@ export const requiredScopesForRpcCall = (
   method: string,
   payload: unknown,
 ): ReadonlyArray<AuthEnvironmentScope> => {
+  if (
+    method === WS_METHODS.serverRefreshProviders &&
+    typeof payload === "object" &&
+    payload !== null &&
+    "reloadSecrets" in payload &&
+    payload.reloadSecrets === true
+  ) {
+    return [AuthOrchestrationReadScope, AuthProvidersManageScope];
+  }
   if (method === WS_METHODS.serverRetryResourceTelemetry) {
     return [AuthEnvironmentMaintainScope, AuthDiagnosticsReadScope];
   }
@@ -418,16 +433,22 @@ export const authorizeRpcCall = (
 export const layer = (
   scopes: ReadonlyArray<AuthEnvironmentScope>,
   onAuthorized?: (method: string, payload: unknown) => Effect.Effect<void>,
+  maxInFlight?: number,
 ) =>
-  Layer.succeed(RpcScopeAuthorization)((effect, { rpc, payload }) =>
-    authorizeRpcCall(scopes, rpc._tag, payload).pipe(
-      Effect.andThen(
-        onAuthorized === undefined
-          ? effect
-          : Effect.tap(effect, () => onAuthorized(rpc._tag, payload)),
-      ),
-    ),
-  );
+  Layer.sync(RpcScopeAuthorization)(() => {
+    const limitInFlight = makeInFlightLimit(maxInFlight);
+    return (effect, { rpc, payload }) =>
+      authorizeRpcCall(scopes, rpc._tag, payload).pipe(
+        Effect.andThen(
+          limitInFlight(
+            rpc,
+            onAuthorized === undefined
+              ? effect
+              : Effect.tap(effect, () => onAuthorized(rpc._tag, payload)),
+          ),
+        ),
+      );
+  });
 
 /** Retrying can install or restart tools even though ordinary listing is readable. */
 export const requiredScopeForDeviceList = (input: DeviceListInput): AuthEnvironmentScope =>

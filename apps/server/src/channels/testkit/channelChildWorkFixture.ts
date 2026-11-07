@@ -107,6 +107,7 @@ const threadsLayer = (
     ThreadManagementService.ThreadManagementService,
     ThreadManagementService.ThreadManagementService.of({
       listOlderSettledThreads: unused,
+      listAppOwnedChildThreadIds: unused,
       awaitBackgroundTasks: unused,
       getLaunchedPendingQuestions: unused,
       assertReviewTaskSendAllowed: unused,
@@ -115,6 +116,7 @@ const threadsLayer = (
       listLaunchEdges: unused,
       getThreadShell: unused,
       getShellSnapshot: unused,
+      getAgentAwarenessSnapshot: unused,
       readShellSnapshot: unused,
       ensureLegacyTranscript: unused,
       dispatch: ((command: {

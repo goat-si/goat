@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createGoatBotSendQueue } from "./sendQueue.ts";
@@ -38,6 +38,84 @@ function setup(canDispatch: () => boolean = () => true) {
 }
 
 describe("createGoatBotSendQueue", () => {
+  it("keeps task attribution in the pending row and every retry", async () => {
+    const attempt = deferred<{ requestKey: string }>();
+    const failed = deferred<void>();
+    const sent: Array<string | undefined> = [];
+    const taskId = ChannelTaskId.make("task-1");
+    const queue = createGoatBotSendQueue({
+      send: (message) => {
+        sent.push(message.taskId);
+        return sent.length === 1 ? attempt.promise : Promise.resolve({ requestKey: "input" });
+      },
+      canDispatch: () => true,
+      onChange: () => {
+        if (queue.pendingInputs()[0]?.state === "failed") failed.resolve();
+      },
+      makeKey: () => "key",
+    });
+    queue.submit("hello", bot, [], taskId);
+    expect(queue.pendingInputs()[0]?.taskId).toBe(taskId);
+    attempt.reject(new Error("offline"));
+    await failed.promise;
+    queue.retry("key");
+    expect(sent).toEqual([taskId, taskId]);
+  });
+  it("does not send queued messages or restore rows after disposal during an in-flight send", async () => {
+    const first = deferred<{ requestKey: string }>();
+    const finished = deferred<void>();
+    const sent: string[] = [];
+    const forgotten: string[] = [];
+    let disposed = false;
+    let key = 0;
+    const queue = createGoatBotSendQueue({
+      makeKey: () => `key-${++key}`,
+      canDispatch: () => true,
+      send: ({ text }) => {
+        sent.push(text);
+        return first.promise;
+      },
+      onForget: (clientKey) => {
+        forgotten.push(clientKey);
+      },
+      onChange: () => {
+        if (disposed) finished.resolve();
+      },
+    });
+    queue.submit("first", bot);
+    queue.submit("second", bot);
+    queue.dispose();
+    disposed = true;
+    first.resolve({ requestKey: "accepted" });
+    await finished.promise;
+    expect(sent).toEqual(["first"]);
+    expect(forgotten).toEqual(["key-1", "key-2"]);
+    expect(queue.pendingInputs()).toEqual([]);
+  });
+  it("shows the re-attach instruction after an expired upload rejection (#2388)", async () => {
+    const failed = deferred<void>();
+    const queue = createGoatBotSendQueue({
+      send: async () => {
+        throw { attachmentProblem: "expired" };
+      },
+      canDispatch: () => true,
+      onChange: () => {
+        if (queue.pendingInputs()[0]?.state === "failed") failed.resolve();
+      },
+      makeKey: () => "expired",
+    });
+    queue.submit("file", bot);
+    await failed.promise;
+    expect(queue.pendingInputs()[0]?.rejectionReason).toContain("re-attach");
+  });
+  it("discards only a failed message without changing other messages (#2388)", () => {
+    const { queue } = setup(() => false);
+    const first = queue.submit("first", bot);
+    const second = queue.submit("second", bot);
+    queue.discard(first);
+    expect(queue.pendingInputs().map((entry) => entry.clientKey)).toEqual([second]);
+  });
+
   it("sends in order, one at a time, while still taking new messages", async () => {
     const { queue, calls } = setup();
     queue.submit("first", bot);
@@ -89,7 +167,13 @@ describe("createGoatBotSendQueue", () => {
 
 it("keeps the submit-time bot and receivedAt through a failed attempt and retry", async () => {
   let clock = "2026-10-12T12:00:00Z";
-  const calls: Array<{ clientKey: string; text: string; receivedAt: string; bot: typeof bot }> = [];
+  const calls: Array<{
+    clientKey: string;
+    text: string;
+    attachments: ReadonlyArray<unknown>;
+    receivedAt: string;
+    bot: typeof bot;
+  }> = [];
   const attempt = deferred<{ requestKey: string }>();
   const queue = createGoatBotSendQueue({
     send: async (message) => {
@@ -110,8 +194,20 @@ it("keeps the submit-time bot and receivedAt through a failed attempt and retry"
   queue.retry("fixed-key");
   await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("accepted"));
   expect(calls).toEqual([
-    { clientKey: "fixed-key", text: "original", receivedAt: "2026-10-12T12:00:00Z", bot },
-    { clientKey: "fixed-key", text: "original", receivedAt: "2026-10-12T12:00:00Z", bot },
+    {
+      clientKey: "fixed-key",
+      text: "original",
+      attachments: [],
+      receivedAt: "2026-10-12T12:00:00Z",
+      bot,
+    },
+    {
+      clientKey: "fixed-key",
+      text: "original",
+      attachments: [],
+      receivedAt: "2026-10-12T12:00:00Z",
+      bot,
+    },
   ]);
   expect(queue.pendingInputs()[0]?.state).toBe("accepted");
 });
@@ -165,4 +261,29 @@ it("never retries a final rejected input even through the queue API", async () =
   });
   queue.retry("key");
   expect(queue.pendingInputs()[0]?.state).toBe("failed");
+});
+
+it("sends a message's files on every attempt and names them while it is pending", async () => {
+  const sent: Array<ReadonlyArray<string>> = [];
+  const attempt = deferred<{ requestKey: string }>();
+  const queue = createGoatBotSendQueue({
+    send: async (message) => {
+      sent.push(message.attachments.map((file) => file.name));
+      return sent.length === 1 ? attempt.promise : { requestKey: "input" };
+    },
+    canDispatch: () => true,
+    onChange: () => {},
+    makeKey: () => "key",
+    now: () => "2026-10-12T12:00:00Z",
+  });
+  const photo = { id: "draft-1", type: "image", name: "photo.png", uri: "file:///photo.png" };
+  queue.submit("", bot, [photo]);
+  expect(queue.pendingInputs()[0]?.attachments).toEqual([
+    { id: "draft-1", type: "image", name: "photo.png" },
+  ]);
+  attempt.reject(new Error("socket closed"));
+  await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("failed"));
+  queue.retry("key");
+  await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("accepted"));
+  expect(sent).toEqual([["photo.png"], ["photo.png"]]);
 });

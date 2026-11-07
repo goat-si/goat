@@ -104,7 +104,7 @@ const setup = Effect.fn("MobileThreadTest.setup")(function* (options?: {
   const session: RpcSession = {
     client,
     initialConfig: Effect.succeed({} as never),
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
     inboundFrames: Effect.succeed(0),
@@ -143,6 +143,7 @@ const setup = Effect.fn("MobileThreadTest.setup")(function* (options?: {
     reorderRoutes: () => Effect.die("Unexpected reorder"),
     removeRelayEnvironments: () => Effect.die("Unexpected removal"),
     retryNow: () => Effect.void,
+    reconnect: () => Effect.void,
     setEnabled: () => Effect.die("Unexpected toggle"),
     setCompatibility: () => Effect.die("Unexpected compatibility update"),
     state: () => SubscriptionRef.get(supervisor.state),

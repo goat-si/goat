@@ -244,6 +244,8 @@ describe("session first receipts", () => {
           )
           .findLast((entry) => entry.taskId === task.taskId);
         assert.oneOf(chip?.status, ["received", "dispatching", "running", "waiting_input"]);
+        // Clients keep the bot's own turns out of the conversation's task cards by this field.
+        assert.strictEqual(chip?.kind, "turn");
       }).pipe(Effect.provide(harness.layer));
     },
   );

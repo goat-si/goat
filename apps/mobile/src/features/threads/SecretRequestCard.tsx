@@ -5,6 +5,7 @@ import {
   secretRequestDisplay,
   secretRequestFailureMessage,
   secretRequestPrivacyNote,
+  secretRequestProviders,
   type SecretRequestItem,
 } from "@goat/client-runtime/secret-request";
 import {
@@ -13,7 +14,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
 import { useRef, useState } from "react";
-import { View, type ColorValue } from "react-native";
+import { Pressable, View, type ColorValue } from "react-native";
 
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
@@ -23,6 +24,14 @@ import { Button } from "../../components/ui/Button";
 
 const LOCK_SYMBOL: AppSymbolName = { ios: "lock", android: "lock" };
 const PRIVATE_SYMBOL: AppSymbolName = { ios: "checkmark.shield", android: "lock" };
+const EMPTY_CARD = { number: "", expiryMonth: "", expiryYear: "", cvc: "", name: "" };
+const CARD_FIELDS = [
+  ["number", "Card number"],
+  ["expiryMonth", "Expiry month"],
+  ["expiryYear", "Expiry year"],
+  ["cvc", "CVC"],
+  ["name", "Name on card"],
+] as const;
 
 export function SecretRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -87,15 +96,26 @@ function PendingSecretRequestForm(props: {
     reportFailure: false,
     reportDefect: false,
   });
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const providers = config?.secretRequestReferences
+    ? secretRequestProviders(settings?.secretProviders)
+    : [];
+  const [providerId, setProviderId] = useState("");
+  const selectedProvider = providers.find((provider) => provider.id === providerId);
   const [secret, setSecret] = useState("");
+  const [username, setUsername] = useState("");
+  const [setupKey, setSetupKey] = useState("");
+  const [cardValues, setCardValues] = useState(EMPTY_CARD);
+  const login = item.requestKind === "login";
+  const card = item.requestKind === "card";
+  const cardReply = { type: "save_card" as const, ...cardValues };
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Submit then a tap can both run before a re-render; this guard is synchronous.
   const inFlight = useRef(false);
 
-  const send = async (
-    reply: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
-  ) => {
+  const send = async (reply: Parameters<typeof secretRequestAnswerInput>[1]) => {
     const input = secretRequestAnswerInput(item, reply);
     if (input === null || inFlight.current) return;
     inFlight.current = true;
@@ -107,6 +127,9 @@ function PendingSecretRequestForm(props: {
     });
     if (result._tag === "Success") {
       setSecret("");
+      setUsername("");
+      setSetupKey("");
+      setCardValues(EMPTY_CARD);
       return;
     }
     if (!isAtomCommandInterrupted(result)) {
@@ -124,23 +147,120 @@ function PendingSecretRequestForm(props: {
           </Text>
         ) : null}
       </View>
-      <TextInput
-        accessibilityLabel={item.label}
-        placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
-        value={secret}
-        onChangeText={setSecret}
-        editable={canAnswer && !submitting}
-        onFocus={markOpened}
-        secureTextEntry
-        autoCorrect={false}
-        autoCapitalize="none"
-        autoComplete="off"
-        textContentType="none"
-        importantForAutofill="no"
-        spellCheck={false}
-        returnKeyType="done"
-        onSubmitEditing={() => void send({ type: "save", secret })}
-      />
+      {!login && !card && providers.length > 0 ? (
+        <View accessibilityLabel="Secret source">
+          {[{ id: "", label: "Enter value" }, ...providers].map((provider) => (
+            <Pressable
+              key={provider.id}
+              accessibilityRole="radio"
+              accessibilityState={{
+                checked: providerId === provider.id,
+                disabled: !canAnswer || submitting,
+              }}
+              disabled={!canAnswer || submitting}
+              onPress={() => {
+                setProviderId(provider.id);
+                setSecret("");
+              }}
+            >
+              <Text>{provider.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+      {login ? (
+        <TextInput
+          accessibilityLabel="Username"
+          placeholder="Username"
+          value={username}
+          onChangeText={setUsername}
+          editable={canAnswer && !submitting}
+          onFocus={markOpened}
+          autoCorrect={false}
+          autoCapitalize="none"
+          autoComplete="off"
+          textContentType="none"
+          importantForAutofill="no"
+          spellCheck={false}
+        />
+      ) : null}
+      {card ? (
+        CARD_FIELDS.map(([key, label]) => (
+          <TextInput
+            key={key}
+            accessibilityLabel={label}
+            placeholder={label}
+            value={cardValues[key]}
+            onChangeText={(value) => setCardValues((previous) => ({ ...previous, [key]: value }))}
+            editable={canAnswer && !submitting}
+            onFocus={markOpened}
+            secureTextEntry={key === "cvc"}
+            autoCorrect={false}
+            autoCapitalize="none"
+            autoComplete="off"
+            textContentType="none"
+            importantForAutofill="no"
+            spellCheck={false}
+          />
+        ))
+      ) : (
+        <TextInput
+          accessibilityLabel={login ? "Password" : item.label}
+          placeholder={
+            login
+              ? "Password"
+              : selectedProvider
+                ? "op://vault/item/field"
+                : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
+          }
+          value={secret}
+          onChangeText={setSecret}
+          editable={canAnswer && !submitting}
+          onFocus={markOpened}
+          secureTextEntry
+          autoCorrect={false}
+          autoCapitalize="none"
+          autoComplete="off"
+          textContentType="none"
+          importantForAutofill="no"
+          spellCheck={false}
+          returnKeyType="done"
+          onSubmitEditing={() =>
+            void send(
+              login
+                ? {
+                    type: "save_login",
+                    username,
+                    password: secret,
+                    authenticatorSetupKey: setupKey,
+                  }
+                : selectedProvider
+                  ? {
+                      type: "reference",
+                      reference: { provider: selectedProvider.id, reference: secret },
+                    }
+                  : { type: "save", secret },
+            )
+          }
+        />
+      )}
+      {login ? (
+        <TextInput
+          accessibilityLabel="Authenticator setup key"
+          placeholder="Authenticator setup key (optional)"
+          value={setupKey}
+          onChangeText={setSetupKey}
+          editable={canAnswer && !submitting}
+          onFocus={markOpened}
+          secureTextEntry
+          autoCorrect={false}
+          autoCapitalize="none"
+          autoComplete="off"
+          textContentType="none"
+          importantForAutofill="no"
+          spellCheck={false}
+        />
+      ) : null}
       {error !== null ? (
         <Text
           accessibilityRole="alert"
@@ -154,8 +274,38 @@ function PendingSecretRequestForm(props: {
         label="Save securely"
         tone="primary"
         fullWidth
-        disabled={!canAnswer || submitting || secret.trim().length === 0}
-        onPress={() => void send({ type: "save", secret })}
+        disabled={
+          !canAnswer ||
+          submitting ||
+          (card
+            ? secretRequestAnswerInput(item, cardReply) === null
+            : selectedProvider
+              ? secretRequestAnswerInput(item, {
+                  type: "reference",
+                  reference: { provider: selectedProvider.id, reference: secret },
+                }) === null
+              : secret.trim().length === 0) ||
+          (login && username.trim().length === 0)
+        }
+        onPress={() =>
+          void send(
+            card
+              ? cardReply
+              : login
+                ? {
+                    type: "save_login",
+                    username,
+                    password: secret,
+                    authenticatorSetupKey: setupKey,
+                  }
+                : selectedProvider
+                  ? {
+                      type: "reference",
+                      reference: { provider: selectedProvider.id, reference: secret },
+                    }
+                  : { type: "save", secret },
+          )
+        }
       />
       <View className="flex-row items-center justify-between gap-2">
         <View className="flex-1 flex-row items-center gap-1.5">

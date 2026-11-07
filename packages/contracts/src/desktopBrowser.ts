@@ -3,6 +3,14 @@ import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { AgentCursorSnapshot } from "./computerUseOverlay.ts";
 
+export const DesktopPreviewTabIdSchema = Schema.String.check(Schema.isTrimmed()).check(
+  Schema.isNonEmpty(),
+);
+export const DesktopPreviewSetShownInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  shown: Schema.Boolean,
+});
+
 const TabKey = {
   threadId: TrimmedNonEmptyString,
   tabId: TrimmedNonEmptyString,
@@ -13,6 +21,8 @@ export const DesktopBrowserEvent = Schema.Union([
   /** Its `<webview>` went away: closed, crashed, swapped, or devtools took the debugger. */
   Schema.Struct({ type: Schema.Literal("detached"), ...TabKey }),
   Schema.Struct({ type: Schema.Literal("cdp"), ...TabKey, message: Schema.String }),
+  /** Its `<webview>` started or stopped being on screen in a desktop window. */
+  Schema.Struct({ type: Schema.Literal("shown"), ...TabKey, shown: Schema.Boolean }),
 ]);
 export type DesktopBrowserEvent = typeof DesktopBrowserEvent.Type;
 

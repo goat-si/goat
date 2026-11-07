@@ -42,6 +42,7 @@ export const AuthOrchestrationOperateScope = "orchestration:operate" as const;
 export const AuthOrchestrationApproveScope = "orchestration:approve" as const;
 export const AuthSettingsWriteScope = "settings:write" as const;
 export const AuthProvidersManageScope = "providers:manage" as const;
+export const AuthVoiceManageScope = "voice:manage" as const;
 export const AuthEnvironmentMaintainScope = "environment:maintain" as const;
 export const AuthPreviewOperateScope = "preview:operate" as const;
 export const AuthDiagnosticsReadScope = "diagnostics:read" as const;
@@ -75,6 +76,7 @@ export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationApproveScope,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
+  AuthVoiceManageScope,
   AuthEnvironmentMaintainScope,
   AuthPreviewOperateScope,
   AuthDiagnosticsReadScope,
@@ -138,7 +140,10 @@ const legacyParents: Partial<Record<AuthEnvironmentScope, AuthEnvironmentScope>>
 /** Keep permission denials decodable by clients with the original scope enum. */
 export function authScopeRequiredResponse(requiredPermission: AuthEnvironmentScope) {
   return {
-    requiredScope: legacyParents[requiredPermission] ?? requiredPermission,
+    requiredScope:
+      requiredPermission === AuthVoiceManageScope
+        ? AuthOrchestrationOperateScope
+        : (legacyParents[requiredPermission] ?? requiredPermission),
     requiredPermission,
   };
 }
@@ -273,6 +278,7 @@ export const AuthWebSocketTicketResult = Schema.Struct({
   expiresAt: Schema.DateTimeUtc,
 });
 export type AuthWebSocketTicketResult = typeof AuthWebSocketTicketResult.Type;
+export const AuthWebSocketTicketResultJson = Schema.toCodecJson(AuthWebSocketTicketResult);
 
 /**
  * Media routes share a ticket across requests; RPC uses a separate ticket.
@@ -636,19 +642,30 @@ export function requiredScopesForServerSettingsPatch(
 ): ReadonlyArray<AuthEnvironmentScope> {
   let changesProviders = false;
   let changesSettings = false;
+  let changesVoice = false;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
-    if (key === "providers" || key === "providerInstances" || key === "usageLimitSources") {
+    if (key === "speech") {
+      changesVoice = true;
+    } else if (
+      key === "providers" ||
+      key === "providerInstances" ||
+      key === "usageLimitSources" ||
+      key === "secretProviders"
+    ) {
       changesProviders = true;
     } else {
       changesSettings = true;
     }
   }
   return [
-    ...(changesSettings || !changesProviders || agentTerminalBinding !== undefined
+    ...(changesSettings ||
+    (!changesProviders && !changesVoice) ||
+    agentTerminalBinding !== undefined
       ? [AuthSettingsWriteScope]
       : []),
     ...(changesProviders ? [AuthProvidersManageScope] : []),
+    ...(changesVoice ? [AuthVoiceManageScope] : []),
     ...(agentTerminalBinding !== undefined ? [AuthAccessWriteScope] : []),
   ];
 }

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
+import { BearerConnectionCredential, CredentialStore } from "@goat/client-runtime/connection";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { vi } from "vite-plus/test";
 
 vi.mock("react-native", () => ({
@@ -13,6 +16,7 @@ vi.mock("expo-secure-store", () => ({
 }));
 
 import { CONNECTION_CATALOG_KEY, LEGACY_CONNECTIONS_KEY, make } from "./catalog-store";
+import * as ConnectionStorage from "./storage";
 import * as MobileSecureStorage from "../persistence/mobile-secure-storage";
 
 function makeStorage(initial: Readonly<Record<string, string>>) {
@@ -34,6 +38,22 @@ function makeStorage(initial: Readonly<Record<string, string>>) {
 }
 
 describe("mobile connection catalog storage", () => {
+  it.effect("keeps a credential saved after the one a replacement expected", () =>
+    Effect.gen(function* () {
+      const memory = makeStorage({});
+      const credentials = yield* CredentialStore.ConnectionCredentialStore.pipe(
+        Effect.provide(
+          ConnectionStorage.layer.pipe(
+            Layer.provide(Layer.succeed(MobileSecureStorage.MobileSecureStorage, memory.storage)),
+          ),
+        ),
+      );
+      yield* credentials.put("a", new BearerConnectionCredential({ token: "fresh" }));
+      yield* credentials.put("a", new BearerConnectionCredential({ token: "adopted" }), "old");
+      expect(Option.getOrNull(yield* credentials.get("a"))?.token).toBe("fresh");
+    }),
+  );
+
   it.effect("refuses a future catalog without deleting or rewriting it", () =>
     Effect.gen(function* () {
       const raw = JSON.stringify({ schemaVersion: 99 });

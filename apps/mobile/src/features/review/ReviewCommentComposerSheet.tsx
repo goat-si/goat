@@ -1,7 +1,7 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { TextInputWrapper } from "expo-paste-input";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, ScrollView, View, useWindowDimensions } from "react-native";
 import { KeyboardAvoidingView, KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,6 +15,8 @@ import { cn } from "../../lib/cn";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { convertPastedImagesToAttachments, pickComposerImages } from "../../lib/composerImages";
 import { useNativePaste } from "../../lib/useNativePaste";
+import { retainComposerAttachmentFile } from "../../lib/composerAttachmentFiles";
+import { releaseUnusedComposerAttachmentFiles } from "../../state/use-composer-drafts";
 import { setPendingConnectionError } from "../../state/use-remote-environment-registry";
 import { appendReviewCommentToDraft } from "../../state/use-thread-composer-state";
 import {
@@ -33,6 +35,12 @@ const REVIEW_COMMENT_PREVIEW_MAX_LINES = 5;
 const NO_LINES: ReturnType<typeof getSelectedReviewCommentLines> = [];
 const NO_HIGHLIGHTS: ReturnType<typeof highlightReviewSelectedLines> = {};
 
+function releaseImages(images: ReadonlyArray<DraftComposerImageAttachment>) {
+  void releaseUnusedComposerAttachmentFiles(images).catch((error) =>
+    console.warn("[review comment] could not release attachment files", error),
+  );
+}
+
 type ReviewCommentComposerSheetProps = StaticScreenProps<{
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -49,7 +57,37 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
   const { environmentId, threadId } = props.route.params;
   const [commentText, setCommentText] = useState("");
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerImageAttachment>>([]);
+  const ownedImages = useRef(new Map<string, () => void>());
+  const pickerLifetime = useRef<AbortController | null>(null);
   const [previewFile, setPreviewFile] = useState<FilePreviewSource | null>(null);
+
+  // oxlint-disable-next-line goat/react-effect-budget -- picker results belong to this sheet's lifetime
+  useEffect(() => {
+    const controller = new AbortController();
+    pickerLifetime.current = controller;
+    return () => {
+      controller.abort();
+      pickerLifetime.current = null;
+      for (const release of ownedImages.current.values()) release();
+      ownedImages.current.clear();
+    };
+  }, []);
+
+  const addImages = (images: ReadonlyArray<DraftComposerImageAttachment>, signal: AbortSignal) => {
+    if (signal.aborted) {
+      releaseImages(images);
+      return;
+    }
+    for (const image of images) {
+      if (image.fileUri) {
+        ownedImages.current.set(
+          image.id,
+          retainComposerAttachmentFile(image.fileUri, () => releaseImages([image])),
+        );
+      }
+    }
+    setAttachments((current) => [...current, ...images]);
+  };
 
   const { selectedLines, highlightedLinesById } = useMemo(() => {
     if (!target) return { selectedLines: NO_LINES, highlightedLinesById: NO_HIGHLIGHTS };
@@ -87,6 +125,8 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
     navigation.goBack();
   }, [navigation]);
   const handleNativePaste = useNativePaste((uris) => {
+    const signal = pickerLifetime.current?.signal;
+    if (!signal || signal.aborted) return;
     void (async () => {
       try {
         const images = await convertPastedImagesToAttachments({
@@ -94,7 +134,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
           existingCount: attachments.length,
         });
         if (images.length > 0) {
-          setAttachments((current) => [...current, ...images]);
+          addImages(images, signal);
         }
       } catch (error) {
         console.error("[review comment] error converting pasted images", error);
@@ -103,11 +143,13 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
   });
 
   async function handlePickImages(): Promise<void> {
+    const signal = pickerLifetime.current?.signal;
+    if (!signal || signal.aborted) return;
     const result = await pickComposerImages({ existingCount: attachments.length });
     if (result.images.length > 0) {
-      setAttachments((current) => [...current, ...result.images]);
+      addImages(result.images, signal);
     }
-    if (result.error) {
+    if (!signal.aborted && result.error) {
       setPendingConnectionError(result.error);
     }
   }
@@ -123,6 +165,8 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
       text: formatReviewCommentContext(target, commentText),
       attachments,
     });
+    for (const release of ownedImages.current.values()) release();
+    ownedImages.current.clear();
     setAttachments([]);
     dismissComposer();
   }, [attachments, commentText, dismissComposer, environmentId, target, threadId]);
@@ -251,6 +295,8 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
                         onPressPreview={setPreviewFile}
                         removeButtonPlacement="gutter"
                         onRemove={(imageId) => {
+                          ownedImages.current.get(imageId)?.();
+                          ownedImages.current.delete(imageId);
                           setAttachments((current) =>
                             current.filter((image) => image.id !== imageId),
                           );

@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./omo/client": {
+      "types": "./src/omoClient.ts",
+      "import": "./src/omoClient.ts"
+    },
+    "./omo/settings": {
+      "types": "./src/omoSettings.ts",
+      "import": "./src/omoSettings.ts"
+    },
     "./client": {
       "types": "./src/client.ts",
       "import": "./src/client.ts"

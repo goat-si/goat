@@ -17,6 +17,7 @@ import {
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
+import { shrinkPng, shrinkJpegWithin } from "./ServerBrowserImage.ts";
 import { pointerInterception } from "./pointerInterception.ts";
 import { subsequentClick } from "./actionClick.ts";
 import { evaluationExpired, requireEvaluationChannel } from "./actionEvaluation.ts";
@@ -37,6 +38,8 @@ import { withRefAnnotations } from "./annotateRefs.ts";
 import { codeLocator } from "./codeLocator.ts";
 import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
+import { aimClickPoint } from "./clickAim.ts";
+import { capturePaint, occludedRefs } from "./paintOcclusion.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import { pageChanged, runSnapshot, tooBusy, transientCapture } from "./snapshotRetry.ts";
 import {
@@ -418,41 +421,13 @@ export const captureViewport = async (
   return data;
 };
 
-/** Runs in the page's own isolated world, as the server has no image library. */
-const SHRINK_PNG = `async function (png, width, height) {
-  const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
-  const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-  // Namespaced, as an XML document's createElement makes a plain element with no getContext.
-  const canvas = document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  context.imageSmoothingQuality = "high";
-  context.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-  return canvas.toDataURL("image/png").slice("data:image/png;base64,".length);
-}`;
-
-const shrinkPng = async (cdp: CDPSession, png: string, scale: number) => {
-  const size = pngSize(png);
-  const { frameTree } = await cdp.send("Page.getFrameTree");
-  const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
-    frameId: frameTree.frame.id,
-    worldName: "goat-preview-screenshot",
-  });
-  const { result, exceptionDetails } = await cdp.send("Runtime.callFunctionOn", {
-    functionDeclaration: SHRINK_PNG,
-    executionContextId,
-    arguments: [
-      { value: png },
-      { value: Math.round(size.width * scale) },
-      { value: Math.round(size.height * scale) },
-    ],
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  if (exceptionDetails) throw new Error("The snapshot could not shrink its screenshot.");
-  return result.value as string;
+export const captureViewportWithin = async (
+  cdp: CDPSession,
+  quality: number,
+  bounds: { readonly maxWidth: number; readonly maxHeight: number },
+) => {
+  const data = await captureViewport(cdp, { format: "jpeg", quality });
+  return (await shrinkJpegWithin(cdp, data, quality, bounds)) ?? data;
 };
 
 // Bounds, PNG checks, and scale retries adapted from Emanuele-web04/synara @ 566efb1b1.
@@ -577,6 +552,7 @@ const capture = async (
     readLayersHeader(input.page),
     input.annotate ? Promise.resolve(undefined) : captureImage(),
     tabCookies(input.page),
+    capturePaint(input.cdp),
   ]);
   void pageAndScreenshot.catch(constVoid);
   let tree: string;
@@ -625,7 +601,7 @@ const capture = async (
     await pageAndScreenshot.catch(constVoid);
     throw cause;
   }
-  const [captured, layersLine, capturedImage, cookies] = await pageAndScreenshot;
+  const [captured, layersLine, capturedImage, cookies, paint] = await pageAndScreenshot;
   // Checked after the reads: an embedding frame element can be hidden while they run.
   const hidden = scoped ? await scopeHidden(scoped) : false;
   const page = hidden ? { ...captured, visibleText: "" } : captured;
@@ -651,12 +627,13 @@ const capture = async (
     unread,
     generation,
     refs: state.refs,
+    occluded: occludedRefs(paint, tree),
   });
   return snapshotOptionsResult(
     input.page,
     {
       ...page,
-      url: mask(page.url),
+      url: mask(withoutDataPayload(page.url)),
       title: mask(page.title),
       // Mask text before truncating so a value crossing the cut cannot leak its prefix.
       visibleText: mask(page.visibleText, MAX_VISIBLE_TEXT_LENGTH),
@@ -682,7 +659,7 @@ export const snapshot = (input: SnapshotInput): Promise<PreviewAutomationSnapsho
   });
 
 /** Return when a dialog opens; waiting for the action to finish would block until dialog resolution. */
-export const click = async (
+const clickTarget = async (
   page: Page,
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
@@ -693,10 +670,17 @@ export const click = async (
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
   const locator = targetLocator(page, input);
-  const point = await targetPoint(page, locator, input, deadline, gate);
+  const rough = await targetPoint(page, locator, input, deadline, gate);
+  if (locator !== null) await settled(locator, deadline, true, gate);
+  const aimed =
+    locator === null
+      ? { point: rough }
+      : await aimClickPoint(page, locator, deadline, gate).catch((cause: unknown) => {
+          throw unsentOnTimeout(cause);
+        });
+  const { point } = aimed;
   await pointer(point, "click");
   const button = input.button ?? "left";
-  if (locator !== null) await settled(locator, deadline, true, gate);
   let sent = false;
   let dialog = false;
   let onDialog = constVoid;
@@ -739,7 +723,11 @@ export const click = async (
       return locator === null
         ? requireEvaluationChannel(gate).call(() => page.mouse.click(point.x, point.y, { button }))
         : requireEvaluationChannel(gate).call(() =>
-            locator.click({ button, ...dispatched(deadline) }),
+            locator.click({
+              button,
+              ...("position" in aimed ? { position: aimed.position } : {}),
+              ...dispatched(deadline),
+            }),
           );
     return subsequentClick(gate, point, button, count);
   };
@@ -769,6 +757,38 @@ export const click = async (
   // A dialog that stopped a multi-press click leaves it short of what was asked.
   const short = (input.clickCount ?? 1) > presses && (input.clickCount ?? 1) > 1;
   return { ...point, ...outcome, ...(short ? { pressesCompleted: presses } : {}) };
+};
+export const click = async (
+  page: Page,
+  input: PreviewAutomationClickInput,
+  pointer: PointerReporter = noPointer,
+  gate: DispatchGate = open,
+): ReturnType<typeof clickTarget> => {
+  try {
+    return await clickTarget(page, input, pointer, gate);
+  } catch (cause) {
+    const timedOut =
+      (cause instanceof ServerBrowserOperationError &&
+        cause.tag === "PreviewAutomationTimeoutError") ||
+      (cause instanceof Error && cause.name === "TimeoutError");
+    const target = input.locator ?? input.selector;
+    if (!timedOut || target === undefined) throw cause;
+    const detail =
+      cause instanceof ServerBrowserOperationError &&
+      typeof cause.detail === "object" &&
+      cause.detail !== null
+        ? cause.detail
+        : {};
+    const beforeInput = "beforeInput" in detail && detail.beforeInput === true;
+    const label = JSON.stringify(target.length > 200 ? `${target.slice(0, 200)}...` : target);
+    const reason = beforeInput
+      ? `No input was sent. The click target ${label} was not ready before the deadline.`
+      : `The click may have been sent; check the page before retrying. The target was ${label}.`;
+    throw new ServerBrowserOperationError("PreviewAutomationTimeoutError", reason, {
+      ...detail,
+      reason,
+    });
+  }
 };
 export const type = async (
   page: Page,

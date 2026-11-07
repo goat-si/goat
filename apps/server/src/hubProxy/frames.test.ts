@@ -216,6 +216,20 @@ it("4b: an operate client may upload follow-up attachments through the hub", () 
   ).toMatchObject({ requiredScope: "orchestration:operate" });
 });
 
+it("4b: an operate client may embed an uploaded file in a note through the hub", () => {
+  const scopes = ["orchestration:read", "orchestration:operate"] as const;
+  const payload = { attachmentId: "pending-00000000-0000-4000-8000-000000000000" };
+  expect(refuseProxiedCall(scopes, "notes.attach", payload)).toBeUndefined();
+  expect(refuseProxiedCall(["orchestration:read"], "notes.attach", payload)).toMatchObject({
+    requiredScope: "orchestration:operate",
+  });
+  expect(
+    refuseProxiedCall(["orchestration:read"], "assets.createUrl", {
+      resource: { _tag: "note-file", path: ".attachments/0123456789abcdef.png" },
+    }),
+  ).toBeUndefined();
+});
+
 const full = ["orchestration:read", "orchestration:operate", "filesystem:read"] as const;
 
 it("4c: an operate client may answer approvals, dismiss questions and start threads on a node", () => {

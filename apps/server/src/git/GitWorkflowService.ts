@@ -117,6 +117,7 @@ export class GitWorkflowService extends Context.Service<
       readonly cwd: string;
       readonly refName: string;
       readonly onOutputLine?: ((line: string) => Effect.Effect<void, never>) | undefined;
+      readonly remote?: GitVcsDriver.GitWorktreeBaseRemote;
     }) => Effect.Effect<
       { readonly commitSha: string; readonly remoteRefName: string } | null,
       GitCommandError

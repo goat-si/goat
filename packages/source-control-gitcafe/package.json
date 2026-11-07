@@ -18,7 +18,6 @@
   },
   "dependencies": {
     "@goat/contracts": "workspace:*",
-    "@goat/provider-core": "workspace:*",
     "@goat/shared": "workspace:*",
     "@goat/source-control-core": "workspace:*",
     "effect": "catalog:"

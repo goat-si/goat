@@ -57,6 +57,10 @@ export const worktreeEntries = {
         "working-tree, branch-range, staged or unstaged; omitted returns the normal review views.",
       baseRef: "Base revision for a branch-range comparison.",
       ignoreWhitespace: "Ignore whitespace changes when true.",
+      metadataOnly:
+        "Return file statistics without loading full patches, unless a file is selected.",
+      trackedOnly:
+        "For metadata-only previews, omit untracked files and mark the result incomplete.",
       file: "Optional one-file comparison with path, previousPath and sourceKind.",
       "file.path": "Repository-relative file path.",
       "file.previousPath": "Previous repository-relative path for a rename, or null.",
@@ -66,6 +70,15 @@ export const worktreeEntries = {
       {
         title: "Read a bounded diff preview of a known GOAT checkout.",
         args: { projectId: "project:example", scope: "working-tree" },
+      },
+      {
+        title: "Read tracked file statistics first.",
+        args: {
+          projectId: "project:example",
+          scope: "working-tree",
+          metadataOnly: true,
+          trackedOnly: true,
+        },
       },
     ],
     effect: "read",

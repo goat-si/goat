@@ -1,8 +1,9 @@
 import { ArrowDownIcon, ArrowUpIcon } from "~/components/solar";
-import { type ComponentProps, type ReactNode } from "react";
+import { type ComponentProps, type ReactNode, type RefObject } from "react";
 
 import { Command, CommandFooter, CommandInput, CommandPanel } from "./ui/command";
 import { Kbd, KbdGroup } from "./ui/kbd";
+import { restoreBrowseSelection, type PendingInputSelection } from "./CommandPaletteSelection";
 
 /**
  * A view replacing another inside an open dialog mounts with focus on the body,
@@ -28,6 +29,7 @@ type CommandPaletteContentProps = Omit<ComponentProps<typeof Command>, "children
   readonly footerTrailing?: ReactNode;
   readonly inputAccessory?: ReactNode;
   readonly inputProps: ComponentProps<typeof CommandInput>;
+  readonly pendingSelectionRef?: RefObject<PendingInputSelection | null>;
   readonly panelSize?: "list" | "tall-list" | "fill";
   readonly showBackHint?: boolean;
   readonly testId?: string;
@@ -40,6 +42,7 @@ export function CommandPaletteContent({
   footerTrailing,
   inputAccessory,
   inputProps,
+  pendingSelectionRef,
   panelSize = "list",
   showBackHint,
   testId,
@@ -49,7 +52,15 @@ export function CommandPaletteContent({
     <div className="contents" data-testid={testId}>
       <Command {...commandProps}>
         <div className="relative">
-          <CommandInput autoFocus={false} {...inputProps} ref={claimFocusInOpenDialog} />
+          <CommandInput
+            autoFocus={false}
+            {...inputProps}
+            ref={(input) => {
+              if (!input) return;
+              restoreBrowseSelection(input, pendingSelectionRef);
+              claimFocusInOpenDialog(input);
+            }}
+          />
           {inputAccessory}
         </div>
         <CommandPanel

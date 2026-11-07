@@ -1,7 +1,45 @@
 import * as Schema from "effect/Schema";
+import * as SchemaGetter from "effect/SchemaGetter";
 
 import { ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
+import { SecretReference } from "./secretReference.ts";
 import { goatCallText } from "./agentSurface/callText.ts";
+
+export type CardDetails = {
+  readonly number: string;
+  readonly expiryMonth: string;
+  readonly expiryYear: string;
+  readonly cvc: string;
+  readonly name: string;
+};
+
+export function normalizeCardDetails(input: CardDetails): CardDetails | undefined {
+  const number = input.number.replace(/[ -]/g, "");
+  if (!/^\d{12,19}$/.test(number)) return undefined;
+  if (!/^(?:0?[1-9]|1[0-2])$/.test(input.expiryMonth)) return undefined;
+  if (!/^(?:\d{2}|\d{4})$/.test(input.expiryYear)) return undefined;
+  if (!/^\d{3,4}$/.test(input.cvc) || !/\S/.test(input.name)) return undefined;
+  return {
+    ...input,
+    number,
+    expiryYear: input.expiryYear.length === 2 ? `20${input.expiryYear}` : input.expiryYear,
+  };
+}
+
+const CardAnswer = Schema.Struct({
+  type: Schema.Literal("save_card"),
+  number: Schema.String,
+  expiryMonth: Schema.String,
+  expiryYear: Schema.String,
+  cvc: Schema.String,
+  name: Schema.String,
+}).check(Schema.makeFilter((card) => normalizeCardDetails(card) !== undefined));
+const NormalizedCardAnswer = CardAnswer.pipe(
+  Schema.decodeTo(CardAnswer, {
+    decode: SchemaGetter.transform((card) => ({ ...card, ...normalizeCardDetails(card) })),
+    encode: SchemaGetter.transform((card) => card),
+  }),
+);
 
 /** Server stores the value under a one-use SecretRef; the thread learns only status. */
 export const SecretRequestAnswerInput = Schema.Struct({
@@ -9,17 +47,32 @@ export const SecretRequestAnswerInput = Schema.Struct({
   turnItemId: TurnItemId,
   answer: Schema.Union([
     Schema.Struct({ type: Schema.Literal("save"), secret: TrimmedNonEmptyString }),
+    Schema.Struct({
+      type: Schema.Literal("save_login"),
+      username: TrimmedNonEmptyString,
+      password: Schema.String.check(Schema.isPattern(/\S/)),
+      authenticatorSetupKey: Schema.optionalKey(Schema.String),
+    }),
+    NormalizedCardAnswer,
     Schema.Struct({ type: Schema.Literal("decline") }),
+    Schema.Struct({ type: Schema.Literal("reference"), reference: SecretReference }),
   ]),
 });
 export type SecretRequestAnswerInput = typeof SecretRequestAnswerInput.Type;
 
 const SECRET_REQUEST_FAILURE_MESSAGES = {
+  answer_mismatch: "The answer does not match the requested kind.",
+  login_ref: "This login item requires the login fill tool.",
+  card_ref: "This card item requires the card fill tool.",
+  invalid_card: "The card details are invalid.",
+  invalid_authenticator_setup_key: "The authenticator setup key is invalid.",
   load_failed: "Could not load the secret request.",
   not_found: "This secret request no longer exists.",
   already_answered: "This secret request was already answered.",
   agent_stopped: "The agent that asked has stopped, so this secret can't be used.",
   store_failed: "Could not store the secret.",
+  reference_unreadable:
+    "Could not read the secret from its provider. Unlock it and try again, or enter the value.",
   record_failed: "Saved the secret, but could not update the request.",
   invalid_ref: "That secretRef is not valid.",
   read_failed: "Could not read the secret.",

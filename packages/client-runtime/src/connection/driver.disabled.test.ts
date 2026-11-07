@@ -80,7 +80,10 @@ function harness() {
       prepare,
       prepareForUpdate: () => Effect.die("unused"),
     }),
-    Effect.provideService(RpcSession.RpcSessionFactory, { connect }),
+    Effect.provideService(RpcSession.RpcSessionFactory, {
+      connect,
+      openProbe: () => Effect.die("unused"),
+    }),
     Effect.provide(RpcHttp.layerRemoteHttpClient(fetch)),
   );
   return { fetch, prepare, connect, make };

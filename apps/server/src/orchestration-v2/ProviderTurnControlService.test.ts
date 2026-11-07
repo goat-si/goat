@@ -233,6 +233,7 @@ it.effect(
           getIgnoredActivity: () => Effect.die("unused getIgnoredActivity"),
           getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
           getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
+          getAgentAwarenessSnapshot: () => Effect.die("unused getAgentAwarenessSnapshot"),
           listActiveSubagentThreadIds: () => Effect.die("unused listActiveSubagentThreadIds"),
           countThreads: () => Effect.die("unused countThreads"),
           listLaunchEdges: () => Effect.die("unused listLaunchEdges"),
@@ -256,7 +257,10 @@ it.effect(
           getThreadHistoryPage: () => Effect.die("unused"),
           getTimelinePage: () => Effect.die("Unused timeline read"),
           getMessageCount: () => Effect.die("unused message count"),
+          getSubagentCount: () => Effect.die("unused subagent count"),
+          listAppOwnedChildThreadIds: () => Effect.die("unused listAppOwnedChildThreadIds"),
           getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
+          getMessagesById: () => Effect.die("unused getMessagesById"),
           getTurnItem: () => Effect.die("unused turn item read"),
           getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
           getThreadRecords: () => Effect.die("unused record read"),
@@ -290,6 +294,7 @@ it.effect(
           getUnreadableThreadIds: () => Effect.die("unused getUnreadableThreadIds"),
           getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
           getThreadSnapshotWindow: () => Effect.die("unused getThreadSnapshotWindow"),
+          getPullRequestSnapshot: () => Effect.die("unused getPullRequestSnapshot"),
         }),
       );
       const layerSessionManager = Layer.succeed(
@@ -819,6 +824,43 @@ it.effect("restart preserves recovery without a live session", () =>
       yield* control.interruptAndAwaitTerminal(f.input);
       assert.isFalse(yield* Deferred.isDone(f.interrupted));
       assert.isFalse(yield* Deferred.isDone(f.subscribed));
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
+it.effect("a missing survivor session cannot confirm that Stop succeeded", () =>
+  Effect.gen(function* () {
+    const f = yield* restartWaitFixture(false, { sessionMissing: true });
+    yield* Ref.update(f.state, (projection) => ({
+      ...projection,
+      providerTurns: projection.providerTurns.map((turn) => ({
+        ...turn,
+        survivingRestart: { nativeStartedAt: null },
+      })),
+    }));
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+      const error = yield* control.interrupt(f.input).pipe(Effect.flip);
+      assert.instanceOf(error, ProviderTurnControlService.ProviderTurnControlError);
+      assert.include(String(error.cause), "cannot confirm");
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
+it.effect("restart cannot start replacement work for a survivor with no session", () =>
+  Effect.gen(function* () {
+    const f = yield* restartWaitFixture(false, { sessionMissing: true });
+    yield* Ref.update(f.state, (projection) => ({
+      ...projection,
+      providerTurns: projection.providerTurns.map((turn) => ({
+        ...turn,
+        survivingRestart: { nativeStartedAt: null },
+      })),
+    }));
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+      const error = yield* control.interruptAndAwaitTerminal(f.input).pipe(Effect.flip);
+      assert.equal(error.operation, "restart");
     }).pipe(Effect.provide(f.layer));
   }),
 );

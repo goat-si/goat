@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
-import { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   refreshArchivedThreadsForEnvironment,
@@ -27,6 +27,7 @@ import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { refreshGoatBotWaitingCount } from "./useGoatBotWaitingCount";
+import { restoreTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
 const NO_PENDING = [] as const;
 
@@ -59,13 +60,18 @@ function GoatBotThreadSession({
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }) {
+  const taskFocus = getTaskPaneFocus();
+  // oxlint-disable-next-line goat/react-effect-budget -- Restore focus after the bot thread remounts.
+  useLayoutEffect(() => {
+    restoreTaskOpener(taskFocus);
+  });
   const threadRef = scopeThreadRef(environmentId, threadId);
   const shell = useThreadShell(threadRef);
   const bootstrapped = useEnvironmentShellsBootstrapped(environmentId);
   const visibleTurnItems = useThreadVisibleTurnItems(
     resolveThreadDetailRef(threadRef, { shellExists: shell !== null, waitForShell: true }),
   );
-  const session = useGoatBotSession(visibleTurnItems);
+  const session = useGoatBotSession(visibleTurnItems, null);
   const homeSettings = useGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
   const chipRevision = visibleTurnItems

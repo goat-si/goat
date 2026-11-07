@@ -1,8 +1,11 @@
+import * as Queue from "effect/Queue";
+import * as Effect from "effect/Effect";
+import type * as ServerBrowser from "./ServerBrowser.ts";
 // @effect-diagnostics nodeBuiltinImport:off - a mocked CDP session for ServerBrowser tests; no Effect runtime.
 import * as NodeEvents from "node:events";
 import { vi } from "vite-plus/test";
 
-export type MockFrame = ReturnType<typeof makeFrame>;
+type MockFrame = ReturnType<typeof makeFrame>;
 
 /** What the next copy shortcut copies: the page's selection, or the focused frame's. */
 export const mockCopy: { page: string; key: string; focusedFrame: MockFrame | null } = {
@@ -19,6 +22,26 @@ export function makeFrame() {
     recording: Promise.withResolvers<void>(),
   };
   return frame;
+}
+
+/** A ref-click locator: a 10px box at the origin whose probe finds it on top at its centre. */
+export function refClickTarget() {
+  const box = async () => ({ x: 0, y: 0, width: 10, height: 10 });
+  const evaluate = async () => ({
+    rects: [{ x: 0, y: 0, width: 10, height: 10 }],
+    origin: { x: 0, y: 0 },
+    border: { x: 0, y: 0 },
+    inside: true,
+  });
+  const element = { boundingBox: box, waitForElementState: box, dispose: box, evaluate };
+  const handle = { ...element, ownerFrame: async () => null };
+  return {
+    scrollIntoViewIfNeeded: box,
+    boundingBox: box,
+    click: vi.fn(async (_options?: unknown) => {}),
+    elementHandle: async () => handle,
+    count: async () => 1,
+  };
 }
 
 const PNG_HEADER = (() => {
@@ -48,7 +71,12 @@ export function makeSession(
         return { data: (input as { format: string }).format === "png" ? PNG_HEADER : "ZnJhbWU=" };
       }
       // Snapshots shrink their screenshot in the page; the header stands in for the result.
-      if (method === "Runtime.callFunctionOn") return { result: { value: PNG_HEADER } };
+      if (method === "Runtime.callFunctionOn")
+        return {
+          result: {
+            value: (input as { arguments?: unknown[] }).arguments?.length === 4 ? null : PNG_HEADER,
+          },
+        };
       if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
       // Snapshots read password fields from their own isolated world in each frame.
       if (method === "Page.createIsolatedWorld") {
@@ -88,3 +116,28 @@ export function makeSession(
     }),
   };
 }
+
+export function fileChooserElement(accept: string) {
+  return {
+    getAttribute: async () => accept,
+    evaluate: (probe: (element: { ownerDocument: unknown }) => boolean) =>
+      Promise.resolve(
+        probe({
+          ownerDocument: (globalThis as typeof globalThis & { document?: unknown }).document,
+        }),
+      ),
+  };
+}
+
+// Fills the queue immediately before the caller drives the stalled viewer.
+// @effect-diagnostics effectFnOpportunity:off
+export const stallViewer = (viewer: ServerBrowser.ServerBrowserViewer) => {
+  const output = viewer.output as unknown as Queue.Queue<ServerBrowser.ServerBrowserViewerOutput>;
+  const acked = Promise.withResolvers<void>();
+  let unacked = 0;
+  const ack = Effect.sync(() => {
+    if (--unacked === 0) acked.resolve();
+  });
+  while (Queue.offerUnsafe(output, { _tag: "frame", data: Buffer.alloc(0), ack })) unacked++;
+  return Effect.promise(() => acked.promise);
+};

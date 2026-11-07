@@ -14,6 +14,23 @@ import * as PtyAdapter from "@goat/shared/PtyAdapter";
 const WINDOWS_PTY_READY_TIMEOUT = "15 seconds";
 const isPtySpawnError = Schema.is(PtyAdapter.PtySpawnError);
 
+type NodePtyTerminal = import("node-pty").IPty & {
+  on(event: "error", listener: (error: Error) => void): void;
+};
+// IPty does not declare on(); node-pty's Terminal forwards it to the pty socket.
+const hasOn = (pty: import("node-pty").IPty): pty is NodePtyTerminal =>
+  "on" in pty && typeof pty.on === "function";
+
+// The socket error codes node-pty tolerates without rethrowing, per platform.
+const toleratedPtySocketCodes = (platform: NodeJS.Platform) =>
+  platform === "win32" ? ["errno 5", "EIO"] : ["EAGAIN", "errno 5", "EIO"];
+
+const endPtyOnSocketError = (pty: NodePtyTerminal, platform: NodeJS.Platform) => (error: Error) => {
+  const code = "code" in error && typeof error.code === "string" ? error.code : "";
+  if (toleratedPtySocketCodes(platform).some((tolerated) => code.includes(tolerated))) return;
+  pty.kill();
+};
+
 export class NodePtyModuleLoadError extends Schema.TaggedError<NodePtyModuleLoadError>()(
   "NodePtyModuleLoadError",
   {
@@ -262,6 +279,9 @@ const make = Effect.fn("NodePtyAdapter.make")(function* () {
             env,
             name: "xterm-256color",
           });
+          // node-pty only marks the pty closed on an error it rethrows; ending the shell reports the exit.
+          if (hasOn(nativeProcess))
+            nativeProcess.on("error", endPtyOnSocketError(nativeProcess, platform));
           return { nativeProcess, process: new NodePtyProcess(nativeProcess, platform) };
         },
         catch: (cause) =>

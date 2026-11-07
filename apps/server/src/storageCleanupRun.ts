@@ -1,0 +1,78 @@
+import {
+  ThreadId,
+  type StorageCleanupReportEntry,
+  type WorktreeCleanupPreview,
+} from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
+
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import { WorktreeCleanupPreviewState } from "./worktreeSnapshots/WorktreeCleanupPreviewState.ts";
+import { WorktreeSnapshotStore } from "./worktreeSnapshots/WorktreeSnapshotStore.ts";
+
+interface WorktreePass {
+  readonly waiting: boolean;
+  readonly kept: ReadonlyArray<string>;
+}
+
+/**
+ * Runs one sweep's worktree work: snapshot housekeeping first, then, until a person saw or
+ * confirmed the first-run preview, a dry pass that only marks what cleanup would remove.
+ */
+export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeCleanupRun")(function* (
+  requiresConfirmation: Effect.Effect<boolean>,
+) {
+  const previewState = yield* WorktreeCleanupPreviewState;
+  const store = yield* WorktreeSnapshotStore;
+  const sql = yield* SqlClient.SqlClient;
+  // Activation never reverts, so later sweeps skip the dry pass.
+  let activated = false;
+  const housekeeping = Effect.fn("StorageCleanup.snapshotHousekeeping")(
+    function* (nowMs: number, snapshotDays: number | null) {
+      const deleted = yield* sql<{ threadId: string }>`
+          SELECT thread_id AS "threadId" FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NOT NULL
+        `.pipe(NodeSqliteClient.readOnly);
+      yield* store.purgeDeletedThreads(
+        nowMs,
+        deleted.map((row) => ThreadId.make(row.threadId)),
+      );
+      if (snapshotDays !== null) yield* store.expire(nowMs, snapshotDays);
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("worktree snapshot housekeeping failed", { cause }),
+    ),
+  );
+  return Effect.fn("StorageCleanup.runWorktreeCleanup")(function* <E, R>(input: {
+    readonly nowMs: number;
+    readonly snapshotDays: number | null;
+    readonly entries: StorageCleanupReportEntry[];
+    readonly clean: (
+      dryRun: boolean,
+      entries: StorageCleanupReportEntry[],
+    ) => Effect.Effect<WorktreePass, E, R>;
+  }) {
+    yield* housekeeping(input.nowMs, input.snapshotDays);
+    const none: WorktreeCleanupPreview | null = null;
+    if (activated) return { ...(yield* input.clean(false, input.entries)), preview: none };
+    const dryEntries: StorageCleanupReportEntry[] = [];
+    const dry = yield* input.clean(true, dryEntries);
+    const plannedCount = dryEntries.filter((entry) => entry.planned === true).length;
+    // Nothing to remove needs no preview; the first sweep with candidates starts one.
+    if (plannedCount === 0) {
+      input.entries.push(...dryEntries);
+      return { ...dry, preview: none };
+    }
+    const gate = yield* previewState.evaluate({
+      nowMs: input.nowMs,
+      plannedCount,
+      requiresConfirmation: yield* requiresConfirmation,
+    });
+    if (!gate.apply) {
+      input.entries.push(...dryEntries);
+      return { ...dry, preview: gate.preview };
+    }
+    activated = true;
+    return { ...(yield* input.clean(false, input.entries)), preview: none };
+  });
+});

@@ -1,4 +1,6 @@
+import * as AuthAccessRpc from "./authAccessRpc.ts";
 import { WsComputerUseHistoryRpc, WsComputerUseStatusChangesRpc } from "./computerUseHistoryRpc.ts";
+import * as StorageCleanupRpcs from "./storageCleanupRpcs.ts";
 import {
   HandoffReadInput,
   HandoffRespondInput,
@@ -125,12 +127,7 @@ import {
   MemoryImportRpcs,
 } from "./memoryRpc.ts";
 import { HUB_NODES_WS_METHODS, HubNodesRpcs } from "./hubNodesRpc.ts";
-import {
-  AuthAccessStreamError,
-  AuthAccessStreamEvent,
-  AgentTerminalBinding,
-  EnvironmentAuthorizationError,
-} from "./auth.ts";
+import { AgentTerminalBinding, EnvironmentAuthorizationError } from "./auth.ts";
 import {
   BackgroundPolicySnapshot,
   ClientActivityReportInput,
@@ -273,6 +270,7 @@ import {
 import {
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationGetWorkflowScriptError,
+  OrchestrationV2GetNativeChildWorkError,
   OrchestrationV2StopWorkflowError,
   OrchestrationV2ForceStopThreadError,
   OrchestrationV2DispatchCommandError,
@@ -427,7 +425,6 @@ import {
 } from "./storageUsage.ts";
 import { HostDiskPressure } from "./hostPressure.ts";
 import {
-  StorageCleanupReport,
   DatabaseStorageStatus,
   ServerSettings,
   ServerSettingsError,
@@ -518,6 +515,7 @@ import {
 } from "./hubProxy.ts";
 
 export const WS_METHODS = {
+  ...StorageCleanupRpcs.STORAGE_CLEANUP_WS_METHODS,
   ...MEMORY_WS_METHODS,
   ...BROWSER_CLAIMS_WS_METHODS,
 
@@ -647,9 +645,7 @@ export const WS_METHODS = {
   serverCommitDesktopUpdate: "server.commitDesktopUpdate",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
-  serverRunStorageCleanup: "server.runStorageCleanup",
   serverResumeAutomation: "server.resumeAutomation",
-  serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetWorktreesDirectoryStatus: "server.getWorktreesDirectoryStatus",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverCompactStorage: "server.compactStorage",
@@ -788,7 +784,7 @@ export const WS_METHODS = {
   subscribeDeviceState: "subscribeDeviceState",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
-  subscribeAuthAccess: "subscribeAuthAccess",
+  ...AuthAccessRpc.AUTH_ACCESS_WS_METHODS,
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
 
@@ -869,7 +865,6 @@ const WsPreviewSessionsControlRpc = Rpc.make(WS_METHODS.previewSessionsControl, 
   error: Schema.Union([EnvironmentAuthorizationError, HandoffError]),
 });
 
-/** A desktop session's live picture for one viewer, or why there is none (#1370). */
 const WsPreviewSessionsFramesRpc = Rpc.make(WS_METHODS.previewSessionsFrames, {
   payload: PreviewSessionFramesInput,
   success: PreviewSessionFrameEvent,
@@ -890,6 +885,7 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
     fresh: Schema.optional(Schema.Boolean),
     /** Bypass model caches; explicit rediscovery may open sessions, background refreshes must not. */
     refreshModels: Schema.optional(Schema.Boolean),
+    reloadSecrets: Schema.optional(Schema.Boolean),
     /**
      * Reply without snapshots, or with only the requested instance's cwd snapshot. Snapshots then
      * reach the client only through these replies, so another client's scan shows on its next
@@ -1046,20 +1042,9 @@ const WsServerCommitDesktopUpdateRpc = Rpc.make(WS_METHODS.serverCommitDesktopUp
   error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
 });
 
-const WsServerRunStorageCleanupRpc = Rpc.make(WS_METHODS.serverRunStorageCleanup, {
-  payload: Schema.Struct({}),
-  success: StorageCleanupReport,
-  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
-});
 const WsServerResumeAutomationRpc = Rpc.make(WS_METHODS.serverResumeAutomation, {
   payload: Schema.Struct({}),
   error: Schema.Union([AutomationResumeError, EnvironmentAuthorizationError]),
-});
-const WsServerGetStorageCleanupReportRpc = Rpc.make(WS_METHODS.serverGetStorageCleanupReport, {
-  payload: Schema.Struct({}),
-  success: Schema.NullOr(StorageCleanupReport),
-  stream: true,
-  error: EnvironmentAuthorizationError,
 });
 const WsServerGetWorktreesDirectoryStatusRpc = Rpc.make(
   WS_METHODS.serverGetWorktreesDirectoryStatus,
@@ -1461,7 +1446,8 @@ const WsPullRequestsSetFilesViewedRpc = Rpc.make(WS_METHODS.pullRequestsSetFiles
 
 const WsPullRequestsRunActionRpc = Rpc.make(WS_METHODS.pullRequestsRunAction, {
   payload: PullRequestActionInput,
-  success: Schema.Void,
+  // Undefined unless asked for with replyWithSummary, or when the host's reply lacked it.
+  success: Schema.UndefinedOr(PullRequestSummary),
   error: PullRequestRpcError,
 });
 
@@ -2188,6 +2174,15 @@ const WsOrchestrationV2GetWorkflowScriptRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationV2GetNativeChildWorkRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getNativeChildWork,
+  {
+    payload: OrchestrationV2RpcSchemas.getNativeChildWork.input,
+    success: OrchestrationV2RpcSchemas.getNativeChildWork.output,
+    error: Schema.Union([OrchestrationV2GetNativeChildWorkError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2GetTurnItemRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.getTurnItem, {
   payload: OrchestrationV2RpcSchemas.getTurnItem.input,
   success: OrchestrationV2RpcSchemas.getTurnItem.output,
@@ -2463,13 +2458,6 @@ const WsScheduledTasksGetWebhookDeliveryRpc = Rpc.make(
   },
 );
 
-const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
-  payload: Schema.Struct({}),
-  success: AuthAccessStreamEvent,
-  error: Schema.Union([AuthAccessStreamError, EnvironmentAuthorizationError]),
-  stream: true,
-});
-
 const WsSubscribeBackgroundPolicyRpc = Rpc.make(WS_METHODS.subscribeBackgroundPolicy, {
   payload: Schema.Struct({}),
   success: BackgroundPolicySnapshot,
@@ -2531,9 +2519,12 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerCommitDesktopUpdateRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
-  WsServerRunStorageCleanupRpc,
+  StorageCleanupRpcs.WsServerRunStorageCleanupRpc,
+  StorageCleanupRpcs.WsServerRespondWorktreeCleanupPreviewRpc,
+  StorageCleanupRpcs.WsThreadGetWorkspaceStatusRpc,
+  StorageCleanupRpcs.WsThreadRestoreWorkspaceRpc,
   WsServerResumeAutomationRpc,
-  WsServerGetStorageCleanupReportRpc,
+  StorageCleanupRpcs.WsServerGetStorageCleanupReportRpc,
   WsServerGetWorktreesDirectoryStatusRpc,
   WsServerGetDatabaseStorageRpc,
   WsServerCompactStorageRpc,
@@ -2739,11 +2730,15 @@ export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
   WsSubscribeDeviceStateRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
-  WsSubscribeAuthAccessRpc,
+  AuthAccessRpc.Subscribe,
+  AuthAccessRpc.CreatePairing,
+  AuthAccessRpc.RevokePairing,
+  AuthAccessRpc.RevokeClient,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
   WsOrchestrationV2DispatchCommandRpc,
   WsOrchestrationV2GetWorkflowScriptRpc,
+  WsOrchestrationV2GetNativeChildWorkRpc,
   WsOrchestrationV2StopWorkflowRpc,
   WsOrchestrationV2ForceStopThreadRpc,
   WsOrchestrationV2GetTurnItemRpc,

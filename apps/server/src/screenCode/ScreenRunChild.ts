@@ -79,6 +79,9 @@ const methods = [
   "tab_dialog",
   "tab_upload",
   "tab_fill_secret",
+  "tab_fill_login",
+  "tab_fill_card",
+  "tab_fill_one_time_code",
 ] as const;
 
 type ChildResult = Pick<
@@ -95,6 +98,7 @@ export async function runScreenChild(
   input: NodeJS.ReadableStream,
   output: NodeJS.WritableStream,
 ): Promise<void> {
+  // oxlint-disable-next-line goat/guard-error-emitters -- Async iteration rejects when readline emits an error.
   const lines = NodeReadline.createInterface({ input, crlfDelay: Infinity });
   const iterator = lines[Symbol.asyncIterator]();
   const first = await iterator.next();

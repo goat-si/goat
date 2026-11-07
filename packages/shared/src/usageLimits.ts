@@ -5,6 +5,7 @@ import {
   type ProviderConsumeResetCreditInput,
   type ServerProviderSlashCommand,
   isProviderAvailable,
+  PROVIDER_DISPLAY_NAMES,
   type ServerProvider,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
@@ -192,6 +193,8 @@ function unionOrigins(left: readonly LimitOrigin[] = [], right: readonly LimitOr
   return [...seen.values()];
 }
 
+const hubAccountName = (account: { readonly id: string }) => account.id.replace(/\.json$/i, "");
+
 export interface LimitAccount {
   readonly key: string;
   readonly driver: ServerProvider["driver"];
@@ -265,6 +268,11 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     ];
     const winner = fresher ? next : previous;
     const creditSource = creditSources.get(key);
+    // A hub e-mail names the account better than the driver's default instance name.
+    const hubEmail = [previous, next].some(
+      (account) => account.environments.length === 0 && account.email,
+    );
+    const displayName = previous.displayName ?? next.displayName;
     accounts.set(key, {
       ...previous,
       aggregated: previous.aggregated !== false || next.aggregated !== false,
@@ -274,7 +282,12 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         : { poolName: previous.poolName ?? next.poolName }),
       ...(winner.state === undefined ? {} : { state: winner.state }),
       ...(winner.observedAt === undefined ? {} : { observedAt: winner.observedAt }),
-      displayName: previous.displayName ?? next.displayName,
+      displayName:
+        hubEmail &&
+        displayName?.toLowerCase() === PROVIDER_DISPLAY_NAMES[previous.driver]?.toLowerCase()
+          ? ([previous, next].find((account) => account.environments.length === 0 && account.email)
+              ?.displayName ?? null)
+          : displayName,
       plan: planSources.get(key)?.plan ?? previous.plan ?? next.plan,
       accentColor: previous.accentColor ?? next.accentColor,
       environments,
@@ -354,7 +367,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         merge(resolveKey(account) ?? key, {
           key,
           driver: account.driver,
-          displayName: account.email ? null : (account.label ?? account.id.replace(/\.json$/i, "")),
+          displayName: account.label ?? (account.email ? null : hubAccountName(account)),
           ...(source.kind === "opencodex" && !account.email
             ? { poolName: sourceAccountName(source.kind, account) ?? undefined }
             : {}),
@@ -935,7 +948,7 @@ export function collectProviderUsageLimits(
       accounts.push({
         id: `${source.id}:${account.id}`,
         driver: account.driver,
-        label: `${source.label} · ${account.label ?? account.id}`,
+        label: `${source.label} · ${account.label ?? hubAccountName(account)}`,
         sourceLabel: source.kind === "opencodex" ? source.label : "CLI Proxy",
         ...(account.usageLimits.resetCredits?.nextCreditId
           ? {

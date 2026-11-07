@@ -1,17 +1,20 @@
 import {
+  DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
   GoatHostStatusResult,
   OrchestratorMcpFailure,
   type EnvironmentId,
   type GoatHostStatusInput,
   type HostStatusEntry,
+  type ProviderInstanceId,
 } from "@goat/contracts";
+import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
-import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -33,6 +36,7 @@ import * as DatabaseStorage from "../persistence/DatabaseStorage.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as RepositoryInventory from "../project/RepositoryInventory.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
@@ -40,7 +44,6 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import {
   countHostThreads,
   runningSubagents,
-  HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS,
   hostStatusProviders,
   hostStatusQuotas,
   isUnsupportedHostStatusMessage,
@@ -60,7 +63,13 @@ import {
  */
 export const HOST_STATUS_REMOTE_TIMEOUT_MS = 10_000;
 
+/** How long a shared read answers from a host's last ok status instead of asking it again. */
+const REMOTE_STATUS_FRESH_MS = 30_000;
+
 const decodeStatus = Schema.decodeUnknownEffect(GoatHostStatusResult);
+
+/** One host read in flight; every caller sharing its key awaits the same answer. */
+type PendingRead = Deferred.Deferred<HostStatusEntry, OrchestratorMcpFailure>;
 
 const failure = (code: OrchestratorMcpFailure["code"], message: string) =>
   new OrchestratorMcpFailure({ code, message });
@@ -76,8 +85,15 @@ export interface HostStatusMcpServiceShape {
   readonly read: (
     scope: McpInvocationScope,
     input: GoatHostStatusInput,
-    /** Repository diagnosis must not acquire a stopped runtime; ordinary status keeps its existing behavior. */
-    options?: { readonly requireReady?: true },
+    options?: {
+      /** Repository diagnosis must not acquire a stopped runtime; ordinary status keeps its existing behavior. */
+      readonly requireReady?: true;
+      /**
+       * For callers already authorized for every connected host (signed-in clients, placement,
+       * pressure, health): they join one read per host and reuse an answer under 30 s old.
+       */
+      readonly shared?: true;
+    },
   ) => Effect.Effect<GoatHostStatusResult, OrchestratorMcpFailure>;
   /**
    * The same read for a signed-in client. Connected SSH hosts are reached only with `reachHosts`,
@@ -101,6 +117,8 @@ const make = Effect.gen(function* () {
   const repositories = yield* RepositoryInventory.RepositoryInventory;
   const registry = yield* ProviderRegistry.ProviderRegistry;
   const usageSources = yield* UsageLimitSources.UsageLimitSources;
+  const settingsService = yield* ServerSettings.ServerSettingsService;
+  const layerScope = yield* Effect.scope;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   // Runtime updates wait on this predicate, so host status reports the same answer.
   const projections = yield* Effect.serviceOption(ProjectionStore.ProjectionStoreV2);
@@ -142,44 +160,67 @@ const make = Effect.gen(function* () {
   // Optional so tests and builds without the driver keep reporting the rest.
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const browserReadiness = yield* ServerBrowserReadiness.optionalReadiness;
-  const lastRefreshAt = yield* Ref.make(Number.NEGATIVE_INFINITY);
+  /** One background provider probe at a time; startedAt paces the next one. */
+  const quotaProbe = yield* Ref.make({ running: false, startedAt: Number.NEGATIVE_INFINITY });
   const known = yield* Ref.make(new Map<string | null, HostStatusEntry>());
+  /** Plain status from shared reads only, so an agent's wider read never answers a client. */
+  const sharedAnswers = yield* Ref.make(
+    new Map<string, { readonly entry: HostStatusEntry; readonly at: number }>(),
+  );
   /** Per caller and host, so a slow host's connection keeps going between polls instead of restarting. */
-  const remoteReads = yield* FiberMap.make<string, HostStatusEntry, OrchestratorMcpFailure>();
+  const remoteReads = yield* Ref.make(new Map<string, PendingRead>());
 
   const remember = (key: string | null, entry: HostStatusEntry) =>
-    Ref.update(known, (current) => {
-      const next = new Map(current);
-      next.set(key, entry);
-      return next;
+    Ref.update(known, (current) => new Map(current).set(key, entry));
+
+  const defaultQuotaPaceMs = Duration.toMillis(DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL);
+  /** Background activity's provider check interval; a read is demand, so "off" keeps the default. */
+  const quotaPaceMs = settingsService.getSettings.pipe(
+    Effect.map((settings) =>
+      Duration.toMillis(
+        resolveServerBackgroundActivitySettings(settings).providerHealthRefreshInterval,
+      ),
+    ),
+    Effect.map((ms) => (ms > 0 ? ms : defaultQuotaPaceMs)),
+    Effect.orElseSucceed(() => defaultQuotaPaceMs),
+  );
+
+  const refreshQuotas = Effect.fn("HostStatus.refreshQuotas")(function* (
+    instanceIds: ReadonlyArray<ProviderInstanceId>,
+  ) {
+    // One provider failing or dying must not stop the rest; its cached windows stay.
+    yield* Effect.forEach(instanceIds, (id) => Effect.exit(registry.refreshInstance(id)), {
+      concurrency: 1,
+      discard: true,
     });
+  });
 
   const readQuotas = Effect.fn("HostStatus.readQuotas")(function* () {
     const now = yield* clock.currentTimeMillis;
-    const last = yield* Ref.get(lastRefreshAt);
-    let providers = yield* registry.getProviders;
-    const due = providers.filter((provider) =>
-      quotaRefreshDue(provider.usageLimits, now, HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS),
-    );
-    const refreshed = new Set<string>();
-    if (now - last >= HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS && due.length > 0) {
-      yield* Ref.set(lastRefreshAt, now);
-      yield* Effect.forEach(
-        due,
-        (provider) =>
-          registry.refreshInstance(provider.instanceId).pipe(
-            Effect.tap(() => Effect.sync(() => refreshed.add(provider.instanceId))),
-            // A probe that fails keeps the cached windows. The rate limit still applies.
-            Effect.ignore,
-          ),
-        { concurrency: 1, discard: true },
+    const pace = yield* quotaPaceMs;
+    const providers = yield* registry.getProviders;
+    const due = providers.filter((provider) => quotaRefreshDue(provider.usageLimits, now, pace));
+    if (due.length > 0) {
+      // Placement, pressure and clients poll this, and a provider probe takes seconds: none of them waits on it.
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const claimed = yield* Ref.modify(quotaProbe, (state) =>
+            !state.running && now - state.startedAt >= pace
+              ? [true, { running: true, startedAt: now }]
+              : [false, state],
+          );
+          if (!claimed) return;
+          yield* refreshQuotas(due.map((provider) => provider.instanceId)).pipe(
+            Effect.ensuring(Ref.update(quotaProbe, (state) => ({ ...state, running: false }))),
+            Effect.forkIn(layerScope),
+          );
+        }),
       );
-      providers = yield* registry.getProviders;
     }
     const projected = yield* usageSources.projectProviders(providers);
     const quotaPool = yield* usageSources.quotaPool;
     return {
-      quotas: hostStatusQuotas(projected, refreshed),
+      quotas: hostStatusQuotas(projected),
       providers: hostStatusProviders(providers),
       ...(quotaPool === undefined ? {} : { quotaPool }),
       // Routed quotas carry markers here, so a reader never infers routing for this host.
@@ -307,23 +348,67 @@ const make = Effect.gen(function* () {
     failInvalid: boolean,
     includeRepositories: boolean,
     requireReady: boolean,
+    shared: boolean,
   ) {
+    const plainShared = shared && !includeRepositories && !requireReady;
+    if (plainShared) {
+      const now = yield* clock.currentTimeMillis;
+      const answer = (yield* Ref.get(sharedAnswers)).get(host);
+      if (answer !== undefined && now - answer.at < REMOTE_STATUS_FRESH_MS) return answer.entry;
+    }
     const key =
-      scope.requestNamespace +
+      (plainShared ? "shared" : scope.requestNamespace) +
       "\u0000" +
       host +
-      (failInvalid ? "\u0000named" : "") +
+      (failInvalid && !plainShared ? "\u0000named" : "") +
       (includeRepositories ? "\u0000repos" : "") +
       (requireReady ? "\u0000ready" : "");
-    const running = yield* FiberMap.get(remoteReads, key);
-    const fiber = Option.isSome(running)
-      ? running.value
-      : yield* FiberMap.run(
+    const fetch = plainShared
+      ? // Shared callers turn every failure into an unreachable entry, so none needs failInvalid.
+        readRemoteOnce(scope, host, false, false, false).pipe(
+          Effect.tap((entry) =>
+            entry.reachability === "ok"
+              ? clock.currentTimeMillis.pipe(
+                  Effect.flatMap((at) =>
+                    Ref.update(sharedAnswers, (current) =>
+                      new Map(current).set(host, { entry, at }),
+                    ),
+                  ),
+                )
+              : Effect.void,
+          ),
+        )
+      : readRemoteOnce(scope, host, failInvalid, includeRepositories, requireReady);
+    // Claimed in one atomic step, so every caller awaits the same read, even one arriving as it ends.
+    const pending = yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const fresh = yield* Deferred.make<HostStatusEntry, OrchestratorMcpFailure>();
+        const [deferred, mine] = yield* Ref.modify(
           remoteReads,
-          key,
-          readRemoteOnce(scope, host, failInvalid, includeRepositories, requireReady),
+          (current): readonly [readonly [PendingRead, boolean], Map<string, PendingRead>] => {
+            const existing = current.get(key);
+            return existing !== undefined
+              ? [[existing, false], current]
+              : [[fresh, true], new Map(current).set(key, fresh)];
+          },
         );
-    const answer = yield* Fiber.join(fiber).pipe(
+        if (mine)
+          yield* fetch.pipe(
+            // Leave the map before answering, so a read after this one asks the host again.
+            Effect.onExit((exit) =>
+              Ref.update(remoteReads, (current) => {
+                if (current.get(key) !== fresh) return current;
+                const next = new Map(current);
+                next.delete(key);
+                return next;
+              }).pipe(Effect.andThen(Deferred.done(fresh, exit))),
+            ),
+            Effect.forkIn(layerScope),
+          );
+        return deferred;
+      }),
+    );
+    const answer = yield* Deferred.await(pending).pipe(
       Effect.timeoutOption(HOST_STATUS_REMOTE_TIMEOUT_MS),
     );
     if (Option.isSome(answer)) return answer.value;
@@ -336,7 +421,18 @@ const make = Effect.gen(function* () {
   });
 
   const read: HostStatusMcpServiceShape["read"] = Effect.fn("HostStatus.read")(
-    function* (scope, input, options) {
+    function* (scope, input, requested) {
+      // Sharing skips the per-call authorization, so only a thread-less read-only caller holding
+      // orchestration, which that authorization admits the same way, may share.
+      const options =
+        requested?.shared === true &&
+        (scope.thread !== undefined ||
+          scope.client?.access !== "read-only" ||
+          !scope.capabilities.has("orchestration"))
+          ? requested.requireReady === true
+            ? { requireReady: true as const }
+            : {}
+          : requested;
       if (input.local === true && input.host !== undefined) {
         return yield* failure("invalid_request", "Pass either host or local:true, not both.");
       }
@@ -355,6 +451,7 @@ const make = Effect.gen(function* () {
                   true,
                   input.repositories === true,
                   options?.requireReady === true,
+                  options?.shared === true,
                 ),
                 LOCAL_HOST_COMPATIBILITY,
               ),
@@ -374,6 +471,7 @@ const make = Effect.gen(function* () {
                 false,
                 input.repositories === true,
                 options?.requireReady === true,
+                options?.shared === true,
               ),
             { concurrency: 4 },
           ),
@@ -404,7 +502,9 @@ const make = Effect.gen(function* () {
       // Only reads: remote hosts are asked for their own local status with writes off.
       client: { sessionId: client.sessionId, label: "GOAT client", access: "read-only" },
     };
-    return yield* read(scope, client.reachHosts && client.local !== true ? {} : { local: true });
+    return yield* read(scope, client.reachHosts && client.local !== true ? {} : { local: true }, {
+      shared: true,
+    });
   });
 
   return HostStatusMcpService.of({ read, readForClient });

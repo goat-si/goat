@@ -29,12 +29,12 @@ function RestoreDeviceDefaultsButton({ onRestored }: { onRestored: () => void })
   const { changedSettingLabels, restoreDefaults } = useSettingsRestore(onRestored);
   return (
     <Button
-      size="xs"
+      size="sm"
       variant="ghost"
       disabled={changedSettingLabels.length === 0}
       onClick={() => void restoreDefaults()}
     >
-      <RotateCcwIcon className="mx-1 size-3.5" />
+      <RotateCcwIcon />
       <span className="max-sm:sr-only">Restore device defaults</span>
     </Button>
   );

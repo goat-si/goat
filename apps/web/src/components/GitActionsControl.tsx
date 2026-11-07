@@ -52,6 +52,7 @@ import {
   type GitQuickAction,
   type DefaultBranchConfirmableAction,
   requiresDefaultBranchConfirmation,
+  resolveChangesTotals,
   resolveDefaultBranchActionDialogCopy,
   resolveFeatureBranchUnavailableReason,
   resolveGitActionProgressPresentation,
@@ -104,6 +105,7 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { useQuietThreadProjection, useQuietThreadShell } from "~/state/entities";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
+import { useThreadWorkspaceStatus, workspaceUnavailable } from "./chat/useThreadWorkspaceStatus";
 import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
 import { threadEnvironment } from "~/state/threads";
@@ -239,7 +241,6 @@ function getMenuActionDisabledReason({
   if (!item.disabled) return null;
   if (isBusy) return "Git action in progress.";
   if (!gitStatus) return "Git status is unavailable.";
-
   const hasBranch = gitStatus.refName !== null;
   const hasChanges = gitStatus.hasWorkingTreeChanges;
   const isAhead = gitStatus.aheadCount > 0;
@@ -345,7 +346,6 @@ function GitActionElapsedTime({
     }, 1_000);
     return () => window.clearInterval(intervalId);
   }, [startedAtMs]);
-
   const elapsed = formatGitActionElapsed(startedAtMs, nowMs);
   if (!elapsed) {
     return null;
@@ -547,7 +547,6 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     publishResult?.repository.nameWithOwner ?? null,
     null,
   ] as const;
-
   const publishRepositoryParts = publishRepository.trim().split("/");
   const publishRepositoryOwner = publishRepositoryParts[0]?.trim() ?? "";
   const publishRepositoryName = publishRepositoryParts.slice(1).join("/").trim();
@@ -557,7 +556,6 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     !publishRepositoryAction.isPending &&
     publishRepositoryOwner.length > 0 &&
     publishRepositoryName.length > 0;
-
   const submitPublishRepository = () => {
     if (!canSubmitPublishRepository) {
       return;
@@ -588,7 +586,6 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
       });
     })();
   };
-
   const resetState = () => {
     setPublishRemoteName("origin");
     setPublishRepositoryOverride(null);
@@ -597,14 +594,12 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     setPublishError(null);
     setPublishResult(null);
   };
-
   const handleOpenChange = (open: boolean) => {
     props.onOpenChange(open);
     if (!open) {
       resetState();
     }
   };
-
   const openSourceControlSettings = () => {
     handleOpenChange(false);
     void navigate({ to: "/settings/source-control" });
@@ -1002,6 +997,12 @@ export default function GitActionsControl({
   );
   const activeServerThread =
     activeServerThreadShell ?? activeServerThreadProjection?.projection.thread ?? null;
+  const workspaceStatus = useThreadWorkspaceStatus(
+    activeServerThread ? activeThreadRef : null,
+    activeServerThread?.worktreePath ?? null,
+    serverConfig?.environment?.capabilities?.worktreeRestore === true,
+    `${activeServerThreadShell?.latestRun?.runId ?? ""}:${activeServerThreadShell?.latestRun?.status ?? ""}`,
+  );
   const isLocalDraftThread = activeDraftThread !== null && activeServerThread === null;
   const canChangeThreadBranch = canWriteSourceControl && (isLocalDraftThread || canOperateThread);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
@@ -1024,7 +1025,6 @@ export default function GitActionsControl({
     }, GIT_ACTION_SUCCESS_VISIBLE_MS);
     return () => window.clearTimeout(timeoutId);
   }, [inlineSuccess]);
-
   const persistThreadBranchSync = (branch: string | null, manualSelection = false) => {
     if (!activeThreadRef) {
       return;
@@ -1067,7 +1067,6 @@ export default function GitActionsControl({
   const persistLiveThreadBranch = useStableCallback((branch: string | null) => {
     persistThreadBranchSync(branch);
   });
-
   const syncThreadBranchAfterGitAction = (result: GitRunStackedActionResult) => {
     const branchUpdate = resolveThreadBranchUpdate(result);
     if (!branchUpdate) {
@@ -1076,7 +1075,6 @@ export default function GitActionsControl({
 
     persistThreadBranchSync(branchUpdate.branch, true);
   };
-
   const gitStatusQuery = useEnvironmentQuery(
     activeEnvironmentId !== null && gitCwd !== null
       ? vcsEnvironment.status({
@@ -1095,8 +1093,11 @@ export default function GitActionsControl({
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
   const gitStatusForActions = gitStatus;
-  const changesTotals = gitStatusForActions?.branchChanges ?? gitStatusForActions?.workingTree;
-
+  const changesTotals = resolveChangesTotals(gitStatusForActions) ?? {
+    baseRef: null,
+    insertions: 0,
+    deletions: 0,
+  };
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
   // Changed-file paths are repository-relative, so they must resolve against
   // the worktree root from the same status snapshot, not the project cwd.
@@ -1104,7 +1105,6 @@ export default function GitActionsControl({
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
   const noneSelected = selectedFiles.length === 0;
-
   const initAction = useVcsInitAction(sourceControlScope);
   const runImmediateGitAction = useGitStackedAction(sourceControlScope);
   const pullAction = useVcsPullAction(sourceControlScope);
@@ -1168,8 +1168,8 @@ export default function GitActionsControl({
     gitActionProgress === null &&
     !gitStatusError &&
     quickAction.disabled &&
-    !changesTotals?.insertions &&
-    !changesTotals?.deletions;
+    !changesTotals.insertions &&
+    !changesTotals.deletions;
   const pendingDefaultBranchActionCopy = pendingDefaultBranchAction
     ? resolveDefaultBranchActionDialogCopy({
         action: pendingDefaultBranchAction.action,
@@ -1504,7 +1504,6 @@ export default function GitActionsControl({
       ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
     });
   };
-
   const openChangedFileInEditor = (filePath: string) => {
     if (workingTreeRoot === null) {
       toastManager.add({
@@ -1531,10 +1530,8 @@ export default function GitActionsControl({
       );
     })();
   };
-
   const canPublishRepository =
     canWriteSourceControl && isRepo && gitStatusForActions !== null && !hasPrimaryRemote;
-
   const initializeGit = () => {
     void (async () => {
       const result = await initAction.run();
@@ -1595,7 +1592,6 @@ export default function GitActionsControl({
             </Popover>
           );
         }
-
         return (
           <MenuItem
             density={presentation === "menu" ? "touch" : "default"}
@@ -1654,19 +1650,21 @@ export default function GitActionsControl({
         gitStatusForActions.aheadCount === 0 && (
           <p className="px-2 py-1.5 text-xs text-warning">Behind upstream. Pull/rebase first.</p>
         )}
-      {gitStatusError && <p className="px-2 py-1.5 text-xs text-destructive">{gitStatusError}</p>}
+      {gitStatusError &&
+        !workspaceUnavailable(
+          workspaceStatus.data?.state,
+          activeServerThread?.worktreePath ?? null,
+          gitCwd,
+        ) && <p className="px-2 py-1.5 text-xs text-destructive">{gitStatusError}</p>}
     </>
   );
-
   if (!gitCwd) return null;
-
   return (
     <>
       {presentation === "menu" ? (
         !isRepo ? (
           <MenuItem
             density={presentation === "menu" ? "touch" : "default"}
-
             disabled={initAction.isPending}
             onClick={initializeGit}
           >
@@ -1679,7 +1677,6 @@ export default function GitActionsControl({
           <>
             <MenuItem
               density={presentation === "menu" ? "touch" : "default"}
-
               disabled={isGitActionRunning || quickAction.disabled || !!quickActionDisabledReason}
               onClick={runQuickAction}
             >
@@ -1866,7 +1863,6 @@ export default function GitActionsControl({
           )}
         </ActionGroup>
       )}
-
       {isPanel && isRepo && !quietEmptyDraft ? (
         <ThreadDetailsControl
           type="button"
@@ -1877,28 +1873,28 @@ export default function GitActionsControl({
           onClick={onOpenChanges}
         >
           <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
-          <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Changes</span>
+          <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
+            Changes{" "}
+            {changesTotals.baseRef === null ? "(Uncommitted)" : `(vs ${changesTotals.baseRef})`}
+          </span>
           <span className="flex items-center gap-1.5 font-mono text-xs tabular-nums">
             <span
               className={
-                changesTotals?.insertions
-                  ? "text-diff-addition-foreground"
-                  : "text-muted-foreground"
+                changesTotals.insertions ? "text-diff-addition-foreground" : "text-muted-foreground"
               }
             >
-              +{formatDiffCount(changesTotals?.insertions ?? 0)}
+              +{formatDiffCount(changesTotals.insertions)}
             </span>
             <span
               className={
-                changesTotals?.deletions ? "text-diff-deletion-foreground" : "text-muted-foreground"
+                changesTotals.deletions ? "text-diff-deletion-foreground" : "text-muted-foreground"
               }
             >
-              -{formatDiffCount(changesTotals?.deletions ?? 0)}
+              -{formatDiffCount(changesTotals.deletions)}
             </span>
           </span>
         </ThreadDetailsControl>
       ) : null}
-
       <Dialog
         open={isCommitDialogOpen}
         onOpenChange={(open) => {
@@ -2074,7 +2070,6 @@ export default function GitActionsControl({
           </DialogFooter>
         </DialogPopup>
       </Dialog>
-
       <PublishRepositoryDialog
         open={isPublishDialogOpen}
         onOpenChange={setIsPublishDialogOpen}
@@ -2082,7 +2077,6 @@ export default function GitActionsControl({
         threadRef={activeThreadRef}
         gitCwd={gitCwd}
       />
-
       <Dialog
         open={pendingDefaultBranchAction !== null}
         onOpenChange={(open) => {

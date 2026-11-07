@@ -5,7 +5,8 @@ need a separate branch and working directory.
 
 ## Start a thread
 
-On web and desktop, a new thread keeps the current project and carries your model
+On web and desktop, **New thread** lets you choose a project when multiple projects
+are open. Shift-click to start in the current project. A new thread carries your model
 and mode selections, unless the destination project has its own model default.
 Its workspace starts from the project's configured default, which falls back to
 **Local**. Starting a new thread also resets an empty draft's workspace selection.
@@ -61,6 +62,14 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.
+
+When GOAT Bot is enabled, **Bots** lists the main bot and, on supported servers,
+its task and coding threads. Use a task's menu to pin it, mark it done, or mark it read.
+
+A task opens its own conversation beside the main chat on a wide screen, or in place
+of the chat on a narrow one; messages you send there stay with that task. To always
+open tasks in place, turn off **Open task threads beside the main chat** in
+**Settings → GOAT Bot**. **Work** in the GOAT Bot header lists tasks and routines.
 
 The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
 sent something since you last opened it; the number badge counts tasks awaiting your
@@ -216,8 +225,15 @@ to appears as last reported by that environment.
 Subagents a provider starts itself, such as Codex agents and Claude Code tasks, appear as a
 **+N** beside their thread while they work; hover it to see each one and what it is doing.
 The machine count includes only GOAT servers that answer. Machines the page shows without
-counting, such as an unreachable server, a stopped Boat machine, or an SSH host another machine
-reported, are listed behind the **+N** beside the count.
+counting, such as an unreachable server or an SSH host another machine reported, are listed
+behind the **+N** beside the count.
+
+A Boat cloud machine appears while it is starting, running, stopping or failed, while it answers
+as a GOAT server, or while work runs on it. A stopped one that does not answer and has nothing
+running on it leaves Fleet and stays in **Settings → Connections → Cloud machines**; it comes back
+when you resume it. A running machine with nothing on it stays, with a warning that Boat bills it
+while it sits idle. Cloud agent runs, such as Claude Cloud or Cursor Cloud, appear while they run
+and for 15 minutes after they last changed; open older ones from the thread list.
 
 On mobile, **Fleet** is the first tab of **Usage**, and Usage opens on it, once the phone reaches
 more than one machine or is connected to a hub. It shows the same counts and lists the running
@@ -375,8 +391,9 @@ for custom configuration.
 **Limited** means the provider stopped on a usage or rate limit. The conversation
 keeps the provider's explanation. Retry after the limit resets, or switch to
 another provider instance.
-On web and desktop, press **Resume** in an empty composer to continue a limited
-or interrupted turn manually.
+Press **Resume** in an empty composer to continue a limited or interrupted turn
+manually. Do this when the provider reports no reset time, because nothing
+continues the turn on its own.
 Queued messages stay saved while the limit blocks the thread. They run after
 the continuation finishes. If the queue was held by a restart, resume it then.
 
@@ -400,6 +417,11 @@ finished, on this machine or a connected one. On web and desktop, follow them un
 **Lineage** in the thread details, which counts the ones still running; open one there to read
 it, or choose **Promote to thread** from its menu to make it a regular thread. While a subagent
 is open, it shows beneath the thread that started it until you navigate away.
+
+A subagent delegated to another machine folds under the thread that delegated it, like a
+launched thread (see below), but only its approvals and questions raise that thread. It enters
+**Priority** on its own only while it waits for you. When this app is not connected to the
+delegating machine, it keeps an ordinary row in the list.
 
 On mobile, open a subagent from its conversation card or **Agents**. On iOS
 layouts with an inspector, its thread opens beside the parent. Maximize it to
@@ -446,6 +468,8 @@ Choose **Snooze → Custom…** from a thread's menu to pick a date and time in 
 local time zone, or a duration in minutes, hours, or days. Durations start when
 you confirm; one day means 24 hours. On web and desktop, you can also snooze
 several selected threads together. Choose **Wake thread** to bring a thread back early.
+
 A snoozed thread keeps working and stays hidden until its wake time, even while
-its agent wakes itself for background work. It comes back early only when it needs
-an approval or answer from you, when a run fails, or when you send it a message.
+its agent wakes itself for background work. It comes back early for an approval,
+a new question, a failed run, or a message or answer you send. You can snooze an existing
+question and answer when the thread wakes; the question stays unanswered.

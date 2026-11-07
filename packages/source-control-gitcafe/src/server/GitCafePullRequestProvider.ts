@@ -1,8 +1,10 @@
+import { chunk } from "./gitCafeChunk.ts";
+import { gitCafeActionSummary } from "./gitCafeActionSummary.ts";
 import { SourceControlProviderKind } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
+import { randomUuidV4 } from "@goat/shared/randomUuid";
 import {
   NonNegativeInt,
   resolvePullRequestAuthorFilter,
@@ -33,6 +35,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   stacks: true,
   stackActions: true,
   reactions: true,
+  mentions: true,
   labels: true,
   // Line comments go through GitCafe's review drafts, which arrive with revision fencing.
   review: {
@@ -62,11 +65,6 @@ const CHANGES_PAGE_LIMIT = 500;
 const LINE_STATS_MAX_FILES = DIFF_FILES_BATCH * 4;
 const MAX_CHANGE_PAGES = 20;
 const LINE_STATS_CACHE_SIZE = 256;
-
-const chunk = <A>(items: ReadonlyArray<A>, size: number): Array<ReadonlyArray<A>> =>
-  Array.from({ length: Math.ceil(items.length / size) }, (_, index) =>
-    items.slice(index * size, (index + 1) * size),
-  );
 
 const detailablePaths = (files: ReadonlyArray<Json.GitCafeDiffFile>) =>
   files.filter((file) => !file.binary && !file.tooLarge).map((file) => file.path);
@@ -897,7 +895,7 @@ export const make = Effect.gen(function* () {
     ),
     getChangeRequestPreview: (input) =>
       readPull("getChangeRequestPreview", input).pipe(
-        Effect.map((pull) => Json.toChangeRequest(pull, input)),
+        Effect.map((pull) => ({ ...Json.toChangeRequest(pull, input), ...settledMerge(pull) })),
       ),
     getChangeRequestSummary: Effect.fn("GitCafePullRequestProvider.getChangeRequestSummary")(
       function* (input) {
@@ -1127,12 +1125,12 @@ export const make = Effect.gen(function* () {
         case "reopen": {
           const pull = yield* readPull(input.action, input);
           const path = yield* pullPath(input.action, input);
-          yield* send(input.action, input, {
+          const reply = yield* send(input.action, input, {
             method: "POST",
             path: `${path}/${input.action}`,
             body: { expectedVersion: pull.version },
           });
-          return;
+          return gitCafeActionSummary(reply, input);
         }
         default:
           return yield* failure(input.action, `GitCafe cannot ${input.action} from GOAT.`);

@@ -34,6 +34,7 @@
         "export-brand-icons.ts",
         "goat-rename.ts",
         "sign-macos.ts",
+        "prepare-server-compile-cache.cjs",
         "smoke-desktop-app.ts",
         // Local Linux computer use helper build and its live check.
         "build-computer-use-helper-linux.ts",
@@ -71,6 +72,8 @@
         "src/provider/testFixtures/*.mjs",
         // sshRuntimeSpawn.test.ts spawns it by path as a separate process.
         "src/cloud/sshRuntimeSpawn.fixture.ts",
+        // app.test.ts runs the cwd fixture in an isolated process.
+        "src/cli/serverCwd.fixture.ts",
         // graphqlgen reads its config.
         "graphql.config.ts",
       ],
@@ -80,7 +83,13 @@
       // The Vite+ web build prerequisite.
       // Native and disk-loaded provider packages stay external to the bundle; the
       // CLI archive and desktop sidecar stage them from this manifest.
-      "ignoreDependencies": ["@effect/platform-node-shared", "@goat/web", "@napi-rs/keyring"],
+      // The speech worker loads transcribe-cpp from generated source.
+      "ignoreDependencies": [
+        "@effect/platform-node-shared",
+        "@goat/web",
+        "@napi-rs/keyring",
+        "transcribe-cpp",
+      ],
     },
     "apps/desktop": {
       // Electron loads these bundles by filename rather than importing them.
@@ -92,6 +101,7 @@
         "src/snapShot/SnapShotAccessibilityWorker.ts!",
         "src/boot.ts!",
         "src/compileCache.ts!",
+        "src/serverCompileCache.ts!",
         "src/main.ts!",
         "src/preload.ts!",
         "src/preview-pick-preload.ts!",

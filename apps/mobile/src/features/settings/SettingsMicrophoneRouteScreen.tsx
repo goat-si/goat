@@ -4,12 +4,13 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { getRecordingPermissionsAsync, requestRecordingPermissionsAsync } from "expo-audio";
 import { useCallback, useEffect, useState } from "react";
-import { AppState, Linking, Pressable, View } from "react-native";
+import { AppState, Linking, Platform, Pressable, View } from "react-native";
 import Reanimated, { ReduceMotion, useAnimatedStyle, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { type AppSymbolName, SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
+import { ListRowLayout } from "../../components/ui/ListRowLayout";
 import { cn } from "../../lib/cn";
 import {
   isMicrophoneDevice,
@@ -18,10 +19,12 @@ import {
   microphoneEntryKey,
   microphoneOrder,
 } from "../../lib/microphonePriority";
+import { getLocalVoiceTranscriber } from "../../native/voiceTranscription";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsDragHandle } from "./components/SettingsDragHandle";
 import { SettingsSection } from "./components/SettingsSection";
+import { VoiceEnvironmentSettings, VoiceModelManagementSettings } from "./VoiceEnvironmentSettings";
 
 const REMOVE_SIZE = 20;
 
@@ -88,6 +91,38 @@ const KINDS: Record<
 };
 
 export function SettingsMicrophoneRouteScreen() {
+  return Platform.OS !== "ios" && getLocalVoiceTranscriber() === null ? (
+    <VoiceInputUnavailable />
+  ) : (
+    <MicrophoneSettings />
+  );
+}
+
+function VoiceInputUnavailable() {
+  const insets = useSafeAreaInsets();
+  return (
+    <View collapsable={false} className="flex-1 bg-sheet">
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+        className="flex-1"
+        contentContainerClassName="gap-3 px-5 pt-4"
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
+      >
+        <SettingsSection title="Voice input">
+          <ListRowLayout icon="mic" label="Not available on this device" />
+        </SettingsSection>
+        <Text className="px-2 text-sm text-foreground-muted">
+          GOAT's voice recording is not available on this device. You can still manage voice models
+          on a connected environment.
+        </Text>
+        <VoiceModelManagementSettings />
+      </ScrollView>
+    </View>
+  );
+}
+
+function MicrophoneSettings() {
   const insets = useSafeAreaInsets();
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -145,6 +180,7 @@ export function SettingsMicrophoneRouteScreen() {
         contentContainerClassName="gap-3 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
+        {Platform.OS === "ios" ? <VoiceEnvironmentSettings /> : null}
         {permission === "ask" || permission === "denied" ? (
           <>
             <SettingsSection title="Microphone access">

@@ -191,6 +191,8 @@ export function ComposerEditor({
           presentation,
           token.type === "mention" ? token.value : contextRecordFileName(record),
         );
+        const appIconUri =
+          token.type === "context" ? props.appChipIconUris?.get(token.contextId) : undefined;
         return {
           type: token.type,
           source: token.source,
@@ -204,12 +206,20 @@ export function ComposerEditor({
                 ? `${token.label}${props.context?.records.some((record) => record.contextId === token.contextId) ? "" : " · unavailable"}`
                 : basename(token.value),
           detail: token.type === "context" ? composerChipSizeSuffix(record) : "",
-          iconUri: contextChipIconUri(icon),
-          tintsIcon: icon.kind === "chip",
+          iconUri: appIconUri ?? contextChipIconUri(icon),
+          tintsIcon: appIconUri === undefined && icon.kind === "chip",
         };
       }),
     );
-  }, [props.value, tokens, props.context, skillLabels, theme, chipTextColor]);
+  }, [
+    props.value,
+    tokens,
+    props.context,
+    props.appChipIconUris,
+    skillLabels,
+    theme,
+    chipTextColor,
+  ]);
   // Every render resolves against the snapshot history, so a render whose
   // (value, selection) lags the acknowledged native state is stamped behind
   // the native revision and rejected by the editor instead of re-applying a

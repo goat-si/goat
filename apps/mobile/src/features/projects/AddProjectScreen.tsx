@@ -1,3 +1,4 @@
+import { resolvePastedPath } from "@goat/shared/path";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import * as Dialog from "../../components/ui/Dialog";
@@ -15,12 +16,14 @@ import {
   buildProjectCreateCommand,
   canCreateProjectInEnvironment,
   findExistingAddProject,
+  getCloneDirectoryPath,
   getCloneDirectoryName,
   getDefaultCloneUrl,
   getNewProjectPathPreview,
   getNewProjectPublishTarget,
   getNewProjectPublishTargets,
   getNewProjectRepository,
+  githubIncompleteOwnerRepositoryMessage,
   defaultHostCloneUrl,
   normalizePastedCloneUrl,
   parseAddProjectRemoteSource,
@@ -88,8 +91,11 @@ import {
   useRemoteConnectionStatus,
   useSavedRemoteConnections,
 } from "../../state/use-remote-environment-registry";
-import { resolveAddProjectEnvironment } from "./AddProjectScreen.logic";
 import { useBrowsePathInput } from "./use-browse-path-input";
+import {
+  isMissingCloneParentBrowseFailure,
+  resolveAddProjectEnvironment,
+} from "./AddProjectScreen.logic";
 import {
   createNewTaskDraft,
   setComposerDraftText,
@@ -107,6 +113,7 @@ interface EnvironmentOption {
   readonly connectionError: string | null;
   readonly connectionErrorTraceId: string | null;
   readonly supportsCloneTracking: boolean;
+  readonly ghqCloneLayout: boolean;
 }
 
 const environmentOptionOrder = Order.mapInput(
@@ -154,7 +161,6 @@ function SectionTitle(props: { readonly children: string }) {
 
 function AddProjectShell(props: { readonly children: ReactNode; readonly title: string }) {
   const insets = useSafeAreaInsets();
-
   return (
     // A collapsible wrapper lets formSheet resizing mistake the full-height view for a header and collapse the ScrollView.
     <SettingsScreen title={props.title}>
@@ -274,7 +280,7 @@ function ProjectPathInput(props: {
     <TextInput
       className="h-12 min-h-12 rounded-[24px] px-4 py-0 text-base leading-snug"
       value={props.value}
-      onChangeText={props.onChangeText}
+      onChangeText={(text) => props.onChangeText(resolvePastedPath(props.value, text))}
       autoCapitalize="none"
       autoCorrect={false}
       placeholder="~/projects/my-app"
@@ -290,7 +296,6 @@ function useEnvironmentOptions(
   const serverConfigByEnvironmentId = useServerConfigs();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const { connectedEnvironments } = useRemoteConnectionStatus();
-
   return ((): ReadonlyArray<EnvironmentOption> => {
     const runtimeByEnvironmentId = new Map(
       connectedEnvironments.map((environment) => [environment.environmentId, environment] as const),
@@ -309,6 +314,7 @@ function useEnvironmentOptions(
         connectionError: runtime?.connectionError ?? null,
         connectionErrorTraceId: runtime?.connectionErrorTraceId ?? null,
         supportsCloneTracking: config?.environment.capabilities.projectCloneTracking === true,
+        ghqCloneLayout: config?.settings.ghqCloneLayout === true,
       };
     });
     return Arr.sort(
@@ -340,7 +346,6 @@ function useSelectedEnvironment(requestedEnvironmentId: EnvironmentId | null): {
       canCreateProjectInEnvironment(environment.connectionState),
     ) ??
     null;
-
   return {
     environmentOptions,
     selectedEnvironment,
@@ -351,7 +356,6 @@ function useSelectedEnvironment(requestedEnvironmentId: EnvironmentId | null): {
 function EmptyEnvironmentState() {
   const navigation = useNavigation();
   const connectHubLabel = useConnectHubEntryLabel();
-
   return (
     <View className="items-center gap-3 rounded-2xl bg-grouped-card px-5 py-8">
       <Text className="text-center text-lg font-goat-bold">Environment unavailable</Text>
@@ -398,13 +402,11 @@ function SourceControlRow(props: {
         colorClassName="accent-icon"
       />
     );
-
   if (!props.ready) {
     return (
       <ListRow title={title} subtitle={props.hint} icon={icon} disabled isFirst={props.isFirst} />
     );
   }
-
   return (
     <ListRow
       title={title}
@@ -446,11 +448,9 @@ export function AddProjectSourceScreen(props: { readonly environmentId?: string 
         }),
   );
   const readiness = buildAddProjectRemoteSourceReadiness(discoveryState.data);
-
   return (
     <AddProjectShell title="Add project">
       {selectedEnvironment === null ? <EmptyEnvironmentState /> : null}
-
       {environmentOptions.length > 1 || (selectedEnvironment !== null && !isConnected) ? (
         <>
           <SectionTitle>Environments</SectionTitle>
@@ -494,7 +494,6 @@ export function AddProjectSourceScreen(props: { readonly environmentId?: string 
           </ListSection>
         </>
       ) : null}
-
       {selectedEnvironment ? (
         <>
           <ListSection>
@@ -622,8 +621,10 @@ function useCreateProject(environment: EnvironmentOption | null) {
   const openNewTaskDraft = useOpenNewTaskDraft();
   const navigation = useNavigation();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
+  const updateProject = useAtomCommand(projectEnvironment.update, {
+    label: "project unarchive",
+  });
   const projects = useProjects();
-
   return async (workspaceRoot: string, originRoute = getActiveRoute(navigation)) => {
     if (
       !environment ||
@@ -636,14 +637,25 @@ function useCreateProject(environment: EnvironmentOption | null) {
       );
       return;
     }
-
     const existing = findExistingAddProject({
       projects,
       environmentId: environment.environmentId,
       path: workspaceRoot,
     });
     if (existing) {
-      Dialog.alert("Project already exists", existing.title);
+      // Adding an archived project's folder again brings the project back.
+      const unarchived =
+        existing.archivedAt == null ||
+        (
+          await updateProject({
+            environmentId: existing.environmentId,
+            input: { projectId: existing.id, archived: false },
+          })
+        )._tag === "Success";
+      Dialog.alert(
+        "Project already exists",
+        unarchived ? existing.title : `${existing.title} is still archived. Try again later.`,
+      );
       openNewTaskDraft(
         {
           environmentId: existing.environmentId,
@@ -654,7 +666,6 @@ function useCreateProject(environment: EnvironmentOption | null) {
       );
       return;
     }
-
     const projectId = ProjectId.make(uuidv4());
     const command = buildProjectCreateCommand({
       commandId: CommandId.make(uuidv4()),
@@ -715,9 +726,13 @@ export function AddProjectRepositoryScreen(props: {
   const [repositoryInput, setRepositoryInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const lookupRepository = async () => {
     if (!environment || repositoryInput.trim().length === 0 || isSubmitting) return;
+    const incompleteOwnerMessage = githubIncompleteOwnerRepositoryMessage(source, repositoryInput);
+    if (incompleteOwnerMessage) {
+      setError(incompleteOwnerMessage);
+      return;
+    }
     setError(null);
     setIsSubmitting(true);
     const provider = addProjectRemoteSourceProvider(source);
@@ -735,7 +750,6 @@ export function AddProjectRepositoryScreen(props: {
       setIsSubmitting(false);
       return;
     }
-
     const result = await lookupRepositoryQuery({
       environmentId: environment.environmentId,
       input: {
@@ -759,7 +773,6 @@ export function AddProjectRepositoryScreen(props: {
     }
     setIsSubmitting(false);
   };
-
   return (
     <AddProjectShell title={source === "url" ? "Git URL" : addProjectRemoteSourceLabel(source)}>
       {error ? <ErrorBanner message={error} /> : null}
@@ -802,6 +815,7 @@ function FolderBrowser(props: {
     readonly selectedDirectoryName?: string;
   }) => Promise<boolean>;
   readonly pinnedDirectoryName?: string;
+  readonly cloning?: boolean;
 }) {
   const browsePath = getFilesystemBrowsePath(props.pathInput, props.environment.platform);
   const browseInput =
@@ -834,14 +848,22 @@ function FolderBrowser(props: {
     browseState.data?.entries ?? [],
     browseFilterQuery,
   );
-
   return (
     <>
       <SectionTitle>Browse folders</SectionTitle>
       {!canReadFiles && !fileAccess.isPending ? (
         <ErrorBanner message={fileAccess.error ?? "This connection cannot browse host folders."} />
       ) : null}
-      {browseState.error ? <ErrorBanner message={browseState.error} /> : null}
+      {browseState.error === null ? null : isMissingCloneParentBrowseFailure({
+          cloning: props.cloning === true,
+          failure: browseState.cause,
+        }) ? (
+        <Text className="text-sm text-foreground-muted">
+          This folder does not exist yet. Cloning creates it.
+        </Text>
+      ) : (
+        <ErrorBanner message={browseState.error} />
+      )}
       <ListSection>
         {fileAccess.isPending || (browseState.isPending && browseState.data === null) ? (
           <View className="items-center py-5">
@@ -931,7 +953,6 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
     environment?.newProjectsRoot != null
       ? getNewProjectPathPreview(environment.newProjectsRoot, trimmedName)
       : null;
-
   const showMachines =
     environmentOptions.length > 1 || (environment === null && environmentOptions.length > 0);
   const machineRows = showMachines ? (
@@ -968,7 +989,6 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
       })}
     </ListSection>
   ) : null;
-
   // State lags a render behind, so a double tap could start a second create.
   const submittingRef = useRef(false);
   const submit = async () => {
@@ -1033,7 +1053,6 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
       originRoute,
     );
   };
-
   return (
     <AddProjectShell title="New project">
       {error ? <ErrorBanner message={error} /> : null}
@@ -1164,7 +1183,6 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
     useBrowsePathInput(environment);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const submitPath = async () => {
     if (!environment || isBrowseNavigating || isSubmitting) return;
     setError(null);
@@ -1177,7 +1195,6 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
       setError(resolved.error);
       return;
     }
-
     setIsSubmitting(true);
     const result = await createProject(resolved.path);
     if (result && AsyncResult.isFailure(result)) {
@@ -1185,7 +1202,6 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
     }
     setIsSubmitting(false);
   };
-
   return (
     <AddProjectShell title="Local folder">
       {error ? <ErrorBanner message={error} /> : null}
@@ -1245,13 +1261,18 @@ export function AddProjectDestinationScreen(props: {
   const repositoryTitle = stringParam(props.repositoryTitle);
   const prompt = stringParam(props.prompt);
   const repositoryName = stringParam(props.repositoryName)?.trim() ?? "";
+  const ghqDirectoryPath =
+    remoteUrl && environment?.ghqCloneLayout
+      ? getCloneDirectoryPath(remoteUrl, true, repositoryName)
+      : null;
+  const cloneDirectoryName = ghqDirectoryPath?.split("/").at(-1) ?? repositoryName;
   const { isBrowseNavigating, navigateToBrowsePath, pathInput, setPathInput } = useBrowsePathInput(
     environment,
-    repositoryName,
+    cloneDirectoryName,
+    ghqDirectoryPath ?? repositoryName,
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const submitPath = async () => {
     if (
       !environment ||
@@ -1273,7 +1294,6 @@ export function AddProjectDestinationScreen(props: {
       setError(resolved.error);
       return;
     }
-
     const originRoute = getActiveRoute(navigation);
     setIsSubmitting(true);
     if (environment.supportsCloneTracking) {
@@ -1370,7 +1390,8 @@ export function AddProjectDestinationScreen(props: {
             navigateToBrowsePath={navigateToBrowsePath}
             pathInput={pathInput}
             setPathInput={setPathInput}
-            pinnedDirectoryName={repositoryName}
+            pinnedDirectoryName={cloneDirectoryName}
+            cloning={Boolean(remoteUrl)}
           />
         </>
       ) : (

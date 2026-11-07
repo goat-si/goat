@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EnvironmentId, ProjectId } from "@goat/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { planProjectRemoval } from "@goat/client-runtime/state/projects";
 
 describe("project removal confirmation", () => {
@@ -16,21 +16,67 @@ describe("project removal confirmation", () => {
     environmentLabel: "Remote",
   };
 
-  it("limits a checkout's thread count to its environment and project", () => {
+  const parent = ThreadId.make("parent");
+  const listed = {
+    rootThreadId: parent,
+    parentThreadId: null,
+    relationshipToParent: null,
+  } as const;
+  const child = {
+    rootThreadId: parent,
+    parentThreadId: parent,
+    relationshipToParent: "subagent",
+  } as const;
+
+  it("counts listed threads and still deletes hidden children", () => {
     const plan = planProjectRemoval({
       members: [local],
       groupMemberCount: 2,
       hasOtherMembers: false,
       displayName: "Repo",
       threads: [
-        { environmentId: local.environmentId, projectId: local.id },
-        { environmentId: remote.environmentId, projectId: remote.id },
+        {
+          environmentId: local.environmentId,
+          projectId: local.id,
+          lineage: listed,
+          sideChatOf: null,
+        },
+        {
+          environmentId: local.environmentId,
+          projectId: local.id,
+          lineage: child,
+          sideChatOf: null,
+        },
+        {
+          environmentId: local.environmentId,
+          projectId: local.id,
+          lineage: listed,
+          sideChatOf: parent,
+        },
+        {
+          environmentId: remote.environmentId,
+          projectId: remote.id,
+          lineage: listed,
+          sideChatOf: null,
+        },
       ],
     });
-    expect(plan.projectThreads).toHaveLength(1);
+    expect(plan.projectThreads).toHaveLength(3);
     expect(plan.confirmationMessage).toBe(
       'Remove checkout "Repo" and delete its 1 thread?\nPath: /work/repo\nEnvironment: Local\nThose threads and any archived threads are deleted from GOAT. Provider sessions are kept.\nOther entries in this grouped project are unaffected.\nThis action cannot be undone.',
     );
+  });
+
+  it("does not invent a thread count for an older server", () => {
+    const plan = planProjectRemoval({
+      members: [local],
+      groupMemberCount: 1,
+      hasOtherMembers: false,
+      displayName: "Repo",
+      threads: [],
+      unloadedThreadCount: null,
+    });
+    expect(plan.confirmationMessage).toContain('Remove project "Repo" and delete its threads?');
   });
 
   it("keeps an environment-filtered group scoped to its selected checkout", () => {

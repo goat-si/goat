@@ -1,10 +1,15 @@
 import {
+  cachedThreadState,
+  hasMissingPendingRequestCard,
+  statusWithoutLiveData,
+} from "./threadPendingRequestCache.ts";
+import {
   isOrchestrationV2WorkActive,
   ORCHESTRATION_V2_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
   type OrchestrationV2ThreadDetailSnapshot,
   type OrchestrationV2ThreadProjection,
-  type OrchestrationV2ThreadStreamItem,
+  type OrchestrationV2ResolvedThreadStreamItem,
   type ThreadId as ThreadIdType,
 } from "@goat/contracts";
 import { boundedSnapshotProjection } from "@goat/shared/orchestrationV2BoundedSnapshot";
@@ -31,7 +36,7 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
-import { request, subscribeDynamic } from "../rpc/client.ts";
+import { request, subscribeThreadItems } from "../rpc/client.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
 import { THREAD_SNAPSHOT_IDLE_TTL_MS } from "./threadRetention.ts";
@@ -55,17 +60,7 @@ import {
 } from "./threadStateSnapshots.ts";
 import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
 import { makeThreadRequestsResolvedAnnouncer, pendingRuntimeRequestIds } from "./threadRequests.ts";
-import {
-  EMPTY_ENVIRONMENT_THREAD_STATE,
-  type EnvironmentThreadState,
-  type EnvironmentThreadStatus,
-} from "./threadState.ts";
-
-function statusWithoutLiveData(
-  data: Option.Option<OrchestrationV2ThreadProjection>,
-): EnvironmentThreadStatus {
-  return Option.isSome(data) ? "cached" : "empty";
-}
+import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
 
 function formatThreadError(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
@@ -110,18 +105,6 @@ function matchesThreadSnapshot(
   );
 }
 
-function cachedThreadState(value: EnvironmentThreadState): EnvironmentThreadState {
-  return {
-    ...value,
-    status:
-      value.status === "deleted" || (value.status === "live" && Option.isSome(value.data))
-        ? value.status
-        : statusWithoutLiveData(value.data),
-    error: Option.none(),
-    history: { ...value.history, loading: false, error: null },
-  };
-}
-
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
   resumeCache?: ThreadResumeCache,
@@ -143,10 +126,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => StreamDiagnostics.noteThreadStreamClosed(environmentId, threadId)),
   );
-  const retained = resumeCache?.snapshot;
+  const candidate = resumeCache?.snapshot;
+  const retained =
+    candidate &&
+    Option.isSome(candidate.state.data) &&
+    hasMissingPendingRequestCard(candidate.state.data.value)
+      ? undefined
+      : candidate;
   const owner = {};
   if (resumeCache) resumeCache.owner = owner;
-  const cached =
+  const loaded =
     retained === undefined
       ? yield* cache.loadThread(environmentId, threadId).pipe(
           Effect.catch((error) =>
@@ -161,6 +150,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ),
         )
       : Option.none<OrchestrationV2ThreadDetailSnapshot>();
+  const cached = Option.filter(
+    loaded,
+    (snapshot) => !hasMissingPendingRequestCard(snapshot.projection),
+  );
   const cachedThread = Option.map(cached, (snapshot) => snapshot.projection);
   // Seed the resume cursor from the cached snapshot so a warm cache can catch up
   // via `afterSequence` instead of re-downloading the full thread body.
@@ -421,9 +414,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
-  type EventItem = Extract<OrchestrationV2ThreadStreamItem, { kind: "event" }>;
+  type EventItem = Extract<OrchestrationV2ResolvedThreadStreamItem, { kind: "event" }>;
   type SequencedItem = Extract<
-    OrchestrationV2ThreadStreamItem,
+    OrchestrationV2ResolvedThreadStreamItem,
     { kind: "event" | "unknown-event" }
   >;
   const noteEvents = (fresh: ReadonlyArray<EventItem>, unknown: number, sequence: number) =>
@@ -565,7 +558,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   });
 
   const applyItemLocked = Effect.fn("EnvironmentThreadState.applyItemLocked")(function* (
-    item: OrchestrationV2ThreadStreamItem,
+    item: OrchestrationV2ResolvedThreadStreamItem,
   ) {
     if (item.kind === "synchronized") {
       yield* Ref.set(awaitingCompletion, false);
@@ -614,7 +607,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   });
 
   const applyItems = Effect.fn("EnvironmentThreadState.applyItems")(function* (
-    items: ReadonlyArray<OrchestrationV2ThreadStreamItem>,
+    items: ReadonlyArray<OrchestrationV2ResolvedThreadStreamItem>,
   ) {
     yield* applyLock.withPermits(1)(
       Effect.gen(function* () {
@@ -911,8 +904,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   yield* markSynchronizing;
   yield* Effect.forkScoped(
-    subscribeDynamic(
-      ORCHESTRATION_V2_WS_METHODS.subscribeThread,
+    subscribeThreadItems(
+      threadId,
       Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session) {
         let current = yield* SubscriptionRef.get(state);
         // A prior definitive miss (or delete event) already cleared this thread.
@@ -983,6 +976,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             }
             case "missing": {
               yield* setDeleted();
+              // A 404 also means "not created yet". Only a delete event may outlive this mount.
+              if (resumeCache?.owner === owner) resumeCache.snapshot = undefined;
               return yield* Effect.never;
             }
             case "unavailable": {

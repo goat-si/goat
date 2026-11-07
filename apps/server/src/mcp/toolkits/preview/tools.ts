@@ -2,6 +2,7 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
   ActionOutcomeSafety,
+  BrowserNavigationTarget,
   OrchestratorMcpFailure,
   ToolActivityIcon,
   PreviewAutomationClickInput,
@@ -11,6 +12,12 @@ import {
   PreviewAutomationEvaluateInput,
   PreviewAutomationFetchInput,
   PreviewAutomationFetchResult,
+  PreviewAutomationFillCardInput,
+  PreviewAutomationFillCardResult,
+  PreviewAutomationFillOneTimeCodeInput,
+  PreviewAutomationFillOneTimeCodeResult,
+  PreviewAutomationFillLoginInput,
+  PreviewAutomationFillLoginResult,
   PreviewAutomationFillSecretInput,
   PreviewAutomationFillSecretResult,
   PreviewAutomationHoverInput,
@@ -50,7 +57,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
-import { withClientRequestId } from "../keyedParameters.ts";
+import { KeyedClientRequestId } from "../keyedParameters.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -119,7 +126,14 @@ const PreviewStatusTool = Tool.make(agentSurfaceRegistry["preview.status"].name,
 
 const PreviewOpenTool = Tool.make(agentSurfaceRegistry["preview.open"].name, {
   description: agentSurfaceRegistry["preview.open"].description,
-  parameters: withClientRequestId(PreviewAutomationOpenInput),
+  parameters: PreviewAutomationOpenInput.mapFields(
+    (fields) => ({
+      ...fields,
+      target: Schema.optional(BrowserNavigationTarget.members[1]),
+      clientRequestId: Schema.optional(KeyedClientRequestId),
+    }),
+    { unsafePreserveChecks: true },
+  ),
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
@@ -276,6 +290,33 @@ const PreviewFillSecretTool = Tool.make(agentSurfaceRegistry["preview.fill_secre
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.fill_secret"]));
 
+const PreviewFillLoginTool = Tool.make(agentSurfaceRegistry["preview.fill_login"].name, {
+  description: agentSurfaceRegistry["preview.fill_login"].description,
+  parameters: PreviewAutomationFillLoginInput,
+  success: Schema.Struct({ ...PreviewAutomationFillLoginResult.fields, ...safetyFields }),
+  failure: PreviewToolFailure,
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.fill_login"]));
+
+const PreviewFillCardTool = Tool.make(agentSurfaceRegistry["preview.fill_card"].name, {
+  description: agentSurfaceRegistry["preview.fill_card"].description,
+  parameters: PreviewAutomationFillCardInput,
+  success: Schema.Struct({ ...PreviewAutomationFillCardResult.fields, ...safetyFields }),
+  failure: PreviewToolFailure,
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.fill_card"]));
+
+const PreviewFillOneTimeCodeTool = Tool.make(
+  agentSurfaceRegistry["preview.fill_one_time_code"].name,
+  {
+    description: agentSurfaceRegistry["preview.fill_one_time_code"].description,
+    parameters: PreviewAutomationFillOneTimeCodeInput,
+    success: Schema.Struct({ ...PreviewAutomationFillOneTimeCodeResult.fields, ...safetyFields }),
+    failure: PreviewToolFailure,
+    dependencies,
+  },
+).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.fill_one_time_code"]));
+
 const PreviewScrollCollectTool = Tool.make(agentSurfaceRegistry["preview.scroll_collect"].name, {
   description: agentSurfaceRegistry["preview.scroll_collect"].description,
   parameters: PreviewAutomationScrollCollectInput,
@@ -424,6 +465,9 @@ export const PreviewToolkit = Toolkit.make(
   PreviewClickTool,
   PreviewTypeTool,
   PreviewFillSecretTool,
+  PreviewFillLoginTool,
+  PreviewFillCardTool,
+  PreviewFillOneTimeCodeTool,
   PreviewHoverTool,
   PreviewSelectTool,
   PreviewDragTool,
@@ -455,6 +499,9 @@ export const PreviewStandardToolkit = Toolkit.make(
   PreviewClickTool,
   PreviewTypeTool,
   PreviewFillSecretTool,
+  PreviewFillLoginTool,
+  PreviewFillCardTool,
+  PreviewFillOneTimeCodeTool,
   PreviewHoverTool,
   PreviewSelectTool,
   PreviewDragTool,

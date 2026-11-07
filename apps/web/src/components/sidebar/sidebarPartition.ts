@@ -11,6 +11,7 @@ import { excludeGlobalAgentThreads } from "../../globalAgentRoute";
 import type { useGlobalAgentStore } from "../../globalAgentStore";
 import {
   applySidebarThreadDrop,
+  belongsInSidebarWorkingShelf,
   filterSidebarV2VisibleThreads,
   firstValidTimestampMs,
   holdSidebarPriorityRank,
@@ -126,8 +127,10 @@ export function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const active: EnvironmentThreadShell[] = [];
   const working: EnvironmentThreadShell[] = [];
   const inbox = (thread: EnvironmentThreadShell, manuallyMoved = false) =>
-    workingShelfEnabled &&
-    (manuallyMoved ? isThreadWorking(thread) : inboxObservation.isWorking(thread))
+    belongsInSidebarWorkingShelf(thread, {
+      enabled: workingShelfEnabled,
+      isWorking: manuallyMoved ? isThreadWorking : inboxObservation.isWorking,
+    })
       ? working
       : active;
   const snoozed: EnvironmentThreadShell[] = [];

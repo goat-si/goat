@@ -29,31 +29,38 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "../ui/sidebar";
-import { GoatBotAvatar } from "./GoatBotAvatar";
+import { GoatBotMainAvatar } from "./GoatBotAvatar";
 import { useGoatBotPreferred } from "./GoatBotModeButton";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
-import { useGoatBotHome } from "./useGoatBotHome";
 import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 import { useGoatBotReadMenu } from "./useGoatBotReadMenu";
 
 type GoatBotReadMenuProps = ReturnType<typeof useGoatBotReadMenu>;
 
 /** GOAT Bot's pinned place at the top of the thread list, hidden in thread mode. */
-export function GoatBotSidebarRow() {
-  useGoatBotHome();
+export function GoatBotSidebarRow({
+  name = "GOAT Bot",
+  slackEnabled = false,
+}: { name?: string; slackEnabled?: boolean } = {}) {
   const port = useContext(GoatBotChannelContext);
   const enabled = useGoatBotPreferred();
-  return enabled ? <GoatBotSidebarObserver key={port ? "port" : "none"} /> : null;
+  return enabled ? (
+    <GoatBotSidebarObserver key={port ? "port" : "none"} name={name} slackEnabled={slackEnabled} />
+  ) : null;
 }
 
 /** Observes the bot without creating a bot thread. */
-function GoatBotSidebarObserver() {
+function GoatBotSidebarObserver({ name, slackEnabled }: { name: string; slackEnabled: boolean }) {
   const count = useGoatBotWaitingCount();
   const readMenu = useGoatBotReadMenu(count);
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const pathname = useLocation({ select: (location) => location.pathname });
+  const task = useLocation({
+    select: (location) => (location.search as { task?: string } | undefined)?.task,
+  });
   const params = useParams({ strict: false });
-  const active = isGoatBotRoute(pathname, resolveThreadRouteTarget(params), botRef);
+  const active =
+    task === undefined && isGoatBotRoute(pathname, resolveThreadRouteTarget(params), botRef);
   const { isMobile, setOpenMobile } = useSidebar();
   const threadRef = botRef ? scopeThreadRef(botRef.environmentId, botRef.threadId) : null;
   const shell = useThreadShell(threadRef);
@@ -61,12 +68,14 @@ function GoatBotSidebarObserver() {
     if (isMobile) setOpenMobile(false);
   };
   return (
-    <SidebarGroup className="z-[1]">
+    <SidebarGroup className="z-1">
       <SidebarMenu>
         <SidebarMenuItem>
           {botRef && shell?.lastVisitedAt !== undefined ? (
             <GoatBotSidebarPreview
               key={`${botRef.environmentId}:${botRef.threadId}`}
+              name={name}
+              slackEnabled={slackEnabled}
               botRef={botRef}
               active={active}
               count={count}
@@ -75,6 +84,8 @@ function GoatBotSidebarObserver() {
             />
           ) : (
             <GoatBotConversationRow
+              name={name}
+              slackEnabled={slackEnabled}
               active={active}
               count={count}
               onClick={handleClick}
@@ -90,12 +101,16 @@ function GoatBotSidebarObserver() {
 }
 
 function GoatBotSidebarPreview({
+  name,
+  slackEnabled,
   botRef,
   active,
   count,
   onClick,
   readMenu,
 }: {
+  name: string;
+  slackEnabled: boolean;
   botRef: GoatBotRef;
   active: boolean;
   count: number | undefined;
@@ -122,6 +137,8 @@ function GoatBotSidebarPreview({
   });
   return (
     <GoatBotConversationRow
+      name={name}
+      slackEnabled={slackEnabled}
       active={active}
       count={count}
       onClick={onClick}
@@ -133,6 +150,8 @@ function GoatBotSidebarPreview({
 }
 
 function GoatBotConversationRow({
+  name,
+  slackEnabled,
   active,
   count,
   onClick,
@@ -140,6 +159,8 @@ function GoatBotConversationRow({
   preview,
   at,
 }: {
+  name: string;
+  slackEnabled: boolean;
   active: boolean;
   count: number | undefined;
   onClick: () => void;
@@ -168,7 +189,7 @@ function GoatBotConversationRow({
           />
         ) : null}
       </span>
-      <GoatBotAvatar size="sm" />
+      <GoatBotMainAvatar size="sm" place="list" />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
         <span className="flex min-w-0 items-center gap-2">
           <span
@@ -178,7 +199,7 @@ function GoatBotConversationRow({
                 : "min-w-0 flex-1 truncate"
             }
           >
-            GOAT Bot
+            {name}
           </span>
           {at ? (
             <span
@@ -189,22 +210,32 @@ function GoatBotConversationRow({
             </span>
           ) : null}
           {count !== undefined && count > 0 ? (
-            <Badge size="sm" variant="secondary">
+            <Badge size="sm" variant="secondary" aria-label={`${count} waiting for you`}>
               {count}
             </Badge>
           ) : null}
         </span>
-        {preview ? (
-          <span
-            className={
-              preview.unread
-                ? "truncate text-xs font-normal text-sidebar-foreground/75"
-                : "truncate text-xs font-normal text-sidebar-muted-foreground"
-            }
-          >
-            {preview.text}
-          </span>
-        ) : null}
+        <span className="flex min-w-0 items-center gap-1">
+          <Badge size="sm" variant="secondary">
+            Main
+          </Badge>
+          {slackEnabled && (
+            <Badge size="sm" variant="secondary">
+              Slack
+            </Badge>
+          )}
+          {preview ? (
+            <span
+              className={
+                preview.unread
+                  ? "min-w-0 flex-1 truncate text-xs font-normal text-sidebar-foreground/75"
+                  : "min-w-0 flex-1 truncate text-xs font-normal text-sidebar-muted-foreground"
+              }
+            >
+              {preview.text}
+            </span>
+          ) : null}
+        </span>
       </span>
     </SidebarMenuButton>
   );

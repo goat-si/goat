@@ -7,7 +7,9 @@ export const worktreeCleanupEnabled = (rules: WorktreeCleanupRules) =>
   rules.worktreeSettledAfterDays !== null ||
   rules.worktreeOnMerge ||
   rules.worktreeOnDelete ||
-  rules.worktreeUnchanged;
+  rules.worktreeUnchanged ||
+  rules.worktreeOnArchive ||
+  rules.worktreeKeepRecent !== null;
 
 export function anyWorktreePolicy(
   settings: ServerSettings,

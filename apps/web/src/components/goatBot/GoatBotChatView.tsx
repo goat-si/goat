@@ -1,21 +1,31 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useContext, useRef, useState, type ReactNode } from "react";
+
+import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
+import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
+import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { isElectron } from "~/env";
 import { ChevronRightIcon } from "~/components/solar";
 import { GOAT_BOT_PATH, type GlobalAgentLegacyRoute } from "~/globalAgentRoute";
+import { useStableCallback } from "~/hooks/useStableCallback";
 
+import { WorkspaceFileDropOverlay } from "../chat/TimelineOverlays";
+import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
 import { Button } from "../ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
+import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { GoatBotAvatar } from "./GoatBotAvatar";
-import { GoatBotComposer } from "./GoatBotComposer";
-import { GoatBotModeButton } from "./GoatBotModeButton";
+import { GoatBotAvatar, GoatBotMainAvatar } from "./GoatBotAvatar";
+import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
+import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
-import { GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
+import { useGoatBotReading } from "./useGoatBotFace";
 import {
   canSendToGoatBot,
   type GoatBotAvailability,
@@ -30,6 +40,8 @@ const EXAMPLES = [
 ] as const;
 
 export interface GoatBotChatViewProps {
+  /** The bot's server supports task threads, so task chips render as task-thread pills. */
+  readonly supportsTaskThreads?: boolean | undefined;
   readonly homeMove?:
     | { readonly label: string; readonly busy: boolean; readonly onMove: () => void }
     | undefined;
@@ -39,8 +51,14 @@ export interface GoatBotChatViewProps {
   readonly rows: ReadonlyArray<GoatBotRow>;
   /** When GOAT Bot started reading a message it is still answering. */
   readonly replyingSince?: string | null | undefined;
-  readonly onSend: (text: string) => void;
+  readonly onSend: (
+    text: string,
+    attachments?: ReadonlyArray<GoatBotDraftAttachment>,
+  ) => boolean | void;
+  /** What GOAT Bot's server takes with a message; null when it takes no files. */
+  readonly attachmentSupport?: GoatBotAttachmentSupport | null | undefined;
   readonly onRetryInput: (clientKey: string) => void;
+  readonly onDiscardInput?: (clientKey: string) => void;
   /** Asks the server for its bot again, after a failure or a busy global agent. */
   readonly onRetryAvailability?: (() => void) | undefined;
   /** The old global agent, which keeps its coding view and history. */
@@ -59,6 +77,7 @@ export interface GoatBotChatViewProps {
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
 export function GoatBotChatView({
+  supportsTaskThreads = false,
   availability,
   homeMove,
   homeMoveError,
@@ -66,7 +85,9 @@ export function GoatBotChatView({
   rows,
   replyingSince = null,
   onSend,
+  attachmentSupport = null,
   onRetryInput,
+  onDiscardInput,
   onRetryAvailability,
   legacyAgentRoute,
   removal = null,
@@ -75,10 +96,31 @@ export function GoatBotChatView({
   onUnarchive,
   onCheckAgain,
 }: GoatBotChatViewProps) {
+  const [panelOpen, setPanelOpen] = useState(false);
+  const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const bot = availability.kind === "ready" ? availability.bot : null;
   const removed = removal !== null;
   const ready = availability.kind === "ready" && !removed;
   const canSend = !removed && canSendToGoatBot(availability, canOperate);
+  const acceptsFiles = canSend && attachmentSupport !== null;
+  const composerRef = useRef<GoatBotComposerHandle>(null);
+  const [dragActive, setDragActive] = useState(false);
+  if (!acceptsFiles && dragActive) setDragActive(false);
+  const addDroppedFiles = useStableCallback((files: File[]) =>
+    composerRef.current?.addFiles(files),
+  );
+  const dropHandlers = makeWorkspaceFileDropHandlers({
+    setDragActive,
+    addFiles: addDroppedFiles,
+    addFolders: () =>
+      toastManager.add({
+        type: "error",
+        title: "Folders can't be attached to GOAT Bot. Drop the files instead.",
+      }),
+  });
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null);
+  const working = useContext(GoatBotActivityContext);
+  const reading = useGoatBotReading(replyingSince);
   const headerStatus =
     removal === "archived"
       ? "Archived"
@@ -90,114 +132,153 @@ export function GoatBotChatView({
             ? null
             : statusLine(availability);
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
-        {/* Equal sides center the title until the controls, which never shrink, need its space. */}
-        <div aria-hidden className="flex-1 basis-0" />
-        <div className="flex max-w-[60%] min-w-0 items-center gap-2">
-          <GoatBotAvatar size="md" />
-          <div className="flex min-w-0 items-center gap-2">
-            <h1 className="goat-name-capsule truncate text-foreground">
-              {GOAT_BOT_TITLE} <ChevronRightIcon aria-hidden className="size-3" />
-            </h1>
-            {headerStatus ? (
-              <p className="truncate text-2xs text-muted-foreground">{headerStatus}</p>
+    <div className="flex min-h-0 min-w-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+        <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
+          {/* Equal sides center the title until the controls, which never shrink, need its space. */}
+          <div aria-hidden className="flex-1 basis-0" />
+          <div className="flex max-w-[60%] min-w-0 items-center gap-2">
+            <GoatBotMainAvatar
+              size="md"
+              chatOpen
+              activity={reading ? { state: "reading" } : removed ? null : working}
+            />
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="goat-name-capsule truncate text-foreground">
+                {GOAT_BOT_TITLE} <ChevronRightIcon aria-hidden className="size-3" />
+              </h1>
+              {headerStatus ? (
+                <p className="truncate text-2xs text-muted-foreground">{headerStatus}</p>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
+            <GoatBotModelPicker />
+            {bot && (
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Toggle GOAT Bot work panel"
+                aria-expanded={panelOpen}
+                onClick={() => setPanelOpen((open) => !open)}
+              >
+                Work
+              </Button>
+            )}
+          </div>
+        </WorkspacePageHeader>
+        {availability.kind === "offline" ||
+        availability.kind === "home_offline" ||
+        availability.kind === "connecting" ? (
+          <div
+            role="status"
+            className="border-b border-border px-4 py-2 text-sm text-muted-foreground"
+          >
+            {availability.kind === "home_offline"
+              ? offlineHomeCopy(availability)
+              : availability.kind === "offline"
+                ? "GOAT Bot's computer is offline. You can send messages again once it reconnects."
+                : "Connecting to GOAT Bot…"}
+            {/* With no history the notice below carries the same action. */}
+            {availability.kind === "home_offline" && homeMove && rows.length > 0 ? (
+              <div className="mt-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={homeMove.busy}
+                  onClick={homeMove.onMove}
+                >
+                  Move GOAT Bot to {homeMove.label}
+                </Button>
+              </div>
             ) : null}
           </div>
-        </div>
-        <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
-          <GoatBotModelPicker />
-          <GoatBotModeButton to="thread" />
-        </div>
-      </WorkspacePageHeader>
-      {availability.kind === "offline" ||
-      availability.kind === "home_offline" ||
-      availability.kind === "connecting" ? (
+        ) : null}
+        {homeMoveError ? (
+          <p role="alert" className="px-4 py-2 text-sm text-muted-foreground">
+            {homeMoveError}
+          </p>
+        ) : null}
+        {rows.length > 0 &&
+        availability.kind !== "ready" &&
+        availability.kind !== "offline" &&
+        availability.kind !== "home_offline" &&
+        availability.kind !== "connecting" ? (
+          <div role="status">
+            <GoatBotNotice
+              availability={availability}
+              onRetryAvailability={onRetryAvailability}
+              legacyAgentRoute={legacyAgentRoute}
+            />
+          </div>
+        ) : null}
         <div
-          role="status"
-          className="border-b border-border px-4 py-2 text-sm text-muted-foreground"
+          className="relative flex min-h-0 flex-1 flex-col"
+          {...(acceptsFiles ? dropHandlers : {})}
         >
-          {availability.kind === "home_offline"
-            ? offlineHomeCopy(availability)
-            : availability.kind === "offline"
-              ? "GOAT Bot's computer is offline. You can send messages again once it reconnects."
-              : "Connecting to GOAT Bot…"}
-          {/* With no history the notice below carries the same action. */}
-          {availability.kind === "home_offline" && homeMove && rows.length > 0 ? (
-            <div className="mt-2">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={homeMove.busy}
-                onClick={homeMove.onMove}
-              >
-                Move GOAT Bot to {homeMove.label}
-              </Button>
-            </div>
+          {dragActive ? <WorkspaceFileDropOverlay /> : null}
+          {rows.length > 0 ? (
+            // History stays readable while the bot is unavailable; only sending stops.
+            <GoatBotTimeline
+              rows={rows}
+              environmentId={environmentId}
+              taskThreads={supportsTaskThreads}
+              replyingSince={removed ? null : replyingSince}
+              onRetry={onRetryInput}
+              onDiscard={onDiscardInput}
+              onPick={canSend ? (answer) => onSend(answer) : undefined}
+            />
+          ) : removal !== null ? (
+            <GoatBotRemovedNotice
+              removal={removal}
+              availability={availability}
+              onRetryAvailability={onRetryAvailability}
+              canOpenCurrentBot={canOpenCurrentBot}
+              onUnarchive={onUnarchive}
+              onCheckAgain={onCheckAgain}
+            />
+          ) : (
+            <GoatBotNotice
+              availability={availability}
+              homeMove={homeMove}
+              onRetryAvailability={onRetryAvailability}
+              legacyAgentRoute={legacyAgentRoute}
+              onSelectExample={
+                canSend
+                  ? (text) => setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
+                  : undefined
+              }
+            />
+          )}
+          {ready && !canOperate ? (
+            <p className="mx-auto w-full max-w-3xl px-4 pb-2 text-xs text-muted-foreground">
+              You can read this chat but can't send messages.
+            </p>
           ) : null}
-        </div>
-      ) : null}
-      {homeMoveError ? (
-        <p role="alert" className="px-4 py-2 text-sm text-muted-foreground">
-          {homeMoveError}
-        </p>
-      ) : null}
-      {rows.length > 0 &&
-      availability.kind !== "ready" &&
-      availability.kind !== "offline" &&
-      availability.kind !== "home_offline" &&
-      availability.kind !== "connecting" ? (
-        <div role="status">
-          <GoatBotNotice
-            availability={availability}
-            onRetryAvailability={onRetryAvailability}
-            legacyAgentRoute={legacyAgentRoute}
+          <GoatBotComposer
+            ref={composerRef}
+            key={seed?.nonce ?? 0}
+            initialText={seed?.text ?? ""}
+            disabled={!canSend}
+            placeholder={canSend ? "Message GOAT Bot" : "GOAT Bot isn't available"}
+            attachmentSupport={attachmentSupport}
+            onSend={onSend}
           />
         </div>
-      ) : null}
-      {rows.length > 0 ? (
-        // History stays readable while the bot is unavailable; only sending stops.
-        <GoatBotTimeline
-          rows={rows}
-          environmentId={environmentId}
-          replyingSince={removed ? null : replyingSince}
-          onRetry={onRetryInput}
-          onPick={canSend ? onSend : undefined}
-        />
-      ) : removal !== null ? (
-        <GoatBotRemovedNotice
-          removal={removal}
-          availability={availability}
-          onRetryAvailability={onRetryAvailability}
-          canOpenCurrentBot={canOpenCurrentBot}
-          onUnarchive={onUnarchive}
-          onCheckAgain={onCheckAgain}
-        />
-      ) : (
-        <GoatBotNotice
-          availability={availability}
-          homeMove={homeMove}
-          onRetryAvailability={onRetryAvailability}
-          legacyAgentRoute={legacyAgentRoute}
-          onSelectExample={
-            canSend
-              ? (text) => setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
-              : undefined
-          }
-        />
+      </div>
+      {bot && panelOpen && !narrow && (
+        <aside aria-label="GOAT Bot work" className="flex w-80 shrink-0 border-l border-border">
+          <GoatBotWorkPanel environmentId={bot.environmentId} threadId={bot.threadId} />
+        </aside>
       )}
-      {ready && !canOperate ? (
-        <p className="mx-auto w-full max-w-3xl px-4 pb-2 text-xs text-muted-foreground">
-          You can read this chat but can't send messages.
-        </p>
-      ) : null}
-      <GoatBotComposer
-        key={seed?.nonce ?? 0}
-        initialText={seed?.text ?? ""}
-        disabled={!canSend}
-        placeholder={canSend ? "Message GOAT Bot" : "GOAT Bot isn't available"}
-        onSend={onSend}
-      />
+      {bot && narrow && (
+        <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
+          <SheetPopup>
+            <SheetTitle className="sr-only">GOAT Bot work</SheetTitle>
+            <GoatBotWorkPanel environmentId={bot.environmentId} threadId={bot.threadId} />
+          </SheetPopup>
+        </Sheet>
+      )}
     </div>
   );
 }
@@ -373,7 +454,7 @@ function GoatBotNotice({
       </EmptyHeader>
       {availability.kind === "ready" && onSelectExample ? (
         <EmptyContent>
-          <div className="flex flex-col items-start gap-2 text-left">
+          <div className="flex flex-col items-center gap-2">
             {EXAMPLES.map((example) => (
               <button
                 key={example}

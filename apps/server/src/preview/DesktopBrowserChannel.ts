@@ -22,12 +22,15 @@ import * as Stream from "effect/Stream";
 import * as Ndjson from "effect/encoding/Ndjson";
 import * as NodeCrypto from "node:crypto";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 import * as ServerConfig from "../config.ts";
 import { writeAllToFileDescriptor } from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 
 const decodeEvent = Schema.decodeUnknownEffect(DesktopBrowserEvent);
 const encodeCommand = Schema.encodeEffect(Schema.fromJsonString(DesktopBrowserCommand));
+// fromReadable reports errors while reading; the socket is destroyed on release.
+const ignoreAfterStreamEnds = () => {};
 
 export interface DesktopTabKey {
   readonly threadId: string;
@@ -45,6 +48,8 @@ export class DesktopBrowserChannel extends Context.Service<
     readonly detached: Stream.Stream<DesktopTabKey>;
     readonly attached: Stream.Stream<DesktopTabKey>;
     readonly isAttached: (key: DesktopTabKey) => Effect.Effect<boolean>;
+    /** Whether a desktop window draws the tab on screen, which no streamed viewer counts. */
+    readonly isShown?: (key: DesktopTabKey) => boolean;
     readonly endpoint: (key: DesktopTabKey) => Effect.Effect<string, never, Scope.Scope>;
     readonly pointer: (
       key: DesktopTabKey,
@@ -67,6 +72,8 @@ const make = Effect.gen(function* () {
   const controlFd = config.desktopBrowserControlFd;
   const changes = yield* PubSub.unbounded<{ key: DesktopTabKey; attached: boolean }>();
   const attachedTabs = new Set<string>();
+  // Missing reports protect desktop tabs until the renderer explicitly marks them hidden.
+  const shownTabs = new Map<string, boolean>();
   const inbound = new Map<string, Queue.Queue<string>>();
   const writeLock = yield* Semaphore.make(1);
 
@@ -93,6 +100,7 @@ const make = Effect.gen(function* () {
       cursorState: Effect.fn("DesktopBrowserChannel.cursorState")(function () {
         return Effect.void;
       }),
+      isShown: () => false,
     });
   }
 
@@ -108,7 +116,12 @@ const make = Effect.gen(function* () {
 
   // Use cancellable socket reads; filesystem pipe reads keep Node alive after scope shutdown.
   const readable = yield* Effect.acquireRelease(
-    Effect.sync(() => new NodeNet.Socket({ fd: inputFd, readable: true, writable: false })),
+    Effect.sync(() =>
+      guardErrors(
+        new NodeNet.Socket({ fd: inputFd, readable: true, writable: false }),
+        ignoreAfterStreamEnds,
+      ),
+    ),
     (stream) => Effect.sync(() => stream.destroy()),
   );
   yield* NodeStream.fromReadable<Uint8Array, Error>({
@@ -133,14 +146,20 @@ const make = Effect.gen(function* () {
           return PubSub.publish(changes, { key, attached: true });
         case "detached": {
           attachedTabs.delete(id);
+          shownTabs.delete(id);
           const queue = inbound.get(id);
           return (queue ? Queue.shutdown(queue) : Effect.void).pipe(
             Effect.andThen(PubSub.publish(changes, { key, attached: false })),
           );
         }
+        case "shown":
+          if (attachedTabs.has(id) && (shownTabs.has(id) || shownTabs.size < 32))
+            shownTabs.set(id, event.shown);
+          return Effect.void;
       }
     }),
     Effect.catchCause((cause) => Effect.logWarning("desktop browser channel stopped", { cause })),
+    Effect.ensuring(Effect.sync(() => shownTabs.clear())),
     Effect.forkScoped,
   );
 
@@ -231,6 +250,7 @@ const make = Effect.gen(function* () {
     isAttached: Effect.fn("DesktopBrowserChannel.isAttached")(function (key) {
       return Effect.sync(() => attachedTabs.has(keyOf(key)));
     }),
+    isShown: (key) => shownTabs.get(keyOf(key)) ?? true,
     endpoint,
     turn: Effect.fn("DesktopBrowserChannel.turn")(function (threadId, active) {
       return command({ type: "turn", threadId, active });

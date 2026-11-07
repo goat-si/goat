@@ -43,14 +43,16 @@ type LastWorkThread = Pick<
   | "latestUserMessageAt"
   | "worktreePath"
 >;
-type LastWorkProject = Pick<EnvironmentProject, "environmentId" | "id">;
+type LastWorkProject = Pick<EnvironmentProject, "environmentId" | "id" | "archivedAt">;
 
 export function resolveLastWorkTarget(
   threads: ReadonlyArray<LastWorkThread>,
   projects: ReadonlyArray<LastWorkProject>,
 ): { projectRef: ScopedProjectRef; envMode: DraftThreadEnvMode } | null {
   const loadedProjects = new Set(
-    projects.map((project) => `${project.environmentId}:${project.id}`),
+    projects
+      .filter((project) => project.archivedAt == null)
+      .map((project) => `${project.environmentId}:${project.id}`),
   );
   let latestThread: LastWorkThread | null = null;
   let latestAt = -Infinity;

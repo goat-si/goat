@@ -16,11 +16,24 @@ import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import { TestClock } from "effect/testing";
 import {
+  backgroundServiceRunningMessage,
   repointLauncher,
   resolveLauncherPath,
   resolveNewestRelease,
   resolveNewestVersion,
 } from "./update.ts";
+
+it("reports the running service version accurately while a restart is pending", () => {
+  assert.equal(
+    backgroundServiceRunningMessage("2.0.0", true, "2.0.0"),
+    "  Background service still running the version before 2.0.0. Run `goat service restart` when you are ready to switch it to 2.0.0.",
+  );
+  assert.include(backgroundServiceRunningMessage("1.0.0", false, "2.0.0"), "still running 1.0.0.");
+  assert.include(
+    backgroundServiceRunningMessage(undefined, true, "2.0.0"),
+    "still running an unknown version.",
+  );
+});
 
 it.effect("authenticates each release page until the requested channel is found", () =>
   Effect.gen(function* () {
@@ -68,12 +81,35 @@ it.layer(NodeServices.layer)("goat update launcher", (it) => {
 
       const repointed = yield* repointLauncher({
         launchedAs: launcher,
-        versionsDir: path.join(root, "runtime/goat/versions"),
+        baseDir: root,
         targetEntryPath: newExe,
       });
 
       assert.deepStrictEqual(Option.getOrUndefined(repointed), launcher);
       assert.equal(yield* fs.readLink(launcher), newExe);
+      assert.include(yield* fs.readFileString(path.join(root, "runtime", "launchers")), launcher);
+    }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
+  );
+
+  it.effect("does not repoint a launcher when its record cannot be written", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-update-" });
+      const oldExe = path.join(root, "runtime/goat/versions/1/goat");
+      const newExe = path.join(root, "runtime/goat/versions/2/goat");
+      const launcher = path.join(root, "bin/goat");
+      yield* fs.makeDirectory(path.dirname(oldExe), { recursive: true });
+      yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+      yield* fs.makeDirectory(path.join(root, "runtime/launchers"));
+      yield* fs.symlink(oldExe, launcher);
+      const error = yield* repointLauncher({
+        launchedAs: launcher,
+        baseDir: root,
+        targetEntryPath: newExe,
+      }).pipe(Effect.flip);
+      assert.include(error.reason, "Could not record");
+      assert.equal(yield* fs.readLink(launcher), oldExe);
     }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
   );
 
@@ -100,7 +136,7 @@ it.layer(NodeServices.layer)("goat update launcher", (it) => {
       for (const launchedAs of [copy, foreign, otherLauncher, undefined]) {
         const repointed = yield* repointLauncher({
           launchedAs,
-          versionsDir: path.join(root, "runtime/goat/versions"),
+          baseDir: root,
           targetEntryPath: newExe,
         });
         assert.equal(repointed._tag, "None", launchedAs ?? "undefined");
@@ -114,6 +150,7 @@ it.layer(NodeServices.layer)("goat update launcher", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+      const delimiter = (yield* HostProcess.Platform) === "win32" ? ";" : ":";
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-update-" });
       const launcher = path.join(root, "bin/t3");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
@@ -122,7 +159,7 @@ it.layer(NodeServices.layer)("goat update launcher", (it) => {
       const bare = yield* resolveLauncherPath.pipe(
         Effect.provideService(HostProcess.InvokedAs, "t3"),
         Effect.provideService(HostProcess.Environment, {
-          PATH: `${path.join(root, "missing")}:${path.join(root, "bin")}`,
+          PATH: [path.join(root, "missing"), path.join(root, "bin")].join(delimiter),
         }),
         Effect.provideService(HostProcess.WorkingDirectory, root),
       );
@@ -140,7 +177,7 @@ it.layer(NodeServices.layer)("goat update launcher", (it) => {
       assert.equal(bare, launcher);
       assert.equal(relative, launcher);
       assert.equal(absent, undefined);
-    }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
+    }).pipe(Effect.scoped),
   );
 });
 

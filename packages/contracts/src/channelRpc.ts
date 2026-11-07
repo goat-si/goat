@@ -9,6 +9,16 @@ import {
   ChannelEnsureBotResult,
   ChannelGetBotStatusInput,
   ChannelGetBotStatusResult,
+  ChannelListBotsInput,
+  ChannelListBotsResult,
+  ChannelUpdateBotInput,
+  ChannelUpdateBotResult,
+  ChannelListChildWorkInput,
+  ChannelListChildWorkResult,
+  ChannelListBotThreadsInput,
+  ChannelListBotThreadsResult,
+  ChannelUpdateTaskViewInput,
+  ChannelTaskView,
   ChannelGatewayError,
   ChannelGetInputInput,
   ChannelGetTaskInput,
@@ -45,6 +55,36 @@ const ChannelEnsureBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ensureBot, {
 const ChannelGetBotStatusRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotStatus, {
   payload: ChannelGetBotStatusInput,
   success: ChannelGetBotStatusResult,
+  error: ChannelRpcError,
+});
+
+const ChannelListBotsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBots, {
+  payload: ChannelListBotsInput,
+  success: ChannelListBotsResult,
+  error: ChannelRpcError,
+});
+
+const ChannelUpdateBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.updateBot, {
+  payload: ChannelUpdateBotInput,
+  success: ChannelUpdateBotResult,
+  error: ChannelRpcError,
+});
+
+const ChannelListBotThreadsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotThreads, {
+  payload: ChannelListBotThreadsInput,
+  success: ChannelListBotThreadsResult,
+  error: ChannelRpcError,
+});
+
+const ChannelListChildWorkRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listChildWork, {
+  payload: ChannelListChildWorkInput,
+  success: ChannelListChildWorkResult,
+  error: ChannelRpcError,
+});
+
+const ChannelUpdateTaskViewRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.updateTaskView, {
+  payload: ChannelUpdateTaskViewInput,
+  success: ChannelTaskView,
   error: ChannelRpcError,
 });
 
@@ -115,6 +155,11 @@ const SlackChannelSubscribeStatusRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.subscri
 export const ChannelRpcs = RpcGroup.make(
   ChannelEnsureBotRpc,
   ChannelGetBotStatusRpc,
+  ChannelListBotsRpc,
+  ChannelUpdateBotRpc,
+  ChannelListBotThreadsRpc,
+  ChannelListChildWorkRpc,
+  ChannelUpdateTaskViewRpc,
   ChannelIngestRpc,
   ChannelGetTaskRpc,
   ChannelListTasksRpc,

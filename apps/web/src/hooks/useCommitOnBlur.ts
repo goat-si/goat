@@ -21,8 +21,10 @@ export function useCommitOnBlur(
   {
     multiline = false,
     commitUnchanged = false,
+    normalizeDraft,
   }: {
     multiline?: boolean;
+    normalizeDraft?: ((previous: string, next: string) => string) | undefined;
     /** Mixed fields can explicitly clear all targets even when their placeholder value is empty. */
     commitUnchanged?: boolean;
   } = {},
@@ -32,7 +34,12 @@ export function useCommitOnBlur(
   return {
     value: draft?.value ?? value,
     onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      setDraft({ value: event.target.value, edited: true });
+      setDraft({
+        value: normalizeDraft
+          ? normalizeDraft(draft?.value ?? value, event.target.value)
+          : event.target.value,
+        edited: true,
+      });
     },
     onFocus: () => {
       setDraft({ value, edited: false });

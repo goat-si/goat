@@ -1,3 +1,7 @@
+import {
+  assignEnvironmentHueSlots,
+  environmentHueSlot,
+} from "@goat/client-runtime/state/environment-hue";
 import { arrangeSidebarReorder } from "./sidebar/frozenReorder";
 import {
   hasUnseenCompletion,
@@ -43,11 +47,7 @@ import {
 import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@goat/shared/paletteSearch";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@goat/contracts";
 import { isSideChatThread } from "@goat/contracts";
-import {
-  DEFAULT_CLIENT_SETTINGS,
-  type SidebarProjectSortOrder,
-  type SidebarThreadSortOrder,
-} from "@goat/contracts/settings";
+import { DEFAULT_CLIENT_SETTINGS, type SidebarProjectSortOrder } from "@goat/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import { sortByRankThenPrompt } from "@goat/client-runtime/state/thread-sort";
 import { isInSidebarProjectScope, type SidebarProjectScopeInput } from "./sidebar/projectScope";
@@ -58,7 +58,6 @@ import {
 } from "@goat/client-runtime/state/thread-settled";
 import {
   getThreadSortTimestamp,
-  sortThreads,
   toSortableTimestamp,
   type ThreadSortInput,
 } from "../lib/threadSort";
@@ -94,37 +93,19 @@ const SIDEBAR_HOST_HUE_CLASSES = [
   "text-rose-500",
 ] as const;
 
-function sidebarHostHueSlot(environmentId: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < environmentId.length; index += 1) {
-    hash = Math.imul(hash ^ environmentId.charCodeAt(index), 0x01000193);
-  }
-  return (hash >>> 0) % SIDEBAR_HOST_HUE_CLASSES.length;
-}
-
-/** Hash-only hue, for an environment outside the known set. */
 export function sidebarHostHueClassName(environmentId: string): string {
-  return SIDEBAR_HOST_HUE_CLASSES[sidebarHostHueSlot(environmentId)]!;
+  return SIDEBAR_HOST_HUE_CLASSES[environmentHueSlot(environmentId)]!;
 }
 
-/**
- * Distinct globe hues for the known device environments. Each id keeps its hashed
- * hue unless an id that sorts earlier already took it, then moves to the next free
- * one, so colors only repeat past the palette size and never depend on list order.
- */
 export function assignSidebarHostHues(
   environmentIds: ReadonlyArray<string>,
 ): ReadonlyMap<string, string> {
-  const taken = new Set<number>();
-  const hues = new Map<string, string>();
-  for (const environmentId of [...new Set(environmentIds)].toSorted()) {
-    if (taken.size === SIDEBAR_HOST_HUE_CLASSES.length) taken.clear();
-    let slot = sidebarHostHueSlot(environmentId);
-    while (taken.has(slot)) slot = (slot + 1) % SIDEBAR_HOST_HUE_CLASSES.length;
-    taken.add(slot);
-    hues.set(environmentId, SIDEBAR_HOST_HUE_CLASSES[slot]!);
-  }
-  return hues;
+  return new Map(
+    [...assignEnvironmentHueSlots(environmentIds)].map(([id, slot]) => [
+      id,
+      SIDEBAR_HOST_HUE_CLASSES[slot]!,
+    ]),
+  );
 }
 
 export function shouldNavigateAfterThreadPark(input: {
@@ -256,6 +237,13 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
 // Snoozed rows cannot accept drops without a wake time. Working rows only drag out as chat context.
+
+export function belongsInSidebarWorkingShelf<T>(
+  thread: T,
+  input: { readonly enabled: boolean; readonly isWorking: (thread: T) => boolean },
+): boolean {
+  return input.enabled && input.isWorking(thread);
+}
 
 const SIDEBAR_MARKER_PREFIX = "sidebar-marker-";
 
@@ -1056,7 +1044,10 @@ export function resolveSidebarWokeAtForRow(input: {
 
 type SidebarPriorityMember = ThreadStatusInput &
   ThreadSnoozeShell &
-  Pick<SidebarThreadSummary, "settledOverride" | "pinnedAt" | "deletedAt">;
+  Pick<SidebarThreadSummary, "settledOverride" | "pinnedAt" | "deletedAt"> & {
+    readonly lineage?: SidebarThreadSummary["lineage"] | undefined;
+    readonly source: Pick<SidebarThreadSummary["source"], "launchedBy">;
+  };
 
 /** Priority membership shared by the section and the activity bell. Holds are not included. */
 export function isSidebarPriorityMember(input: {
@@ -1202,13 +1193,6 @@ export function isSidebarNestedLinkClick(target: EventTarget | null): boolean {
       ? target.parentElement
       : null;
   return nodeClosest(parent, "a[href]") !== null;
-}
-
-export function shouldCreateNewThreadInCurrentProject(
-  shiftKey: boolean,
-  projectGroupCount: number,
-): boolean {
-  return shiftKey || projectGroupCount <= 1;
 }
 
 export function orderItemsByPreferredIds<TItem, TId>(input: {
@@ -1470,8 +1454,8 @@ export function resolveThreadStatusPill(input: {
   if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
     return {
       label: "Pending Approval",
-      colorClass: "text-amber-600 dark:text-amber-300/90",
-      dotClass: "bg-amber-500 dark:bg-amber-300/90",
+      colorClass: "text-warning-foreground",
+      dotClass: "bg-warning",
       pulse: false,
     };
   }
@@ -1534,8 +1518,8 @@ export function resolveThreadStatusPill(input: {
   if (hasUnseenFailure(thread)) {
     return {
       label: "Failed",
-      colorClass: "text-red-600 dark:text-red-300/90",
-      dotClass: "bg-red-500 dark:bg-red-300/90",
+      colorClass: "text-destructive-foreground",
+      dotClass: "bg-destructive",
       pulse: false,
     };
   }
@@ -1557,8 +1541,8 @@ export function resolveThreadStatusPill(input: {
   if (hasUnseenCompletion(thread)) {
     return {
       label: "Completed",
-      colorClass: "text-emerald-600 dark:text-emerald-300/90",
-      dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
+      colorClass: "text-success-foreground",
+      dotClass: "bg-success",
       pulse: false,
     };
   }
@@ -1584,32 +1568,7 @@ export function resolveProjectStatusIndicator(
   return highestPriorityStatus;
 }
 
-export function getFallbackThreadIdAfterDelete<
-  T extends Pick<Thread, "id" | "projectId" | "createdAt" | "updatedAt"> & ThreadSortInput,
->(input: {
-  threads: readonly T[];
-  deletedThreadId: T["id"];
-  sortOrder: SidebarThreadSortOrder;
-  deletedThreadIds?: ReadonlySet<T["id"]>;
-}): T["id"] | null {
-  const { deletedThreadId, deletedThreadIds, sortOrder, threads } = input;
-  const deletedThread = threads.find((thread) => thread.id === deletedThreadId);
-  if (!deletedThread) {
-    return null;
-  }
-
-  return (
-    sortThreads(
-      threads.filter(
-        (thread) =>
-          thread.projectId === deletedThread.projectId &&
-          thread.id !== deletedThreadId &&
-          !deletedThreadIds?.has(thread.id),
-      ),
-      sortOrder,
-    )[0]?.id ?? null
-  );
-}
+export { getFallbackThreadIdAfterDelete } from "./sidebar/threadDeletionFallback";
 function getProjectSortTimestamp(
   project: SidebarProject,
   projectThreads: readonly ThreadSortInput[],

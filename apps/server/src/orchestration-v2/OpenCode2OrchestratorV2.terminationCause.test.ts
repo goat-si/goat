@@ -9,6 +9,7 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import {
   OPENCODE2_HTTP_PROTOCOL,
   OpenCode2OrchestratorReplayHarness,
+  layerRegistry,
 } from "./Adapters/OpenCode2AdapterV2.testkit.ts";
 import { provideDeterministicTestRuntime } from "./testkit/DeterministicRuntime.ts";
 import type { OrchestratorV2ScenarioStep } from "./testkit/OrchestratorScenario.ts";
@@ -22,9 +23,10 @@ import {
   threadCommands,
 } from "./OpenCode2OrchestratorV2.testkit.ts";
 
-it.effect("records queued replacement when a waiting message becomes Steer", () =>
+const queuedReplacementScenario = (steerFails: boolean) =>
   Effect.gen(function* () {
-    const name = "opencode2-queued-replaced";
+    const name = steerFails ? "opencode2-steer-fails" : "opencode2-queued-replaced";
+    const steerSent = Promise.withResolvers<void>();
     const cwd = yield* checkpointWorkspace(name);
     const thread = threadCommands({ name, worktreePath: cwd });
     const ids = yield* IdAllocator.IdAllocatorV2;
@@ -61,6 +63,10 @@ it.effect("records queued replacement when a waiting message becomes Steer", () 
           },
         }),
         out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+        reply(
+          "session.prompt",
+          steerFails ? { status: 500, body: { error: "steer failed" } } : "<hang>",
+        ),
         out("session.interrupt", { sessionID: SESSION }),
         reply("session.interrupt", { interrupted: true }),
       ],
@@ -76,10 +82,65 @@ it.effect("records queued replacement when a waiting message becomes Steer", () 
     ];
     const result = yield* runOrchestratorV2ProviderReplayScenario(
       { name, transcript, commands: [thread.create, first, second, promote], steps },
-      OpenCode2OrchestratorReplayHarness,
+      {
+        ...OpenCode2OrchestratorReplayHarness,
+        makeProviderAdapterRegistryLayer: (transcript, options) =>
+          layerRegistry(transcript, {
+            ...options,
+            onHang: () => steerSent.resolve(),
+          }),
+      },
+      {
+        steerGuard: {
+          commandId: promote.commandId,
+          arrival: Effect.promise(() => steerSent.promise),
+        },
+      },
     ).pipe(provideDeterministicTestRuntime);
-    const projection = result.projections.get(thread.threadId);
+    return { result, threadId: thread.threadId };
+  });
+
+it.effect("records queued replacement when a waiting message becomes Steer", () =>
+  Effect.gen(function* () {
+    const { result, threadId } = yield* queuedReplacementScenario(false);
+    const projection = result.projections.get(threadId);
     assert.isDefined(projection);
     assert.equal(projection.runs[1]?.terminationCause?.kind, "queued_replaced");
+  }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer))),
+);
+
+it.effect("fails fast when the queued steer attempt fails (#2473)", () =>
+  Effect.gen(function* () {
+    const outcome = yield* queuedReplacementScenario(true).pipe(Effect.exit);
+    assert.equal(outcome._tag, "Failure");
+    if (outcome._tag === "Failure") {
+      assert.include(String(outcome.cause), "steer attempt failed before reaching OpenCode");
+    }
+  }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer))),
+);
+
+it.effect("fails fast when a promotion has no steer effect (#2473)", () =>
+  Effect.gen(function* () {
+    const name = "opencode2-missing-steer-effect";
+    const thread = threadCommands({ name, worktreePath: yield* checkpointWorkspace(name) });
+    const transcript = yield* OpenCode2OrchestratorReplayHarness.decodeTranscript({
+      provider: OPENCODE_PROVIDER,
+      protocol: OPENCODE2_HTTP_PROTOCOL,
+      version: "2.0.18",
+      scenario: name,
+      entries: [],
+    });
+    const options = {
+      steerGuard: { commandId: thread.command("promote"), arrival: Effect.never },
+    };
+    const outcome = yield* runOrchestratorV2ProviderReplayScenario(
+      { name, transcript, commands: [], steps: [] },
+      OpenCode2OrchestratorReplayHarness,
+      options,
+    ).pipe(provideDeterministicTestRuntime, Effect.exit);
+    assert.equal(outcome._tag, "Failure", "a missing steer effect must fail the scenario");
+    if (outcome._tag === "Failure") {
+      assert.include(String(outcome.cause), "no steer effect");
+    }
   }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer))),
 );

@@ -8,7 +8,27 @@ import {
 import { expect, it, vi } from "vite-plus/test";
 
 const appearance = vi.hoisted(() => ({ mode: "dark" as "light" | "dark", baseFontSize: 16 }));
-const screenSession = vi.hoisted(() => ({ activity: null as GoatBotActivity | null }));
+const screenSession = vi.hoisted(() => ({
+  activity: null as GoatBotActivity | null,
+  rows: [] as GoatBotRow[],
+  supportsTaskThreads: false,
+  requestedTaskId: undefined as string | null | undefined,
+  workTaskId: undefined as string | undefined,
+}));
+vi.mock("./MobileBotWork", () => ({
+  MobileBotWork: (props: { taskId?: string; taskCard?: ReactNode }) => {
+    screenSession.workTaskId = props.taskId;
+    return <section aria-label="Task header">{props.taskCard}</section>;
+  },
+}));
+const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
+vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
+const picker = vi.hoisted(() => ({
+  onPicked: null as
+    | ((files: ReadonlyArray<import("../../lib/composerImages").DraftComposerAttachment>) => void)
+    | null,
+  release: vi.fn(),
+}));
 
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
@@ -67,13 +87,37 @@ vi.mock("react-native", () => ({
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
+vi.mock("./GoatBotComposerAttachments", () => ({
+  GoatBotAttachButton: (props: { onPicked: typeof picker.onPicked }) => {
+    picker.onPicked = props.onPicked;
+    return null;
+  },
+  GoatBotAttachmentStrip: () => null,
+  releaseGoatBotAttachments: picker.release,
+}));
 vi.mock("@legendapp/list/react-native", () => ({
-  LegendList: ({ ListFooterComponent }: { ListFooterComponent?: ReactNode }) => (
-    <>{ListFooterComponent}</>
-  ),
+  LegendList: (props: {
+    data?: GoatBotRow[];
+    renderItem?: (item: { item: GoatBotRow }) => ReactNode;
+    ListFooterComponent?: ReactNode;
+  }) => {
+    list.props = props;
+    return (
+      <>
+        {props.data?.map((item) => (
+          <div key={item.id}>{props.renderItem?.({ item })}</div>
+        ))}
+        {props.ListFooterComponent}
+      </>
+    );
+  },
 }));
 vi.mock("@react-navigation/elements", async () => ({
   HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
+}));
+vi.mock("@react-navigation/native", () => ({
+  useNavigation: () => ({ dispatch: () => {} }),
+  StackActions: { push: (name: string, params: object) => ({ name, params }) },
 }));
 vi.mock("react-native-reanimated", () => ({
   default: { View: (props: { children?: unknown }) => props.children },
@@ -98,18 +142,24 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
 vi.mock("./useMobileGoatBotSession", () => ({
-  useMobileGoatBotSession: () => ({
-    availability: "ready",
-    rows: [],
-    canSend: true,
-    onSend: () => true,
-    onRetryInput: () => {},
-    replyingSince: null,
-    activity: screenSession.activity,
-  }),
+  useMobileGoatBotSession: (_visible: boolean, taskId?: string | null) => {
+    screenSession.requestedTaskId = taskId;
+    return {
+      availability: "ready",
+      rows: screenSession.rows,
+      canSend: true,
+      attachmentSupport: { maxUploadBytes: null },
+      onSend: () => true,
+      onRetryInput: () => {},
+      replyingSince: null,
+      activity: screenSession.activity,
+      supportsTaskThreads: screenSession.supportsTaskThreads,
+    };
+  },
 }));
 
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
+import { isComposerAttachmentFileRetained } from "../../lib/composerAttachmentFiles";
 
 const props = { canSend: true, onSend: () => true, onRetry: () => {}, onSelectThread: () => {} };
 const bot: Extract<GoatBotRow, { kind: "bot" }> = {
@@ -138,6 +188,31 @@ async function render(element: ReactNode) {
     },
   };
 }
+
+it("releases a picker result that arrives after the GOAT Bot screen unmounts", async () => {
+  picker.release.mockClear();
+  picker.onPicked = null;
+  const file = {
+    id: "late-pick",
+    type: "file" as const,
+    name: "report.pdf",
+    mimeType: "application/pdf",
+    sizeBytes: 4,
+    fileUri: "file:///documents/late-pick.pdf",
+  };
+  const picked = Promise.withResolvers<ReadonlyArray<typeof file>>();
+  const view = await render(<GoatBotScreen visible />);
+  const onPicked = picker.onPicked;
+  if (!onPicked) throw new Error("expected attachment picker");
+  const completion = picked.promise.then(onPicked);
+  await view.unmount();
+  await act(async () => {
+    picked.resolve([file]);
+    await completion;
+  });
+  expect(isComposerAttachmentFileRetained(file.fileUri)).toBe(false);
+  expect(picker.release).toHaveBeenCalledWith([file]);
+});
 
 it("marks a failed answer as danger and prefixes its accessibility label", async () => {
   const view = await render(<GoatBotTimelineRow {...props} row={bot} />);
@@ -228,4 +303,98 @@ it("shows the shared reader's reading and working text below the conversation", 
   const idle = await render(<GoatBotScreen visible />);
   expect(idle.container.textContent).not.toContain("Run df -h");
   await idle.unmount();
+});
+
+it("opens the conversation at its newest message and keeps following it", async () => {
+  const view = await render(<GoatBotScreen visible />);
+  // Without initialScrollAtEnd a long conversation opened at its oldest message.
+  expect(list.props).toMatchObject({
+    initialScrollAtEnd: true,
+    maintainScrollAtEnd: true,
+    alignItemsAtEnd: true,
+  });
+  await view.unmount();
+});
+
+it("ignores an unsupported task screen and uses main-chat filtering", async () => {
+  screenSession.supportsTaskThreads = false;
+  const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
+  const view = await render(<GoatBotScreen visible taskId={task} />);
+  expect(screenSession.workTaskId).toBeUndefined();
+  await view.unmount();
+  const main = await render(<GoatBotScreen visible />);
+  expect(screenSession.requestedTaskId).toBeNull();
+  await main.unmount();
+});
+
+it("renders legacy task cards without task navigation when the capability is absent", async () => {
+  screenSession.supportsTaskThreads = false;
+  screenSession.rows = [
+    {
+      kind: "task",
+      id: "card",
+      createdAt: "2026-10-12T09:40:00Z",
+      firstInGroup: true,
+      groupPosition: "single",
+      card: {
+        key: "task-1",
+        revision: 1,
+        updatedAt: "2026-10-12T09:40:00Z",
+        title: "Check disks",
+        statusLabel: "Running",
+        tone: "active",
+        sourceLabel: null,
+        summary: null,
+        attentionLabel: null,
+        pullRequests: [],
+        target: { kind: "none", label: "Unavailable" },
+      },
+    },
+  ];
+  const view = await render(<GoatBotScreen visible />);
+  expect(view.container.textContent).toContain("Check disks");
+  expect(view.container.textContent).toContain("Running");
+  expect(view.container.textContent).not.toContain("Task thread ·");
+  await view.unmount();
+  screenSession.rows = [];
+});
+
+it("shows a task chip in the task header only when one exists", async () => {
+  const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
+  screenSession.supportsTaskThreads = true;
+  screenSession.rows = [
+    {
+      kind: "task",
+      id: "card",
+      createdAt: "2026-10-12T09:40:00Z",
+      firstInGroup: true,
+      groupPosition: "single",
+      card: {
+        key: "task-1",
+        revision: 1,
+        updatedAt: "2026-10-12T09:40:00Z",
+        title: "Check disks",
+        statusLabel: "Running",
+        tone: "active",
+        sourceLabel: null,
+        summary: "Disk summary",
+        attentionLabel: null,
+        pullRequests: [],
+        target: { kind: "none", label: "Unavailable" },
+      },
+    },
+  ];
+  const view = await render(<GoatBotScreen visible taskId={task} />);
+  expect(view.container.querySelector('[aria-label="Task header"]')?.textContent).toContain(
+    "Disk summary",
+  );
+  expect(list.props?.data).toEqual([]);
+  await view.unmount();
+  screenSession.rows = [];
+  const empty = await render(<GoatBotScreen visible taskId={task} />);
+  expect(empty.container.querySelector('[aria-label="Task header"]')?.textContent).not.toContain(
+    "Disk summary",
+  );
+  await empty.unmount();
+  screenSession.supportsTaskThreads = false;
 });

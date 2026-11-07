@@ -4,6 +4,45 @@ import { reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { parse } from "./ComputerUseLeaseProtocol.ts";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 
+it.effect("non-person full access refuses a listed terminal without an executable", () =>
+  Effect.gen(function* () {
+    const result = yield* reserveProxyCall(
+      {
+        controlId: "control",
+        bundleIds: false,
+        reservation: (request) =>
+          Effect.sync(() => {
+            if (request.action !== "reserve") return { status: "released" } as const;
+            const app = deniedCallApp(request, [], true);
+            return app === undefined
+              ? ({ status: "admitted", reservationId: null } as const)
+              : ({ status: "refused", detail: "app_not_allowed", app } as const);
+          }),
+      },
+      {
+        id: 1,
+        message:
+          parse(
+            JSON.stringify({
+              method: "tools/call",
+              params: { name: "click", arguments: { pid: 42, window_id: 1 } },
+            }),
+          ) ?? {},
+        connectionId: "driver",
+        callId: "one",
+        interruptions: 0,
+        idleEpoch: 0,
+        foreground: [],
+        scope: {
+          listed: new Map([[42, { id: "org.gnome.Terminal", name: "GNOME Terminal" }]]),
+          apps: undefined,
+        },
+      },
+    );
+    assert.include(result.refused ?? "", "app_not_allowed");
+  }),
+);
+
 it.effect("refuses a batch alias shared with a denied app", () =>
   Effect.gen(function* () {
     const executable = "C:\\Shared\\host.exe";

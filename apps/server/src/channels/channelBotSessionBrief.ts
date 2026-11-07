@@ -5,7 +5,10 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a revision is a content hash.
 import * as NodeCrypto from "node:crypto";
 
+import { canSeeTask } from "./channelBotRecall.ts";
+import type { ChannelRequester, ChannelTask } from "@goat/contracts";
 import type { OrchestrationV2ProviderTurnTokenUsage } from "@goat/contracts";
+import { type BotIdentity, DEFAULT_BOT_IDENTITY } from "./ChannelBotProfiles.ts";
 
 export const SESSION_PREFIX_HEADINGS = [
   "Standing instructions",
@@ -28,7 +31,11 @@ export interface SessionPrefixParts {
   readonly notes: string;
   readonly journal: string;
   readonly tail: ReadonlyArray<{ readonly role: "user" | "assistant"; readonly text: string }>;
-  readonly openWork: ReadonlyArray<{ readonly title: string; readonly status: string }>;
+  readonly openWork: ReadonlyArray<{
+    readonly taskId: string;
+    readonly title: string;
+    readonly status: string;
+  }>;
   readonly message: string;
 }
 
@@ -49,7 +56,9 @@ export const frozenSessionPrefix = (parts: SessionPrefixParts) =>
     ),
     section(
       SESSION_PREFIX_HEADINGS[4],
-      parts.openWork.map((task) => "- " + task.title + " (" + task.status + ")").join("\n"),
+      parts.openWork
+        .map((task) => "- " + task.taskId + ": " + task.title + " (" + task.status + ")")
+        .join("\n"),
     ),
     section(SESSION_PREFIX_HEADINGS[5], parts.message),
   ].join("\n\n");
@@ -81,4 +90,52 @@ export const sessionRotationDue = (
   )
     return "context_budget";
   return undefined;
+};
+
+export const visibleOpenWork = (
+  tasks: ReadonlyArray<ChannelTask>,
+  current: ChannelTask,
+  requester: ChannelRequester,
+) =>
+  tasks.filter(
+    (task) =>
+      task.taskId !== current.taskId &&
+      task.requester.principalId === requester.principalId &&
+      canSeeTask(requester, task, current.conversationId) &&
+      (task.status === "received" ||
+        task.status === "dispatching" ||
+        task.status === "running" ||
+        task.status === "waiting_input"),
+  );
+
+export const formatOpenWork = (tasks: ReadonlyArray<ChannelTask>) =>
+  "Open work in this conversation:\n" +
+  (tasks
+    .map((task) => "- " + task.taskId + ": " + task.title + " (" + task.status + ")")
+    .join("\n") || "(none)");
+
+/** The bot's identity at the head of a session prefix; empty for the default bot, so its prefix is unchanged. */
+export const identitySection = (identity: BotIdentity) =>
+  identity.name === DEFAULT_BOT_IDENTITY.name && identity.purpose.trim() === ""
+    ? ""
+    : // JSON strings carry no raw newline, so profile text can never start a line or a heading.
+      "## Identity\nThe person named you " +
+      JSON.stringify(identity.name) +
+      ". Where GOAT's instructions say GOAT Bot, they mean you: introduce yourself by that name.\n" +
+      (identity.purpose.trim() === ""
+        ? ""
+        : "Your purpose, in the person's words (a JSON string): " +
+          JSON.stringify(identity.purpose) +
+          "\n") +
+      "\n";
+
+const STANDING_HEADING = "## " + SESSION_PREFIX_HEADINGS[0] + "\n";
+
+/** Whether a frozen prefix was started with this identity: the text before its first heading line matches exactly. */
+export const identityIsCurrent = (prefix: string, identity: BotIdentity) => {
+  const at = prefix.startsWith(STANDING_HEADING) ? 0 : prefix.indexOf("\n" + STANDING_HEADING) + 1;
+  return (
+    (at > 0 || prefix.startsWith(STANDING_HEADING)) &&
+    prefix.slice(0, at) === identitySection(identity)
+  );
 };

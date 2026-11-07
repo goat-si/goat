@@ -18,7 +18,7 @@ import * as PtyAdapter from "@goat/shared/PtyAdapter";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import type { ProviderDriver } from "@goat/provider-core/server/driver";
 import { ProviderDriverError } from "@goat/provider-core/server/errors";
-import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
+import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentity";
 import {
@@ -81,6 +81,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
       const resolveLogin = resolveClaudeCloudLogin(config.sourceInstanceId).pipe(
         Effect.provideService(ProviderHost.ProviderHost, host),
         Effect.provideService(Path.Path, path),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(HostProcess.Environment, processEnvironment),
         Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
         Effect.provideService(HostProcess.Platform, platform),

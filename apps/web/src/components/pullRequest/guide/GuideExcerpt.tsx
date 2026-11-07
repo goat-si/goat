@@ -5,7 +5,11 @@ import type {
   SelectedLineRange,
 } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
-import type { PullRequestReviewGuideExcerpt, PullRequestReviewPosition } from "@goat/contracts";
+import type {
+  EnvironmentId,
+  PullRequestReviewGuideExcerpt,
+  PullRequestReviewPosition,
+} from "@goat/contracts";
 import { ArrowUpRightIcon } from "~/components/solar";
 import { useState } from "react";
 
@@ -37,6 +41,7 @@ import {
   fileDiffRows,
   rowsToPatch,
 } from "@goat/client-runtime/review-guide-tour";
+import type { PullRequestMentionScope } from "../PullRequestMarkdownTextarea";
 import { GuideNoteMarker } from "./GuideNotes";
 import { GuideProse } from "./GuideProse";
 
@@ -52,9 +57,11 @@ export interface ExcerptNoteMarker {
 }
 
 export interface ExcerptCommenting {
+  readonly environmentId?: EnvironmentId | undefined;
   readonly canComment: boolean;
   /** The host anchors a comment to a range of lines rather than to its last one. */
   readonly rangeComments: boolean;
+  readonly mentionScope: PullRequestMentionScope | null;
   readonly pending: ReadonlyArray<PendingReviewComment>;
   readonly onComment: (comment: {
     readonly path: string;
@@ -320,9 +327,11 @@ function ExcerptDiff({
             ))}
             {annotation.metadata.draft && draft !== null && commenting !== null ? (
               <DiffCommentAnnotation
+                environmentId={commenting.environmentId}
                 kind="draft"
                 rangeLabel={`${excerpt.path}:${getReviewPositionAnchor(draft.position).line}`}
                 text=""
+                mentionScope={commenting.canComment ? commenting.mentionScope : null}
                 placeholder={
                   commenting.canComment ? "Add a comment…" : "Ask the agent about these lines…"
                 }

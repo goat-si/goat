@@ -21,7 +21,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { readCustomModelEntries } from "@goat/shared/model";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { createProviderVersionAdvisory } from "./maintenanceResolver.ts";
-import { collectUint8StreamText } from "./collectStreamText.ts";
+import { collectUint8StreamText } from "@goat/shared/collectStreamText";
+export { classifySpawnFailure, safeProcessCwd, spawnFailureMessage } from "./spawnFailure.ts";
 
 const WINDOWS_COMMAND_NOT_FOUND_PATTERNS = [
   /is not recognized as an internal or external command/i,

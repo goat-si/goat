@@ -105,7 +105,7 @@ export function DevicePreviewScreen({
   const preview = selectedThreadDevicePreview(previews, selectedKey);
   const onInputConnected = async (connected: boolean) => {
     setInputConnected(connected);
-    if (connected && !embedded) setControlsVisible(false);
+    if (!connected) setControlsVisible(true);
   };
   useEffect(() => {
     if (focused && state.data !== null && previews.length === 0) onClose();
@@ -345,20 +345,23 @@ export function DevicePreviewScreen({
           </View>
         </Animated.View>
       ) : (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Show device controls"
-          accessibilityHint="Shaking the phone also shows them"
-          hitSlop={12}
-          className="absolute h-11 w-16 items-center justify-center self-center"
+        <View
+          pointerEvents="box-none"
+          className="absolute self-center"
           style={{
             top: Math.max(insets.top, 12),
             transform: [{ translateX: (handleBounds.left - handleBounds.right) / 2 }],
           }}
-          onPress={() => setControlsVisible(true)}
         >
-          <View className="h-1.5 w-10 rounded-full bg-white/40" />
-        </Pressable>
+          <GlassSurface className="flex-row items-center gap-1 p-1">
+            <SheetCloseButton accessibilityLabel="Close device preview" onClose={onClose} />
+            <ControlPill
+              accessibilityLabel="Show device controls"
+              icon="chevron.down"
+              onPress={() => setControlsVisible(true)}
+            />
+          </GlassSurface>
+        </View>
       )}
     </View>
   );

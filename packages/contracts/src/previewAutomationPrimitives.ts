@@ -141,3 +141,38 @@ export const PreviewAutomationFillSecretResult = Schema.Struct({
   }),
 });
 export type PreviewAutomationFillSecretResult = typeof PreviewAutomationFillSecretResult.Type;
+
+export const PreviewAutomationFillLoginInput = Schema.Struct({
+  tabId: Schema.optional(PreviewTabId),
+  secretRef: SecretRef,
+  timeoutMs: OptionalTimeoutMs,
+});
+export const PreviewAutomationFillLoginResult = Schema.Struct({
+  usernameFilled: Schema.Boolean,
+  passwordFilled: Schema.Boolean,
+  verdict: Schema.Literals(["confirmed", "unverifiable", "refused"]),
+  code: Schema.optional(Schema.String),
+});
+export type PreviewAutomationFillLoginResult = typeof PreviewAutomationFillLoginResult.Type;
+
+export const PreviewAutomationFillOneTimeCodeInput = PreviewAutomationFillLoginInput;
+export const PreviewAutomationFillOneTimeCodeResult = Schema.Struct({
+  filled: Schema.Boolean,
+  verdict: Schema.Literals(["confirmed", "unverifiable", "refused"]),
+  code: Schema.optional(Schema.String),
+});
+export type PreviewAutomationFillOneTimeCodeResult =
+  typeof PreviewAutomationFillOneTimeCodeResult.Type;
+
+export const PreviewAutomationFillCardInput = PreviewAutomationFillLoginInput;
+export const PreviewAutomationFillCardResult = Schema.Struct({
+  numberFilled: Schema.Boolean,
+  cvcFilled: Schema.Boolean,
+  expiryFilled: Schema.Boolean,
+  expiryMonthFilled: Schema.Boolean,
+  expiryYearFilled: Schema.Boolean,
+  nameFilled: Schema.Boolean,
+  verdict: Schema.Literals(["confirmed", "unverifiable", "refused"]),
+  code: Schema.optional(Schema.String),
+});
+export type PreviewAutomationFillCardResult = typeof PreviewAutomationFillCardResult.Type;

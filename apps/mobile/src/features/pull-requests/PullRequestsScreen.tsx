@@ -6,7 +6,7 @@ import {
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { useNavigation } from "@react-navigation/native";
-import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { use, useCallback, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   Keyboard,
@@ -40,9 +40,11 @@ import {
   type EnvironmentPullRequestListEntry,
   withoutScratchProjectScope,
   pullRequestProjectChoices,
+  pullRequestListErrorMessages,
 } from "./pullRequestList";
 import { useDebouncedValue } from "../../state/queries";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { useSearchScrollRestoration } from "../workspace/useSearchScrollRestoration";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 
 function PullRequestScrollView(props: ScrollViewProps) {
@@ -147,7 +149,11 @@ export function PullRequestsScreen(
         })),
     [environments, environmentId, configs, controls, query],
   );
-  const result = usePullRequestList(targets);
+  const environmentLabels = useMemo(
+    () => new Map(environments.map((item) => [item.environmentId, item.environmentLabel])),
+    [environments],
+  );
+  const result = usePullRequestList(targets, environmentLabels);
   const connectedTargets = targets.filter((target) =>
     environments.some(
       (environment) =>
@@ -222,17 +228,12 @@ export function PullRequestsScreen(
     ),
     [selectPullRequest, selectedKey, actions, select, busyKey, sidebar],
   );
-  const previousSearchMode = useRef(tab.searchMode);
-  useEffect(() => {
-    const restoringSearch =
-      previousSearchMode.current !== "resting" && tab.searchMode === "resting";
-    previousSearchMode.current = tab.searchMode;
-    if (restoringSearch)
-      void listRef.current?.scrollToOffset({
-        offset: tab.scrollOffset - (Platform.OS === "ios" ? insets.top : 0),
-        animated: false,
-      });
-  }, [tab.searchMode, tab.scrollOffset, insets.top]);
+  useSearchScrollRestoration(tab.searchMode, () => {
+    void listRef.current?.scrollToOffset({
+      offset: tab.scrollOffset - (Platform.OS === "ios" ? insets.top : 0),
+      animated: false,
+    });
+  });
 
   return (
     <View className={sidebar ? "flex-1 bg-drawer" : "flex-1 bg-screen"}>
@@ -339,10 +340,7 @@ export function PullRequestsScreen(
             {result.data?.errors.length ? (
               <PullRequestListErrors
                 key={JSON.stringify(targets)}
-                messages={result.data.errors.map(
-                  (error) =>
-                    `${error.projectTitle || environments.find((environment) => environment.environmentId === error.environmentId)?.environmentLabel || "Environment"}: ${error.message}`,
-                )}
+                messages={pullRequestListErrorMessages(result.data.errors, environmentLabels)}
               />
             ) : null}
           </>

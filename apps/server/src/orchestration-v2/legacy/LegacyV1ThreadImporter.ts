@@ -33,7 +33,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventSink from "../EventSink.ts";
-import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
+import { randomUuidV4 } from "@goat/shared/randomUuid";
 
 const IMPORT_EVENT_PREFIX = "migration:v1";
 const TRANSCRIPT_EVENT_BATCH_SIZE = 100;
@@ -362,10 +362,9 @@ const make = Effect.gen(function* () {
       ORDER BY created_at ASC, message_id ASC
     `.pipe(NodeSqliteClient.readOnly);
 
-  const listShellMessages = Effect.fn("LegacyV1ThreadImporter.listShellMessages")(function* (
-    threadId: ThreadId,
-  ) {
-    const latest = yield* sql<LegacyMessageRow>`
+  const listShellMessages = Effect.fn("LegacyV1ThreadImporter.listShellMessages")(
+    function* (threadId: ThreadId) {
+      const latest = yield* sql<LegacyMessageRow>`
         SELECT
           message.message_id,
           message.thread_id,
@@ -395,7 +394,7 @@ const make = Effect.gen(function* () {
         ORDER BY message.created_at DESC, message.message_id DESC
         LIMIT 1
       `;
-    const latestUser = yield* sql<LegacyMessageRow>`
+      const latestUser = yield* sql<LegacyMessageRow>`
         SELECT
           message.message_id,
           message.thread_id,
@@ -425,12 +424,14 @@ const make = Effect.gen(function* () {
         ORDER BY message.created_at DESC, message.message_id DESC
         LIMIT 1
       `;
-    return [latestUser[0], latest[0]].filter(
-      (message, index, selected): message is LegacyMessageRow =>
-        message !== undefined &&
-        selected.findIndex((candidate) => candidate?.message_id === message.message_id) === index,
-    );
-  });
+      return [latestUser[0], latest[0]].filter(
+        (message, index, selected): message is LegacyMessageRow =>
+          message !== undefined &&
+          selected.findIndex((candidate) => candidate?.message_id === message.message_id) === index,
+      );
+    },
+    (effect) => NodeSqliteClient.readOnly(sql.withTransaction(effect)),
+  );
 
   const reconcileShellsBase = Effect.gen(function* () {
     const now = DateTime.formatIso(yield* DateTime.now);
@@ -476,7 +477,7 @@ const make = Effect.gen(function* () {
          OR json_type(projection.payload_json, '$.branchPullRequest') IS NULL
          OR json_type(projection.payload_json, '$.activeOrderKey') IS NULL
       ORDER BY thread.created_at ASC, thread.thread_id ASC
-    `;
+    `.pipe(NodeSqliteClient.readOnly);
     let repairedThreadCount = 0;
     for (const row of repairRows) {
       const decoded = decodeStoredThread(row.payload_json);
@@ -574,7 +575,7 @@ const make = Effect.gen(function* () {
           AND event.event_type = 'thread.created'
       )
       ORDER BY thread.created_at ASC, thread.thread_id ASC
-    `;
+    `.pipe(NodeSqliteClient.readOnly);
     let importedThreadCount = repairedThreadCount;
     let importedMessageCount = 0;
     for (const row of rows) {

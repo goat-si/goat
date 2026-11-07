@@ -2,6 +2,7 @@ import type { FleetConnection } from "@goat/client-runtime/state/fleet-connectio
 import type { FleetCloudRun } from "@goat/client-runtime/state/fleet-cloud-agents";
 import type { FleetMachine, FleetThread } from "@goat/client-runtime/state/fleet";
 import {
+  fleetIdleBillingLabel,
   fleetMachineSubtitle,
   fleetMachineWork,
 } from "@goat/client-runtime/state/fleet-machine-description";
@@ -167,6 +168,8 @@ export function FleetCloudRunRow(props: {
 type QuietMachineProps = {
   readonly machine: FleetMachine;
   readonly connection: FleetConnection | undefined;
+  /** For a running Boat machine nothing runs on, which Boat still bills: the server that owns it. */
+  readonly idleBillingOwner: string | null;
   readonly bordered: boolean;
   readonly onOpenConnections: () => void;
 };
@@ -194,7 +197,12 @@ function QuietMachineRow(props: QuietMachineProps & { readonly age: string | nul
         .filter((part) => part !== null)
         .join(" · ");
   const subtitle = fleetMachineSubtitle(machine);
-  const meta = machine.answering && subtitle !== null ? status + " · " + subtitle : status;
+  const meta = [
+    machine.answering && subtitle !== null ? status + " · " + subtitle : status,
+    props.idleBillingOwner === null ? null : fleetIdleBillingLabel(props.idleBillingOwner),
+  ]
+    .filter((part) => part !== null)
+    .join(" · ");
   return (
     <FleetRow
       icon={<FleetMachineDot connection={connection} />}

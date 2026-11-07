@@ -22,6 +22,9 @@ import {
   type PreviewAutomationFetchResult,
   type PreviewAutomationRead,
   type PreviewAutomationFillSecretResult,
+  type PreviewAutomationFillLoginResult,
+  type PreviewAutomationFillCardResult,
+  type PreviewAutomationFillOneTimeCodeResult,
   type PreviewAutomationScrollCollectResult,
   type PreviewAutomationSnapshot,
   type PreviewAutomationLogs,
@@ -141,6 +144,9 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
       "fetch",
       "read",
       "fillSecret",
+      "fillLogin",
+      "fillCard",
+      "fillOneTimeCode",
     ].includes(operation)
   )
     return { result, ...safety };
@@ -346,9 +352,29 @@ const handlers = {
         Effect.gen(function* () {
           yield* McpInvocationContext.requireThreadMcpCapability("preview");
           yield* McpToolAccess.admit(input);
-          return yield* invokeTargeted<PreviewAutomationStatus>(
+          const { target, url, ...openInput } = input;
+          const opened = yield* invokeTargeted<PreviewAutomationStatus>(
             "open",
-            normalizePreviewOpenInput(input),
+            normalizePreviewOpenInput(
+              target === undefined && url !== undefined ? { ...openInput, url } : openInput,
+            ),
+          );
+          if (target === undefined || opened.tabId === null) return opened;
+          return yield* invokeTargeted<PreviewAutomationStatus>("navigate", {
+            target,
+            tabId: opened.tabId,
+          }).pipe(
+            Effect.mapError((error) =>
+              Object.assign(error, {
+                safety: {
+                  possibleCommit: true,
+                  retryClass: "same_key" as const,
+                  writeStatus: "may_have_applied" as const,
+                  code: "write_partial" as const,
+                },
+                next: "The tab opened but navigation failed; inspect it before retrying.",
+              }),
+            ),
           );
         }),
       { admission: "handler" },
@@ -402,6 +428,25 @@ const handlers = {
   goat_preview_fill_secret: McpToolAccess.destructive(
     McpToolAccess.actsAsCaller((input) =>
       invokeTargeted<PreviewAutomationFillSecretResult>("fillSecret", input, input.timeoutMs),
+    ),
+  ),
+  goat_preview_fill_login: McpToolAccess.destructive(
+    McpToolAccess.actsAsCaller((input) =>
+      invokeTargeted<PreviewAutomationFillLoginResult>("fillLogin", input, input.timeoutMs),
+    ),
+  ),
+  goat_preview_fill_card: McpToolAccess.destructive(
+    McpToolAccess.actsAsCaller((input) =>
+      invokeTargeted<PreviewAutomationFillCardResult>("fillCard", input, input.timeoutMs),
+    ),
+  ),
+  goat_preview_fill_one_time_code: McpToolAccess.destructive(
+    McpToolAccess.actsAsCaller((input) =>
+      invokeTargeted<PreviewAutomationFillOneTimeCodeResult>(
+        "fillOneTimeCode",
+        input,
+        input.timeoutMs,
+      ),
     ),
   ),
   preview_hover: McpToolAccess.actsAsCaller((input) =>

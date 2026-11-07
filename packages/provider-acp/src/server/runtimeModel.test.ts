@@ -1046,10 +1046,7 @@ describe("AcpRuntimeModel", () => {
         data: { rawOutput: "Retained the implementation decisions." },
       },
     });
-    expect(idle.events[0]).toMatchObject({
-      _tag: "UsageUpdated",
-      usage: { usedTokens: 420 },
-    });
+    expect(idle.events).toEqual([]);
   });
 
   it("applies ACP v2 agent-owned terminal snapshots and output chunks", () => {
@@ -1365,6 +1362,23 @@ describe("extractMcpToolCallIdentity", () => {
         server: "goat",
         tool: "delegate_task",
       });
+    }
+  });
+
+  it("recognizes Kiro @goat titles only for known tools", () => {
+    for (const [title, expected] of [
+      ["@goat/html_render", { server: "goat", tool: "html_render" }],
+      ["@goat/delegate_task", { server: "goat", tool: "delegate_task" }],
+      ["@goat/not_a_real_tool", undefined],
+    ] as const) {
+      const call = toolCallFromUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "kiro",
+        kind: "other",
+        title,
+        status: "pending",
+      });
+      expect(extractMcpToolCallIdentity(call), title).toEqual(expected);
     }
   });
 

@@ -3,6 +3,34 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./socketFrameParts": {
+      "types": "./src/socketFrameParts.ts",
+      "import": "./src/socketFrameParts.ts"
+    },
+    "./timedShutdownPhase": {
+      "types": "./src/timedShutdownPhase.ts",
+      "import": "./src/timedShutdownPhase.ts"
+    },
+    "./collectStreamText": {
+      "types": "./src/collectStreamText.ts",
+      "import": "./src/collectStreamText.ts"
+    },
+    "./randomUuid": {
+      "types": "./src/randomUuid.ts",
+      "import": "./src/randomUuid.ts"
+    },
+    "./motionTokens": {
+      "types": "./src/motionTokens.ts",
+      "import": "./src/motionTokens.ts"
+    },
+    "./toolPriority": {
+      "types": "./src/toolPriority.ts",
+      "import": "./src/toolPriority.ts"
+    },
+    "./stallAwareQuiet": {
+      "types": "./src/stallAwareQuiet.ts",
+      "import": "./src/stallAwareQuiet.ts"
+    },
     "./urlCredentialRedaction": {
       "types": "./src/urlCredentialRedaction.ts",
       "import": "./src/urlCredentialRedaction.ts"
@@ -114,6 +142,10 @@
     "./themePreview": {
       "types": "./src/themePreview.ts",
       "import": "./src/themePreview.ts"
+    },
+    "./textDirection": {
+      "types": "./src/textDirection.ts",
+      "import": "./src/textDirection.ts"
     },
     "./projectFavicon": {
       "types": "./src/projectFavicon.ts",
@@ -307,6 +339,10 @@
       "types": "./src/cliArgs.ts",
       "import": "./src/cliArgs.ts"
     },
+    "./closedPipe": {
+      "types": "./src/closedPipe.ts",
+      "import": "./src/closedPipe.ts"
+    },
     "./connectAuth": {
       "types": "./src/connectAuth.ts",
       "import": "./src/connectAuth.ts"
@@ -342,6 +378,10 @@
     "./composerTrigger": {
       "types": "./src/composerTrigger.ts",
       "import": "./src/composerTrigger.ts"
+    },
+    "./pullRequestComposerTrigger": {
+      "types": "./src/pullRequestComposerTrigger.ts",
+      "import": "./src/pullRequestComposerTrigger.ts"
     },
     "./composerInlineTokens": {
       "types": "./src/composerInlineTokens.ts",
@@ -523,6 +563,10 @@
       "types": "./src/nodeSqliteClient.ts",
       "import": "./src/nodeSqliteClient.ts"
     },
+    "./readerAdmission": {
+      "types": "./src/readerAdmission.ts",
+      "import": "./src/readerAdmission.ts"
+    },
     "./orchestrationV2BoundedSnapshot": {
       "types": "./src/orchestrationV2BoundedSnapshot.ts",
       "import": "./src/orchestrationV2BoundedSnapshot.ts"
@@ -530,6 +574,10 @@
     "./orchestrationV2DedupedBodies": {
       "types": "./src/orchestrationV2DedupedBodies.ts",
       "import": "./src/orchestrationV2DedupedBodies.ts"
+    },
+    "./threadTextAppend": {
+      "types": "./src/threadTextAppend.ts",
+      "import": "./src/threadTextAppend.ts"
     },
     "./orchestrationV2Timeline": {
       "types": "./src/orchestrationV2Timeline.ts",
@@ -595,6 +643,10 @@
       "types": "./src/markdownFrontmatter.ts",
       "import": "./src/markdownFrontmatter.ts"
     },
+    "./markdownTaskList": {
+      "types": "./src/markdownTaskList.ts",
+      "import": "./src/markdownTaskList.ts"
+    },
     "./markdownListIndentation": {
       "types": "./src/markdownListIndentation.ts",
       "import": "./src/markdownListIndentation.ts"
@@ -654,6 +706,14 @@
     "./mcpResponsePayloads": {
       "types": "./src/mcpResponsePayloads.ts",
       "import": "./src/mcpResponsePayloads.ts"
+    },
+    "./processErrorNet": {
+      "types": "./src/processErrorNet.ts",
+      "import": "./src/processErrorNet.ts"
+    },
+    "./errorGuards": {
+      "types": "./src/errorGuards.ts",
+      "import": "./src/errorGuards.ts"
     },
     "./PtyAdapter": {
       "types": "./src/PtyAdapter.ts",

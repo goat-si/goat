@@ -14,7 +14,7 @@ export interface GeneratedSummary {
 }
 
 export interface SummaryPromotions {
-  /** The final chunk's input, which the candidates cite. */
+  /** The answering chunk's input, which the candidates cite. */
   readonly input: M.GenerateMemorySummaryInput;
   readonly candidates: NonNullable<M.GenerateMemorySummaryOutcome["promotions"]>;
   readonly execution: M.MemoryGenerationExecution;
@@ -23,7 +23,7 @@ export interface SummaryPromotions {
 /**
  * Summarizes every bounded source chunk in order. A chunk with nothing durable leaves the previous
  * summary standing and later chunks still run; the last useful chunk is the result. Promotion is
- * asked for on the final chunk only, when the model sees the whole accumulated summary.
+ * requested on every chunk with messages; the latest answer replaces the earlier one.
  */
 export const generateSummaryChunks = Effect.fn("MemoryWorker.generateSummaryChunks")(function* <
   E,
@@ -57,7 +57,7 @@ export const generateSummaryChunks = Effect.fn("MemoryWorker.generateSummaryChun
     // Empty filtered pages still consume their bounded source range. A trailing
     // empty page completes the work without sending an invalid empty model input.
     if (source.messages.length) {
-      const input = yield* options.buildInput(source, previousSummary, final && options.promote);
+      const input = yield* options.buildInput(source, previousSummary, options.promote);
       yield* options.renewClaim;
       const output = yield* options.generate(input);
       if (!options.sameExecution(output.execution))

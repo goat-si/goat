@@ -36,6 +36,7 @@ import {
   updateEasDeviceHosts,
 } from "./easDeviceHostsSettings.logic";
 import { SecretInput } from "./SecretInput";
+import { SecretReferencePicker } from "./SecretReferencePicker";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsRow } from "./settingsLayout";
 
@@ -171,6 +172,7 @@ function EasDeviceHostEditor(props: {
 }) {
   const check = useAtomCommand(deviceEnvironment.easAccount, { reportFailure: false });
   const [draft, setDraft] = useState(props.host);
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
   const tokenId = useId();
   // A saved token arrives redacted; only a replacement or a clear changes it.
   const [token, setToken] = useState<
@@ -181,11 +183,12 @@ function EasDeviceHostEditor(props: {
   const openCheck = useAtomValue(
     deviceEasAccountCheck({
       environmentId: props.environmentId,
-      input: props.host.accessToken
-        ? props.isNew
-          ? {}
-          : { hostId: props.host.id }
-        : { accessToken: "" },
+      input:
+        props.host.accessToken || props.host.accessTokenReference
+          ? props.isNew
+            ? {}
+            : { hostId: props.host.id }
+          : { accessToken: "" },
     }),
   );
   const [checked, setAccount] = useState<AccountCheck | null>(null);
@@ -200,7 +203,13 @@ function EasDeviceHostEditor(props: {
     ...draft,
     label: draft.label.trim(),
     accessToken:
-      token.kind === "saved" ? props.host.accessToken : token.kind === "new" ? token.value : "",
+      draft.accessTokenReference != null
+        ? ""
+        : token.kind === "saved"
+          ? props.host.accessToken
+          : token.kind === "new"
+            ? token.value
+            : "",
   };
   const valid = Option.isSome(parseEasDeviceHostDraft(next));
   // Why Save is off, for the limits the fields' ranges do not show.
@@ -223,6 +232,9 @@ function EasDeviceHostEditor(props: {
     const result = await check({
       environmentId: props.environmentId,
       input: {
+        ...(draft.accessTokenReference != null
+          ? { accessTokenReference: draft.accessTokenReference }
+          : {}),
         ...(token.kind === "saved" && !props.isNew ? { hostId: props.host.id } : {}),
         // A cleared token is sent as empty, so the check does not fall back to
         // the saved one that Save is about to drop.
@@ -307,27 +319,29 @@ function EasDeviceHostEditor(props: {
                 Expo access token
               </label>
               <div className="flex items-center gap-2">
-                <SecretInput
-                  id={tokenId}
-                  className="min-w-0 flex-1"
-                  configured={token.kind === "saved"}
-                  value={token.kind === "new" ? token.value : ""}
-                  disabled={props.busy}
-                  placeholder="Optional"
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    // Emptying the field is not clearing the saved token; the
-                    // Clear button is, so a saved token comes back here.
-                    setToken(
-                      value
-                        ? { kind: "new", value }
-                        : props.host.accessToken
-                          ? { kind: "saved" }
-                          : { kind: "cleared" },
-                    );
-                    resetAccount();
-                  }}
-                />
+                {draft.accessTokenReference == null && (
+                  <SecretInput
+                    id={tokenId}
+                    className="min-w-0 flex-1"
+                    configured={token.kind === "saved"}
+                    value={token.kind === "new" ? token.value : ""}
+                    disabled={props.busy}
+                    placeholder="Optional"
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      // Emptying the field is not clearing the saved token; the
+                      // Clear button is, so a saved token comes back here.
+                      setToken(
+                        value
+                          ? { kind: "new", value }
+                          : props.host.accessToken
+                            ? { kind: "saved" }
+                            : { kind: "cleared" },
+                      );
+                      resetAccount();
+                    }}
+                  />
+                )}
                 {token.kind !== "cleared" ? (
                   <Button
                     type="button"
@@ -336,6 +350,7 @@ function EasDeviceHostEditor(props: {
                     aria-label="Clear access token"
                     onClick={() => {
                       setToken({ kind: "cleared" });
+                      setDraft((current) => ({ ...current, accessTokenReference: null }));
                       resetAccount();
                     }}
                   >
@@ -343,6 +358,17 @@ function EasDeviceHostEditor(props: {
                   </Button>
                 ) : null}
               </div>
+              {config?.easSecretReferences === true && (
+                <SecretReferencePicker
+                  environmentId={props.environmentId}
+                  value={draft.accessTokenReference ?? undefined}
+                  onChange={(value) => {
+                    setDraft((current) => ({ ...current, accessTokenReference: value ?? null }));
+                    setToken({ kind: "cleared" });
+                    resetAccount();
+                  }}
+                />
+              )}
             </div>
             <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2.5">
               <p role="status" className="min-w-0 text-xs text-muted-foreground">

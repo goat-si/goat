@@ -21,7 +21,7 @@
 //
 // test-windows runs WINDOWS_SUITES on hosted Windows: in lane=all, in the windows lane, with the
 // ci:windows label, and on a pull request that changes one of those paths. Its job has a 30-minute
-// timeout and never runs on EPYC.
+// timeout.
 //
 // smoke-linux-computer-use builds the Linux computer use helper and runs its live smoke on a
 // private Xvfb display, hosted only since it installs packages: in lane=all, and on a pull request
@@ -65,6 +65,8 @@ const WINDOWS_SUITES = [
   "scripts/build-computer-use-helper",
 ];
 const WINDOWS_TASK = "test-windows";
+/** Every workspace package suite no other task owns, listed by packageSuites. */
+const PACKAGES_TASK = "test-packages";
 /** Paths whose change selects the Linux computer use smoke. */
 const LINUX_COMPUTER_USE_PATHS = [
   "apps/server/src/cua/linuxHelper/",
@@ -98,6 +100,7 @@ const SERVER_RUN_CONFIG = [
   "vite.config.ts",
   "apps/server/vite.config.ts",
   "packages/shared/src/testing/longTempDir.ts",
+  "packages/shared/src/testing/providerEnv.ts",
   "apps/server/src/testUtils/gitConfig.setup.ts",
 ];
 /** Selected server tests carrying at least this share of the suite's time run as the full suite. */
@@ -124,6 +127,7 @@ const TASKS = [
   "check",
   "typecheck",
   "test",
+  PACKAGES_TASK,
   "test-ssh",
   "test-desktop",
   "test-contracts",
@@ -142,7 +146,8 @@ const TASKS = [
 const MATRIX_ORDER = ["check", "typecheck", CHANGED_TESTS_TASK, ...TASKS.slice(2)];
 /**
  * Minutes of plain Node work with no browsers, native headers or need for many cores. They run on
- * hosted ubuntu-24.04 even in trusted runs, so they never queue behind half-hour EPYC server shards.
+ * hosted ubuntu-24.04 even if a self-hosted pool returns, so they never queue behind half-hour
+ * server shards.
  */
 const HOSTED_TASKS = new Set([
   "check",
@@ -157,14 +162,7 @@ const HOSTED_TASKS = new Set([
 
 /** Workspace packages each task tests or builds. A change in their dependency closure selects the task. */
 const TASK_ROOTS = {
-  test: [
-    "apps/web",
-    "packages/provider-core",
-    "packages/provider-opencode",
-    "packages/provider-cursor",
-    "packages/provider-grok",
-    "packages/provider-acp",
-  ],
+  test: ["apps/web"],
   "test-ssh": ["packages/ssh"],
   "test-desktop": ["apps/desktop"],
   "test-contracts": ["packages/contracts"],
@@ -175,6 +173,41 @@ const TASK_ROOTS = {
   "test-relay": ["infra/relay"],
   build: ["apps/desktop", "apps/server"],
 };
+
+/** Package directories whose suites a task of their own runs, so test-packages leaves them out. */
+const OWNED_SUITES = new Set([...Object.values(TASK_ROOTS).flat(), "infra/ingest"]);
+
+/** packages/* directories test-packages covers; a change in their dependency closure selects it. */
+const packageSuiteDirs = (workspace) =>
+  [...workspace.keys()].filter((dir) => dir.startsWith("packages/") && !OWNED_SUITES.has(dir));
+
+/**
+ * Names of the workspace packages test-packages runs: every one with a test script that no other
+ * task owns, so a new package is tested without editing goat-ci.yml. scripts keeps its own list.
+ */
+function packageSuiteManifests(root) {
+  const dirs = ["oxlint-plugin-goat"];
+  for (const parent of ["apps", "packages", "infra"]) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(path.join(root, parent), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) if (entry.isDirectory()) dirs.push(parent + "/" + entry.name);
+  }
+  const manifests = [];
+  for (const dir of dirs.sort()) {
+    if (OWNED_SUITES.has(dir)) continue;
+    const file = path.join(root, dir, "package.json");
+    if (!fs.existsSync(file)) continue;
+    const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof manifest.scripts?.test === "string") manifests.push([dir, manifest.name]);
+  }
+  return manifests;
+}
+
+const packageSuites = (root) => packageSuiteManifests(root).map(([, name]) => name);
 
 /**
  * apps/server lists @goat/web only so its build runs after the web build. Server
@@ -382,18 +415,25 @@ function reachesMemoryGrowth(changed, graph) {
  * reasons maps each selected task (or "full") to the first file that chose it and server is the
  * plan for test-server. Without a graph the server suite runs in full when selected.
  */
-function selectTasks(files, workspace, { graph, weights = {} } = {}) {
+function selectTasks(
+  files,
+  workspace,
+  { graph, weights = {}, root = path.resolve(__dirname, "../..") } = {},
+) {
   const reasons = new Map();
   const choose = (task, file) => {
     if (!reasons.has(task)) reasons.set(task, file);
   };
   const changed = new Map();
+  const suiteDirs = packageSuiteManifests(root).map(([dir]) => dir + "/");
   for (const file of files) {
+    if (file === "packages/shared/src/testing/providerEnv.ts") return everything(file);
     if (isDocument(file)) continue;
     // A dependency change can move any task, and the release version check reads every manifest.
     if (path.posix.basename(file) === "package.json") return everything(file);
     // The ingest Worker's suite covers its SQL and config and the shared allowlist.
     if (INGEST_SUITE_TRIGGER.test(file)) choose("test-ingest", file);
+    if (suiteDirs.some((dir) => file.startsWith(dir))) choose(PACKAGES_TASK, file);
     if (TYPECHECK_ONLY_RE.test(file)) {
       choose("typecheck", file);
       continue;
@@ -403,7 +443,8 @@ function selectTasks(files, workspace, { graph, weights = {} } = {}) {
     choose("typecheck", file);
     if (!changed.has(dir)) changed.set(dir, file);
   }
-  for (const [task, roots] of Object.entries(TASK_ROOTS)) {
+  const taskRoots = { ...TASK_ROOTS, [PACKAGES_TASK]: packageSuiteDirs(workspace) };
+  for (const [task, roots] of Object.entries(taskRoots)) {
     const reach = closure(workspace, roots, task === "build" ? [] : BUILD_ONLY_EDGES);
     for (const [dir, file] of changed) {
       if (reach.has(dir)) {
@@ -454,13 +495,14 @@ function selectTasks(files, workspace, { graph, weights = {} } = {}) {
 
 /**
  * The ci job matrix; test-server expands into its shards. Each entry carries the job title and its
- * runner pool, hosted, epyc or windows; goat-ci.yml sends only trusted runs' epyc entries to EPYC.
+ * runner pool, hosted, linux or windows. goat-ci.yml runs hosted and linux entries on ubuntu-24.04
+ * since the EPYC pool was retired; linux marks the heavy work a self-hosted pool would take.
  */
 function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
   const include = [];
   for (const task of MATRIX_ORDER) {
     if (!tasks.includes(task)) continue;
-    const runner = task === WINDOWS_TASK ? "windows" : HOSTED_TASKS.has(task) ? "hosted" : "epyc";
+    const runner = task === WINDOWS_TASK ? "windows" : HOSTED_TASKS.has(task) ? "hosted" : "linux";
     if (task === "test-server") {
       const related = server.mode === "related";
       const count = related ? server.shards : SERVER_SHARDS;
@@ -665,6 +707,7 @@ async function planTasks({ env, payload, root, fetchImpl, files }) {
         ...selectTasks(changed, readWorkspace(root), {
           graph: buildImportGraph(root),
           weights: readServerWeights(root),
+          root,
         }),
         quick: false,
         affected: true,
@@ -798,6 +841,7 @@ module.exports = {
   MEMORY_LABEL,
   WINDOWS_LABEL,
   WINDOWS_SUITES,
+  PACKAGES_TASK,
   LANES,
   TASKS,
   CHANGED_TESTS_TASK,
@@ -808,6 +852,7 @@ module.exports = {
   isDocument,
   readWorkspace,
   readServerWeights,
+  packageSuites,
   closure,
   planServerTests,
   reachesMemoryGrowth,

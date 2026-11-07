@@ -86,6 +86,7 @@ export const ServerSelfUpdateCapability = Schema.Literals([
 export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
+  freshContext: Schema.optionalKey(Schema.Boolean),
   memoryHubProtocolVersion: Schema.optionalKey(Schema.Int),
   memory: Schema.optionalKey(
     Schema.Struct({
@@ -111,6 +112,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   attachmentUploads: Schema.optionalKey(Schema.Boolean),
   questionAttachments: Schema.optionalKey(Schema.Boolean),
+  /** GOAT Bot input takes uploaded attachments; absent on servers that refuse them. */
+  goatBotAttachments: Schema.optionalKey(Schema.Boolean),
   fileAttachments: Schema.optionalKey(
     Schema.Struct({
       maxUploadBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
@@ -125,6 +128,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
   storageCleanup: Schema.optionalKey(Schema.Boolean),
   storageCleanupRun: Schema.optionalKey(Schema.Boolean),
+  /** Server snapshots worktrees before cleanup and answers `thread.getWorkspaceStatus` / `thread.restoreWorkspace`. */
+  worktreeRestore: Schema.optionalKey(Schema.Boolean),
   databaseStorage: Schema.optionalKey(Schema.Boolean),
   otlpEndpointCheck: Schema.optionalKey(Schema.Boolean),
   projectWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
@@ -140,6 +145,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can exclude PR-linked threads from inactivity settlement. */
   threadAutoSettlementScope: Schema.optionalKey(Schema.Boolean),
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
+  codexTurnSurvival: Schema.optionalKey(Schema.Boolean),
+  /** Server honors `codexAppServerIsolation` for new Codex threads. */
+  codexAppServerIsolation: Schema.optionalKey(Schema.Boolean),
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
   /** Hide the switch when absent; older servers silently drop per-project provider patches. */
   projectProviderInstanceOverrides: Schema.optionalKey(Schema.Boolean),
@@ -198,6 +206,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Only explicit false skips Live Activity seeding; older servers may still publish. */
   agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
+  /** Server keeps `pinned` and `archived` from project.update. Older servers drop them. */
+  projectOrganization: Schema.optionalKey(Schema.Boolean),
   /** Server answers projects.listIgnoredFiles. */
   ignoredFileListing: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
@@ -224,6 +234,13 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotHome: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.getBotStatus`. Older servers leave clients paging `listTasks`. */
   goatBotStatus: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.listBots`. */
+  goatBotProfiles: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.updateBot`, and the main bot's sessions carry its name and purpose. */
+  goatBotProfileEdit: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.listChildWork`. */
+  goatBotChildWork: Schema.optionalKey(Schema.Boolean),
+  goatBotTaskThreads: Schema.optionalKey(Schema.Boolean),
   /** `channel.getBotStatus` leaves out tasks that were waiting when the bot thread was last visited. */
   goatBotWaitingRead: Schema.optionalKey(Schema.Boolean),
   /** Server runs a live Slack channel connection. False while only the settings contract exists. */

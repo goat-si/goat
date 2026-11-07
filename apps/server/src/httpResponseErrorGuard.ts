@@ -1,7 +1,8 @@
 // These guards run on the raw Node HTTP server before Effect handles requests.
 // @effect-diagnostics nodeBuiltinImport:off
-import type * as NodeHttp from "node:http";
+import * as NodeHttp from "node:http";
 import type * as NodeStream from "node:stream";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 export function guardHttpResponseWriteErrors<T extends NodeHttp.Server>(
   server: T,
@@ -19,6 +20,12 @@ export function guardHttpResponseWriteErrors<T extends NodeHttp.Server>(
   });
   return server;
 }
+
+/** The server's own 'error' is heard by NodeHttpServer, which listens before it calls listen(). */
+export const createGuardedHttpServer = () =>
+  rejectRequestsUntilServing(
+    guardHttpResponseWriteErrors(guardErrors(NodeHttp.createServer(), () => {})),
+  );
 
 /**
  * NodeHttpServer listens before serve() attaches its handlers, so requests in

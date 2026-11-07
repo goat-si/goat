@@ -265,7 +265,12 @@ describe("fleetHostRows", () => {
       },
       createdAt: "2026-10-24T09:00:00.000Z",
       updatedAt: "2026-10-24T09:00:00.000Z",
-      source: {},
+      latestUserMessageAt: null,
+      pinnedAt: null,
+      settledOverride: null,
+      snoozedUntil: null,
+      snoozedAt: null,
+      source: { pendingRuntimeRequest: null },
     };
     const fleet = buildFleet({
       environments: [
@@ -359,6 +364,27 @@ describe("fleetHostRows", () => {
       [hostSourceKey(studio, "lidge-ai"), hostSourceKey(studio, "lidge-ai"), "ok"],
       [hostSourceKey(other, "box"), hostSourceKey(other, "box"), "ok"],
     ]);
+  });
+
+  it("does not list a hidden Boat machine's readings as other hosts, but keeps a namesake elsewhere", () => {
+    const other = EnvironmentId.make("other");
+    const rows = fleetHostRows({
+      machines: [machine("studio", { environmentId: studio })],
+      sshAliases: new Map(),
+      reports: reportsOf(
+        {
+          environmentId: studio,
+          hosts: [entry(null), entry("devbox", { noMetrics: true }), entry("boat-bx_abcdefgh")],
+        },
+        { environmentId: other, hosts: [entry("devbox"), entry("boat-bx_abcdefgh")] },
+      ),
+      primaryEnvironmentId: studio,
+      hidden: {
+        routes: [{ via: studio, alias: "devbox" }],
+        cloudAliases: ["boat-bx_abcdefgh"],
+      },
+    });
+    expect(rows.map((row) => row.key)).toEqual(["studio", hostSourceKey(other, "devbox")]);
   });
 });
 
@@ -601,6 +627,41 @@ describe("fleetAlerts", () => {
     expect(
       view(fleetAlerts(oneMachine([]), new Map([["studio", away]]), NOW, { environmentOf })),
     ).toEqual([["muted", "Unreachable for 4m 0s · No route to host", "retry"]]);
+  });
+
+  it("warns about a running Boat machine nothing runs on, linking to settings only where it is owned", () => {
+    const rows = fleetHostRows({
+      machines: [
+        machine("studio", { environmentId: studio }),
+        machine("near", { kind: "cloud", answering: false }),
+        machine("far", { kind: "cloud", answering: false }),
+      ],
+      sshAliases: new Map(),
+      reports: reportsOf({ environmentId: studio, hosts: [entry(null)] }),
+      primaryEnvironmentId: studio,
+    });
+    const alerts = fleetAlerts(rows, new Map(), NOW, {
+      idleBilling: new Map([
+        ["near", { owner: studio, ownerLabel: "studio", ownedHere: true }],
+        ["far", { owner: mini, ownerLabel: "mini", ownedHere: false }],
+      ]),
+    });
+    expect(
+      alerts.map((alert) => [alert.label, alert.tone, alert.detail, alert.action ?? null]),
+    ).toEqual([
+      [
+        "near",
+        "warning",
+        "Running with nothing on it; Boat bills while it runs",
+        { kind: "cloud_machines", environmentId: studio },
+      ],
+      [
+        "far",
+        "warning",
+        "Running with nothing on it; Boat bills while it runs. Stop it from mini's Settings → Connections → Cloud machines",
+        null,
+      ],
+    ]);
   });
 
   it("blames a silent host's oversized history in one alert that offers to compact", () => {

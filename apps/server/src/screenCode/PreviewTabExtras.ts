@@ -1,6 +1,12 @@
 import {
   PreviewAutomationEvaluateInput,
   PreviewAutomationFillSecretInput,
+  PreviewAutomationFillCardInput,
+  PreviewAutomationFillCardResult,
+  PreviewAutomationFillOneTimeCodeInput,
+  PreviewAutomationFillOneTimeCodeResult,
+  PreviewAutomationFillLoginInput,
+  PreviewAutomationFillLoginResult,
   PreviewAutomationLogsInput,
   PreviewAutomationUploadInput,
   type ScreenRunError,
@@ -102,18 +108,146 @@ const fillTabSecret = Effect.fn("PreviewTargetHost.fillSecret")(function* (
   return { value, category: "unverifiable" as const, evidence: ["Secret fill completed"] };
 });
 
+const isLogin = Schema.is(PreviewAutomationFillLoginInput);
+const isLoginResult = Schema.is(PreviewAutomationFillLoginResult);
+const fillTabLogin = Effect.fn("PreviewTargetHost.fillLogin")(function* (
+  arg: Record<string, unknown>,
+  invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
+) {
+  const input = { secretRef: arg.secretRef };
+  if (!isLogin(input))
+    return yield* Effect.fail({
+      code: "invalid_argument" as const,
+      effectStarted: false,
+      nextStep: "Provide a login reference.",
+    });
+  const value = yield* invoke(input);
+  if (!isLoginResult(value))
+    return yield* Effect.fail({
+      code: "unknown_outcome" as const,
+      effectStarted: true,
+      nextStep: "Inspect the page before retrying.",
+    });
+  if (value.verdict === "confirmed" && (!value.usernameFilled || !value.passwordFilled))
+    return yield* Effect.fail({
+      code: "unknown_outcome" as const,
+      effectStarted: true,
+      nextStep: "Inspect the page before retrying.",
+    });
+  const confirmed = value.verdict === "confirmed";
+  return {
+    value,
+    category: confirmed ? ("confirmed" as const) : ("unverifiable" as const),
+    evidence: ["Login fill completed"],
+    outcome: {
+      dispatch: value.verdict === "refused" ? ("refused" as const) : ("confirmed" as const),
+      effect: confirmed ? ("confirmed" as const) : ("unknown" as const),
+    },
+  };
+});
+
+const isCard = Schema.is(PreviewAutomationFillCardInput);
+const isCardResult = Schema.is(PreviewAutomationFillCardResult);
+const fillTabCard = Effect.fn("PreviewTargetHost.fillCard")(function* (
+  arg: Record<string, unknown>,
+  invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
+) {
+  const input = { secretRef: arg.secretRef };
+  if (!isCard(input))
+    return yield* Effect.fail({
+      code: "invalid_argument" as const,
+      effectStarted: false,
+      nextStep: "Provide a card reference.",
+    });
+  const value = yield* invoke(input);
+  if (!isCardResult(value))
+    return yield* Effect.fail({
+      code: "unknown_outcome" as const,
+      effectStarted: true,
+      nextStep: "Inspect the page before retrying.",
+    });
+  if (value.verdict === "confirmed" && (!value.numberFilled || !value.cvcFilled))
+    return yield* Effect.fail({
+      code: "unknown_outcome" as const,
+      effectStarted: true,
+      nextStep: "Inspect the page before retrying.",
+    });
+  const confirmed = value.verdict === "confirmed";
+  return {
+    value,
+    category: confirmed ? ("confirmed" as const) : ("unverifiable" as const),
+    evidence: ["Card fill completed"],
+    outcome: {
+      dispatch: value.verdict === "refused" ? ("refused" as const) : ("confirmed" as const),
+      effect: confirmed ? ("confirmed" as const) : ("unknown" as const),
+    },
+  };
+});
+
+const isCode = Schema.is(PreviewAutomationFillOneTimeCodeInput);
+const isCodeResult = Schema.is(PreviewAutomationFillOneTimeCodeResult);
+const fillTabCode = Effect.fn("PreviewTargetHost.fillOneTimeCode")(function* (
+  arg: Record<string, unknown>,
+  invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
+) {
+  const input = { secretRef: arg.secretRef };
+  if (!isCode(input))
+    return yield* Effect.fail({
+      code: "invalid_argument" as const,
+      effectStarted: false,
+      nextStep: "Provide a login reference.",
+    });
+  const value = yield* invoke(input);
+  if (!isCodeResult(value) || (value.verdict === "confirmed" && !value.filled))
+    return yield* Effect.fail({
+      code: "unknown_outcome" as const,
+      effectStarted: true,
+      nextStep: "Inspect the page before retrying.",
+    });
+  const confirmed = value.verdict === "confirmed";
+  return {
+    value,
+    category: confirmed ? ("confirmed" as const) : ("unverifiable" as const),
+    evidence: ["Code fill completed"],
+    outcome: {
+      dispatch: value.verdict === "refused" ? ("refused" as const) : ("confirmed" as const),
+      effect: confirmed ? ("confirmed" as const) : ("unknown" as const),
+    },
+  };
+});
+
 export function dispatchTabExtra(
   method: string,
   arg: Record<string, unknown>,
   invalidatePoints: () => void,
   invalidateTarget: () => void,
   invoke: (
-    operation: "logs" | "fillSecret" | "dialog" | "evaluate" | "upload",
+    operation:
+      | "logs"
+      | "fillSecret"
+      | "fillLogin"
+      | "fillCard"
+      | "fillOneTimeCode"
+      | "dialog"
+      | "evaluate"
+      | "upload",
     input: unknown,
     documentGeneration?: number,
   ) => Effect.Effect<unknown, ScreenRunError>,
   upload?: { locator: string | undefined; documentGeneration: number | undefined },
 ) {
+  if (method === "tab_fill_one_time_code") {
+    invalidatePoints();
+    return fillTabCode(arg, (input) => invoke("fillOneTimeCode", input));
+  }
+  if (method === "tab_fill_card") {
+    invalidatePoints();
+    return fillTabCard(arg, (input) => invoke("fillCard", input));
+  }
+  if (method === "tab_fill_login") {
+    invalidatePoints();
+    return fillTabLogin(arg, (input) => invoke("fillLogin", input));
+  }
   if (method === "tab_logs") return readTabLogs(arg, (input) => invoke("logs", input));
   const inputResult = <A, E>(effect: Effect.Effect<A, E>) =>
     effect.pipe(

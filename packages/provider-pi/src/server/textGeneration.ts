@@ -6,6 +6,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { TextGenerationError } from "@goat/contracts";
 import type { PiSettings } from "../settings.ts";
+import { PI_PROFILE, type PiRuntimeProfile } from "./profile.ts";
 
 import { makePiRpcConnection, parsePiModelSlug, piRecordString } from "./rpc.ts";
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
@@ -17,16 +18,17 @@ const isTextGenerationError = Schema.is(TextGenerationError);
 
 // Pi's `errorMessage` is the provider's raw response text and can echo
 // credentials, so only a leading HTTP status reaches the error detail.
-const piTurnErrorDetail = (errorMessage: string | undefined) => {
+const piTurnErrorDetail = (errorMessage: string | undefined, name: string) => {
   const status = errorMessage?.match(/^([45]\d\d)\b/)?.[1];
   return status === undefined
-    ? "Pi could not generate text: the model provider reported an error."
-    : `Pi could not generate text: the model provider returned HTTP ${status}.`;
+    ? `${name} could not generate text: the model provider reported an error.`
+    : `${name} could not generate text: the model provider returned HTTP ${status}.`;
 };
 
 export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* (
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
+  profile: PiRuntimeProfile = PI_PROFILE,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -34,7 +36,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
     function* (request) {
       const { operation, cwd, prompt, modelSelection } = request;
 
-      const resolvedLaunchArgs = resolvePiLaunchArgs(piSettings.launchArgs);
+      const resolvedLaunchArgs = resolvePiLaunchArgs(piSettings.launchArgs, profile);
       if (!resolvedLaunchArgs.ok) {
         return yield* new TextGenerationError({
           operation,
@@ -47,12 +49,14 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
         mcpSession: undefined,
         extensionPath: undefined,
         ephemeral: true,
+        shortLived: true,
         disableExtensions: true,
         // Background naming/content helpers must never mutate the workspace.
         disableTools: true,
+        profile,
       });
       const connection = yield* makePiRpcConnection({
-        command: piSettings.binaryPath || "pi",
+        command: piSettings.binaryPath || profile.defaultBinary,
         args: launch.args,
         cwd,
         env: launch.env,
@@ -64,7 +68,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
         if (parsed === null) {
           return yield* new TextGenerationError({
             operation,
-            detail: `Pi model '${modelSelection.model}' must use provider/model format.`,
+            detail: `${profile.displayName} model '${modelSelection.model}' must use provider/model format.`,
           });
         }
         yield* connection
@@ -76,10 +80,10 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
                 ? new TextGenerationError({
                     operation,
                     detail:
-                      `Pi rejected model '${modelSelection.model}': ${error.detail ?? "unknown error"}. ` +
-                      "If the model comes from a Pi extension or package, text generation cannot use it " +
-                      "because it runs Pi with --no-extensions. Pick a built-in Pi model or one defined " +
-                      "in Pi's models.json.",
+                      `${profile.displayName} rejected model '${modelSelection.model}': ${error.detail ?? "unknown error"}. ` +
+                      `If the model comes from a ${profile.displayName} extension or package, text generation cannot use it ` +
+                      `because it runs ${profile.displayName} with --no-extensions. Pick a built-in ${profile.displayName} model or one defined ` +
+                      `in ${profile.displayName}'s models.json.`,
                     cause: error,
                   })
                 : error,
@@ -99,7 +103,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
           if (event["type"] === "message_end" && piRecordString(message, "role") === "assistant") {
             turnError =
               piRecordString(message, "stopReason") === "error"
-                ? piTurnErrorDetail(piRecordString(message, "errorMessage"))
+                ? piTurnErrorDetail(piRecordString(message, "errorMessage"), profile.displayName)
                 : undefined;
           }
         }
@@ -114,10 +118,10 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
       if (!text) {
         return yield* new TextGenerationError({
           operation,
-          detail: turnError ?? "Pi returned empty output.",
+          detail: turnError ?? `${profile.displayName} returned empty output.`,
         });
       }
-      return yield* TextGenerationOperations.decodeJsonReply(request, "Pi", text);
+      return yield* TextGenerationOperations.decodeJsonReply(request, profile.displayName, text);
     },
     (effect, request) => {
       const { operation } = request;
@@ -126,7 +130,12 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
         Effect.flatMap(
           Option.match({
             onNone: () =>
-              Effect.fail(new TextGenerationError({ operation, detail: "Pi request timed out." })),
+              Effect.fail(
+                new TextGenerationError({
+                  operation,
+                  detail: `${profile.displayName} request timed out.`,
+                }),
+              ),
             onSome: (value) => Effect.succeed(value),
           }),
         ),
@@ -135,7 +144,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
             ? cause
             : new TextGenerationError({
                 operation,
-                detail: "Pi text generation failed.",
+                detail: `${profile.displayName} text generation failed.`,
                 cause,
               }),
         ),
@@ -146,6 +155,6 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
 
   return TextGenerationOperations.fromRunner(
     "PiTextGeneration",
-    TextGenerationOperations.withoutInvestigation("Pi", runPiJson),
+    TextGenerationOperations.withoutInvestigation(profile.displayName, runPiJson),
   );
 });

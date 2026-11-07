@@ -58,6 +58,15 @@ export function sshRuntimeBuildOrder(status: SshHostStatus) {
       );
 }
 
+/** Whether the host can accept a runtime update from this app. */
+export function sshRuntimeCanBeUpdated(status: SshHostStatus) {
+  return !(
+    (status.state === "ready" || status.state === "providers_not_ready") &&
+    status.detail &&
+    !status.refreshDeferred
+  );
+}
+
 export function sshRuntimePhaseText(phase: SshRuntimePhase): string {
   switch (phase) {
     case "connecting":
@@ -115,7 +124,9 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
       const order = sshRuntimeBuildOrder(status);
       const label =
         order !== undefined && order < 0
-          ? "Update available"
+          ? sshRuntimeCanBeUpdated(status)
+            ? "Update available"
+            : "Kept"
           : order !== undefined && order > 0
             ? "Newer than this app"
             : "Kept";
@@ -124,6 +135,7 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
     case "update_waiting":
       return `Update waits for running work${runtime}`;
     case "update_blocked": {
+      if (status.detail !== undefined) return status.detail;
       const order =
         status.runtimeVersion === null
           ? undefined
@@ -201,11 +213,13 @@ export function sshRuntimeRecoveryText(status: SshHostStatus) {
         : "Register your public SSH key on the host, then try again.";
     case "providers_not_ready":
       return (
-        [status.providers?.fixes[0]?.instruction, deferredRecovery].filter(Boolean).join(" ") ||
-        null
+        [status.providers?.fixes[0]?.instruction, deferredRecovery ?? status.detail]
+          .filter(Boolean)
+          .join(" ") || null
       );
     case "ready": {
       if (deferredRecovery) return deferredRecovery;
+      if (status.detail) return status.detail;
       if (status.runtimeVersion === null) return null;
       if (status.runtimeVersion === status.requestedVersion) return null;
       const order = sshRuntimeBuildOrder(status);

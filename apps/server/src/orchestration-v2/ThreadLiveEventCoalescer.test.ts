@@ -9,10 +9,16 @@ import {
   TurnItemId,
   type OrchestrationV2ThreadStreamItem,
   type OrchestrationV2TurnItem,
+  OrchestrationV2RpcSchemas,
 } from "@goat/contracts";
+import {
+  makeThreadTextAppendDecoder,
+  makeThreadTextAppendEncoder,
+} from "@goat/shared/threadTextAppend";
 import { it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vite-plus/test";
@@ -154,6 +160,49 @@ function makeTextItem(
   };
 }
 
+const emptyProjection = {
+  thread: {
+    id: threadId,
+    projectId: ProjectId.make("project-reducer"),
+    title: "Reducer",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: null,
+    lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+    forkedFrom: null,
+    createdBy: "user",
+    creationSource: "web",
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    lastVisitedAt: null,
+    deletedAt: null,
+  },
+  runs: [],
+  attempts: [],
+  nodes: [],
+  subagents: [],
+  providerSessions: [],
+  providerThreads: [],
+  providerTurns: [],
+  runtimeRequests: [],
+  messages: [],
+  plans: [],
+  turnItems: [],
+  checkpointScopes: [],
+  checkpoints: [],
+  contextHandoffs: [],
+  contextTransfers: [],
+  visibleTurnItems: [],
+  updatedAt: now,
+} satisfies OrchestrationV2ThreadProjection;
+
 describe("ThreadLiveEventCoalescer", () => {
   it("preserves tool-call identity switches as insertion-order boundaries", () => {
     const events = [
@@ -268,48 +317,6 @@ describe("ThreadLiveEventCoalescer", () => {
           item(4, "a", "Final A", true),
           item(5, "b", "Final B", true),
         ];
-        const emptyProjection = {
-          thread: {
-            id: threadId,
-            projectId: ProjectId.make("project-reducer"),
-            title: "Reducer",
-            providerInstanceId: ProviderInstanceId.make("codex"),
-            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            activeProviderThreadId: null,
-            lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
-            forkedFrom: null,
-            createdBy: "user",
-            creationSource: "web",
-            createdAt: now,
-            updatedAt: now,
-            archivedAt: null,
-            settledOverride: null,
-            settledAt: null,
-            lastVisitedAt: null,
-            deletedAt: null,
-          },
-          runs: [],
-          attempts: [],
-          nodes: [],
-          subagents: [],
-          providerSessions: [],
-          providerThreads: [],
-          providerTurns: [],
-          runtimeRequests: [],
-          messages: [],
-          plans: [],
-          turnItems: [],
-          checkpointScopes: [],
-          checkpoints: [],
-          contextHandoffs: [],
-          contextTransfers: [],
-          visibleTurnItems: [],
-          updatedAt: now,
-        } satisfies OrchestrationV2ThreadProjection;
         const apply = (inputs: ReadonlyArray<ThreadEvent>, partialTimeline: boolean) => {
           let projection: OrchestrationV2ThreadProjection = emptyProjection;
           let latestLocalTurnOrdinal = 0;
@@ -493,3 +500,128 @@ it.effect("propagates an upstream failure instead of leaving the subscriber wait
     if (result._tag === "Failure") expect(result.failure).toBe("source stopped");
   }),
 );
+
+describe("live text appends", () => {
+  const seeded = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+  const pieces = ["a", "bc", " ", "é", "😀", "\n", "def"];
+  const ids = ["m1", "m2", "r1", "r2"];
+  const wire = Schema.toCodecJson(OrchestrationV2RpcSchemas.subscribeThread.output);
+  const toWire = Schema.encodeSync(wire);
+  const fromWire = Schema.decodeUnknownSync(wire);
+
+  const reasoning = (sequence: number, id: string, text: string, streaming: boolean) => {
+    const input = makeTextItem(sequence, {
+      id,
+      text,
+      type: "reasoning",
+      status: streaming ? "running" : "completed",
+      streaming,
+    });
+    if (input.event.type !== "turn-item.updated" || input.event.payload.type !== "reasoning")
+      throw new Error("Expected reasoning");
+    // The shared fixture carries an assistant `messageId` the wire schema drops from reasoning.
+    const { messageId: _messageId, ...payload } = { messageId: null, ...input.event.payload };
+    return {
+      ...input,
+      event: { ...input.event, payload: { ...payload, ordinal: ids.indexOf(id) } },
+    };
+  };
+
+  const history = (random: () => number) => {
+    const texts = new Map<string, string>();
+    const events: ThreadEvent[] = [];
+    for (let sequence = 1; sequence <= 120; sequence += 1) {
+      const roll = random();
+      if (roll < 0.05) {
+        events.push(
+          makeToolActivity(sequence, { kind: "tool.completed", toolCallId: `c${sequence}` }),
+        );
+        continue;
+      }
+      const id = ids[Math.floor(random() * ids.length)]!;
+      const previous = texts.get(id) ?? "";
+      const text =
+        roll < 0.09
+          ? previous.slice(0, Math.floor(random() * previous.length))
+          : roll < 0.12
+            ? `#${previous.slice(1)}`
+            : previous + pieces[Math.floor(random() * pieces.length)]!;
+      const streaming = random() > 0.05;
+      texts.set(id, text);
+      events.push(
+        id.startsWith("m")
+          ? makeStreamingMessage(sequence, { id, text, streaming })
+          : reasoning(sequence, id, text, streaming),
+      );
+    }
+    return events;
+  };
+
+  const deliver = (events: ReadonlyArray<ThreadEvent>, random: () => number) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const coalescer = yield* makeThreadLiveEventCoalescer({
+          maxItems: 100_000,
+          maxSerializedBytes: 1_000_000_000,
+        });
+        for (let index = 0; index < events.length;) {
+          const size = 1 + Math.floor(random() * 6);
+          yield* coalescer.offerAll(events.slice(index, index + size));
+          index += size;
+          if (random() < 0.7) yield* TestClock.adjust("50 millis");
+        }
+        yield* coalescer.end;
+        const encode = makeThreadTextAppendEncoder();
+        const items = yield* Stream.runCollect(coalescer.stream);
+        return Array.from(items, (item) => fromWire(toWire(encode(item))));
+      }),
+    );
+
+  const reduce = (projection: OrchestrationV2ThreadProjection, event: ThreadEvent["event"]) =>
+    applyOrchestrationV2ProjectionEvent(projection, event) ?? projection;
+
+  it.effect(
+    "converges on the server's text across random growth, rewrites, and resumes (seeded property)",
+    () =>
+      Effect.gen(function* () {
+        let appends = 0;
+        for (let seed = 1; seed <= 40; seed += 1) {
+          const random = seeded(seed);
+          const events = history(random);
+          const expected = events.reduce<OrchestrationV2ThreadProjection>(
+            (state, { event }) => reduce(state, event),
+            emptyProjection,
+          );
+          const last = events.at(-1)?.sequence ?? 0;
+          let projection: OrchestrationV2ThreadProjection = emptyProjection;
+          let applied = 0;
+          for (let attempt = 0; applied < last; attempt += 1) {
+            expect(attempt).toBeLessThan(100);
+            const delivered = yield* deliver(
+              events.filter((event) => event.sequence > applied),
+              random,
+            );
+            const decode = makeThreadTextAppendDecoder();
+            const received =
+              random() < 0.4 ? Math.floor(random() * delivered.length) : delivered.length;
+            for (const item of delivered.slice(0, received)) {
+              if (item.kind === "text-append") appends += 1;
+              const resolved = decode(item);
+              expect(resolved).not.toBeNull();
+              if (resolved?.kind !== "event" || resolved.sequence <= applied) continue;
+              applied = resolved.sequence;
+              projection = reduce(projection, resolved.event);
+            }
+          }
+          expect(projection.messages.length + projection.turnItems.length).toBeGreaterThan(0);
+          expect(projection).toEqual(expected);
+        }
+        expect(appends).toBeGreaterThan(100);
+      }),
+  );
+});

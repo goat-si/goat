@@ -1,3 +1,4 @@
+import { fromSecret } from "./PayloadSigner.ts";
 import {
   SessionClaims,
   WebSocketClaims,
@@ -44,8 +45,6 @@ import {
   base64UrlEncode,
   resolveLegacySessionCookieName,
   resolveSessionCookieName,
-  signPayload,
-  timingSafeEqualBase64Url,
 } from "./utils.ts";
 import * as ChildSetupSession from "./childSetupSession.ts";
 import {
@@ -470,7 +469,7 @@ export const make = Effect.gen(function* () {
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const authSessions = yield* AuthSessions.AuthSessionRepository;
-  const signingSecret = yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
+  const signer = fromSecret(yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32));
   const connectedSessionsRef = yield* Ref.make(new Map<AuthSessionId, number>());
   const lastUsedWritesRef = yield* Ref.make(new Map<AuthSessionId, number>());
   const changesPubSub = yield* PubSub.unbounded<SessionCredentialChange>();
@@ -807,7 +806,7 @@ export const make = Effect.gen(function* () {
             }),
         ),
       );
-      const signature = signPayload(encodedPayload, signingSecret);
+      const signature = signer.sign(encodedPayload);
       const client = input?.client ?? createDefaultClientMetadata();
       const sessionRecord = {
         sessionId,
@@ -950,8 +949,7 @@ export const make = Effect.gen(function* () {
       return yield* new MalformedSessionTokenError({});
     }
 
-    const expectedSignature = signPayload(encodedPayload, signingSecret);
-    if (!timingSafeEqualBase64Url(signature, expectedSignature)) {
+    if (!signer.verify(encodedPayload, signature)) {
       return yield* new InvalidSessionTokenSignatureError({});
     }
 
@@ -1009,7 +1007,7 @@ export const make = Effect.gen(function* () {
       ...(row.value.connectAccessGeneration != null
         ? { connectAccessGeneration: row.value.connectAccessGeneration }
         : {}),
-      scopes: claims.scopes,
+      scopes: row.value.scopes,
       ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
       ...(claims.rtc ? { runtimeModeCeiling: claims.rtc } : {}),
       ...(claims.csp === undefined ? {} : { childSetupPurpose: claims.csp }),
@@ -1055,7 +1053,7 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    const signature = signPayload(encodedPayload, signingSecret);
+    const signature = signer.sign(encodedPayload);
     return {
       token: `${encodedPayload}.${signature}`,
       expiresAt,
@@ -1070,8 +1068,7 @@ export const make = Effect.gen(function* () {
       return yield* new MalformedWebSocketTokenError({});
     }
 
-    const expectedSignature = signPayload(encodedPayload, signingSecret);
-    if (!timingSafeEqualBase64Url(signature, expectedSignature)) {
+    if (!signer.verify(encodedPayload, signature)) {
       return yield* new InvalidWebSocketTokenSignatureError({});
     }
 

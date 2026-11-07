@@ -25,6 +25,7 @@ const MIN_CARD_SPACE_PX = 160;
 const AGENT_VIEW_ASPECT = 16 / 10;
 /** The card's padding and two-line header around its picture's well, in px. */
 const CARD_CHROME = { width: 24, height: 70 } as const;
+const LARGE_BROWSER_CHROME = { width: 26, height: 100 } as const;
 const LARGE_MAX_WIDTH_PX = 720;
 /** The large view takes up to this share of the pane, so the conversation stays in sight. */
 const LARGE_PANE_SHARE = 0.5;
@@ -39,16 +40,19 @@ function agentCardFits(paneWidth: number, contentWidth: number) {
 }
 
 /** The card's height for a width; the picture keeps its aspect at every size. */
-const agentCardHeight = (width: number) =>
-  CARD_CHROME.height + (width - CARD_CHROME.width) / AGENT_VIEW_ASPECT;
+const agentCardHeight = (width: number, browser: boolean) => {
+  const chrome = browser ? LARGE_BROWSER_CHROME : CARD_CHROME;
+  return chrome.height + (width - chrome.width) / AGENT_VIEW_ASPECT;
+};
 
 /**
  * The large view's width: it follows the pane's width, capped so the whole card fits the height
  * it has. Only its frame changes size; the page inside keeps its own viewport.
  */
-function largeAgentViewWidth(paneWidth: number, maxHeight: number) {
-  const byHeight = (maxHeight - CARD_CHROME.height) * AGENT_VIEW_ASPECT + CARD_CHROME.width;
-  return Math.round(
+function largeAgentViewWidth(paneWidth: number, maxHeight: number, browser: boolean) {
+  const chrome = browser ? LARGE_BROWSER_CHROME : CARD_CHROME;
+  const byHeight = (maxHeight - chrome.height) * AGENT_VIEW_ASPECT + chrome.width;
+  return (browser ? Math.floor : Math.round)(
     Math.max(
       AGENT_CARD_WIDTH_PX,
       Math.min(LARGE_MAX_WIDTH_PX, paneWidth * LARGE_PANE_SHARE, byHeight),
@@ -111,14 +115,20 @@ function layoutAgentScreen(input: {
   readonly pane: Box;
   readonly viewport: { readonly width: number; readonly height: number };
   readonly obstacles: ReadonlyArray<Box>;
+  readonly browser: boolean;
 }): AgentScreenLayout {
   const paneWidth = input.pane.right - input.pane.left;
   const card = placeAgentColumn({ ...input, width: AGENT_CARD_WIDTH_PX });
-  const roomy = largeAgentViewWidth(paneWidth, input.viewport.height - input.pane.top);
+  const roomy = largeAgentViewWidth(
+    paneWidth,
+    input.viewport.height - input.pane.top,
+    input.browser,
+  );
   const placed = placeAgentColumn({ ...input, width: roomy });
-  const width = largeAgentViewWidth(paneWidth, placed.maxHeight);
+  const width = largeAgentViewWidth(paneWidth, placed.maxHeight, input.browser);
   const fits =
-    agentCardHeight(width) <= placed.maxHeight && width <= paneWidth - 2 * AGENT_CARD_GAP_PX;
+    agentCardHeight(width, input.browser) <= placed.maxHeight &&
+    width <= paneWidth - 2 * AGENT_CARD_GAP_PX;
   return { card, large: fits ? { ...placed, width } : null };
 }
 
@@ -143,6 +153,7 @@ export function useAgentCardsPlacement(
   layoutKey: string,
   active: boolean,
   watchMounts: boolean,
+  browser: boolean,
 ): AgentScreenLayout | null {
   const setNarrow = usePreviewSessionStack((state) => state.setNarrow);
   const [layout, setLayout] = useState<AgentScreenLayout | null>(null);
@@ -166,6 +177,7 @@ export function useAgentCardsPlacement(
         pane,
         viewport,
         obstacles: obstacles.map((element) => element.getBoundingClientRect()),
+        browser,
       });
       setLayout((current) => (sameLayout(current, next) ? current : next));
     };
@@ -215,6 +227,7 @@ export function useAgentCardsPlacement(
   }, [
     active,
     watchMounts,
+    browser,
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A new layoutKey moves what floats beside the cards without resizing anything, so it measures again.
     layoutKey,
     probe,

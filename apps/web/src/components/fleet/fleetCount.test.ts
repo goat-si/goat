@@ -9,7 +9,8 @@ describe("fleetUncountedMachines", () => {
     const uncounted = fleetUncountedMachines(snapshot.machines, connections);
     expect(uncounted.map((host) => [host.label, host.reason])).toEqual([
       ["clisu-oracle", "Unreachable"],
-      ["nightly-ci", "Boat · Stopped · via mac-studio"],
+      ["scratch-box", "Boat · Running · via mac-studio"],
+      ["weekly-eval", "Boat · Stopped · via mac-studio"],
       ["gpu-box", "SSH host · via mac-studio"],
     ]);
     // The status line's count and its +N cover the graph exactly once.

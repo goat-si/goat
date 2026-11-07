@@ -265,7 +265,8 @@ A bot that starts cloud runs on its own can show them in GOAT with `goat_call {p
 }
 ```
 
-The run appears in Fleet under its provider and in the thread list with "via Grok Bot". When an
+The run appears in the thread list with "via Grok Bot", and in Fleet under its provider while it
+runs and for 15 minutes after it last changed. When an
 environment signed in to the same account can see the run, GOAT follows it and reports when it
 ends. Otherwise it keeps only the link and says so (`tracking: "link-only"`), and never posts `run.completed` for it. Devin Cloud sessions
 started outside GOAT are always link-only. **Stop** on a registered run's thread only stops

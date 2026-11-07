@@ -323,6 +323,32 @@ describe("learnApps", () => {
 });
 
 describe("scopeVerdict", () => {
+  it("a bundle launch with urls is refused under full access and under an app grant", () => {
+    for (const apps of [undefined, approvedApps(["com.example.Editor"])]) {
+      for (const value of [["https://example.com"], [], "", null]) {
+        assert.equal(
+          scopeVerdict({
+            name: "launch_app",
+            args: { bundle_id: "com.example.Editor", urls: value },
+            apps,
+            appOf: () => undefined,
+            bundleIds: true,
+          })._tag,
+          "refuse",
+        );
+      }
+      assert.equal(
+        scopeVerdict({
+          name: "launch_app",
+          args: { bundle_id: "com.example.Editor", session: null },
+          apps,
+          appOf: () => undefined,
+          bundleIds: true,
+        })._tag,
+        "allow",
+      );
+    }
+  });
   it("approves an app by the id list_apps reports, so its display name is no second grant to it", () => {
     const byName = (listed: Map<number, ListedApp>) =>
       scopeVerdict({

@@ -1,4 +1,6 @@
+import { AddToChatButton, chatSubject } from "./PullRequestChatActions";
 import { filterPullRequestConversationItems } from "./pullRequestConversationFilter";
+import { useAtomValue } from "@effect/atom-react";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { useAtomCommand } from "~/state/use-atom-command";
 import type {
@@ -63,17 +65,27 @@ import {
   pullRequestFindingKey,
   pullRequestReviewOutcome,
   visibleBody,
+  type PullRequestChatSubject,
   type PullRequestConversationItem,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
 import {
   canEditPullRequestChangeRequest,
   canEditPullRequestComment,
+  descriptionDraftInForce,
+  settleDescriptionSave,
+  startDescriptionSave,
+  type DescriptionDraft,
 } from "@goat/client-runtime/pull-request-editing";
+import { setMarkdownTaskChecked } from "@goat/shared/markdownTaskList";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestCommentBody } from "./PullRequestCommentBody";
 import { PullRequestMoreReplies } from "./PullRequestMoreReplies";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
+import {
+  type PullRequestMentionScope,
+  pullRequestMentionScope,
+} from "./PullRequestMarkdownTextarea";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
 import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
@@ -153,6 +165,7 @@ function reviewStateLabel(state: string): string {
 interface CommentEditing {
   readonly cwd: string;
   readonly environmentId: EnvironmentId;
+  readonly mentionScope: PullRequestMentionScope | null;
   readonly threadRef: ScopedThreadRef | null;
   readonly canEdit: (comment: PullRequestComment) => boolean;
   readonly editingId: string | null;
@@ -177,6 +190,7 @@ function CommentBody({
         value={comment.body}
         cwd={editing.cwd}
         environmentId={editing.environmentId}
+        mentionScope={editing.mentionScope}
         threadRef={editing.threadRef}
         label="Edit comment"
         saving={editing.saving}
@@ -213,6 +227,7 @@ function CollapsedComment({
   replyCount = 0,
   replies = null,
   moreReplies = null,
+  onAddToChat,
 }: {
   comment: PullRequestComment;
   editing: CommentEditing;
@@ -224,6 +239,7 @@ function CollapsedComment({
   replyCount?: number;
   replies?: ReactNode;
   moreReplies?: ReactNode;
+  onAddToChat?: (() => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const statusTriggerRef = useRef<HTMLButtonElement>(null);
@@ -248,6 +264,7 @@ function CollapsedComment({
                 className={cn("size-3.5 transition-transform", open && "rotate-180")}
               />
             </CollapsibleTrigger>
+            {onAddToChat ? <AddToChatButton onClick={onAddToChat} /> : null}
             {reactionBar}
           </div>
           <CommentLocation comment={comment} thread={thread} />
@@ -385,6 +402,7 @@ export function PullRequestSummaryTab({
   fixFindingLabel = "Fix in a thread",
   fixCheckLabel = "Fix",
   onFixFinding,
+  onAddToChat,
   onRefresh,
   onRefreshChecks = onRefresh,
 }: {
@@ -400,6 +418,8 @@ export function PullRequestSummaryTab({
   fixFindingLabel?: string;
   fixCheckLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
+  /** Absent where there is no composer beside the panel to add a remark to. */
+  onAddToChat?: (subject: PullRequestChatSubject) => void;
   onRefresh: () => void;
   onRefreshChecks?: () => void;
 }) {
@@ -485,8 +505,23 @@ export function PullRequestSummaryTab({
   const updateComment = useAtomCommand(pullRequestEnvironment.updateComment, {
     reportFailure: false,
   });
-  const [bodyScope, setBodyScope] = useState<string | null>(null);
-  const [bodySaving, setBodySaving] = useState(false);
+  const canUpdate = useAtomValue(pullRequestEnvironment.update.permissionAtom(environmentId));
+  const canEditDescription = canUpdate && canEditPullRequestChangeRequest(detail);
+  // The editor keeps the body it opened from, so a failed save cannot reset what was typed.
+  const [bodyScope, setBodyScope] = useState<{
+    readonly url: string;
+    readonly body: string;
+  } | null>(null);
+  const [descriptionDraft, setDescriptionDraft] = useState<DescriptionDraft | null>(null);
+  const descriptionDraftKept = descriptionDraftInForce(
+    descriptionDraft,
+    detail.url,
+    detail.observedAt,
+  );
+  if (descriptionDraftKept !== descriptionDraft) setDescriptionDraft(descriptionDraftKept);
+  const description = descriptionDraftKept?.body ?? detail.body;
+  const descriptionSaving = (descriptionDraftKept?.saves ?? 0) > 0;
+  const descriptionSavesRunning = useRef(0);
   // Hosts can reuse comment ids across pull requests.
   const [commentScope, setCommentScope] = useState<{
     readonly pullRequest: string;
@@ -495,22 +530,33 @@ export function PullRequestSummaryTab({
   const [commentSaving, setCommentSaving] = useState(false);
   const editingCommentId = commentScope?.pullRequest === detail.url ? commentScope.commentId : null;
 
-  const saveBody = async (body: string) => {
-    if (bodySaving) return;
-    setBodySaving(true);
+  // Checkbox ticks and the editor share one draft, so each starts from the other's latest body.
+  const saveDescription = async (body: string) => {
+    const key = detail.url;
+    setDescriptionDraft((draft) => startDescriptionSave(draft, detail, body));
+    descriptionSavesRunning.current += 1;
     const result = await update({ environmentId, input: { ...reference, body } });
-    setBodySaving(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Could not save the description" });
-      return;
-    }
-    setBodyScope(null);
-    onRefresh();
+    descriptionSavesRunning.current -= 1;
+    const saved = result._tag === "Success";
+    setDescriptionDraft((draft) => settleDescriptionSave(draft, key, saved));
+    if (!saved) toastManager.add({ type: "error", title: "Could not save the description" });
+    if (descriptionSavesRunning.current === 0) onRefresh();
+    return saved;
+  };
+  const saveBody = async (body: string) => {
+    if (descriptionSaving) return;
+    if (await saveDescription(body)) setBodyScope(null);
+  };
+  const toggleTask = ({ markerOffset, checked }: { markerOffset: number; checked: boolean }) => {
+    const body = setMarkdownTaskChecked(description, markerOffset, checked);
+    if (body !== description) void saveDescription(body);
   };
 
+  const mentionScope = pullRequestMentionScope(detail, environmentId, reference);
   const commentEditing: CommentEditing = {
     cwd: detail.workspaceRoot,
     environmentId,
+    mentionScope,
     threadRef,
     canEdit: (comment) => canEditPullRequestComment(detail, comment),
     editingId: editingCommentId,
@@ -563,6 +609,8 @@ export function PullRequestSummaryTab({
             ? null
             : { kind: "comment", comment }
           : { kind: "thread", thread };
+    // A reply goes with its conversation, from the card that heads it.
+    const chat = reply ? null : chatSubject(comment, thread);
     return (
       <article
         key={`${detail.url}:${comment.id}`}
@@ -595,6 +643,9 @@ export function PullRequestSummaryTab({
               </span>
             </Button>
           ) : null}
+          {onAddToChat && chat !== null ? (
+            <AddToChatButton onClick={() => onAddToChat(chat)} />
+          ) : null}
           {reactionBarFor(comment)}
         </div>
         {reply ? null : (
@@ -621,6 +672,7 @@ export function PullRequestSummaryTab({
     const moreReplies =
       item.kind === "thread" && item.hasMoreReplies ? <PullRequestMoreReplies {...item} /> : null;
     if (isPullRequestCommentFinished(comment, thread)) {
+      const chat = chatSubject(comment, thread);
       return (
         <CollapsedComment
           key={`${detail.url}:${item.kind}:${item.id}`}
@@ -633,6 +685,7 @@ export function PullRequestSummaryTab({
           replyCount={item.kind === "thread" ? item.replies.length + item.moreReplies : 0}
           replies={replies}
           moreReplies={moreReplies}
+          onAddToChat={onAddToChat && chat !== null ? () => onAddToChat(chat) : undefined}
           reactionBar={reactionBarFor(comment)}
         />
       );
@@ -748,16 +801,17 @@ export function PullRequestSummaryTab({
 
       <Section key={`description:${detail.url}`} title="Description" keepMounted>
         <div className="group">
-          {bodyScope === detail.url ? (
+          {bodyScope?.url === detail.url ? (
             <PullRequestMarkdownEditor
               allowEmpty
-              value={detail.body}
+              value={bodyScope.body}
               cwd={detail.workspaceRoot}
               environmentId={environmentId}
+              mentionScope={mentionScope}
               threadRef={threadRef}
               label={`${capitalizeTerm(terminology.singular)} description`}
               placeholder={`Describe this ${terminology.singular}`}
-              saving={bodySaving}
+              saving={descriptionSaving}
               onSave={(body) => void saveBody(body)}
               onCancel={() => setBodyScope(null)}
             />
@@ -765,15 +819,16 @@ export function PullRequestSummaryTab({
             <div className="flex items-start gap-1">
               <PullRequestMarkdown
                 className="min-w-0 flex-1"
-                text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
+                text={description.trim().length > 0 ? description : "_No description provided._"}
                 cwd={detail.workspaceRoot}
                 environmentId={environmentId}
                 threadRef={threadRef}
+                onTaskListChange={canEditDescription ? toggleTask : undefined}
               />
-              {canEditPullRequestChangeRequest(detail) ? (
+              {canEditDescription ? (
                 <PullRequestEditButton
                   aria-label="Edit description"
-                  onClick={() => setBodyScope(detail.url)}
+                  onClick={() => setBodyScope({ url: detail.url, body: description })}
                 />
               ) : null}
             </div>

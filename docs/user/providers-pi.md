@@ -88,6 +88,21 @@ installs Pi's example `subagent` extension, GOAT also shows its task progress an
 UI. Pi runs those children without a session, so they cannot be opened or resumed as GOAT
 threads.
 
+## OmO
+
+[OmO](https://omo.dev) is built on a Pi fork and runs through the same integration. Install it on
+the GOAT server with `npm install -g omo-ai` (Node.js 24 or newer), run `omo`, then `/login` to
+connect a model provider. In GOAT, open **Settings → Providers**, enable OmO, and refresh it. GOAT
+has been tested with OmO 5.1.40; newer releases show as unverified until they are tested.
+
+OmO keeps its own state in `~/.omo/agent`, or in `OMO_CODING_AGENT_DIR` when set. Its permission
+modes work like Pi's: commands that OmO runs inside its `eval` cells still ask in GOAT.
+
+GOAT applies two limits to OmO's own tools. Its desktop control tools (`computer` and
+`computer_actions`) are disabled, so use GOAT's computer use instead. When a thread's permission
+profile allows no native subagents, OmO's `task`, `team_create`, `workpool` and `workflow`
+tools are refused. GOAT does not import OmO's terminal sessions.
+
 ## Troubleshooting
 
 - If Pi is unavailable, confirm that the configured binary runs on the server machine, then refresh

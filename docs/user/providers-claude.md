@@ -64,6 +64,8 @@ Add another Claude instance in **Settings > Providers**:
 | Claude Work     | `claude`    | Leave empty            |
 | Claude Personal | `claude`    | `~/.claude_personal`   |
 
+On mobile, choose **Add Claude account** in **Settings > Provider accounts**, then enter the name and signed-in config folder for that environment. You can edit the name or folder, or remove an added account there; removing it leaves the folder and sign-in on the environment.
+
 An empty config-directory setting uses Claude Code's normal configuration. The
 custom setting changes `CLAUDE_CONFIG_DIR`, leaving `HOME` and the system keychain
 location intact. Use the same variable for the login command. Setting `HOME`
@@ -92,8 +94,8 @@ You can also send `/compact` in an existing conversation. Web and desktop offer
 **Compact context** from the context meter. When you return to a large thread
 after Claude's prompt cache expires, a **Compact** chip with the thread's token count shows
 next to the send button. While it is on, Enter summarizes the history first, then
-sends your message. Click the chip to switch it to **Full** and keep the full
-history for that message. The cache lasts about an hour on a Claude
+sends your message. Click the chip to keep the full history for that message; it shows **Full** or
+**Keep full**, depending on the interface. On mobile, an eligible message summarizes first without showing a chip. The cache lasts about an hour on a Claude
 subscription and 5 minutes with an API key, Bedrock, or Vertex. See [commands and skills](./composer.md#commands-and-skills) for using
 composer commands.
 
@@ -101,9 +103,10 @@ composer commands.
 over 200,000 tokens. Each Claude provider's settings can override it:
 
 - **When you return** shows the **Compact** chip described above. This is the default.
-- **Before the cache expires (beta)** compacts an idle thread shortly before its
-  prompt cache expires, so coming back does not reprocess the whole conversation.
-  The compaction appears in the thread as a `/compact` turn sent by GOAT.
+- **Before the cache expires (beta)** tries to compact an idle thread shortly before its
+  prompt cache expires, while the history is still cached. The compaction appears in
+  the thread as a `/compact` turn sent by GOAT. If the window is missed, such as
+  after a server restart, the **Compact** chip appears when you return instead.
 - **Never** skips idle compaction and Claude's resume prompt. **Auto-compact after**
   still applies, and you can still compact by hand.
 

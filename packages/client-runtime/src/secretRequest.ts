@@ -1,4 +1,15 @@
-import type { OrchestrationV2TurnItem, SecretRequestAnswerInput } from "@goat/contracts";
+import {
+  normalizeCardDetails,
+  isSecretReference,
+  isOnePasswordReference,
+  type SecretReference,
+  SecretProviderId,
+  type ServerSettings,
+  type CardDetails,
+  type OrchestrationV2TurnItem,
+  type SecretRequestAnswerInput,
+} from "@goat/contracts";
+import * as Schema from "effect/Schema";
 
 export type SecretRequestItem = Extract<
   OrchestrationV2TurnItem,
@@ -7,13 +18,17 @@ export type SecretRequestItem = Extract<
 
 /** A `file` request lets the agent's commands read the value, so its card must not promise more. */
 export const secretRequestPrivacyNote = (
-  item: Pick<SecretRequestItem, "delivery" | "siteOrigin">,
+  item: Pick<SecretRequestItem, "delivery" | "siteOrigin" | "requestKind">,
 ) =>
-  item.siteOrigin
-    ? `The agent gets only a reference. GOAT types it into a password field on ${item.siteOrigin}`
-    : item.delivery === "file"
-      ? "Kept out of chat, in a private file this agent's commands can read for 24 hours"
-      : "Stored securely, never shown to the agent";
+  item.siteOrigin && item.requestKind === "card"
+    ? `The agent gets only a reference. GOAT fills this card on ${item.siteOrigin}`
+    : item.siteOrigin && item.requestKind === "login"
+      ? `The agent gets only a reference. GOAT fills this login on ${item.siteOrigin}`
+      : item.siteOrigin
+        ? `The agent gets only a reference. GOAT types it into a password field on ${item.siteOrigin}`
+        : item.delivery === "file"
+          ? "Kept out of chat, in a private file this agent's commands can read for 24 hours"
+          : "Stored securely, never shown to the agent";
 export const SECRET_REQUEST_DEFAULT_PLACEHOLDER = "Paste the secret";
 
 export type SecretRequestDisplay =
@@ -66,12 +81,62 @@ export function secretRequestDisplay(
   }
 }
 
+export function secretRequestProviders(providers: ServerSettings["secretProviders"] | undefined) {
+  const isProviderId = Schema.is(SecretProviderId);
+  return Object.entries(providers ?? {}).flatMap(([id, provider]) =>
+    isProviderId(id) && provider.kind === "one_password" ? [{ id, label: provider.label }] : [],
+  );
+}
+
 export function secretRequestAnswerInput(
   item: Pick<SecretRequestItem, "id" | "threadId">,
-  answer: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
+  answer:
+    | { readonly type: "save"; readonly secret: string }
+    | { readonly type: "reference"; readonly reference: SecretReference }
+    | {
+        readonly type: "save_login";
+        readonly username: string;
+        readonly password: string;
+        readonly authenticatorSetupKey?: string;
+      }
+    | ({ readonly type: "save_card" } & CardDetails)
+    | { readonly type: "decline" },
 ): SecretRequestAnswerInput | null {
   if (answer.type === "decline") {
     return { threadId: item.threadId, turnItemId: item.id, answer: { type: "decline" } };
+  }
+  if (answer.type === "reference") {
+    const reference = { ...answer.reference, reference: answer.reference.reference.trim() };
+    return isSecretReference(reference) && isOnePasswordReference(reference.reference)
+      ? { threadId: item.threadId, turnItemId: item.id, answer: { type: "reference", reference } }
+      : null;
+  }
+  if (answer.type === "save_login") {
+    const username = answer.username.trim();
+    const password = answer.password;
+    const key = answer.authenticatorSetupKey?.trim();
+    if (username.length === 0 || password.trim().length === 0) return null;
+    return {
+      threadId: item.threadId,
+      turnItemId: item.id,
+      answer: {
+        type: "save_login",
+        username,
+        password,
+        ...(key
+          ? {
+              authenticatorSetupKey: key.toLowerCase().startsWith("otpauth:")
+                ? answer.authenticatorSetupKey
+                : key,
+            }
+          : {}),
+      },
+    };
+  }
+  if (answer.type === "save_card") {
+    const card = normalizeCardDetails(answer);
+    if (card === undefined) return null;
+    return { threadId: item.threadId, turnItemId: item.id, answer: { ...card, type: "save_card" } };
   }
   const secret = answer.secret.trim();
   if (secret.length === 0) return null;

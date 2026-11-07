@@ -24,12 +24,12 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import migration from "../persistence/Migrations/071_RemoteReports.ts";
-import dispatchMigration from "../persistence/Migrations/072_RemoteDispatches.ts";
-import threadRunResultsMigration from "../persistence/Migrations/075_ThreadRunResults.ts";
-import relayMigration from "../persistence/Migrations/076_RemoteReportRelay.ts";
-import observedChecksMigration from "../persistence/Migrations/093_ThreadRunObservedChecks.ts";
-import fencesMigration from "../persistence/Migrations/107_RemoteReportFences.ts";
+import migration from "../persistence/Migrations/081_RemoteReports.ts";
+import dispatchMigration from "../persistence/Migrations/082_RemoteDispatches.ts";
+import threadRunResultsMigration from "../persistence/Migrations/085_ThreadRunResults.ts";
+import relayMigration from "../persistence/Migrations/086_RemoteReportRelay.ts";
+import observedChecksMigration from "../persistence/Migrations/103_ThreadRunObservedChecks.ts";
+import fencesMigration from "../persistence/Migrations/117_RemoteReportFences.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const threadId = ThreadId.make("remote-thread");

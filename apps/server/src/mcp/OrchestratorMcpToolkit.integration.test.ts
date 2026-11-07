@@ -73,7 +73,6 @@ import * as LaunchWatchService from "./LaunchWatchService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { layerPermissionProfilesOff } from "./McpToolAccess.testkit.ts";
-
 interface CapturedTurn {
   readonly instanceId: ProviderInstanceId;
   readonly threadId: ThreadId;
@@ -465,6 +464,7 @@ describe("orchestrator MCP toolkit", () => {
   it.live.each([
     { label: "distinct", result: queuedFollowupResult, latestSummary: queuedFollowupResult },
     { label: "identical", result: delegatedResult, latestSummary: null },
+    { label: "emoji", result: "😀", latestSummary: "😀" },
   ])("reports $label child results", ({ result, latestSummary }) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -524,6 +524,7 @@ describe("orchestrator MCP toolkit", () => {
           Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
           Layer.provideMerge(
             SecretRequests.layer.pipe(
+              Layer.provide(ServerSettings.layerTest()),
               Layer.provide(layerMemorySecretStore),
               Layer.provide(layerOrchestration),
             ),
@@ -847,6 +848,7 @@ describe("orchestrator MCP toolkit", () => {
             delegated.resultContextTransferId,
           );
           const transferReads: Array<string> = [];
+          const messageReads: Array<string> = [];
           const tracer = Tracer.make({
             span(options) {
               const span = new Tracer.NativeSpan(options);
@@ -854,11 +856,16 @@ describe("orchestrator MCP toolkit", () => {
               span.end = (endTime, exit) => {
                 end(endTime, exit);
                 const query = span.attributes.get("db.query.text");
+                if (typeof query !== "string") return;
                 if (
-                  typeof query === "string" &&
                   /SELECT[\s\S]*FROM orchestration_v2_projection_context_transfers/i.test(query)
                 ) {
                   transferReads.push(query);
+                }
+                if (
+                  /SELECT\s+payload_json\s+FROM orchestration_v2_projection_messages/i.test(query)
+                ) {
+                  messageReads.push(query);
                 }
               };
               return span;
@@ -866,7 +873,11 @@ describe("orchestrator MCP toolkit", () => {
           });
           const parentlessRead = yield* invoke(
             "goat_thread_read",
-            { threadId: delegated.childThreadId, limit: 100 },
+            {
+              threadId: delegated.childThreadId,
+              limit: 100,
+              maxCharsPerItem: result === "😀" ? 1 : 20_000,
+            },
             { ...invocation, thread: undefined },
           ).pipe(Effect.withTracer(tracer));
           expect(parentlessRead.isError).not.toBe(true);
@@ -880,6 +891,7 @@ describe("orchestrator MCP toolkit", () => {
           const read = yield* invoke("goat_thread_read", {
             threadId: delegated.childThreadId,
             limit: 100,
+            maxCharsPerItem: result === "😀" ? 1 : 20_000,
           }).pipe(Effect.withTracer(tracer));
           expect(read.isError).not.toBe(true);
           expect(transferReads.length).toBeGreaterThan(0);
@@ -889,6 +901,13 @@ describe("orchestrator MCP toolkit", () => {
             afterRead.subagents.find((task) => task.id === runningFollowup.taskId)
               ?.completionDelivery?.state,
           ).toBe("acknowledged");
+
+          const messageReadsBeforeCapabilities = messageReads.length;
+          const capabilities = yield* invoke("goat_schedule_list", {}).pipe(
+            Effect.withTracer(tracer),
+          );
+          expect(capabilities.isError).not.toBe(true);
+          expect(messageReads).toHaveLength(messageReadsBeforeCapabilities);
         }).pipe(Effect.provide(layerTest));
       }),
     ),

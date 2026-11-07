@@ -751,12 +751,39 @@ export default defineConfig({
         rules: { "goat/no-raw-resize-observer": "error" },
       },
       {
+        // Error emitters need their owner's failure route from creation.
+        files: ["apps/server/src/**", "packages/*/src/**"],
+        excludeFiles: [
+          "**/*.{test,spec}.{ts,tsx,mts,cts}",
+          "**/*.testkit.ts",
+          "**/*Testkit*.ts",
+          "**/*.{fixture,fixtures}.ts",
+          "**/*{Fixture,Fixtures,fixture,fixtures}*.ts",
+          "**/*Harness*.ts",
+          "**/{test,tests,testkit,testing,testUtils,fixtures,integration,__tests__}/**",
+          "**/testFixtures/**",
+          "packages/provider-testing/**",
+          "packages/source-control-testing/**",
+        ],
+        rules: { "goat/guard-error-emitters": "error" },
+      },
+      {
         files: ["apps/web/src/**"],
         rules: { "shadcn/no-unknown-classes": "error" },
       },
       {
         files: ["apps/web/src/**"],
         rules: { "goat/no-outset-state-indicators": "error" },
+      },
+      {
+        // Rows of side-by-side controls. Elsewhere a negative margin often aligns an edge
+        // control's icon with the text above it, which overlaps nothing.
+        files: [
+          "apps/web/src/components/chat/{ChatComposer,Composer*,ProviderModelPicker,TraitsPicker}.tsx",
+          "apps/web/src/components/goatBot/**",
+          "apps/web/src/components/fleet/**",
+        ],
+        rules: { "goat/no-negative-control-margin": "error" },
       },
       {
         files: ["apps/*/src/**", "packages/*/src/**"],

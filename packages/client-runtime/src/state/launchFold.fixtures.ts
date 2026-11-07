@@ -76,5 +76,14 @@ export function thread(
 
 export const key = (id: string, environmentId = HOME) =>
   scopedThreadKey(scopeThreadRef(environmentId, ThreadId.make(id)));
+/** A goat_task_create child on OTHER whose parent is "parent" on HOME. */
+export const remoteTask = (id: string, options: Parameters<typeof thread>[1] = {}) =>
+  thread(id, {
+    environmentId: OTHER,
+    launchedBy: "parent",
+    launcherEnvironment: HOME,
+    via: "delegate_task",
+    ...options,
+  });
 export const ids = (threads: readonly LaunchFoldThread[]) =>
   threads.map((entry) => String(entry.id));

@@ -1,8 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -22,6 +24,8 @@ import {
 } from "./sshRuntimeGitBash.ts";
 import * as SshRuntimeAutoUpdate from "./sshRuntimeAutoUpdate.ts";
 
+vi.mock("node:child_process", { spy: true });
+
 const PID = 4242;
 const target = "1.1.0";
 const GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
@@ -32,6 +36,7 @@ const isShellCommand = (command: string) =>
 const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* (
   options: {
     readonly ownVersion?: string;
+    readonly homeIsFile?: boolean;
     readonly otherBaseDir?: boolean;
     readonly platform?: NodeJS.Platform;
     /** Windows only. Undefined means Git Bash was not found. */
@@ -41,6 +46,18 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
   const fs = yield* FileSystem.FileSystem;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-auto-update-" });
   const goatHome = NodePath.join(home, ".goat");
+  const baseConfig = yield* ServerConfig.ServerConfig.pipe(
+    Effect.provide(
+      ServerConfig.layerTest(
+        process.cwd(),
+        options.otherBaseDir === true ? NodePath.join(home, "other") : goatHome,
+      ),
+    ),
+  );
+  // This seam is test-only: production home cannot be a file while the updater activates.
+  const config = options.homeIsFile
+    ? { ...baseConfig, stateDir: yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-state-" }) }
+    : baseConfig;
   const stateDir = NodePath.join(goatHome, "ssh-launch", "runtime");
   const versionDir = (version: string) =>
     NodePath.join(goatHome, "runtime", "goat", "versions", version);
@@ -56,6 +73,7 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
     installCode: 0,
     executableSha256: "exe-sha",
     preflight: undefined as Record<string, unknown> | undefined,
+    markerAtLaunch: undefined as string | undefined,
     launchOutput: '{"status":"ready","remotePort":3773}\n',
     installs: [] as string[],
     installCommands: [] as string[],
@@ -63,6 +81,7 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
     preflights: [] as ReadonlyArray<string>[],
     launches: [] as {
       readonly shell: string;
+      readonly cwd: string;
       readonly script: string;
       readonly args: ReadonlyArray<string>;
       readonly env: NodeJS.ProcessEnv;
@@ -101,6 +120,9 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
       }),
     runDetached: (input) =>
       Effect.gen(function* () {
+        state.markerAtLaunch = yield* fs
+          .readFileString(NodePath.join(config.stateDir, "ssh-runtime-auto-update.json"))
+          .pipe(Effect.orElseSucceed(() => undefined));
         state.launches.push(input);
         yield* Deferred.succeed(launchStarted, undefined);
         if (holdLaunch) yield* Deferred.await(launchGate);
@@ -132,14 +154,6 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
           if (file.startsWith(dir + "/")) files.delete(file);
       }),
   });
-  const config = yield* ServerConfig.ServerConfig.pipe(
-    Effect.provide(
-      ServerConfig.layerTest(
-        process.cwd(),
-        options.otherBaseDir === true ? NodePath.join(home, "other") : goatHome,
-      ),
-    ),
-  );
   const memory = yield* ProjectionStore.ProjectionStoreV2.pipe(
     Effect.provide(ProjectionStore.layerMemory),
   );
@@ -179,11 +193,17 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
       getServerActivity: () => Effect.sync(() => state.activity),
     }),
   );
+  if (options.homeIsFile) {
+    yield* fs.remove(home, { recursive: true });
+    yield* fs.writeFileString(home, "");
+    yield* fs.chmod(home, 0o700);
+  }
   return {
     runtime,
     state,
     files,
     stateDir,
+    configStateDir: config.stateDir,
     home,
     launchStarted,
     launchGate,
@@ -194,6 +214,38 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
 });
 
 it.layer(NodeServices.layer)("SSH runtime auto-update", (it) => {
+  it.effect("persists the replacement marker before launch and recognizes its own version", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ ownVersion: "1.0.0" });
+      yield* h.runtime.prepare(target);
+      expect(yield* h.runtime.activate(target)).toBe("requested");
+      expect(JSON.parse(h.state.markerAtLaunch ?? "null")).toMatchObject({
+        targetVersion: target,
+        at: expect.any(Number),
+      });
+      const fs = yield* FileSystem.FileSystem;
+      const marker = NodePath.join(h.configStateDir, "ssh-runtime-auto-update.json");
+      expect(yield* h.runtime.replacedInto).toBeUndefined();
+      yield* fs.writeFileString(marker, JSON.stringify({ targetVersion: "1.0.0", at: 1 }));
+      expect(yield* h.runtime.replacedInto).toBe("1.0.0");
+      h.files.set(NodePath.join(h.stateDir, "pid"), "1");
+      expect(yield* h.runtime.replacedInto).toBeUndefined();
+    }),
+  );
+
+  it.effect("does not launch when writing the replacement marker fails", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const fs = yield* FileSystem.FileSystem;
+      yield* h.runtime.prepare(target);
+      yield* fs.makeDirectory(NodePath.join(h.configStateDir, "ssh-runtime-auto-update.json"));
+      expect((yield* h.runtime.activate(target).pipe(Effect.flip))._tag).toBe(
+        "ServerSelfUpdateError",
+      );
+      expect(h.state.launches).toHaveLength(0);
+    }),
+  );
+
   it.effect("is owned only while the launch records name this managed process", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness();
@@ -332,6 +384,15 @@ it.layer(NodeServices.layer)("SSH runtime auto-update", (it) => {
     }),
   );
 
+  it.effect("starts the detached shell at root when home is an executable file", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ homeIsFile: true });
+      yield* h.runtime.prepare(target);
+      expect(yield* h.runtime.activate(target)).toBe("requested");
+      expect(h.state.launches[0]?.cwd).toBe(NodePath.parse(h.home).root);
+    }),
+  );
+
   it.effect("a pending launch result is a busy deferral", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness();
@@ -464,6 +525,79 @@ it.live("the detached launcher returns the script's output through files", () =>
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "POSIX process-group cleanup",
   () => {
+    it.live("a missing command settles a spawn failure", () =>
+      Effect.gen(function* () {
+        const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
+        const result = yield* host.run({
+          command: "/goat-nonexistent-command-for-spawn-regression",
+          args: [],
+          env: {},
+          timeoutMs: 1000,
+        });
+        expect(result).toEqual({ code: null, stdout: "", stderr: "" });
+      }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
+    );
+    it.live("an output pipe that breaks on a live command stops it before the run settles", () =>
+      Effect.gen(function* () {
+        const create = NodeChildProcess.spawn;
+        const spawned = Promise.withResolvers<NodeChildProcess.ChildProcess>();
+        using _spawn = vi.spyOn(NodeChildProcess, "spawn").mockImplementationOnce((...args) => {
+          const child = Reflect.apply(
+            create,
+            NodeChildProcess,
+            args,
+          ) as NodeChildProcess.ChildProcess;
+          spawned.resolve(child);
+          return child;
+        });
+        const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
+        const running = yield* host
+          .run({
+            command: "/bin/sh",
+            args: ["-c", 'printf "ready\\n"; sleep 600'],
+            env: { PATH: process.env.PATH },
+            timeoutMs: 600_000,
+          })
+          .pipe(Effect.forkChild);
+        const child = yield* Effect.promise(() => spawned.promise);
+        yield* Effect.promise(() => new Promise((resolve) => child.stdout?.once("data", resolve)));
+        child.stdout?.destroy(new Error("output pipe broke"));
+        const result = yield* Fiber.join(running);
+        expect(result.code).toBeNull();
+        expect(child.signalCode).toBe("SIGKILL");
+      }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
+    );
+    it.live("an output pipe that breaks after a clean leader exit still fails the run", () =>
+      Effect.gen(function* () {
+        const create = NodeChildProcess.spawn;
+        const spawned = Promise.withResolvers<NodeChildProcess.ChildProcess>();
+        using _spawn = vi.spyOn(NodeChildProcess, "spawn").mockImplementationOnce((...args) => {
+          const child = Reflect.apply(
+            create,
+            NodeChildProcess,
+            args,
+          ) as NodeChildProcess.ChildProcess;
+          spawned.resolve(child);
+          return child;
+        });
+        const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
+        // The background sleep keeps the output pipe open after the shell exits 0.
+        const running = yield* host
+          .run({
+            command: "/bin/sh",
+            args: ["-c", 'sleep 600 & printf "ready\\n"; exit 0'],
+            env: { PATH: process.env.PATH },
+            timeoutMs: 600_000,
+          })
+          .pipe(Effect.forkChild);
+        const child = yield* Effect.promise(() => spawned.promise);
+        yield* Effect.promise(() => new Promise((resolve) => child.once("exit", resolve)));
+        expect(child.exitCode).toBe(0);
+        child.stdout?.destroy(new Error("output pipe broke"));
+        const result = yield* Fiber.join(running);
+        expect(result.code).toBeNull();
+      }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
+    );
     it.live("a timed-out host command also stops the processes it started", () =>
       Effect.gen(function* () {
         const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;

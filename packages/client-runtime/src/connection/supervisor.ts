@@ -1,3 +1,4 @@
+import type { EstablishmentProgress, SetupPreparation } from "./establishmentProgress.ts";
 import { makeConnectedLeaseMonitor } from "./connectedLease.ts";
 import type { DesktopSshPreparationProgress } from "@goat/contracts";
 import { withRelayClientTracing } from "@goat/shared/relayTracing";
@@ -42,6 +43,7 @@ import {
   connectionRouteKind,
   connectionRoutes,
   entryWithRoutes,
+  insertRoute,
   type ReportedEndpoint,
 } from "./routes.ts";
 
@@ -59,6 +61,10 @@ const LOCAL_PROXY_RECHECK_MS = 60_000;
 // A better route that answered the check but then failed to connect is not
 // tried again for this long, so a flaky LAN cannot bounce the connection.
 const BETTER_ROUTE_COOLDOWN_MS = 300_000;
+
+type ConnectedLease = ConnectionDriver.EnvironmentConnectionLease & {
+  readonly activeRoute: ConnectionRoute | undefined;
+};
 
 interface SupervisorIntent {
   readonly desired: boolean;
@@ -102,28 +108,6 @@ type AttemptOutcome =
       readonly slowSetupTimeout?: SetupPreparation;
       readonly failureOrigin?: ConnectionFailureOrigin;
     };
-
-interface SetupPreparation {
-  readonly routeId: string | undefined;
-  readonly startedAt: bigint;
-}
-
-interface EstablishmentProgress {
-  readonly preparation: SetupPreparation;
-  readonly pendingPreparations: ReadonlyMap<string, bigint>;
-  readonly synchronizedRoutes: number;
-  readonly hostAnswered: boolean;
-  readonly setup: { readonly routeId: string; readonly elapsedMs: number } | null;
-  readonly stage: "preparing" | "opening" | "synchronizing";
-  readonly ordinaryStartedAt: bigint;
-  readonly sshPreparation: {
-    readonly operationId: string;
-    readonly deadline: bigint;
-    readonly phase: ConnectionSshPreparation["phase"];
-    readonly hostAnswered: boolean;
-  } | null;
-  readonly wake: Queue.Queue<void>;
-}
 
 type EstablishmentEvent =
   | {
@@ -289,9 +273,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const connectivity = yield* Connectivity.Connectivity;
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
+  const targetNetwork = (network: NetworkStatus): NetworkStatus =>
+    network === "offline" && target._tag === "PrimaryConnectionTarget" ? "unknown" : network;
+  const initialNetwork = yield* connectivity.status;
+  const observedNetwork = yield* Ref.make(initialNetwork);
   const initialIntent: SupervisorIntent = {
     desired: options?.initiallyDesired ?? false,
-    network: yield* connectivity.status,
+    network: targetNetwork(initialNetwork),
   };
   const intent = yield* Ref.make(initialIntent);
   const attemptSequence = yield* Ref.make(0);
@@ -344,35 +332,42 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   const learnRoutesFrom = Effect.fnUntraced(function* (
     learn: NonNullable<EnvironmentSupervisorOptions["learnRoutes"]>,
-    lease: ConnectionDriver.EnvironmentConnectionLease,
+    lease: ConnectedLease,
   ) {
-    const config = yield* lease.session.initialConfig.pipe(Effect.option);
-    const reported = Option.getOrUndefined(config)?.directEndpoints;
-    if (reported === undefined) return;
-    const activeId = connectionRouteId(lease.prepared.target);
-    const activeRoute = (yield* currentRoutes).find(
-      (route) => connectionRouteId(route.target) === activeId,
-    );
+    const activeRoute = lease.activeRoute;
     if (activeRoute === undefined) return;
-    const updated = yield* learn({ activeRoute, reported });
-    if (Option.isSome(updated)) {
-      yield* Ref.set(currentEntry, updated.value);
-      yield* requestBetterRouteCheck(lease);
-    }
+    yield* lease.session.subscribeServerConfig().pipe(
+      Stream.filter((event) => event.type === "snapshot"),
+      Stream.map((event) => event.config.directEndpoints),
+      Stream.filter((reported) => reported !== undefined),
+      Stream.changesWith((previous, next) => JSON.stringify(previous) === JSON.stringify(next)),
+      Stream.runForEach((reported) =>
+        Effect.gen(function* () {
+          const updated = yield* learn({ activeRoute, reported });
+          if (Option.isSome(updated)) {
+            yield* Ref.set(currentEntry, updated.value);
+            yield* requestBetterRouteCheck(lease);
+          }
+        }),
+      ),
+      Effect.ignoreCause({ log: true }),
+    );
   });
 
-  const routeIndex = (lease: ConnectionDriver.EnvironmentConnectionLease) =>
+  const routeIndex = (lease: ConnectedLease) =>
     currentRoutes.pipe(
-      Effect.map((routes) =>
-        routes.findIndex(
-          (route) => connectionRouteId(route.target) === connectionRouteId(lease.prepared.target),
-        ),
-      ),
+      Effect.map((routes) => {
+        const activeId = connectionRouteId(lease.prepared.target);
+        const index = routes.findIndex((route) => connectionRouteId(route.target) === activeId);
+        return index === -1 && lease.activeRoute !== undefined
+          ? insertRoute(routes, lease.activeRoute).findIndex(
+              (route) => connectionRouteId(route.target) === activeId,
+            )
+          : index;
+      }),
     );
 
-  const checkBetterRoutes = Effect.fnUntraced(function* (
-    lease: ConnectionDriver.EnvironmentConnectionLease,
-  ) {
+  const checkBetterRoutes = Effect.fnUntraced(function* (lease: ConnectedLease) {
     const latest = yield* Ref.get(currentEntry);
     const current = yield* routeIndex(lease);
     if (current <= 0) return;
@@ -396,8 +391,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     });
   });
 
-  const betterRouteChecks = yield* Queue.dropping<ConnectionDriver.EnvironmentConnectionLease>(1);
-  const requestBetterRouteCheck = (lease: ConnectionDriver.EnvironmentConnectionLease) =>
+  const betterRouteChecks = yield* Queue.dropping<ConnectedLease>(1);
+  const requestBetterRouteCheck = (lease: ConnectedLease) =>
     routeIndex(lease).pipe(
       Effect.flatMap((index) =>
         index > 0 ? Queue.offer(betterRouteChecks, lease).pipe(Effect.asVoid) : Effect.void,
@@ -543,6 +538,22 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
             synchronizedRoutes:
               current.synchronizedRoutes + (progress.stage === "synchronizing" ? 1 : 0),
           };
+          const advanced =
+            routeChanged ||
+            (!current.hostAnswered && next.hostAnswered) ||
+            (current.stage !== next.stage &&
+              (next.stage === "opening" || next.stage === "synchronizing")) ||
+            (next.stage === "synchronizing" &&
+              routeId !== undefined &&
+              !current.synchronizedRouteIds.has(routeId));
+          next = {
+            ...next,
+            lastProgressAt: advanced ? now : current.lastProgressAt,
+            synchronizedRouteIds:
+              next.stage === "synchronizing" && routeId !== undefined
+                ? new Set([...current.synchronizedRouteIds, routeId])
+                : current.synchronizedRouteIds,
+          };
           let visible = yield* Ref.get(evidence);
           if (routeChanged) {
             const { sshPreparation: _preparation, sshRuntimeReady: _ready, ...rest } = visible;
@@ -598,7 +609,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
                 sshPreparation: null,
                 ...(terminal === undefined
                   ? {
-                      ordinaryStartedAt: now,
+                      lastProgressAt: now,
                       preparation: { routeId, startedAt: now },
                       setup: null,
                     }
@@ -635,7 +646,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
               next = {
                 ...next,
                 sshPreparation: null,
-                ordinaryStartedAt: now,
+                lastProgressAt: now,
                 preparation: { routeId, startedAt: now },
               };
             }
@@ -768,6 +779,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     ignoreOffline: Ref.Ref<boolean>,
     sequence: number,
   ) {
+    let deviceOffline = (yield* Ref.get(observedNetwork)) === "offline";
     for (;;) {
       const next = yield* Queue.take(signals);
       switch (next._tag) {
@@ -778,7 +790,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           if (next.attemptSequence === sequence) return false;
           break;
         case "NetworkChanged":
-          if (next.network === "offline" && !(yield* Ref.get(ignoreOffline))) {
+          if (target._tag === "PrimaryConnectionTarget") {
+            if (next.network === "offline") deviceOffline = true;
+            else if (deviceOffline) return true;
+          } else if (next.network === "offline" && !(yield* Ref.get(ignoreOffline))) {
             return false;
           }
           break;
@@ -825,10 +840,12 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     return undefined;
   });
 
-  const monitorConnectedLease = makeConnectedLeaseMonitor({
+  const monitorConnectedLease = makeConnectedLeaseMonitor<ConnectedLease>({
     target,
     loopback,
     currentRoutes,
+    // Use the observed device status, including offline for a primary target.
+    currentNetwork: Ref.get(observedNetwork),
     signals,
     resetRetryState,
     probeUnanswered,
@@ -867,7 +884,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       hostAnswered: false,
       setup: null,
       stage: "preparing",
-      ordinaryStartedAt: startedAt,
+      lastProgressAt: startedAt,
+      synchronizedRouteIds: new Set(),
       sshPreparation: null,
       wake: yield* Queue.sliding<void>(1),
     });
@@ -912,14 +930,14 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           const setup = Duration.toNanosUnsafe(
             Duration.millis(loopbackBudgetMs(loopback, answered) * routeCount),
           );
-          const synchronized = BigInt(progress.synchronizedRoutes);
           const active = progress.sshPreparation;
           const preparing = active !== null && active.hostAnswered && active.phase !== "connecting";
           const deadline = preparing
             ? active.deadline
-            : progress.ordinaryStartedAt +
-              setup +
-              synchronized * Duration.toNanosUnsafe(SYNCHRONIZATION_TIMEOUT);
+            : progress.lastProgressAt +
+              (progress.stage === "synchronizing"
+                ? Duration.toNanosUnsafe(SYNCHRONIZATION_TIMEOUT)
+                : setup);
           const remaining = deadline - (yield* Clock.monotonicTimeNanos);
           if (remaining <= 0n) {
             return {
@@ -1057,6 +1075,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       [...samples, setupElapsedMs].slice(-SETUP_SAMPLE_COUNT),
     );
     yield* Ref.set(wakeRetryUntil, 0n);
+    const connectedLease: ConnectedLease = {
+      ...active.lease,
+      activeRoute: (yield* currentRoutes).find(
+        (route) =>
+          connectionRouteId(route.target) === connectionRouteId(active.lease.prepared.target),
+      ),
+    };
     const connectedAt = yield* Clock.currentTimeMillis;
     yield* Queue.clear(betterRouteChecks);
     yield* Queue.take(betterRouteChecks).pipe(
@@ -1068,7 +1093,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     yield* SubscriptionRef.set(prepared, Option.some(active.lease.prepared));
     yield* SubscriptionRef.set(session, Option.some(active.lease.session));
     if (options?.learnRoutes !== undefined) {
-      yield* learnRoutesFrom(options.learnRoutes, active.lease).pipe(Effect.forkScoped);
+      yield* learnRoutesFrom(options.learnRoutes, connectedLease).pipe(Effect.forkScoped);
     }
     yield* Ref.update(
       evidence,
@@ -1097,7 +1122,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           attemptSpan: active.attemptSpan,
         })),
       ),
-      monitorConnectedLease(active.lease).pipe(
+      monitorConnectedLease(connectedLease).pipe(
         Effect.mapError((error): TracedAttemptFailure => ({
           error,
           attemptSpan: active.attemptSpan,
@@ -1304,7 +1329,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         error.retryAfterMillis ?? 0,
         inWakeWindow
           ? WAKE_RETRY_DELAY_MS
-          : retryDelayMs(failureCount, yield* Random.next, loopback),
+          : retryDelayMs(failureCount, yield* Random.next, loopback, outcome.established),
       );
       if (!inWakeWindow) failureCount += 1;
       pendingRetry = Option.map(attemptSpan, (previousAttempt) => ({
@@ -1330,11 +1355,14 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   yield* connectivity.changes.pipe(
     Stream.runForEach((network) =>
-      Ref.modify(intent, (current) =>
-        current.network === network ? [false, current] : ([true, { ...current, network }] as const),
-      ).pipe(
+      Ref.modify(observedNetwork, (current) => [current !== network, network] as const).pipe(
         Effect.flatMap((changed) =>
-          changed ? signal({ _tag: "NetworkChanged", network }) : Effect.void,
+          changed
+            ? Ref.update(intent, (current) => ({
+                ...current,
+                network: targetNetwork(network),
+              })).pipe(Effect.andThen(signal({ _tag: "NetworkChanged", network })))
+            : Effect.void,
         ),
       ),
     ),

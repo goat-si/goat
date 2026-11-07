@@ -22,6 +22,7 @@ import { useAdaptiveWorkspaceLayout } from "../../layout/adaptive-workspace-cont
 import { HubAccessNotice } from "../../settings/HubAccessNotice";
 import { openSettings } from "../../settings/settings-navigation";
 import { useSelectWorkspaceDetail } from "../../workspace/useSelectWorkspaceDetail";
+import { useRemoteLauncherReads } from "../../threads/remoteLauncherReads";
 import { useAppearancePreferences } from "../../settings/appearance/AppearancePreferencesProvider";
 import { showsFleetGraph } from "./fleetGraphText";
 import { UsageFleetGraph } from "./UsageFleetGraph";
@@ -48,6 +49,7 @@ export default function UsageFleetSection() {
 }
 
 function FleetContent() {
+  useRemoteLauncherReads();
   const { snapshot, connections, loading } = useAtomValue(mobileFleet.fleetPageAtom);
   const cloudAgents = useAtomValue(mobileFleet.fleetCloudAgentsAtom);
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
@@ -78,6 +80,9 @@ function FleetContent() {
   const listed = selected === null ? snapshot.machines : [selected];
   const busy = listed.filter(isFleetMachineBusy);
   const quiet = listed.filter((machine) => !isFleetMachineBusy(machine));
+  const idleBillingOwners = new Map(
+    snapshot.idleCloudMachines.map((entry) => [entry.machineId, entry.ownerLabel]),
+  );
   const { totals } = snapshot;
   const notConnected = snapshot.machines.filter((machine) => !machine.answering).length;
   const hubs = [...presentations].filter(
@@ -224,6 +229,7 @@ function FleetContent() {
               key={machine.id}
               machine={machine}
               connection={connections.get(machine.id)}
+              idleBillingOwner={idleBillingOwners.get(machine.id) ?? null}
               bordered={index > 0}
               onOpenConnections={openConnections}
             />

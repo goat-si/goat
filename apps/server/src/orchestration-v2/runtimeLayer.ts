@@ -1,4 +1,6 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
@@ -22,6 +24,7 @@ import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as WorktreeSnapshotStoreLive from "../worktreeSnapshots/WorktreeSnapshotStoreLive.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "../project/ScratchThreadPromotion.ts";
 import * as CheckpointCaptureService from "./CheckpointCaptureService.ts";
@@ -70,6 +73,11 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as CloudTaskSource from "./CloudTaskSourceService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 
+export const provideHostPressure =
+  <E2, RIn2>(monitor: Layer.Layer<HostPressureMonitor.HostPressureMonitor, E2, RIn2>) =>
+  <ROut, E, RIn>(runtime: Layer.Layer<ROut, E, RIn>) =>
+    runtime.pipe(Layer.provide(monitor));
+
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
   OrchestrationCommandReceipts.layer,
@@ -86,7 +94,7 @@ const layerCommandReceiptStoreProvided = CommandReceiptStore.layerFromApplicatio
   Layer.provide(layerEventInfrastructure),
 );
 
-const layerStores = Layer.mergeAll(
+export const layerStores = Layer.mergeAll(
   layerEventInfrastructure,
   layerEventStoreProvided,
   ProjectionStore.layer,
@@ -198,6 +206,7 @@ const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pip
       layerProviderAuthServiceProvided,
       layerRunExecutionServiceProvided,
       layerRuntimePolicyProvided,
+      WorktreeSnapshotStoreLive.layer.pipe(Layer.provide(GitVcsDriver.layer)),
     ),
   ),
 );
@@ -349,12 +358,15 @@ const layerProviderContinuationWorkerProvided = ProviderContinuationService.laye
 );
 const layerThreadTitleRegenerationProvided = ThreadTitleRegenerationService.layer.pipe(
   Layer.provide(
-    Layer.mergeAll(layerThreadManagementProvided, ProjectStore.layer, TextGeneration.layer),
+    Layer.mergeAll(layerThreadManagementProvided, ProjectStore.layer, TextGeneration.layer).pipe(
+      Layer.provideMerge(NodeServices.layer),
+    ),
   ),
 );
 const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
   Layer.provide(
     Layer.mergeAll(
+      layerStores,
       layerRunFinalizationServiceProvided,
       layerCheckpointRollbackServiceProvided,
       layerProviderSessionManagerProvided,

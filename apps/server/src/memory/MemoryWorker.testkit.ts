@@ -14,20 +14,23 @@ import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
-import migration from "../persistence/Migrations/078_Memory.ts";
-import hubMigration from "../persistence/Migrations/079_MemoryHubSync.ts";
-import lineageMigration from "../persistence/Migrations/082_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/083_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../persistence/Migrations/095_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../persistence/Migrations/084_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/085_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/086_MemoryRevertResults.ts";
-import threadIndexMigration from "../persistence/Migrations/097_MemorySummaryWorkThreadIndex.ts";
+import migration from "../persistence/Migrations/088_Memory.ts";
+import hubMigration from "../persistence/Migrations/089_MemoryHubSync.ts";
+import lineageMigration from "../persistence/Migrations/092_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/093_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/105_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/094_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/095_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/096_MemoryRevertResults.ts";
+import threadIndexMigration from "../persistence/Migrations/107_MemorySummaryWorkThreadIndex.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import * as Service from "./MemoryService.ts";
 import * as Maintenance from "./MemoryFtsMaintenance.ts";
 import * as Worker from "./MemoryWorker.ts";
+import * as Snapshot from "./MemorySnapshot.ts";
+import * as Projection from "../orchestration-v2/ProjectionStore.ts";
+import * as Sync from "./MemorySyncService.ts";
 export const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 export const environmentId = M.EnvironmentId.make("fixture");
 export const space = M.MemorySpaceId.make(id(1));
@@ -81,8 +84,12 @@ export const live = (
   promotions?: (
     input: M.GenerateMemorySummaryInput,
   ) => NonNullable<M.GenerateMemorySummaryOutcome["promotions"]>,
+  wrapStore: (
+    store: Parameters<typeof Store.MemoryStore.of>[0],
+  ) => Parameters<typeof Store.MemoryStore.of>[0] = (store) => store,
 ) =>
   Worker.layer.pipe(
+    Layer.provide(Layer.effect(Store.MemoryStore, Effect.map(Store.MemoryStore, wrapStore))),
     Layer.provideMerge(service),
     Layer.provideMerge(maintenance),
     Layer.provide(NodeServices.layer),
@@ -336,4 +343,62 @@ export const seedRolledBackRegeneration = Effect.gen(function* () {
     yield* sql`INSERT INTO orchestration_events VALUES (${index + 5},${id(1400 + index)},${threadId},'message.updated',${encodeMessage({ ...earlyMessage, id: M.MessageId.make(`run-b-${index}`), runId: nextRunId })},${now},2,'thread')`;
   }
   yield* sql`INSERT INTO orchestration_events VALUES (106,${id(1600)},${threadId},'run.updated',${encodeRun({ ...run, id: nextRunId, userMessageId: M.MessageId.make("run-b-0"), status: "completed" })},${now},2,'thread')`;
+});
+
+// The snapshot service and worker share the real writer/store; only the provider and
+// projection shell are synthetic. The second turn receives no new memory snapshot.
+export const lineageLive = (onInput?: (input: M.GenerateMemorySummaryInput) => void) =>
+  Snapshot.layer.pipe(
+    Layer.provide(
+      Layer.succeed(Settings.MemoryHubCommittedSettings, {
+        read: Effect.succeed({
+          provenance: null,
+          settings: { mode: "hub" as const, memorySpaceId: space },
+          version: 1,
+        }),
+      }),
+    ),
+    Layer.provideMerge(live(false, onInput)),
+    Layer.provide(
+      Layer.succeed(Environment.ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(environmentId),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(Projection.ProjectionStoreV2)({
+        getRunMessage: () => Effect.sync(() => undefined),
+        getThreadShell: (requested) =>
+          Effect.succeed({
+            id: requested,
+            projectId: M.ProjectId.make("project"),
+            activeRunId: M.RunId.make("run"),
+            activityRunStatus: "running",
+          } as M.OrchestrationV2ThreadShell),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(Sync.MemorySyncService)({
+        readLocalReadiness: () =>
+          Effect.succeed({ memorySpaceId: space, bootstrap: "ready" as const }),
+      }),
+    ),
+  );
+export const lineagePolicy = {
+  grant: "read" as const,
+  policyEpoch: 1,
+  finalAuthority: Effect.succeed(true),
+};
+export const lineageSetup = Effect.gen(function* () {
+  yield* TestClock.setTime(Date.parse(now));
+  yield* seed;
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`ALTER TABLE orchestration_v2_projection_threads ADD COLUMN project_id TEXT`;
+  yield* sql`ALTER TABLE orchestration_v2_projection_threads ADD COLUMN archived_at TEXT`;
+  yield* sql`UPDATE orchestration_v2_projection_threads SET project_id='project' WHERE thread_id=${threadId}`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_runs(run_id TEXT,thread_id TEXT,ordinal INTEGER,status TEXT,payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_messages(message_id TEXT,role TEXT,payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_turn_items(thread_id TEXT,run_id TEXT,type TEXT,status TEXT)`;
+  yield* sql`INSERT INTO orchestration_v2_projection_runs VALUES ('run',${threadId},1,'running','{}')`;
+  yield* sql`CREATE TABLE projection_projects(project_id TEXT,workspace_root TEXT,deleted_at TEXT)`;
+  yield* sql`INSERT INTO projection_projects VALUES ('project','/synthetic',NULL)`;
 });

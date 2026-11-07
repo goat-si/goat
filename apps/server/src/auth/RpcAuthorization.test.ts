@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  CHANNEL_GATEWAY_WS_METHODS,
   AuthDiagnosticsReadScope,
   AuthEnvironmentMaintainScope,
   AuthFilesystemReadScope,
@@ -13,6 +14,7 @@ import {
   CLIENT_GUARDED_RPC_SCOPES,
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
+  ORCHESTRATION_V2_WS_METHODS,
   SshWorkspaceLaunchInput,
   ThreadId,
   WS_METHODS,
@@ -43,6 +45,56 @@ const RPC_REQUIRED_SCOPES = {
 };
 
 describe("RPC authorization scopes", () => {
+  it("requires provider management for explicitly reloading secrets", () => {
+    expect(
+      RpcAuthorization.requiredScopesForRpcCall(WS_METHODS.serverRefreshProviders, {
+        reloadSecrets: true,
+      }),
+    ).toEqual([AuthOrchestrationReadScope, AuthProvidersManageScope]);
+    expect(
+      RpcAuthorization.requiredScopesForRpcCall(WS_METHODS.serverRefreshProviders, {}),
+    ).toEqual([AuthOrchestrationReadScope]);
+  });
+  it.effect("requires orchestration read to list bot profiles", () =>
+    Effect.gen(function* () {
+      const method = CHANNEL_GATEWAY_WS_METHODS.listBots;
+      const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall([], method, {}));
+      expect(denied.requiredPermission).toBe(AuthOrchestrationReadScope);
+      yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationReadScope], method, {});
+    }),
+  );
+  it.effect("refuses a bot profile edit to a read-only session", () =>
+    Effect.gen(function* () {
+      const method = CHANNEL_GATEWAY_WS_METHODS.updateBot;
+      const input = { botId: "main", name: "Jarvis" };
+      for (const scopes of [[], [AuthOrchestrationReadScope]]) {
+        const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall(scopes, method, input));
+        expect(denied.requiredPermission).toBe(AuthOrchestrationOperateScope);
+      }
+      yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationOperateScope], method, input);
+    }),
+  );
+  it.effect("protects bot task thread reads and view changes", () =>
+    Effect.gen(function* () {
+      for (const [method, scope] of [
+        [CHANNEL_GATEWAY_WS_METHODS.listBotThreads, AuthOrchestrationReadScope],
+        [CHANNEL_GATEWAY_WS_METHODS.listChildWork, AuthOrchestrationReadScope],
+        [CHANNEL_GATEWAY_WS_METHODS.updateTaskView, AuthOrchestrationOperateScope],
+      ] as const) {
+        const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall([], method, {}));
+        expect(denied.requiredPermission).toBe(scope);
+        yield* RpcAuthorization.authorizeRpcCall([scope], method, {});
+      }
+    }),
+  );
+  it.effect("requires orchestration read before returning native child work", () =>
+    Effect.gen(function* () {
+      const method = ORCHESTRATION_V2_WS_METHODS.getNativeChildWork;
+      const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall([], method, {}));
+      expect(denied.requiredPermission).toBe(AuthOrchestrationReadScope);
+      yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationReadScope], method, {});
+    }),
+  );
   it.effect("refuses storage item deletion without environment maintenance authority", () =>
     Effect.gen(function* () {
       const method = WS_METHODS.serverCleanUpStorageItems;
@@ -746,6 +798,7 @@ describe("notes permissions", () => {
       WS_METHODS.notesMove,
       WS_METHODS.notesDelete,
       WS_METHODS.notesStartWork,
+      WS_METHODS.notesAttach,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
   });
@@ -771,6 +824,7 @@ describe("notes permissions", () => {
               [WS_METHODS.notesMove]: () => invoked,
               [WS_METHODS.notesDelete]: () => invoked,
               [WS_METHODS.notesStartWork]: () => invoked,
+              [WS_METHODS.notesAttach]: () => invoked,
             }),
             RpcAuthorization.layer([AuthOrchestrationReadScope]),
           ),
@@ -795,6 +849,7 @@ describe("notes permissions", () => {
           requestId: "attempt",
           target: { type: "host", host: "host", projectPath: "/project" },
         }).pipe(Effect.asVoid),
+        client[WS_METHODS.notesAttach]({ attachmentId: "pending-attempt" }).pipe(Effect.asVoid),
       ];
       for (const request of denied)
         expect(yield* request.pipe(Effect.flip)).toMatchObject({

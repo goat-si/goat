@@ -80,6 +80,21 @@ describe("turn capabilities", () => {
     expect(projected).toContain("capability: computer-use");
     expect(projected).toContain("If those tools are not in your tool list");
   });
+
+  it("routes web pages to GOAT's browser under either chip, so a named browser never reaches screen.app()", () => {
+    const notes = (["computer-use", "browser"] as const).map((capability) => {
+      const message = withTurnCapabilities({ text: "Search in Chrome" }, [capability]);
+      return projectComposerContextForProvider({
+        text: message.text,
+        records: message.context?.records ?? [],
+      });
+    });
+    for (const note of notes) {
+      expect(note).toContain("even in a browser the user names such as Chrome");
+      expect(note).toContain("screen.tab() or screen.openTab() in goat_screen_run");
+      expect(note).toContain("screen.app() is for native apps and a browser's own dialogs");
+    }
+  });
 });
 
 describe("app chips", () => {

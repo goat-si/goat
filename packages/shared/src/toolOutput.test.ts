@@ -106,6 +106,17 @@ describe("toolOutputSettle", () => {
 });
 
 describe("compactDynamicToolOutput", () => {
+  it("keeps the counts a batch pull request link or unlink reports", () => {
+    expect(
+      compactDynamicToolOutput({
+        linked: [{ host: "github.com", repository: "acme/app", numbers: [1, 2] }],
+        linkedCount: 2,
+        unlinked: [{ host: "github.com", repository: "acme/app", state: "merged", numbers: [1] }],
+        unlinkedCount: 1,
+      }),
+    ).toEqual({ linkedCount: 2, unlinkedCount: 1 });
+  });
+
   it("extracts IDs through the MCP result envelopes used by GOAT summaries", () => {
     const metadata = { threadId: "thread-1", messageId: "message-1" };
     const json = JSON.stringify({ ...metadata, response: "Private response body" });

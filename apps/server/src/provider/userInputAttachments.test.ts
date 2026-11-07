@@ -1,3 +1,8 @@
+import {
+  documentAlternateContentFixtures,
+  documentHiddenTextFixtures,
+  documentLineBreakFixtures,
+} from "./documentTextFixtures.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -292,7 +297,7 @@ describe("question answer paths", () => {
         attachmentsDir: config.attachmentsDir,
         attachmentsByQuestionId: { q: [file] },
       });
-      expect(answers.q).toContain(`text extracted to: "${path}.txt"`);
+      expect(answers.q).toContain(`text extracted to: ${JSON.stringify(path + ".txt")}`);
       expect(NodeFS.readFileSync(`${path}.txt`, "utf8")).toContain("Vessel: Larkspur");
       expect(NodeFS.readFileSync(`${path}.txt`, "utf8")).toContain("301");
       expect(NodeFS.readFileSync(`${path}.txt`, "utf8")).toContain("42");
@@ -347,7 +352,7 @@ describe("question answer paths", () => {
             attachmentsDir: config.attachmentsDir,
             attachmentsByQuestionId: { q: [file] },
           });
-          expect(answers.q).toContain(path);
+          expect(answers.q).toContain(JSON.stringify(path));
           expect(answers.q).not.toContain("text extracted");
           expect(NodeFS.existsSync(`${path}.txt`)).toBe(false);
           expect(NodeFS.readFileSync(path, "utf8")).toBe("invalid document");
@@ -547,6 +552,7 @@ describe("question answer paths", () => {
           expected: ["Start", "[Extracted text truncated at document extraction limits.]"],
           absent: ["Unneeded"],
         },
+        ...documentAlternateContentFixtures,
         {
           ext: "docx",
           bounded: true,
@@ -556,15 +562,8 @@ describe("question answer paths", () => {
           },
           expected: ["## Report & totals", "North\t12 34", "Before Inner After\tNeighbor"],
         },
-        {
-          ext: "docx",
-          bounded: true,
-          parts: {
-            "word/document.xml":
-              '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>First</w:t><w:cr/><w:t>Second</w:t><w:br/><w:t>Third</w:t></w:r></w:p></w:body></w:document>',
-          },
-          expected: ["First\nSecond\nThird"],
-        },
+        ...documentLineBreakFixtures,
+        ...documentHiddenTextFixtures,
         {
           ext: "docx",
           bounded: true,
@@ -1100,7 +1099,7 @@ describe("question answer paths", () => {
       expect(answers.q).toEqual([
         "First",
         "Second",
-        `Attached file "spec \\"final\\".txt": "${path}"`,
+        `Attached file "spec \\"final\\".txt": ${JSON.stringify(path)}`,
       ]);
       expect(answers.other).toBe("No file");
       expect(original.q).toEqual(["First", "Second"]);
@@ -1111,7 +1110,7 @@ describe("question answer paths", () => {
         attachmentsByQuestionId: { ["__proto__"]: [attachment] },
       });
       expect(Object.keys(specialKey)).toEqual(["__proto__"]);
-      expect(specialKey["__proto__"]).toContain(path);
+      expect(specialKey["__proto__"]).toContain(JSON.stringify(path));
     }).pipe(Effect.provide(layer)),
   );
   it.effect("does not send an unavailable attachment path", () =>

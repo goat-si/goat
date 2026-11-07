@@ -29,6 +29,7 @@ import {
   shouldPublishShellApplicationEvent,
   skipUnchangedThreadShells,
   subagentLineageOrder,
+  subagentShellState,
 } from "./ShellStream.ts";
 
 const emptyShellSnapshot = {
@@ -301,10 +302,53 @@ describe("omitIdleSubagentShells", () => {
     expect(
       shouldPublishShellApplicationEvent(
         { event: { threadId: "idle", type: "turn-item.updated" } } as ApplicationStoredEvent,
-        omitted.subagentThreadIds,
+        new Set(omitted.subagentThreadIds),
       ),
     ).toBe(false);
   });
+
+  it.effect("keeps shared snapshot subagent IDs isolated between subscribers (#2441)", () =>
+    Effect.sync(() => {
+      const threads = [row("root", null), row("child", "root")];
+      const snapshot = { ...emptyShellSnapshot, snapshotSequence: 5, threads };
+      const index = {
+        subagentThreadIds: [ThreadId.make("child")],
+        subagentParentIds: new Set(["root"]),
+      };
+      const options = {
+        omitIdleSubagents: true,
+        omitOlderSettled: false,
+        now: DateTime.makeUnsafe(0),
+      };
+      const first = shellSnapshotForSubscriber(snapshot, options, index);
+      const joined = shellSnapshotForSubscriber(snapshot, options, index);
+      const firstState = subagentShellState(
+        [...first.subagentThreadIds],
+        snapshot.snapshotSequence,
+      );
+      const joinedState = subagentShellState(
+        [...joined.subagentThreadIds],
+        snapshot.snapshotSequence,
+      );
+      const promotion = {
+        sequence: 6,
+        event: {
+          threadId: "child",
+          type: "thread.metadata-updated",
+          payload: { lineage: { relationshipToParent: null } },
+        },
+      } as ApplicationStoredEvent;
+      const transcript = {
+        sequence: 7,
+        event: { threadId: "child", type: "message.updated" },
+      } as ApplicationStoredEvent;
+      expect(shouldPublishShellApplicationEvent(promotion, firstState.ids, firstState)).toBe(true);
+      expect(shouldPublishShellApplicationEvent(transcript, firstState.ids, firstState)).toBe(true);
+      expect(shouldPublishShellApplicationEvent(transcript, joinedState.ids, joinedState)).toBe(
+        false,
+      );
+    }),
+  );
 });
 
 describe("omitOlderSettledShells", () => {
@@ -345,11 +389,33 @@ describe("omitOlderSettledShells", () => {
     expect(result.olderSettled).toEqual({
       before: DateTime.formatIso(DateTime.makeUnsafe(100 * DAY - 2.4 * DAY)),
       asOfSequence: 7,
+      sideChatCounts: [],
       counts: [
         { projectId: "project-a", count: 1 },
         { projectId: "project-b", count: 1 },
       ],
     });
+  });
+
+  it("keeps the parent's recent side chat on reconnect and preserves legacy totals", () => {
+    const parent = row("parent", null);
+    const side = row("side", 1, { sideChatOf: parent.id });
+    const oldSide = row("old-side", 40, { sideChatOf: parent.id });
+    const result = shellSnapshotForSubscriber(
+      {
+        ...emptyShellSnapshot,
+        snapshotSequence: 7,
+        threads: [...newest, parent, side, row("old", 30), oldSide],
+      },
+      { omitIdleSubagents: true, omitOlderSettled: true, now },
+    ).snapshot;
+    expect(result.threads.map((thread) => thread.id)).toContain(side.id);
+    expect(result.threads.map((thread) => thread.id)).not.toContain(oldSide.id);
+    expect(result.olderSettled?.counts).toEqual([{ projectId: "project-a", count: 3 }]);
+    expect(result.olderSettled?.sideChatCounts).toEqual([{ projectId: "project-a", count: 1 }]);
+    expect(result.olderSettled?.before).toBe(
+      DateTime.formatIso(DateTime.makeUnsafe(100 * DAY - 2.3 * DAY)),
+    );
   });
 
   it("keeps threads tied with the 25th newest", () => {

@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState, Range } from "@codemirror/state";
+import { Facet, type EditorState, type Range } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -9,8 +9,15 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import type { SyntaxNodeRef, Tree } from "@lezer/common";
-import { noteLinkDefinitions, normalizeLinkLabel } from "./note-editor-links";
+import { imagesChanged, type NoteImageStore } from "./note-editor-images";
+import { noteLinkDefinitions, normalizeLinkLabel, playableMediaLabel } from "./note-editor-links";
 import { toggleTaskAt } from "./note-editor-state";
+
+/** Where attachment images get their signed URLs; without it they show their labels. */
+export const noteImageStore = Facet.define<NoteImageStore, NoteImageStore | null>({
+  combine: (stores) => stores[0] ?? null,
+});
+const DIRECT_IMAGE = /^(?:https?:|data:image\/)/i;
 
 const definitionsByTree = new WeakMap<Tree, ReadonlyMap<string, string>>();
 function linkDefinitions(state: EditorState) {
@@ -58,23 +65,32 @@ class ImageWidget extends WidgetType {
   constructor(
     readonly src: string,
     readonly alt: string,
+    readonly url: string | null,
+    readonly store: NoteImageStore | null,
   ) {
     super();
   }
   override eq(other: ImageWidget) {
-    return other.src === this.src && other.alt === this.alt;
+    return other.src === this.src && other.alt === this.alt && other.url === this.url;
   }
-  toDOM() {
+  toDOM(view: EditorView) {
     const label = document.createElement("span");
     label.className = "cm-goat-image-label";
     label.textContent = this.alt || "Image";
-    // Note-relative paths live in the hub's repository, which this page cannot read.
-    if (!/^(?:https?:|data:image\/)/i.test(this.src)) return label;
+    // Note attachments live on the hub; the app signs a URL for each one this page shows.
+    const direct = DIRECT_IMAGE.test(this.src);
+    const source = direct ? this.src : this.url;
+    if (source === null) return label;
     const image = document.createElement("img");
     image.className = "cm-goat-image";
     image.alt = this.alt;
-    image.src = this.src;
-    image.onerror = () => image.replaceWith(label);
+    image.src = source;
+    image.onerror = () => {
+      image.replaceWith(label);
+      if (!direct && this.store?.failed(this.src))
+        view.dispatch({ effects: imagesChanged.of(null) });
+    };
+    if (!direct) image.onload = () => this.store?.loaded(this.src);
     return image;
   }
   override ignoreEvent() {
@@ -83,6 +99,29 @@ class ImageWidget extends WidgetType {
 }
 
 const hiddenMark = Decoration.replace({});
+
+class MediaLinkWidget extends WidgetType {
+  constructor(
+    readonly href: string,
+    readonly label: string,
+  ) {
+    super();
+  }
+  override eq(other: MediaLinkWidget) {
+    return other.href === this.href && other.label === this.label;
+  }
+  toDOM() {
+    const link = document.createElement("span");
+    link.className = "cm-goat-link";
+    link.setAttribute("data-href", this.href);
+    link.textContent = this.label;
+    return link;
+  }
+  override ignoreEvent() {
+    return false;
+  }
+}
+
 const bullet = Decoration.replace({ widget: new BulletWidget() });
 const marks = {
   strong: Decoration.mark({ class: "cm-goat-strong" }),
@@ -103,6 +142,7 @@ function frontmatterEnd(state: EditorState) {
 function buildDecorations(view: EditorView): DecorationSet {
   const { state } = view;
   const { doc } = state;
+  const images = state.facet(noteImageStore);
   const revealed = new Set<number>();
   if (view.hasFocus)
     for (const range of state.selection.ranges)
@@ -210,11 +250,21 @@ function buildDecorations(view: EditorView): DecorationSet {
         }
         const href = doc.sliceString(url.from, url.to);
         if (node.name === "Image") {
+          const alt = doc.sliceString(open.to, close.from);
+          const media = playableMediaLabel(href, alt);
           replace(
             node.from,
             node.to,
             Decoration.replace({
-              widget: new ImageWidget(href, doc.sliceString(open.to, close.from)),
+              widget:
+                media !== null
+                  ? new MediaLinkWidget(href, media)
+                  : new ImageWidget(
+                      href,
+                      alt,
+                      DIRECT_IMAGE.test(href) ? null : (images?.url(href) ?? null),
+                      images,
+                    ),
             }),
           );
           return false;
@@ -343,23 +393,33 @@ function buildDecorations(view: EditorView): DecorationSet {
 export const livePreview = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    // Image changes that arrived while composing, applied once composition ends.
+    imagesPending = false;
     constructor(view: EditorView) {
       this.decorations = buildDecorations(view);
     }
     update(update: ViewUpdate) {
+      const images = update.transactions.some((tr) =>
+        tr.effects.some((effect) => effect.is(imagesChanged)),
+      );
       // Rebuilding around a composing syllable can break Hangul composition; map instead.
       if (update.view.composing) {
         this.decorations = this.decorations.map(update.changes);
+        if (images) this.imagesPending = true;
         return;
       }
       if (
+        images ||
+        this.imagesPending ||
         update.docChanged ||
         update.selectionSet ||
         update.viewportChanged ||
         update.focusChanged ||
         syntaxTree(update.startState) !== syntaxTree(update.state)
-      )
+      ) {
+        this.imagesPending = false;
         this.decorations = buildDecorations(update.view);
+      }
     }
   },
   { decorations: (plugin) => plugin.decorations },

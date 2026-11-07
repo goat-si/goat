@@ -105,6 +105,7 @@ export const PREVIEW_SET_ZOOM_FACTOR_CHANNEL = "desktop:preview-set-zoom-factor"
 export const PREVIEW_HARD_RELOAD_CHANNEL = "desktop:preview-hard-reload";
 export const PREVIEW_SET_COLOR_SCHEME_CHANNEL = "desktop:preview-set-color-scheme";
 export const PREVIEW_SET_AUDIO_MUTED_CHANNEL = "desktop:preview-set-audio-muted";
+export const PREVIEW_SET_SHOWN_CHANNEL = "desktop:preview-set-shown";
 export const PREVIEW_OPEN_DEVTOOLS_CHANNEL = "desktop:preview-open-devtools";
 export const PREVIEW_CLEAR_COOKIES_CHANNEL = "desktop:preview-clear-cookies";
 export const PREVIEW_CLEAR_CACHE_CHANNEL = "desktop:preview-clear-cache";
@@ -116,6 +117,8 @@ export const PREVIEW_SET_ANNOTATION_THEME_CHANNEL = "desktop:preview-set-annotat
 export const PREVIEW_SET_ANNOTATION_SEND_ENABLED_CHANNEL =
   "desktop:preview-set-annotation-send-enabled";
 export const PREVIEW_PICK_ELEMENT_CHANNEL = "desktop:preview-pick-element";
+export const PREVIEW_ANNOTATION_VOICE_EVENT_CHANNEL = "desktop:preview-annotation-voice-event";
+export const PREVIEW_ANNOTATION_VOICE_STATE_CHANNEL = "desktop:preview-annotation-voice-state";
 export const PREVIEW_CANCEL_PICK_ELEMENT_CHANNEL = "desktop:preview-cancel-pick-element";
 export const PREVIEW_CAPTURE_SCREENSHOT_CHANNEL = "desktop:preview-capture-screenshot";
 export const PREVIEW_REVEAL_ARTIFACT_CHANNEL = "desktop:preview-reveal-artifact";

@@ -9,6 +9,7 @@ import type {
   DesktopSnapShotEvent,
 } from "@goat/contracts";
 import {
+  AnnotationVoiceEvent,
   DesktopWindowMaterialState,
   DesktopSshPreparationProgressEventSchema,
   DesktopPreviewSessionStackState,
@@ -22,6 +23,7 @@ import * as IpcChannels from "./ipc/channels.ts";
 import { mergeLegacyLocalStorage } from "./legacyLocalStorageMerge.ts";
 
 const decodeWindowMaterialState = Schema.decodeUnknownOption(DesktopWindowMaterialState);
+const decodeAnnotationVoiceEvent = Schema.decodeUnknownOption(AnnotationVoiceEvent);
 
 const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
@@ -500,6 +502,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL, { tabId, colorScheme }),
     setAudioMuted: (tabId, audioMuted) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
+    setShown: (tabId, shown) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_SHOWN_CHANNEL, { tabId, shown }),
     openDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
     listBrowserProfileOrigins: (environmentId, profileId) =>
@@ -520,7 +524,23 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         tabId,
         enabled,
       }),
-    pickElement: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL, { tabId }),
+    pickElement: (tabId, voice) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL, {
+        tabId,
+        ...(voice ? { voice } : {}),
+      }),
+    annotationVoice: {
+      onEvent: (listener) => {
+        const onEvent = (_event: Electron.IpcRendererEvent, tabId: unknown, value: unknown) => {
+          const decoded = decodeAnnotationVoiceEvent(value);
+          if (typeof tabId === "string" && Option.isSome(decoded)) listener(tabId, decoded.value);
+        };
+        ipcRenderer.on(IpcChannels.PREVIEW_ANNOTATION_VOICE_EVENT_CHANNEL, onEvent);
+        return () => ipcRenderer.off(IpcChannels.PREVIEW_ANNOTATION_VOICE_EVENT_CHANNEL, onEvent);
+      },
+      update: (state) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_ANNOTATION_VOICE_STATE_CHANNEL, state),
+    },
     cancelPickElement: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CANCEL_PICK_ELEMENT_CHANNEL, { tabId }),
     captureScreenshot: (tabId) =>

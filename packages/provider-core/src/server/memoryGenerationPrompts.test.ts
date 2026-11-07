@@ -71,6 +71,20 @@ import {
 import { strictOutputSchemaViolations } from "./strictOutputSchema.ts";
 import { toJsonSchemaObject } from "./textGenerationUtils.ts";
 describe("memory generation prompts", () => {
+  it.effect("promotion guidance describes durable preferences and full restatement", () =>
+    Effect.gen(function* () {
+      const promoted = yield* buildMemorySummaryPrompt({ ...summary, promote: true });
+      expect(promoted.prompt).toContain("stable preferences");
+      expect(promoted.prompt).toContain("conventions");
+      expect(promoted.prompt).toContain("previous summary");
+      expect(promoted.prompt).toContain("restate");
+      expect(promoted.prompt).toContain("one-off task instructions");
+      const ordinary = yield* buildMemorySummaryPrompt(summary);
+      expect(ordinary.prompt).not.toContain("Also return project and user");
+      expect(Schema.is(ordinary.outputSchema)({ summary: null })).toBe(true);
+      expect(toJsonSchemaObject(ordinary.outputSchema)).not.toHaveProperty("properties.project");
+    }),
+  );
   it.effect("treats memory text as data and offers no tools", () =>
     Effect.gen(function* () {
       const output = yield* buildMemorySummaryPrompt({

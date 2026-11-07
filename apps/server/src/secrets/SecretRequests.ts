@@ -6,6 +6,8 @@ import {
   SIGN_IN_SECRET_MIN_LENGTH,
   SecretRef,
   SecretRequestError,
+  normalizeCardDetails,
+  type CardDetails,
   type HandoffActor,
   type ProjectId,
   type SecretRequestAnswerInput,
@@ -27,7 +29,10 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as Metrics from "../observability/Metrics.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { resolveSecret, withSecretReadAdmission } from "./secretResolver.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { parseSetupKey, type AuthenticatorSetup } from "./Authenticator.ts";
 
 const SECRET_REF_PREFIX = "secret-ref:";
 const storeName = (ref: SecretRef) => `secret-request-${ref.slice(SECRET_REF_PREFIX.length)}`;
@@ -50,10 +55,42 @@ const StoredSecret = Schema.fromJsonString(
     value: Schema.String,
     savedAt: Schema.Number,
     origin: Schema.optional(Schema.String),
+    loginThreadId: Schema.optional(Schema.String),
+    cardThreadId: Schema.optional(Schema.String),
+    loginInFlight: Schema.optional(Schema.Boolean),
+    loginConsumed: Schema.optional(Schema.Boolean),
+    codeSetup: Schema.optional(
+      Schema.Struct({
+        secret: Schema.String,
+        algorithm: Schema.Literals(["SHA1", "SHA256", "SHA512"]),
+        digits: Schema.Literals([6, 8]),
+        period: Schema.Number,
+      }),
+    ),
+    codeFills: Schema.optional(Schema.Number),
+    codeExpiresAt: Schema.optional(Schema.Number),
   }),
 );
+const LoginItem = Schema.fromJsonString(
+  Schema.Struct({ username: Schema.String, password: Schema.String }),
+);
+const encodeLogin = Schema.encodeEffect(LoginItem);
+const decodeLogin = Schema.decodeUnknownOption(LoginItem);
+const CardItem = Schema.fromJsonString(
+  Schema.Struct({
+    number: Schema.String,
+    expiryMonth: Schema.String,
+    expiryYear: Schema.String,
+    cvc: Schema.String,
+    name: Schema.String,
+  }),
+);
+const encodeCard = Schema.encodeEffect(CardItem);
+const decodeCard = Schema.decodeUnknownOption(CardItem);
 const encodeStored = Schema.encodeEffect(StoredSecret);
 const decodeStored = Schema.decodeUnknownOption(StoredSecret);
+
+export type LoginDelivery = "none" | "partial" | "complete" | "uncertain";
 
 export class SecretRequests extends Context.Service<
   SecretRequests,
@@ -81,6 +118,21 @@ export class SecretRequests extends Context.Service<
       readonly threadId: ThreadId;
       readonly origin: string;
     }) => Effect.Effect<string, SecretRequestError>;
+    readonly useLogin: <E, R>(
+      input: { readonly ref: SecretRef; readonly threadId: ThreadId; readonly origin: string },
+      use: (item: {
+        readonly username: string;
+        readonly password: string;
+      }) => Effect.Effect<LoginDelivery, E, R>,
+    ) => Effect.Effect<LoginDelivery, SecretRequestError | E, R>;
+    readonly useCard: <E, R>(
+      input: { readonly ref: SecretRef; readonly threadId: ThreadId; readonly origin: string },
+      use: (item: CardDetails) => Effect.Effect<LoginDelivery, E, R>,
+    ) => Effect.Effect<LoginDelivery, SecretRequestError | E, R>;
+    readonly useOneTimeCode: <E, R>(
+      input: { readonly ref: SecretRef; readonly threadId: ThreadId; readonly origin: string },
+      use: (setup: AuthenticatorSetup) => Effect.Effect<LoginDelivery, E, R>,
+    ) => Effect.Effect<LoginDelivery, SecretRequestError | E, R>;
     /** Moves a saved `file` request's value to an owner-only file and returns its path. */
     readonly saveToFile: (input: {
       readonly threadId: ThreadId;
@@ -89,11 +141,12 @@ export class SecretRequests extends Context.Service<
   }
 >()("goat/secrets/SecretRequests") {}
 
-const make = Effect.gen(function* () {
+const make = Effect.fn("SecretRequests.make")(function* (readReference: typeof resolveSecret) {
   const store = yield* ServerSecretStore.ServerSecretStore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+  const settings = yield* ServerSettings.ServerSettingsService;
   // Beside the store's own files so the same owner-only directory and cleanup rules apply.
   const filesDir = store.directory === undefined ? undefined : path.join(store.directory, "files");
 
@@ -121,6 +174,40 @@ const make = Effect.gen(function* () {
         return yield* new SecretRequestError({ reason: "already_answered" });
       }
       if (
+        input.answer.type !== "decline" &&
+        (item.requestKind === "login"
+          ? input.answer.type !== "save_login"
+          : item.requestKind === "card"
+            ? input.answer.type !== "save_card"
+            : input.answer.type !== "save" && input.answer.type !== "reference")
+      ) {
+        return yield* new SecretRequestError({ reason: "answer_mismatch" });
+      }
+      const cardDetails =
+        input.answer.type === "save_card" ? normalizeCardDetails(input.answer) : undefined;
+      const codeSetup =
+        input.answer.type === "save_login" && input.answer.authenticatorSetupKey !== undefined
+          ? parseSetupKey(input.answer.authenticatorSetupKey)
+          : undefined;
+      if (
+        input.answer.type === "save_login" &&
+        input.answer.authenticatorSetupKey !== undefined &&
+        codeSetup === undefined
+      )
+        return yield* new SecretRequestError({ reason: "invalid_authenticator_setup_key" });
+      if (codeSetup !== undefined && item.siteOrigin === undefined)
+        return yield* new SecretRequestError({ reason: "origin_required" });
+      if (input.answer.type === "save_card" && cardDetails === undefined)
+        return yield* new SecretRequestError({ reason: "invalid_card" });
+      if (input.answer.type === "save_card" && item.siteOrigin === undefined)
+        return yield* new SecretRequestError({ reason: "origin_required" });
+      if (
+        input.answer.type === "save_login" &&
+        input.answer.password.length < SIGN_IN_SECRET_MIN_LENGTH
+      ) {
+        return yield* new SecretRequestError({ reason: "too_short_for_sign_in" });
+      }
+      if (
         input.answer.type === "save" &&
         item.siteOrigin !== undefined &&
         input.answer.secret.length < SIGN_IN_SECRET_MIN_LENGTH
@@ -131,12 +218,52 @@ const make = Effect.gen(function* () {
       if (run === undefined || ThreadManagementService.isTerminalRunStatus(run.status)) {
         return yield* new SecretRequestError({ reason: "agent_stopped" });
       }
+      const reference = input.answer.type === "reference" ? input.answer.reference : undefined;
+      const referenceValue =
+        reference !== undefined
+          ? yield* settings.getSettings.pipe(
+              Effect.flatMap((current) =>
+                Effect.tryPromise((signal) =>
+                  withSecretReadAdmission(
+                    () => readReference(current.secretProviders, reference),
+                    signal,
+                  ),
+                ),
+              ),
+              Effect.mapError(() => new SecretRequestError({ reason: "reference_unreadable" })),
+            )
+          : undefined;
+      if (referenceValue !== undefined && referenceValue.trim() === "")
+        return yield* new SecretRequestError({ reason: "reference_unreadable" });
+      if (
+        referenceValue !== undefined &&
+        item.siteOrigin !== undefined &&
+        referenceValue.length < SIGN_IN_SECRET_MIN_LENGTH
+      )
+        return yield* new SecretRequestError({ reason: "too_short_for_sign_in" });
       // Create before recording so racing answers cannot overwrite values or show saved before storage.
       // Existing values on pending cards finish earlier saves whose recording failed.
-      if (input.answer.type === "save") {
+      if (input.answer.type !== "decline") {
+        let value: string;
+        if (input.answer.type === "reference" && referenceValue !== undefined)
+          value = referenceValue;
+        else if (input.answer.type === "save") value = input.answer.secret;
+        else if (input.answer.type === "save_login")
+          value = yield* encodeLogin({
+            username: input.answer.username,
+            password: input.answer.password,
+          }).pipe(Effect.orDie);
+        else {
+          if (cardDetails === undefined)
+            return yield* new SecretRequestError({ reason: "invalid_card" });
+          value = yield* encodeCard(cardDetails).pipe(Effect.orDie);
+        }
         const encoded = yield* encodeStored({
           projectId: records.thread.projectId,
-          value: input.answer.secret,
+          value,
+          ...(input.answer.type === "save_login" ? { loginThreadId: input.threadId } : {}),
+          ...(codeSetup === undefined ? {} : { codeSetup }),
+          ...(input.answer.type === "save_card" ? { cardThreadId: input.threadId } : {}),
           savedAt: yield* Clock.currentTimeMillis,
           ...(item.siteOrigin === undefined ? {} : { origin: item.siteOrigin }),
         }).pipe(Effect.orDie);
@@ -152,7 +279,7 @@ const make = Effect.gen(function* () {
             ),
           );
       }
-      const secretStatus = input.answer.type === "save" ? "saved" : "declined";
+      const secretStatus = input.answer.type === "decline" ? "declined" : "saved";
       yield* threadManagement
         .dispatch({
           type: "secret_request.record",
@@ -167,18 +294,19 @@ const make = Effect.gen(function* () {
           ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
           ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
           ...(item.siteOrigin === undefined ? {} : { siteOrigin: item.siteOrigin }),
+          ...(item.requestKind === undefined ? {} : { requestKind: item.requestKind }),
           secretStatus,
         })
         .pipe(
           Effect.mapError((cause) => new SecretRequestError({ reason: "record_failed", cause })),
           // Clear failed saves so the pending card can be answered again.
           Effect.tapError(() =>
-            input.answer.type === "save"
+            input.answer.type !== "decline"
               ? removeLogged(storeName(refFor(salt, input.threadId, item.id)))
               : Effect.void,
           ),
         );
-      if (input.answer.type !== "save") return;
+      if (input.answer.type === "decline") return;
       // The wait may have closed the card; delete unrecorded answers because no one receives their refs.
       const recorded = yield* threadManagement
         .getThreadRecords(input.threadId, ["turnItems"], {
@@ -230,6 +358,7 @@ const make = Effect.gen(function* () {
   const readRef = Effect.fn("SecretRequests.readRef")(function* (input: {
     readonly ref: SecretRef;
     readonly projectId: ProjectId;
+    readonly forCode?: boolean;
   }) {
     if (!REF_PATTERN.test(input.ref))
       return yield* new SecretRequestError({ reason: "invalid_ref" });
@@ -242,7 +371,13 @@ const make = Effect.gen(function* () {
     if (Option.isNone(decoded) || decoded.value.projectId !== input.projectId) {
       return yield* new SecretRequestError({ reason: "ref_unavailable" });
     }
-    if ((yield* Clock.currentTimeMillis) - decoded.value.savedAt > SECRET_REF_TTL_MS) {
+    if (!input.forCode && decoded.value.loginConsumed === true) {
+      return yield* new SecretRequestError({ reason: "ref_unavailable" });
+    }
+    if (
+      !input.forCode &&
+      (yield* Clock.currentTimeMillis) - decoded.value.savedAt > SECRET_REF_TTL_MS
+    ) {
       yield* removeLogged(storeName(input.ref));
       return yield* new SecretRequestError({ reason: "ref_expired" });
     }
@@ -255,6 +390,10 @@ const make = Effect.gen(function* () {
     readonly origin?: string;
   }) {
     const stored = yield* readRef(input);
+    if (stored.cardThreadId !== undefined)
+      return yield* new SecretRequestError({ reason: "card_ref" });
+    if (stored.loginThreadId !== undefined)
+      return yield* new SecretRequestError({ reason: "login_ref" });
     // Checked before removal, so a wrong destination leaves the ref usable on its own site.
     if (input.origin === undefined && stored.origin !== undefined) {
       return yield* new SecretRequestError({ reason: "origin_bound" });
@@ -291,6 +430,115 @@ const make = Effect.gen(function* () {
       ),
     );
   });
+
+  const writeLoginRef = Effect.fn("SecretRequests.writeLoginRef")(
+    (ref: SecretRef, entry: typeof StoredSecret.Type) =>
+      encodeStored(entry).pipe(
+        Effect.orDie,
+        Effect.flatMap((encoded) => store.set(storeName(ref), new TextEncoder().encode(encoded))),
+        Effect.mapError((cause) => new SecretRequestError({ reason: "store_failed", cause })),
+      ),
+  );
+
+  const useReserved = <A, E, R>(
+    input: { readonly ref: SecretRef; readonly threadId: ThreadId; readonly origin: string },
+    kind: "login" | "card" | "code",
+    decode: (value: string, setup: AuthenticatorSetup | undefined) => Option.Option<A>,
+    use: (item: A) => Effect.Effect<LoginDelivery, E, R>,
+  ) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const records = yield* threadManagement
+          .getThreadRecords(input.threadId, [])
+          .pipe(
+            Effect.mapError((cause) => new SecretRequestError({ reason: "load_failed", cause })),
+          );
+        const { stored, item } = yield* Effect.gen(function* () {
+          const stored = yield* readRef({
+            ref: input.ref,
+            projectId: records.thread.projectId,
+            forCode: kind === "code",
+          });
+          if (
+            (kind === "card" ? stored.cardThreadId : stored.loginThreadId) !== input.threadId ||
+            stored.loginInFlight === true ||
+            (kind === "login" && stored.loginConsumed === true) ||
+            (kind === "code" && stored.codeSetup === undefined)
+          )
+            return yield* new SecretRequestError({ reason: "ref_unavailable" });
+          if (stored.origin !== input.origin)
+            return yield* new SecretRequestError({ reason: "origin_mismatch" });
+          if (
+            kind === "code" &&
+            (yield* Clock.currentTimeMillis) >=
+              (stored.codeExpiresAt ?? stored.savedAt + SECRET_REF_TTL_MS)
+          ) {
+            if (stored.loginConsumed === true) yield* removeLogged(storeName(input.ref));
+            return yield* new SecretRequestError({ reason: "ref_expired" });
+          }
+          const item = decode(stored.value, stored.codeSetup);
+          if (Option.isNone(item)) return yield* new SecretRequestError({ reason: "read_failed" });
+          yield* writeLoginRef(input.ref, { ...stored, loginInFlight: true });
+          return { stored, item: item.value };
+        }).pipe(consumeLock.withPermits(1));
+        const delivery = yield* restore(use(item)).pipe(
+          Effect.catchCause((cause) =>
+            removeLogged(storeName(input.ref)).pipe(
+              consumeLock.withPermits(1),
+              Effect.andThen(Effect.failCause(cause)),
+            ),
+          ),
+        );
+        return yield* Effect.gen(function* () {
+          if (delivery === "none") {
+            yield* writeLoginRef(input.ref, stored);
+            return delivery;
+          }
+          if (kind === "login" && stored.codeSetup !== undefined) {
+            yield* writeLoginRef(input.ref, {
+              ...stored,
+              value: "",
+              loginConsumed: true,
+              codeExpiresAt: (yield* Clock.currentTimeMillis) + 10 * 60 * 1000,
+            });
+            return delivery;
+          }
+          if (kind === "code" && delivery === "complete" && (stored.codeFills ?? 0) < 2) {
+            yield* writeLoginRef(input.ref, {
+              ...stored,
+              codeFills: (stored.codeFills ?? 0) + 1,
+            });
+            return delivery;
+          }
+          if (kind === "code" && stored.loginConsumed !== true) {
+            const {
+              codeSetup: _codeSetup,
+              codeFills: _codeFills,
+              codeExpiresAt: _codeExpiresAt,
+              ...login
+            } = stored;
+            yield* writeLoginRef(input.ref, login);
+            return delivery;
+          }
+          if (!(yield* removeLogged(storeName(input.ref))))
+            return yield* new SecretRequestError({ reason: "consume_failed" });
+          return delivery;
+        }).pipe(consumeLock.withPermits(1));
+      }),
+    );
+
+  const useLogin: SecretRequests["Service"]["useLogin"] = (input, use) =>
+    useReserved(input, "login", (value) => decodeLogin(value), use).pipe(
+      Effect.withSpan("SecretRequests.useLogin"),
+    );
+  const useCard: SecretRequests["Service"]["useCard"] = (input, use) =>
+    useReserved(input, "card", (value) => decodeCard(value), use).pipe(
+      Effect.withSpan("SecretRequests.useCard"),
+    );
+  const useOneTimeCode: SecretRequests["Service"]["useOneTimeCode"] = (input, use) =>
+    useReserved(input, "code", (_value, setup) => Option.fromNullishOr(setup), use).pipe(
+      Effect.withSpan("SecretRequests.useOneTimeCode"),
+    );
 
   const saveToFile: SecretRequests["Service"]["saveToFile"] = Effect.fn(
     "SecretRequests.saveToFile",
@@ -360,7 +608,13 @@ const make = Effect.gen(function* () {
       const decoded = Option.flatMap(stored, (bytes) =>
         decodeStored(new TextDecoder().decode(bytes)),
       );
-      if (Option.isSome(decoded) && now - decoded.value.savedAt <= SECRET_REF_TTL_MS) continue;
+      if (
+        Option.isSome(decoded) &&
+        (decoded.value.loginConsumed && decoded.value.codeExpiresAt !== undefined
+          ? now < decoded.value.codeExpiresAt
+          : now - decoded.value.savedAt <= SECRET_REF_TTL_MS)
+      )
+        continue;
       if (yield* removeLogged(name)) removed += 1;
     }
     yield* Effect.annotateCurrentSpan({ "secret_request.expired_removed": removed });
@@ -393,7 +647,18 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  return SecretRequests.of({ answer, savedRef, consume, consumeForOrigin, saveToFile });
+  return SecretRequests.of({
+    answer,
+    savedRef,
+    consume,
+    consumeForOrigin,
+    useLogin,
+    useCard,
+    useOneTimeCode,
+    saveToFile,
+  });
 });
 
-export const layer = Layer.effect(SecretRequests, make);
+export const layerWithReader = (readReference: typeof resolveSecret) =>
+  Layer.effect(SecretRequests, make(readReference));
+export const layer = Layer.effect(SecretRequests, make(resolveSecret));

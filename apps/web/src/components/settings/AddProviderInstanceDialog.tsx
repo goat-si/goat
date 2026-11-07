@@ -1,4 +1,6 @@
+import { deriveInstanceId } from "@goat/client-runtime/provider-instance-ids";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { ACP_LOCAL_PRESETS } from "@goat/provider-acp-registry/localPresets";
 
 import { useAtomValue } from "@effect/atom-react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
@@ -59,21 +61,7 @@ import { resolveOfficialAcpRegistryIconUrl } from "./AcpRegistryIcon";
 import { AddManagedCodexAccountDialog } from "./CodexSetupSection";
 import { MultipleAccountsNote } from "./MultipleAccountsNote";
 import { ProviderEnvironmentSection } from "./ProviderInstanceCard";
-
-/** Limit the slug to 48 chars so the composed ProviderInstanceId fits its 64-char cap. */
-function slugifyLabel(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 48);
-}
-
-function deriveInstanceId(driver: ProviderDriverKind, label: string): string {
-  const slug = slugifyLabel(label);
-  return slug ? `${driver}_${slug}` : "";
-}
+import { localPresetDraft } from "./AddProviderInstanceDialog.presets";
 
 const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -403,6 +391,22 @@ export function AddProviderInstanceDialog({
     setHasAttemptedSubmit(false);
   };
 
+  const handleLocalPreset = (preset: (typeof ACP_LOCAL_PRESETS)[number]) => {
+    const draft = localPresetDraft(preset);
+    setDriver(ACP_REGISTRY_DRIVER_KIND);
+    setSelectedAcp(null);
+    setIsManualAcpConfiguration(true);
+    setConfigByDriver((existing) => ({ ...existing, [ACP_REGISTRY_DRIVER_KIND]: draft.config }));
+    setIdentityByDriver((existing) =>
+      updateProviderIdentityDraft(existing, ACP_REGISTRY_DRIVER_KIND, {
+        label: draft.label,
+        instanceIdOverride: null,
+      }),
+    );
+    setLocalEnvironment([]);
+    setHasAttemptedSubmit(false);
+  };
+
   const handleSave = async () => {
     if (!readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
     if (isSaving || createdInstanceId) return;
@@ -598,6 +602,34 @@ export function AddProviderInstanceDialog({
                     </div>
                   ) : (
                     <>
+                      {ACP_LOCAL_PRESETS.map((preset) => (
+                        <div key={preset.id} className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <img src={preset.iconUrl} alt="" className="size-8 rounded" />
+                            <div>
+                              <p className="text-sm font-medium">{preset.label}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Install on {environmentLabel}: {preset.installHint}
+                              </p>
+                              <a
+                                href={preset.docsUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs underline"
+                              >
+                                Documentation
+                              </a>
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleLocalPreset(preset)}
+                          >
+                            Use {preset.label}
+                          </Button>
+                        </div>
+                      ))}
                       <AcpRegistrySearchStep
                         environmentId={environmentId}
                         providerInstances={settings.providerInstances}

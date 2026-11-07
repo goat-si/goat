@@ -150,10 +150,15 @@ export const seedParentWithTerminalTask = (input: {
   readonly runId: RunId;
   readonly rootNodeId: NodeId;
   readonly taskId: NodeId;
-  readonly deliveryState: "delivered" | "claimed" | "acknowledged" | "disposed";
+  readonly deliveryState: "pending" | "delivered" | "claimed" | "acknowledged" | "disposed";
   readonly completionWake?: "always" | "settled_only";
   readonly remote?: boolean;
   readonly deliveryTaskIds?: ReadonlyArray<NodeId>;
+  readonly parentRunStatus?: "running" | "completed";
+  readonly siblingTasks?: ReadonlyArray<{
+    readonly id: NodeId;
+    readonly deliveryState: "delivered" | "claimed" | "acknowledged" | "disposed";
+  }>;
   readonly now: DateTime.Utc;
 }) =>
   Effect.gen(function* () {
@@ -236,10 +241,10 @@ export const seedParentWithTerminalTask = (input: {
             userMessageId: MessageId.make(`message:seed-user:${input.threadId}`),
             rootNodeId: input.rootNodeId,
             activeAttemptId: null,
-            status: "running",
+            status: input.parentRunStatus ?? "running",
             requestedAt: input.now,
             startedAt: input.now,
-            completedAt: null,
+            completedAt: input.parentRunStatus === "completed" ? input.now : null,
             checkpointId: null,
             contextHandoffId: null,
             delegatedCompletion: {
@@ -256,22 +261,25 @@ export const seedParentWithTerminalTask = (input: {
             },
           },
         },
-        {
-          id: EventId.make(`event:seed-task:${input.threadId}`),
-          type: "subagent.updated",
+        ...[
+          { id: input.taskId, deliveryState: input.deliveryState },
+          ...(input.siblingTasks ?? []),
+        ].map((task) => ({
+          id: EventId.make(`event:seed-task:${input.threadId}:${task.id}`),
+          type: "subagent.updated" as const,
           threadId: input.threadId,
           runId: input.runId,
-          nodeId: input.taskId,
+          nodeId: task.id,
           driver,
           providerInstanceId: modelSelection.instanceId,
           occurredAt: input.now,
           payload: {
-            id: input.taskId,
+            id: task.id,
             threadId: input.threadId,
             runId: input.runId,
             parentNodeId: input.rootNodeId,
-            origin: "app_owned",
-            createdBy: "agent",
+            origin: "app_owned" as const,
+            createdBy: "agent" as const,
             driver,
             providerInstanceId: modelSelection.instanceId,
             providerThreadId: null,
@@ -291,16 +299,16 @@ export const seedParentWithTerminalTask = (input: {
             model: null,
             completionWake: input.completionWake ?? "settled_only",
             completionDelivery: {
-              state: input.deliveryState,
-              observedByRunId: input.deliveryState === "acknowledged" ? input.runId : null,
+              state: task.deliveryState,
+              observedByRunId: task.deliveryState === "acknowledged" ? input.runId : null,
             },
-            status: "completed",
+            status: "completed" as const,
             result: "child finished",
             startedAt: input.now,
             completedAt: input.now,
             updatedAt: input.now,
           },
-        },
+        })),
       ],
     });
   });

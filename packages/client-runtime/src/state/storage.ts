@@ -32,6 +32,28 @@ export function createStorageEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverCleanUpStorageItems,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    /** Whether a thread's worktree is present, or was cleaned up and can be restored. */
+    threadWorkspaceStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:thread:workspace-status",
+      tag: WS_METHODS.threadGetWorkspaceStatus,
+      idleTtlMs: 0,
+      staleTimeMs: 0,
+    }),
+    /** Restores a cleaned-up worktree, or starts the thread in a fresh one with { mode: "fresh" }. */
+    restoreThreadWorkspace: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:thread:restore-workspace",
+      tag: WS_METHODS.threadRestoreWorkspace,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => environmentId + ":" + input.threadId,
+      },
+    }),
+    /** Records that the cleanup preview was shown ("seen") or starts cleanup now ("confirm"). */
+    respondWorktreeCleanupPreview: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:respond-worktree-cleanup-preview",
+      tag: WS_METHODS.serverRespondWorktreeCleanupPreview,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     /** That machine's free disk space and its disk-only pressure level, as it changes. */
     diskPressure: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:disk-pressure",

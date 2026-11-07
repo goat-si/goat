@@ -9,4 +9,5 @@ export const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "acpRegistry",
   "opencode",
   "pi",
+  "omo",
 ]);

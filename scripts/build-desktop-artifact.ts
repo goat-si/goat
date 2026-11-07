@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off - Node's typed junction API avoids Windows symlink privileges while keeping the probe isolated.
 import { makeMacPackagedPayloadValidator } from "./desktop-artifact-mac.ts";
+import { countWindowsPayloadFiles } from "./desktop-artifact-windows-payload.ts";
 
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
@@ -1156,7 +1157,7 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
   ];
 }
 
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
+export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 96;
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
@@ -3083,6 +3084,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   computerUseHelperPath?: string,
 ) {
   const buildConfig: Record<string, unknown> = {
+    afterPack: NodeURL.fileURLToPath(new URL("./desktop-after-pack.ts", import.meta.url)),
     appId: resolveDesktopAppId(version),
     productName: resolveDesktopProductName(version),
     artifactName: "GOAT-${version}-${arch}.${ext}",
@@ -3108,7 +3110,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
             ...(platform === "linux"
               ? ["**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}"]
               : []),
-            "**/node_modules/@ubjs/node-*/**/*.node",
+            "**/node_modules/{@ubjs/node-*/**/*.node,@transcribe-cpp/**/*.{dylib,so,so.*}}",
           ],
         }),
     extraResources: [
@@ -3218,11 +3220,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.toolsets = { appimage: "1.0.3" };
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
-    // withComputerUseHelper sets its own afterPack for signed mac builds; a Linux helper would
-    // have to run both hooks.
-    buildConfig.afterPack = NodeURL.fileURLToPath(
-      new URL("./link-legacy-linux-executable.ts", import.meta.url),
-    );
     buildConfig.linux = {
       target: target === "AppImage" ? [target, "deb"] : [target],
       executableName: LINUX_EXECUTABLE_NAME,
@@ -3685,30 +3682,6 @@ function collectUnpackedAsarFiles(
   return output;
 }
 
-const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(function* (root: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const pendingDirectories = [root];
-  let count = 0;
-
-  while (pendingDirectories.length > 0) {
-    const directory = pendingDirectories.pop();
-    if (directory === undefined) break;
-    const entries = yield* fs.readDirectory(directory);
-    for (const entry of entries) {
-      const entryPath = path.join(directory, entry);
-      const stat = yield* fs.stat(entryPath);
-      if (stat.type === "Directory") {
-        pendingDirectories.push(entryPath);
-      } else if (stat.type === "File") {
-        count += 1;
-      }
-    }
-  }
-
-  return count;
-});
-
 export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
   "desktopArtifact.verifyWindowsPrimaryFffNativeLoad",
 )(function* (input: {
@@ -4073,7 +4046,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     }
   }
 
-  const fileCount = yield* countPayloadFiles(packagedAppDir);
+  const fileCount = yield* countWindowsPayloadFiles(packagedAppDir);
   if (fileCount > fileLimit) {
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "file-limit-exceeded",

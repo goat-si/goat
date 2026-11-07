@@ -1,5 +1,6 @@
 import * as M from "@goat/contracts";
 import { makeDrainableWorker, type DrainableWorker } from "@goat/shared/DrainableWorker";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -15,6 +16,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
+import { forkParked } from "../serverActivation.ts";
 import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
@@ -28,10 +30,9 @@ import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./Memo
 import { selectContinuationCandidates } from "./memoryContinuationScan.ts";
 import * as SourceScan from "./memorySourceScan.ts";
 import { catchUpWakes, terminalRunStatuses as terminal } from "./memoryCatchUpWakes.ts";
-import { MemoryWorkerError } from "./MemoryWorkerError.ts";
+import { MemoryWorkerError, safeCode } from "./MemoryWorkerError.ts";
 import { generateSummaryChunks, type SummaryPromotions } from "./memorySummaryChunks.ts";
 import { resolveThreadProject } from "./MemorySummaryCommit.ts";
-
 export { MemoryWorkerError };
 export class MemoryWorker extends Context.Service<
   MemoryWorker,
@@ -74,18 +75,6 @@ export const MEMORY_CONTINUATION_SCAN_INTERVAL_MS = 900_000;
 const continuationPageSize = 100;
 /** Outbox rows one retention statement examines; the pass yields to the event loop between pages. */
 const MEMORY_RETENTION_PAGE_ROWS = 64;
-const isFailureCode = Schema.is(M.MemoryFailureCode);
-const safeCode = (error: unknown): M.MemoryFailureCode => {
-  if (typeof error === "object" && error !== null) {
-    if ("code" in error && isFailureCode(error.code)) return error.code;
-    if ("_tag" in error && error._tag === "TextGenerationError") {
-      // Only exact public enum codes may cross the provider's diagnostic boundary.
-      if ("detail" in error && isFailureCode(error.detail)) return error.detail;
-      return "generation_failed";
-    }
-  }
-  return "storage_failed";
-};
 const isWorkerError = Schema.is(MemoryWorkerError);
 const isHeld = Schema.is(Hold.MemoryGenerationHeld);
 const workerError = (cause: unknown) =>
@@ -228,6 +217,7 @@ const make = Effect.gen(function* () {
     promotions: SummaryPromotions | undefined,
     thread: M.ScopedThreadRef,
     space: M.MemorySpaceId,
+    replace: boolean,
   ) =>
     promotions
       ? query(
@@ -236,7 +226,7 @@ const make = Effect.gen(function* () {
             thread,
             space,
           ),
-        ).pipe(Effect.map((project) => ({ ...promotions, project })))
+        ).pipe(Effect.map((project) => ({ ...promotions, project, replace })))
       : Effect.undefined;
   const summaryEvidenceValid = Effect.fn("MemoryWorker.summaryEvidenceValid")(function* (
     work: Store.MemoryWork,
@@ -302,11 +292,7 @@ const make = Effect.gen(function* () {
       modelSelection === null ? undefined : `${space ?? ""}|${encodeSelection(modelSelection)}`;
     const scanContinuations =
       scanKey !== undefined && (scanKey !== continuationScanKey || now >= continuationScanDueAt);
-    // Recovers each live thread whose latest terminal run still has unsummarized messages, or
-    // whose consolidation is due. It starts from the thread projection and probes each thread's
-    // tail by index, so its cost follows the thread count instead of the event history. Any
-    // unfinished or cancelled row for that run settles it: work ids are deterministic, so
-    // re-deriving a settled run only repeats the same no-op insert.
+    // Tail probes cost per thread. Unfinished or cancelled work settles a run; ids are deterministic.
     const continuations = scanContinuations
       ? yield* query(
           selectContinuationCandidates(sql, {
@@ -358,8 +344,7 @@ const make = Effect.gen(function* () {
               continue;
             }
             if (!terminal.has(run.status)) continue;
-            // Memory is off. Still process deletion/rollback and advance the hook;
-            // continuations recover these summaries once memory is turned back on.
+            // Continuations recover skipped summaries when memory is turned back on.
             if (modelSelection === null) continue;
             if (yield* query(SourceScan.isDelegatedChildThread(sql, row.stream_id))) continue;
             const source = yield* query(
@@ -438,8 +423,7 @@ const make = Effect.gen(function* () {
             );
             if (candidate.metadata.kind !== "summary") continue;
             if (!chunk) {
-              // Events only append, so a run invalidated by later events stays invalidated.
-              // Record that as settled, or every scan would read this source again.
+              // Events only append, so an invalidated run stays invalidated; settle it or scans reread it.
               if (continuationSequences.has(row.sequence))
                 work.push({
                   ...candidate,
@@ -638,8 +622,7 @@ const make = Effect.gen(function* () {
             throughSequence: meta.sourceWatermark.throughSequence,
             previousSummary,
             dependencies,
-            // Consolidation is the daily durability pass, so only it proposes promotions.
-            promote: work.kind === "consolidate" && !work.space.startsWith("_local:"),
+            promote: !work.space.startsWith("_local:"),
             buildInput: (chunk, previous, promote) =>
               query(
                 decodeInput(
@@ -752,6 +735,7 @@ const make = Effect.gen(function* () {
             generated.promotions,
             meta.sourceThread,
             M.MemorySpaceId.make(work.space),
+            work.kind === "consolidate" || summary !== undefined,
           ),
           recheckSource: recheckSource.pipe(
             Effect.asVoid,
@@ -971,7 +955,7 @@ const make = Effect.gen(function* () {
     const queued = yield* Ref.make(false);
     const worker = yield* makeDrainableWorker<void, never, never>(() =>
       Ref.set(queued, false).pipe(
-        Effect.andThen(sweepDue()),
+        Effect.andThen(NodeSqliteClient.backgroundReads(sweepDue())),
         Effect.catch((error) =>
           Effect.logWarning("Memory sweep deferred", { code: error.code, stage: error.stage }),
         ),
@@ -984,15 +968,20 @@ const make = Effect.gen(function* () {
     yield* Effect.addFinalizer(() =>
       Ref.set(started, false).pipe(Effect.andThen(Ref.set(queue, undefined))),
     );
-    yield* Stream.runForEach(yield* store.subscribeWake, () => wake).pipe(Effect.forkScoped);
-    yield* events.stream({ afterSequence: yield* store.readThreadHookWatermark() }).pipe(
-      catchUpWakes,
-      Stream.runForEach(() => wake),
-      Effect.catch(() => Effect.void),
-      Effect.forkScoped,
+    const watermark = yield* store.readThreadHookWatermark();
+    yield* forkParked(
+      Effect.gen(function* () {
+        yield* Stream.runForEach(yield* store.subscribeWake, () => wake).pipe(Effect.forkScoped);
+        yield* events.stream({ afterSequence: watermark }).pipe(
+          catchUpWakes,
+          Stream.runForEach(() => wake),
+          Effect.ignore,
+          Effect.forkScoped,
+        );
+        yield* wake;
+        yield* wake.pipe(Effect.repeat(Schedule.spaced("5 seconds")), Effect.forkScoped);
+      }),
     );
-    yield* wake;
-    yield* wake.pipe(Effect.repeat(Schedule.spaced("5 seconds")), Effect.forkScoped);
   }, Effect.mapError(workerError));
   const drain = Effect.gen(function* () {
     const worker = yield* Ref.get(queue);

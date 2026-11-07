@@ -49,6 +49,9 @@ import { makeExpiryHolds } from "./expiryHolds.ts";
 import { makeComputerUseStanding, type CreateInput } from "./computerUseStanding.ts";
 import { startComputerUseSettingsObserver } from "./computerUseSettingsObserver.ts";
 import { makeHandoffClientLabel } from "./handoffClientLabel.ts";
+import { BrowserClaimResponder } from "./BrowserClaimResponder.ts";
+import { answerBrowserClaim, browserClaimResultMessage } from "./browserClaimHandoffResponse.ts";
+import { makeBrowserClaimEnd } from "./browserClaimHandoffEnd.ts";
 import { targetKey } from "./targetKey.ts";
 import * as PersonStop from "./computerUsePersonStop.ts";
 import { storeName, matchesArgs } from "./handoffDigest.ts";
@@ -102,6 +105,11 @@ export class Handoffs extends Context.Service<
       authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
     ) => Effect.Effect<void, HandoffError | ServerSettingsError>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
+    readonly endBrowserClaim: (
+      input: HandoffReadInput,
+      state: "cancelled" | "expired",
+      reason: string,
+    ) => Effect.Effect<Handoff, HandoffError>;
     /** A computer use request's answer for its waiting call; see computerUseContinuations. */
     readonly awaitComputerUseAnswer: Continuations["awaitAnswer"];
     readonly deliverComputerUseWake: Continuations["deliverWake"];
@@ -235,6 +243,7 @@ const make = Effect.gen(function* () {
   const secrets = yield* SecretRequests.SecretRequests;
   const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const tabClaims = yield* Effect.serviceOption(BrowserOriginGrants);
+  const browserClaimResponder = yield* Effect.serviceOption(BrowserClaimResponder);
   const withAdmission = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Option.isSome(computerUseLeases) ? computerUseLeases.value.serializeAdmission(effect) : effect;
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
@@ -297,6 +306,8 @@ const make = Effect.gen(function* () {
     keepPrivate = false,
     computerUseScope?: "session" | "always",
     onResolved?: Effect.Effect<void, HandoffError>,
+    resultMessage?: string,
+    browserClaimDecisionAt?: DateTime.Utc,
   ) {
     yield* threads
       .dispatch({
@@ -310,6 +321,8 @@ const make = Effect.gen(function* () {
         state,
         actor,
         ...(computerUseScope === undefined ? {} : { computerUseScope }),
+        ...(resultMessage === undefined ? {} : { resultMessage }),
+        ...(browserClaimDecisionAt === undefined ? {} : { browserClaimDecisionAt }),
       })
       .pipe(Effect.mapError(unavailable));
     const handoff = yield* read(input);
@@ -401,6 +414,13 @@ const make = Effect.gen(function* () {
       const isGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
       const pendingGrant = isGrant && isHandoffPending(record.state);
       yield* standing.validate(input, record);
+      // Handoff lock precedes claim lock; claim code never calls back into handoffs under its lock.
+      const browserClaimResult = yield* answerBrowserClaim(
+        record,
+        input,
+        browserClaimResponder,
+        () => loadPrivate(input.handoffId),
+      );
       // An app, or the whole screen, is one thread's; an overlapping approval waits for it to end.
       if (pendingGrant && input.action === "completed") {
         const held = Option.isNone(computerUseLeases)
@@ -444,13 +464,19 @@ const make = Effect.gen(function* () {
         yield* standing.end(input.threadId, input.handoffId, endsApproved);
       yield* PersonStop.markPersonStopped(input, record, savePrivate);
       const retire = standing.end(input.threadId, input.handoffId, false);
+      const outcome =
+        input.action === "completed" && browserClaimResult?.answer.agentResult.status === "refused"
+          ? "declined"
+          : input.action;
       const result = yield* transition(
         input,
-        input.action,
+        outcome,
         { type: "client", label },
         isGrant && !isHandoffPending(record.state),
         input.computerUseScope,
         pendingGrant && input.action === "opened" ? retire : undefined,
+        browserClaimResultMessage(browserClaimResult),
+        browserClaimResult?.decisionAt,
       );
       yield* standing.record(input, result);
       if (
@@ -465,7 +491,7 @@ const make = Effect.gen(function* () {
       if (isGrant && Option.isSome(computerUseLeases)) yield* computerUseLeases.value.changed;
       if (isGrant) yield* continuations.answered(input.handoffId);
       if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
-      if (result.state !== input.action) return yield* new HandoffError({ reason: "conflict" });
+      if (result.state !== outcome) return yield* new HandoffError({ reason: "conflict" });
       return result;
     },
     lock.withPermits(1),
@@ -921,6 +947,7 @@ const make = Effect.gen(function* () {
     withComputerUseSettings: standing.withSettings,
     removeComputerUseAllowedApp: standing.removeAllowedApp,
     read,
+    endBrowserClaim: makeBrowserClaimEnd({ read, transition, lock }),
     open,
     respond,
     cancelComputerUseByPerson: (input) =>

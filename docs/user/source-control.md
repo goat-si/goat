@@ -161,6 +161,11 @@ toast or from the banner above the composer. When the host refuses the machine's
 clones over HTTPS with Git's credentials for that host instead, and the project's remote uses the
 HTTPS URL.
 
+To lay clones out like [ghq](https://github.com/x-motemen/ghq), turn on **Clone into host folders**
+under **Settings → Threads** (or **Source control** on mobile). Clones then default to
+`<host>/<owner>/<repo>` under **Add project starts in**, so set that to `~/ghq` to share ghq's
+folders. You can still change the destination before cloning.
+
 For a local Git repository without a remote, **Publish Repository** creates a hosted repository,
 adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
 make your first commit before pushing.
@@ -182,7 +187,13 @@ uses the project's instructions and recent commit subjects.
 
 Open **Pull requests** to review changes and comments, request reviewers, check out a branch,
 or merge. You can edit review titles and descriptions and your own comments where the host allows it.
+Where you can edit a description, you can also tick its checkboxes from the Summary tab
+(the Overview tab on mobile).
 GitLab calls these merge requests.
+
+For a fork whose checkout also has an `upstream` remote, the list shows pull requests from the
+fork's own `origin` repository. Turn on **Include upstream repos** in the filters to add the
+repository it was forked from.
 
 Ask an agent to edit a PR, comment, submit a review, reply to or resolve a review thread,
 manage reactions, labels and reviewers, or change its state through GOAT's MCP tools. The

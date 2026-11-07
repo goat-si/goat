@@ -16,7 +16,7 @@ function composerControlClassName(size: ComposerControlSize, className?: string)
     "[&_:is([data-composer-control-label],[data-chat-provider-model-picker-label])]:[text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:[&_:is([data-composer-control-label],[data-chat-provider-model-picker-label])]:py-1.5",
     size === "xs"
       ? "h-7 gap-1 px-1.75 font-normal text-foreground/70 dark:text-muted-foreground text-sm hover:text-foreground/80 sm:h-6 sm:text-xs [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5 [&_svg[data-composer-control-chevron]]:ms-0 [&_svg[data-composer-control-chevron]]:-me-1"
-      : "h-7 gap-1.5 px-2 font-medium text-foreground/80 [&_svg:not([class*='text-'])]:text-muted-foreground hover:text-foreground text-composer-control sm:text-composer-control-sm [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4",
+      : "h-7 gap-1.5 px-1.25 font-medium [&_svg[data-composer-control-chevron]]:me-0 text-foreground/80 [&_svg:not([class*='text-'])]:text-muted-foreground hover:text-foreground text-composer-control sm:text-composer-control-sm [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4",
     "aria-pressed:bg-accent aria-pressed:text-accent-foreground aria-pressed:hover:bg-accent/80",
     className,
   );

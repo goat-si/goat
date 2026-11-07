@@ -8,6 +8,8 @@ Press **⌘N** (**Ctrl+N** on Windows and Linux) on the Notes page, choose **New
 
 The list shows pinned notes first, then everything else with the most recently changed on top. Press **/** to search titles, folders, and the opening text of each note, use the arrow keys to move through the list, and press **Enter** to start typing in the selected note. **Esc** in a note returns to the list. Pin a note with the pin button next to its status; pins are kept in the file, so they show on every device.
 
+On web and desktop, hide the list to give the note the full width with the panel button next to **Notes** at the top of the page, **⌘\\** (**Ctrl+\\** on Windows and Linux), or **Hide notes list** in the command palette. GOAT remembers the choice in that browser or app. **/** brings the list back to search.
+
 ## Where notes live
 
 Each note is a `.md` file in the `notes` folder of the server's data directory: `~/.goat/notes` for `goat serve` and SSH hosts, and `~/.goat/desktop/notes` for the desktop app. A note sits at the top of the folder or inside one folder; a folder is a project, and notes do not nest deeper than that. You can edit the files with any editor or from a terminal, and open clients show the change within a second or two.
@@ -35,6 +37,14 @@ On web and desktop, notes open in a rich editor with headings, lists, checklists
 On mobile, a note shows formatted text, and the line you are typing on shows its markdown. Tap a checkbox to tick it, or tap into the text to write; the bar above the keyboard adds bold, italic, headings, lists, and checklists, and its code button shows the whole note as markdown. Edits stay on the phone until you choose **Save on phone**; a ticked checkbox saves at once. Tables stay as markdown text. A note that mixes Windows and Unix line endings opens as markdown source instead, so its line endings are kept exactly; use **Edit markdown** to change it.
 
 To delete a note, choose **Delete…** from its **⋯** menu on web and desktop, or **Delete note** on mobile. Deleting needs a connection to the hub, and a phone holding unsent edits for the note must sync or discard them first. If the note changed since you opened it, GOAT keeps it and shows the current version so you can decide again.
+
+## Images, files, and links
+
+On web and desktop, paste or drop files into a note, or use the paperclip button in the toolbar. Each file is uploaded to the hub and saved in the `.attachments` folder inside the notes folder, and the note gets ordinary markdown for it: images, videos, and audio as `![name](/.attachments/…)`, which show in the note, and other files as `[name](/.attachments/…)`, which show as a chip you can download. Files can be up to 50 MB. A reference that starts with `/` points at the notes folder, so it keeps working when you move the note into another folder. Removing a file from the note leaves it in `.attachments` and in the notes history.
+
+A line that holds only a web link shows as a card. YouTube, Vimeo, and Loom links play in the note; paste one on an empty line to add a player. Some videos refuse to play inside the desktop app, so each player also links to the original page. GOAT does not fetch titles or previews of other sites.
+
+On mobile, images in a note show in place. Videos, audio, and other attached files show as links; tapping one downloads it and opens it on the phone. Adding files from the phone is not available yet.
 
 ## When someone else changed the note
 

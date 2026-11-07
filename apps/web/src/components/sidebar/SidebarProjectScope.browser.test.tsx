@@ -1,5 +1,5 @@
 import { EnvironmentId, ProjectId, ProviderInstanceId } from "@goat/contracts";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -35,23 +35,21 @@ const groups = buildSidebarProjectSnapshots({
   resolveEnvironmentLabel: () => "Local",
 });
 
-function ScopeFixture() {
+function ScopeFixture({ projectGroups = groups }: { projectGroups?: typeof groups }) {
   const [keys, setKeys] = useState<readonly string[]>([]);
-  const anchor = useRef<HTMLDivElement>(null);
   return (
     <TooltipProvider>
       <SidebarProvider>
-        <div ref={anchor}>
+        <div>
           <SidebarProjectScope
-            projectGroups={groups}
-            scopedProjectGroups={groups.filter((group) => keys.includes(group.projectKey))}
+            projectGroups={projectGroups}
+            scopedProjectGroups={projectGroups.filter((group) => keys.includes(group.projectKey))}
             projectScopeKeys={keys}
             setProjectScopeKeys={setKeys}
             openProjectSettings={() => {}}
             showProjectEnvironments={false}
             primaryEnvironmentId={environmentId}
             environmentMachineById={new Map()}
-            headerSearchRef={anchor}
           />
         </div>
       </SidebarProvider>
@@ -60,6 +58,16 @@ function ScopeFixture() {
 }
 
 describe("sidebar project scope", () => {
+  it("keeps archived projects out of the picker while leaving them available to the sidebar", async () => {
+    const archived = { ...groups[1]!, archived: true };
+    await using screen = await render(<ScopeFixture projectGroups={[groups[0]!, archived]} />, {
+      // The picker does not navigate in this test.
+      router: false,
+    });
+    await userEvent.click(screen.getByRole("combobox", { name: "Filter threads by project" }));
+    await expect.element(page.getByRole("option", { name: "Alpha" })).toBeInTheDocument();
+    await expect.element(page.getByRole("option", { name: "Alpine" })).not.toBeInTheDocument();
+  });
   it("keeps the query and menu open while shift-clicking projects and shows both icons", async () => {
     await using screen = await render(<ScopeFixture />, {
       // The picker does not navigate in this test.
@@ -69,9 +77,13 @@ describe("sidebar project scope", () => {
     const search = page.getByRole("combobox", { name: "Search projects" });
     await userEvent.fill(search, "Al");
     await userEvent.keyboard("{Shift>}");
-    await userEvent.click(page.getByRole("option", { name: "Alpha" }));
+    await userEvent.click(
+      page.getByRole("option", { name: "Alpha" }).getByText("Alpha", { exact: true }),
+    );
     await expect.element(search).toHaveValue("Al");
-    await userEvent.click(page.getByRole("option", { name: "Alpine" }));
+    await userEvent.click(
+      page.getByRole("option", { name: "Alpine" }).getByText("Alpine", { exact: true }),
+    );
     await userEvent.keyboard("{/Shift}");
     await expect.element(search).toHaveValue("Al");
     const trigger = screen.getByRole("combobox", {

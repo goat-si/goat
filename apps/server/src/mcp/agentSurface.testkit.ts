@@ -37,6 +37,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as ChannelGateway from "../channels/ChannelGateway.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
+import * as ChannelSessionTaskActions from "../channels/channelSessionTaskActions.ts";
 import * as ChannelTaskExport from "../channels/ChannelTaskExport.ts";
 import * as ChannelBotHome from "../channels/ChannelBotHome.ts";
 import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
@@ -61,6 +62,7 @@ import * as FleetPlacement from "../fleet/resources/Placement.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as MemoryService from "../memory/MemoryService.ts";
 import * as MemorySyncService from "../memory/MemorySyncService.ts";
+import * as MemoryRecall from "../memory/MemoryRecall.ts";
 import * as MemorySettingsService from "../memory/MemorySettingsService.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -121,6 +123,7 @@ import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewToolkit } from "./toolkits/preview/tools.ts";
 import { BrowserClaimToolkit } from "./toolkits/preview/browserClaims/tools.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
+import { BrowserClaimHandoffs } from "../preview/BrowserClaimHandoffs.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -182,6 +185,7 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const inertDependencies = Layer.mergeAll(
   Layer.mock(BrowserOriginGrants)({}),
+  Layer.mock(BrowserClaimHandoffs)({}),
   Layer.mock(AgentWorkspace.AgentWorkspaceMcpService)({}),
   Layer.mock(AgentTerminal.AgentTerminalMcpService)({}),
   AttachmentLifecycle.layerUnused,
@@ -219,6 +223,9 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),
   Layer.mock(ChannelTaskExport.ChannelTaskExport)({}),
+  Layer.mock(ChannelSessionTaskActions.ChannelSessionTaskActions)({
+    checkCaller: () => Effect.void,
+  }),
   Layer.mock(ChannelWorkerReports.ChannelWorkerReports)({}),
   Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
   Layer.mock(ChannelBotHome.ChannelBotHome)({}),
@@ -254,6 +261,7 @@ const inertDependencies = Layer.mergeAll(
     },
   }),
   Layer.mock(MemorySyncService.MemorySyncService)({}),
+  Layer.mock(MemoryRecall.MemoryRecall)({}),
   Layer.mock(MemorySettingsService.MemorySettingsService)({}),
   Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
   Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),

@@ -17,6 +17,7 @@ import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { makeDarwinAgentScope } from "./agentMemoryGuard.ts";
 
 const AGENT_SLICE = "app-goat-agents.slice";
 // Both agent families compete with the server under app.slice: restart-surviving terminals run
@@ -102,6 +103,7 @@ const MAX_TRACKED_THREADS = 500;
 
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
+  if (platform === "darwin") return yield* makeDarwinAgentScope();
   if (platform !== "linux") return AgentScope.defaultValue();
 
   const runner = yield* ProcessRunner.ProcessRunner;
@@ -387,6 +389,7 @@ export const make = Effect.gen(function* () {
   });
 
   return {
+    watch: () => Effect.void,
     wrap: Effect.fn("AgentScope.wrap")(function* ({
       command,
       args,

@@ -59,7 +59,9 @@ const granted = Effect.fn("appLeases.granted")(function* (name: string, apps: Ar
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const threadId = ThreadId.make(`thread-${name}`);
   yield* grant(threadId, `handoff:${name}`, apps);
-  const control = yield* leases.control(threadId, yield* leases.active(threadId));
+  const control = Option.getOrThrow(
+    yield* leases.control(threadId, yield* leases.active(threadId)),
+  );
   return { threadId, control };
 });
 
@@ -690,6 +692,7 @@ describe("call admission after an app lease check (D17)", () => {
       ]);
       const reserve = makeCallReservation({
         admission: yield* Semaphore.make(1),
+        appCatalog: Effect.succeedSome([]),
         controls,
         reservations: makeCallReservations(),
         changed: Effect.void,
@@ -752,6 +755,7 @@ describe("call admission after an app lease check (D17)", () => {
         ]);
         const calls = makeCallReservation({
           admission: yield* Semaphore.make(1),
+          appCatalog: Effect.succeedSome([]),
           controls,
           reservations: makeCallReservations(),
           changed: Effect.void,
@@ -811,6 +815,7 @@ describe("call admission after an app lease check (D17)", () => {
         ]);
         const calls = makeCallReservation({
           admission: yield* Semaphore.make(1),
+          appCatalog: Effect.succeedSome([]),
           controls,
           reservations: makeCallReservations(),
           changed: Effect.void,

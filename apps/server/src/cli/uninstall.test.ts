@@ -18,7 +18,10 @@ import { findOwnedLauncher, spawnWindowsRemoval, uninstallCommand } from "./unin
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: vi.fn(() => new actual.ChildProcess()) };
+  return {
+    ...actual,
+    spawn: vi.fn(() => Object.assign(new actual.ChildProcess(), { stdio: [null, null, null] })),
+  };
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -132,7 +135,7 @@ it("passes the Windows removal directory literally with delayed expansion disabl
   const spawn = vi.mocked(NodeChildProcess.spawn);
   spawn.mockClear();
   const runtimeDir = "C:\\GOAT home %COMSPEC% !COMSPEC! & data\\runtime\\goat";
-  spawnWindowsRemoval("fake-cmd.exe", runtimeDir);
+  spawnWindowsRemoval("fake-cmd.exe", runtimeDir, () => {});
   expect(spawn).toHaveBeenCalledWith(
     "fake-cmd.exe",
     [

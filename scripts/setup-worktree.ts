@@ -4,17 +4,30 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import { currentUnsupportedNodeMessage } from "./lib/node-runtime.ts";
+
 const ENV_FILES = [".env", NodePath.join("infra", "relay", ".env")];
 
 const worktree = NodePath.dirname(import.meta.dirname);
 
-export function selectWorktreeInstall(tools: { readonly vp: boolean; readonly pnpm: boolean }): {
+export function worktreeInstallCandidates(tools: {
+  readonly vp: boolean;
+  readonly pnpm: boolean;
+}): {
   readonly command: string;
   readonly tool: string;
-} {
-  if (tools.vp) return { command: "vp i --frozen-lockfile", tool: "vp" };
-  if (tools.pnpm) return { command: "pnpm install --frozen-lockfile", tool: "pnpm" };
-  return { command: "npx --yes vite-plus i --frozen-lockfile", tool: "npx vite-plus" };
+}[] {
+  return [
+    ...(tools.vp ? [{ command: "vp i --frozen-lockfile", tool: "vp" }] : []),
+    ...(tools.pnpm ? [{ command: "pnpm install --frozen-lockfile", tool: "pnpm" }] : []),
+    { command: "npx --yes vite-plus i --frozen-lockfile", tool: "npx vite-plus" },
+  ];
+}
+
+export function isCorepackLauncherMissing(output: string): boolean {
+  return /Cannot find module\s+['"][^'"\r\n]*[\\/]corepack[\\/][^'"\r\n]*[\\/]bin[\\/]pnpm\.cjs['"]/i.test(
+    output,
+  );
 }
 
 function toolOnPath(name: string): boolean {
@@ -83,43 +96,61 @@ async function main(): Promise<void> {
     });
   }
 
+  const unsupportedNode = currentUnsupportedNodeMessage("node scripts/setup-worktree.ts");
+  if (unsupportedNode) {
+    failureDetail = unsupportedNode;
+    process.stderr.write(`${unsupportedNode}\n`);
+    process.exit(1);
+  }
+
   // GOAT passes the project root, older builds under its legacy T3 name. The git
   // hook passes neither; the main worktree is the first `git worktree list` entry.
   const projectRoot =
     process.env.GOAT_PROJECT_ROOT || process.env.T3CODE_PROJECT_ROOT || mainWorktree(); // goat-rename: legacy
 
   // A fresh worktree has no node_modules and often no global `vp`.
-  const selected = selectWorktreeInstall({
+  const candidates = worktreeInstallCandidates({
     vp: toolOnPath("vp"),
     pnpm: toolOnPath("pnpm"),
   });
-  process.stderr.write(`Worktree setup: installing dependencies with ${selected.tool}.\n`);
-  // `shell` resolves the tool through PATH, including Windows command shims.
-  // Setup has no one answering install prompts, so stdin stays closed and a
-  // prompt fails instead of hanging. pnpm 12 never asks to purge node_modules,
-  // and some pnpm 12 builds reject the `--yes` that skipped that pnpm 11 prompt.
-  // Install exactly the locked dependencies so setup never rewrites the lockfile.
-  // Output is piped, not inherited, so a failure can keep its tail in the marker.
-  const install = NodeChildProcess.spawn(selected.command, {
-    cwd: worktree,
-    shell: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  activeInstall = install;
-  let installOutput = "";
-  for (const [source, target] of [
-    [install.stdout, process.stdout],
-    [install.stderr, process.stderr],
-  ] as const) {
-    source.setEncoding("utf8");
-    source.on("data", (chunk: string) => {
-      target.write(chunk);
-      installOutput = (installOutput + chunk).slice(-8_000);
+  // Shell resolves Windows shims; closed stdin prevents unattended prompts.
+  // pnpm 12 builds can reject --yes, and the frozen lockfile prevents rewrites.
+  // Capture output so the failure marker can include its tail.
+  for (const [index, selected] of candidates.entries()) {
+    process.stderr.write(`Worktree setup: installing dependencies with ${selected.tool}.\n`);
+    const install = NodeChildProcess.spawn(selected.command, {
+      cwd: worktree,
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
     });
-  }
-  const installStatus = await new Promise<number | null>((resolve) => install.on("close", resolve));
-  activeInstall = undefined;
-  if (installStatus !== 0 || cancelSignal) {
+    activeInstall = install;
+    let installOutput = "";
+    let launcherMissing = false;
+    for (const [source, target] of [
+      [install.stdout, process.stdout],
+      [install.stderr, process.stderr],
+    ] as const) {
+      // The tail kept for the marker can drop the diagnostic, so it is matched as output arrives.
+      let carry = "";
+      source.setEncoding("utf8");
+      source.on("data", (chunk: string) => {
+        target.write(chunk);
+        installOutput = (installOutput + chunk).slice(-8_000);
+        launcherMissing ||= isCorepackLauncherMissing(carry + chunk);
+        carry = (carry + chunk).slice(-1_000);
+      });
+    }
+    const installStatus = await new Promise<number | null>((resolve) =>
+      install.on("close", resolve),
+    );
+    activeInstall = undefined;
+    if (installStatus === 0 && !cancelSignal) break;
+    if (!cancelSignal && index + 1 < candidates.length && launcherMissing) {
+      process.stderr.write(
+        "Worktree setup: corepack's pnpm launcher is missing; trying the next installer.\n",
+      );
+      continue;
+    }
     failureDetail = cancelSignal
       ? `Cancelled by ${cancelSignal}.`
       : installOutput.trimEnd().split("\n").slice(-30).join("\n");

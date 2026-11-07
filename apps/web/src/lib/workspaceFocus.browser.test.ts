@@ -32,6 +32,19 @@ function setup() {
 }
 
 describe("workspace area focus", () => {
+  it("focuses the active sidebar thread when entering the sidebar", () => {
+    using fixture = setup();
+    const sidebar = fixture.area("sidebar", 0);
+    sidebar.button.dataset.sidebarRow = "first";
+    const active = document.createElement("button");
+    active.dataset.sidebarRow = "active";
+    active.setAttribute("aria-current", "page");
+    sidebar.element.append(active);
+    const composer = fixture.area("composer", 1);
+    composer.button.focus();
+    fixture.controller.move(-1);
+    expect(document.activeElement).toBe(active);
+  });
   it("cycles in workspace order in both directions, independent of DOM order", () => {
     using fixture = setup();
     const panel = fixture.area("panel", 3);
@@ -224,6 +237,29 @@ describe("workspace area focus", () => {
     details.button.focus();
     details.element.hidden = true;
     await vi.waitFor(() => expect(document.activeElement).toBe(composer.button));
+  });
+
+  it("keeps focus on the control a panel tab switch came from", () => {
+    using fixture = setup();
+    const panel = fixture.area("panel", 3);
+    const content = document.createElement("div");
+    content.setAttribute("data-right-panel-surface-content", "");
+    const row = (name: string) => {
+      const button = document.createElement("button");
+      button.textContent = name;
+      content.append(button);
+      return button;
+    };
+    const earlierRow = row("reference-analysis.md");
+    const clickedRow = row("print-guide.md");
+    panel.element.append(content);
+    panel.element.dataset.workspaceFocusKey = "panel:file:print-guide.md";
+    earlierRow.focus();
+    panel.element.dataset.workspaceFocusKey = "panel:file:reference-analysis.md";
+    clickedRow.focus();
+    panel.element.dataset.workspaceFocusKey = "panel:file:print-guide.md";
+    expect(fixture.controller.focus("panel")).toBe(true);
+    expect(document.activeElement).toBe(clickedRow);
   });
 
   it("waits for a requested area to mount", async () => {

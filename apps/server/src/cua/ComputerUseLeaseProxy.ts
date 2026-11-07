@@ -866,7 +866,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         callId: String(ownRequests++),
         interruptions: interruptionsSeen ?? 0,
         idleEpoch: idleEpochSeen ?? 0,
-        claimPid: selectedClaim?.pid,
+        ...Admission.claimAdmission(selectedClaim?.pid, primitive?.authority),
         foreground,
         scope: { listed, apps, labels },
       });

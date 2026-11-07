@@ -233,7 +233,7 @@ const liveProbe = Effect.gen(function* () {
           thread: undefined,
           client: { sessionId: "fleet-health", label: "GOAT fleet health", access: "read-only" },
         };
-        return status.read(scope, { host });
+        return status.read(scope, { host }, { shared: true });
       }),
       Effect.map(
         (result): HostStatusEntry =>

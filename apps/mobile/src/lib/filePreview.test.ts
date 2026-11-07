@@ -80,6 +80,10 @@ vi.mock("react-native", () => ({
   useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1 }),
   Text: ({ children }: { children?: ReactNode }) => createElement("span", null, children),
   AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
+  AccessibilityInfo: {
+    isReduceMotionEnabled: async () => true,
+    addEventListener: () => ({ remove() {} }),
+  },
   View: ({ children }: { children?: ReactNode }) => createElement("div", null, children),
   Pressable: (props: {
     children?: ReactNode;
@@ -173,7 +177,7 @@ vi.mock("../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("../state/threads", () => ({ environmentThreadShells: {}, threadEnvironment: {} }));
 vi.mock("../state/entities", () => ({
   useLiveThreadLinkLabels: (text: string) => text,
-  useThreadChipIcons: () => new Map(),
+  useContextChipIcons: () => new Map(),
 }));
 vi.mock("../state/use-thread-selection", () => ({
   useThreadSelection: () => ({ selectedThread: null }),
@@ -268,7 +272,7 @@ vi.mock("./openExternalUrl", () => ({}));
 vi.mock("./attachmentDownload", () => ({}));
 vi.mock("./uuid", () => ({}));
 vi.mock("../features/threads/thread-context-divider", () => ({}));
-vi.mock("../features/threads/thread-handoff-row", () => ({}));
+vi.mock("../features/threads/thread-handoff-row", () => ({ ThreadModelSwitchDivider: () => null }));
 vi.mock("../features/threads/ThreadGuestShareBar", () => ({ useThreadGuestShare: () => null }));
 vi.mock("../features/threads/SecretRequestCard", () => ({}));
 vi.mock("../features/threads/worktree-setup-card", () => ({}));

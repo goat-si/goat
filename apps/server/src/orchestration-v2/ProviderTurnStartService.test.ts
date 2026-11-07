@@ -1,6 +1,7 @@
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import {
   managedWorktreesDir,
+  makeRestorableCheckout,
   makeWorktreeStartHarness,
   startWithMissingWorktree,
 } from "./ProviderTurnStartService.worktree.testkit.ts";
@@ -58,7 +59,7 @@ it.each([
   { label: "with a branch", branch: "feature/restore" },
   { label: "without a branch", branch: null },
 ])(
-  "recreates the checkout when possible and fails safely on a broken projection, $label",
+  "recreates the checkout when possible and never starts the provider unverified, $label",
   async ({ branch }) => {
     const harness = makeWorktreeStartHarness(branch);
     const {
@@ -72,9 +73,10 @@ it.each([
     } = harness;
     await Effect.gen(function* () {
       const service = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
-      const error = yield* service.start({ threadId, runId }).pipe(Effect.flip);
-      expect(error._tag).toBe("ProviderTurnStartError");
-      expect(harness.projectionReadCount()).toBe(2);
+      // A fake checkout cannot pass verification, so the start settles failed before reading on.
+      const exit = yield* service.start({ threadId, runId }).pipe(Effect.exit);
+      expect(exit._tag).toBe(branch === null ? "Failure" : "Success");
+      expect(harness.projectionReadCount()).toBe(branch === null ? 2 : 1);
       if (branch === null) {
         expect(createWorktree).not.toHaveBeenCalled();
       } else {
@@ -85,13 +87,13 @@ it.each([
           path: `${managedWorktreesDir}/project/feature-restore`,
         });
       }
-      expect(writeIfRunCurrent).not.toHaveBeenCalled();
+      expect(writeIfRunCurrent).toHaveBeenCalledTimes(branch === null ? 0 : 1);
       expect(startRootRun).not.toHaveBeenCalled();
     }).pipe(Effect.provide(layer), Effect.runPromise);
   },
 );
 
-it("settles the last contended start attempt instead of leaving its run starting", async () => {
+it("returns a typed busy error for a directly invoked contended start", async () => {
   const { layer, threadId, runId, writeIfRunCurrent, createWorktree, startRootRun } =
     makeWorktreeStartHarness(null);
   await Effect.gen(function* () {
@@ -102,34 +104,9 @@ it("settles the last contended start attempt instead of leaving its run starting
     ).pipe(Effect.forkChild);
     yield* Deferred.await(held);
     const service = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
-    yield* service.start({ threadId, runId, willRetry: false });
-    expect(writeIfRunCurrent).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        runId,
-        expectedStatus: "starting",
-        events: expect.arrayContaining([
-          expect.objectContaining({
-            type: "run.updated",
-            payload: expect.objectContaining({ status: "failed" }),
-          }),
-          expect.objectContaining({
-            type: "run-attempt.updated",
-            payload: expect.objectContaining({ status: "failed" }),
-          }),
-          expect.objectContaining({
-            type: "node.updated",
-            payload: expect.objectContaining({ status: "failed" }),
-          }),
-          expect.objectContaining({
-            type: "turn-item.updated",
-            payload: expect.objectContaining({
-              type: "error",
-              failure: expect.objectContaining({ message: expect.stringContaining("Retry") }),
-            }),
-          }),
-        ]),
-      }),
-    );
+    const error = yield* service.start({ threadId, runId, willRetry: false }).pipe(Effect.flip);
+    expect(error.cause).toBeInstanceOf(ProviderTurnStart.WorkspaceLeaseBusyError);
+    expect(writeIfRunCurrent).not.toHaveBeenCalled();
     expect(createWorktree).not.toHaveBeenCalled();
     expect(startRootRun).not.toHaveBeenCalled();
   }).pipe(Effect.scoped, Effect.provide(layer), Effect.runPromise);
@@ -674,38 +651,49 @@ effectIt.effect("preserves earlier failures and defers even the final normal att
 );
 
 for (const type of ["provider-turn.start", "provider-turn.restart"] as const) {
-  effectIt.effect(`settles a still-contended ${type} only at its ten-minute deadline`, () =>
-    Effect.gen(function* () {
-      const h = yield* leaseWorker(type);
-      yield* h.worker.runOnce;
-      yield* TestClock.adjust("599 seconds");
-      yield* h.worker.runOnce;
-      expect(yield* h.row).toMatchObject({ status: "pending", attemptCount: 0 });
-      expect(h.projection().runs.at(-1)?.status).toBe("starting");
-      yield* TestClock.adjust("1 second");
-      yield* h.worker.runOnce;
-      expect(yield* h.row).toMatchObject({
-        status: "succeeded",
-        attemptCount: 1,
-        lastError: null,
-      });
-      expect(h.projection().runs.at(-1)?.terminationCause).toEqual({ kind: "validation_error" });
-      expect(h.projection().turnItems).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "error",
-            title: "Workspace is busy",
-            failure: expect.objectContaining({
-              message: expect.stringContaining("workspace is busy"),
-            }),
-          }),
-        ]),
-      );
-      expect(h.open).not.toHaveBeenCalled();
-      expect(h.startRootRun).not.toHaveBeenCalled();
-    }).pipe(Effect.scoped),
+  effectIt.effect(
+    `keeps a contended ${type} pending beyond ten minutes and starts after release`,
+    () =>
+      Effect.gen(function* () {
+        const h = yield* leaseWorker(type);
+        yield* h.worker.runOnce;
+        yield* TestClock.adjust("11 minutes");
+        yield* h.worker.runOnce;
+        expect(yield* h.row).toMatchObject({ status: "pending", attemptCount: 0 });
+        expect(h.projection().runs.at(-1)?.status).toBe("starting");
+        expect(h.writeIfRunCurrent).not.toHaveBeenCalled();
+        expect(h.startRootRun).not.toHaveBeenCalled();
+        yield* h.release;
+        yield* TestClock.adjust("1 second");
+        yield* h.worker.runOnce;
+        expect(yield* h.row).toMatchObject({ status: "succeeded", attemptCount: 1 });
+        expect(h.startRootRun).toHaveBeenCalledOnce();
+      }).pipe(Effect.scoped),
   );
 }
+
+effectIt.effect(
+  "cancels a deferred workspace turn without starting it after the lease is released",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* leaseWorker();
+      yield* h.worker.runOnce;
+      yield* TestClock.adjust("11 minutes");
+      yield* h.worker.runOnce;
+      expect(yield* h.row).toMatchObject({ status: "pending", attemptCount: 0 });
+      const ids = yield* h.outbox.cancelUnsettled({
+        threadId: h.threadId,
+        effectTypes: ["provider-turn.start"],
+        reason: "cancelled",
+      });
+      yield* h.outbox.signalCancellations(ids);
+      yield* h.release;
+      yield* TestClock.adjust("1 second");
+      expect(yield* h.worker.runOnce).toBe(false);
+      expect(yield* h.row).toMatchObject({ status: "cancelled", attemptCount: 0 });
+      expect(h.startRootRun).not.toHaveBeenCalled();
+    }).pipe(Effect.scoped),
+);
 
 // GOAT holds the workspace lease only while it prepares the checkout, and
 // never waits for it: a start that finds cleanup holding the lease defers to
@@ -713,21 +701,16 @@ for (const type of ["provider-turn.start", "provider-turn.restart"] as const) {
 effectIt.effect("defers provider startup to a running cleanup and recreates its checkout", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-start-" });
-    const worktreePath = path.join(workspaceRoot, "project", "worktree");
-    yield* fileSystem.makeDirectory(worktreePath, { recursive: true });
+    const { worktreePath, addWorktree, location } = yield* makeRestorableCheckout;
     const release = yield* Deferred.make<void>();
     const harness = makeLocalCommandHarness({
       text: "Continue",
       worktreePath,
-      worktreesDir: workspaceRoot,
+      ...location,
       fileSystem,
       failReadsAfterRunning: true,
     });
-    harness.createWorktree.mockImplementation(() =>
-      fileSystem.makeDirectory(worktreePath).pipe(Effect.as({} as never), Effect.orDie),
-    );
+    harness.createWorktree.mockImplementation(() => addWorktree.pipe(Effect.as({} as never)));
     const open = harness.open.getMockImplementation()!;
     harness.open.mockImplementation(() =>
       Effect.gen(function* () {
@@ -749,7 +732,7 @@ effectIt.effect("defers provider startup to a running cleanup and recreates its 
     yield* Fiber.join(cleanup);
     yield* harness.startWithRetry;
     expect(harness.createWorktree).toHaveBeenCalledWith({
-      cwd: "/tmp/native-account-project",
+      cwd: location.workspaceRoot,
       refName: "feature/restore",
       path: worktreePath,
     });

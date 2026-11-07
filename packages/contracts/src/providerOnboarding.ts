@@ -54,6 +54,17 @@ export const ProviderAddableInstance = Schema.Struct({
 });
 export type ProviderAddableInstance = typeof ProviderAddableInstance.Type;
 
+export const ProviderLocalPreset = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  command: TrimmedNonEmptyString,
+  args: Schema.Array(Schema.String),
+  iconUrl: TrimmedNonEmptyString,
+  installHint: TrimmedNonEmptyString,
+  docsUrl: TrimmedNonEmptyString,
+});
+export type ProviderLocalPreset = typeof ProviderLocalPreset.Type;
+
 export const ProviderAddableDriver = Schema.Struct({
   driver: ProviderDriverKind,
   displayName: TrimmedNonEmptyString,
@@ -70,6 +81,7 @@ export const ProviderAddableDriver = Schema.Struct({
     command: Schema.NullOr(TrimmedNonEmptyString),
   }),
   instances: Schema.Array(ProviderAddableInstance),
+  presets: Schema.optionalKey(Schema.Array(ProviderLocalPreset)),
 });
 export type ProviderAddableDriver = typeof ProviderAddableDriver.Type;
 

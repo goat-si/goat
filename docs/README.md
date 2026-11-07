@@ -6,6 +6,7 @@
 - [Messages and context](./user/composer.md)
 - [Working with threads](./user/thread-sidebar.md)
 - [Permission modes](./user/permission-modes.md)
+- [Secrets](./user/secrets.md)
 - [Terminal history](./user/terminal.md)
 - [Source control](./user/source-control.md)
 - [Project settings](./user/project-settings.md)
@@ -43,6 +44,7 @@ source alone does not explain. Most code changes do not need an internal documen
 
 - [Architecture overview](./internals/overview.md)
 - [Glossary](./internals/glossary.md)
+- [Server resilience](./internals/server-resilience.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [SSH reconnect](./internals/ssh-reconnect.md)
 - [SSH hardening references](./internals/ssh-hardening-references.md)

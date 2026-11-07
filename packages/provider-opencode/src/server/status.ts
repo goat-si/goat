@@ -1,3 +1,4 @@
+import { settingsSecretLiteral } from "@goat/contracts";
 import {
   type ModelCapabilities,
   type ServerProviderModel,
@@ -15,6 +16,9 @@ import { createModelCapabilities } from "@goat/shared/model";
 import { compareSemverVersions } from "@goat/shared/semver";
 import {
   buildServerProvider,
+  classifySpawnFailure,
+  isCommandMissingCause,
+  spawnFailureMessage,
   COMPACT_SLASH_COMMAND,
   nonEmptyTrimmed,
   providerModelsFromSettings,
@@ -24,6 +28,7 @@ import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import type { ProbedOpenCode } from "./versionProbe.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
+import { findSpawnFailure } from "./spawnFailure.ts";
 
 const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
@@ -66,6 +71,7 @@ function formatOpenCodeProbeError(input: {
   readonly isExternalServer: boolean;
   readonly phase: "version" | "inventory";
   readonly serverUrl: string;
+  readonly binaryPath: string;
 }): {
   readonly installed: boolean;
   readonly message: string;
@@ -110,13 +116,32 @@ function formatOpenCodeProbeError(input: {
     };
   }
 
-  if (lower.includes("enoent") || lower.includes("notfound")) {
-    return {
-      installed: false,
-      message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
-    };
+  const spawn = findSpawnFailure(input.cause);
+  if (spawn !== undefined) {
+    const failure = classifySpawnFailure(input.cause, spawn.cwd, undefined, {
+      binary: input.binaryPath,
+      env: { PATH: spawn.path },
+    });
+    if (failure === "missing")
+      return {
+        installed: false,
+        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+      };
+    const message = spawnFailureMessage(failure, spawn.cwd, input.binaryPath);
+    if (message) return { installed: true, message };
   }
-
+  let cause = spawn === undefined ? input.cause : undefined;
+  const seen = new Set<unknown>();
+  while (cause && typeof cause === "object" && !seen.has(cause)) {
+    seen.add(cause);
+    if (isCommandMissingCause(cause)) {
+      return {
+        installed: false,
+        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+      };
+    }
+    cause = "cause" in cause ? cause.cause : undefined;
+  }
   if (lower.includes("quarantine")) {
     return {
       installed: true,
@@ -707,6 +732,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       isExternalServer,
       phase,
       serverUrl: openCodeSettings.serverUrl,
+      binaryPath: openCodeSettings.binaryPath,
     });
     return buildServerProvider({
       presentation: OPENCODE_PRESENTATION,
@@ -800,7 +826,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
           directory: cwd,
           serverUrl: openCodeSettings.serverUrl,
           ...(openCodeSettings.serverPassword
-            ? { serverPassword: openCodeSettings.serverPassword }
+            ? { serverPassword: settingsSecretLiteral(openCodeSettings.serverPassword) }
             : {}),
         })
         .pipe(Effect.flatMap(loadInventory), Effect.scoped)

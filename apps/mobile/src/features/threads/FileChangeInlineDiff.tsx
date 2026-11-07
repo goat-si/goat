@@ -121,6 +121,7 @@ export function FileChangeInlineDiff(props: {
           file={file}
           patch={extractFilePatch(patch, file)}
           workspaceRoot={workspaceRoot}
+          showStats={files.length > 1}
         />
       ))}
     </View>
@@ -133,6 +134,8 @@ function InlineFileDiff(props: {
   readonly file: FileDiffMetadata;
   readonly patch: string;
   readonly workspaceRoot: string | undefined;
+  /** The work row already shows the totals; per-file counts only help with several files. */
+  readonly showStats: boolean;
 }) {
   const { file, patch } = props;
   const navigation = useNavigation();
@@ -189,16 +192,18 @@ function InlineFileDiff(props: {
           accessibilityRole="button"
           accessibilityLabel={`Review changes to ${displayPath}`}
           onPress={openReview}
-          className="min-w-0 flex-1 flex-row items-center gap-2 py-2 active:opacity-60"
+          className="min-h-[44px] min-w-0 flex-1 flex-row items-center gap-2 py-2 active:opacity-60"
         >
           <Text
-            className="min-w-0 shrink font-mono text-2xs text-foreground-muted"
+            className="min-w-0 shrink font-mono text-xs text-foreground-secondary"
             numberOfLines={1}
             ellipsizeMode="middle"
           >
             {displayPath}
           </Text>
-          <PullRequestDiffStats additions={stats.additions} deletions={stats.deletions} compact />
+          {props.showStats ? (
+            <PullRequestDiffStats additions={stats.additions} deletions={stats.deletions} compact />
+          ) : null}
           <SymbolView name="arrow.up.right" size={12} tintColorClassName="accent-icon-muted" />
         </Pressable>
         {patch.length > 0 ? (

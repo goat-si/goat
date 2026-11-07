@@ -2,9 +2,7 @@ import {
   openCodexRouteSummary,
   resolveProviderInstanceDisplayName,
 } from "@goat/client-runtime/state/provider-instance-display";
-
 import { Spinner } from "~/components/ui/spinner";
-
 import {
   TriangleAlertIcon as AlertTriangleIcon,
   CheckIcon,
@@ -29,6 +27,7 @@ import {
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
+  type SecretReference,
   type ProviderInstanceId,
   type AcpRegistryUrlAuthAction,
   type EnvironmentId,
@@ -54,6 +53,7 @@ import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { DraftInput } from "../ui/draft-input";
 import { SecretInput } from "./SecretInput";
+import { SecretReferencePicker } from "./SecretReferencePicker";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -106,6 +106,7 @@ type EnvironmentDraftRow = {
   readonly value: string;
   readonly sensitive: boolean;
   readonly valueRedacted?: boolean;
+  readonly secret?: SecretReference;
 };
 
 function makeEnvironmentDraftRow(
@@ -118,6 +119,7 @@ function makeEnvironmentDraftRow(
     value: variable.value,
     sensitive: variable.sensitive,
     ...(variable.valueRedacted !== undefined ? { valueRedacted: variable.valueRedacted } : {}),
+    ...(variable.secret !== undefined ? { secret: variable.secret } : {}),
   };
 }
 
@@ -134,7 +136,9 @@ function providerEnvironmentsEqual(
         variable.name === other.name &&
         variable.value === other.value &&
         variable.sensitive === other.sensitive &&
-        variable.valueRedacted === other.valueRedacted
+        variable.valueRedacted === other.valueRedacted &&
+        variable.secret?.provider === other.secret?.provider &&
+        variable.secret?.reference === other.secret?.reference
       );
     })
   );
@@ -262,6 +266,8 @@ function ProviderEnvironmentFieldRow(props: {
   readonly idPrefix: string;
   readonly onCommit: (field: ProviderEnvironmentField, value: string) => void;
   readonly onRemove: (field: ProviderEnvironmentField) => void;
+  readonly environmentId?: EnvironmentId | undefined;
+  readonly onSecret: (field: ProviderEnvironmentField, secret: SecretReference | undefined) => void;
 }) {
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
   const value = props.variable?.valueRedacted ? "" : (props.variable?.value ?? "");
@@ -272,7 +278,7 @@ function ProviderEnvironmentFieldRow(props: {
       description={props.field.description}
       control={
         <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
-          {props.field.sensitive === false ? (
+          {props.variable?.secret ? null : props.field.sensitive === false ? (
             <DraftInput
               id={inputId}
               size="sm"
@@ -295,6 +301,13 @@ function ProviderEnvironmentFieldRow(props: {
               spellCheck={false}
             />
           )}
+          {props.environmentId && props.field.sensitive !== false ? (
+            <SecretReferencePicker
+              environmentId={props.environmentId}
+              value={props.variable?.secret}
+              onChange={(secret) => props.onSecret(props.field, secret)}
+            />
+          ) : null}
           {props.variable ? (
             <Button
               type="button"
@@ -315,6 +328,7 @@ function ProviderEnvironmentFieldRow(props: {
 export function ProviderEnvironmentSection(props: {
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
+  readonly environmentId?: EnvironmentId | undefined;
 }) {
   const [rows, setRows] = useState<ReadonlyArray<EnvironmentDraftRow>>(() =>
     props.environment.map(makeEnvironmentDraftRow),
@@ -348,6 +362,7 @@ export function ProviderEnvironmentSection(props: {
         if (
           name.length > 0 ||
           row.value.length > 0 ||
+          row.secret !== undefined ||
           row.sensitive !== true ||
           row.valueRedacted !== undefined
         ) {
@@ -378,6 +393,22 @@ export function ProviderEnvironmentSection(props: {
 
   const removeVariable = (id: string) => {
     const nextRows = rows.filter((row) => row.id !== id);
+    setRows(nextRows);
+    publishRows(nextRows);
+  };
+
+  const updateSecret = (id: string, secret: SecretReference | undefined) => {
+    const nextRows = rows.map((row) => {
+      if (row.id !== id) return row;
+      const { secret: _old, ...rest } = row;
+      return {
+        ...rest,
+        value: "",
+        valueRedacted: false,
+        sensitive: true,
+        ...(secret ? { secret } : {}),
+      };
+    });
     setRows(nextRows);
     publishRows(nextRows);
   };
@@ -414,6 +445,7 @@ export function ProviderEnvironmentSection(props: {
                 className="w-full min-w-0 sm:w-44 sm:shrink-0"
                 value={variable.name}
                 onCommit={(name) => updateVariable(variable.id, { name: name.trim() })}
+                disabled={variable.valueRedacted === true}
                 placeholder="VARIABLE_NAME"
                 spellCheck={false}
                 aria-label={`Environment variable name ${index + 1}`}
@@ -421,7 +453,7 @@ export function ProviderEnvironmentSection(props: {
               <span className="hidden text-xs text-muted-foreground sm:inline" aria-hidden>
                 =
               </span>
-              {variable.sensitive ? (
+              {variable.secret ? null : variable.sensitive ? (
                 <SecretInput
                   size="sm"
                   font="mono"
@@ -446,6 +478,13 @@ export function ProviderEnvironmentSection(props: {
                   aria-label={`Environment variable value ${index + 1}`}
                 />
               )}
+              {props.environmentId ? (
+                <SecretReferencePicker
+                  environmentId={props.environmentId}
+                  value={variable.secret}
+                  onChange={(secret) => updateSecret(variable.id, secret)}
+                />
+              ) : null}
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -453,6 +492,7 @@ export function ProviderEnvironmentSection(props: {
                       type="button"
                       size="icon-micro"
                       variant="ghost-muted"
+                      disabled={variable.valueRedacted === true}
                       onClick={() => {
                         const sensitive = !variable.sensitive;
                         updateVariable(variable.id, {
@@ -489,6 +529,9 @@ export function ProviderEnvironmentSection(props: {
           ))}
           <p className="text-xs text-muted-foreground">
             Sensitive values are stored separately and never returned to the app.
+            {rows.some((row) => row.valueRedacted === true)
+              ? " Enter a new value to rename a saved one or make it plain text."
+              : null}
           </p>
         </div>
       ) : null}
@@ -835,6 +878,15 @@ export function ProviderInstanceCard({
   const removeEnvironmentField = (field: ProviderEnvironmentField) => {
     updateEnvironment(providerEnvironmentWithoutNames(instance.environment, new Set([field.name])));
   };
+  const updateEnvironmentFieldSecret = (
+    field: ProviderEnvironmentField,
+    secret: SecretReference | undefined,
+  ) => {
+    const rest = providerEnvironmentWithoutNames(instance.environment, new Set([field.name]));
+    updateEnvironment(
+      secret ? [...rest, { name: field.name, value: "", sensitive: true, secret }] : rest,
+    );
+  };
 
   const titleIconNode = (
     <ProviderInstanceIcon
@@ -1171,6 +1223,7 @@ export function ProviderInstanceCard({
   const runtimeFields = driverOption ? (
     <ProviderSettingsForm
       definition={driverOption}
+      environmentId={environmentId}
       value={instance.config}
       idPrefix={`provider-instance-${instanceId}`}
       variant="settings"
@@ -1243,6 +1296,8 @@ export function ProviderInstanceCard({
                   variable={readProviderEnvironmentVariable(instance.environment, field.name)}
                   idPrefix={`provider-instance-${instanceId}`}
                   onCommit={updateEnvironmentField}
+                  onSecret={updateEnvironmentFieldSecret}
+                  environmentId={environmentId}
                   onRemove={removeEnvironmentField}
                 />
               ))}
@@ -1283,6 +1338,7 @@ export function ProviderInstanceCard({
             <ProviderEnvironmentSection
               environment={genericEnvironment}
               onChange={updateGenericEnvironment}
+              environmentId={environmentId}
             />
           </FoldedSettingsSection>
         </div>
@@ -1307,6 +1363,7 @@ export function ProviderInstanceCard({
           <ProviderEnvironmentSection
             environment={genericEnvironment}
             onChange={updateGenericEnvironment}
+            environmentId={environmentId}
           />
         </SettingsSection>
       )}

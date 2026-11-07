@@ -31,12 +31,38 @@ The composer banners are the reference.
   renders `Button`.
 - [`ComposerBannerStack.tsx`](../../apps/web/src/components/chat/ComposerBannerStack.tsx) composes
   the slots and owns only stack behavior: priority, expand and collapse, dismiss transitions.
-- Consumers are a few lines of slots, and the slots carry the styling:
-  [`ComposerActivityStatus.tsx`](../../apps/web/src/components/chat/ComposerActivityStatus.tsx).
+- Consumers are a few lines of slots, and the slots carry the banner styling:
+  [`ComposerPlanFollowUpBanner.tsx`](../../apps/web/src/components/chat/ComposerPlanFollowUpBanner.tsx).
 
 Build new UI the same way. Compose or extend a component instead of copying its markup and classes.
 When a call site repeats a treatment another one already uses, make it a variant or a slot on the
 shared component. A new composer banner or notice uses the `ComposerBanner` slots.
+
+## Control rows
+
+People judge a toolbar by what they see, not by its boxes: the gap from one icon or label to the
+next, and from the card edge to the first and last mark. A row of side-by-side controls (the
+composer footer, page headers, GOAT Bot's header) keeps these rules:
+
+- One height and one center line. Every control in the composer and in headers is 28px (`h-7`,
+  `size-7`), text controls and the round send button included; a title capsule matches it.
+- Symmetric padding inside each control, measured to its icon or text. `ComposerControl` and
+  `icon-sm` buttons both leave 6px, so a text control and an icon button read alike.
+- Spacing comes from the parent's `gap`, never from a negative margin on a control. A negative
+  margin overlaps the neighbour's hover fill and hit area; `goat/no-negative-control-margin`
+  rejects one in the composer, GOAT Bot and Fleet. A filled shape, such as the round send button,
+  is seen by its edge, so its gap is wider to leave the same visible space.
+- The row's own gap does not change with viewport width. Each group sets its spacing, so the
+  visible gaps match at every size.
+- A panel lays itself out by its own width with a container query (`@container`), not by the
+  viewport: a panel beside the sidebar can be narrow on a wide screen.
+- Small text uses the bundled sans with `tabular-nums` for numbers. The mono stack falls back to
+  Consolas on Windows, which looks jagged at 10 to 11px.
+
+[`controlRowLayout.ts`](../../apps/web/test/controlRowLayout.ts) checks a rendered row against
+these rules in a browser test;
+[`ComposerControl.layout.browser.test.tsx`](../../apps/web/src/components/chat/ComposerControl.layout.browser.test.tsx)
+is the example. A new kind of control row gets the same check.
 
 ## Handlers in large components
 

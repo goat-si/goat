@@ -29,8 +29,8 @@
     "generate:expo-schema": "node scripts/fetch-expo-schema.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.276",
-    "@cursor/sdk": "1.0.38",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.284",
+    "@cursor/sdk": "1.2.0",
     "@effect/platform-node": "catalog:",
     "@effect/platform-node-shared": "catalog:",
     "@ff-labs/fff-node": "0.11.0",
@@ -74,6 +74,7 @@
     "smol-toml": "1.8.0",
     "stream-chain": "^4.2.5",
     "stream-json": "3.6.0",
+    "transcribe-cpp": "0.4.1",
     "undici": "catalog:",
     "yaml": "catalog:",
     "yauzl": "^3.4.0",
@@ -92,11 +93,13 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@types/node": "catalog:",
     "@types/proper-lockfile": "^4.1.4",
+    "@types/ws": "catalog:",
     "@types/yauzl": "^3.4.0",
     "effect-acp": "workspace:*",
     "effect-codex-app-server": "workspace:*",
     "graphql": "16.14.1",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "ws": "catalog:"
   },
   "engines": {
     "node": "^24.16.0 || >=26.1.0"

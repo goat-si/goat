@@ -16,6 +16,8 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Exit from "effect/Exit";
+import * as Cause from "effect/Cause";
 import { vi } from "vite-plus/test";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
@@ -31,7 +33,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { packMemoryContext } from "@goat/provider-core/server/memoryContext";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import { CursorSettings } from "../settings.ts";
-import { makeCursorAdapterV2 } from "./adapter.ts";
+import { cursorMcpServers, makeCursorAdapterV2 } from "./adapter.ts";
 
 const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 
@@ -59,7 +61,10 @@ const cursorSdkMock = vi.hoisted(() => {
   const send = vi.fn(
     async (
       message: string | { text: string },
-      options: { readonly onDelta?: (input: { readonly update: unknown }) => Promise<void> },
+      options: {
+        readonly onDelta?: (input: { readonly update: unknown }) => Promise<void>;
+        readonly mcpServers?: unknown;
+      },
     ) => {
       runOperations.push("run.start");
       sentMessages.push(typeof message === "string" ? message : message.text);
@@ -123,17 +128,20 @@ const cursorSdkMock = vi.hoisted(() => {
 });
 
 vi.mock("./sdk.ts", () => ({
-  Agent: {
-    create: cursorSdkMock.create,
-    resume: cursorSdkMock.resume,
-    listRuns: cursorSdkMock.listRuns,
-    cancelRun: cursorSdkMock.cancelRun,
-    messages: {
-      list: vi.fn(async () => []),
+  isCursorSdkError: () => false,
+  loadCursorSdk: () => ({
+    Agent: {
+      create: cursorSdkMock.create,
+      resume: cursorSdkMock.resume,
+      listRuns: cursorSdkMock.listRuns,
+      cancelRun: cursorSdkMock.cancelRun,
+      messages: {
+        list: vi.fn(async () => []),
+      },
     },
-  },
-  createAgentPlatform: vi.fn(),
-  SqliteLocalAgentStore: { open: vi.fn() },
+    createAgentPlatform: vi.fn(),
+  }),
+  loadCursorSqlite: () => ({ SqliteLocalAgentStore: { open: vi.fn() } }),
 }));
 
 const layerTest = CursorAgentSdk.layer.pipe(
@@ -161,6 +169,41 @@ const layerTest = CursorAgentSdk.layer.pipe(
 );
 
 describe("CursorAgentSdkRunner", () => {
+  it.effect("constructs without loading and reports first-use load failures as runner errors", () =>
+    Effect.gen(function* () {
+      const failure = new Error("missing SDK chunk");
+      const load = vi.fn(() => {
+        throw failure;
+      });
+      const runner = yield* CursorAgentSdk.makeCursorAgentSdkRunner(() => undefined).pipe(
+        Effect.provideService(CursorSdk.CursorSdk, {
+          load,
+          loadSqlite: () => {
+            throw new Error("unused SQLite");
+          },
+        }),
+      );
+      assert.strictEqual(load.mock.calls.length, 0);
+      const result = yield* runner
+        .open({
+          operation: "create",
+          options: {},
+          threadId: ThreadId.make("lazy-load"),
+          providerSessionId: ProviderSessionId.make("lazy-load"),
+        })
+        .pipe(Effect.exit);
+      assert(Exit.isFailure(result));
+      assert.deepStrictEqual(
+        Cause.squash(result.cause),
+        new CursorAgentSdk.CursorAgentSdkRunnerError({
+          method: "agent.create",
+          cause: failure,
+        }),
+      );
+      assert.strictEqual(load.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("retries a resumed send after cancelling its abandoned local run", () =>
     Effect.gen(function* () {
       cursorSdkMock.runOperations.length = 0;
@@ -316,10 +359,8 @@ describe("CursorAgentSdkRunner", () => {
             attachments: [],
           },
           refreshMemoryContext: () =>
-            Effect.gen(function* () {
+            Effect.sync(() => {
               refreshes++;
-              if (refreshes === 3 && restoreGrant) yield* sessions.set(retryAttachment);
-              // Recovery must refresh the snapshot rather than reuse the first message.
               return refreshes === 3 ? snapshot : undefined;
             }),
         };
@@ -340,7 +381,25 @@ describe("CursorAgentSdkRunner", () => {
         yield* finishTurn(1);
         assert.include(cursorSdkMock.sentMessages[0]!, "read=true, write=false, source=false");
         yield* sessions.clear(threadId);
-        if (restoreGrant) yield* sessions.set({ ...retryAttachment, grantedScopes: [] });
+        yield* sessions.set({
+          ...attachment,
+          authorizationHeader: "Bearer prior-recovery",
+          grantedScopes: [],
+        });
+        const cancelled = Promise.withResolvers<void>();
+        const releaseCancel = Promise.withResolvers<void>();
+        cursorSdkMock.cancelRun.mockImplementationOnce(async () => {
+          cursorSdkMock.runOperations.push("agent.cancelRun");
+          cancelled.resolve();
+          await releaseCancel.promise;
+          cursorSdkMock.setStaleRunActive(false);
+        });
+        yield* Effect.gen(function* () {
+          yield* Effect.promise(() => cancelled.promise);
+          if (restoreGrant) yield* sessions.set(retryAttachment);
+          else yield* sessions.clear(threadId);
+          releaseCancel.resolve();
+        }).pipe(Effect.forkScoped);
         cursorSdkMock.setStaleRunActive(true);
         cursorSdkMock.runOperations.length = 0;
         yield* finishTurn(2);
@@ -357,6 +416,10 @@ describe("CursorAgentSdkRunner", () => {
         assert.include(
           cursorSdkMock.sentMessages[2]!,
           `read=${restoreGrant}, write=false, source=false`,
+        );
+        assert.deepEqual(
+          cursorSdkMock.send.mock.calls[2]?.[1].mcpServers,
+          restoreGrant ? cursorMcpServers(retryAttachment) : {},
         );
         assert.equal(refreshes, 3);
         yield* sessions.clear(threadId);

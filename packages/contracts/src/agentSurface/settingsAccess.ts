@@ -21,6 +21,7 @@ const GRANTS_AGENTS = "It widens what agents may do; a person grants that.";
 const HOLDS_SECRETS = "It holds credentials; a person enters them in Settings.";
 
 export const SETTINGS_ACCESS = {
+  speech: person("A person controls local speech model configuration."),
   setModelFavorites: agent,
   setModelsHidden: agent,
   setProviderModelOrder: agent,
@@ -31,6 +32,9 @@ export const SETTINGS_ACCESS = {
   storageCleanup: agent,
   worktreesDirectory: agent,
   enableAgentMemoryAccess: person(GRANTS_AGENTS),
+  agentMemoryLimitGiB: person(
+    "It is this machine's memory safety limit for agents; a person sets it.",
+  ),
   agentWorkspaceAccess: person(GRANTS_AGENTS),
   agentTerminalAccess: person(GRANTS_AGENTS),
   memoryOwnerSourceReadPolicy: person(
@@ -39,10 +43,13 @@ export const SETTINGS_ACCESS = {
   memoryEnabled: path("memory.settings_update"),
   memoryModelSelection: path("memory.settings_update"),
   goatBotModelSelection: agent,
+  goatBotSessionRouting: agent,
   channelAutoPlacement: agent,
   responseStreamingMode: agent,
   enableProviderUpdateChecks: agent,
   continueThreadsAfterServerUpdate: agent,
+  codexTurnsSurviveServerStop: agent,
+  codexAppServerIsolation: agent,
   automaticServerUpdates: agent,
   enableAgentBrowserAccess: person(GRANTS_AGENTS),
   blockedBrowserHosts: person("It controls which browser hosts agents may use; a person decides."),
@@ -93,6 +100,7 @@ export const SETTINGS_ACCESS = {
   newWorktreesStartFromOrigin: agent,
   worktreeSubmodules: agent,
   addProjectBaseDirectory: agent,
+  ghqCloneLayout: agent,
   textGenerationModelSelection: agent,
   threadTitleInstructions: agent,
   branchNamingMode: agent,
@@ -112,9 +120,11 @@ export const SETTINGS_ACCESS = {
   completionWebhook: person("It sends reports to an outside address and holds a signing secret."),
   providerInstances: path("provider.update"),
   usageLimitSources: person(HOLDS_SECRETS),
+  secretProviders: person(HOLDS_SECRETS),
   cursorKeychainUsageEnabled: person("It reads the system keychain."),
   usagePriceOverrides: agent,
   usageModelAliases: agent,
+  usageModelFilter: agent,
   goatBotHome: path("channel.bot_home_claim"),
 } as const satisfies { readonly [K in SettingsKey]-?: SettingsAccess };
 

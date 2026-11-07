@@ -2,6 +2,7 @@
 import * as Schema from "effect/Schema";
 import * as NodeHttp from "node:http";
 import { codexAuthorizationRequest, codexCallbackUrl } from "@goat/shared/codexAuthHandoff";
+import { guardErrors } from "./errorGuards.ts";
 
 export class CodexAuthCallbackError extends Schema.TaggedError<CodexAuthCallbackError>()(
   "CodexAuthCallbackError",
@@ -36,36 +37,40 @@ export async function receiveCodexAuthCallback(
   const callback = Promise.withResolvers<string>();
   // Keep early open/bind failures from leaving an unobserved rejection behind.
   void callback.promise.catch(() => undefined);
-  const server = NodeHttp.createServer((incoming, response) => {
-    try {
-      if (incoming.method !== "GET") throw new Error("method");
-      const url = codexCallbackUrl(
-        new URL(incoming.url ?? "/", request.redirectUri).toString(),
-        request.redirectUri,
-        request.state,
-      ).toString();
-      const returnUrl = destination?.(url);
-      response.setHeader("cache-control", "no-store");
-      response.setHeader("referrer-policy", "no-referrer");
-      response.setHeader("x-content-type-options", "nosniff");
-      if (returnUrl) {
-        response.writeHead(303, { location: returnUrl }).end();
-      } else {
-        response.setHeader(
-          "content-security-policy",
-          "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
-        );
-        response
-          .writeHead(200, { "content-type": "text/html; charset=utf-8" })
-          .end(
-            '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>GOAT</title><style>body{font-family:system-ui;display:grid;place-items:center;min-height:90vh;margin:0}main{max-width:360px;padding:32px}h1{font-size:24px}p{line-height:1.6;opacity:.7}</style></head><body><main><h1>Return to GOAT</h1><p>Your sign-in response has been received. GOAT is finishing the connection. You can close this tab.</p></main></body></html>',
+  let listenFailure = (_error: Error) => {};
+  const server = guardErrors(
+    NodeHttp.createServer((incoming, response) => {
+      try {
+        if (incoming.method !== "GET") throw new Error("method");
+        const url = codexCallbackUrl(
+          new URL(incoming.url ?? "/", request.redirectUri).toString(),
+          request.redirectUri,
+          request.state,
+        ).toString();
+        const returnUrl = destination?.(url);
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("referrer-policy", "no-referrer");
+        response.setHeader("x-content-type-options", "nosniff");
+        if (returnUrl) {
+          response.writeHead(303, { location: returnUrl }).end();
+        } else {
+          response.setHeader(
+            "content-security-policy",
+            "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
           );
+          response
+            .writeHead(200, { "content-type": "text/html; charset=utf-8" })
+            .end(
+              '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>GOAT</title><style>body{font-family:system-ui;display:grid;place-items:center;min-height:90vh;margin:0}main{max-width:360px;padding:32px}h1{font-size:24px}p{line-height:1.6;opacity:.7}</style></head><body><main><h1>Return to GOAT</h1><p>Your sign-in response has been received. GOAT is finishing the connection. You can close this tab.</p></main></body></html>',
+            );
+        }
+        callback.resolve(url);
+      } catch {
+        response.writeHead(400).end("This response does not belong to the active sign-in.");
       }
-      callback.resolve(url);
-    } catch {
-      response.writeHead(400).end("This response does not belong to the active sign-in.");
-    }
-  });
+    }),
+    (error) => listenFailure(error),
+  );
   const cancelled = () => callback.reject(new Error("Sign-in cancelled on this computer."));
   abort.signal.addEventListener("abort", cancelled, { once: true });
   const timer = setTimeout(
@@ -76,14 +81,16 @@ export async function receiveCodexAuthCallback(
   try {
     if (signal?.aborted) throw new Error("Sign-in cancelled on this computer.");
     await new Promise<void>((resolve, reject) => {
-      server.once("error", () =>
+      listenFailure = () =>
         reject(
           new Error(
             "The ChatGPT callback port is in use on this computer. Close the other sign-in and try again, or paste the redirect URL in GOAT.",
           ),
-        ),
-      );
-      server.listen(Number(new URL(request.redirectUri).port), "127.0.0.1", resolve);
+        );
+      server.listen(Number(new URL(request.redirectUri).port), "127.0.0.1", () => {
+        listenFailure = (error) => callback.reject(error);
+        resolve();
+      });
     });
     if (abort.signal.aborted) throw new Error("Sign-in cancelled on this computer.");
     if (!(await openBrowser(request.authorizationUrl)))

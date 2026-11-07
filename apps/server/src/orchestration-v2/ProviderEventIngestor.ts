@@ -1,3 +1,5 @@
+import { withAgentOom } from "./agentOomFailure.ts";
+import { handedOffSurvivorTurns } from "./goat/CodexSurvivorHandoff.ts";
 import {
   NodeId,
   CommandId,
@@ -36,6 +38,7 @@ import { isCommandActions, parseCommandActions } from "@goat/shared/commandActio
 import { isTemporaryWorktreeBranch } from "@goat/shared/git";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@goat/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import { BUNDLED_MODEL_MANIFEST } from "../provider/ModelManifest.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as EventSink from "./EventSink.ts";
@@ -48,6 +51,7 @@ import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
 import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import { boundFileChangeForStorage } from "./WireProjection.ts";
 import { withFileChangeLineCounts } from "./fileChangeLineCounts.ts";
+import { withWriterFallback } from "./readerOverloadFallback.ts";
 
 export class ProviderEventNormalizeError extends Schema.TaggedError<ProviderEventNormalizeError>()(
   "ProviderEventNormalizeError",
@@ -135,6 +139,14 @@ function providerTurnAnalyticsProperties(input: {
   readonly context?: ProviderTurnAnalyticsContext;
 }): Readonly<Record<string, unknown>> {
   const usage = input.providerTurn.turnTokenUsage;
+  const observedModel = usage?.models?.length === 1 ? usage.models[0] : undefined;
+  const catalog = BUNDLED_MODEL_MANIFEST.providers?.[input.driver];
+  const confirmedModel =
+    observedModel === undefined
+      ? undefined
+      : catalog?.models.find(
+          (model) => model.slug === observedModel || model.aliases?.includes(observedModel),
+        )?.slug;
   const modelSelection = input.context?.modelSelection;
   const effort = modelSelection
     ? (getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
@@ -155,7 +167,8 @@ function providerTurnAnalyticsProperties(input: {
       : { cacheCreationTokens: usage.cacheCreationTokens }),
     ...(usage?.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
     ...(usage?.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
-    ...(modelSelection ? { model: modelSelection.model, mixedModels: false } : {}),
+    ...(confirmedModel ? { model: confirmedModel, mixedModels: false } : {}),
+    ...(usage?.models !== undefined && usage.models.length > 1 ? { mixedModels: true } : {}),
     ...(effort ? { effort } : {}),
     ...(input.context?.runtimeMode ? { runtimeMode: input.context.runtimeMode } : {}),
     ...(input.context?.interactionMode ? { interactionMode: input.context.interactionMode } : {}),
@@ -622,7 +635,14 @@ export const layer: Layer.Layer<
                     })),
                   ];
             }
-            case "provider_turn.updated":
+            case "provider_turn.updated": {
+              const turnThreadId = input.event.threadId ?? input.threadId;
+              const handedOff = yield* handedOffSurvivorTurns(projections, {
+                threadId: turnThreadId,
+                runId: input.runId,
+                providerTurn: input.event.providerTurn,
+                at: yield* DateTime.now,
+              });
               return [
                 ...(["completed", "interrupted", "failed", "cancelled"].includes(
                   input.event.providerTurn.status,
@@ -639,7 +659,17 @@ export const layer: Layer.Layer<
                   payload: input.event.providerTurn,
                   nodeId: input.event.providerTurn.nodeId,
                 }),
+                ...(yield* Effect.forEach(handedOff, ({ runId, turn }) =>
+                  makeDomainEvent(input, {
+                    type: "provider-turn.updated",
+                    threadId: turnThreadId,
+                    runId,
+                    payload: turn,
+                    nodeId: turn.nodeId,
+                  }),
+                )),
               ];
+            }
             case "node.updated":
               // Adapters send an unchanged node again with each text delta. Compare with the
               // stored node, not the last one sent, because the server also writes nodes.
@@ -747,9 +777,9 @@ export const layer: Layer.Layer<
                 return dismissed;
               }
               const occurredAt = yield* DateTime.now;
-              const failure = (yield* agentScope.oomKilled(input.threadId))
-                ? { ...input.event.failure, message: "Killed: out of memory.", code: "oom_kill" }
-                : input.event.failure;
+              const failure = yield* withAgentOom(input.threadId, input.event.failure).pipe(
+                Effect.provideService(AgentScope, agentScope),
+              );
               return [
                 ...dismissed,
                 yield* makeDomainEvent(input, {
@@ -775,6 +805,7 @@ export const layer: Layer.Layer<
         },
         (effect, input) =>
           effect.pipe(
+            withWriterFallback,
             Effect.mapError(
               (cause) =>
                 new ProviderEventNormalizeError({
@@ -942,6 +973,7 @@ export const layer: Layer.Layer<
                 input.event.type === "app_thread.created"
                   ? threadCommands.withLock(input.event.appThread.id, effect)
                   : effect,
+              withWriterFallback,
             ),
         ),
     });

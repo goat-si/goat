@@ -71,6 +71,8 @@ export function makeTestAdapter(input: {
   readonly subagentOnlyBackgroundWork?: boolean;
   readonly holdFirstTurn?: Deferred.Deferred<void>;
   readonly releaseFirstTurn?: Deferred.Deferred<void>;
+  readonly backgroundWork?: Ref.Ref<boolean>;
+  readonly closedSessions?: Ref.Ref<ReadonlyArray<string>>;
 }): ProviderAdapter.ProviderAdapterV2["Service"] {
   return {
     instanceId: input.instanceId,
@@ -81,6 +83,12 @@ export function makeTestAdapter(input: {
       sessionInput: Parameters<ProviderAdapter.ProviderAdapterV2["Service"]["openSession"]>[0],
     ) {
       const events = yield* PubSub.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+      if (input.closedSessions !== undefined) {
+        const closedSessions = input.closedSessions;
+        yield* Effect.addFinalizer(() =>
+          Ref.update(closedSessions, (ids) => [...ids, sessionInput.providerSessionId]),
+        );
+      }
       const now = yield* DateTime.now;
       const providerSession: OrchestrationV2ProviderSession = {
         id: sessionInput.providerSessionId,
@@ -115,6 +123,12 @@ export function makeTestAdapter(input: {
         ...(input.canReuseContextUsage === undefined
           ? {}
           : { canReuseContextUsage: input.canReuseContextUsage }),
+        ...(input.backgroundWork === undefined
+          ? {}
+          : {
+              hasPendingBackgroundWork: Ref.get(input.backgroundWork),
+              hasPendingBackgroundWorkForThread: () => Effect.succeed(false),
+            }),
         ensureThread: Effect.fn("ProviderSwitchTest.ensureThread")(function* (
           threadInput: Parameters<
             ProviderAdapter.ProviderAdapterV2SessionRuntime["ensureThread"]

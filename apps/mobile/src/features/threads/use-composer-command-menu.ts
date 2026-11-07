@@ -3,6 +3,7 @@ import type {
   EnvironmentId,
   ProjectId,
   ProviderInteractionMode,
+  RepositoryIdentity,
   ServerProvider,
   ServerSettings,
 } from "@goat/contracts";
@@ -103,6 +104,7 @@ export function buildComposerSlashCommandItems(input: {
   readonly hasThread: boolean;
   readonly hasCompactableConversation?: boolean;
   readonly offersUsageLimits?: boolean;
+  readonly offersSideChat?: boolean;
   readonly allowInteractionMode: boolean;
   readonly selectedProviderStatus: Pick<
     ServerProvider,
@@ -142,6 +144,18 @@ export function buildComposerSlashCommandItems(input: {
   // Providers expand commands only at the start of a message. GOAT commands
   // change local state and do not have this restriction.
   if (!input.atMessageStart) return items;
+  if (input.offersSideChat) {
+    for (const command of ["side", "btw"] as const) {
+      if (command.includes(query))
+        items.push({
+          id: `cmd:${command}`,
+          type: "slash-command",
+          command,
+          label: `/${command}`,
+          description: command === "side" ? "Ask a side question" : "Same as /side",
+        });
+    }
+  }
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
@@ -212,12 +226,13 @@ export function useComposerCommandMenu({
   thread = null,
   projectCwd,
   pullRequestProjectId = null,
-  pullRequestRepository = null,
+  pullRequestRepositoryIdentity = null,
   selectedProviderStatus,
   serverConfig = null,
   hasThread,
   hasCompactableConversation,
   offersUsageLimits = false,
+  offersSideChat = false,
   enabled = true,
   onChangeDraftMessage,
   onUpdateInteractionMode,
@@ -228,13 +243,13 @@ export function useComposerCommandMenu({
   readonly environmentId: EnvironmentId | null;
   readonly threadShells?: ReadonlyArray<EnvironmentThreadShell>;
   /** The composer's thread, with the draft's unsent settings such as plan mode applied. */
-  readonly thread?: Pick<
-    EnvironmentThreadShell,
-    "id" | "projectId" | "pullRequests" | "interactionMode"
-  > | null;
+  readonly thread?:
+    | (Pick<EnvironmentThreadShell, "id" | "projectId" | "pullRequests" | "interactionMode"> &
+        Partial<Pick<EnvironmentThreadShell, "sideChatOf" | "lineage">>)
+    | null;
   readonly projectCwd: string | null;
   readonly pullRequestProjectId?: ProjectId | null;
-  readonly pullRequestRepository?: string | null;
+  readonly pullRequestRepositoryIdentity?: RepositoryIdentity | null;
   readonly selectedProviderStatus: ServerProvider | null;
   /** Decides which of GOAT's built-in skills the menu lists for this provider and project. */
   readonly serverConfig?: {
@@ -252,6 +267,7 @@ export function useComposerCommandMenu({
   readonly hasThread: boolean;
   readonly hasCompactableConversation: boolean;
   readonly offersUsageLimits?: boolean;
+  readonly offersSideChat?: boolean;
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
@@ -260,6 +276,11 @@ export function useComposerCommandMenu({
   const navigation = useNavigation();
   const currentThreadId = thread?.id ?? null;
   const threadPullRequests = thread?.pullRequests;
+  // The server lists a fork's own origin repository, not the upstream its identity names.
+  const pullRequestRepository =
+    pullRequestRepositoryIdentity?.origin?.displayName ??
+    pullRequestRepositoryIdentity?.displayName ??
+    null;
   const [localSelection, setLocalSelection] = useState(() => ({
     ownerKey,
     ...composerSelectionAtEnd(draftMessage),
@@ -347,6 +368,7 @@ export function useComposerCommandMenu({
     environmentId,
     projectId: pullRequestProjectId,
     repository: pullRequestRepository,
+    selectedRepository: pullRequestRepositoryIdentity?.displayName ?? null,
     threadPullRequests,
     query: trigger?.kind === "pull-request" ? trigger.query : null,
   });
@@ -369,7 +391,7 @@ export function useComposerCommandMenu({
         },
         label: `#${entry.number}`,
         description: `${entry.isDraft ? "Draft" : entry.state} · ${
-          entry.repository.toLowerCase() === pullRequestRepository?.toLowerCase()
+          entry.repository.toLowerCase() === pullRequestSearch.repository?.toLowerCase()
             ? ""
             : `${entry.repository} · `
         }${entry.title}`,
@@ -384,6 +406,11 @@ export function useComposerCommandMenu({
         atMessageStart: trigger.rangeStart === 0,
         hasThread,
         hasCompactableConversation,
+        offersSideChat:
+          offersSideChat &&
+          hasThread &&
+          thread?.sideChatOf == null &&
+          thread?.lineage?.relationshipToParent !== "subagent",
         offersUsageLimits,
         allowInteractionMode: onUpdateInteractionMode !== undefined,
         selectedProviderStatus: selectedProviderStatus

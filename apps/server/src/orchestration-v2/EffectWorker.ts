@@ -37,7 +37,7 @@ import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeComputerUseStop } from "./goat/ComputerUseStop.ts";
 import { makeCleanupEffects } from "./goat/CleanupEffects.ts";
-import { continueRestartedRun } from "./RestartContinuation.ts";
+import { makeRestartContinuation } from "./RestartContinuation.ts";
 import * as AutomationHold from "../automationHold.ts";
 import { isNonRetryableProviderTurnControlFailure } from "./providerTurnControlFailure.ts";
 
@@ -53,11 +53,7 @@ export class OrchestrationEffectExecutorV2 extends Context.Service<
   OrchestrationEffectExecutorV2Shape
 >()("goat/orchestration-v2/EffectWorker/OrchestrationEffectExecutorV2") {}
 
-// Persist the deadline through the outbox's enqueue time: ten minutes gives
-// the five-minute git removal timeout headroom without resetting on reclaims.
-const WORKSPACE_LEASE_WAIT_MS = 10 * 60_000;
 const WORKSPACE_LEASE_RETRY_MS = 1_000;
-
 export const layerExecutor: Layer.Layer<
   OrchestrationEffectExecutorV2,
   never,
@@ -84,6 +80,7 @@ export const layerExecutor: Layer.Layer<
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const continueRestartedRun = yield* makeRestartContinuation(providerTurnStart);
     const stopComputerUse = yield* makeComputerUseStop;
     const runCleanup = yield* makeCleanupEffects;
     return OrchestrationEffectExecutorV2.of({
@@ -156,9 +153,6 @@ export const layerExecutor: Layer.Layer<
                 threadId: effect.threadId,
                 runId: effect.request.runId,
                 willRetry,
-                workspaceLeaseDeadline: DateTime.add(DateTime.makeUnsafe(effect.createdAt), {
-                  milliseconds: WORKSPACE_LEASE_WAIT_MS,
-                }),
               })
               .pipe(
                 Effect.mapError(
@@ -298,6 +292,10 @@ export const layerExecutor: Layer.Layer<
                     const message = projection.messages.find((item) => item.id === messageId);
                     const run = projection.runs.find((item) => item.id === message?.runId);
                     if (message === undefined || run === undefined) return yield* error;
+                    // Notifications must be queued messages.
+                    const queued =
+                      message.delegatedCompletion !== undefined ||
+                      message.notification !== undefined;
                     // Reuse message ids and receipts so retries cannot duplicate messages or follow-ups.
                     yield* threads
                       .dispatch({
@@ -313,10 +311,7 @@ export const layerExecutor: Layer.Layer<
                           ? {}
                           : { modelSelection: run.modelSelection }),
                         dispatchMode: {
-                          type:
-                            message.delegatedCompletion === undefined
-                              ? "start_immediately"
-                              : "queue_after_active",
+                          type: queued ? "queue_after_active" : "start_immediately",
                         },
                         createdBy: message.createdBy,
                         creationSource: message.creationSource,
@@ -395,9 +390,6 @@ export const layerExecutor: Layer.Layer<
                     threadId: effect.threadId,
                     runId: effect.request.runId,
                     willRetry,
-                    workspaceLeaseDeadline: DateTime.add(DateTime.makeUnsafe(effect.createdAt), {
-                      milliseconds: WORKSPACE_LEASE_WAIT_MS,
-                    }),
                   }),
                 ),
                 Effect.mapError(
@@ -590,14 +582,20 @@ export interface OrchestrationEffectWorkerV2Shape {
   readonly configureConcurrency: (count: number) => Effect.Effect<void>;
   readonly awaitControlWork: Effect.Effect<void>;
   readonly awaitCleanupWork: Effect.Effect<void>;
+  readonly awaitStartWork: Effect.Effect<void>;
   readonly runGeneralOnce: Effect.Effect<boolean, OrchestrationEffectWorkerError>;
   readonly runControlOnce: Effect.Effect<boolean, OrchestrationEffectWorkerError>;
   readonly runCleanupOnce: Effect.Effect<boolean, OrchestrationEffectWorkerError>;
+  readonly runStartOnce: Effect.Effect<boolean, OrchestrationEffectWorkerError>;
   readonly nextGeneralClaimableAt: Effect.Effect<
     Option.Option<DateTime.Utc>,
     OrchestrationEffectWorkerError
   >;
   readonly nextControlClaimableAt: Effect.Effect<
+    Option.Option<DateTime.Utc>,
+    OrchestrationEffectWorkerError
+  >;
+  readonly nextStartClaimableAt: Effect.Effect<
     Option.Option<DateTime.Utc>,
     OrchestrationEffectWorkerError
   >;
@@ -937,12 +935,15 @@ export const layerWithOptions = (
         }),
         awaitControlWork: awaitLaneWork(outbox.awaitControlAvailable),
         awaitCleanupWork: awaitLaneWork(outbox.awaitCleanupAvailable),
+        awaitStartWork: awaitLaneWork(outbox.awaitStartAvailable),
         runGeneralOnce: runOnce(false, effectTypesForLane("general")),
         runControlOnce: runOnce(false, effectTypesForLane("control")),
         runCleanupOnce: runOnce(false, effectTypesForLane("cleanup")),
+        runStartOnce: runOnce(false, effectTypesForLane("start")),
         nextGeneralClaimableAt: nextFor(effectTypesForLane("general")),
         nextControlClaimableAt: nextFor(effectTypesForLane("control")),
         nextCleanupClaimableAt: nextFor(effectTypesForLane("cleanup")),
+        nextStartClaimableAt: nextFor(effectTypesForLane("start")),
         awaitWork: awaitLaneWork(outbox.awaitAvailable),
         runOnce: runOnce(),
         runRecoveryOnce: runOnce(true),

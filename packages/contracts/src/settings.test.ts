@@ -1,9 +1,4 @@
-import {
-  MemoryHubSettings,
-  MemoryHubSettingsUpdateInput,
-  ORCHESTRATION_HISTORY_BUDGET_BYTES,
-  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
-} from "./memory.ts";
+import { MemoryHubSettings, MemoryHubSettingsUpdateInput } from "./memory.ts";
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
@@ -44,15 +39,31 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeMemoryHubSettings = Schema.decodeSync(MemoryHubSettings);
+const decodeUnknownMemoryHubSettings = Schema.decodeUnknownSync(MemoryHubSettings);
+const decodeMemoryHubSettingsUpdate = Schema.decodeSync(MemoryHubSettingsUpdateInput);
 
 it("defaults blocked browser hosts to empty and normalizes valid writes", () => {
   expect(decodeServerSettings({}).blockedBrowserHosts).toEqual([]);
   expect(
-    decodeServerSettingsPatch({ blockedBrowserHosts: [" EXAMPLE.COM. ", "[2001:0db8::1]"] }),
+    decodeServerSettingsPatch({
+      blockedBrowserHosts: [
+        " EXAMPLE.COM. ",
+        "[2001:0db8::1]",
+        "example.com:443",
+        "[2001:db8::1]:8080",
+      ],
+    }),
   ).toEqual({
-    blockedBrowserHosts: ["example.com", "[2001:db8::1]"],
+    blockedBrowserHosts: ["example.com", "[2001:db8::1]", "example.com", "[2001:db8::1]"],
   });
-  for (const host of ["", "https://example.com", "example.com:443", "example.com/path"]) {
+  for (const host of [
+    "",
+    "https://example.com",
+    "example.com:abc",
+    "example.com:99999",
+    "example.com/path",
+  ]) {
     expect(() => decodeServerSettingsPatch({ blockedBrowserHosts: [host] })).toThrow();
   }
 });
@@ -92,20 +103,16 @@ describe("agent tool listing", () => {
 });
 
 describe("storage cleanup settings", () => {
-  it("keeps cleanup disabled for existing installations", () => {
+  it("turns worktree cleanup on by default, with snapshots before removal", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
-    expect(decodeServerSettings({}).storageCleanup).toEqual({
-      worktreeAfterDays: null,
-      worktreeSettledAfterDays: null,
-      worktreeOnMerge: false,
-      worktreeOnDelete: false,
-      worktreeUnchanged: false,
+    expect(decodeServerSettings({}).storageCleanup).toMatchObject({
+      worktreeAfterDays: 7,
+      worktreeKeepRecent: 15,
+      worktreeOnArchive: true,
+      worktreeOnDelete: true,
+      worktreeSnapshotChanges: true,
+      worktreeSnapshotDays: 30,
       worktreeKeepWhen: "uncommitted-changes",
-      browserArtifactsAfterDays: null,
-      logsAfterDays: null,
-      historyBudgetBytes: ORCHESTRATION_HISTORY_BUDGET_BYTES,
-      historyArchiveAfterDays: ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
-      historyArchiveDeleteAfterDays: null,
     });
   });
 
@@ -187,6 +194,17 @@ describe("ServerSettings usage price overrides", () => {
     ]) {
       expect(() => decodeServerSettingsPatch({ usagePriceOverrides })).toThrow();
     }
+  });
+
+  it("ignores an invalid model filter without dropping the other settings", () => {
+    const valid = { include: [{ provider: "newer-provider", model: "orbit-1" }] };
+    expect(decodeServerSettings({ usageModelFilter: valid }).usageModelFilter).toEqual(valid);
+    const settings = decodeServerSettings({
+      usageModelFilter: { exclude: [{ model: "" }] },
+      usageModelAliases: { "drift-9": "orbit-1" },
+    });
+    expect(settings.usageModelFilter).toBeUndefined();
+    expect(settings.usageModelAliases).toEqual({ "drift-9": "orbit-1" });
   });
 });
 
@@ -723,7 +741,7 @@ describe("memory hub settings", () => {
       "https://hub.invalid#secret",
     ])
       expect(() =>
-        Schema.decodeSync(MemoryHubSettings)({
+        decodeMemoryHubSettings({
           mode: "member",
           hubEnvironmentId: "env",
           endpoint,
@@ -734,7 +752,7 @@ describe("memory hub settings", () => {
   });
   it("replaces memory hub configuration as one dedicated admin field", () => {
     expect(
-      Schema.decodeSync(MemoryHubSettingsUpdateInput)({
+      decodeMemoryHubSettingsUpdate({
         requestId: "00000000-0000-4000-8000-000000000001",
         expectedVersion: 0,
         action: "configure",
@@ -742,7 +760,7 @@ describe("memory hub settings", () => {
       }),
     ).toMatchObject({ settings: { mode: "disabled" } });
     expect(() =>
-      Schema.decodeUnknownSync(MemoryHubSettings)({
+      decodeUnknownMemoryHubSettings({
         mode: "disabled",
         endpoint: "https://old.invalid",
       }),
@@ -951,4 +969,23 @@ describe("destination rail client settings", () => {
     expect(settings.destinationRail).toEqual(saved);
     expect(encodeClientSettings(settings).destinationRail).toEqual(saved);
   });
+});
+
+it("validates the per-agent memory limit setting", () => {
+  expect(decodeServerSettings({}).agentMemoryLimitGiB).toBeNull();
+  expect(decodeServerSettingsPatch({ agentMemoryLimitGiB: 0 }).agentMemoryLimitGiB).toBe(0);
+  expect(decodeServerSettingsPatch({ agentMemoryLimitGiB: 1024 }).agentMemoryLimitGiB).toBe(1024);
+  expect(() => decodeServerSettingsPatch({ agentMemoryLimitGiB: -1 })).toThrow();
+  expect(() => decodeServerSettingsPatch({ agentMemoryLimitGiB: 1025 })).toThrow();
+  expect(() => decodeServerSettingsPatch({ agentMemoryLimitGiB: 1.5 })).toThrow();
+});
+
+it("defaults Codex survival and validates its patch", () => {
+  expect(decodeServerSettings({}).codexTurnsSurviveServerStop).toBe("restart");
+  for (const value of ["off", "restart", "always"]) {
+    expect(decodeServerSettingsPatch({ codexTurnsSurviveServerStop: value })).toEqual({
+      codexTurnsSurviveServerStop: value,
+    });
+  }
+  expect(() => decodeServerSettingsPatch({ codexTurnsSurviveServerStop: "invalid" })).toThrow();
 });

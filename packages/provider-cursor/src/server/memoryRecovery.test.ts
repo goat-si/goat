@@ -41,15 +41,17 @@ const sdk = vi.hoisted(() => ({
   cancelRun: vi.fn(),
 }));
 vi.mock("./sdk.ts", () => ({
-  Agent: {
-    create: async () => ({ agentId: "recovery-agent", send: sdk.send, close: () => {} }),
-    resume: async () => ({ agentId: "recovery-agent", send: sdk.send, close: () => {} }),
-    listRuns: async () => ({ items: [{ id: "abandoned-run", status: "running" }] }),
-    cancelRun: sdk.cancelRun,
-    messages: { list: async () => [] },
-  },
-  createAgentPlatform: async () => ({ prewarmLocalWorkspace: async () => async () => {} }),
-  SqliteLocalAgentStore: { open: vi.fn() },
+  loadCursorSdk: () => ({
+    Agent: {
+      create: async () => ({ agentId: "recovery-agent", send: sdk.send, close: () => {} }),
+      resume: async () => ({ agentId: "recovery-agent", send: sdk.send, close: () => {} }),
+      listRuns: async () => ({ items: [{ id: "abandoned-run", status: "running" }] }),
+      cancelRun: sdk.cancelRun,
+      messages: { list: async () => [] },
+    },
+    createAgentPlatform: async () => ({ prewarmLocalWorkspace: async () => async () => {} }),
+  }),
+  loadCursorSqlite: () => ({ SqliteLocalAgentStore: { open: vi.fn() } }),
 }));
 const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 

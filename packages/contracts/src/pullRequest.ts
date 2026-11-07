@@ -278,6 +278,8 @@ export const PullRequestCapabilities = Schema.Struct({
   stacks: Schema.optional(Schema.Boolean),
   stackActions: Schema.optional(Schema.Boolean),
   labels: Schema.optional(Schema.Boolean),
+  /** The host searches the repository's users, so composers can complete `@login`. */
+  mentions: Schema.optional(Schema.Boolean),
   /**
    * Every head gets at least one check, so a head that has gone a while without any means none
    * reported rather than that the repository runs none. Absent means an empty list says nothing.
@@ -358,6 +360,8 @@ export const PullRequestListInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   projectIds: Schema.optional(Schema.Array(ProjectId).check(Schema.isMaxLength(100))),
   host: Schema.optional(TrimmedNonEmptyString),
+  /** Also list the upstream repositories forks were made from. */
+  includeUpstream: Schema.optional(Schema.Boolean),
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
   cursors: Schema.optional(PullRequestListCursors),
   query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
@@ -449,6 +453,8 @@ export const PullRequestPreview = Schema.Struct({
   state: PullRequestState,
   isDraft: Schema.Boolean,
   createdAt: IsoDateTime,
+  updatedAt: Schema.optional(IsoDateTime),
+  observedAt: Schema.optional(Schema.Finite),
 });
 export type PullRequestPreview = typeof PullRequestPreview.Type;
 
@@ -476,6 +482,10 @@ export const PullRequestSummary = Schema.Struct({
   mergeability: Schema.optional(PullRequestMergeability),
   /** Null when the host says the pull request is in no stack; absent when the read did not ask. */
   stack: Schema.optional(Schema.NullOr(PullRequestStackMembership)),
+  headSha: Schema.optional(TrimmedNonEmptyString),
+  /** Absent means the read did not report auto-merge state, not that it is off. */
+  autoMergeEnabled: Schema.optional(Schema.Boolean),
+  autoMergeMethod: Schema.optional(PullRequestMergeMethod),
 });
 export type PullRequestSummary = typeof PullRequestSummary.Type;
 
@@ -499,6 +509,8 @@ export type PullRequestStack = typeof PullRequestStack.Type;
 
 export const PullRequestDiffStat = Schema.Struct({
   projectId: ProjectId,
+  /** Keeps a fork's own and upstream repositories apart when they share a path on two hosts. */
+  host: Schema.optional(TrimmedNonEmptyString),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   additions: NonNegativeInt,
@@ -525,6 +537,8 @@ export const PullRequestFilterOptionsInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   projectIds: Schema.optional(Schema.Array(ProjectId).check(Schema.isMaxLength(100))),
   host: Schema.optional(TrimmedNonEmptyString),
+  repository: Schema.optional(TrimmedNonEmptyString),
+  includeUpstream: PullRequestListInput.fields.includeUpstream,
   query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
 });
 export type PullRequestFilterOptionsInput = typeof PullRequestFilterOptionsInput.Type;
@@ -735,6 +749,8 @@ export const PullRequestActionInput = Schema.Struct({
   headSha: Schema.optional(TrimmedNonEmptyString),
   mergeMethod: Schema.optional(PullRequestMergeMethod),
   updateMethod: Schema.optional(PullRequestUpdateMethod),
+  /** Opt-in, because older clients decode the action's success as void and reject a summary. */
+  replyWithSummary: Schema.optional(Schema.Literal(true)),
 });
 export type PullRequestActionInput = typeof PullRequestActionInput.Type;
 

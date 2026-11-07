@@ -226,6 +226,45 @@ it.live("initializes an isolated repository and commits own and external edits",
   ),
 );
 
+it.live("commits a large attachment alone and never stages attachment temp files", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const { notesDir } = yield* Config.ServerConfig;
+    const git = yield* Git.NotesGit;
+    const runner = yield* Runner.ProcessRunner;
+    yield* fs.makeDirectory(`${notesDir}/.attachments`, { recursive: true });
+    yield* fs.writeFileString(`${notesDir}/task.md`, "task");
+    yield* git.flush;
+    // Larger than the runner's 64 KiB output limit that a staged-file probe would read.
+    yield* fs.writeFile(
+      `${notesDir}/.attachments/0123456789abcdef.png`,
+      new Uint8Array(200 * 1024),
+    );
+    yield* fs.writeFileString(`${notesDir}/.attachments/.tmp-crash.png`, "partial");
+    yield* git.flush;
+    const log = yield* runner.run({ command: "git", args: ["log", "--format=%s"], cwd: notesDir });
+    assert.strictEqual(log.code, 0);
+    assert.strictEqual(
+      log.stdout.trim().split("\n")[0],
+      "notes: attachment .attachments/0123456789abcdef.png",
+    );
+    const tracked = yield* runner.run({ command: "git", args: ["ls-files"], cwd: notesDir });
+    assert.deepStrictEqual(tracked.stdout.trim().split("\n").toSorted(), [
+      ".attachments/0123456789abcdef.png",
+      "task.md",
+    ]);
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Git.layer.pipe(
+        Layer.provideMerge(Runner.layer),
+        Layer.provideMerge(Config.layerTest("/tmp", { prefix: "notes-git-attachment-" })),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
 it.live("isolates repository, config, index and both identities from inherited Git overrides", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

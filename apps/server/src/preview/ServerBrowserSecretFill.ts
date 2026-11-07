@@ -1,5 +1,9 @@
+import { makeLoginOperation } from "./ServerBrowserLoginOperation.ts";
+import { FILL, IDENTIFIER, IDENTIFIER_NAME } from "./secretFillAccountScripts.ts";
 import { FOCUSED, SELECTED } from "./secretFillTargetScripts.ts";
 import { STILL_FILLED } from "./secretFillStillFilled.ts";
+import { makeCodeOperationWithStore } from "./ServerBrowserCodeOperation.ts";
+import { makeCardOperationWithStore } from "./ServerBrowserCardOperation.ts";
 // @effect-diagnostics globalTimers:off -- The privacy settle wait runs inside a Promise-based browser operation.
 /**
  * goat_preview_fill_secret: types an origin-bound secret into a password field over CDP in an
@@ -8,6 +12,7 @@ import { STILL_FILLED } from "./secretFillStillFilled.ts";
  */
 import {
   PreviewAutomationFillSecretInput,
+  SecretRequestError,
   type PreviewAutomationFillSecretResult,
   type PreviewAutomationRequest,
   type PreviewSignInField,
@@ -20,7 +25,6 @@ import { constVoid } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { BrowserContext, CDPSession, Frame, Page, Request } from "playwright-core";
-
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { rememberSecret } from "./pageSecrets.ts";
 import { HISTORY_FIELD_SCRIPT } from "./historyFieldScript.ts";
@@ -89,7 +93,6 @@ const refused = (message: string, failure?: SecretFailure) =>
       : { beforeInput: true, ...(failure ? { secretFailure: failure } : {}) },
   );
 
-/** Why a secretRef could not be used, in the three states a caller can act on. */
 const secretFailure = (reason: SecretRequestFailureReason): SecretFailure => {
   switch (reason) {
     case "not_found":
@@ -98,6 +101,11 @@ const secretFailure = (reason: SecretRequestFailureReason): SecretFailure => {
     case "ref_unavailable":
     case "ref_expired":
       return "no_candidate";
+    case "answer_mismatch":
+    case "login_ref":
+    case "card_ref":
+    case "invalid_card":
+    case "invalid_authenticator_setup_key":
     case "agent_stopped":
     case "not_a_file_request":
     case "origin_required":
@@ -107,6 +115,7 @@ const secretFailure = (reason: SecretRequestFailureReason): SecretFailure => {
       return "not_permitted";
     case "load_failed":
     case "store_failed":
+    case "reference_unreadable":
     case "record_failed":
     case "read_failed":
     case "consume_failed":
@@ -125,68 +134,6 @@ const PASSWORD_ORIGIN = `function () {
   const field = this instanceof HTMLInputElement && this.type === "password" &&
     !this.disabled && !this.readOnly && this.isConnected && this.ownerDocument === document;
   return field ? self.origin : null;
-}`;
-// The identifier field a password field belongs to, as the sign-in state reads it.
-const IDENTIFIER_FIELD_OF = `(field) => {
-  const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const named = (input) => /username|email/i.test(input.autocomplete || "");
-  const collect = (root) => {
-    const found = [...root.querySelectorAll("input")];
-    for (const el of root.querySelectorAll("*")) if (el.shadowRoot) found.push(...collect(el.shadowRoot));
-    return found;
-  };
-  const candidates = (root) => collect(root).filter(
-    (input) => input !== field && visible(input) && !input.disabled &&
-      (["text", "email", "tel"].includes(input.type) || named(input)),
-  );
-  // The nearest scope that has one: the form, the field's shadow root, then the whole document.
-  const scopes = [field.form || field.closest("form"), field.getRootNode(), field.ownerDocument];
-  const inputs = scopes.filter(Boolean).map(candidates).find((found) => found.length > 0) || [];
-  const before = inputs.filter((input) => input.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING);
-  return inputs.find(named) || before[before.length - 1] || null;
-}`;
-const IDENTIFIER_OF = `(field) => {
-  const id = (${IDENTIFIER_FIELD_OF})(field);
-  return id ? id.value.trim() : null;
-}`;
-const IDENTIFIER = `function () { return (${IDENTIFIER_OF})(this); }`;
-// The name a form request carries the identifier under; null without one or without a name.
-const IDENTIFIER_NAME = `function () {
-  const id = (${IDENTIFIER_FIELD_OF})(this);
-  return id && id.name ? id.name : null;
-}`;
-// Without an identifier field, page text names the account: as a whole address, and no other one.
-const NAMED_ONLY = `(wanted) => {
-  const text = document.body ? document.body.innerText.toLowerCase() : "";
-  const part = (c) => c !== undefined && /[a-z0-9._%+@-]/.test(c);
-  let whole = false;
-  for (let at = text.indexOf(wanted); at !== -1 && !whole; at = text.indexOf(wanted, at + 1)) {
-    const after = text.slice(at + wanted.length).replace(/^[.]+/, "");
-    whole = !part(text[at - 1]) && !part(after[0]);
-  }
-  const addresses = text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+[.][a-z]{2,}/g) || [];
-  return whole && addresses.every((address) => address === wanted);
-}`;
-// Rechecks, in the same call that types, that the form still shows the account it showed when
-// the field was found, and the expected account when the caller named one.
-const FILL = `function (value, origin, identifier, account) {
-  if (!(this instanceof HTMLInputElement) || this.type !== "password" || this.disabled ||
-    this.readOnly || !this.isConnected || this.ownerDocument !== document || self.origin !== origin)
-    return false;
-  const shown = (${IDENTIFIER_OF})(this);
-  if (shown !== identifier) return "account";
-  // With an identifier field, only that field counts; page text names the account only without one.
-  const wanted = account === null ? null : account.toLowerCase();
-  if (wanted !== null && (shown !== null ? shown.toLowerCase() !== wanted : !(${NAMED_ONLY})(wanted)))
-    return "account";
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(this, value);
-  this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-  this.dispatchEvent(new Event("change", { bubbles: true }));
-  let active = document.activeElement;
-  while (active && active.shadowRoot && active.shadowRoot.activeElement)
-    active = active.shadowRoot.activeElement;
-  if (active === this) this.blur();
-  return true;
 }`;
 
 interface Target {
@@ -501,7 +448,6 @@ export const make = Effect.gen(function* () {
   const contextValues = new WeakMap<BrowserContext, Set<string>>();
   /** Fills under way per context: no recording there starts meanwhile. */
   const filling = new WeakMap<BrowserContext, number>();
-  /** The field each tab last took a password into, and where it went. */
   const lastFill = new WeakMap<
     Page,
     Target & {
@@ -565,7 +511,6 @@ export const make = Effect.gen(function* () {
   };
   const signIns = new WeakMap<Page, SignInRecord>();
   const watchedForSignIn = new WeakSet<Page>();
-  /** Orders submissions and hand backs; only which came first matters. */
   let signInOrder = 0;
   const noteSignIn = (page: Page, change: Partial<SignInRecord>) =>
     signIns.set(page, { ...signIns.get(page), ...change });
@@ -810,7 +755,55 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  /** Whether a tab may show a password GOAT filled in pixels: its site, or a fill under way, says no. */
+  const multiFieldDeps = {
+    debugLogging: playwrightDebugLogging,
+    reserve: reserving,
+    recording: (tab) => {
+      track(tab);
+      return [...(contextTabs.get(tab.page.context()) ?? [])].some(
+        (each) => each.recording !== null || each.recordingStart !== null,
+      );
+    },
+    register: (tab, thread, value) => {
+      const context = tab.page.context();
+      contextValues.set(context, (contextValues.get(context) ?? new Set<string>()).add(value));
+      joinContext(thread, context);
+      for (const each of contextThreads.get(context) ?? []) addValues(each, [value]);
+      rememberSecret(tab.page, value);
+    },
+    protect: (tab, thread, origin, session, field) => {
+      filledOrigins.set(thread, (filledOrigins.get(thread) ?? new Set<string>()).add(origin));
+      contextOrigins.set(
+        tab.page.context(),
+        (contextOrigins.get(tab.page.context()) ?? new Set<string>()).add(origin),
+      );
+      markFilled(tab.page);
+      const entry = { session, ...field };
+      watch(session);
+      fences.set(tab.page, [...(fences.get(tab.page) ?? []), entry]);
+      return () =>
+        fences.set(
+          tab.page,
+          (fences.get(tab.page) ?? []).filter((each) => each !== entry),
+        );
+    },
+  } satisfies Omit<Parameters<typeof makeLoginOperation>[0], "use">;
+
+  const fillLogin = makeLoginOperation({
+    ...multiFieldDeps,
+    use: (input, run) =>
+      runPromise(
+        secretRequests.useLogin(input, (login) =>
+          Effect.tryPromise({
+            try: () => run(login),
+            catch: () => new SecretRequestError({ reason: "consume_failed" }),
+          }),
+        ),
+      ),
+  });
+
+  const fillCard = makeCardOperationWithStore(multiFieldDeps, secretRequests, runPromise);
+  const fillOneTimeCode = makeCodeOperationWithStore(multiFieldDeps, secretRequests, runPromise);
   const pixelsOff = (tab: SecretFillTab, threadId: ThreadId) => {
     if ((filling.get(tab.page.context()) ?? 0) > 0) return FILLING;
     const origins = filledOrigins.get(threadId);
@@ -861,7 +854,6 @@ export const make = Effect.gen(function* () {
     if (off !== null) throw refused(off);
   };
 
-  /** Checks the fields GOAT filled on a page, dropping those that let go. */
   const fenceState = async (page: Page) => {
     let unconfirmed = false;
     let shown = false;
@@ -965,7 +957,6 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  /** The tab's sign-in facts, from the page and from what GOAT saw it send. */
   const signInStateOf = async (tab: SecretFillTab, threadId: ThreadId) => {
     const page = await readSignInPage(tab);
     // Masked before the cut, so a cut never leaves the start of a value.
@@ -980,6 +971,24 @@ export const make = Effect.gen(function* () {
 
   return {
     fill,
+    fillLogin,
+    fillCard,
+    fillOneTimeCode,
+    fillRequest: <T extends SecretFillTab>(
+      tab: T,
+      request: PreviewAutomationRequest,
+      deadline: number,
+      record: RecordAction<T>,
+      gate: Parameters<typeof fill>[4],
+      around: Parameters<typeof fill>[5],
+    ) =>
+      request.operation === "fillOneTimeCode"
+        ? fillOneTimeCode(tab, request, deadline, record, gate, around)
+        : request.operation === "fillCard"
+          ? fillCard(tab, request, deadline, record, gate, around)
+          : request.operation === "fillLogin"
+            ? fillLogin(tab, request, deadline, record, gate, around)
+            : fill(tab, request, deadline, record, gate, around),
     guard,
     assertPixels,
     historyField,

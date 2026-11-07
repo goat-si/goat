@@ -4,6 +4,7 @@ import type {
   ProjectId,
   PullRequestAction,
   PullRequestListEntry,
+  PullRequestSummary,
 } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -21,6 +22,7 @@ import {
   pullRequestStatsKeysToRequest,
   pullRequestStatsRefreshBatches,
   mergePullRequestDiffStats,
+  withDiffStat,
   partitionPullRequestsWithPriority,
   pullRequestAuthorChoices,
   selectedPullRequestAuthor,
@@ -33,6 +35,7 @@ import {
   resolveSelectedEnvironmentId,
   type EnvironmentPullRequestEntry,
   applyPullRequestOverrides,
+  pullRequestOverrideAfterAction,
   reusePullRequestEntries,
   settlePullRequestOverrides,
 } from "./pullRequestList.logic";
@@ -84,6 +87,7 @@ describe("visible pull request line-count targets", () => {
       {
         environmentId: ENV_1,
         projectId: "project-1",
+        repository: "goat-si/goat",
         number: 1,
         additions: 1,
         deletions: 1,
@@ -98,8 +102,50 @@ describe("visible pull request line-count targets", () => {
     );
     expect([...keys]).toEqual([secondKey]);
     expect(pullRequestStatsBatches(entriesByKey, keys)[0]?.input.refs).toEqual([
-      { projectId: "project-1", repository: "goat-si/goat", number: 2 },
+      { projectId: "project-1", host: "github.com", repository: "goat-si/goat", number: 2 },
     ]);
+  });
+
+  it("keeps line counts apart for a fork's own and upstream pull requests with one number", () => {
+    const stats = mergePullRequestDiffStats(new Map(), [
+      {
+        environmentId: ENV_1,
+        projectId: "project-1",
+        repository: "goat-si/goat",
+        number: 1,
+        additions: 3,
+        deletions: 0,
+      },
+      {
+        environmentId: ENV_1,
+        projectId: "project-1",
+        repository: "upstream-team/upstream-repo",
+        number: 1,
+        additions: 9,
+        deletions: 0,
+      },
+    ]);
+    const counted = (repository: string) =>
+      withDiffStat(entry({ number: 1, repository, additions: 0, deletions: 0 }), stats).additions;
+    expect([counted("goat-si/goat"), counted("upstream-team/upstream-repo")]).toEqual([3, 9]);
+  });
+
+  it("keeps line counts apart for one repository path on two hosts, and reads host-less answers", () => {
+    const stat = {
+      environmentId: ENV_1,
+      projectId: "project-1",
+      repository: "goat-si/goat",
+      number: 1,
+    };
+    const stats = mergePullRequestDiffStats(new Map(), [
+      { ...stat, host: "git.cafe", additions: 3, deletions: 0 },
+      { ...stat, host: "github.com", additions: 9, deletions: 0 },
+    ]);
+    const counted = (host: string, from = stats) =>
+      withDiffStat(entry({ number: 1, host, additions: 0, deletions: 0 }), from).additions;
+    expect([counted("git.cafe"), counted("github.com")]).toEqual([3, 9]);
+    const older = mergePullRequestDiffStats(new Map(), [{ ...stat, additions: 5, deletions: 0 }]);
+    expect(counted("github.com", older)).toBe(5);
   });
 
   it("keeps every per-environment batch within the stats contract limit", () => {
@@ -582,6 +628,26 @@ describe("pull request list overrides", () => {
     expect(applyPullRequestOverrides(rows, new Map(), key, "open")).toBe(rows);
   });
 
+  it("shows a reply's queued merge as open and never un-merges a merged row", () => {
+    const reply = { state: "open", updatedAt: "2026-07-03T00:00:00Z", observedAt: 300 } as const;
+    const override = pullRequestOverrideAfterAction(
+      entry(1, "open"),
+      "merge",
+      new Date(900),
+      1,
+      reply as unknown as PullRequestSummary,
+    )!;
+    const overrides = new Map([["#1", override]]);
+    expect(applyPullRequestOverrides([entry(1, "open")], overrides, key, "open")).toMatchObject([
+      { state: "open", updatedAt: reply.updatedAt, observedAt: 300 },
+    ]);
+    expect(
+      applyPullRequestOverrides([entry(1, "merged")], overrides, key, "all").map(
+        (row) => row.state,
+      ),
+    ).toEqual(["merged"]);
+  });
+
   it("keeps a confirmed close hidden when its override is cleared", () => {
     const at = 1_000_000;
     const rows = [entry(1, "closed"), entry(2, "open"), entry(3, "merged")];
@@ -720,6 +786,26 @@ describe("findProjectForRepository", () => {
         scopedEnvironmentId: ENV_2,
       }),
     ).toBe(payments);
+  });
+
+  it("finds a fork by its own origin repository on the origin's host", () => {
+    const fork = {
+      id: "p1",
+      environmentId: ENV_1,
+      repositoryIdentity: {
+        canonicalKey: "github.com/upstream-team/upstream-repo",
+        locator: { source: "git-remote" as const, remoteName: "upstream", remoteUrl: "" },
+        provider: SourceControlProviderKind.make("github"),
+        displayName: "upstream-team/upstream-repo",
+        origin: { canonicalKey: "git.cafe/goat-si/goat", displayName: "goat-si/goat" },
+      },
+    };
+    expect(findProjectForRepository([fork], { repository: "goat-si/goat", host: "git.cafe" })).toBe(
+      fork,
+    );
+    expect(
+      findProjectForRepository([fork], { repository: "goat-si/goat", host: "github.com" }),
+    ).toBeUndefined();
   });
 
   it("keeps repository matches on the selected environment when project IDs overlap", () => {

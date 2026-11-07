@@ -1,4 +1,5 @@
 import {
+  type AssetResource,
   COMPUTER_USE_PROVIDER_DRIVERS,
   type ComputerUseApp,
   TURN_CAPABILITIES,
@@ -6,7 +7,14 @@ import {
   type ProviderInteractionMode,
   type TurnCapability,
 } from "@goat/contracts";
-import { appIdFitsContextId, TURN_CAPABILITY_LABEL } from "@goat/shared/turnCapabilities";
+import { collectComposerContextReferences } from "@goat/shared/composerContextReferences";
+import {
+  appIdFitsContextId,
+  appIdForContextId,
+  TURN_CAPABILITY_LABEL,
+} from "@goat/shared/turnCapabilities";
+
+import { computerUseAppToolIcon } from "./work-log/computerUse.ts";
 
 /**
  * Whether a capability can run on the next turn. `checking` is not an answer yet, so picking
@@ -211,4 +219,33 @@ export function composerThreadMayRunUnattended(
     thread?.launchedBy?.kind === "launch" ||
     thread?.lineage.relationshipToParent === "subagent"
   );
+}
+
+type AppChipIconResource = Extract<AssetResource, { readonly _tag: "native-app-icon" }>;
+
+/**
+ * The icon an `@Finder` chip shows: the host's own icon for the app its id names, as computer
+ * use rows draw it. Null for `@computer` and `@browser`. A host with no icon for the app
+ * leaves the chip its computer use icon.
+ */
+export function appChipIconResource(contextId: string, label: string): AppChipIconResource | null {
+  const appId = appIdForContextId(contextId);
+  if (appId === undefined) return null;
+  const icon = computerUseAppToolIcon({ bundleId: appId, name: label });
+  return icon === undefined ? null : { _tag: "native-app-icon", app: icon.app };
+}
+
+/** The app chips in a draft or message, once each, with the icon each one asks its host for. */
+export function appChipIcons(
+  text: string,
+): Array<{ readonly contextId: string; readonly resource: AppChipIconResource }> {
+  // Cheap guard for the common case, since a composer asks again on every keystroke.
+  if (!text.includes("/capability/app_")) return [];
+  const icons = new Map<string, AppChipIconResource>();
+  for (const occurrence of collectComposerContextReferences(text)) {
+    if (occurrence.kind !== "capability" || icons.has(occurrence.contextId)) continue;
+    const resource = appChipIconResource(occurrence.contextId, occurrence.label);
+    if (resource !== null) icons.set(occurrence.contextId, resource);
+  }
+  return [...icons].map(([contextId, resource]) => ({ contextId, resource }));
 }

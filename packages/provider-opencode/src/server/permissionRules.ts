@@ -1,7 +1,47 @@
 import type { PermissionRuleset } from "@opencode-ai/sdk/v2";
+import type { ProviderRequestKind } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 import { nonEmptyString, recordString, recordValue } from "./records.ts";
+
+export type OpenCodePermissionRequestKind = Extract<
+  ProviderRequestKind,
+  "command" | "file-read" | "file-change"
+>;
+
+export function openCodePermissionRequestKind(
+  permission: string,
+  toolName?: string,
+): OpenCodePermissionRequestKind {
+  const normalized = permission.toLowerCase();
+  const normalizedTool = toolName?.toLowerCase() ?? "";
+  if (
+    normalized === "edit" ||
+    normalized === "write" ||
+    normalized === "patch" ||
+    normalized === "apply_patch" ||
+    normalizedTool === "edit" ||
+    normalizedTool === "write" ||
+    normalizedTool === "patch" ||
+    normalizedTool === "apply_patch"
+  ) {
+    return "file-change";
+  }
+  if (
+    normalized === "read" ||
+    normalized === "glob" ||
+    normalized === "grep" ||
+    normalized === "lsp" ||
+    normalized === "external_directory" ||
+    normalizedTool === "read" ||
+    normalizedTool.includes("glob") ||
+    normalizedTool.includes("grep") ||
+    normalizedTool.includes("search")
+  ) {
+    return "file-read";
+  }
+  return "command";
+}
 
 const OPENCODE_ALWAYS_ALLOWED_PERMISSIONS = [
   "question",

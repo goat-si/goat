@@ -49,7 +49,8 @@ import { isExactServiceVersion, SERVICE_LAUNCHER_PROTOCOL } from "./serviceProto
 
 export { SERVER_UPDATE_BUSY_REASON };
 
-const PREFLIGHT_TIMEOUT = Duration.seconds(30);
+// A staged runtime cold start can take over a minute on a loaded host.
+const PREFLIGHT_TIMEOUT = Duration.minutes(3);
 
 export function resolveServerSelfUpdateCapability(input: {
   readonly desktopManaged: boolean;

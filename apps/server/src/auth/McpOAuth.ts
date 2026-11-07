@@ -1,3 +1,4 @@
+import { fromSecret } from "./PayloadSigner.ts";
 import {
   AuthAccessWriteScope,
   type AuthEnvironmentScope,
@@ -37,7 +38,6 @@ import {
   base64UrlDecodeUtf8,
   base64UrlEncode,
   deriveAuthClientMetadata,
-  signPayload,
   timingSafeEqualBase64Url,
 } from "./utils.ts";
 
@@ -254,7 +254,8 @@ const make = Effect.gen(function* () {
     .pipe(Effect.orDie);
   const codes = yield* Ref.make<ReadonlyMap<string, PendingCode>>(new Map());
 
-  const sign = (domain: string, payload: string) => signPayload(`${domain}.${payload}`, signingKey);
+  const signer = fromSecret(signingKey);
+  const sign = (domain: string, payload: string) => signer.sign(`${domain}.${payload}`);
 
   const signClientId = (name: string, redirectUris: ReadonlyArray<string>) => {
     const body = base64UrlEncode(JSON.stringify({ v: 1, n: name, r: redirectUris }));
@@ -264,7 +265,7 @@ const make = Effect.gen(function* () {
   const parseClientId = (clientId: string): McpOAuthClient | undefined => {
     const [body, signature, extra] = clientId.split(".");
     if (!body || !signature || extra !== undefined) return undefined;
-    if (!timingSafeEqualBase64Url(signature, sign("mcp-client-id", body))) return undefined;
+    if (!signer.verify(`mcp-client-id.${body}`, signature)) return undefined;
     let json: string;
     try {
       json = base64UrlDecodeUtf8(body);

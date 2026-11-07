@@ -43,7 +43,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
+import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 

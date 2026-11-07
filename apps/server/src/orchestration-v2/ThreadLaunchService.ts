@@ -13,7 +13,6 @@ import {
   type OrchestrationV2CreationSource,
   type OrchestrationV2ProviderThreadNativeMetadata,
   type OrchestrationV2CloudTask,
-  type OrchestrationV2ProviderFailure,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadLauncher,
   type ProviderDriverKind,
@@ -59,12 +58,12 @@ import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as Orchestrator from "./Orchestrator.ts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
-import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
+import { randomUuidV4 } from "@goat/shared/randomUuid";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import {
   appendPreparationLine,
   type PreparationLog,
-  renderPreparationLog,
+  withPreparationLog,
 } from "./preparationLog.ts";
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
 import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
@@ -278,14 +277,6 @@ function failureDetail(error: unknown): string {
 
 export const preparationFailureClass = (error: unknown) =>
   classifyPreparationFailure(isThreadLaunchError(error) ? error.cause : error);
-
-const withPreparationLog = (
-  failure: OrchestrationV2ProviderFailure,
-  log: PreparationLog,
-): OrchestrationV2ProviderFailure => {
-  const text = renderPreparationLog(log);
-  return text === null ? failure : { ...failure, log: text };
-};
 
 const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
@@ -546,22 +537,25 @@ const make = Effect.gen(function* () {
         }
         let startRef = input.workspaceStrategy.baseRef;
         let baseRefName = input.workspaceStrategy.baseRef;
-        const shouldFetch =
-          input.workspaceStrategy.startFromOrigin === true &&
-          (yield* git
-            .resolveWorktreeBaseRemote({
-              cwd: project.workspaceRoot,
-              refName: input.workspaceStrategy.baseRef,
-            })
-            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))) !== null;
+        const remote =
+          input.workspaceStrategy.startFromOrigin === true
+            ? yield* git
+                .resolveWorktreeBaseRemote({
+                  cwd: project.workspaceRoot,
+                  refName: input.workspaceStrategy.baseRef,
+                })
+                .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
+            : null;
+        const shouldFetch = remote !== null;
         yield* setupTracker.stageStatus(threadId, "fetch", shouldFetch ? "running" : "skipped");
-        if (shouldFetch) {
+        if (remote !== null) {
           yield* note(`Fetching ${input.workspaceStrategy.baseRef} from its remote.`);
           const remoteBase = yield* git
             .fetchWorktreeBaseCommit({
               cwd: project.workspaceRoot,
               refName: input.workspaceStrategy.baseRef,
               onOutputLine: note,
+              remote,
             })
             .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
           if (remoteBase !== null) {
@@ -697,12 +691,21 @@ const make = Effect.gen(function* () {
         const worktreeCwd = worktreePath;
         branchRename = yield* generateBranchNameFor(worktreeCwd, initialMessage).pipe(
           Effect.flatMap(({ branch: newBranch, exactName }) =>
-            git.renameBranch({
-              cwd: worktreeCwd,
-              oldBranch,
-              newBranch,
-              ...(exactName ? { exactName: true } : {}),
-            }),
+            git
+              .renameBranch({
+                cwd: worktreeCwd,
+                oldBranch,
+                newBranch,
+                ...(exactName ? { exactName: true } : {}),
+              })
+              .pipe(
+                Effect.tap((renamed) =>
+                  Effect.sync(() => {
+                    if (createdBranch === oldBranch) createdBranch = renamed.branch;
+                  }),
+                ),
+                Effect.uninterruptible,
+              ),
           ),
           Effect.flatMap((renamed) =>
             Effect.gen(function* () {

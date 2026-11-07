@@ -47,6 +47,7 @@ export const LeaseBrowserClaim = Schema.Struct({
   /** The driver target the claim's bind minted; the proxy sends it with every page call. */
   targetId: TrimmedNonEmptyString,
   origins: Schema.Array(BrowserOrigin).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+  blockedHosts: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 export const ComputerUseLeaseBrowserCapability = Schema.Struct({
@@ -56,7 +57,7 @@ export const ComputerUseLeaseBrowserClaimEnded = Schema.Struct({
   browserClaimEnded: Schema.Struct({
     claimId: TrimmedNonEmptyString,
     claimGeneration: Schema.Int,
-    reason: Schema.Literal("origin_changed"),
+    reason: Schema.Literals(["origin_changed", "blocked_url"]),
   }),
 });
 
@@ -65,6 +66,7 @@ export const BrowserClaimEndReason = Schema.Literals([
   "stopped",
   "driver_restarted",
   "origin_changed",
+  "blocked_url",
   "origin_mismatch",
   "refused",
   "tab_closed",
@@ -107,4 +109,12 @@ export const BrowserClaimResult = Schema.Union([
 export const BrowserClaimsSnapshot = Schema.Struct({
   claims: Schema.Array(LiveTabClaim),
   grants: Schema.Array(BrowserOriginGrant),
+  ended: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        claimId: TrimmedNonEmptyString,
+        reason: BrowserClaimEndReason,
+      }),
+    ).check(Schema.isMaxLength(50)),
+  ),
 });

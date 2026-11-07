@@ -1,3 +1,6 @@
+import { CLONE_SETTINGS_SEARCH_ITEMS } from "./settingsSearchCloneItems";
+import { GOAT_BOT_ROUTING_SEARCH_ITEMS } from "./settingsSearchGoatBotItems";
+import { UPDATES_SETTINGS_SEARCH_ITEMS } from "./settingsSearchUpdatesItems";
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
@@ -222,7 +225,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/storage",
     scope: "project-defaults",
     searchTerms: [
-      "disk storage delete deleted archived threads old inactive merged unchanged worktrees retention days project inherit off custom",
+      "disk storage automatic delete deleted archived threads old inactive merged settled unchanged worktrees retention days project inherit off custom",
     ],
   },
   {
@@ -237,7 +240,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Artifacts and logs",
     to: "/settings/storage",
     scope: "environment-defaults",
-    searchTerms: ["disk storage browser screenshots captures rotated logs cleanup retention"],
+    searchTerms: [
+      "disk storage delete old browser artifacts screenshots captures rotated logs cleanup retention",
+    ],
   },
   {
     id: "project-defaults",
@@ -560,9 +565,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "proactive-panels",
-    title: "Proactive panels",
+    title: "Open pull requests and changes panels proactively",
     to: "/settings/general",
-    searchTerms: ["automatically open diff pull request pr right panel agent completion"],
+    searchTerms: ["proactive automatically open diff pull request pr right panel agent completion"],
   },
   {
     id: "skills-in-slash-menu",
@@ -594,37 +599,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     searchTerms: ["queue steer running turn send default behavior composer"],
   },
+  ...UPDATES_SETTINGS_SEARCH_ITEMS,
   {
-    id: "provider-update-checks",
-    title: "Provider update checks",
-    to: "/settings/general",
-    searchTerms: ["installed cli versions newer available codex claude cursor grok fx opencode"],
-    scope: "environment-defaults",
-  },
-  {
-    id: "automatic-server-updates",
-    title: "Automatic server updates",
-    to: "/settings/general",
-    scope: "environment-defaults",
-    searchTerms: ["background service stable nightly channel idle automatic update"],
-  },
-  {
-    id: "continue-threads-after-server-update",
-    title: "Continue threads after restarts",
+    id: "codex-turn-survival",
+    title: "Keep Codex turns running",
     to: "/settings/general",
     scope: "project-defaults",
-    searchTerms: [
-      "resume running active interrupted work restart reboot machine crash desktop update automatically",
-    ],
+    searchTerms: ["survive restart update quit codex progress"],
   },
   {
-    id: "background-activity",
-    title: "Background activity",
+    id: "codex-app-server-isolation",
+    title: "Codex app-servers",
     to: "/settings/general",
     scope: "environment-defaults",
-    searchTerms: [
-      "balanced performance battery saver advanced git fetch provider health refresh host power monitor idle policy",
-    ],
+    searchTerms: ["codex app server process per thread shared isolation crash memory"],
   },
   {
     id: "new-threads",
@@ -647,13 +635,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "project-defaults",
     searchTerms: ["new worktrees start remote origin latest fetched branch local"],
   },
-  {
-    id: "add-project-starts-in",
-    title: "Add project starts in",
-    to: "/settings/general",
-    scope: "environment-defaults",
-    searchTerms: ["base directory folder browser path home"],
-  },
+  ...CLONE_SETTINGS_SEARCH_ITEMS,
   {
     id: "unpin-confirmation",
     title: "Unpin confirmation",
@@ -826,7 +808,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Providers",
     to: "/settings/providers",
     searchTerms: [
-      "agents cli codex claude cursor grok fx opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
+      "agents cli codex claude cursor grok fx opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory codex_home shadow home endpoint arguments environment variables display name accent color custom favorite hidden auto compact native sessions import resume",
       "opencodex home model route connect to home",
     ],
   },
@@ -890,13 +872,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "goat-bot",
     searchTerms: ["goat bot home computer environment cluster"],
   },
-  {
-    id: "channel-auto-placement",
-    title: "Automatically choose a worker computer",
-    to: "/settings/goat-bot",
-    targetId: "goat-bot",
-    searchTerms: ["channel placement quota ssh host worker automatic"],
-  },
+  ...GOAT_BOT_ROUTING_SEARCH_ITEMS,
   {
     id: "goat-bot-model",
     title: "GOAT Bot model",
@@ -1086,7 +1062,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "WSL backend",
     to: "/settings/connections",
     searchTerms: [
-      "windows subsystem linux distro second server projects stop windows backend restart",
+      "windows subsystem linux distro second server projects stop windows backend restart wsl only",
     ],
     desktopOnly: true,
     windowsOnly: true,
@@ -1195,11 +1171,8 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["restore reopen deleted history projects"],
   },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;
-
 export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
-
 const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const));
-
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
   "/settings/memory": null,
   "/settings/diagnostics": "environment",
@@ -1220,7 +1193,6 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/beta": null,
   "/settings/archived": "project-defaults",
 };
-
 export function getSettingsSearchTargetScope(targetId: string) {
   const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;
   const item =
@@ -1234,7 +1206,6 @@ export function getSettingsSearchTargetScope(targetId: string) {
       }
     : null;
 }
-
 interface AutoSettlementSearchEnvironment {
   readonly environmentId: EnvironmentId;
   readonly connection: { readonly phase: EnvironmentConnectionPhase };
@@ -1244,7 +1215,6 @@ interface AutoSettlementSearchEnvironment {
     };
   } | null;
 }
-
 export function getThreadAutoSettlementSearchAvailability(
   environments: readonly AutoSettlementSearchEnvironment[],
   scope?: Pick<ResolvedSettingsScope, "kind" | "environmentIds">,
@@ -1271,7 +1241,6 @@ export function getThreadAutoSettlementSearchAvailability(
       selected.every((environment) => eligibleEnvironmentIds.includes(environment.environmentId)),
   };
 }
-
 export function isSettingsSearchScopeAvailable(
   requiredScope: SettingsSearchScope | null,
   scopeKind: ResolvedSettingsScope["kind"],
@@ -1376,7 +1345,6 @@ export function searchSettings(
   const normalizedQuery = normalizeSearchText(query);
   if (normalizedQuery.length === 0) return [];
   const queryTokens = normalizedQuery.split(" ");
-
   return settingsForThisPlatform(items)
     .flatMap((item, index) => {
       const title = normalizeSearchText(item.title);
@@ -1386,7 +1354,6 @@ export function searchSettings(
         ...(item.searchTerms ?? []).map(normalizeSearchText),
       ];
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];
-
       const exactPhraseField = fields.findIndex((field) => field.includes(normalizedQuery));
       const rank =
         title === normalizedQuery

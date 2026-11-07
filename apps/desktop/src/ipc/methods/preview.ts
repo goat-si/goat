@@ -1,4 +1,6 @@
 import {
+  AnnotationVoicePickInput,
+  AnnotationVoiceState,
   DesktopPreviewAnnotationSendEnabledInputSchema,
   DesktopPreviewAnnotationThemeInputSchema,
   DesktopPreviewArtifactInputSchema,
@@ -9,6 +11,7 @@ import {
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetAudioMutedInputSchema,
+  DesktopPreviewSetShownInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewSetZoomFactorInputSchema,
   BrowserImportResult,
@@ -209,6 +212,15 @@ const setAudioMuted = DesktopIpc.makeIpcMethod({
     yield* manager.setAudioMuted(tabId, audioMuted);
   }),
 });
+const setShown = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_SHOWN_CHANNEL,
+  payload: DesktopPreviewSetShownInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setShown")(function* ({ tabId, shown }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setShown(tabId, shown);
+  }),
+});
 const openDevTools = tabMethod(
   IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL,
   "desktop.ipc.preview.openDevTools",
@@ -396,11 +408,21 @@ const setAnnotationTheme = DesktopIpc.makeIpcMethod({
 
 const pickElement = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL,
-  payload: DesktopPreviewTabInputSchema,
+  payload: AnnotationVoicePickInput,
   result: Schema.NullOr(PreviewAnnotationSubmissionResultSchema),
-  handler: Effect.fn("desktop.ipc.preview.pickElement")(function* ({ tabId }) {
+  handler: Effect.fn("desktop.ipc.preview.pickElement")(function* ({ tabId, voice }) {
     const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.pickElement(tabId);
+    return yield* manager.pickElement(tabId, voice);
+  }),
+});
+
+const updateAnnotationVoice = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_ANNOTATION_VOICE_STATE_CHANNEL,
+  payload: AnnotationVoiceState,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.annotationVoice")(function* (state) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.updateAnnotationVoice(state);
   }),
 });
 
@@ -475,6 +497,7 @@ export const methods = [
   setColorScheme,
   setZoomFactor,
   setAudioMuted,
+  setShown,
   openDevTools,
   clearCookies,
   clearCache,
@@ -482,6 +505,7 @@ export const methods = [
   setAnnotationTheme,
   setAnnotationSendEnabled,
   pickElement,
+  updateAnnotationVoice,
   cancelPickElement,
   captureScreenshot,
   revealArtifact,

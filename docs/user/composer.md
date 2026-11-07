@@ -14,12 +14,19 @@ to keep a large paste editable in the composer instead.
 
 ## Formatting
 
-The composer writes Markdown and shows it styled as you type. Markers such as
-`**` stay in the text and show beside the styled words when your cursor is on
-them. Lines starting with `- `, `1. `, `- [ ] `, `> `, `# ` or `---` become lists,
-task lists, quotes, headings and rules; ` ``` ` followed by Enter opens a code
-block. What you typed is what the agent receives, markers and numbering
-included, and `#1234` without a space still looks up a pull request.
+The composer writes Markdown and shows it styled as you type. When your cursor
+is on styled text, its Markdown shows instead, such as `**bold**`, and the
+markers edit like any other text: delete them to remove the style, or change
+`**` to `*` for italic. The style updates when your cursor leaves. To write
+plain Markdown with no styling, turn off **Settings → Chat → Rich text
+composer**. Lines starting with `- `, `1. `, `- [ ] `, `> `, `# ` or `---`
+become lists, task lists, quotes, headings and rules; ` ``` ` followed by Enter
+opens a code block. What you typed is what the agent receives, markers and
+numbering included, and `#1234` without a space still looks up a pull request.
+
+Some styled text containing or touching literal Markdown characters, such as a
+bold `path\` or `2*3`, keeps its styling without showing markers. Use formatting
+shortcuts or turn off rich text to edit the formatting of those ranges.
 
 Enter sends. In a list or quote, **Shift+Enter** continues it, and Shift+Enter
 on an empty line moves out one level, then leaves it; **Tab** nests a list item
@@ -37,7 +44,8 @@ Attach up to 100 files per message. Each image can be up to 10 MiB, with at most
 50 MiB each, subject to the environment's upload support and limit. The agent
 receives them on the environment's machine. Provider and model limits still
 apply, including images already in the conversation. A video attachment gives
-the agent a file path; it does not enable native video input.
+the agent a file path; only [Antigravity](./providers-antigravity.md#skills-and-attachments)
+sends supported videos to Gemini models as video.
 
 Uploads begin when you add an attachment. All uploads must finish before the
 message can send. Retry or remove a failed upload. On web and desktop, reloading
@@ -46,7 +54,8 @@ before an upload finishes requires you to attach that file again.
 You can drag or paste images into the web or desktop composer. HEIC and HEIF
 photos are converted to JPEG there and when selected from the mobile photo
 library; photos over the image limit are also resized to fit. On mobile, you can
-also send files to GOAT through another app's system share sheet.
+also send files to GOAT through another app's system share sheet. On Android, you
+can also drag images from another app into the message input in split screen.
 
 See [images and videos](#images-and-videos-in-messages) for previewing and saving media.
 
@@ -202,9 +211,12 @@ and use **Attach again** or remove the missing file before sending.
 
 ## Voice input on iPhone
 
-On supported iPhones with iOS 26 or later, use the composer's microphone to record,
-then confirm to transcribe. Text is inserted where your selection was when
-recording started, ready for you to review and edit before sending.
+On iPhone, use the composer's microphone to record, then confirm to transcribe.
+Text is inserted where your selection was when recording started, ready for you
+to review and edit before sending.
+
+Apple's on-device speech transcription requires a supported device with iOS 26
+or later. When it is unavailable, GOAT can use an environment to transcribe instead.
 
 The first use may download Apple's speech model and needs a network connection.
 Later transcription works offline for that language. Recordings can be up to five
@@ -219,22 +231,44 @@ for example, put **Other Bluetooth** above your AirPods so a new headset is pref
 while the AirPods microphone stays low. By default, CarPlay comes after the built-in
 microphone.
 
-Transcription runs on your iPhone when Apple's speech model supports your
-language. Otherwise the recording is transcribed by the environment the thread
-belongs to, and the composer names it while you record. GOAT deletes the
+By default, transcription runs on your iPhone when Apple's speech model supports
+your language. Otherwise the thread's environment transcribes it. You can choose
+a paired environment and manage its speech models in **Settings → Microphone**;
+that device-only choice sends recordings to the selected environment. The composer
+names the destination while you record. GOAT deletes the
 temporary audio after transcription or cancellation; only the message text is
 sent when you submit.
+Model management needs the explicit permission described in [Voice input on desktop and web](#voice-input-on-desktop-and-web).
+
+On Android, GOAT cannot yet record for environment dictation. You can still manage
+models on a connected environment in **Settings → Microphone**.
 
 ## Voice input on desktop and web
 
 Click the composer's microphone to record, then confirm to insert the text or send it.
 
-The desktop app transcribes on this computer, even when the thread runs on another
-machine: the recording goes to the transcription service through this computer's
-Codex sign-in or OpenCodex, and never to the other machine. If you
-turned off **Local environment** in **Settings › Connections**, desktop voice input
-is unavailable until you turn it back on. In a browser, the environment you are
-connected to transcribes. The recorder shows which device transcribes.
+By default, the desktop app uses this computer's Codex sign-in or OpenCodex to
+transcribe. In a browser, the thread's environment uses its transcription service.
+The recorder shows where transcription runs.
+
+You can instead choose **Transcribe on** a connected environment from the
+composer's dictation options. This sends recordings to that environment and uses a
+speech model installed there. The choice belongs to this device; select **Use
+existing voice input** to turn it off. Someone with voice management permission can
+download, select, or remove models from **Manage voice models** in the same menu.
+Connections through a hub do not currently support this option.
+After choosing an environment, you can also dictate into review and citation
+comments. In the desktop Browser, the same choice applies to annotation comments.
+
+Model management requires the explicit `voice:manage` permission; ordinary pairing
+does not grant it. On the environment's machine, create a pairing with:
+
+```sh
+goat pair --scope orchestration:read --scope orchestration:operate --scope voice:manage
+```
+
+Using `--scope` replaces the default grant, so add any other permissions that
+device needs.
 
 The first time on a Mac, macOS asks whether GOAT may use the microphone. If you
 declined, or turned GOAT off later, the composer says so and offers **Open System
@@ -265,9 +299,10 @@ the text. Drag a row by its handle to reorder it, use the handle's arrow keys, p
 to a steer, or remove it.
 
 If you stop the agent or the server restarts, queued messages keep their order and are held.
-Press **Resume** in an empty composer on web and desktop, or **Resume queue** on mobile, to
-continue. Sending a new message also resumes the queue, unless it steers a turn that is already
-running. You can edit, reorder, or remove held messages without starting them.
+Press **Resume** in an empty composer to continue. Resume also continues a stopped run or one
+that hit a usage limit, even with nothing queued. Sending a new message also resumes the queue,
+unless it steers a turn that is already running. You can edit, reorder, or remove held messages
+without starting them.
 
 The pencil on a queued row opens that message in the composer for editing. The original message
 stays in the queue until you save, and its row is highlighted while you edit. The message's
@@ -304,7 +339,10 @@ tasks they delegate. Turn it off for every project, or for one project, in **Set
 Integrations → Agent tools**; on mobile, under **Agent behavior**.
 
 Send `/compact` in an existing conversation to reduce context usage when the
-provider supports it. Web and desktop also offer compaction from the context meter.
+provider supports it. On web and desktop, the context meter is enabled by default and appears
+when the provider reports usage. To enable it if hidden, open **Settings → General → Legacy features →
+Context window indicator (legacy)**. Open the meter for usage details and **Compact context**
+when the provider supports compaction.
 
 Claude instances can also compact idle threads for you. See
 [compact long conversations](./providers-claude.md#compact-long-conversations).

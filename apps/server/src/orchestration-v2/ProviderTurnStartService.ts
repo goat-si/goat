@@ -1,5 +1,10 @@
-import { makeRecreateMissingWorktree } from "./goat/RecreateWorktree.ts";
+import { isRegisteredAttach, nativeForkTurns } from "./providerTurnStartHelpers.ts";
+import { withAgentOom } from "./agentOomFailure.ts";
+import { AgentScope } from "@goat/shared/AgentScope";
+import { makeDeliverySession } from "./goat/ProviderTurnDeliverySession.ts";
+import { makeRestorePending, makeRestoreThreadWorkspace } from "./goat/restoreThreadWorkspace.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
+import { refuseCodexAdmission } from "./goat/CodexTurnAdmission.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
 import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
 import {
@@ -25,12 +30,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
+import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import * as EventSink from "./EventSink.ts";
@@ -55,6 +62,7 @@ import {
 } from "@goat/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import { settledBeforeStartRun } from "./runTerminationCause.ts";
+import { abandonedTurnRepairEvents, endedRunsByAttempt } from "./goat/StoppedEarlierTurn.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import { tryWithWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
@@ -89,24 +97,15 @@ const isProviderAdapterOpenSessionError = Schema.is(
 export interface ProviderTurnStartServiceV2Shape {
   /**
    * Starts the run's provider turn. When `willRetry` is true, a session open
-   * failure is returned so the caller can retry. A workspace lease deadline
-   * gives contention its own wait budget, independent of normal failures.
+   * failure is returned so the caller can retry. Workspace contention is always returned.
    */
   readonly start: (input: {
     readonly threadId: ThreadId;
     readonly runId: RunId;
     readonly willRetry?: boolean;
-    readonly workspaceLeaseDeadline?: DateTime.Utc;
     readonly reattach?: boolean;
   }) => Effect.Effect<void, ProviderTurnStartError>;
 }
-
-/** A registered cloud task whose first run has not started: that run attaches, never submits. */
-const isRegisteredAttach = (thread: OrchestrationV2ProviderThread | undefined) =>
-  thread?.cloudTask?.attach === "registered" &&
-  thread.firstRunOrdinal === null &&
-  thread.nativeThreadRef !== null &&
-  (thread.cloudTask.status === "running" || thread.cloudTask.status === "submitting");
 
 export class ProviderTurnStartServiceV2 extends Context.Service<
   ProviderTurnStartServiceV2,
@@ -133,15 +132,17 @@ export const layer: Layer.Layer<
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
+    const agentScope = yield* AgentScope;
     const eventSink = yield* EventSink.EventSinkV2;
     const prepareHandoffRecovery = yield* makeProviderTurnHandoffRecovery;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
-    const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
-    const recreateMissingWorktree = yield* makeRecreateMissingWorktree;
+    const recreateMissingWorktree = yield* makeRestoreThreadWorkspace;
+    const restorePending = yield* makeRestorePending;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
+    const codexSurvivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const memorySnapshot = yield* Effect.serviceOption(MemorySnapshot.MemorySnapshot);
@@ -252,46 +253,10 @@ export const layer: Layer.Layer<
         ),
       );
 
-    const makeDeliverySession = (
-      session: ProviderAdapter.ProviderAdapterV2SessionRuntime,
-      startWithHandoffs: (
-        input: Parameters<ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"]>[0],
-        compact?: boolean,
-      ) => ReturnType<ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"]>,
-    ) => {
-      let deliver: typeof startWithHandoffs | undefined = startWithHandoffs;
-      const start = (
-        input: Parameters<ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"]>[0],
-        compact = false,
-      ) =>
-        Effect.suspend(() => {
-          if (deliver !== undefined) return deliver(input, compact);
-          return compact && session.compactThread !== undefined
-            ? session.compactThread(input)
-            : session.startTurn(input);
-        }).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              deliver = undefined;
-            }),
-          ),
-        );
-      return {
-        ...session,
-        startTurn: (input: Parameters<typeof session.startTurn>[0]) => start(input),
-        ...(session.compactThread === undefined
-          ? {}
-          : {
-              compactThread: (input: Parameters<typeof session.startTurn>[0]) => start(input, true),
-            }),
-      };
-    };
-
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
       readonly runId: RunId;
       readonly willRetry?: boolean;
-      readonly workspaceLeaseDeadline?: DateTime.Utc;
       readonly reattach?: boolean;
       /** Called once this start attaches a registered cloud task instead of submitting. */
       readonly onAttach?: () => void;
@@ -640,22 +605,37 @@ export const layer: Layer.Layer<
             item: {
               type: "error",
               title: failed.title,
-              failure: makeProviderFailure({
-                cause: failed.error,
-                message:
-                  failed.message ??
-                  knownProviderFailureMessage(failed.error) ??
-                  (nestedCause instanceof Error
-                    ? nestedCause.message
-                    : typeof nestedCause === "string"
-                      ? nestedCause
-                      : failed.error.message),
-                class: "provider_error",
-              }),
+              failure: yield* withAgentOom(
+                input.threadId,
+                makeProviderFailure({
+                  cause: failed.error,
+                  message:
+                    failed.message ??
+                    knownProviderFailureMessage(failed.error) ??
+                    (nestedCause instanceof Error
+                      ? nestedCause.message
+                      : typeof nestedCause === "string"
+                        ? nestedCause
+                        : failed.error.message),
+                  class: "provider_error",
+                }),
+              ).pipe(Effect.provideService(AgentScope, agentScope)),
             },
           });
         },
       );
+      if (
+        yield* refuseCodexAdmission({
+          survivors: codexSurvivors,
+          settings: serverSettings,
+          driver: providerThread.driver,
+          threadId: input.threadId,
+          projectId: projection.thread.projectId,
+          message,
+          settle: settleStartFailure,
+        })
+      )
+        return;
       const { worktreePath, branch } = projection.thread;
       if (!cloud && worktreePath !== null) {
         // Removal may hold this lease for minutes. Return to the outbox's
@@ -663,11 +643,12 @@ export const layer: Layer.Layer<
         const prepared = yield* tryWithWorkspaceLease(
           path.resolve(worktreePath),
           Effect.gen(function* () {
+            // A rebinding that committed after this start loaded the thread sends it to retry.
+            const bound = yield* projectionStore.getThreadShell(input.threadId).pipe(Effect.option);
+            if (Option.getOrNull(bound)?.worktreePath !== worktreePath) return "rebound" as const;
             if (branch === null) return;
-            const exists = yield* fileSystem
-              .exists(worktreePath)
-              .pipe(Effect.orElseSucceed(() => true));
-            if (!exists && (yield* isManagedWorktreePath(worktreePath))) {
+            const ready = yield* restorePending.ready(worktreePath);
+            if (!ready && (yield* isManagedWorktreePath(worktreePath))) {
               const project = yield* projects.getById(projection.thread.projectId).pipe(
                 Effect.map(Option.getOrUndefined),
                 Effect.orElseSucceed(() => undefined),
@@ -679,6 +660,7 @@ export const layer: Layer.Layer<
                   branch,
                 });
                 yield* recreateMissingWorktree({
+                  threadId: projection.thread.id,
                   cwd: project.workspaceRoot,
                   worktreePath,
                   branch,
@@ -687,37 +669,11 @@ export const layer: Layer.Layer<
             }
           }).pipe(Effect.result),
         );
-        if (Option.isNone(prepared)) {
-          const reason =
-            "The workspace is busy with checkout removal or preparation. Retry the turn when it finishes.";
-          const now = yield* DateTime.now;
-          const deadlineExceeded =
-            input.workspaceLeaseDeadline !== undefined &&
-            DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(input.workspaceLeaseDeadline);
-          if (
-            !deadlineExceeded &&
-            (input.workspaceLeaseDeadline !== undefined ||
-              input.willRetry === true ||
-              input.reattach === true)
-          ) {
-            return yield* new ProviderTurnStartError({
-              runId,
-              cause: new WorkspaceLeaseBusyError({}),
-            });
-          }
-          yield* settleRunBeforeStart({
-            signal: "workspace-lease-busy",
-            status: "failed",
-            now,
-            providerInstanceId: run.providerInstanceId,
-            itemProviderThreadId: providerThread.id,
-            item: {
-              type: "error",
-              title: "Workspace is busy",
-              failure: makeProviderFailure({ message: reason, class: "validation_error" }),
-            },
+        if (Option.isNone(prepared) || Result.getOrUndefined(prepared.value) === "rebound") {
+          return yield* new ProviderTurnStartError({
+            runId,
+            cause: new WorkspaceLeaseBusyError({}),
           });
-          return;
         }
         if (prepared.value._tag === "Failure") {
           if (input.willRetry === true) return yield* prepared.value.failure;
@@ -725,7 +681,7 @@ export const layer: Layer.Layer<
             signal: "worktree-recreate-failure",
             title: "Couldn't recreate thread workspace",
             error: prepared.value.failure,
-            message: prepared.value.failure.message,
+            message: prepared.value.failure.detail,
           });
           return;
         }
@@ -762,16 +718,7 @@ export const layer: Layer.Layer<
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
       );
-      const failedRuns = new Map(
-        projection.runs
-          .filter(
-            (previous) =>
-              previous.ordinal < run.ordinal &&
-              previous.providerThreadId === providerThread.id &&
-              previous.status === "failed",
-          )
-          .map((previous) => [previous.activeAttemptId, previous] as const),
-      );
+      const failedRuns = endedRunsByAttempt(projection.runs, run, providerThread.id);
       const abandonedTurns = projection.providerTurns.flatMap((turn) => {
         const previous = failedRuns.get(turn.runAttemptId);
         return turn.providerThreadId === providerThread.id &&
@@ -810,20 +757,21 @@ export const layer: Layer.Layer<
           runId: run.id,
           activeAttemptId: attempt.id,
           expectedStatus: "starting",
-          events: yield* Effect.forEach(abandonedTurns, ({ turn, run: failedRun }) =>
-            Effect.gen(function* () {
-              return {
-                id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
-                type: "provider-turn.updated" as const,
-                threadId: projection.thread.id,
-                runId: failedRun.id,
-                nodeId: turn.nodeId,
-                providerInstanceId: failedRun.providerInstanceId,
-                occurredAt: completedAt,
-                payload: { ...turn, status: "interrupted" as const, completedAt },
-              };
+          // Without a session nothing was stopped; the adapter refuses a thread Codex reports busy.
+          events: yield* abandonedTurnRepairEvents({
+            abandoned: abandonedTurns,
+            stoppedLive: Option.isSome(liveSession),
+            projection,
+            run,
+            rootNode,
+            providerThreadId: providerThread.id,
+            noticeId: idAllocator.derive.runSignalTurnItem({
+              runId,
+              signal: "stopped-earlier-turn",
             }),
-          ),
+            allocateEventId: idAllocator.allocate.event({ threadId: projection.thread.id }),
+            at: completedAt,
+          }),
         });
         if (!repaired.committed) return;
       }
@@ -965,7 +913,7 @@ export const layer: Layer.Layer<
           return yield* loadFromProvider(
             session.forkThread({
               sourceProviderThread,
-              sourceProviderTurns: sourceProjection.providerTurns,
+              sourceProviderTurns: nativeForkTurns(sourceProjection),
               targetThreadId: projection.thread.id,
               modelSelection: run.modelSelection,
               runtimePolicy: resolvedRuntimePolicy,
@@ -1074,7 +1022,10 @@ export const layer: Layer.Layer<
         resumedRetryHandoff = [];
         if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return undefined;
 
-        if (cloud && resumed._tag === "Failure")
+        if (
+          resumed._tag === "Failure" &&
+          (cloud || resumed.failure._tag === "ProviderAdapterThreadInUseError")
+        )
           return yield* loadFromProvider(Effect.fail(resumed.failure));
         yield* Effect.logWarning("Recovering provider context in a fresh native session", {
           driver: session.driver,

@@ -1,4 +1,5 @@
-import type { EnvironmentId } from "@goat/contracts";
+import { sourceControlTokenPatch } from "@goat/shared/serverSettings";
+import { isSecretReference, type EnvironmentId, type SecretReference } from "@goat/contracts";
 import { ExternalLinkIcon } from "~/components/solar";
 import { useState } from "react";
 
@@ -13,6 +14,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button, InlineButton } from "../ui/button";
 import { Input } from "../ui/input";
 import { SecretInput } from "./SecretInput";
+import { SecretReferencePicker } from "./SecretReferencePicker";
 import { Label } from "../ui/label";
 
 export function SourceControlTokenSettings({
@@ -37,20 +39,18 @@ export function SourceControlTokenSettings({
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const normalizedHost = host.trim().toLowerCase();
-  const isSaved = (tokens[normalizedHost] ?? "").length > 0;
+  const token = tokens[normalizedHost];
+  const isSaved = typeof token === "string" ? token.length > 0 : token !== undefined;
   const savedHosts = Object.entries(tokens)
-    .filter(([, value]) => value.length > 0)
+    .filter(([, value]) => typeof value !== "string" || value.length > 0)
     .map(([saved]) => saved);
 
-  const save = async (target: string, token: string) => {
+  const save = async (target: string, token: string | SecretReference) => {
     setSaving(true);
     const result = await updateSettings({
       environmentId,
-      // Send the whole map; other tokens' redaction markers preserve their values.
       input: {
-        patch: {
-          sourceControlHosts: { [definition.kind]: { tokens: { ...tokens, [target]: token } } },
-        },
+        patch: sourceControlTokenPatch(definition.kind, target, token),
       },
     });
     setSaving(false);
@@ -106,12 +106,21 @@ export function SourceControlTokenSettings({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor={`${definition.kind}-token-${environmentId}`}>Token</Label>
-            <SecretInput
-              id={`${definition.kind}-token-${environmentId}`}
-              size="sm"
-              configured={isSaved}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+            {!isSecretReference(token) ? (
+              <SecretInput
+                id={`${definition.kind}-token-${environmentId}`}
+                size="sm"
+                configured={isSaved}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+              />
+            ) : null}
+            <SecretReferencePicker
+              environmentId={environmentId}
+              value={isSecretReference(token) ? token : undefined}
+              onChange={(reference) => {
+                if (normalizedHost) void save(normalizedHost, reference ?? "");
+              }}
             />
           </div>
         </div>

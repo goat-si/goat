@@ -17,7 +17,9 @@ import { getRouter, type AppRouter } from "~/router";
 import {
   ENVIRONMENT_ID,
   assistantItem,
+  emitTerminalMetadata,
   emitThreadEvent,
+  emitVcsStatus,
   installFakeEnvironment,
   isThreadSubscribed,
   runningRun,
@@ -50,6 +52,7 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
 const HISTORY_TURNS = 20;
 const STREAM_DELTAS = 30;
 const TYPED_TEXT = "fix the flaky tests!";
+const TERMINAL_UPDATES = 20;
 // The stream scenario leaves a turn on its thread, so it streams into one no other scenario opens.
 const THREADS = ["thread-warm", "thread-a", "thread-b", "thread-live"].map((name) =>
   threadWithHistory(name, HISTORY_TURNS),
@@ -182,7 +185,7 @@ it("app-stream-assistant-turn", async () => {
   const counted = await measure(async () => {
     let text = "";
     for (let delta = 0; delta < STREAM_DELTAS; delta++) {
-      text += `word${delta} `;
+      text += `word${delta}\n\n`;
       await act(() =>
         emitThreadEvent(LIVE, {
           type: "turn-item.updated",
@@ -209,6 +212,37 @@ it("app-stream-assistant-turn", async () => {
   // Each delta adds a paragraph; finished blocks keep their render.
   expect(counted.components.MarkdownParagraph).toBe(STREAM_DELTAS);
   await report("app-stream-assistant-turn", [counted], { commits: false });
+});
+
+it("app-terminal-updates-in-other-thread", async () => {
+  using _clock = frozenClock();
+  await using _app = (await openThread(A)).screen;
+  const counted = await measure(async () => {
+    for (let update = 0; update < TERMINAL_UPDATES; update++) {
+      await act(() =>
+        emitTerminalMetadata({
+          type: "upsert",
+          terminal: {
+            threadId: B,
+            terminalId: "default",
+            cwd: "/repo",
+            worktreePath: null,
+            status: "running",
+            pid: 42,
+            exitCode: null,
+            exitSignal: null,
+            hasRunningSubprocess: true,
+            label: `command ${update}`,
+            updatedAt: `2026-03-18T09:01:${String(update).padStart(2, "0")}.000Z`,
+          },
+        }),
+      );
+    }
+  });
+  // Only thread B's sidebar row shows these updates.
+  expect(counted.components.ChatView).toBeUndefined();
+  expect(counted.components.SidebarThreadRow).toBe(TERMINAL_UPDATES);
+  await report("app-terminal-updates-in-other-thread", [counted]);
 });
 
 it("app-type-in-composer", async () => {
@@ -286,4 +320,30 @@ it("app-switch-settings-section", async () => {
   await report("app-switch-settings-section", [
     await measure(openSettings(router, "/settings/appearance")),
   ]);
+});
+
+it("VCS status changes do not redraw the composer", async () => {
+  using _clock = frozenClock();
+  await using _app = (await openThread(WARM)).screen;
+  const local = (insertions: number) => ({
+    isRepo: true,
+    hasPrimaryRemote: true,
+    isDefaultRef: true,
+    refName: "main",
+    hasWorkingTreeChanges: insertions % 2 === 1,
+    workingTree: {
+      files: [{ path: "src/app.ts", insertions, deletions: 0 }],
+      insertions,
+      deletions: 0,
+    },
+  });
+  await act(() => emitVcsStatus({ _tag: "snapshot", local: local(0), remote: null }));
+  const counted = await measure(async () => {
+    for (let update = 1; update <= 20; update++) {
+      await act(() => emitVcsStatus({ _tag: "localUpdated", local: local(update) }));
+    }
+  });
+  expect(counted.components.ChatView).toBeGreaterThan(0);
+  expect(counted.components.ChatComposer).toBeUndefined();
+  await report("vcs-status-composer", [counted]);
 });

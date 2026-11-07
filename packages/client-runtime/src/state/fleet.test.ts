@@ -84,9 +84,17 @@ function shell(environmentId: EnvironmentId, id: string, options: ShellOptions =
       title: "task " + nativeId,
       status: status ?? "running",
     })),
+    latestUserMessageAt: null,
+    pinnedAt: null,
+    settledOverride: null,
+    snoozedUntil: null,
+    snoozedAt: null,
     createdAt: options.createdAt ?? "2026-10-17T00:00:00.000Z",
     updatedAt: options.updatedAt ?? "2026-10-17T00:00:00.000Z",
-    source: options.launchedBy === undefined ? {} : { launchedBy: options.launchedBy },
+    source:
+      options.launchedBy === undefined
+        ? { pendingRuntimeRequest: null }
+        : { pendingRuntimeRequest: null, launchedBy: options.launchedBy },
   };
 }
 
@@ -219,6 +227,68 @@ describe("createFleetSummaryAtom", () => {
   });
 });
 
+describe("remote delegated children", () => {
+  it("resolves a subagent launcher, leaves remote running work folded, and retains an orphan", () => {
+    const child = shell(remote, "child", {
+      launchedBy: {
+        kind: "launch",
+        via: "delegate_task",
+        threadId: ThreadId.make("launcher"),
+        environmentId: local,
+        environmentLabel: null,
+        threadTitle: null,
+      },
+    });
+    const parent = shell(local, "parent", { status: "idle" });
+    const launcher = shell(local, "launcher", { subagentOf: "parent", status: "idle" });
+    const environments = [env(local, "Mac"), env(remote, "Box")];
+    const input = {
+      environments,
+      primaryEnvironmentId: local,
+      shells: [parent, launcher, child],
+      remote: [],
+    };
+    expect(buildFleet(input).threads).toEqual([]);
+    const asking = { ...child, hasPendingUserInput: true };
+    expect(
+      buildFleet({ ...input, shells: [parent, launcher, asking] }).threads.map(
+        ({ title, state }) => [title, state],
+      ),
+    ).toEqual([["parent", "attention"]]);
+    expect(
+      buildFleet({
+        ...input,
+        environments: [{ ...environments[0]!, connected: false }, environments[1]!],
+        shells: [parent, launcher, asking],
+      }).threads.map(({ title, state }) => [title, state]),
+    ).toEqual([["child", "attention"]]);
+  });
+
+  it("folds a remote child into its live parent and lifts its request", () => {
+    const child = shell(remote, "child", {
+      approval: true,
+      launchedBy: {
+        kind: "launch",
+        via: "delegate_task",
+        threadId: ThreadId.make("parent"),
+        environmentId: local,
+        environmentLabel: null,
+        threadTitle: null,
+      },
+    });
+    const shells = [shell(local, "parent"), child];
+    const environments = [env(local, "Mac"), env(remote, "Box")];
+    expect(summarizeFleet(shells, environments)).toMatchObject({ running: 0, attention: 1 });
+    const fleet = buildFleet({ environments, primaryEnvironmentId: local, shells, remote: [] });
+    expect(fleet.threads.map((row) => [row.title, row.state])).toEqual([["parent", "attention"]]);
+    expect(fleet.totals).toMatchObject({ running: 0, attention: 1 });
+    expect(summarizeFleet([child], [env(remote, "Box")])).toMatchObject({
+      running: 0,
+      attention: 1,
+    });
+  });
+});
+
 describe("buildFleet", () => {
   it("draws a disconnected environment without counting its stale threads", () => {
     const fleet = buildFleet({
@@ -250,7 +320,7 @@ describe("buildFleet", () => {
       remote: [
         {
           dispatcherEnvironmentId: local,
-          // Two routes to one server, a plain SSH host, and a stopped Boat machine.
+          // Two routes to one server, a plain SSH host, and a stopped Boat machine Fleet leaves out.
           launches: [launch({ host: "mac.tailnet" }), launch({ host: "devbox" })],
           cloudMachines: [cloud({ state: "archived", label: "Nightly" })],
         },
@@ -260,7 +330,6 @@ describe("buildFleet", () => {
       ["Mac", true],
       ["Box", true],
       ["Away", false],
-      ["Nightly", false],
       ["devbox", false],
     ]);
     expect(fleet.totals.machines).toBe(2);
@@ -433,7 +502,7 @@ describe("buildFleet", () => {
 
   it("keeps a cloud machine separate when nothing ties it to a connection", () => {
     const fleet = buildFleet({
-      environments: [env(local, "Mac"), env(remote, "Box", [CLOUD_ALIAS])],
+      environments: [env(local, "Mac"), env(remote, "Box", ["box"])],
       primaryEnvironmentId: remote,
       shells: [],
       remote: [
@@ -453,9 +522,13 @@ describe("buildFleet", () => {
       "cloud",
     ]);
     expect(fleet.machines[2]).toMatchObject({ label: "Cloud box", subtitle: "via Mac" });
+    // A machine on its way out has no node, and its alias still claims its host readings.
+    expect(fleet.hiddenCloudAliases).toEqual(["boat-bx_zzzzzzzz"]);
   });
 
-  it("names a reported cloud machine's Boat state, so a stopped one is not mistaken for away", () => {
+  it("leaves a stopped Boat machine nothing runs on out of Fleet, and keeps one starting or with work", () => {
+    const starting = "boat-bx_zzzzzzzz" as CloudMachine["alias"];
+    const busy = "boat-bx_yyyyyyyy" as CloudMachine["alias"];
     const fleet = buildFleet({
       environments: [env(local, "Mac")],
       primaryEnvironmentId: local,
@@ -463,19 +536,107 @@ describe("buildFleet", () => {
       remote: [
         {
           dispatcherEnvironmentId: local,
-          launches: [],
+          launches: [launch({ host: busy })],
           cloudMachines: [
             cloud({ state: "archived" }),
-            cloud({ alias: "boat-bx_zzzzzzzz" as CloudMachine["alias"], state: "provisioning" }),
+            cloud({ alias: starting, state: "provisioning" }),
+            cloud({ alias: busy, state: "archived" }),
           ],
         },
       ],
     });
-    expect(fleet.machines.slice(1).map((machine) => [machine.kind, machine.boat])).toEqual([
-      ["cloud", { status: "stopped", source: "record" }],
-      ["cloud", { status: "starting", source: "record" }],
+    expect(
+      fleet.machines.map((machine) => [
+        machine.sshHost?.alias ?? null,
+        machine.boat,
+        machine.reported,
+      ]),
+    ).toEqual([
+      [null, null, 0],
+      [starting, { status: "starting", source: "record" }, 0],
+      [busy, { status: "stopped", source: "record" }, 1],
     ]);
-    expect(fleet.machines[0]!.boat).toBeNull();
+    expect(fleet.hiddenCloudAliases).toEqual([CLOUD_ALIAS]);
+    expect(fleet.hiddenRoutes).toEqual([{ via: local, alias: CLOUD_ALIAS }]);
+  });
+
+  it("leaves out a saved Boat server that does not answer while Boat says it is stopped", () => {
+    const build = (connected: boolean) =>
+      buildFleet({
+        environments: [env(local, "Mac"), { ...env(remote, "Box", [CLOUD_ALIAS]), connected }],
+        primaryEnvironmentId: local,
+        shells: [],
+        remote: [
+          {
+            dispatcherEnvironmentId: local,
+            launches: [],
+            cloudMachines: [cloud({ state: "archived" })],
+          },
+        ],
+      });
+    expect(build(false).machines.map((machine) => machine.label)).toEqual(["Mac"]);
+    expect(build(false).hiddenCloudAliases).toEqual([CLOUD_ALIAS]);
+    expect(build(true).machines.map((machine) => machine.label)).toEqual(["Mac", "Box"]);
+  });
+
+  it("draws one Boat machine when its record and a launch on it come from servers in different SSH configs", () => {
+    const studio = EnvironmentId.make("studio");
+    const fleet = buildFleet({
+      environments: [env(local, "Mac"), env(studio, "Studio")],
+      primaryEnvironmentId: local,
+      shells: [],
+      remote: [
+        { dispatcherEnvironmentId: local, launches: [], cloudMachines: [cloud()] },
+        {
+          dispatcherEnvironmentId: studio,
+          launches: [launch({ host: CLOUD_ALIAS })],
+          cloudMachines: [],
+        },
+      ],
+    });
+    const boats = fleet.machines.filter((machine) => machine.boat !== null);
+    expect(boats.map((machine) => [machine.label, machine.reported])).toEqual([["Cloud box", 1]]);
+    expect(fleet.idleCloudMachines).toEqual([]);
+  });
+
+  it("joins a Boat server one source resolved with the record another SSH config reports", () => {
+    const studio = EnvironmentId.make("studio");
+    const fleet = buildFleet({
+      environments: [env(local, "Mac"), env(remote, "Box", [CLOUD_ALIAS]), env(studio, "Studio")],
+      primaryEnvironmentId: local,
+      shells: [shell(remote, "t1")],
+      remote: [{ dispatcherEnvironmentId: studio, launches: [], cloudMachines: [cloud()] }],
+    });
+    const boats = fleet.machines.filter((machine) => machine.boat !== null);
+    expect(boats.map((machine) => [machine.environmentId, machine.running])).toEqual([[remote, 1]]);
+    expect(fleet.idleCloudMachines).toEqual([]);
+  });
+
+  it("names the server that supplied an idle running Boat machine's record as its owner", () => {
+    const studio = EnvironmentId.make("studio");
+    const fleet = buildFleet({
+      environments: [env(local, "Mac"), env(remote, "Box", [CLOUD_ALIAS]), env(studio, "Studio")],
+      primaryEnvironmentId: local,
+      shells: [shell(remote, "t1", { status: null })],
+      remote: [
+        // The primary resolves the alias first, from a launch that no longer runs.
+        {
+          dispatcherEnvironmentId: local,
+          launches: [launch({ host: CLOUD_ALIAS, state: null })],
+          cloudMachines: [],
+        },
+        {
+          dispatcherEnvironmentId: studio,
+          launches: [launch({ host: CLOUD_ALIAS, threadId: ThreadId.make("t1") })],
+          cloudMachines: [cloud()],
+        },
+      ],
+    });
+    const box = fleet.machines.find((machine) => machine.environmentId === remote)!;
+    expect(box.boat).toEqual({ status: "running", source: "record" });
+    expect(fleet.idleCloudMachines).toEqual([
+      { machineId: box.id, owner: studio, ownerLabel: "Studio" },
+    ]);
   });
 
   it("falls back to the reserved alias only when no record describes the host", () => {

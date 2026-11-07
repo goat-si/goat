@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - node:http sends the one-shot loopback callback with no proxy, redirect handling, or response logging.
 import * as NodeHttp from "node:http";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 import { ProviderSetupError, type ProviderInstanceId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -73,26 +74,28 @@ export const forwardAntigravityCallback = (
         detail: "Could not deliver the sign-in response. Start sign-in again.",
       });
     let response: NodeHttp.IncomingMessage | undefined;
-    const request = NodeHttp.request(
-      {
-        protocol: "http:",
-        hostname: callback.hostname,
-        port: callback.port,
-        path: `${callback.pathname}${callback.search}`,
-        method: "GET",
-        agent: false,
-      },
-      (incoming) => {
-        response = incoming;
-        incoming.once("error", () => resume(Effect.fail(failed())));
-        incoming.once("end", () => {
-          const status = incoming.statusCode ?? 0;
-          resume(status >= 200 && status < 300 ? Effect.void : Effect.fail(failed()));
-        });
-        incoming.resume();
-      },
+    const request = guardErrors(
+      NodeHttp.request(
+        {
+          protocol: "http:",
+          hostname: callback.hostname,
+          port: callback.port,
+          path: `${callback.pathname}${callback.search}`,
+          method: "GET",
+          agent: false,
+        },
+        (incoming) => {
+          response = incoming;
+          incoming.once("error", () => resume(Effect.fail(failed())));
+          incoming.once("end", () => {
+            const status = incoming.statusCode ?? 0;
+            resume(status >= 200 && status < 300 ? Effect.void : Effect.fail(failed()));
+          });
+          incoming.resume();
+        },
+      ),
+      () => resume(Effect.fail(failed())),
     );
-    request.once("error", () => resume(Effect.fail(failed())));
     request.end();
     return Effect.sync(() => {
       request.destroy();

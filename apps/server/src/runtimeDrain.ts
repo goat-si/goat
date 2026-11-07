@@ -1,6 +1,7 @@
 import {
   RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
   RUNTIME_DRAIN_MAX_GRACE_SECONDS,
+  type DesktopStopIntent,
   type RuntimeDrainRequest,
   type RuntimeDrainResult,
 } from "@goat/contracts";
@@ -11,11 +12,35 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as RuntimeAdmission from "./runtimeAdmission.ts";
 import * as RuntimeIdentity from "./runtimeIdentity.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
+
+export const stopKind = (
+  marked: boolean,
+  intent: Option.Option<DesktopStopIntent>,
+): "restart" | "quit" =>
+  marked ||
+  (Option.isSome(intent) &&
+    ["relaunch", "update-install", "recovery-retry"].includes(intent.value.reason))
+    ? "restart"
+    : "quit";
+
+export class RuntimeRestartMarker extends Context.Service<
+  RuntimeRestartMarker,
+  { readonly markRestart: Effect.Effect<void>; readonly isRestart: Effect.Effect<boolean> }
+>()("goat/runtimeDrain/RuntimeRestartMarker") {}
+
+export const layerRestartMarker = Layer.effect(
+  RuntimeRestartMarker,
+  Effect.gen(function* () {
+    const marked = yield* Ref.make(false);
+    return { markRestart: Ref.set(marked, true), isRestart: Ref.get(marked) };
+  }),
+);
 
 export class RuntimeShutdown extends Context.Service<
   RuntimeShutdown,
@@ -57,6 +82,7 @@ const make = Effect.gen(function* () {
   const lifecycle = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const shutdown = yield* RuntimeShutdown;
+  const restartMarker = yield* RuntimeRestartMarker;
   const scope = yield* Scope.Scope;
   const arbiter = yield* Effect.serviceOption(RuntimeUpdateArbiter);
   let active: ActiveDrain | undefined;
@@ -102,6 +128,7 @@ const make = Effect.gen(function* () {
       if (status === "drained") {
         // Keep admission closed while HTTP flushes, then use normal restart recovery shutdown.
         yield* Effect.sleep(250);
+        yield* restartMarker.markRestart;
         yield* shutdown.shutdown;
       }
     });

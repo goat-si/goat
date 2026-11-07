@@ -19,6 +19,7 @@ export const environmentEntries = {
       sinceTime: "Start instant required for hourly resolution.",
       untilTime: "End instant required for hourly resolution; at most 24 hours after sinceTime.",
       awaitRefresh: "Wait for a fresh provider scan when true.",
+      modelFilter: "Include or exclude usage by provider and model.",
     },
     examples: [
       {

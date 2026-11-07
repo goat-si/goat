@@ -1,3 +1,4 @@
+export { AuthAccessMutationError } from "./authAccessRpc.ts";
 export * from "./baseSchemas.ts";
 export * from "./assistantCitations.ts";
 export * from "./composerContext.ts";
@@ -5,12 +6,15 @@ export * from "./composerContextClipboard.ts";
 export * from "./background.ts";
 export * from "./acpRegistry.ts";
 export * from "./auth.ts";
+export * from "./speech.ts";
+export * from "./previewAnnotationVoice.ts";
 export * from "./agentWorkspace.ts";
 export * from "./agentTerminal.ts";
 export * from "./environment.ts";
 export * from "./environmentHttp.ts";
 export * from "./relayClient.ts";
 export * from "./desktopBootstrap.ts";
+export * from "./desktopStopIntent.ts";
 export * from "./cua.ts";
 export * from "./computerUseHistory.ts";
 export * from "./desktopCuaManifest.ts";
@@ -64,6 +68,14 @@ export * from "./keybindings.ts";
 export * from "./server.ts";
 export * from "./automationHold.ts";
 export * from "./settings.ts";
+export * from "./worktreeRetention.ts";
+export {
+  SecretReference,
+  isSecretReference,
+  isOnePasswordReference,
+  SettingsSecretValue,
+  settingsSecretLiteral,
+} from "./secretReference.ts";
 export * from "./blockedBrowserHosts.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";
@@ -136,6 +148,9 @@ export * from "./clientRpcPermissions.ts";
 
 export * from "./memory.ts";
 export * from "./siteNotes.ts";
+export * from "./memoryRecall.ts";
+export * from "./memoryRemember.ts";
+export * from "./memoryMcpTools.ts";
 export * from "./memoryGeneration.ts";
 
 export * from "./handoff.ts";
@@ -146,3 +161,5 @@ export * from "./goatclawLanes.ts";
 export * from "./decisions.ts";
 
 export * from "./actionOutcomeSafety.ts";
+
+export * from "./botProfile.ts";

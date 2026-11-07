@@ -10,6 +10,10 @@ import { parseNote } from "./frontmatter.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { supervise } from "../backgroundSupervision.ts";
 
+// An embed copies into a temp file before publishing it under its hash. The exclusion keeps a
+// temp, including one a crash left behind, out of every commit without holding any lock.
+const ATTACHMENT_TEMP_PATHSPEC = ":(exclude,glob).attachments/.tmp-*";
+
 export class NotesGit extends Context.Service<
   NotesGit,
   {
@@ -68,7 +72,7 @@ const make = Effect.gen(function* () {
         yield* checked(["init"]);
         initialized = true;
       }
-      yield* checked(["add", "-A", "--", "."]);
+      yield* checked(["add", "-A", "--", ".", ATTACHMENT_TEMP_PATHSPEC]);
       const diff = yield* checked(["diff", "--cached", "--quiet"], [0, 1]);
       if (diff.code !== 1) return;
       const changed = yield* checked(["diff", "--cached", "--name-only", "-z"]);
@@ -76,14 +80,20 @@ const make = Effect.gen(function* () {
       let message = names.length > 1 ? `notes: ${names.length} changes` : "notes: update notes";
       if (names.length === 1) {
         const name = names[0]!;
-        const staged = yield* run(["show", `:${name}`]);
-        const author =
-          staged.code === 0
-            ? yield* Effect.try(() => parseNote(staged.stdout).updatedBy).pipe(
-                Effect.orElseSucceed(() => null),
-              )
-            : null;
-        message = `notes: ${staged.code === 0 ? "update" : "delete"} ${name.replace(/[\r\n]/gu, " ")}${author ? ` (${author})` : ""}`;
+        const label = name.replace(/[\r\n]/gu, " ");
+        if (name.startsWith(".attachments/")) {
+          // Embedded files can be far larger than the runner's output limit and carry no author.
+          message = `notes: attachment ${label}`;
+        } else {
+          const staged = yield* run(["show", `:${name}`]);
+          const author =
+            staged.code === 0
+              ? yield* Effect.try(() => parseNote(staged.stdout).updatedBy).pipe(
+                  Effect.orElseSucceed(() => null),
+                )
+              : null;
+          message = `notes: ${staged.code === 0 ? "update" : "delete"} ${label}${author ? ` (${author})` : ""}`;
+        }
       }
       yield* checked([
         "-c",

@@ -2,6 +2,7 @@
 import { ipcRenderer } from "electron";
 import { getElementContext } from "react-grab/primitives";
 import type {
+  AnnotationVoiceConfig,
   DesktopPreviewAnnotationTheme,
   PickedElementPayload,
   PickedElementStackFrame,
@@ -18,6 +19,8 @@ import { createAnnotationIdSource } from "./AnnotationIds.ts";
 import { resolveAnnotationSubmission } from "./AnnotationKeyboard.ts";
 import { previewAnnotationStyles } from "./AnnotationStyles.generated.ts";
 import { installRecordingCursor } from "./RecordingCursor.ts";
+import { installAnnotationVoice } from "./AnnotationVoiceGuest.ts";
+import { rectFromDomRect, normalizeRect, isUsableRect, unionRects } from "./AnnotationGeometry.ts";
 import { DEFAULT_RECORDING_INPUT_OPTIONS } from "./RecordingInput.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -218,45 +221,6 @@ window.addEventListener("mouseup", requestNavigationForButton, true);
 window.addEventListener("auxclick", suppressNavigationButton, true);
 
 const nextId = createAnnotationIdSource();
-
-const rectFromDomRect = (rect: DOMRect): PreviewAnnotationRect => ({
-  x: rect.left,
-  y: rect.top,
-  width: rect.width,
-  height: rect.height,
-});
-
-const normalizeRect = (
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-): PreviewAnnotationRect => ({
-  x: Math.min(startX, endX),
-  y: Math.min(startY, endY),
-  width: Math.abs(endX - startX),
-  height: Math.abs(endY - startY),
-});
-
-const isUsableRect = (rect: PreviewAnnotationRect): boolean => rect.width >= 3 && rect.height >= 3;
-
-function unionRects(
-  rects: ReadonlyArray<PreviewAnnotationRect>,
-  padding = 20,
-): PreviewAnnotationRect | null {
-  if (rects.length === 0) return null;
-  const left = Math.min(...rects.map((rect) => rect.x));
-  const top = Math.min(...rects.map((rect) => rect.y));
-  const right = Math.max(...rects.map((rect) => rect.x + rect.width));
-  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
-  // Main clips to the captured viewport; clipping here would lose offscreen bounds.
-  return {
-    x: left - padding,
-    y: top - padding,
-    width: right - left + padding * 2,
-    height: bottom - top + padding * 2,
-  };
-}
 
 function isAnnotationNode(element: Element): boolean {
   return element instanceof Element && element.closest(`[${OVERLAY_ATTRIBUTE}]`) !== null;
@@ -524,7 +488,7 @@ function strokeBounds(
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
-function startAnnotation(sendEnabled: boolean): void {
+function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): void {
   activeSession?.teardown(false);
   let finished = false;
   const host = document.createElement("div");
@@ -655,6 +619,9 @@ function startAnnotation(sendEnabled: boolean): void {
     queueEditorLayout();
   };
   comment.addEventListener("input", resizeComment);
+  const voiceControl = voice
+    ? installAnnotationVoice({ config: voice, comment, row: composerRow, resize: resizeComment })
+    : null;
 
   const updateStatus = (): void => {
     const hasTargets = selected.size > 0 || regions.length > 0 || strokes.length > 0;
@@ -1354,6 +1321,7 @@ function startAnnotation(sendEnabled: boolean): void {
     if (editorLayoutFrame !== null) window.cancelAnimationFrame(editorLayoutFrame);
     ipcRenderer.off(CANCEL_PICK_CHANNEL, onCancel);
     ipcRenderer.off(ANNOTATION_CAPTURED_CHANNEL, onCaptured);
+    voiceControl?.dispose();
     document.documentElement.removeAttribute("data-goat-annotation-tool");
     cursorStyle.remove();
     inputLayer?.remove();
@@ -1381,6 +1349,7 @@ function startAnnotation(sendEnabled: boolean): void {
   };
 
   const submitAnnotation = (submission: PreviewAnnotationSubmission): void => {
+    if (voiceControl?.busy()) return;
     if (submission === "send" && !sendEnabled) return;
     if (pendingCapture || (selected.size === 0 && regions.length === 0 && strokes.length === 0))
       return;
@@ -1485,9 +1454,14 @@ function startAnnotation(sendEnabled: boolean): void {
 
 ipcRenderer.on(
   START_PICK_CHANNEL,
-  (_event, theme: DesktopPreviewAnnotationTheme | undefined, sendEnabled?: boolean) => {
+  (
+    _event,
+    theme: DesktopPreviewAnnotationTheme | undefined,
+    sendEnabled?: boolean,
+    voice?: AnnotationVoiceConfig,
+  ) => {
     if (theme) annotationTheme = theme;
-    startAnnotation(sendEnabled === true);
+    startAnnotation(sendEnabled === true, voice);
   },
 );
 ipcRenderer.on(ANNOTATION_SEND_ENABLED_CHANNEL, (_event, enabled: boolean) => {

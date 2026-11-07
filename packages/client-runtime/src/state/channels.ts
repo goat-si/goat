@@ -2,9 +2,12 @@ import {
   CHANNEL_GATEWAY_WS_METHODS,
   type ChannelBotRef,
   type ChannelIngestInput,
+  type ChannelTaskId,
+  type ChatAttachment,
   SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
-import { Atom } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
+import * as Effect from "effect/Effect";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
@@ -12,6 +15,7 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "./runtime.ts";
+import { createEnvironmentSessionAtoms } from "./session.ts";
 
 /**
  * Commands and queries for the GOAT bot, the channel ledger, and Slack settings. Bot messages
@@ -21,10 +25,49 @@ import {
 export function createChannelEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
+  const sessions = createEnvironmentSessionAtoms(runtime);
+  const listBots = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:channel:list-bots",
+    tag: CHANNEL_GATEWAY_WS_METHODS.listBots,
+    staleTimeMs: 2_000,
+  });
+  const childWorkQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:channel:list-child-work",
+    tag: CHANNEL_GATEWAY_WS_METHODS.listChildWork,
+    staleTimeMs: 2_000,
+  });
+  const childWorkFamily = Atom.family((key: string) => {
+    const target = JSON.parse(key) as Parameters<typeof childWorkQuery>[0];
+    return Atom.make((get) =>
+      get(sessions.initialConfigValueAtom(target.environmentId))?.environment.capabilities
+        .goatBotChildWork === true
+        ? get(childWorkQuery(target))
+        : AsyncResult.success({ groups: [] }),
+    );
+  });
   return {
     ensureBot: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:ensure-bot",
       tag: CHANNEL_GATEWAY_WS_METHODS.ensureBot,
+    }),
+    listBots,
+    /** Edits a bot's name, avatar or purpose; the roster and settings re-read the list after. */
+    updateBot: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:update-bot",
+      tag: CHANNEL_GATEWAY_WS_METHODS.updateBot,
+      onSuccess: ({ environmentId }, registry) =>
+        Effect.sync(() => registry.refresh(listBots({ environmentId, input: {} }))),
+    }),
+    listBotThreads: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:list-bot-threads",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
+      staleTimeMs: 2_000,
+    }),
+    listChildWork: (target: Parameters<typeof childWorkQuery>[0]) =>
+      childWorkFamily(JSON.stringify(target)),
+    updateTaskView: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:update-task-view",
+      tag: CHANNEL_GATEWAY_WS_METHODS.updateTaskView,
     }),
     ingest: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:ingest",
@@ -81,8 +124,11 @@ export function createChannelEnvironmentAtoms<R, E>(
 export function goatBotIngestInput(input: {
   readonly bot: ChannelBotRef;
   readonly text: string;
+  /** Uploads this server already holds; the gateway refuses any other file. */
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
   readonly clientMessageId: string;
   readonly receivedAt: string;
+  readonly taskId?: ChannelTaskId;
 }): ChannelIngestInput {
   return {
     kind: "goat",
@@ -97,8 +143,35 @@ export function goatBotIngestInput(input: {
       threadId: input.bot.threadId,
     },
     text: input.text,
-    attachments: [],
+    attachments: input.attachments ?? [],
     receivedAt: input.receivedAt,
     intent: "message",
+    ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+  };
+}
+
+/** A bot's editable profile fields, as a person sees them in a form. */
+export interface BotProfileValues {
+  readonly name: string;
+  readonly avatar: string | null;
+  readonly purpose: string;
+}
+
+/** What to send for a bot's profile: every field when creating, else only what changed, trimmed as stored. */
+export function botProfileChanges(
+  mode: "edit" | "create",
+  initial: BotProfileValues,
+  draft: { readonly name: string; readonly avatar: string; readonly purpose: string },
+): Partial<BotProfileValues> {
+  const next = {
+    name: draft.name.trim(),
+    avatar: draft.avatar.trim() === "" ? null : draft.avatar.trim(),
+    purpose: draft.purpose.trim(),
+  };
+  if (mode === "create") return next;
+  return {
+    ...(next.name === initial.name ? {} : { name: next.name }),
+    ...(next.avatar === initial.avatar ? {} : { avatar: next.avatar }),
+    ...(next.purpose === initial.purpose ? {} : { purpose: next.purpose }),
   };
 }

@@ -348,7 +348,9 @@ then reuses it for later launches of the same update.
 Windows keeps JavaScript and package metadata inside `app.asar` and unpacks only
 native libraries and helper executables. Avoid enabling whole-package smart
 unpacking: each loose file adds work to NSIS installation and counts against
-the payload limit.
+the payload limit. Prepared server bytecode in `resources/server-compile-cache`
+is the one exception: one file per loaded server chunk, checked against its
+manifest and a separate budget, because the backend reads it on every start.
 
 The artifact builder rejects a Windows package when any of these invariants
 break:
@@ -366,7 +368,9 @@ break:
   `node_modules/` with the Linux node-pty binary, and must not carry a loose
   server bundle (`bin.mjs`).
 - The external Windows resource monitor is absent.
-- The unpacked Windows application contains more than 80 files.
+- The unpacked Windows application contains more than 96 files. Speech
+  dictation alone unpacks koffi and transcribe-cpp's per-CPU ggml DLLs, which
+  ggml chooses between at runtime, so all of them ship.
 
 Cross-architecture Windows builds retain every structural and extracted-sidecar
 check, but skip executing the target Electron binary. A same-architecture build

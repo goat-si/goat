@@ -31,3 +31,5 @@ export const MOBILE_TEXT_CLASSES = {
   largeTitle: "text-2xl",
   display: "text-3xl",
 } as const satisfies Record<keyof typeof MOBILE_TYPOGRAPHY, string>;
+
+export const MOBILE_CHROME_MAX_FONT_SCALE = 1.4;

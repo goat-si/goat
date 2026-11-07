@@ -94,18 +94,23 @@ type AttachmentRemoveCommand<E> = AtomCommand<
   E
 >;
 
-export function deletePendingAttachmentUpload<E>(input: {
+export async function deletePendingAttachmentUpload<E>(input: {
   readonly registry: AtomRegistry.AtomRegistry;
   readonly remove: AttachmentRemoveCommand<E>;
   readonly environmentId: EnvironmentId;
   readonly attachmentId: string;
-}): void {
-  void runAtomCommand(
+}) {
+  const result = await runAtomCommand(
     input.registry,
     input.remove,
     { environmentId: input.environmentId, input: { attachmentId: input.attachmentId } },
     { reportFailure: false, reportDefect: false },
   );
+  if (result._tag === "Failure") {
+    const error = squashAtomCommandFailure(result);
+    return { ok: false as const, error };
+  }
+  return { ok: true as const };
 }
 
 export interface AttachmentByteUpload {
@@ -115,7 +120,11 @@ export interface AttachmentByteUpload {
 
 export type AttachmentUploadCycleResult =
   | { readonly status: "uploaded"; readonly attachmentId: string }
-  | { readonly status: "cancelled"; readonly attachmentId: string | null }
+  | {
+      readonly status: "cancelled";
+      readonly attachmentId: string | null;
+      readonly cleanupFailure?: { readonly step: "cleanup"; readonly error: unknown };
+    }
   | {
       readonly status: "failed";
       readonly step: "mint" | "resolve-url" | "transfer";
@@ -137,7 +146,7 @@ export async function runAttachmentUploadCycle<E, RE>(input: {
   readonly upload: AttachmentCreateUploadUrlInput;
   readonly resolveUploadUrl: (relativeUrl: string) => string | null;
   readonly transport: (url: string) => AttachmentByteUpload;
-  readonly onMinted?: (attachmentId: string) => "continue" | "cancel";
+  readonly onMinted?: (attachmentId: string) => "continue" | "cancel" | "abandon";
   readonly onTransferStart?: (abort: () => void) => void;
 }): Promise<AttachmentUploadCycleResult> {
   const minted = await runAtomCommand(
@@ -155,13 +164,21 @@ export async function runAttachmentUploadCycle<E, RE>(input: {
     };
   }
   const attachmentId = minted.value.attachmentId;
-  if (input.onMinted?.(attachmentId) === "cancel") {
-    deletePendingAttachmentUpload({
+  const action = input.onMinted?.(attachmentId);
+  if (action === "abandon") return { status: "cancelled", attachmentId };
+  if (action === "cancel") {
+    const deletion = await deletePendingAttachmentUpload({
       registry: input.registry,
       remove: input.remove,
       environmentId: input.environmentId,
       attachmentId,
     });
+    if (!deletion.ok)
+      return {
+        status: "cancelled",
+        attachmentId,
+        cleanupFailure: { step: "cleanup", error: deletion.error },
+      };
     return { status: "cancelled", attachmentId };
   }
 
@@ -194,9 +211,9 @@ export function clampFileAttachmentUploadBytes(advertisedMaxUploadBytes: number)
 }
 
 export function formatAttachmentSize(sizeBytes: number): string {
-  return sizeBytes >= 1024 * 1024
-    ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`
-    : `${Math.max(1, Math.ceil(sizeBytes / 1024))} KB`;
+  const kilobytes = Math.max(1, Math.ceil(sizeBytes / 1024));
+  // Pick the unit after rounding, so 1023.5 KB reads "1.0 MB", not "1024 KB".
+  return kilobytes >= 1024 ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB` : `${kilobytes} KB`;
 }
 
 export function fileAttachmentTooLargeMessage(name: string, maxUploadBytes: number): string {

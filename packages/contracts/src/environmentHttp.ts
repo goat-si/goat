@@ -83,6 +83,7 @@ import {
   RelayLinkProofRequest,
 } from "./relay.ts";
 import * as Voice from "./voice.ts";
+import { makeEnvironmentSpeechHttpApi } from "./environmentSpeechHttp.ts";
 export * from "./voice.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
@@ -937,7 +938,7 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
   .add(HttpApiEndpoint.put("webhookPut", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.patch("webhookPatch", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.get("webhookGet", WEBHOOK_PATH, webhookEndpoint)) {}
-const EnvironmentVoiceHttpErrors = [
+export const EnvironmentVoiceHttpErrors = [
   ...EnvironmentScopedOperationErrors,
   EnvironmentHttpForbiddenError,
   ...Voice.VoiceHttpErrors,
@@ -974,4 +975,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentConnectHttpApi)
   .add(EnvironmentWebhooksHttpApi)
+  .add(makeEnvironmentSpeechHttpApi(EnvironmentAuthenticatedAuth, EnvironmentVoiceHttpErrors))
   .add(EnvironmentVoiceHttpApi) {}

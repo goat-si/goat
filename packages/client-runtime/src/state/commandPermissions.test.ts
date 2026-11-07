@@ -11,10 +11,12 @@ import type { RpcSession } from "../rpc/session.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
+  AuthAccessWriteScope,
   AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
+  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   SSH_PREFLIGHT_STEP_ORDER,
   AuthSourceControlWriteScope,
@@ -35,6 +37,8 @@ import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentRpcCommand } from "./runtime.ts";
 import { createServerEnvironmentAtoms } from "./server.ts";
 import { createComputerUseHistoryCommand } from "./computerUseHistory.ts";
+import { createPreviewEnvironmentAtoms } from "./preview.ts";
+import { createAuthEnvironmentAtoms } from "./auth.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -69,6 +73,75 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("requires the destination read grant to refresh providers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const refresh = createCommandPermissions(runtime, WS_METHODS.serverRefreshProviders);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(refresh.permissionAtom(env))).toBe(false);
+        expect((yield* refresh.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthOrchestrationReadScope],
+            permissions: [AuthOrchestrationReadScope],
+          }),
+        );
+        expect(registry.get(refresh.permissionAtom(env))).toBe(true);
+        yield* refresh.authorize(registry, env);
+        expect(registry.get(refresh.permissionAtom(env, { reloadSecrets: true }))).toBe(false);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthOrchestrationReadScope, AuthProvidersManageScope],
+            permissions: [AuthOrchestrationReadScope, AuthProvidersManageScope],
+          }),
+        );
+        expect(registry.get(refresh.permissionAtom(env, { reloadSecrets: true }))).toBe(true);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(refresh.permissionAtom(other))).toBe(false);
+        expect((yield* refresh.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        expect(registry.get(refresh.permissionAtom(env))).toBe(false);
+        expect((yield* refresh.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+      }),
+    ),
+  );
+
+  it.effect("requires settings authority to approve a browser claim on the destination", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const commands = createPreviewEnvironmentAtoms(runtime);
+        const approve = { claimId: "claim:1", approved: true };
+        const decline = { claimId: "claim:1", approved: false };
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(commands.claimWindows.permissionAtom(env))).toBe(true);
+        expect(registry.get(commands.claim.permissionAtom(env))).toBe(false);
+        expect(registry.get(commands.claimAnswer.permissionAtom(env, approve))).toBe(false);
+        expect(registry.get(commands.claimAnswer.permissionAtom(env, decline))).toBe(true);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(true),
+            scopes: [AuthOrchestrationOperateScope, AuthSettingsWriteScope],
+            permissions: [AuthOrchestrationOperateScope, AuthSettingsWriteScope],
+          }),
+        );
+        expect(registry.get(commands.claim.permissionAtom(env))).toBe(true);
+        expect(registry.get(commands.claimAnswer.permissionAtom(env, approve))).toBe(true);
+      }),
+    ),
+  );
   it.effect("requires the destination preview grant to close a browser tab", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -820,6 +893,41 @@ it.effect("history command enforces read scope at the destination", () =>
       );
       expect(registry.get(command.permissionAtom(env))).toBe(true);
       expect(registry.get(command.permissionAtom(other))).toBe(false);
+    }),
+  ),
+);
+
+it.effect("guards access mutations using the destination environment's current grant", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const commands = createAuthEnvironmentAtoms(runtime);
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(false),
+          scopes: [AuthAccessWriteScope],
+          permissions: [AuthAccessWriteScope],
+        }),
+      );
+      registry.set(sessions(other), AsyncResult.success(grant(false)));
+      for (const command of [
+        commands.createPairing,
+        commands.revokePairing,
+        commands.revokeClient,
+      ]) {
+        expect(registry.get(command.permissionAtom(env))).toBe(true);
+        expect(registry.get(command.permissionAtom(other))).toBe(false);
+      }
+      const result = yield* Effect.promise(() =>
+        commands.createPairing.run(registry, {
+          environmentId: other,
+          input: { scopes: ["orchestration:read"] },
+        }),
+      );
+      expect(result._tag).toBe("Failure");
+      registry.set(sessions(env), AsyncResult.success(grant(false)));
+      expect(registry.get(commands.revokeClient.permissionAtom(env))).toBe(false);
     }),
   ),
 );

@@ -331,3 +331,46 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chec
     },
   );
 });
+
+it("installs a relative GOAT home from a directory ending in a newline", async () => {
+  const root = await NodeFSP.realpath(
+    await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-relative-home-")),
+  );
+  const cwd = NodePath.join(root, "cwd\n");
+  const relative = "-custom home\\home\n";
+  const target = NodePath.join(cwd, relative, "runtime/goat/versions/1.2.3");
+  const launcher = NodePath.join(root, "bin/goat");
+  try {
+    await NodeFSP.mkdir(target, { recursive: true });
+    await NodeFSP.writeFile(NodePath.join(target, ".install-complete"), "1.2.3\n");
+    await NodeFSP.writeFile(NodePath.join(target, "goat"), "#!/bin/sh\necho 'goat v1.2.3'\n", {
+      mode: 0o755,
+    });
+    const result = NodeChildProcess.spawnSync(
+      "sh",
+      [NodePath.resolve(import.meta.dirname, "install.sh")],
+      {
+        cwd,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: root,
+          GOAT_HOME: relative,
+          GOAT_VERSION: "1.2.3",
+          GOAT_INSTALL_BIN_DIR: NodePath.dirname(launcher),
+          GOAT_RELEASE_BASE_URL: "http://127.0.0.1:1",
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(await NodeFSP.readlink(launcher)).toBe(NodePath.join(target, "goat"));
+    expect(
+      NodeChildProcess.execFileSync(launcher, ["--version"], {
+        cwd: NodeOS.tmpdir(),
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("goat v1.2.3");
+  } finally {
+    await NodeFSP.rm(root, { recursive: true, force: true });
+  }
+});

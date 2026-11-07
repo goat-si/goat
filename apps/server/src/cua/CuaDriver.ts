@@ -1,7 +1,8 @@
+import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import * as NodeModule from "node:module";
 
 import {
-  CuaAgentBlock,
+  type CuaAgentBlock,
   CuaDriverMcpConfiguration,
   type ComputerUseApp,
   type CuaDisplayCapability,
@@ -18,10 +19,8 @@ import { isCuaDriverStartupRefusal } from "@goat/shared/cuaDriverManifest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -30,7 +29,6 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Ref from "effect/Ref";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 
@@ -51,70 +49,29 @@ import { desktopHelperReadiness } from "./DesktopHelperReadiness.ts";
 export { desktopHelperReadiness } from "./DesktopHelperReadiness.ts";
 
 import * as ServerConfig from "../config.ts";
-import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DesktopAppsListing from "./DesktopAppsListing.ts";
 import { makeDesktopBrowserManifest } from "./DesktopBrowserManifest.ts";
 import { currentBlock } from "./cuaDriverBlock.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
-import { standaloneCatalog, type CuaAppListing } from "./CuaAppListing.ts";
+import { availableCatalog, standaloneCatalog, type CuaAppListing } from "./CuaAppListing.ts";
 export { catalogName } from "./CuaAppListing.ts";
 import * as InstalledDesktopApps from "./installedDesktopApps.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
 import { honoredSignals } from "./ComputerUsePrivateMode.ts";
+import { makeDesktopHostFactory } from "./DesktopCuaDriverHost.ts";
+import { makeCuaDriverGenerationFence } from "./CuaDriverGeneration.ts";
+export { makeDesktopHostFactory } from "./DesktopCuaDriverHost.ts";
 import * as StandaloneCuaManifest from "./StandaloneCuaManifest.ts";
 import * as LinuxReadiness from "./LinuxReadiness.ts";
 import { LinuxHelperReport } from "./linuxHelperHost/LinuxHelperReport.ts";
-export class CuaDriverStartError extends Schema.TaggedError<CuaDriverStartError>()(
-  "CuaDriverStartError",
-  { binaryPath: Schema.String, cause: Schema.Defect() },
-) {
-  override get message() {
-    return "Failed to start Cua Driver.";
-  }
-}
-export class CuaDriverHostError extends Schema.TaggedError<CuaDriverHostError>()(
-  "CuaDriverHostError",
-  {
-    // "restart" is the desktop retiring its driver on purpose, such as after new grants.
-    // "refused" is the driver rejecting GOAT's capability manifest or launch options at startup.
-    // "display" is a start refused because this host has no screen the driver can use.
-    // "install" is turning computer use on when the verified driver download failed.
-    operation: Schema.Literals([
-      "busy",
-      "start",
-      "stop",
-      "exit",
-      "desktop",
-      "timeout",
-      "restart",
-      "refused",
-      "display",
-      "install",
-    ]),
-    cause: Schema.optional(Schema.Defect()),
-    /** The desktop's typed reason, beside its message, when agents cannot get past it alone. */
-    block: Schema.optional(CuaAgentBlock),
-  },
-) {
-  override get message() {
-    // The desktop's explanation, such as a missing macOS grant, and the display probe's reason
-    // are written for users.
-    if (
-      (this.operation === "desktop" ||
-        this.operation === "display" ||
-        this.operation === "install") &&
-      typeof this.cause === "string"
-    )
-      return this.cause;
-    if (this.operation === "refused") return CUA_DRIVER_REFUSED_MESSAGE;
-    return `Cua Driver host failed during ${this.operation}.`;
-  }
-}
-export const CUA_DRIVER_REFUSED_MESSAGE =
-  "Cua Driver refused GOAT's capability manifest or launch options. The server log has the driver's reason.";
-export type CuaDriverError = CuaDriverStartError | CuaDriverHostError;
-
+import { CuaDriverHostError, CuaDriverStartError, type CuaDriverError } from "./CuaDriverErrors.ts";
+export {
+  CuaDriverHostError,
+  CuaDriverStartError,
+  CUA_DRIVER_REFUSED_MESSAGE,
+  type CuaDriverError,
+} from "./CuaDriverErrors.ts";
 export { agentBlock } from "./cuaDriverBlock.ts";
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const isStartError = Schema.is(CuaDriverStartError);
@@ -123,15 +80,18 @@ export interface CuaDriverHost {
   readonly start: Effect.Effect<CuaDriverMcpConfiguration, CuaDriverError>;
   readonly stop: Effect.Effect<void, CuaDriverError>;
   readonly waitForExit: Effect.Effect<void, CuaDriverError>;
+  readonly hostGeneration?: () => number | undefined;
+  readonly stoppedGeneration?: () => number | undefined;
 }
-
 export class CuaDriver extends Context.Service<
   CuaDriver,
   {
     readonly readBrowserConfig?: Effect.Effect<unknown, Error>;
     readonly publishBrowserManifest?: (union: Union) => Effect.Effect<string, Error>;
     /** Restarts the running driver, so a manifest it would not reload stops counting. */
-    readonly fenceBrowserManifest?: Effect.Effect<void>;
+    readonly fenceBrowserManifest?: Effect.Effect<boolean>;
+    readonly afterBrowserFenceFailure?: (disable: Effect.Effect<void>) => Effect.Effect<void>;
+    readonly markBrowserFence?: () => { readonly run: Effect.Effect<boolean> };
     readonly refreshManifest?: (
       apps: ReadonlyArray<string>,
     ) => Effect.Effect<void, CuaDriverHostError>;
@@ -144,6 +104,7 @@ export class CuaDriver extends Context.Service<
      * host cannot list; asking grants nothing.
      */
     readonly appCatalog: Effect.Effect<ReadonlyArray<ComputerUseApp>>;
+    readonly availableAppCatalog: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
     readonly lastFailure: Effect.Effect<Option.Option<CuaDriverError>>;
     /**
      * Why an agent cannot use the computer here until a person acts, from the last failure and
@@ -190,20 +151,19 @@ export class CuaDriver extends Context.Service<
     };
   }
 >()("goat/cua/CuaDriver") {}
-
 export interface CuaX11Display {
   readonly DISPLAY: string;
   readonly XAUTHORITY?: string;
 }
-
 interface Acquisition {
   readonly result: Deferred.Deferred<Option.Option<CuaDriverMcpConfiguration>>;
   host?: CuaDriverHost;
-  cleanup?: Fiber.Fiber<void>;
+  cleanup?: Fiber.Fiber<boolean>;
   watcher?: Fiber.Fiber<void> | undefined;
   revoked: boolean;
   running?: boolean;
   mcp?: CuaDriverMcpConfiguration;
+  hostGeneration?: number | undefined;
   displayEnvironment?: ReadonlyArray<CuaDisplay.CuaDisplayVariable>;
   /** What this daemon last said about the macOS grants; a failed check clears it. */
   grants?: CuaDisplay.MacGrants | null;
@@ -228,6 +188,7 @@ export interface CuaDriverOptions {
   readonly listedApps?: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
   /** A desktop host's named listing; servers without one name each app by its id. */
   readonly appCatalog?: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
+  readonly availableAppCatalog?: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
   /**
    * Where a server that runs the driver itself reads requestable apps when a request asks
    * (#1561): a short-lived listing on the given display environment, never the shared daemon.
@@ -273,6 +234,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   const freshProbe = invalidateProbe.pipe(Effect.andThen(cachedProbe));
   const lifecycle = yield* Semaphore.make(1);
   const capability = yield* makeBrowserCapabilityLifecycle(options);
+  const generations = makeCuaDriverGenerationFence();
   const manifestLock = yield* Semaphore.make(1);
   let active: Acquisition | undefined;
   let closed = false;
@@ -300,16 +262,26 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     if (entry.watcher) yield* Fiber.interrupt(entry.watcher).pipe(Effect.forkDetach);
     if (!entry.cleanup && entry.host) {
       entry.cleanup = yield* entry.host.stop.pipe(
+        Effect.as(true),
         Effect.catch((error) =>
           Effect.sync(() => {
-            if (active === entry || active === undefined) failure = Option.some(error);
+            if (
+              (active === entry || active === undefined) &&
+              (entry.mcp !== undefined || Option.isNone(failure))
+            )
+              failure = Option.some(error);
+            return false;
           }),
         ),
-        Effect.ignoreCause({ log: true }),
+        Effect.catchCause((cause) =>
+          Effect.logError("Driver stop failed", { cause }).pipe(Effect.as(false)),
+        ),
         Effect.forkDetach({ startImmediately: true }),
       );
     }
-    if (entry.cleanup) yield* Fiber.join(entry.cleanup).pipe(Effect.timeoutOption("4 seconds"));
+    if (!entry.cleanup) return false;
+    const stopped = yield* Fiber.join(entry.cleanup).pipe(Effect.timeoutOption("4 seconds"));
+    return Option.getOrElse(stopped, () => false);
   });
   const revoke = Effect.fnUntraced(function* (entry: Acquisition) {
     entry.revoked = true;
@@ -319,14 +291,16 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       yield* capability.fence;
     }
     yield* Deferred.succeed(entry.result, Option.none());
-    yield* stop(entry);
+    return yield* stop(entry);
   });
-
   yield* Effect.addFinalizer(() =>
-    Effect.gen(function* () {
-      closed = true;
-      if (active) yield* revoke(active);
-    }),
+    timedShutdownPhase(
+      "cuaCleanup",
+      Effect.gen(function* () {
+        closed = true;
+        if (active) yield* revoke(active);
+      }),
+    ),
   );
   yield* changes.pipe(
     Stream.runForEach((value) =>
@@ -336,7 +310,6 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     ),
     Effect.forkScoped,
   );
-
   const start = Effect.fnUntraced(
     function* (entry: Acquisition) {
       if (entry.revoked) return;
@@ -361,9 +334,25 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       failure = Option.none();
       entry.running = true;
       entry.mcp = mcp;
+      entry.hostGeneration = entry.host.hostGeneration?.();
+      if (entry.host.hostGeneration) generations.observe(entry.hostGeneration);
       yield* invalidateGrants;
       yield* cachedGrants.pipe(Effect.forkDetach);
-      yield* capability.probe(mcp, () => active === entry && !entry.revoked);
+      yield* capability.probe(
+        mcp,
+        () =>
+          active === entry &&
+          !entry.revoked &&
+          (entry.host?.hostGeneration === undefined ||
+            (entry.host.hostGeneration() === entry.hostGeneration &&
+              generations.allows(entry.hostGeneration))),
+        () =>
+          active === entry &&
+          !entry.revoked &&
+          entry.host?.hostGeneration !== undefined &&
+          entry.host.hostGeneration() === entry.hostGeneration &&
+          generations.newer(entry.hostGeneration),
+      );
       yield* Deferred.succeed(entry.result, Option.some(withCuaDriverPrivacyEnvironment(mcp)));
       entry.watcher = yield* entry.host.waitForExit.pipe(
         Effect.match({
@@ -402,7 +391,6 @@ export const make = Effect.fn("CuaDriver.make")(function* (
         ),
       ),
   );
-
   const enabled = settings.getSettings.pipe(
     Effect.map((value) => !closed && value.enableCua),
     Effect.catch((cause) =>
@@ -483,6 +471,21 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       yield* revoke(entry);
     }
   }, lifecycle.withPermit);
+  const prepareBrowserFence = (requireCurrent: boolean) => {
+    const entry = active;
+    const generation = entry?.hostGeneration;
+    generations.fence(entry === undefined && !requireCurrent ? generations.last() : generation);
+    return lifecycle.withPermit(
+      Effect.gen(function* () {
+        if (entry === undefined) return false;
+        const stopped = yield* revoke(entry);
+        if (!entry.host?.hostGeneration) return stopped;
+        return (
+          stopped && generation !== undefined && entry.host.stoppedGeneration?.() === generation
+        );
+      }),
+    );
+  };
   return CuaDriver.of({
     readBrowserConfig: Effect.gen(function* () {
       const entry = active;
@@ -503,9 +506,9 @@ export const make = Effect.fn("CuaDriver.make")(function* (
           ),
       ),
     ),
-    fenceBrowserManifest: lifecycle.withPermit(
-      Effect.suspend(() => (active === undefined ? Effect.void : revoke(active))),
-    ),
+    fenceBrowserManifest: Effect.suspend(() => prepareBrowserFence(false)),
+    markBrowserFence: () => ({ run: prepareBrowserFence(true) }),
+    afterBrowserFenceFailure: capability.afterFenceFailure,
     ...(refresh ? { refreshManifest } : {}),
     acquire,
     x11Display: Effect.sync(() =>
@@ -538,6 +541,11 @@ export const make = Effect.fn("CuaDriver.make")(function* (
           : Option.getOrElse(yield* options.appCatalog, () => []);
       return (yield* enabled) ? catalog : [];
     }),
+    availableAppCatalog: availableCatalog(
+      enabled,
+      standaloneListing,
+      options.availableAppCatalog ?? options.appCatalog,
+    ),
     lastFailure: Effect.sync(() => failure),
     block: (options.helperReadiness ?? Effect.succeedNone).pipe(
       Effect.map((helper) =>
@@ -697,7 +705,6 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
         let starting: Promise<EmbeddedDriverConnection> | undefined;
         let stopping: Promise<void> | undefined;
         const watchers = new Map<AbortController, Promise<unknown>>();
-
         const start = Effect.tryPromise({
           try: () => {
             if (stopping) return Promise.reject(new CuaDriverHostError({ operation: "start" }));
@@ -721,7 +728,6 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
               : new CuaDriverStartError({ binaryPath, cause }),
           ),
         );
-
         const stop = Effect.tryPromise({
           try: () =>
             (stopping ??= (async () => {
@@ -764,84 +770,6 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
       });
   },
 );
-
-export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactory")(function* () {
-  const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
-  const crypto = yield* Crypto.Crypto;
-  // The desktop app runs in the signed-in session and starts the driver with its own environment.
-  return (_display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>) =>
-    Effect.gen(function* () {
-      const requestId = yield* crypto
-        .randomUUIDv4()
-        .pipe(Effect.mapError((cause) => new CuaDriverHostError({ operation: "desktop", cause })));
-      const scope = yield* Scope.make();
-      const ready = yield* Deferred.make<CuaDriverMcpConfiguration, CuaDriverError>();
-      const stopped = yield* Deferred.make<void, CuaDriverError>();
-      let requested = false;
-      let retired = false;
-      const unavailable = new CuaDriverHostError({ operation: "desktop" });
-      const retire = (error: CuaDriverError) =>
-        Deferred.fail(ready, error).pipe(Effect.andThen(Deferred.fail(stopped, error)));
-      const lost = Deferred.fail(ready, unavailable).pipe(
-        Effect.andThen(Deferred.succeed(stopped, undefined)),
-      );
-      const start = Effect.gen(function* () {
-        // Start the subscription before writing: the desktop may reply synchronously.
-        yield* receiver.cuaReports.pipe(
-          Stream.runForEach((report) =>
-            Effect.gen(function* () {
-              if (report.requestId !== requestId) return;
-              if (report.status === "ready") yield* Deferred.succeed(ready, report.mcp);
-              else if (report.status === "stopped")
-                yield* retire(new CuaDriverHostError({ operation: "restart" }));
-              else
-                yield* retire(
-                  report.message === undefined && report.block === undefined
-                    ? unavailable
-                    : new CuaDriverHostError({
-                        operation: "desktop",
-                        ...(report.message === undefined ? {} : { cause: report.message }),
-                        ...(report.block === undefined ? {} : { block: report.block }),
-                      }),
-                );
-            }),
-          ),
-          Effect.ensuring(lost),
-          Effect.forkIn(scope, { startImmediately: true }),
-        );
-        const health = yield* receiver.subscribeHealth.pipe(
-          Effect.provideService(Scope.Scope, scope),
-        );
-        if (health.latest.status === "unavailable" || health.latest.status === "stopped")
-          return yield* unavailable;
-        yield* health.changes.pipe(
-          Stream.runForEach((value) =>
-            value.status === "stopped" || value.status === "unavailable" ? lost : Effect.void,
-          ),
-          Effect.forkIn(scope, { startImmediately: true }),
-        );
-        if (retired) return yield* unavailable;
-        requested = true;
-        yield* receiver
-          .requestCuaDriver(requestId, true)
-          .pipe(
-            Effect.mapError((cause) => new CuaDriverHostError({ operation: "desktop", cause })),
-          );
-        return yield* Deferred.await(ready);
-      });
-      const stop = Effect.gen(function* () {
-        retired = true;
-        if (!requested) return;
-        yield* receiver
-          .requestCuaDriver(requestId, false)
-          .pipe(
-            Effect.mapError((cause) => new CuaDriverHostError({ operation: "desktop", cause })),
-          );
-        yield* Deferred.await(stopped).pipe(Effect.ignore, Effect.timeoutOption("3 seconds"));
-      }).pipe(Effect.ensuring(Scope.close(scope, Exit.void)));
-      return { start, stop, waitForExit: Deferred.await(stopped) } satisfies CuaDriverHost;
-    });
-});
 
 export const layer = Layer.effect(
   CuaDriver,
@@ -948,12 +876,15 @@ export const layer = Layer.effect(
     );
     const driver = yield* make(factory, probe, {
       ...(config.mode === "desktop"
-        ? yield* DesktopAppsListing.makeDesktopAppsRequest().pipe(
-            Effect.map((request) => ({
+        ? yield* Effect.gen(function* () {
+            const request = yield* DesktopAppsListing.makeDesktopAppsRequest();
+            const catalog = yield* DesktopAppsListing.makeDesktopAppsCatalog();
+            return {
               listedApps: request.pipe(Effect.map(Option.map((listed) => listed.apps))),
-              appCatalog: request.pipe(Effect.map(Option.map((listed) => listed.catalog))),
-            })),
-          )
+              appCatalog: catalog,
+              availableAppCatalog: catalog,
+            };
+          })
         : {}),
       publishBrowserManifest,
       probeBrowserClaims: yield* makeBrowserDriverCapabilityProbe(),
@@ -976,6 +907,8 @@ export const layer = Layer.effect(
             new BrowserClaimManifestUnavailable({ cause: "Driver configuration is unavailable." }),
           ),
         driver.fenceBrowserManifest,
+        driver.afterBrowserFenceFailure,
+        driver.markBrowserFence,
       );
     return driver;
   }),

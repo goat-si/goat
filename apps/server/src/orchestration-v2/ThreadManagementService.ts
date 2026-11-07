@@ -7,8 +7,9 @@ import type {
   ProjectionRecordField,
   ProjectionRecordFilter,
   ProjectionRecords,
-  ShellSnapshotOptions,
+  ShellSnapshotRead,
 } from "./ProjectionStore.ts";
+import type { ShellSubscriberOptions } from "./ProjectionShellThreadRows.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -27,7 +28,6 @@ import {
   type OrchestrationV2CreationSource,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
-  type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadTranscript,
   type OrchestrationV2ThreadShell,
@@ -83,22 +83,7 @@ export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart" | 
  */
 export const STEER_READY_WAIT_MS = 45_000;
 
-/**
- * The delivery a thread send asks for. Another thread's agent talks like steering whatever mode
- * it named; a thread's own follow-ups and clients outside GOAT threads keep queue and steer.
- */
-export function threadSendMode(input: {
-  readonly requested: "auto" | "queue" | "steer" | "restart" | undefined;
-  readonly senderThreadId: ThreadId | undefined;
-  readonly targetThreadId: ThreadId;
-}): ThreadManagementSendMode {
-  const requested = input.requested ?? "auto";
-  if (requested === "restart") return requested;
-  if (requested === "auto") return "steer_when_ready";
-  return input.senderThreadId !== undefined && input.senderThreadId !== input.targetThreadId
-    ? "steer_when_ready"
-    : requested;
-}
+export { threadSendMode } from "./ThreadSendMode.ts";
 
 export interface ThreadManagementProvenance {
   readonly createdBy: OrchestrationV2Actor;
@@ -473,17 +458,20 @@ export interface ThreadManagementServiceShape {
     readonly threadId: ThreadId;
   }) => Effect.Effect<OrchestrationV2ThreadProjection, ThreadManagementError>;
   readonly getShellSnapshot: Orchestrator.OrchestratorV2["Service"]["getShellSnapshot"];
+  readonly getAgentAwarenessSnapshot: Orchestrator.OrchestratorV2["Service"]["getAgentAwarenessSnapshot"];
   readonly listActiveSubagentThreadIds: Orchestrator.OrchestratorV2["Service"]["listActiveSubagentThreadIds"];
   readonly listLaunchEdges: Orchestrator.OrchestratorV2["Service"]["listLaunchEdges"];
   readonly countThreads: Orchestrator.OrchestratorV2["Service"]["countThreads"];
   readonly listOlderSettledThreads: Orchestrator.OrchestratorV2["Service"]["listOlderSettledThreads"];
   readonly readShellSnapshot: (
-    options?: Pick<ShellSnapshotOptions, "location" | "familyOf" | "worktreePath" | "threadIds">,
+    options?: ShellSubscriberOptions,
   ) => Effect.Effect<
-    Effect.Effect<OrchestrationV2ThreadShellSnapshot, Orchestrator.OrchestratorV2Error>,
+    Effect.Effect<ShellSnapshotRead, Orchestrator.OrchestratorV2Error>,
     Orchestrator.OrchestratorV2Error
   >;
   readonly getThreadShell: Orchestrator.OrchestratorV2["Service"]["getThreadShell"];
+  readonly listAppOwnedChildThreadIds: Orchestrator.OrchestratorV2["Service"]["listAppOwnedChildThreadIds"];
+  /** Omit `projectId` to list every project's threads. Side chats are never listed. */
   readonly listProjectThreads: (input: {
     /** Undefined lists every project. */
     readonly projectId: ProjectId | undefined;
@@ -2139,6 +2127,7 @@ const make = Effect.gen(function* () {
     getProjectThreadRecords,
     getProjectThread,
     getShellSnapshot: orchestrator.getShellSnapshot,
+    getAgentAwarenessSnapshot: orchestrator.getAgentAwarenessSnapshot,
     listActiveSubagentThreadIds: orchestrator.listActiveSubagentThreadIds,
     listLaunchEdges: orchestrator.listLaunchEdges,
     countThreads: orchestrator.countThreads,
@@ -2146,6 +2135,13 @@ const make = Effect.gen(function* () {
     readShellSnapshot: orchestrator.readShellSnapshot,
     getThreadShell: orchestrator.getThreadShell,
     getReviewLedgerEntries: orchestrator.getReviewLedgerEntries,
+    listAppOwnedChildThreadIds: Effect.fn("ThreadManagementService.listAppOwnedChildThreadIds")(
+      function (threadId) {
+        return ensureProjectionTranscript(threadId).pipe(
+          Effect.andThen(orchestrator.listAppOwnedChildThreadIds(threadId)),
+        );
+      },
+    ),
     listProjectThreads,
     sendToThread,
     assertReviewTaskSendAllowed,

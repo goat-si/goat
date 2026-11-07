@@ -55,9 +55,9 @@ import {
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
+import { admitLive } from "./tunnelAttachment.ts";
 import {
   SSH_READY_PROBE_TIMEOUT_MS,
-  SSH_READY_TIMEOUT_MS,
   type SshReadinessBudget,
   sshReadinessBudget,
   waitForHttpReady,
@@ -75,10 +75,12 @@ import {
 import { makeExistingServerRoutes, type ExistingServerRouteShape } from "./existingServer.ts";
 import { makeRemoteScripts, type RuntimeExecutableShape } from "./runtimeExecutable.ts";
 import {
+  absoluteRemoteNodeScriptPath,
   applyScriptPlaceholders,
   decodeRemoteJsonOutput,
   isNodeScriptRunner,
   matchesSignals,
+  compatibleRuntimeUpdateBlocked,
   liveRuntimeBlocksUpdate,
   notifyRuntimePhase,
   REMOTE_ARCHIVE_CHECKSUMS_SECONDS,
@@ -783,6 +785,7 @@ exec "$GOAT_RUNTIME_DIR/goat" "$@"
 `;
 
 const REMOTE_LAUNCH_SCRIPT = `set -eu
+cd "$HOME" 2>/dev/null || cd /
 @@GOAT_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
 STATE_DIR="$HOME/.goat/ssh-launch/$STATE_KEY"
@@ -1044,14 +1047,14 @@ while [ -z "$REMOTE_PORT" ]; do
     # Windows OpenSSH ends every process left in the session, so the server starts outside it.
     if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then set -- "$(cygpath -w "$SPAWN_IDENTITY")"
     else set -- "$(cygpath -w "$(command -v node)")" "$(cygpath -w "$SPAWN_IDENTITY")"; fi
-    REMOTE_PID="$(windows_spawn_detached "$LOG_FILE" "$@" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$(cygpath -w "$DEFAULT_SERVER_HOME")")" || REMOTE_PID=
+    export GOAT_RUNTIME_ORIGIN=ssh; REMOTE_PID="$(windows_spawn_detached "$LOG_FILE" "$@" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$(cygpath -w "$DEFAULT_SERVER_HOME")")" || REMOTE_PID=
     if ! valid_positive "$REMOTE_PID"; then
       printf 'Could not start the GOAT server outside the SSH session on this Windows host.\\n' >&2
       tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
       exit 1
     fi
   else
-    nohup env T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
+    nohup env GOAT_RUNTIME_ORIGIN=ssh T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
     REMOTE_PID="$!"
   fi
   printf '%s\\n' "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME" >"$IDENTITY_NEXT"
@@ -1127,7 +1130,7 @@ trap 'release_recovery_lock; release_replacement_lock' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-acquire_replacement_lock || { printf 'Another client is replacing the remote runtime.\\n' >&2; exit 1; }
+acquire_replacement_lock || { printf 'Another client is replacing the remote runtime.\\n' >&2; exit 1; }; [ -e "$STATE_DIR/run-t3.sh" ] || rm -f "$STATE_DIR/run-goat.sh" || :
 REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
 REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
 REMOTE_PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
@@ -1195,12 +1198,9 @@ export class SshInvalidArchiveVersionError extends Schema.TaggedError<SshInvalid
   }
 }
 
-// The version becomes a directory name the runner removes and recreates, so
-// it must be one exact SemVer segment: no separators, no `..`, no shell
-// metacharacters beyond what SemVer allows.
+// The version names a runtime directory, so it must be one exact SemVer segment.
 const EXACT_ARCHIVE_VERSION =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
-
 export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerError>()(
   "SshMissingRunnerError",
   {},
@@ -1211,7 +1211,7 @@ export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerEr
 }
 
 export function buildRemoteGoatRunnerScript(input?: RemoteGoatRunnerOptions): string {
-  const nodeScriptPath = input?.nodeScriptPath?.trim() || "";
+  const nodeScriptPath = absoluteRemoteNodeScriptPath(input);
   const archiveVersion = input?.archiveVersion?.trim() || "";
   if (nodeScriptPath === "" && archiveVersion === "") {
     throw new SshMissingRunnerError();
@@ -2531,7 +2531,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       snapshot = { ...base, state: "ready", refreshDeferred, detail: refreshDeferred.detail };
       acquisitionFailures.set(key, result.selectedRuntime.upgradeFailure);
     } else if (!("type" in result) && result.selectedRuntime.updateBlocked !== undefined) {
-      snapshot = { ...base, state: "update_blocked", detail: result.selectedRuntime.updateBlocked };
+      snapshot = { ...base, state: "ready", detail: result.selectedRuntime.updateBlocked };
     } else {
       snapshot = { ...base, state: "ready" };
       if (runtimeVersion === requestedVersion) acquisitionFailures.delete(key);
@@ -2728,6 +2728,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         readonly error: SshEnvironmentEffectError;
       },
     ): Effect.fn.Return<T, SshEnvironmentEffectError, SshEnvironmentEffectContext> {
+      if (SshAuth.isSshAgentSigningFailure(input.error)) {
+        if (input.authSecret !== null) authSecrets.delete(input.key);
+        return yield* input.error;
+      }
       if (!SshAuth.isSshAuthFailure(input.error)) {
         return yield* input.error;
       }
@@ -4194,6 +4198,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     let verifiedDrainDeferral:
       | { entry: SshTunnelEntry; intent: NonNullable<ReturnType<typeof pendingReplacements.get>> }
       | undefined;
+    let staleUnmanagedAttachment: SshTunnelEntry | undefined;
     const result = yield* Effect.gen(function* () {
       const { resolvedTarget } = yield* resolveManagedTarget(target);
       key = targetConnectionKey(resolvedTarget);
@@ -4233,14 +4238,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         );
         if (app !== undefined) return app;
       }
-      const output = yield* runSshCommand(resolvedTarget, {
-        batchMode: "yes",
-        interactiveAuth: false,
-        preHostArgs: ["-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no"],
-        remoteCommandArgs: ["sh", "-l", "-s"],
-        stdin: buildRemoteRuntimeProbeScript(requestedVersion, REMOTE_RUNTIME_STATE_KEY),
-        timeoutMs: SSH_READY_TIMEOUT_MS,
-      });
+      const output = yield* NativeWindows.statusRuntimeProbe(resolvedTarget, requestedVersion);
       const probe = yield* decodeRemoteJsonOutput(output.stdout, decodeRemoteRuntimeProbe).pipe(
         Effect.mapError(runtimePreparationError),
       );
@@ -4248,6 +4246,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       const base = { host, requestedVersion };
       let snapshot: SshHostStatus;
       let compatibleLive = false;
+      let admission: ReturnType<typeof admitLive> | undefined;
       if (probe.liveStatus === "live") {
         if (
           probe.liveVersion === undefined ||
@@ -4268,12 +4267,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         const compatible = matchesSignals(probe.liveSignals, requestedVersion);
         const runsRequested = probe.liveVersion === requestedVersion;
         const blocked = liveRuntimeBlocksUpdate(probe, order, compatible, runsRequested);
-        compatibleLive =
+        const binaryVerified =
           compatible &&
-          probe.identityAbsent !== true &&
-          probe.liveBinarySignals !== undefined &&
-          probe.liveBinarySignals.serverVersion === probe.liveVersion &&
+          probe.liveBinarySignals?.serverVersion === probe.liveVersion &&
           matchesSignals(probe.liveBinarySignals, requestedVersion);
+        compatibleLive = binaryVerified && probe.identityAbsent !== true;
         if (!compatible && !blocked) {
           return {
             kind: "error",
@@ -4283,19 +4281,19 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           } satisfies SshHostResult;
         }
         const providers = observed?.status?.providers;
+        admission = admitLive(entry, { ...probe, blocked, compatible, binaryVerified, order });
+        const readyState = providers?.ready === false ? "providers_not_ready" : "ready";
+        staleUnmanagedAttachment = admission.staleEntry;
         snapshot = {
           ...base,
           runtimeVersion: probe.liveVersion,
-          state: blocked
-            ? "update_blocked"
-            : providers?.ready === false
-              ? "providers_not_ready"
-              : "ready",
+          state: admission.restricted ? "update_blocked" : readyState,
           ...(providers === undefined ? {} : { providers }),
-          ...(blocked
+          ...(admission.restricted || admission.explainsUpdate
             ? {
-                detail:
-                  order !== undefined && order > 0
+                detail: !admission.restricted
+                  ? compatibleRuntimeUpdateBlocked(host, probe.liveVersion, requestedVersion, order)
+                  : admission.newer
                     ? `${host} runs a newer GOAT (${probe.liveVersion}). Update this app from the update button next to Settings.`
                     : `A GOAT server that this app didn't start or cannot replace is running on ${host}. Stop it on the host, then reconnect.`,
               }
@@ -4379,6 +4377,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       } else if (compatibleLive && snapshot.runtimeVersion === requestedVersion) {
         clearArchiveDeferral = { failure: previousFailure, intent: pendingReplacements.get(key) };
       } else if (
+        admission?.unreplaceable !== true &&
         compatibleLive &&
         previousFailure?.reason === "archive_unavailable" &&
         previousFailure.archive?.requestedVersion === requestedVersion
@@ -4393,8 +4392,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           refreshDeferred,
         };
       } else if (
-        previousFailure?.reason === "archive_unavailable" ||
-        previousFailure?.reason === "unsupported_platform"
+        admission?.unreplaceable !== true &&
+        (previousFailure?.reason === "archive_unavailable" ||
+          previousFailure?.reason === "unsupported_platform")
       ) {
         snapshot = {
           ...base,
@@ -4439,6 +4439,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     let enriched = yield* enrichFailure(target, result);
     if (closed || (generations.get(key) ?? 0) !== generation) return statuses.get(key) ?? enriched;
     if (statuses.get(key) !== observed && statuses.has(key)) return statuses.get(key)!;
+    if (staleUnmanagedAttachment !== undefined && tunnels.get(key) === staleUnmanagedAttachment) {
+      staleUnmanagedAttachment.attachmentInvalidated = true;
+      attachments.delete(staleUnmanagedAttachment);
+    }
     if (verifiedDrainDeferral !== undefined) {
       if (
         tunnels.get(key) !== verifiedDrainDeferral.entry ||

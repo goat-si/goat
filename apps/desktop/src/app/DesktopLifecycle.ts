@@ -1,3 +1,4 @@
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -13,6 +14,7 @@ import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
@@ -105,7 +107,7 @@ interface QuitState {
   waitingSinceNanos: bigint | null;
 }
 
-// Longer than a backend's stop budget (SIGTERM, 5s grace, SIGKILL, 1s wait),
+// Longer than a backend's stop budget (1s spawn, 5s grace, 1s exit, 1s drain, 1s margin),
 // so a double Cmd-Q at the start of a normal quit cannot cut the backend stop
 // short and orphan it.
 const SHUTDOWN_STALL_THRESHOLD = Duration.seconds(10);
@@ -260,14 +262,21 @@ export const make = DesktopLifecycle.of({
     yield* Effect.gen(function* () {
       yield* Effect.yieldNow;
       yield* Ref.set(state.quitting, true);
+      yield* Ref.set(state.stopReason, "relaunch");
       yield* requestDesktopShutdownAndWait();
       if (environment.isDevelopment) {
         yield* electronApp.exit(75);
         return;
       }
+      const prefixes = ElectronProtocol.getDesktopLinkSchemes(environment.isDevelopment).map(
+        (scheme) => `${scheme.toLowerCase()}:`,
+      );
+      const args = yield* HostProcess.Arguments;
       yield* electronApp.relaunch({
-        execPath: process.execPath,
-        args: process.argv.slice(1),
+        execPath: yield* HostProcess.ExecutablePath,
+        args: args
+          .slice(1)
+          .filter((arg) => !prefixes.some((prefix) => arg.toLowerCase().startsWith(prefix))),
       });
       yield* electronApp.exit(0);
     }).pipe(

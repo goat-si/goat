@@ -14,7 +14,15 @@ export interface GoatMcpToolPresentation {
   readonly logo: GoatMcpToolLogo;
 }
 
-const GOAT_MCP_SERVER_ALIASES = new Set(["goat", "t3-code", "t3_code", "t3code"]);
+const GOAT_MCP_SERVER_ALIASES = new Set([
+  "goat",
+  "goatdirect",
+  "goat-direct",
+  "goat_direct",
+  "t3-code",
+  "t3_code",
+  "t3code",
+]);
 
 const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ...lifecycleToolDefinitions(tool),
@@ -343,6 +351,17 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "browser",
     "browser",
   ),
+  goat_preview_fill_card: tool(["Fill", "Filling", "Filled", "a saved card"], "browser", "browser"),
+  goat_preview_fill_login: tool(
+    ["Fill", "Filling", "Filled", "a saved login"],
+    "browser",
+    "browser",
+  ),
+  goat_preview_fill_one_time_code: tool(
+    ["Fill", "Filling", "Filled", "a one-time code"],
+    "browser",
+    "browser",
+  ),
   goat_preview_fill_secret: tool(
     ["Fill", "Filling", "Filled", "a saved password"],
     "browser",
@@ -629,6 +648,15 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Export", "Exporting", "Exported", "GOAT ledger tasks"],
     "channel-task-read",
   ),
+  channel_task_follow_up: tool(
+    ["Follow up on", "Following up on", "Followed up on", "a GOAT task"],
+    "channel-task-report",
+  ),
+  channel_task_stop: tool(["Stop", "Stopping", "Stopped", "a GOAT task"], "channel-task-report"),
+  channel_task_answer: tool(
+    ["Answer", "Answering", "Answered", "a GOAT task question"],
+    "channel-task-report",
+  ),
   channel_task_move: tool(
     ["Continue", "Continuing", "Continued", "a GOAT task on another machine"],
     "channel-task-move",
@@ -712,6 +740,9 @@ export const GOAT_MCP_CANONICAL_TOOL_ALIASES: Readonly<Record<string, string>> =
   goat_channel_input_read: "channel_input_get",
   goat_channel_task_export: "channel_task_export",
   goat_channel_task_list: "channel_task_list",
+  goat_channel_task_follow_up: "channel_task_follow_up",
+  goat_channel_task_stop: "channel_task_stop",
+  goat_channel_task_answer: "channel_task_answer",
   goat_channel_task_move: "channel_task_move",
   goat_channel_task_read: "channel_task_get",
   goat_channel_task_report: "channel_task_report",
@@ -785,7 +816,21 @@ function normalizeGoatMcpToolLabel(value: string): string {
 }
 
 // Provider prefixes vary; only names in the GOAT inventory reach a tool renderer.
+const toolNameCache = new Map<string, string | null>();
+const TOOL_NAME_CACHE_LIMIT = 10_000;
+const TOOL_NAME_CACHE_MAX_KEY_LENGTH = 256;
+
 function resolveGoatMcpToolName(value: string): string | null {
+  if (value.length > TOOL_NAME_CACHE_MAX_KEY_LENGTH) return parseGoatMcpToolName(value);
+  const cached = toolNameCache.get(value);
+  if (cached !== undefined) return cached;
+  const name = parseGoatMcpToolName(value);
+  if (toolNameCache.size >= TOOL_NAME_CACHE_LIMIT) toolNameCache.clear();
+  toolNameCache.set(value, name);
+  return name;
+}
+
+function parseGoatMcpToolName(value: string): string | null {
   const label = normalizeGoatMcpToolLabel(value);
   // Bare goat_* ids are tools themselves, before goat_ is read as a namespace.
   if (GOAT_MCP_TOOL_NAMES.has(label)) return label;
@@ -800,14 +845,17 @@ function resolveGoatMcpToolName(value: string): string | null {
   }
 
   const namespaceMatch =
-    /^(?<server>goat|t3-code|t3_code|t3code)(?:[.:/]|\s*·\s*)(?<tool>.+)$/i.exec(label);
+    /^(?<server>goat[-_]direct|goatdirect|goat|t3-code|t3_code|t3code)(?:[.:/]|\s*·\s*)(?<tool>.+)$/i.exec(
+      label,
+    );
   if (namespaceMatch?.groups) {
     return namespaceMatch.groups.tool ?? null;
   }
 
-  const prefixed = /^(?:mcp[-_]{1,2})?(?:goat|t3[-_ ]?code)(?:__|[-_.:/ ])(?<tool>.+)$/i.exec(
-    label,
-  );
+  const prefixed =
+    /^(?:mcp[-_]{1,2})?(?:goat[-_]direct|goatdirect|goat|t3[-_ ]?code)(?:__|[-_.:/ ])(?<tool>.+)$/i.exec(
+      label,
+    );
   const candidate = prefixed?.groups?.tool ?? label;
   if (GOAT_MCP_TOOL_NAMES.has(candidate)) return candidate;
   // OpenCode 2 registers `goat-<thread>`; persisted `t3-code-<thread>` names

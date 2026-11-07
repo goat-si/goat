@@ -12,6 +12,14 @@ import type { AppLabels } from "./ComputerUseAppLabels.ts";
 import { batchAppScope } from "./ComputerUseBatchScope.ts";
 import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
 
+export const claimAdmission = (
+  claimPid: number | undefined,
+  authority: "claimBind" | undefined,
+) => ({
+  claimPid,
+  ...(authority === undefined ? {} : { authority }),
+});
+
 export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(function* (
   options: Pick<LeaseProxyOptions<never, never>, "reservation" | "controlId" | "bundleIds">,
   input: {
@@ -22,6 +30,7 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
     readonly interruptions: number;
     readonly idleEpoch: number;
     readonly claimPid?: number | undefined;
+    readonly authority?: "claimBind" | undefined;
     readonly foreground: ReadonlyArray<ComputerUseForegroundGrant>;
     /** The apps the proxy knows by pid, the ones its control may act on, and their labels. */
     readonly scope: {
@@ -72,6 +81,7 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
   ];
   const decision = yield* options.reservation({
     action: "reserve",
+    ...(input.authority === undefined ? {} : { authority: input.authority }),
     controlId: options.controlId,
     connectionId: input.connectionId,
     callId: input.callId,

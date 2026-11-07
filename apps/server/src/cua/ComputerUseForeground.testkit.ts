@@ -109,7 +109,7 @@ export const controlWithForeground = Effect.fn("foreground.fixtureControl")(func
   threadId: ThreadId,
 ) {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
-  const control = yield* leases.control(threadId, Option.none());
+  const control = Option.getOrThrow(yield* leases.control(threadId, Option.none()));
   return { leases, control };
 });
 
@@ -127,7 +127,7 @@ export const foregroundProxy = Effect.fn("foreground.fixtureProxy")(function* (
   });
   const admission = yield* leases.state(threadId, background.handoffId);
   if (admission._tag !== "active") return yield* Effect.die("expected background admission");
-  const control = yield* leases.control(threadId, Option.some(admission.lease));
+  const control = Option.getOrThrow(yield* leases.control(threadId, Option.some(admission.lease)));
   const grant = yield* foregroundGrant(threadId, "handoff:lifecycle-foreground", { minutes: 5 });
   const humanReports = yield* Queue.unbounded<"paused" | "agents" | "refused">();
   const h = yield* harness({

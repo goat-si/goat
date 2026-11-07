@@ -1,4 +1,9 @@
 import { HumanHandoffCard } from "./HumanHandoffCard";
+import {
+  AssistantMarkdownBlocks,
+  type MarkdownLinkHandlers,
+  type MarkdownStyleSet,
+} from "./AssistantMarkdownBlocks";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -17,7 +22,14 @@ import {
 } from "../../lib/enrichedLinkPresentation";
 import { GOAT_CONTEXT_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import { ThreadContextDivider } from "./thread-context-divider";
-import { ThreadHandoffDivider, ThreadHandoffRow } from "./thread-handoff-row";
+import { StandingInstructionsRow } from "./standing-instructions-row";
+import { EXPANDABLE_ROW_MIN_HEIGHT } from "./work-log-layout";
+import { FeedEntryShimmerContext } from "./work-shimmer-arbiter";
+import {
+  ThreadHandoffDivider,
+  ThreadHandoffRow,
+  ThreadModelSwitchDivider,
+} from "./thread-handoff-row";
 import { GuestBubbleTint, GuestMessageName } from "./guestMessageStyle";
 import { ThreadGuestPendingMessage, useThreadGuestShare } from "./ThreadGuestShareBar";
 import { SecretRequestCard } from "./SecretRequestCard";
@@ -36,7 +48,6 @@ import {
   IDLE_COMPACTING_LABELS,
   resolveUserMessagePresentation,
 } from "@goat/client-runtime/user-message";
-import type { StandingInstructionsBlock } from "@goat/shared/standingInstructions";
 import { canForkProjectedAssistantItem } from "@goat/client-runtime/state/thread-workflows";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
@@ -68,10 +79,7 @@ import {
 } from "@goat/shared/composerContextReferences";
 import { ComposerContextSheet } from "../../components/ComposerContextSheet";
 import { writeComposerContextClipboard } from "../../lib/composerContextClipboard";
-import {
-  codexArtifactTemplatePresentationLabel,
-  type CodexArtifactTemplate,
-} from "@goat/shared/codexArtifactTemplates";
+import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
 import { formatAttachmentSize } from "@goat/client-runtime/state/attachments";
 import {
@@ -84,14 +92,10 @@ import {
   markdownImageSourceFragment,
 } from "@goat/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@goat/client-runtime/work-log/presentation";
-import {
-  renderCodexInlineDirectivesAsMarkdown,
-  splitCodexArtifactTemplateMarkdown,
-} from "@goat/shared/codexMarkdownDirectives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
 import { imageMimeType } from "@goat/shared/image";
 import { videoMimeType } from "@goat/shared/video";
-import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
@@ -108,8 +112,10 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   useId,
   type ComponentPropsWithRef,
+  type ComponentRef,
   type ReactNode,
   type Ref,
   type RefObject,
@@ -128,6 +134,7 @@ import {
 } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { useResolveClassNames } from "uniwind";
+import { useReduceMotionEnabled } from "../../lib/appState";
 import { useFilePreviewGallery, FilePreviewGallery } from "../../components/FilePreviewGallery";
 import { assetImageSource } from "../../lib/assetImageSource";
 import { composerImageGallery } from "../../lib/composerImageGallery";
@@ -149,11 +156,7 @@ import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import {
   SelectableMarkdownText,
-  type MarkdownFileContextMenu,
   type MarkdownImageRenderer,
-  type MarkdownImageSourceResolver,
-  type MarkdownLinkCustomization,
-  type NativeMarkdownTextStyle,
   type SelectableMarkdownSkill,
 } from "../../native/SelectableMarkdownText";
 
@@ -181,6 +184,7 @@ import {
   deriveThreadFeedInitialContentInset,
   deriveThreadWorkLogSizing,
   type LayoutVariant,
+  THREAD_WORK_ROW_MIN_HEIGHT,
 } from "../../lib/layout";
 import { uuidv4 } from "../../lib/uuid";
 import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
@@ -242,7 +246,7 @@ import {
   pickWorkspaceBasenameMatch,
   WORKSPACE_BASENAME_LOOKUP_LIMIT,
 } from "@goat/client-runtime/workspace-basename-lookup";
-import { useLiveThreadLinkLabels, useThreadChipIcons } from "../../state/entities";
+import { useLiveThreadLinkLabels, useContextChipIcons } from "../../state/entities";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -296,7 +300,7 @@ function formatMessageTime(input: string): string {
   return MESSAGE_TIME_FORMATTER.format(timestamp);
 }
 
-const TURN_FOLD_HEIGHT = 42;
+const TURN_FOLD_HEIGHT = EXPANDABLE_ROW_MIN_HEIGHT + 3.5;
 const FEED_PADDING_TOP = 12;
 // Rows re-measure within a commit or two of a width change. LegendList also defers imperative
 // scrolls for 100ms after it compensates a size change, and a deferred restore could land
@@ -307,9 +311,6 @@ const FEED_REFLOW_SETTLE_MS = 200;
 const FEED_REFLOW_HOLD_MS = 600;
 const USER_BUBBLE_HORIZONTAL_PADDING = 3.5 * 3.5;
 const ASSISTANT_ROW_HORIZONTAL_PADDING = 3.5;
-const THREAD_FEED_DISCLOSURE_ENTER_TRANSITION = FadeIn.delay(
-  THREAD_DISCLOSURE_TRANSITION_MS,
-).duration(140);
 
 // Virtualization remounts old rows; only newly created content should replay an entrance.
 const FRESH_ENTRY_WINDOW_MS = 3_000;
@@ -359,6 +360,8 @@ export interface ThreadFeedProps {
   readonly onJumpedToMessage?: () => void;
   readonly contentInsetEndAdjustment: SharedValue<number>;
   readonly keyboardOffset: number;
+  readonly sendingWithKeyboard?: boolean;
+  readonly fitShortFeedToViewport?: boolean;
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
   readonly placeholderKeyboardLift?: SharedValue<number>;
@@ -477,6 +480,7 @@ function AssistantForkButton(props: {
           })
           .finally(() => setBusy(false));
       }}
+      hitSlop={8}
       className="h-7 w-7 items-center justify-center disabled:opacity-40"
       style={
         Platform.OS === "android"
@@ -836,81 +840,9 @@ function ThreadMediaVisibility(props: { readonly children: ReactNode }) {
   return <ThreadMediaVisibleContext value={visible}>{props.children}</ThreadMediaVisibleContext>;
 }
 
-interface MarkdownLinkHandlers {
-  readonly onLinkPress: (href: string) => void;
-  readonly fileContextMenu: (href: string) => MarkdownFileContextMenu | undefined;
-  readonly onFileContextMenuAction: (href: string, actionId: string) => void;
-  readonly onImagePress?: (href: string) => void;
-  readonly resolveImageSource?: MarkdownImageSourceResolver;
-  readonly fileEmbedLabel?: (href: string, standalone: boolean) => string | null;
-  readonly linkCustomization?: (href: string) => MarkdownLinkCustomization | undefined;
-}
-
 interface MarkdownStyleSets {
   readonly user: MarkdownStyleSet;
   readonly assistant: MarkdownStyleSet;
-}
-
-interface MarkdownStyleSet {
-  readonly nativeTextStyle: NativeMarkdownTextStyle;
-}
-
-const ARTIFACT_TEMPLATE_SYMBOL_BY_KIND: Record<
-  CodexArtifactTemplate["artifactKind"],
-  AppSymbolName
-> = {
-  document: "doc.text",
-  presentation: "chart.bar.xaxis",
-  spreadsheet: "chart.bar.xaxis",
-  site: "safari",
-  "google-docs": "doc.text",
-  "google-slides": "chart.bar.xaxis",
-  "google-sheets": "chart.bar.xaxis",
-  image: "camera",
-  email: "text.bubble",
-  slack: "text.bubble",
-};
-
-function ArtifactTemplateCard(props: {
-  readonly template: CodexArtifactTemplate;
-  readonly onUse?: ((template: CodexArtifactTemplate) => void) | undefined;
-}) {
-  return (
-    <View className="my-2 min-w-0 flex-row items-center gap-3 rounded-2xl border border-border bg-card px-3 py-3">
-      <View className="relative h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-subtle">
-        <SymbolView
-          name={ARTIFACT_TEMPLATE_SYMBOL_BY_KIND[props.template.artifactKind]}
-          size={20}
-          tintColorClassName="accent-foreground-muted"
-          type="monochrome"
-        />
-        <View className="absolute -right-1 -bottom-1 h-4 w-4 items-center justify-center rounded-full bg-fuchsia-500">
-          <SymbolView
-            name={{ ios: "sparkles", android: "auto_awesome" }}
-            size={9}
-            tintColor="white"
-            type="monochrome"
-          />
-        </View>
-      </View>
-      <View className="min-w-0 flex-1">
-        <Text className="font-goat-bold text-sm text-foreground" numberOfLines={1}>
-          {props.template.displayName}
-        </Text>
-        <Text className="text-xs text-foreground-muted">
-          {codexArtifactTemplatePresentationLabel(props.template.artifactKind)}
-        </Text>
-      </View>
-      {props.onUse ? (
-        <Button
-          label="Use template"
-          tone="secondary"
-          accessibilityLabel={`Use ${props.template.displayName} template`}
-          onPress={() => props.onUse?.(props.template)}
-        />
-      ) : null}
-    </View>
-  );
 }
 
 const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
@@ -922,39 +854,26 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
 }) {
+  const iconSubtleColor = useUniwindTheme()["--color-icon-subtle"];
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
-  const segments = useMemo(() => splitCodexArtifactTemplateMarkdown(liveMarkdown), [liveMarkdown]);
-  const threadIcons = useThreadChipIcons(props.environmentId, liveMarkdown);
+  const threadIcons = useContextChipIcons(props.environmentId, liveMarkdown);
   const linkHandlers: MarkdownLinkHandlers = {
     ...props.linkHandlers,
     linkCustomization: (href) =>
       withChipIcon(props.linkHandlers.linkCustomization?.(href), threadIcons.get(href)),
   };
 
-  return segments.map((segment) => {
-    if (segment.kind === "artifact-template") {
-      return (
-        <ArtifactTemplateCard
-          key={`artifact-template:${segment.sourceOffset}`}
-          template={segment.template}
-          onUse={props.onUseArtifactTemplate}
-        />
-      );
-    }
-    if (segment.markdown.trim().length === 0) return null;
-
-    const markdown = renderCodexInlineDirectivesAsMarkdown(segment.markdown);
-    return (
-      <SelectableMarkdownText
-        key={`markdown:${segment.sourceOffset}`}
-        markdown={markdown}
-        skills={props.skills}
-        textStyle={props.markdownStyles.nativeTextStyle}
-        {...linkHandlers}
-        renderImage={props.renderImage}
-      />
-    );
-  });
+  return (
+    <AssistantMarkdownBlocks
+      markdown={liveMarkdown}
+      iconSubtleColor={iconSubtleColor}
+      markdownStyles={props.markdownStyles}
+      linkHandlers={linkHandlers}
+      onUseArtifactTemplate={props.onUseArtifactTemplate}
+      renderImage={props.renderImage}
+      skills={props.skills}
+    />
+  );
 });
 
 function useMarkdownStyles(): MarkdownStyleSets {
@@ -1051,40 +970,6 @@ function useMarkdownStyles(): MarkdownStyleSets {
     nativeMarkdownTypography,
     regularFontFamily,
   ]);
-}
-
-/** Messages from other agents fold to one line so the user's own messages stay easy to find. */
-/** What GOAT put in front of a launched thread's first message, collapsed until tapped. */
-function StandingInstructionsRow(props: { readonly block: StandingInstructionsBlock }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <View className="gap-1">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: open }}
-        accessibilityLabel={open ? "Hide standing instructions" : "Show standing instructions"}
-        hitSlop={4}
-        onPress={() => setOpen((value) => !value)}
-        className="flex-row items-center gap-1"
-      >
-        <SymbolView
-          name={open ? "chevron.down" : "chevron.right"}
-          size={10}
-          tintColorClassName="accent-foreground-muted"
-          type="monochrome"
-        />
-        <Text className="font-goat-medium text-2xs text-foreground-muted">
-          Standing instructions
-        </Text>
-        <Text className="text-2xs text-foreground-muted opacity-70">{props.block.version}</Text>
-      </Pressable>
-      {open ? (
-        <Text selectable className="text-xs text-foreground-muted">
-          {props.block.text}
-        </Text>
-      ) : null}
-    </View>
-  );
 }
 
 /** Automation prompts are long, repeated runbooks; a folded bubble keeps them out of the way. */
@@ -1245,6 +1130,7 @@ function RunFoldButton({
   }, [entry.expanded, anchorsKey, environmentId, threadId]);
   const error = anchorsKey && failed ? "Couldn't load work. Tap to retry." : null;
   const loading = entry.expanded && anchorsKey !== "" && !failed;
+  const foldHeight = Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight);
   const toggle = () => {
     setFailed(false);
     if (error && entry.expanded) load();
@@ -1258,8 +1144,8 @@ function RunFoldButton({
         accessibilityState={{ expanded: entry.expanded, busy: loading }}
         onPress={toggle}
         hitSlop={4}
-        className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2"
-        style={{ minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight) }}
+        className="min-w-0 flex-1 flex-row items-center gap-2"
+        style={{ minHeight: foldHeight }}
       >
         <Text
           key={rowSizing.textSizeKey}
@@ -1601,7 +1487,7 @@ function renderFeedEntry(
       );
       return (
         <Animated.View
-          className="mb-5 items-end"
+          className="mb-5 mt-2 items-end"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
           {foldRowId !== null ? (
@@ -1612,7 +1498,7 @@ function renderFeedEntry(
             />
           ) : null}
           {presentation.attribution === "t3code" ? (
-            <Text className="mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted opacity-60">
+            <Text className="mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted">
               Sent by GOAT
             </Text>
           ) : null}
@@ -1947,7 +1833,7 @@ function UserMessageContent(props: UserMessageContentProps) {
   const openLinkedThread = useOpenLinkedThread();
   const { selectedThread } = useThreadSelection();
   const liveText = useLiveThreadLinkLabels(props.text, props.environmentId);
-  const threadIcons = useThreadChipIcons(props.environmentId, liveText, props.context?.records);
+  const threadIcons = useContextChipIcons(props.environmentId, liveText, props.context?.records);
   const text = replaceComposerContextReferences(liveText, (ref) => {
     const available = props.context?.records.some((record) => record.contextId === ref.contextId);
     return `[${ref.label}${available ? "" : " (unavailable)"}](${GOAT_CONTEXT_LINK_PROTOCOL}://v1/${ref.kind}/${ref.contextId})`;
@@ -2138,6 +2024,64 @@ function useThreadFeedPresentation(
   );
 }
 
+type DisclosureLayout = {
+  positions: ReadonlyMap<string, number>;
+  anchorIndex: number;
+  list: LegendListRef;
+  playing: boolean;
+};
+const DISCLOSURE_DETAIL_DELAY_MS = 135;
+const DISCLOSURE_DETAIL_FADE_MS = 70;
+const unsubscribeNothing = () => {};
+
+function DisclosureRow(props: {
+  itemKey: string;
+  index: number;
+  layout: DisclosureLayout | null;
+  children: ReactNode;
+}) {
+  const { itemKey, layout } = props;
+  const previous = layout?.positions.get(itemKey);
+  const subscribe = useCallback(
+    (notify: () => void) => {
+      if (!layout || layout.playing || previous === undefined || previous <= 0)
+        return unsubscribeNothing;
+      return layout.list.getState().listenToPosition(itemKey, notify);
+    },
+    [itemKey, layout, previous],
+  );
+  const getOffset = () => {
+    if (!layout || layout.playing || previous === undefined || previous <= 0) return 0;
+    const state = layout.list.getState();
+    const position = state.positionAtIndex(props.index);
+    const anchor = state.positionAtIndex(layout.anchorIndex);
+    return position === undefined || anchor === undefined ? 0 : previous - (position - anchor);
+  };
+  const offset = useSyncExternalStore(subscribe, getOffset, getOffset);
+  const entering = !!layout && previous === undefined;
+  return (
+    <Animated.View
+      collapsable={false}
+      style={
+        layout
+          ? {
+              opacity: entering && !layout.playing ? 0 : 1,
+              transform: [{ translateY: offset }],
+              transitionProperty: layout?.playing ? (entering ? "opacity" : "transform") : "none",
+              transitionDuration: entering
+                ? DISCLOSURE_DETAIL_FADE_MS
+                : THREAD_DISCLOSURE_TRANSITION_MS,
+              transitionDelay: entering ? DISCLOSURE_DETAIL_DELAY_MS : 0,
+              transitionTimingFunction: "ease-out",
+            }
+          : undefined
+      }
+    >
+      {props.children}
+    </Animated.View>
+  );
+}
+
 export const ThreadFeed = memo(function ThreadFeed({
   ref,
   ...props
@@ -2184,6 +2128,17 @@ export const ThreadFeed = memo(function ThreadFeed({
     settledPaneWidth !== null ? Math.round(settledPaneWidth) : measuredViewportWidth;
   const [viewportHeight, setViewportHeight] = useState(0);
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
+  const [disclosureLayout, setDisclosureLayout] = useState<DisclosureLayout | null>(null);
+  const disclosureMotionRef = useRef<DisclosureLayout | null>(null);
+  const disclosureMotionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reduceMotion = useReduceMotionEnabled();
+  const headerEndRef = useRef<ComponentRef<typeof View>>(null);
+  const lastFeedId = props.feed.at(-1)?.id;
+  const [disclosureGap, setDisclosureGap] = useState<{
+    space: number;
+    tail: typeof lastFeedId;
+  } | null>(null);
+  const disclosureTopSpace = disclosureGap?.tail === lastFeedId ? (disclosureGap?.space ?? 0) : 0;
   // LegendList's geometric follow threshold can reclaim users reading history when streamed rows grow.
   const [endFollowEnabled, setEndFollowEnabled] = useState(true);
   const endFollowEnabledRef = useRef(true);
@@ -2683,6 +2638,8 @@ export const ThreadFeed = memo(function ThreadFeed({
   // Include turn completion so unchanged message rows reveal their footer and spacing
   // even when the final message update arrives before the turn settles.
   const listAppearanceData = {
+    disclosureLayout,
+    reduceMotion,
     worktreeSetup: props.worktreeSetup,
     setupWorkingStartedAt: props.setupWorkingStartedAt,
     dispatchingMessageId: props.dispatchingMessageId,
@@ -2767,6 +2724,7 @@ export const ThreadFeed = memo(function ThreadFeed({
     resetEndFollow: () => {
       clearUserScrollSettle();
       userScrollSessionRef.current = false;
+      setDisclosureGap(null);
       cancelReflow();
       transitionEndFollow({ type: "reset" });
     },
@@ -2881,6 +2839,12 @@ export const ThreadFeed = memo(function ThreadFeed({
     // A native resize re-wraps the rows before JS hears of it. This event reaches JS ahead
     // of the row measurements it caused, since layout events are sent parent first.
     if (Math.abs(measuredViewportWidth - nextWidth) > 1) beginReflow();
+    if (
+      Math.abs(measuredViewportWidth - nextWidth) > 1 ||
+      Math.abs(viewportHeight - nextHeight) > 1
+    ) {
+      setDisclosureGap(null);
+    }
     setViewportWidth((current) => (Math.abs(current - nextWidth) > 1 ? nextWidth : current));
     setViewportHeight((current) => (Math.abs(current - nextHeight) > 1 ? nextHeight : current));
   };
@@ -2931,6 +2895,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       if (userScrollSettleTimerRef.current !== null) clearTimeout(userScrollSettleTimerRef.current);
       if (reflowSettleTimerRef.current !== null) clearTimeout(reflowSettleTimerRef.current);
       if (copyFeedbackTimeoutRef.current) clearTimeout(copyFeedbackTimeoutRef.current);
+      if (disclosureMotionTimer.current !== null) clearTimeout(disclosureMotionTimer.current);
       if (disclosureSettleFrameRef.current !== null) {
         cancelAnimationFrame(disclosureSettleFrameRef.current);
       }
@@ -2960,6 +2925,20 @@ export const ThreadFeed = memo(function ThreadFeed({
         }
         disclosureAnchorKeyRef.current = null;
         setDisclosureToggleSettling(false);
+        const motion = disclosureMotionRef.current;
+        if (motion && !motion.playing) {
+          const playing = { ...motion, playing: true };
+          disclosureMotionRef.current = playing;
+          setDisclosureLayout(playing);
+          disclosureMotionTimer.current = setTimeout(
+            () => {
+              disclosureMotionRef.current = null;
+              setDisclosureLayout(null);
+              disclosureMotionTimer.current = null;
+            },
+            DISCLOSURE_DETAIL_DELAY_MS + DISCLOSURE_DETAIL_FADE_MS + 16,
+          );
+        }
         disclosureSettleFrameRef.current = null;
         disclosureSettleSecondFrameRef.current = null;
       });
@@ -2971,6 +2950,45 @@ export const ThreadFeed = memo(function ThreadFeed({
   // wake between the data mutation and LegendList's final layout correction.
   const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string | null) => {
     cancelReflow();
+    const list = listRef.current;
+    if (list && anchorKey && !reduceMotion) {
+      const state = list.getState();
+      const anchorIndex = state.indexByKey(anchorKey);
+      if (anchorIndex !== undefined) {
+        const anchor = state.positionAtIndex(anchorIndex);
+        const anchorTop = state.elementAtIndex(anchorIndex)?.getBoundingClientRect().top;
+        const positions = new Map<string, number>();
+        for (let i = state.startBuffered; i <= state.endBuffered; i++) {
+          const item = presentedFeed[i];
+          if (!item) continue;
+          const displayed =
+            disclosureMotionRef.current &&
+            state.elementAtIndex(i)?.firstElementChild?.getBoundingClientRect().top;
+          positions.set(
+            item.id,
+            displayed != null && anchorTop !== undefined
+              ? displayed - anchorTop
+              : state.positionAtIndex(i) - anchor,
+          );
+        }
+        const motion = {
+          positions,
+          anchorIndex,
+          list,
+          playing: false,
+        };
+        if (disclosureMotionTimer.current !== null) clearTimeout(disclosureMotionTimer.current);
+        disclosureMotionRef.current = motion;
+        setDisclosureLayout(motion);
+      }
+    }
+    // Keep a short feed's bottom-alignment gap through collapse too; replacing it mid-frame moves the tap target.
+    const first = list?.getState().elementAtIndex(0);
+    if (first && headerEndRef.current) {
+      const gap =
+        first.getBoundingClientRect().top - headerEndRef.current.getBoundingClientRect().bottom;
+      if (gap > 1) setDisclosureGap({ space: disclosureTopSpace + gap, tail: lastFeedId });
+    }
     disclosureAnchorKeyRef.current = anchorKey;
     setDisclosureToggleSettling(true);
     settleDisclosureAfterLayout();
@@ -3071,7 +3089,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       case "work-toggle":
         return entry.thought ? undefined : WORK_GROUP_TOGGLE_HEIGHT;
       case "thinking":
-        return WORK_GROUP_TOGGLE_HEIGHT;
+        return THREAD_WORK_ROW_MIN_HEIGHT;
       case "activity-group":
         if (entry.activities[0]?.projectedItem.item.type === "subagent") {
           return undefined;
@@ -3113,9 +3131,11 @@ export const ThreadFeed = memo(function ThreadFeed({
   }, [textSizeKey, contentWidth, hasHtmlRenders, beginReflow, listRef]);
 
   const renderItem = (info: { item: ThreadFeedRow; index: number }) => (
-    <Animated.View
+    <DisclosureRow
       key={info.item.id}
-      entering={disclosureToggleSettling ? THREAD_FEED_DISCLOSURE_ENTER_TRANSITION : undefined}
+      itemKey={info.item.id}
+      index={info.index}
+      layout={disclosureLayout}
     >
       <MessageImageGalleryScope
         entry={info.item}
@@ -3132,48 +3152,60 @@ export const ThreadFeed = memo(function ThreadFeed({
               length={info.item.message.text.length}
             />
           ) : null}
-          {renderFeedEntry(info, {
-            environmentId: props.environmentId,
-            dispatchingMessageId: props.dispatchingMessageId,
-            onEditPendingMessage: props.onEditPendingMessage,
-            onUseArtifactTemplate: props.onUseArtifactTemplate,
-            threadId: props.threadId,
-            copiedRowId,
-            expandedWorkRows,
-            workRowSizing,
-            workGroupScrollPositions,
-            terminalAssistantMessageIds,
-            unsettledTurnId,
-            compactionLabelsByEntryId,
-            failedRunIds,
-            onCopyWorkRow,
-            onToggleWorkGroup,
-            onToggleWorkRow,
-            onToggleTurnFold,
-            onOpenTurnDiff,
-            onPressPreview,
-            onPlaybackStart: onInlinePlaybackStart,
-            markdownLinkHandlers,
-            renderMarkdownImage,
-            renderViewedImage,
-            renderReasoning,
-            iconSubtleColor,
-            replyActionSize,
-            screenColor,
-            userBubbleColor,
-            markdownStyles,
-            reviewCommentColors,
-            reviewCommentBubbleWidth,
-            themeAppearance,
-            duoColumns,
-            userBubbleMaxWidth,
-            markdownContentWidth,
-            contentWidth,
-            threadTitle: props.threadTitle,
-            skills: props.skills,
-            workspaceRoot: props.workspaceRoot,
-            workflowOpening,
-          })}
+          {info.item.type === "message" &&
+          !isCompactionCommandFeedEntry(info.item) &&
+          info.item.message.projectedItem?.item.type === "user_message" &&
+          info.item.message.projectedItem.item.modelSwitch ? (
+            <ThreadModelSwitchDivider
+              environmentId={props.environmentId}
+              modelSwitch={info.item.message.projectedItem.item.modelSwitch}
+              iconColor={iconSubtleColor}
+            />
+          ) : null}
+          <FeedEntryShimmerContext value={info.index}>
+            {renderFeedEntry(info, {
+              environmentId: props.environmentId,
+              dispatchingMessageId: props.dispatchingMessageId,
+              onEditPendingMessage: props.onEditPendingMessage,
+              onUseArtifactTemplate: props.onUseArtifactTemplate,
+              threadId: props.threadId,
+              copiedRowId,
+              expandedWorkRows,
+              workRowSizing,
+              workGroupScrollPositions,
+              terminalAssistantMessageIds,
+              unsettledTurnId,
+              compactionLabelsByEntryId,
+              failedRunIds,
+              onCopyWorkRow,
+              onToggleWorkGroup,
+              onToggleWorkRow,
+              onToggleTurnFold,
+              onOpenTurnDiff,
+              onPressPreview,
+              onPlaybackStart: onInlinePlaybackStart,
+              markdownLinkHandlers,
+              renderMarkdownImage,
+              renderViewedImage,
+              renderReasoning,
+              iconSubtleColor,
+              replyActionSize,
+              screenColor,
+              userBubbleColor,
+              markdownStyles,
+              reviewCommentColors,
+              reviewCommentBubbleWidth,
+              themeAppearance,
+              duoColumns,
+              userBubbleMaxWidth,
+              markdownContentWidth,
+              contentWidth,
+              threadTitle: props.threadTitle,
+              skills: props.skills,
+              workspaceRoot: props.workspaceRoot,
+              workflowOpening,
+            })}
+          </FeedEntryShimmerContext>
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
           ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (
@@ -3181,7 +3213,7 @@ export const ThreadFeed = memo(function ThreadFeed({
           ) : null}
         </ThreadMediaVisibility>
       </MessageImageGalleryScope>
-    </Animated.View>
+    </DisclosureRow>
   );
 
   if (props.contentPresentation.kind === "unavailable" && props.queuedMessages.length === 0) {
@@ -3239,7 +3271,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             freeze={props.freeze}
             // Follow the measured end immediately; animating estimates races row measurement on acknowledgement.
             maintainScrollAtEnd={
-              disclosureToggleSettling || !followsEnd
+              disclosureToggleSettling || props.sendingWithKeyboard || !followsEnd
                 ? false
                 : {
                     animated: false,
@@ -3255,7 +3287,10 @@ export const ThreadFeed = memo(function ThreadFeed({
             maintainScrollAtEndThreshold={reflowFollowsEnd ? Number.POSITIVE_INFINITY : undefined}
             sizeChangeAnchor={reflowAnchorsSizeChanges ? holdReflowAnchor : undefined}
             maintainVisibleContentPosition={
-              followsEnd && !disclosureToggleSettling ? false : maintainVisibleContentPosition
+              (followsEnd && !disclosureToggleSettling) ||
+              (disclosureToggleSettling && disclosureTopSpace > 0)
+                ? false
+                : maintainVisibleContentPosition
             }
             data={presentedFeed}
             extraData={listAppearanceData}
@@ -3265,6 +3300,12 @@ export const ThreadFeed = memo(function ThreadFeed({
             getItemType={(entry) => {
               if (entry.type !== "message") return entry.type;
               if (isCompactionCommandFeedEntry(entry)) return "message:compaction";
+              if (
+                entry.message.role === "assistant" &&
+                !terminalAssistantMessageIds.has(entry.message.id)
+              ) {
+                return "message:assistant-progress";
+              }
               const { attribution } = resolveUserMessagePresentation(entry.message);
               return attribution === "automation" || attribution === "agent"
                 ? `message:${attribution}`
@@ -3276,7 +3317,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             drawDistance={500}
             keyboardShouldPersistTaps="always"
             keyboardDismissMode="none"
-            keyboardLiftBehavior="whenAtEnd"
+            keyboardLiftBehavior={props.sendingWithKeyboard ? "persistent" : "whenAtEnd"}
             // Seed viewport size to skip programmatic attach-time positioning, which races UIKit's adjustedContentInset.
             {...(viewportHeight > 0 && viewportWidth > 0
               ? { estimatedListSize: { height: viewportHeight, width: viewportWidth } }
@@ -3309,6 +3350,7 @@ export const ThreadFeed = memo(function ThreadFeed({
                 {props.historyControls ? (
                   <ThreadFeedLoadEarlierControl {...props.historyControls} />
                 ) : null}
+                <View ref={headerEndRef} collapsable={false} />
               </>
             }
             ListFooterComponent={
@@ -3323,7 +3365,8 @@ export const ThreadFeed = memo(function ThreadFeed({
               ) : null
             }
             contentContainerStyle={{
-              paddingTop: FEED_PADDING_TOP,
+              ...(props.fitShortFeedToViewport ? { minHeight: "100%" } : {}),
+              paddingTop: FEED_PADDING_TOP + disclosureTopSpace,
               paddingLeft: contentHorizontalPadding + contentLeftInset,
               paddingRight: contentHorizontalPadding + contentRightInset,
             }}

@@ -291,6 +291,25 @@ function receptionLanguageDirective(text: string): string {
   }
 }
 
+/**
+ * A renamed bot's name and purpose, as JSON strings so neither can add a line of its own. The
+ * default bot gets none, leaving its prompt unchanged.
+ */
+const receptionIdentityLines = (identity: ChannelReceptionInput["identity"]) =>
+  identity === undefined || (identity.name === "GOAT Bot" && identity.purpose.trim() === "")
+    ? []
+    : [
+        "The person named you " +
+          JSON.stringify(identity.name) +
+          ". Where these instructions say GOAT Bot, they mean you: introduce yourself by that name.",
+        ...(identity.purpose.trim() === ""
+          ? []
+          : [
+              "Your purpose, in the person's words (a JSON string): " +
+                JSON.stringify(identity.purpose),
+            ]),
+      ];
+
 export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
   const tail = input.tail
     .map((entry) => (entry.role === "user" ? "Person: " : "GOAT: ") + entry.text)
@@ -357,6 +376,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
 
   const prompt = [
     "You are GOAT Bot, the person's assistant inside GOAT, a home for coding agents. You answer one message right away and decide what happens next.",
+    ...receptionIdentityLines(input.identity),
     "What you know is written below: facts about this machine, the person's standing notes, your journal of work you started, projects, recent threads, and this conversation. " +
       (readsAllowed
         ? "Before answering you may look up more yourself with read (your memory, the work you started and its results and pull requests, a task's coding thread, or older messages here); that is fast and changes nothing. For work that needs tools you start a coding agent."

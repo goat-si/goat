@@ -134,7 +134,7 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
       setReaction: (input) => record("setReaction", input),
       setLabels: (input) => record("setLabels", input),
       requestReviewers: (input) => record("requestReviewers", input),
-      runAction: (input) => record("runAction", input),
+      runAction: (input) => record("runAction", input).pipe(Effect.as(undefined)),
     }),
     Layer.mock(Projects.ProjectService)({ listShells: () => Effect.succeed([project]) }),
     Layer.mock(Orchestrator.OrchestratorV2)({ getThreadShell: () => Effect.succeed(shell) }),

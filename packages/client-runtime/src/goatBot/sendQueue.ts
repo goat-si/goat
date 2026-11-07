@@ -1,40 +1,59 @@
+import type { ChannelTaskId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import type { GoatBotRef } from "./availability.ts";
-import type { GoatBotPendingInput } from "./rows.ts";
+import type { GoatBotAttachmentLabel, GoatBotPendingInput } from "./rows.ts";
 
 type EntryState = "queued" | "sending" | "accepted" | "failed";
 
-interface Entry {
+interface Entry<A> {
   readonly clientKey: string;
   readonly text: string;
+  readonly attachments: ReadonlyArray<A>;
   readonly createdAt: string;
   readonly bot: GoatBotRef;
+  readonly taskId?: ChannelTaskId;
   state: EntryState;
   requestKey: string | null;
   rejectionReason: string | null;
 }
 
-export interface GoatBotSendQueueOptions {
-  /** Delivers one message. The key is the message's idempotency key on every attempt. */
+export interface GoatBotSendQueueOptions<
+  A extends GoatBotAttachmentLabel = GoatBotAttachmentLabel,
+> {
+  /**
+   * Delivers one message. The key is the message's idempotency key on every attempt, so an
+   * attempt must name the same files as the one before it.
+   */
   readonly send: (message: {
     readonly clientKey: string;
     readonly text: string;
+    readonly attachments: ReadonlyArray<A>;
     readonly receivedAt: string;
     readonly bot: GoatBotRef;
+    readonly taskId?: ChannelTaskId;
   }) => Promise<{ readonly requestKey: string; readonly rejected?: string }>;
   /** Checked right before every attempt; when false the queue stops and waits for a retry. */
   readonly canDispatch: (bot: GoatBotRef) => boolean;
   readonly onChange: () => void;
+  readonly onSubmit?: (clientKey: string, attachments: ReadonlyArray<A>) => void;
+  readonly onForget?: (clientKey: string, attachments: ReadonlyArray<A>) => void;
   readonly makeKey: () => string;
   readonly now?: () => string;
 }
 
-export interface GoatBotSendQueue {
-  /** Queues a message and returns its key. */
-  readonly submit: (text: string, bot: GoatBotRef) => string;
+export interface GoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBotAttachmentLabel> {
+  /** Queues a message, with any files to send along, and returns its key. */
+  readonly submit: (
+    text: string,
+    bot: GoatBotRef,
+    attachments?: ReadonlyArray<A>,
+    taskId?: ChannelTaskId,
+  ) => string;
   /** Sends a failed message again under the same key. Ignored while it is in flight. */
   readonly retry: (clientKey: string) => void;
+  readonly discard: (clientKey: string) => void;
+  readonly dispose: () => void;
   /** Forgets accepted messages once their server rows exist. */
   readonly acknowledge: (requestKeys: ReadonlySet<string>) => void;
   readonly pendingInputs: () => ReadonlyArray<GoatBotPendingInput>;
@@ -44,18 +63,25 @@ export interface GoatBotSendQueue {
  * Sends queued messages one at a time. Failed messages do not hold later ones;
  * a retry lands at its retry time. Each message keeps one key for all attempts.
  */
-export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBotSendQueue {
+export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBotAttachmentLabel>(
+  options: GoatBotSendQueueOptions<A>,
+): GoatBotSendQueue<A> {
   const makeKey = options.makeKey;
   const now = options.now ?? (() => DateTime.formatIso(DateTime.nowUnsafe()));
-  let entries: Entry[] = [];
+  let entries: Entry<A>[] = [];
   let busy = false;
+  let disposed = false;
   let projectedKeys: ReadonlySet<string> = new Set();
   let snapshot: ReadonlyArray<GoatBotPendingInput> = [];
 
   const changed = () => {
     snapshot = entries.map((entry) => ({
       clientKey: entry.clientKey,
+      ...(entry.taskId === undefined ? {} : { taskId: entry.taskId }),
       text: entry.text,
+      ...(entry.attachments.length === 0
+        ? {}
+        : { attachments: entry.attachments.map(({ id, type, name }) => ({ id, type, name })) }),
       createdAt: entry.createdAt,
       state: entry.state,
       requestKey: entry.requestKey,
@@ -65,7 +91,7 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
   };
 
   const pump = () => {
-    if (busy) return;
+    if (busy || disposed) return;
     const next = entries.find((entry) => entry.state === "queued");
     if (next === undefined) return;
     if (!options.canDispatch(next.bot)) {
@@ -82,8 +108,10 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
       options.send({
         clientKey: next.clientKey,
         text: next.text,
+        attachments: next.attachments,
         receivedAt: next.createdAt,
         bot: next.bot,
+        ...(next.taskId === undefined ? {} : { taskId: next.taskId }),
       }))()
       .then(
         (result) => {
@@ -91,11 +119,20 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
           next.rejectionReason = result.rejected ?? null;
           next.requestKey = result.requestKey;
           if (projectedKeys.has(result.requestKey) || projectedKeys.has(next.clientKey)) {
+            if (entries.includes(next)) options.onForget?.(next.clientKey, next.attachments);
             entries = entries.filter((entry) => entry !== next);
           }
         },
-        () => {
+        (error: unknown) => {
           next.state = "failed";
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "attachmentProblem" in error &&
+            error.attachmentProblem === "expired"
+          ) {
+            next.rejectionReason = "Attachment expired. Please re-attach the file.";
+          }
         },
       )
       .finally(() => {
@@ -106,20 +143,24 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
   };
 
   return {
-    submit: (text, bot) => {
+    submit: (text, bot, attachments = [], taskId) => {
+      if (disposed) throw new Error("GOAT Bot send queue is disposed");
       const clientKey = makeKey();
       entries = [
         ...entries,
         {
           clientKey,
           text,
+          attachments,
           createdAt: now(),
           bot: { ...bot },
+          ...(taskId === undefined ? {} : { taskId }),
           state: "queued",
           requestKey: null,
           rejectionReason: null,
         },
       ];
+      options.onSubmit?.(clientKey, attachments);
       changed();
       pump();
       return clientKey;
@@ -131,6 +172,21 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
       changed();
       pump();
     },
+    discard: (clientKey) => {
+      const entry = entries.find((candidate) => candidate.clientKey === clientKey);
+      if (entry?.state !== "failed") return;
+      entries = entries.filter((candidate) => candidate !== entry);
+      options.onForget?.(entry.clientKey, entry.attachments);
+      changed();
+    },
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      const forgotten = entries;
+      entries = [];
+      for (const entry of forgotten) options.onForget?.(entry.clientKey, entry.attachments);
+      changed();
+    },
     acknowledge: (requestKeys) => {
       projectedKeys = requestKeys;
       const kept = entries.filter(
@@ -139,6 +195,9 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
           (entry.requestKey === null || !requestKeys.has(entry.requestKey)),
       );
       if (kept.length === entries.length) return;
+      for (const entry of entries) {
+        if (!kept.includes(entry)) options.onForget?.(entry.clientKey, entry.attachments);
+      }
       entries = kept;
       changed();
     },

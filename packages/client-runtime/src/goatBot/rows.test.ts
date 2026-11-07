@@ -1,4 +1,5 @@
 import {
+  ChatAttachmentId,
   EnvironmentId,
   MessageId,
   MemoryId,
@@ -217,6 +218,126 @@ describe("goatBotConversationPreview", () => {
 });
 
 describe("buildGoatBotTimeline", () => {
+  it("keeps turn receipts in main and isolates replies to known tasks", () => {
+    const at = "2026-10-12T12:00:00Z";
+    const meta = (taskId: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      taskId,
+    });
+    const input = {
+      visibleTurnItems: rowsOf([
+        user("hello", at, "hello"),
+        bot("receipt", at, "Hello"),
+        bot("task-reply", at, "Working"),
+        notice("chip", at),
+      ]),
+      pendingInputs: [],
+      readers: readers(
+        { receipt: meta("channel-task:in1:0"), "task-reply": meta("real-task") },
+        { chip: card("real-task", 1) },
+      ),
+    };
+    expect(content(buildGoatBotTimeline({ ...input, taskId: null })).map((row) => row.id)).toEqual([
+      "hello",
+      "receipt",
+      "chip",
+    ]);
+    expect(
+      content(buildGoatBotTimeline({ ...input, taskId: "real-task" })).map((row) => row.id),
+    ).toEqual(["task-reply", "chip"]);
+  });
+
+  it("hides a task reply known only from the task roster", () => {
+    const at = "2026-10-12T12:00:00Z";
+    const input = {
+      visibleTurnItems: rowsOf([bot("reply", at, "Working")]),
+      pendingInputs: [],
+      readers: readers({
+        reply: { tone: "reply", readAt: null, requestKey: null, taskId: "task" },
+      }),
+      knownTaskIds: ["task"],
+    };
+    expect(content(buildGoatBotTimeline({ ...input, taskId: null }))).toEqual([]);
+    expect(
+      content(buildGoatBotTimeline({ ...input, taskId: "task" })).map((row) => row.id),
+    ).toEqual(["reply"]);
+  });
+
+  it("clears task pending input when its committed rejection has no task tag", () => {
+    const at = "2026-10-12T12:00:00Z";
+    const rows = buildGoatBotTimeline({
+      visibleTurnItems: rowsOf([user("rejected", at, "hello")]),
+      pendingInputs: [
+        {
+          clientKey: "client",
+          taskId: "task",
+          text: "hello",
+          createdAt: at,
+          state: "accepted",
+          requestKey: "request",
+        },
+      ],
+      readers: readers({ rejected: { tone: "reply", readAt: null, requestKey: "request" } }),
+      taskId: "task",
+    });
+    expect(content(rows)).toEqual([]);
+  });
+  it("isolates task messages and pending sends while keeping task references in main", () => {
+    const at = "2026-10-12T12:00:00Z";
+    const metadata = (taskId: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      taskId,
+    });
+    const input = {
+      visibleTurnItems: rowsOf([
+        user("main", at, "main"),
+        user("one", at, "one"),
+        bot("two", at, "two"),
+        notice("chip-one", at),
+        notice("chip-two", at),
+      ]),
+      pendingInputs: [
+        {
+          clientKey: "pending-main",
+          text: "main pending",
+          createdAt: at,
+          state: "queued" as const,
+          requestKey: null,
+        },
+        {
+          clientKey: "pending-one",
+          text: "one pending",
+          createdAt: at,
+          state: "queued" as const,
+          requestKey: null,
+          taskId: "one",
+        },
+      ],
+      readers: readers(
+        { one: metadata("one"), two: metadata("two") },
+        {
+          "chip-one": card("one", 1),
+          "chip-two": card("two", 1),
+        },
+      ),
+    };
+    expect(content(buildGoatBotTimeline({ ...input, taskId: null })).map((row) => row.id)).toEqual([
+      "main",
+      "chip-one",
+      "chip-two",
+      "pending:pending-main",
+    ]);
+    expect(content(buildGoatBotTimeline({ ...input, taskId: "one" })).map((row) => row.id)).toEqual(
+      ["one", "chip-one", "pending:pending-one"],
+    );
+    expect(content(buildGoatBotTimeline({ ...input, taskId: "two" })).map((row) => row.id)).toEqual(
+      ["two", "chip-two"],
+    );
+  });
   it("keeps only the conversation and work cards, hiding tool calls and reasoning", () => {
     const rows = buildGoatBotTimeline({
       visibleTurnItems: rowsOf([
@@ -596,5 +717,42 @@ describe("memory report rows", () => {
     );
     expect(result[0]).toMatchObject({ kind: "bot", memory, options: [] });
     expect(result[1]).not.toHaveProperty("memory");
+  });
+});
+
+describe("attachments on the person's messages", () => {
+  it("shows a photo sent without text, sent and pending, and previews it by name", () => {
+    const photo = {
+      type: "image" as const,
+      id: ChatAttachmentId.make("thread-bot-1"),
+      name: "photo.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+    };
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          { ...user("u", "2026-10-12T12:00:00Z", ""), attachments: [photo] },
+        ]),
+        pendingInputs: [
+          {
+            clientKey: "k",
+            text: "",
+            attachments: [{ id: "draft-1", type: "file", name: "log.txt" }],
+            createdAt: "2026-10-12T12:00:01Z",
+            state: "sending",
+            requestKey: null,
+          },
+        ],
+        readers: readers(),
+      }),
+    );
+    expect(rows.map((row) => row.kind === "user" && row.attachments)).toEqual([
+      [{ id: "thread-bot-1", type: "image", name: "photo.png" }],
+      [{ id: "draft-1", type: "file", name: "log.txt" }],
+    ]);
+    expect(goatBotConversationPreview({ rows, lastVisitedAt: null, active: true })?.text).toBe(
+      "You: log.txt",
+    );
   });
 });

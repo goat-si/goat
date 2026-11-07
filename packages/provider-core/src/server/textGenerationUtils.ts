@@ -42,7 +42,8 @@ export const toStrictJsonSchemaObject = (
 
 export function limitSection(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
-  const truncated = value.slice(0, maxChars);
+  const last = value.charCodeAt(maxChars - 1);
+  const truncated = value.slice(0, last >= 0xd800 && last <= 0xdbff ? maxChars - 1 : maxChars);
   return `${truncated}\n\n[truncated]`;
 }
 
@@ -97,7 +98,13 @@ export function sanitizeThreadTitle(raw: string): string {
     return normalized;
   }
 
-  return `${normalized.slice(0, MAX_THREAD_TITLE_CHARS - 3).trimEnd()}...`;
+  let end = MAX_THREAD_TITLE_CHARS - 3;
+  const previous = normalized.charCodeAt(end - 1);
+  const next = normalized.charCodeAt(end);
+  if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+    end -= 1;
+  }
+  return `${normalized.slice(0, end).trimEnd()}...`;
 }
 
 function cliLabel(cliName: string): string {

@@ -1,4 +1,9 @@
-import { secretSettingsFields } from "@goat/contracts";
+import {
+  isSecretReference,
+  secretSettingsFields,
+  type SecretReference,
+  type ServerSettings,
+} from "@goat/contracts";
 
 import { sourceControlDefinitions } from "./sourceControlDefinitions.ts";
 
@@ -29,6 +34,7 @@ export function sourceControlHostSecretName(slot: SourceControlHostSecretSlot): 
 export function readSecretFieldValues(
   value: unknown,
 ): ReadonlyArray<readonly [serverHost: string | null, value: string]> {
+  if (isSecretReference(value)) return [];
   if (typeof value === "string") return [[null, value]];
   if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
   return Object.entries(value).flatMap(([serverHost, entry]) =>
@@ -40,6 +46,63 @@ export function writeSecretFieldValues(
   original: unknown,
   values: ReadonlyArray<readonly [serverHost: string | null, value: string]>,
 ): unknown {
+  if (isSecretReference(original))
+    return { provider: original.provider, reference: original.reference };
   if (typeof original === "string") return values[0]?.[1] ?? "";
-  return Object.fromEntries(values.map(([serverHost, value]) => [serverHost ?? "", value]));
+  const references =
+    original !== null && typeof original === "object" && !Array.isArray(original)
+      ? Object.entries(original).flatMap(([host, value]) =>
+          isSecretReference(value)
+            ? [
+                [
+                  host.trim().toLowerCase(),
+                  { provider: value.provider, reference: value.reference },
+                ] as const,
+              ]
+            : [],
+        )
+      : [];
+  return Object.fromEntries([
+    ...references,
+    ...values.map(
+      ([serverHost, value]) => [serverHost?.trim().toLowerCase() ?? "", value] as const,
+    ),
+  ]);
+}
+
+export async function resolveHostSecrets(
+  settings: ServerSettings,
+  kind: string,
+  host: string | undefined,
+  read: (reference: SecretReference) => Promise<string>,
+): Promise<ServerSettings> {
+  const original = settings.sourceControlHosts[kind];
+  if (!original) return settings;
+  const fields = { ...original };
+  const readRequired = async (reference: SecretReference) => {
+    const value = await read(reference);
+    if (value.trim() === "") throw new Error("Empty source control credential");
+    return value;
+  };
+  try {
+    for (const name of SOURCE_CONTROL_HOST_SECRET_FIELDS.get(kind) ?? []) {
+      const value = fields[name];
+      if (isSecretReference(value)) {
+        fields[name] = await readRequired(value);
+      } else if (value && typeof value === "object" && !Array.isArray(value)) {
+        const entries: Record<string, unknown> = {};
+        for (const [key, entry] of Object.entries(value)) {
+          entries[key] = isSecretReference(entry)
+            ? host !== undefined && key.toLowerCase() === host.toLowerCase()
+              ? await readRequired(entry)
+              : ""
+            : entry;
+        }
+        fields[name] = entries;
+      }
+    }
+  } catch {
+    throw new Error("Could not resolve source control credential");
+  }
+  return { ...settings, sourceControlHosts: { ...settings.sourceControlHosts, [kind]: fields } };
 }

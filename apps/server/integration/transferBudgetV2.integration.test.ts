@@ -47,6 +47,7 @@ import * as EventSink from "../src/orchestration-v2/EventSink.ts";
 import * as ProjectionStore from "../src/orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../src/orchestration-v2/ThreadManagementService.ts";
 import * as ProjectStore from "../src/orchestration-v2/ProjectStore.ts";
+import * as ShellSnapshotLoads from "../src/orchestration-v2/ShellSnapshotLoads.ts";
 import * as ProjectService from "../src/project/ProjectService.ts";
 import * as ProjectEnrichmentService from "../src/project/ProjectEnrichmentService.ts";
 import * as OrchestrationHttp from "../src/orchestration-v2/http.ts";
@@ -140,7 +141,8 @@ const layerEnrichment = Layer.unwrap(
     });
   }),
 );
-const layerServices = layerManagement.pipe(
+const layerServices = ShellSnapshotLoads.layer.pipe(
+  Layer.provideMerge(layerManagement),
   Layer.provideMerge(
     Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
       getEnvironmentId: Effect.succeed(EnvironmentId.make("transfer-test")),
@@ -233,6 +235,7 @@ const subscribe = Effect.fn("transfer.subscribe")(function* (
           acceptCompactTurnItems: true,
           acceptCompactIds: true,
           acceptDedupedBodies: true,
+          acceptTextAppends: true,
         })
       : client.client[ORCHESTRATION_V2_WS_METHODS.subscribeShell]({
           afterSequence,

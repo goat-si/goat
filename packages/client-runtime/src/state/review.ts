@@ -9,7 +9,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
-import { request } from "../rpc/client.ts";
+import { request, requestGuarded } from "../rpc/client.ts";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import {
@@ -44,6 +44,24 @@ export function createReviewEnvironmentAtoms<R, E>(
     label: "environment-data:review:diff-preview",
     tag: WS_METHODS.reviewGetDiffPreview,
     staleTimeMs: 5_000,
+    execute: Effect.fn("review.diffPreview")(function* (input, emit, previous) {
+      if (
+        !Option.exists(previous, (preview) => !preview.incomplete) &&
+        input.metadataOnly &&
+        input.scope &&
+        input.scope !== "staged" &&
+        !input.file &&
+        !input.trackedOnly
+      ) {
+        const tracked = yield* requestGuarded(WS_METHODS.reviewGetDiffPreview, {
+          ...input,
+          trackedOnly: true,
+        });
+        if (!tracked.incomplete) return tracked;
+        yield* emit(tracked);
+      }
+      return yield* requestGuarded(WS_METHODS.reviewGetDiffPreview, input);
+    }),
     ...(options.onDiffPreviewAnswer === undefined ? {} : { onAnswer: options.onDiffPreviewAnswer }),
   });
   // A file patch is a slice of the comparison its preview generated, so a newer preview

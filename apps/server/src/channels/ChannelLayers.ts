@@ -17,6 +17,9 @@ import * as MemoryStore from "../memory/MemoryStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
+import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
+import * as ChannelBotThreads from "./ChannelBotThreads.ts";
+import * as ChannelTaskViews from "./channelTaskViews.ts";
 import * as ChannelBotRegistry from "./ChannelBotRegistry.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
@@ -30,6 +33,7 @@ import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelTaskExport from "./ChannelTaskExport.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelSessionTaskActions from "./channelSessionTaskActions.ts";
 import * as ChannelSessionFirst from "./ChannelSessionFirst.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -48,10 +52,14 @@ const layerFoundation = Layer.mergeAll(
   MemoryStore.layer,
   ChannelBotHome.layer,
   ChannelBotDirectory.layer,
+  ChannelBotProfiles.layer,
+  ChannelTaskViews.layer,
   ChannelTransport.layer,
 );
 
-const layerTimeline = ChannelBotTimeline.layer.pipe(Layer.provideMerge(layerFoundation));
+const layerTimeline = Layer.mergeAll(ChannelBotTimeline.layer, ChannelBotThreads.layer).pipe(
+  Layer.provideMerge(layerFoundation),
+);
 
 const layerGateway = Layer.mergeAll(
   ChannelGateway.layer,
@@ -89,6 +97,7 @@ export const makeLayerServices = <E, R>(
       Layer.provide(ChannelChildWork.layer),
     ),
     ChannelWorkerReports.layer,
+    ChannelSessionTaskActions.layer,
     ChannelDeliveryWorker.layer,
   ).pipe(
     // Workers on other machines; needs SshRemoteDispatch from the server.

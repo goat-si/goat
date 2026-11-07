@@ -6,10 +6,15 @@ import {
   type AttachmentDeleteInput,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import type { AtomCommand } from "./runtime.ts";
-import { runAttachmentUploadCycle, verifyPersistedAttachmentUpload } from "./attachments.ts";
+import {
+  formatAttachmentSize,
+  runAttachmentUploadCycle,
+  verifyPersistedAttachmentUpload,
+} from "./attachments.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
 const registry = {} as AtomRegistry.AtomRegistry;
@@ -55,6 +60,81 @@ const uploadInput: AttachmentCreateUploadUrlInput = {
 };
 
 describe("runAttachmentUploadCycle", () => {
+  it("leaves a fresh mint to expire when its environment was removed", async () => {
+    removeCalls.length = 0;
+    const result = await runAttachmentUploadCycle({
+      registry,
+      createUploadUrl: makeCreateUploadUrl("pending-abandoned"),
+      remove,
+      environmentId,
+      upload: uploadInput,
+      resolveUploadUrl: () => "https://environment.test/upload",
+      transport: () => {
+        throw new Error("transport must not run after removal");
+      },
+      onMinted: () => "abandon" as const,
+    });
+    expect(result).toEqual({ status: "cancelled", attachmentId: "pending-abandoned" });
+    expect(removeCalls).toEqual([]);
+  });
+  it("reports a failed deletion of a cancelled mint", async () => {
+    const failure = new Error("delete denied");
+    const result = await runAttachmentUploadCycle({
+      registry,
+      createUploadUrl: makeCreateUploadUrl("pending-denied"),
+      remove: {
+        label: "test:remove-denied",
+        run: async () => AsyncResult.failure(Cause.fail(failure)),
+      },
+      environmentId,
+      upload: uploadInput,
+      resolveUploadUrl: () => "https://environment.test/upload",
+      transport: () => {
+        throw new Error("transport must not run after cancel");
+      },
+      onMinted: () => "cancel",
+    });
+    expect(result).toMatchObject({
+      status: "cancelled",
+      attachmentId: "pending-denied",
+      cleanupFailure: { step: "cleanup", error: failure },
+    });
+  });
+  it("waits for pending upload deletion when cancelled after minting", async () => {
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    let settled = false;
+    const result = runAttachmentUploadCycle({
+      registry,
+      createUploadUrl: makeCreateUploadUrl("pending-held"),
+      remove: {
+        label: "test:remove-held",
+        run: async () => {
+          started.resolve();
+          await finish.promise;
+          return AsyncResult.success(undefined);
+        },
+      },
+      environmentId,
+      upload: uploadInput,
+      resolveUploadUrl: () => "https://environment.test/upload",
+      transport: () => {
+        throw new Error("transport must not run after cancel");
+      },
+      onMinted: () => "cancel",
+    }).then((value) => {
+      settled = true;
+      return value;
+    });
+    await started.promise;
+    await Promise.resolve();
+    try {
+      expect(settled).toBe(false);
+    } finally {
+      finish.resolve();
+    }
+    expect(await result).toEqual({ status: "cancelled", attachmentId: "pending-held" });
+  });
   it("deletes the fresh mint when the caller cancels at onMinted", async () => {
     removeCalls.length = 0;
     const result = await runAttachmentUploadCycle({
@@ -127,5 +207,16 @@ describe("verifyPersistedAttachmentUpload", () => {
     const second = await verify();
     expect(second).toEqual({ status: "verified" });
     expect(lookups).toBe(2);
+  });
+});
+
+describe("formatAttachmentSize", () => {
+  it.each([
+    [1_047_552, "1023 KB"],
+    [1_047_553, "1.0 MB"],
+    [1_048_575, "1.0 MB"],
+    [1_048_576, "1.0 MB"],
+  ])("formats %d bytes as %s", (sizeBytes, label) => {
+    expect(formatAttachmentSize(sizeBytes)).toBe(label);
   });
 });

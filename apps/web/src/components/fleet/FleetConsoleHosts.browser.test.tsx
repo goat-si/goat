@@ -113,6 +113,9 @@ function setup() {
     ],
     threads: [],
     totals: { running: 0, attention: 0, reported: 0, machines: 3 },
+    hiddenCloudAliases: [],
+    hiddenRoutes: [],
+    idleCloudMachines: [],
   };
   snapshot.value = value;
   return value;

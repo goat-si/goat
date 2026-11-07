@@ -1,5 +1,5 @@
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
-import * as VoiceTranscription from "./voiceTranscription.ts";
+import * as VoiceRoutes from "./speech/layers.ts";
 import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
 import * as DecisionLayers from "./goatclaw/DecisionLayers.ts";
 import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
@@ -54,15 +54,14 @@ import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as SshRemoteDispatchLive from "./sshRemote/SshRemoteDispatchLive.ts";
 import * as GoatclawFleetSync from "./goatclaw/FleetSync.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
-import * as StorageCleanup from "./storageCleanup.ts";
+import * as StorageCleanupLayer from "./storageCleanupLayer.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 import * as ScreenCodeLayers from "./screenCode/ScreenCodeLayers.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
-// Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
-import * as NodeHttp from "node:http";
 
+import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
@@ -87,6 +86,7 @@ import * as RelayClient from "@goat/shared/relayClient";
 import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import { BUILT_IN_SOURCE_CONTROL_DRIVER_LIST } from "./sourceControl/sourceControlDefinitions.ts";
@@ -114,6 +114,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerOwnership from "./serverOwnership.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
@@ -195,10 +196,7 @@ import * as FleetPlacement from "./fleet/resources/Placement.ts";
 import * as ServerHttp from "./http.ts";
 import * as RuntimeSessionRoute from "./runtimeSessionRoute.ts";
 import { withUntracedRequests } from "./http.ts";
-import {
-  guardHttpResponseWriteErrors,
-  rejectRequestsUntilServing,
-} from "./httpResponseErrorGuard.ts";
+import { createGuardedHttpServer } from "./httpResponseErrorGuard.ts";
 import * as HubProxyHttp from "./hubProxy/http.ts";
 import * as HubProxyNodes from "./hubProxy/HubProxyNodes.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
@@ -227,6 +225,8 @@ import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
 import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as BrowserOriginGrants from "./preview/BrowserOriginGrantsLayer.ts";
+import * as BrowserClaimMcpLayers from "./preview/BrowserClaimMcpLayers.ts";
+import * as BrowserClaimResponder from "./handoffs/BrowserClaimResponder.ts";
 import * as BrowserClaimManifestModule from "./preview/BrowserClaimManifest.ts";
 import * as BrowserClaimBindModule from "./preview/BrowserClaimBind.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
@@ -389,14 +389,13 @@ const layerRelayClient = Layer.unwrap(
     return RelayClient.layerCloudflared({ baseDir: config.baseDir });
   }),
 );
-const layerHttpServer = Layer.unwrap(
+export const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    yield* Effect.forkScoped(heartbeat);
     return NodeHttpServer.layer(
       () => {
-        const server = rejectRequestsUntilServing(
-          guardHttpResponseWriteErrors(NodeHttp.createServer()),
-        );
+        const server = createGuardedHttpServer();
         if (config.privateNetworkOnly) {
           server.on("connection", (socket) => {
             if (!acceptsPrivateNetworkConnection(socket)) {
@@ -410,11 +409,8 @@ const layerHttpServer = Layer.unwrap(
         host: config.host ?? "127.0.0.1",
         port: config.port,
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
-        // Context takeover stays enabled (ws default) so the compression
-        // window is shared across frames — that also makes small frames cheap
-        // to compress, so no size threshold is set (ws only honors
-        // `threshold` when context takeover is disabled).
-        websocket: { perMessageDeflate: true },
+        // Context takeover shares the compression window; ws ignores threshold when it is enabled.
+        websocket: { perMessageDeflate: true, WebSocket: HeartbeatWebSocket },
       },
     );
   }),
@@ -611,9 +607,10 @@ const layerServerEnvironment = ServerEnvironment.layer.pipe(
 const layerBrowserOriginGrants = Layer.provide(
   BrowserOriginGrants.layer,
   Layer.mergeAll(
-    layerServerEnvironment,
+    Layer.merge(layerServerEnvironment, layerServerSettings),
     BrowserClaimManifestModule.layer,
     BrowserClaimBindModule.layer,
+    BrowserClaimResponder.layer,
   ),
 );
 const layerCuaDriver = CuaDriver.layer.pipe(
@@ -681,6 +678,7 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
 );
 
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
+  RuntimeLayer.provideHostPressure(HostPressureMonitor.layer),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
@@ -694,10 +692,10 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   ),
 );
 
-const layerOrchestrationApplication = CheckpointDiffQuery.layer.pipe(
-  Layer.provideMerge(layerCheckpointStore),
-  Layer.provideMerge(layerOrchestrationV2Runtime),
-);
+const layerOrchestrationApplication = Layer.merge(
+  CheckpointDiffQuery.layer,
+  NativeChildWorkQuery.layer,
+).pipe(Layer.provideMerge(layerCheckpointStore), Layer.provideMerge(layerOrchestrationV2Runtime));
 
 const layerThreadSettlementWorker = Layer.effectDiscard(
   ThreadSettlementService.make.pipe(Effect.flatMap((service) => service.start())),
@@ -756,7 +754,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerObservedCheckWorker,
   layerIdleCompactionWorker,
   ComputerUseTurnEnd.layer,
-  StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  StorageCleanupLayer.layer,
   WorktreeCheckoutHealth.layer.pipe(Layer.provide(ProcessRunner.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
@@ -907,7 +905,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ),
   ),
 );
-
 const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(layerPtyAdapter),
   Layer.provideMerge(AcpRegistrySupport.layerFromHost.pipe(Layer.provide(ProviderHostLive.layer))),
@@ -924,10 +921,9 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
     OpenCodeRuntime.layer.pipe(
       Layer.provide(
         Layer.unwrap(
-          Effect.gen(function* () {
-            const config = yield* ServerConfig.ServerConfig;
-            return OpenCodeServerLedger.layer({ stateDir: config.stateDir });
-          }),
+          Effect.map(ServerConfig.ServerConfig, (config) =>
+            OpenCodeServerLedger.layer({ stateDir: config.stateDir }),
+          ),
         ),
       ),
     ),
@@ -936,6 +932,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(Layer.mergeAll(layerRepositoryIdentityResolver, layerBrowserOriginGrants)),
+  Layer.provideMerge(BrowserClaimResponder.layer),
   Layer.provideMerge(CodexManagedTokenBroker.layer),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
@@ -950,8 +947,10 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
     ),
   ),
 );
-
 const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
+  Layer.provideMerge(
+    ServerRuntimeStartup.layerSurvivorsAndStopIntent.pipe(Layer.provide(layerPersistence)),
+  ),
   Layer.provideMerge(layerUsage),
   Layer.provideMerge(layerBackground),
   Layer.provideMerge(layerResourceDiagnostics),
@@ -964,7 +963,6 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provide(NetService.layer),
 );
-
 const layerSshWorkspace = SshWorkspaceSync.layer.pipe(
   Layer.provide(layerOrchestrationV2Runtime),
   Layer.provide(GitVcsDriver.layer),
@@ -999,7 +997,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
-      Layer.provide(VoiceTranscription.layer),
+      Layer.provide(VoiceRoutes.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
@@ -1107,7 +1105,7 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
   Layer.provide(layerLaunchWatches),
-  Layer.provide(Layer.merge(SshRemoteDispatchLive.layer, PreviewSessions.layerHandoffs)),
+  Layer.provide(BrowserClaimMcpLayers.layer),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
@@ -1271,8 +1269,7 @@ const layerMakeServer = Layer.unwrap(
         )
       : Layer.empty;
     const cloudLinkStartup = desiredLinkReconcileStartup(cloudLinkParked);
-
-    const layerRuntimeServices = ServerRuntimeStartup.layerWithOptions({
+    const layerRuntimeServices = ServerRuntimeStartup.layerLiveWithOptions({
       activate: Deferred.succeed(activation, undefined).pipe(Effect.asVoid),
       abort: (error) => Deferred.die(activation, error).pipe(Effect.asVoid),
       awaitAuxiliaryParked: Effect.all(
@@ -1284,8 +1281,11 @@ const layerMakeServer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
-
+    }).pipe(
+      Layer.provideMerge(ShellSnapshotLoads.withRuntime(layerOrchestrationV2Runtime)),
+      Layer.provideMerge(layerRuntimeDependencies),
+      Layer.provide(layerLauncher),
+    );
     const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
       disableLogger: !config.logWebSocketEvents,
       routerConfig: HTTP_ROUTER_CONFIG,
@@ -1320,7 +1320,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(HomeRoute.layer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
-      Layer.provideMerge(AgentScopeLive.layer),
+      Layer.provideMerge(AgentScopeLive.layer.pipe(Layer.provide(layerServerSettings))),
       Layer.provideMerge(layerPlatformServices),
       Layer.provideMerge(PendingAttachmentSweep.layer),
     );

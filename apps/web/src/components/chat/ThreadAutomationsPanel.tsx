@@ -34,9 +34,9 @@ import {
 const STATUS_DOT_CLASS = {
   outline: "bg-muted-foreground/40",
   info: "bg-info",
-  success: "bg-emerald-500",
+  success: "bg-success",
   error: "bg-destructive",
-  warning: "bg-amber-500",
+  warning: "bg-warning",
 };
 
 function taskScheduleLine(task: ScheduledTask) {
@@ -161,7 +161,7 @@ export function ThreadAutomationsPanel(props: {
         </p>
       ) : null}
 
-      <ul className="m-0 list-none p-0">
+      <ul className="m-0 max-h-[13.5rem] list-none overflow-y-auto p-0">
         {boundTasks.map((task) => (
           <li
             key={task.id}

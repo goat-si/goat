@@ -1,7 +1,8 @@
-import { SecretRequestError } from "@goat/contracts";
+import { SecretProviderId, SecretRequestError } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  secretRequestAnswerInput,
   secretRequestDisplay,
   secretRequestFailureMessage,
   secretRequestPrivacyNote,
@@ -41,5 +42,114 @@ describe("secretRequestFailureMessage", () => {
       "Could not answer the request. Try again.",
     );
     expect(secretRequestFailureMessage(undefined)).toBe("Could not answer the request. Try again.");
+  });
+});
+
+it("requires both login fields and builds a private login answer", () => {
+  const item = { id: "turn-item:login", threadId: "thread:login" } as never;
+  expect(
+    secretRequestAnswerInput(item, { type: "save_login", username: " ", password: "password" }),
+  ).toBeNull();
+  expect(
+    secretRequestAnswerInput(item, { type: "save_login", username: "user", password: " " }),
+  ).toBeNull();
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "save_login",
+      username: " user ",
+      password: " password ",
+    }),
+  ).toEqual({
+    threadId: "thread:login",
+    turnItemId: "turn-item:login",
+    answer: { type: "save_login", username: "user", password: " password " },
+  });
+});
+
+it("keeps an optional authenticator key while trimming surrounding whitespace", () => {
+  const item = { id: "turn-item:login", threadId: "thread:login" } as never;
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "save_login",
+      username: "user",
+      password: "password",
+      authenticatorSetupKey: "  abcd efgh  ",
+    }),
+  ).toEqual({
+    threadId: "thread:login",
+    turnItemId: "turn-item:login",
+    answer: {
+      type: "save_login",
+      username: "user",
+      password: "password",
+      authenticatorSetupKey: "abcd efgh",
+    },
+  });
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "save_login",
+      username: "user",
+      password: "password",
+      authenticatorSetupKey: "  ",
+    })?.answer,
+  ).toEqual({ type: "save_login", username: "user", password: "password" });
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "save_login",
+      username: "user",
+      password: "password",
+      authenticatorSetupKey: " otpauth://totp/x?secret=ABCD ",
+    })?.answer,
+  ).toEqual({
+    type: "save_login",
+    username: "user",
+    password: "password",
+    authenticatorSetupKey: " otpauth://totp/x?secret=ABCD ",
+  });
+});
+
+it("explains that the agent receives only a reference to the site-bound login", () => {
+  expect(
+    secretRequestPrivacyNote({ requestKind: "login", siteOrigin: "https://example.com" }),
+  ).toBe("The agent gets only a reference. GOAT fills this login on https://example.com");
+});
+
+it("validates and normalizes a card answer without altering name or CVC", () => {
+  const item = { id: "item:card", threadId: "thread:card" } as never;
+  const answer = {
+    type: "save_card" as const,
+    number: "4242 4242-4242 4242",
+    expiryMonth: "01",
+    expiryYear: "29",
+    cvc: "003",
+    name: "  Name  ",
+  };
+  expect(secretRequestAnswerInput(item, { ...answer, cvc: "12" })).toBeNull();
+  expect(secretRequestAnswerInput(item, { ...answer, number: "123" })).toBeNull();
+  expect(secretRequestAnswerInput(item, answer)).toEqual({
+    threadId: "thread:card",
+    turnItemId: "item:card",
+    answer: { ...answer, number: "4242424242424242", expiryYear: "2029" },
+  });
+});
+
+it("validates a provider reference before building an answer", () => {
+  const item = { id: "turn-item:secret", threadId: "thread:secret" } as never;
+  const provider = SecretProviderId.make("vault");
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "reference",
+      reference: { provider, reference: "not a reference" },
+    }),
+  ).toBeNull();
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "reference",
+      reference: { provider, reference: " op://vault/item/password " },
+    }),
+  ).toEqual({
+    threadId: "thread:secret",
+    turnItemId: "turn-item:secret",
+    answer: { type: "reference", reference: { provider, reference: "op://vault/item/password" } },
   });
 });

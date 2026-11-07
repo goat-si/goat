@@ -11,6 +11,7 @@ import type * as Electron from "electron";
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
+import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopTelemetryPublisher from "./DesktopTelemetryPublisher.ts";
 import * as DesktopRendererHistory from "./DesktopRendererHistory.ts";
 
@@ -51,26 +52,64 @@ function layerElectronApp(
   } satisfies ElectronApp.ElectronApp["Service"]);
 }
 
-const layerCuaRouting = DesktopTelemetryPublisher.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      layerElectronApp([]),
-      layerHistory,
-      Layer.succeed(
-        ElectronPowerMonitor.ElectronPowerMonitor,
-        ElectronPowerMonitor.ElectronPowerMonitor.of({
-          isOnBatteryPower: Effect.succeed(false),
-          getSystemIdleTime: Effect.succeed(0),
-          getSystemIdleState: () => Effect.succeed("active"),
-          getCurrentThermalState: Effect.succeed("nominal"),
-          onSimpleEvent: () => Effect.void,
-          onThermalStateChange: () => Effect.void,
-          onSpeedLimitChange: () => Effect.void,
-        }),
+const layerShell = Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
+  installIntoProcess: Effect.succeed(true),
+  awaitDiscovery: Effect.succeed(true),
+  updates: Stream.empty,
+});
+const makeLayerCuaRouting = (shell = layerShell) =>
+  DesktopTelemetryPublisher.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerElectronApp([]),
+        layerHistory,
+        shell,
+        Layer.succeed(
+          ElectronPowerMonitor.ElectronPowerMonitor,
+          ElectronPowerMonitor.ElectronPowerMonitor.of({
+            isOnBatteryPower: Effect.succeed(false),
+            getSystemIdleTime: Effect.succeed(0),
+            getSystemIdleState: () => Effect.succeed("active"),
+            getCurrentThermalState: Effect.succeed("nominal"),
+            onSimpleEvent: () => Effect.void,
+            onThermalStateChange: () => Effect.void,
+            onSpeedLimitChange: () => Effect.void,
+          }),
+        ),
       ),
     ),
-  ),
-);
+  );
+
+const layerCuaRouting = makeLayerCuaRouting();
+
+it.effect("sends shell environment only to the primary backend (#28556)", () => {
+  const shell = Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
+    installIntoProcess: Effect.succeed(true),
+    awaitDiscovery: Effect.succeed(true),
+    updates: Stream.make({
+      version: 1,
+      type: "shellEnvironment",
+      platform: "darwin",
+      discovered: true,
+      environment: { PATH: "/private/path" },
+    }),
+  });
+  return Effect.gen(function* () {
+    const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+    const local = yield* publisher.encodedForSource("primary").pipe(
+      Stream.map((bytes) => new TextDecoder().decode(bytes)),
+      Stream.filter((value) => value.includes("shellEnvironment")),
+      Stream.runHead,
+    );
+    assert.isTrue(Option.isSome(local));
+    const remote = yield* publisher
+      .encodedForSource("ssh:remote")
+      .pipe(Stream.take(2), Stream.runCollect);
+    assert.isFalse(
+      remote.some((value) => new TextDecoder().decode(value).includes("shellEnvironment")),
+    );
+  }).pipe(Effect.provide(makeLayerCuaRouting(shell)));
+});
 
 const collectTelemetry = Effect.fn(function* (stream: Stream.Stream<Uint8Array>) {
   const messages = yield* Queue.unbounded<DesktopHostTelemetryMessage>();

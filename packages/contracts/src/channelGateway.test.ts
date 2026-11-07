@@ -11,9 +11,35 @@ import {
   ChannelNoticeInput,
   ChannelOutboundMessage,
   ChannelRequester,
+  ChannelUpdateBotInput,
 } from "./index.ts";
 
 const json = <S extends Schema.Codec<unknown, unknown>>(schema: S) => Schema.toCodecJson(schema);
+
+describe("channel.updateBot input", () => {
+  const decode = Schema.decodeUnknownExit(ChannelUpdateBotInput);
+  it("refuses a profile edit a bot could not carry", () => {
+    for (const input of [
+      { name: "Jarvis" },
+      { botId: "", name: "Jarvis" },
+      { botId: "main", name: "" },
+      { botId: "main", name: "   " },
+      { botId: "main", name: "x".repeat(65) },
+      { botId: "main", avatar: "x".repeat(17) },
+      { botId: "main", avatar: "" },
+      { botId: "main", purpose: "x".repeat(4001) },
+    ]) {
+      expect(decode(input)._tag, JSON.stringify(input)).toBe("Failure");
+    }
+  });
+  it("accepts a partial edit and a cleared avatar", () => {
+    expect(decode({ botId: "main", avatar: null })._tag).toBe("Success");
+    expect(decode({ botId: "main", purpose: "" })._tag).toBe("Success");
+    expect(decode({ botId: "main", name: "Jarvis", purpose: "x".repeat(4000) })._tag).toBe(
+      "Success",
+    );
+  });
+});
 
 describe("channel ingest", () => {
   it("round-trips iMessage input, requester and outbound destination", () => {

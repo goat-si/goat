@@ -702,3 +702,26 @@ it("preserves a failed pin after approval", async () => {
   expect(container.textContent).toContain("The SSH host key or destination changed.");
   expect(container.textContent).not.toContain("Host key pinned");
 });
+
+it("shows the tab origin and requires settings access to approve while allowing decline", async () => {
+  harness.scopeAllowed = false;
+  await render({
+    ...handoff,
+    title: "Let this thread use a browser tab",
+    reason:
+      "Use Observed window at https://example.test. The agent can already see this window title and origin.",
+    target: { environmentId, path: "browser_claim.answer" },
+    state: "pending",
+  });
+  expect(container.textContent).toContain("Observed window");
+  expect(container.textContent).toContain("https://example.test");
+  await click("Review request");
+  const approve = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Approve",
+  );
+  const decline = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Decline",
+  );
+  expect(approve?.disabled).toBe(true);
+  expect(decline?.disabled).toBe(false);
+});

@@ -40,6 +40,7 @@ import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
+import { makeLeaseLock } from "./registryLeaseLock.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -142,6 +143,8 @@ export class EnvironmentRegistry extends Context.Service<
       | PlatformEnvironmentRemovalError
     >;
     readonly retryNow: (environmentId: EnvironmentId) => Effect.Effect<void>;
+    /** Starts a new session for an enabled environment, so it reads the saved credential again. */
+    readonly reconnect: (environmentId: EnvironmentId) => Effect.Effect<void>;
     readonly setEnabled: (
       environmentId: EnvironmentId,
       enabled: boolean,
@@ -262,60 +265,8 @@ export const make = Effect.gen(function* () {
   const persistedEnvironmentIds = yield* Ref.make<ReadonlySet<EnvironmentId>>(
     new Set(persistedRoutesByEnvironment.keys()),
   );
-  interface LeaseLock {
-    readonly semaphore: Semaphore.Semaphore;
-    readonly users: number;
-  }
-
-  const leaseLocks = yield* Ref.make<ReadonlyMap<EnvironmentId, LeaseLock>>(new Map());
-  const leaseLocksGuard = yield* Semaphore.make(1);
   const started = yield* Ref.make(false);
-
-  const withLeaseLock = <A, E, R>(
-    environmentId: EnvironmentId,
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E, R> =>
-    Effect.acquireUseRelease(
-      leaseLocksGuard.withPermits(1)(
-        Effect.gen(function* () {
-          const current = yield* Ref.get(leaseLocks);
-          const existing = current.get(environmentId);
-          if (existing !== undefined) {
-            yield* Ref.set(
-              leaseLocks,
-              new Map(current).set(environmentId, {
-                semaphore: existing.semaphore,
-                users: existing.users + 1,
-              }),
-            );
-            return existing.semaphore;
-          }
-          const semaphore = yield* Semaphore.make(1);
-          yield* Ref.set(leaseLocks, new Map(current).set(environmentId, { semaphore, users: 1 }));
-          return semaphore;
-        }),
-      ),
-      (semaphore) => semaphore.withPermits(1)(effect),
-      (semaphore) =>
-        leaseLocksGuard.withPermits(1)(
-          Ref.update(leaseLocks, (current) => {
-            const existing = current.get(environmentId);
-            if (existing === undefined || existing.semaphore !== semaphore) {
-              return current;
-            }
-            const next = new Map(current);
-            if (existing.users === 1) {
-              next.delete(environmentId);
-            } else {
-              next.set(environmentId, {
-                semaphore,
-                users: existing.users - 1,
-              });
-            }
-            return next;
-          }),
-        ),
-    ).pipe(Effect.withSpan("EnvironmentRegistry.withLeaseLock"));
+  const withLeaseLock = yield* makeLeaseLock;
 
   const getEntry = Effect.fn("EnvironmentRegistry.getEntry")(function* (
     environmentId: EnvironmentId,
@@ -789,12 +740,6 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const registerPlatform = Effect.fn("EnvironmentRegistry.registerPlatform")(function* (
-    registration: PrimaryConnectionRegistration,
-  ) {
-    yield* installPlatformRegistration(registration);
-  });
-
   /** Succeeds with `false` when a best-effort write failed, so an identical repeat retries it. */
   const applyPlatformRegistrations = Effect.fn("EnvironmentRegistry.reconcilePlatform")(function* (
     platformRegistrations: ReadonlyArray<PlatformConnectionRegistration>,
@@ -814,6 +759,12 @@ export const make = Effect.gen(function* () {
 
   const reconcileLock = yield* Semaphore.make(1);
   let appliedPlatformRegistrations: ReadonlyArray<PlatformConnectionRegistration> | undefined;
+  const registerPlatform = Effect.fn("EnvironmentRegistry.registerPlatform")(function* (
+    registration: PrimaryConnectionRegistration,
+  ) {
+    appliedPlatformRegistrations = undefined;
+    yield* installPlatformRegistration(registration);
+  }, reconcileLock.withPermits(1));
   // Untraced: platforms repeat unchanged registrations every few seconds, and a
   // span per poll would make idle clients export traces continuously.
   const reconcilePlatform = Effect.fnUntraced(function* (
@@ -1087,6 +1038,24 @@ export const make = Effect.gen(function* () {
       Effect.catchTags({ EnvironmentNotRegisteredError: () => Effect.void }),
       Effect.withSpan("EnvironmentRegistry.retryNow"),
     );
+  const reconnect = Effect.fn("EnvironmentRegistry.reconnect")(function* (
+    environmentId: EnvironmentId,
+  ) {
+    // Under setEnabled's lock and uninterrupted, so the pair never leaves the intent half-changed.
+    yield* withLeaseLock(
+      environmentId,
+      Effect.gen(function* () {
+        const lease = (yield* SubscriptionRef.get(serviceScopes)).get(environmentId);
+        if (
+          lease === undefined ||
+          !(yield* SubscriptionRef.get(entries)).get(environmentId)?.enabled
+        )
+          return;
+        yield* lease.supervisor.disconnect;
+        yield* lease.supervisor.connect;
+      }),
+    ).pipe(Effect.uninterruptible);
+  });
   const setEnabled = Effect.fn("EnvironmentRegistry.setEnabled")(function* (
     environmentId: EnvironmentId,
     enabled: boolean,
@@ -1225,6 +1194,7 @@ export const make = Effect.gen(function* () {
     reorderRoutes,
     removeRelayEnvironments,
     retryNow,
+    reconnect,
     setEnabled,
     setCompatibility,
     state,

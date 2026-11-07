@@ -9,6 +9,14 @@ import * as Effect from "effect/Effect";
 
 import type * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 
+export function knownOptions(
+  options: ReadonlyArray<ProviderOptionSelection> | undefined,
+  descriptors: ReadonlyArray<ProviderOptionDescriptor> | undefined,
+): ReadonlyArray<ProviderOptionSelection> | undefined {
+  if (options === undefined || descriptors === undefined) return options;
+  return options.filter((option) => descriptors.some((descriptor) => descriptor.id === option.id));
+}
+
 /** Models without descriptors skip descriptor checks, but duplicate ids always fail. */
 export function invalidOptionSelections(
   selections: ReadonlyArray<ProviderOptionSelection>,

@@ -1,5 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CheckpointId,
+  CheckpointRef,
+  CheckpointScopeId,
   CommandId,
   EventId,
   MessageId,
@@ -16,6 +19,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Statement from "effect/sql/Statement";
 import * as TestClock from "effect/testing/TestClock";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -31,6 +35,7 @@ const forkCases = (
   [
     ["codex", "interrupted"],
     ["claudeAgent", "failed"],
+    ["codex", "completed"],
   ] as const
 ).map(([driverName, status]) => {
   const driver = ProviderDriverKind.make(driverName);
@@ -122,14 +127,69 @@ it.effect("a persisted fork leaves PR watching with its parent until explicitly 
     assert.isDefined(parentWatch);
     assert.lengthOf(parentBefore?.pendingBackgroundTasks ?? [], 1);
 
+    const reads: Array<string> = [];
+    const recordReads: Statement.Transformer = (statement) => {
+      const [query] = statement.compile();
+      if (/^\s*SELECT/i.test(query)) reads.push(query);
+      return Effect.succeed(statement);
+    };
+    yield* orchestrator
+      .dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("fork-watch-fork"),
+        sourceThreadId,
+        targetThreadId,
+        sourcePoint: { type: "run", runId: sourceRunId },
+        createdBy: "user",
+        creationSource: "mcp",
+      })
+      .pipe(Effect.provideService(Statement.CurrentTransformer, recordReads));
+    assert.isEmpty(
+      reads.filter(
+        (query) =>
+          query.includes("FROM orchestration_v2_projection_checkpoints") ||
+          query.includes("FROM orchestration_v2_projection_context_transfers"),
+      ),
+    );
+    const checkpointId = CheckpointId.make("fork-watch-checkpoint");
+    yield* eventSink.write({
+      events: [
+        {
+          id: EventId.make("fork-watch-captured"),
+          type: "checkpoint.captured",
+          threadId: sourceThreadId,
+          occurredAt: now,
+          payload: {
+            id: checkpointId,
+            threadId: sourceThreadId,
+            scopeId: CheckpointScopeId.make("fork-watch-scope"),
+            runId: sourceRunId,
+            nodeId: NodeId.make("fork-watch-node"),
+            parentCheckpointId: null,
+            ordinalWithinScope: 1,
+            appRunOrdinal: 1,
+            ref: CheckpointRef.make("refs/goat/checkpoint-fork/1"),
+            status: "ready",
+            files: [],
+            capturedAt: now,
+          },
+        },
+      ],
+    });
+    const checkpointChild = ThreadId.make("fork-watch-checkpoint-child");
     yield* orchestrator.dispatch({
       type: "thread.fork",
-      commandId: CommandId.make("fork-watch-fork"),
+      commandId: CommandId.make("fork-watch-checkpoint-fork"),
       sourceThreadId,
-      targetThreadId,
-      sourcePoint: { type: "run", runId: sourceRunId },
+      targetThreadId: checkpointChild,
+      sourcePoint: { type: "checkpoint", checkpointId },
       createdBy: "user",
       creationSource: "mcp",
+    });
+    assert.deepEqual((yield* orchestrator.getThreadShell(checkpointChild))?.forkedFrom, {
+      type: "run",
+      threadId: sourceThreadId,
+      runId: sourceRunId,
     });
     const fork = yield* orchestrator.getThreadShell(targetThreadId);
     assert.isNotNull(fork);
@@ -368,6 +428,7 @@ it.effect.each(forkCases)(
         sourceThreadId,
         targetThreadId,
         sourcePoint: { type: "run", runId: sourceRunId },
+        ...(status === "completed" ? { sideChat: true } : {}),
         createdBy: "user",
         creationSource: "web",
       });
@@ -378,12 +439,19 @@ it.effect.each(forkCases)(
         messageId: MessageId.make("continue-fork"),
         text: "Continue from the selected source run",
         attachments: [],
-        modelSelection,
+        modelSelection:
+          status === "completed" ? { ...modelSelection, model: "other-model" } : modelSelection,
         dispatchMode: { type: "start_immediately" },
         createdBy: "user",
         creationSource: "web",
       });
       const target = yield* orchestrator.getThreadProjection(targetThreadId);
+      if (status === "completed") {
+        assert.isFalse(
+          target.turnItems.some((item) => item.type === "user_message" && item.modelSwitch),
+        );
+        return;
+      }
       assert.equal(target.contextTransfers[0]?.resolution?.strategy, "portable_context");
       assert.lengthOf(target.contextHandoffs, 1);
       const handoff = target.contextHandoffs[0]!;

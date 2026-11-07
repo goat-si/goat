@@ -3,6 +3,8 @@ import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   MemoryReadInput,
+  MemoryRecallInput,
+  MemoryRememberInput,
   MemorySearchInput,
   ProviderInstanceId,
   ThreadId,
@@ -243,7 +245,9 @@ const notesOf = (entry: AgentSurfaceEntry) => entry.parameters;
 // Dynamic tools carry JSON Schema; their handlers decode with these contract schemas.
 const dynamicInputs: Readonly<Record<string, Schema.Codec<unknown, unknown>>> = {
   "memory.search": MemorySearchInput,
+  "memory.recall": MemoryRecallInput,
   "memory.read": MemoryReadInput,
+  "memory.remember": MemoryRememberInput,
 };
 
 const describedProperty = (property: unknown) => {
@@ -309,9 +313,14 @@ it.effect(
             : tool?.parametersSchema
         ) as Schema.Codec<unknown, unknown> | undefined;
         expect(parameters, entry.path).toBeDefined();
+        // Memory read tools fill an omitted memorySpaceId with this server's space before decoding.
+        const defaulted = (args: Record<string, unknown>) =>
+          entry.path.startsWith("memory.") && !("memorySpaceId" in args)
+            ? { ...args, memorySpaceId: "7d1f5c2a-3b4e-4f6a-8c9d-0e1f2a3b4c5d" }
+            : args;
         for (const example of entry.examples)
           expect(
-            Schema.decodeExit(parameters ?? Schema.Never)(example.args)._tag,
+            Schema.decodeExit(parameters ?? Schema.Never)(defaulted(example.args))._tag,
             `${entry.path}: ${example.title}`,
           ).toBe("Success");
       }

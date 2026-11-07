@@ -8,6 +8,7 @@
 import { adoptLegacyEnv } from "@goat/contracts/legacyT3Names";
 
 import { isEntrypoint } from "./entrypoint.ts";
+import { enableCliCompileCache } from "./cliCompileCache.ts";
 
 // Effect CLI built-ins describe the whole command tree, so they need the full CLI.
 const FULL_CLI_BUILTINS = new Set(["--completions", "--wizard", "--no-wizard", "--help", "-h"]);
@@ -53,6 +54,10 @@ if (
   } else if (command === "__managed-chatgpt-token") {
     const { runManagedChatGptTokenCli } = await import("./cli/managedChatGptToken.ts");
     await runManagedChatGptTokenCli(process.argv.slice(3));
+  } else if (command === "__speech-worker") {
+    if (process.argv[3] !== "model") throw new Error("Unknown speech worker mode.");
+    const { runNativeSpeechWorker } = await import("./speech/native.ts");
+    await runNativeSpeechWorker();
   } else if (command === "__screen-run-child") {
     const { runScreenChild } = await import("./screenCode/ScreenRunChild.ts");
     await runScreenChild(process.stdin, process.stdout);
@@ -75,11 +80,16 @@ if (
       const { runAgentSurfaceCliMain } = await import("./cli/agentSurfaceCli.ts");
       process.exitCode = await runAgentSurfaceCliMain(invocation);
     } else {
+      enableCliCompileCache();
       // Before anything reads stdin: the desktop app's Windows launcher starts
       // the CLI without one. Never for the fast paths, whose stdin is a pipe.
       const { attachConsoleStdin } = await import("./cli/consoleStdin.ts");
       attachConsoleStdin();
+      const importStart = performance.now();
       const { runCli } = await import("./binCli.ts");
+      if (process.env.GOAT_STARTUP_PROFILE_DIR) {
+        performance.measure("server.import.binCli", { start: importStart });
+      }
       runCli();
     }
   }

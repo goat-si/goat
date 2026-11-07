@@ -59,6 +59,11 @@ export const makeRequestSecret = (deps: {
         "Pass clientRequestId with wait:false; call again with the same id to collect the answer.",
       );
     const origin = input.origin === undefined ? undefined : normalizeSecretOrigin(input.origin);
+    if (input.kind !== undefined && origin === undefined)
+      return yield* failure(
+        "invalid_request",
+        "A login or card request requires an http(s) origin.",
+      );
     if (input.origin !== undefined && origin === undefined)
       return yield* failure("invalid_request", "origin must be an http(s) URL or origin.");
     if (origin !== undefined && input.delivery === "file")
@@ -99,6 +104,7 @@ export const makeRequestSecret = (deps: {
           runId,
           nodeId,
           turnItemId,
+          ...(input.kind === undefined ? {} : { requestKind: input.kind }),
           label: input.label,
           reason: input.reason,
           ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
@@ -145,7 +151,17 @@ export const makeRequestSecret = (deps: {
     ) {
       yield* Effect.annotateCurrentSpan({ "secret_request.status": status });
       yield* Metrics.increment(Metrics.secretRequestsTotal, { status });
-      if (status !== "saved") return { status };
+      if (status !== "saved") {
+        const note = {
+          declined:
+            "The user declined. Do not ask in chat or another way; explain what is blocked and continue without it.",
+          cancelled:
+            "The card closed with the run. Ask again with a new clientRequestId only if the secret is still needed.",
+          timed_out:
+            "No answer in time. Do not ask in chat; ask again with a new clientRequestId only if the secret is still needed.",
+        }[status];
+        return { status, note };
+      }
       if (input.delivery === "file") {
         const file = yield* secretRequests
           .saveToFile({ threadId, turnItemId })

@@ -1,3 +1,5 @@
+import { ClaudeAccountControls } from "./ClaudeAccountControls";
+import { AddClaudeAccount } from "./AddClaudeAccount";
 import {
   resolveProviderInstanceDisplayName,
   supportsProviderHome,
@@ -160,6 +162,12 @@ export function SettingsProviderAccountsRouteScreen({
                             {routesThroughHome(provider) || !signsInHere(provider) ? null : (
                               <ProviderAccount environment={environment} provider={provider} />
                             )}
+                            {provider.driver === "claudeAgent" ? (
+                              <ClaudeAccountControls
+                                environment={environment}
+                                provider={provider}
+                              />
+                            ) : null}
                             {supportsProviderHome(provider.driver) ? (
                               <CodexHomeRouteStatus
                                 environment={environment}
@@ -169,9 +177,10 @@ export function SettingsProviderAccountsRouteScreen({
                             ) : null}
                           </ProviderAccountFrame>
                         ))}
+                        <AddClaudeAccount environment={environment} />
                         {accounts.length === 0 && !prompt ? (
                           <Text className="p-4 text-foreground-muted">
-                            Configure a provider with in-app sign-in in web or desktop Settings.
+                            Other providers can be configured in web or desktop Settings.
                           </Text>
                         ) : null}
                       </>
@@ -233,6 +242,9 @@ function ProviderAccount({
   const signedIn =
     provider.auth.status === "authenticated" ||
     (provider.auth.status === "unknown" && state?.phase === "succeeded");
+  const usesCredentials =
+    provider.driver === "antigravity" &&
+    (provider.auth.type === "gemini-api-key" || provider.auth.type === "agent-platform");
   const isDiscovering =
     provider.driver === "acpRegistry" &&
     !active &&
@@ -446,7 +458,7 @@ function ProviderAccount({
       ) : !active && !needsExternalSetup && provider.setup?.canAuthenticate !== false ? (
         <SettingsActionRow
           icon="person.crop.circle"
-          label={signedIn ? "Change account" : "Sign in"}
+          label={signedIn ? "Change account" : usesCredentials ? "Connect" : "Sign in"}
           disabled={disabled || !provider.enabled || !provider.installed || state === null}
           loading={pending}
           onPress={chooseMethod}

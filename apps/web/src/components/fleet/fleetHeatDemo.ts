@@ -85,12 +85,17 @@ const BOAT_AGENT_ALIAS = "boat-bx_23456789" as CloudMachineAlias;
 const UNREACHABLE = "clisu-oracle";
 /** A plain SSH host only a dispatcher knows about: drawn and listed, never counted. */
 const SSH_ONLY_HOST = "gpu-box";
+/**
+ * Boat machines in each state Fleet treats apart: stopped with reported work (drawn as stopped),
+ * stopped with nothing on it (left out), and running with nothing on it (drawn with a billing alert).
+ */
+const STOPPED_WITH_WORK = "boat-bx_56789abc" as CloudMachineAlias;
 
-function reportedLaunch(host: string): RemoteLaunch {
+function reportedLaunch(host: string, title = "Nightly eval"): RemoteLaunch {
   return {
     host,
     threadId: null,
-    title: "Nightly eval",
+    title,
     launcherThreadId: ThreadId.make("demo-launcher"),
     source: "thread",
     state: "running",
@@ -200,7 +205,12 @@ function runningShell(environmentId: EnvironmentId, id: string): FleetShell {
     lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: ThreadId.make(id) },
     createdAt: at,
     updatedAt: at,
-    source: {},
+    latestUserMessageAt: null,
+    pinnedAt: null,
+    settledOverride: null,
+    snoozedUntil: null,
+    snoozedAt: null,
+    source: { pendingRuntimeRequest: null },
   };
 }
 
@@ -240,10 +250,12 @@ export function fleetHeatDemo(): {
     remote: [
       {
         dispatcherEnvironmentId: environments[3]!.environmentId,
-        launches: [reportedLaunch(SSH_ONLY_HOST)],
+        launches: [reportedLaunch(SSH_ONLY_HOST), reportedLaunch(STOPPED_WITH_WORK, "Weekly eval")],
         cloudMachines: [
           boatMachine(BOAT_AGENT_ALIAS, "boat-agent", "running"),
           boatMachine("boat-bx_3456789a" as CloudMachineAlias, "nightly-ci", "archived"),
+          boatMachine("boat-bx_456789ab" as CloudMachineAlias, "scratch-box", "running"),
+          boatMachine(STOPPED_WITH_WORK, "weekly-eval", "archived"),
         ],
       },
     ],

@@ -31,7 +31,7 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { type EnvironmentShellState, makeEnvironmentShellState } from "./shell.ts";
+import { makeEnvironmentShellState } from "./shell.ts";
 import { createEnvironmentShellSyncAtom, shellSyncMessage } from "./presentation.ts";
 import * as ShellSnapshotLoader from "./shellSnapshotHttp.ts";
 import { v2Project, v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
@@ -61,7 +61,7 @@ function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
   return {
     client,
     initialConfig: Effect.succeed({ shellResumeCompletionMarker: true } as never),
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
     inboundFrames: Effect.succeed(0),
@@ -216,6 +216,192 @@ describe("environment shell synchronization", () => {
         registry.set(shellAtom, live);
         expect(shellSyncMessage(registry.get(sync))).toBeNull();
       }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { bufferSize: Infinity, expectedSequences: [51], existingRows: false },
+    { bufferSize: Infinity, expectedSequences: [51], existingRows: true },
+    // RpcClient defaults to a 16-event buffer, which splits larger server chunks.
+    { bufferSize: 16, expectedSequences: [17, 33, 49, 51], existingRows: false },
+    { bufferSize: 16, expectedSequences: [17, 33, 49, 51], existingRows: true },
+  ])("batches $bufferSize events (existing: $existingRows)", (input) =>
+    Effect.gen(function* () {
+      const { bufferSize, expectedSequences, existingRows } = input;
+      const events = yield* Queue.bounded<OrchestrationV2ShellStreamItem>(bufferSize);
+      let rowVisits = 0;
+      const rows = Array.from({ length: 50 }, (_, index) => ({
+        ...v2ThreadShell,
+        get id() {
+          rowVisits += 1;
+          return ThreadId.make(`thread-${index}`);
+        },
+      }));
+      const batchSnapshot = { ...LIVE_SHELL_SNAPSHOT, threads: existingRows ? rows : [] };
+      const client = {
+        [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () => Stream.fromQueue(events),
+      } as unknown as WsRpcProtocolClient;
+      const supervisorState = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
+      const activeSession = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
+        Option.some(session(client)),
+      );
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: supervisorState,
+        session: activeSession,
+        prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const cache = Persistence.EnvironmentCacheStore.of({
+        loadShell: () => Effect.succeedNone,
+        saveShell: () => Effect.void,
+        loadShellMeta: () => Effect.succeedNone,
+        saveShellMeta: () => Effect.void,
+        loadThread: () => Effect.succeedNone,
+        saveThread: () => Effect.void,
+        removeThread: () => Effect.void,
+        loadServerConfig: () => Effect.succeedNone,
+        saveServerConfig: () => Effect.void,
+        loadVcsRefs: () => Effect.succeedNone,
+        saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
+        clear: () => Effect.void,
+      });
+      const shellState = yield* makeEnvironmentShellState().pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+        Effect.provideService(
+          ShellSnapshotLoader.ShellSnapshotLoader,
+          ShellSnapshotLoader.ShellSnapshotLoader.of({
+            load: () => Effect.succeedNone,
+          }),
+        ),
+      );
+      yield* SubscriptionRef.set(supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connected",
+        stage: null,
+        attempt: 1,
+        generation: 1,
+        lastFailure: null,
+        retryAt: null,
+      });
+      yield* Queue.offer(events, { kind: "snapshot", snapshot: batchSnapshot });
+      yield* Queue.offer(events, { kind: "synchronized" });
+      yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter((state) => state.status === "live"),
+        Stream.runHead,
+      );
+
+      // Observe before publishing so no batch can arrive before the subscription.
+      const observed = yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.drop(1),
+        Stream.takeUntil(
+          (state) => Option.isSome(state.snapshot) && state.snapshot.value.snapshotSequence === 51,
+        ),
+        Stream.runCollect,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      rowVisits = 0;
+      yield* Queue.offerAll(
+        events,
+        Array.from({ length: 50 }, (_, index) => ({
+          kind: "thread.updated" as const,
+          sequence: 2 + index,
+          location: "active" as const,
+          thread: {
+            ...v2ThreadShell,
+            get id() {
+              rowVisits += 1;
+              return ThreadId.make(`thread-${index}`);
+            },
+            title: "Updated",
+          },
+        })),
+      );
+      const states = yield* Fiber.join(observed);
+      if (existingRows) {
+        // Index each received batch once; distinct updates must not rescan every row.
+        expect(rowVisits).toBeLessThanOrEqual(50 * (expectedSequences.length + 10));
+      }
+      const snapshots = states.map((state) => Option.getOrThrow(state.snapshot));
+      expect(snapshots.map((snapshot) => snapshot.snapshotSequence)).toEqual(expectedSequences);
+      expect(snapshots.at(-1)!.threads.map((thread) => thread.id)).toEqual(
+        Array.from({ length: 50 }, (_, index) => `thread-${index}`),
+      );
+
+      const removedObserved = yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter(
+          (state) => Option.isSome(state.snapshot) && state.snapshot.value.snapshotSequence === 52,
+        ),
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* Queue.offerAll(events, [
+        { kind: "future.event", sequence: 99 } as never,
+        {
+          kind: "thread.removed",
+          sequence: 52,
+          location: "active",
+          threadId: ThreadId.make("thread-0"),
+        },
+        {
+          kind: "thread.removed",
+          sequence: 51,
+          location: "active",
+          threadId: ThreadId.make("thread-1"),
+        },
+      ]);
+      const removedState = Option.getOrThrow(yield* Fiber.join(removedObserved));
+      expect(removedState.generation).toBe(states.at(-1)!.generation);
+      expect([...removedState.removedAt]).toEqual([[ThreadId.make("thread-0"), 52]]);
+
+      // An authoritative snapshot resets even a higher live cursor in the same batch.
+      const resetRow = { ...v2ThreadShell, id: ThreadId.make("reset-row") };
+      const resetObserved = yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter(
+          (state) => Option.isSome(state.snapshot) && state.snapshot.value.snapshotSequence === 4,
+        ),
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* Queue.offerAll(events, [
+        {
+          kind: "thread.removed",
+          sequence: 52,
+          location: "active",
+          threadId: ThreadId.make("thread-0"),
+        },
+        {
+          kind: "snapshot",
+          snapshot: { ...LIVE_SHELL_SNAPSHOT, snapshotSequence: 2, threads: [resetRow] },
+        },
+        { kind: "thread.removed", sequence: 2, location: "active", threadId: resetRow.id },
+        {
+          kind: "thread.updated",
+          sequence: 3,
+          location: "active",
+          thread: { ...resetRow, title: "After reset" },
+        },
+        { kind: "synchronized" },
+        {
+          kind: "thread.updated",
+          sequence: 4,
+          location: "active",
+          thread: { ...resetRow, title: "After completion" },
+        },
+      ]);
+      const resetState = Option.getOrThrow(yield* Fiber.join(resetObserved));
+      expect(resetState.status).toBe("live");
+      expect(resetState.generation).toBeGreaterThan(removedState.generation);
+      expect(resetState.removedAt.size).toBe(0);
+      expect(Option.getOrThrow(resetState.snapshot).threads).toEqual([
+        { ...resetRow, title: "After completion" },
+      ]);
+    }).pipe(Effect.scoped),
   );
 
   it.effect("skips unchanged shell writes, persists resets and flushes changed rows", () =>
@@ -730,104 +916,6 @@ describe("environment shell synchronization", () => {
       const state = yield* SubscriptionRef.get(shellState);
       expect(Option.getOrThrow(state.snapshot).snapshotSequence).toBe(4);
       expect(Option.getOrThrow(state.snapshot).projects[0]?.title).toBe("Server reset");
-    }),
-  );
-
-  it.effect("opts in to shell omissions and counts authoritative snapshots and removals", () =>
-    Effect.gen(function* () {
-      const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
-      const subscribeInput = yield* Deferred.make<unknown>();
-      const loadOptions = yield* Ref.make<ReadonlyArray<unknown>>([]);
-      const client = {
-        [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: (input: unknown) =>
-          Stream.unwrap(
-            Deferred.succeed(subscribeInput, input).pipe(Effect.as(Stream.fromQueue(events))),
-          ),
-      } as unknown as WsRpcProtocolClient;
-      const familySession: RpcSession.RpcSession = {
-        ...session(client),
-        initialConfig: Effect.succeed({
-          shellResumeCompletionMarker: true,
-          shellThreadFamilies: true,
-          shellOlderSettled: true,
-        } as never),
-      };
-      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
-        target: TARGET,
-        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
-        session: yield* SubscriptionRef.make(Option.some(familySession)),
-        prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
-        connect: Effect.void,
-        disconnect: Effect.void,
-        retryNow: Effect.void,
-      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
-      const cache = Persistence.EnvironmentCacheStore.of({
-        loadShell: () => Effect.succeedNone,
-        saveShell: () => Effect.void,
-        loadShellMeta: () => Effect.succeedNone,
-        saveShellMeta: () => Effect.void,
-        loadThread: () => Effect.succeedNone,
-        saveThread: () => Effect.void,
-        removeThread: () => Effect.void,
-        loadServerConfig: () => Effect.succeedNone,
-        saveServerConfig: () => Effect.void,
-        loadVcsRefs: () => Effect.succeedNone,
-        saveVcsRefs: () => Effect.void,
-        removeVcsRefs: () => Effect.void,
-        clearVcsRefs: () => Effect.void,
-        clear: () => Effect.void,
-      });
-      const snapshotLoader = ShellSnapshotLoader.ShellSnapshotLoader.of({
-        load: (_prepared, options) =>
-          Ref.update(loadOptions, (all) => [...all, options]).pipe(
-            Effect.as(Option.some(LIVE_SHELL_SNAPSHOT)),
-          ),
-      });
-      const shellState = yield* makeEnvironmentShellState().pipe(
-        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
-        Effect.provideService(ShellSnapshotLoader.ShellSnapshotLoader, snapshotLoader),
-      );
-      const stateWhere = (predicate: (state: EnvironmentShellState) => boolean) =>
-        SubscriptionRef.changes(shellState).pipe(Stream.filter(predicate), Stream.runHead);
-
-      // Both transports must omit, or omitted children would come back through the socket.
-      expect(yield* Deferred.await(subscribeInput)).toMatchObject({
-        afterSequence: 1,
-        omitIdleSubagents: true,
-        omitOlderSettled: true,
-      });
-      expect(yield* Ref.get(loadOptions)).toEqual([
-        { omitIdleSubagents: true, omitOlderSettled: true },
-      ]);
-      const loaded = Option.getOrThrow(yield* stateWhere((state) => state.generation > 0));
-      expect(loaded.removedAt.size).toBe(0);
-
-      const gone = ThreadId.make("thread-gone");
-      yield* Queue.offer(events, {
-        kind: "snapshot",
-        snapshot: { ...LIVE_SHELL_SNAPSHOT, threads: [] },
-        resolvedRepositoryIdentityRoots: [],
-      });
-      yield* Queue.offer(events, {
-        kind: "thread.removed",
-        sequence: 2,
-        location: "active",
-        threadId: gone,
-      });
-      const removed = Option.getOrThrow(yield* stateWhere((state) => state.removedAt.size > 0));
-      // An enrichment refresh is not authoritative.
-      expect(removed.generation).toBe(loaded.generation);
-      expect(removed.removedAt.get(gone)).toBe(2);
-
-      yield* Queue.offer(events, {
-        kind: "snapshot",
-        snapshot: { ...LIVE_SHELL_SNAPSHOT, snapshotSequence: 5 },
-      });
-      const reset = Option.getOrThrow(
-        yield* stateWhere((state) => state.generation > loaded.generation),
-      );
-      expect(reset.removedAt.size).toBe(0);
     }),
   );
 

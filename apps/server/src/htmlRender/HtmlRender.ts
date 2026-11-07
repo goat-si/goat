@@ -35,7 +35,6 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../attachmentStore.ts";
-import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
 import * as HeadlessChrome from "./headlessChrome.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
@@ -371,7 +370,7 @@ const make = Effect.gen(function* () {
   const browsers = yield* Semaphore.make(MAX_CONCURRENT_BROWSERS);
   // Keep Chrome sandboxed unless explicitly disabled; root must opt out to run.
   const noSandbox = PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment);
-  const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
+  const setupCommand = yield* PreviewBrowserHost.setupCommand(config.baseDir);
 
   const launching = <A>(
     executable: string,

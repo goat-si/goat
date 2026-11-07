@@ -45,6 +45,7 @@ import * as ServerConfig from "../config.ts";
 import { parseNote, serializeNote, type NoteContents } from "./frontmatter.ts";
 import { bodySummary } from "./noteSummary.ts";
 import * as NotesGit from "./NotesGit.ts";
+import * as NoteAttachments from "./NoteAttachments.ts";
 import * as NoteResults from "./NoteResults.ts";
 
 const decodePath = Schema.decodeEffect(NotePath);
@@ -93,6 +94,7 @@ export class NotesService extends Context.Service<
       host: string | null,
       observed?: ThreadResult,
     ) => Effect.Effect<void, NoteError>;
+    readonly attach: NoteAttachments.Attach;
   }
 >()("goat/notes/NotesService") {}
 
@@ -985,6 +987,7 @@ const make = Effect.gen(function* () {
     refreshResults,
     linked,
     cached: (name) => Effect.sync(() => readModel.get(name)),
+    attach: NoteAttachments.bindAttach(git, config, fs),
   });
 });
 export const layer = Layer.effect(NotesService, make);

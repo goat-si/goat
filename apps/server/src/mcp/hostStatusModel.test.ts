@@ -21,7 +21,6 @@ import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 
 const encodeHostStatus = Schema.encodeUnknownSync(GoatHostStatusResult);
 import {
-  HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS,
   clipHostStatusMessage,
   countHostThreads,
   hostStatusProviders,
@@ -174,7 +173,7 @@ it("keeps the last successful sample only for an unreachable host", () => {
 
 it("refreshes stale quota and skips accounts that cannot report it", () => {
   const now = Date.parse("2026-10-12T16:00:00.000Z");
-  const interval = HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS;
+  const interval = 60_000;
   expect(quotaRefreshDue(undefined, now, interval)).toBe(false);
   expect(quotaRefreshDue(limits("2026-10-12T15:00:00.000Z", "unsupported"), now, interval)).toBe(
     false,
@@ -201,13 +200,13 @@ it("refreshes stale quota and skips accounts that cannot report it", () => {
   ] as const satisfies ReadonlyArray<
     Pick<ServerProvider, "instanceId" | "driver" | "displayName" | "usageLimits">
   >;
-  expect(hostStatusQuotas(providers, new Set(["codex"]))).toEqual([
+  expect(hostStatusQuotas(providers)).toEqual([
     {
       instanceId: "codex",
       driver: "codex",
       displayName: "Codex",
       limits: limits("2026-10-12T15:00:00.000Z"),
-      fromCache: false,
+      fromCache: true,
     },
   ]);
 });
@@ -548,19 +547,16 @@ it("tells agents when quota is an OpenCodex pool, with account counts and each w
     },
     quotaPoolRoute: { provider: "openai" },
   };
-  const [pool, missing, failed, direct] = hostStatusQuotas(
-    [
-      { ...base, instanceId: ProviderInstanceId.make("codex"), usageLimits: pooled },
-      { ...base, instanceId: ProviderInstanceId.make("claude"), usageLimits: empty },
-      { ...base, instanceId: ProviderInstanceId.make("child"), usageLimits: unreadable },
-      {
-        ...base,
-        instanceId: ProviderInstanceId.make("direct"),
-        usageLimits: limits("2026-10-28T02:00:00.000Z"),
-      },
-    ],
-    new Set(),
-  );
+  const [pool, missing, failed, direct] = hostStatusQuotas([
+    { ...base, instanceId: ProviderInstanceId.make("codex"), usageLimits: pooled },
+    { ...base, instanceId: ProviderInstanceId.make("claude"), usageLimits: empty },
+    { ...base, instanceId: ProviderInstanceId.make("child"), usageLimits: unreadable },
+    {
+      ...base,
+      instanceId: ProviderInstanceId.make("direct"),
+      usageLimits: limits("2026-10-28T02:00:00.000Z"),
+    },
+  ]);
   expect(pool?.note).toBe(
     "OpenCodex pool for openai on Home home-a: 2 of 3 accounts available. 5 hours 61% (header), Weekly 53% (estimated). These are the pool's limits, not this instance's own account.",
   );

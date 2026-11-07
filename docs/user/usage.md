@@ -18,16 +18,19 @@ Select a model under **Breakdown** to see its trend, cache hit rate, and cost pe
 
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
 record are missing from the totals.
+Text generation (thread titles, commit messages, PR text, branch names and review guides) is not in
+the totals for Codex or Claude Code 2.0.63 and newer, because those runs save no session history.
 
 OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
 databases, including GOAT-managed profiles. Set `OPENCODE_DATA_DIR` or `ANTIGRAVITY_DATA_DIR` on the
 server to read a different data directory; comma-separated paths read multiple directories.
 
-Cursor reads account usage from Cursor's dashboard API using the CLI login saved on the server.
+Cursor reads account usage from Cursor's API using the GOAT sign-in or `CURSOR_API_KEY`,
+or otherwise the CLI login saved on the server.
 This includes headless GOAT sessions and desktop usage across machines; the same account counts
-once across connected environments. Without an accessible CLI login, GOAT shows a
+once across connected environments. Without any of these credentials, GOAT shows a
 notice instead of incomplete local totals. GOAT does not estimate missing tokens from conversation text.
-On macOS, choose **Enable Cursor usage** on Usage to allow GOAT to read your existing CLI login
+On macOS without a GOAT sign-in, choose **Enable Cursor usage** on Usage to allow GOAT to read your existing CLI login
 from Keychain. You can turn it off in **Settings → Providers → Usage providers**. macOS may ask
 you to allow access on the server Mac.
 
@@ -86,6 +89,30 @@ marked **Not saved**. Reconnect them and choose **Retry failed saves** to finish
 without writing again to environments that already saved. Changes are not queued after you close
 the dialog.
 
+## Show only some models
+
+To count only some models, or to leave some out, add `usageModelFilter` to the server's
+`settings.json` in its `userdata` directory, such as `~/.goat/userdata/settings.json`:
+
+```json
+{
+  "usageModelFilter": {
+    "include": [{ "provider": "claude", "model": "orbit-1" }, { "model": "orbit-2" }],
+    "exclude": [{ "model": "drift-9" }]
+  }
+}
+```
+
+`include` keeps only the listed models and `exclude` leaves the listed models out. `provider` is
+one of `claude`, `codex`, `cursor`, `grok`, `opencode`, `antigravity`, `pi`, or `muse`; omit it
+to match a model ID from any provider. Use the model ID that Usage shows without **Map to**, such
+as a provider-prefixed ID for Pi. Filters apply before **Map to**, so a model you leave out is not
+counted under its mapped name. Usage applies each environment's own filter. Remove the setting to
+show every model again.
+
+If the setting is invalid, Usage ignores it and shows every model, and the next save of any other
+setting removes it from `settings.json`.
+
 ## Track subscription limits
 
 **Usage → Limits** shows each provider's subscription accounts and how much quota each has left.
@@ -134,10 +161,10 @@ belong to the remote server. Limits need an OpenCode Go API key, or an OpenCode 
 in OpenCode with an API key. A Console browser sign-in alone does not report them. You can also add
 your Go API key as `OPENCODE_API_KEY` in the OpenCode instance's **Environment variables**, then
 refresh provider status. Cursor reports
-its monthly allowance, including separate Auto and API usage, using the CLI login or
-`CURSOR_AUTH_TOKEN`. On macOS, this includes the default Keychain login after you enable Cursor
-usage. Keychain login is used for limits only with Cursor's default API endpoint. If you configure
-a custom Cursor endpoint, use an explicit token or file-based CLI login for limits.
+its monthly allowance, including separate Auto and API usage, for `CURSOR_AUTH_TOKEN` when set,
+then the GOAT sign-in or `CURSOR_API_KEY`, then the CLI login. On macOS, the default Keychain
+login requires enabling Cursor usage. Sign-in, API keys, and Keychain login report limits only
+with Cursor's default API endpoint. For a custom endpoint, use an explicit token or file-based CLI login.
 
 Grok reports the remaining subscription allowance and reset time for its current billing period
 after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
@@ -252,6 +279,18 @@ Memory and disk thresholds are `elevatedMemoryFreePercent` (10), `criticalMemory
 `elevatedDiskFreeGiB` (10), and `criticalDiskFreeGiB` (2). Set `admission` to `"block"` to refuse
 agent launches onto an overloaded machine, a delivery to `"off"` to silence that level, or
 `enabled` to `false` to turn this off.
+
+## Memory limit for agents (macOS)
+
+GOAT checks the memory of each agent, together with the processes it started, every 30 seconds.
+When one goes over the limit, GOAT stops it and its turn fails with "Killed: out of memory."; the
+thread continues with the next message. Codex and OpenCode run one server that several threads can
+share. GOAT only warns when a shared server exceeds the limit, because stopping it would end every
+session using it on the machine. Muse agents are not covered.
+
+The automatic limit is half of the machine's RAM, up to 16 GiB. Change it under **Settings → General
+→ Updates and background → Agent memory limit**. Set a custom limit in GiB, or set it to 0 to turn
+the limit off.
 
 ## Connect a CLIProxyAPI hub
 

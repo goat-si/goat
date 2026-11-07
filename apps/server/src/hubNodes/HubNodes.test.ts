@@ -24,7 +24,7 @@ import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import migration from "../persistence/Migrations/096_HubNodes.ts";
+import migration from "../persistence/Migrations/106_HubNodes.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";
 
@@ -94,6 +94,8 @@ const fixture = Effect.gen(function* () {
     snapshotFailure: null as "sql" | "linked" | "cloud" | null,
     onSnapshotFailure: Effect.void as Effect.Effect<void>,
     linkedIdentity: remote,
+    descriptorLabel: "Linked box",
+    descriptorIdentity: remote,
     httpCalls: [] as string[],
     httpStatus: 200,
     unlinked: [] as string[],
@@ -133,6 +135,14 @@ const fixture = Effect.gen(function* () {
     }),
     names: Effect.sync(() => state.links.map((entry) => entry.name)),
     find: () => Effect.succeedNone,
+    refreshLabel: (input) =>
+      Effect.sync(() => {
+        state.links = state.links.map((row) =>
+          row.name === input.name && row.environmentId === input.environmentId
+            ? { ...row, label: input.label }
+            : row,
+        );
+      }),
     link: (input) =>
       Effect.gen(function* () {
         yield* input.beforeSave;
@@ -224,7 +234,10 @@ const fixture = Effect.gen(function* () {
     return Effect.succeed(
       HttpClientResponse.fromWeb(
         request,
-        Response.json({ ...descriptor, environmentId: remote }, { status: state.httpStatus }),
+        Response.json(
+          { ...descriptor, label: state.descriptorLabel, environmentId: state.descriptorIdentity },
+          { status: state.httpStatus },
+        ),
       ),
     );
   });
@@ -527,11 +540,17 @@ describe("HubNodes", () => {
     run(({ service, state }) =>
       Effect.gen(function* () {
         state.links = [link];
+        state.descriptorLabel = "Renamed box";
         yield* service.add(sshInput(), options);
         expect(
           (yield* service.check({})).nodes[0]!.routes.every((route) => route.status === "online"),
         ).toBe(true);
         expect(state.httpCalls).toEqual(["https://box.example/.well-known/goat/environment"]);
+        expect(state.links[0]?.label).toBe("Renamed box");
+        state.descriptorIdentity = hub;
+        state.descriptorLabel = "Untrusted name";
+        yield* service.check({});
+        expect(state.links[0]?.label).toBe("Renamed box");
       }),
     ),
   );

@@ -6,7 +6,7 @@ import {
 } from "@goat/client-runtime/state/terminal";
 import { synchronizeTerminalSession } from "../../components/ThreadTerminalDrawer";
 
-import { GhosttyTerminalCore, type GhosttyCell, type GhosttyRow } from "./core";
+import { GhosttyTerminalCore } from "./core";
 import {
   advanceTerminalSelectionClickSequence,
   applyTerminalCopyEvent,
@@ -15,7 +15,6 @@ import {
   isTerminalCopyShortcut,
   primeTerminalCopyInput,
   resolveTerminalMouseData,
-  terminalLinkAtPositionWithRange,
   terminalContentOriginY,
   terminalSelectionAutoscrollRows,
   terminalWheelDeltaRows,
@@ -537,6 +536,150 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(onLinkActivate).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { scenario: "missing", exists: false },
+    { scenario: "file", exists: true },
+    { scenario: "replaced", exists: true },
+    { scenario: "superseded", exists: false },
+    { scenario: "hidden", exists: false },
+    { scenario: "dragged", exists: true },
+    { scenario: "keyboard-selected", exists: false },
+    { scenario: "selection-cleared", exists: true },
+    { scenario: "output-cleaned", exists: true },
+  ])(
+    "validates a quick click without waiting for hover: $scenario",
+    async ({ scenario, exists }) => {
+      vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+      const harness = createHarness();
+      let resolveValidation!: (exists: boolean) => void;
+      const validation = new Promise<boolean>((resolve) => {
+        resolveValidation = resolve;
+      });
+      const validateLink = vi.fn(() => validation);
+      const onLinkActivate = vi.fn();
+      const surface = await harness.create({
+        beforeKey: () => true,
+        canActivateLink: () => false,
+        validateLink,
+        onLinkActivate,
+      });
+      surface.write("src/main.ts");
+      harness.flushFrame();
+      surface.selectAll();
+      expect(surface.getSelection()).toBe("src/main.ts");
+      harness.pointer("pointerdown", 5, 1);
+      expect(validateLink).toHaveBeenCalledWith("src/main.ts");
+      if (scenario === "dragged") harness.pointer("pointermove", 45, 1);
+      harness.pointer("pointerup", 5, 0);
+      expect(onLinkActivate).not.toHaveBeenCalled();
+      if (scenario === "replaced") {
+        surface.write("\r\x1b[2Ksrc/other.ts");
+        harness.flushFrame();
+      }
+      if (scenario === "superseded") harness.pointer("pointerdown", 5, 1);
+      if (scenario === "hidden") {
+        surface.setVisible(false);
+        surface.setVisible(true);
+      }
+      if (scenario === "keyboard-selected")
+        key(surface, "a", "KeyA", { ctrlKey: true, shiftKey: true });
+      if (scenario === "selection-cleared") surface.clearSelection();
+      if (scenario === "output-cleaned") surface.clearSelection({ source: "output" });
+      resolveValidation(exists);
+      await validation;
+      expect(onLinkActivate).toHaveBeenCalledTimes(
+        scenario === "file" || scenario === "output-cleaned" ? 1 : 0,
+      );
+      if (scenario === "missing" || scenario === "selection-cleared")
+        expect(surface.getSelection()).toBe("");
+      if (
+        scenario === "file" ||
+        scenario === "hidden" ||
+        scenario === "superseded" ||
+        scenario === "keyboard-selected"
+      ) {
+        expect(surface.getSelection()).not.toBe("");
+      }
+    },
+  );
+
+  it("only requests validation for a stable visible link under the pointer", async () => {
+    const harness = createHarness();
+    const onLinkHover = vi.fn();
+    const surface = await harness.create({ onLinkHover, canActivateLink: () => false });
+    surface.write("\x1b[?1049h\x1b[Hsrc/first.ts");
+    harness.flushFrame();
+    vi.advanceTimersByTime(250);
+    expect(onLinkHover).not.toHaveBeenCalled();
+
+    harness.pointer("pointermove", 5, 0);
+    expect(onLinkHover).toHaveBeenLastCalledWith("src/first.ts");
+    onLinkHover.mockClear();
+    for (let index = 0; index < 100; index++) {
+      surface.write(`\r\x1b[2Ksrc/file-${index}.ts`);
+      harness.flushFrame();
+      vi.advanceTimersByTime(10);
+    }
+    vi.advanceTimersByTime(239);
+    expect(onLinkHover.mock.calls.filter(([text]) => text !== null)).toEqual([]);
+    vi.advanceTimersByTime(1);
+    harness.flushFrame();
+    vi.advanceTimersByTime(1_000);
+    expect(onLinkHover.mock.calls.filter(([text]) => text !== null)).toEqual([["src/file-99.ts"]]);
+    onLinkHover.mockClear();
+
+    harness.pointer("pointerleave", 5, 0);
+    surface.write("\r\x1b[2Ksrc/recent.ts");
+    harness.flushFrame();
+    vi.advanceTimersByTime(150);
+    harness.pointer("pointermove", 5, 0);
+    vi.advanceTimersByTime(99);
+    expect(onLinkHover.mock.calls.filter(([text]) => text !== null)).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(onLinkHover).toHaveBeenLastCalledWith("src/recent.ts");
+    onLinkHover.mockClear();
+
+    harness.pointer("pointerleave", 5, 0);
+    surface.write("\r\x1b[2Ksrc/still.ts");
+    harness.flushFrame();
+    vi.advanceTimersByTime(250);
+    surface.write("\x1b[2;1Hother output");
+    harness.flushFrame();
+    harness.pointer("pointermove", 5, 0);
+    expect(onLinkHover).toHaveBeenLastCalledWith("src/still.ts");
+    onLinkHover.mockClear();
+
+    surface.write("\x1b[H\x1b[2Ksrc/move.ts");
+    harness.flushFrame();
+    harness.pointer("pointermove", 45, 0);
+    vi.advanceTimersByTime(150);
+    surface.write("\r\x1b[2K src/move.ts");
+    harness.flushFrame();
+    vi.advanceTimersByTime(249);
+    expect(onLinkHover.mock.calls.filter(([text]) => text !== null)).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(onLinkHover).toHaveBeenLastCalledWith("src/move.ts");
+    onLinkHover.mockClear();
+
+    for (const [index, cancel] of [
+      () => {
+        surface.write("\r\x1b[2Kplain text");
+        harness.flushFrame();
+      },
+      () => harness.pointer("pointerleave", 5, 0),
+      () => surface.setVisible(false),
+      () => surface.dispose(),
+    ].entries()) {
+      surface.setVisible(true);
+      surface.write(`\x1b[H\x1b[2Ksrc/next-${index}.ts`);
+      harness.flushFrame();
+      harness.pointer("pointermove", 5, 0);
+      cancel();
+      vi.advanceTimersByTime(250);
+      expect(onLinkHover.mock.calls.filter(([text]) => text !== null)).toEqual([]);
+    }
+  });
+
   it.each([false, true])(
     "uses visibility %s if it changes while WASM initializes",
     async (visible) => {
@@ -581,176 +724,6 @@ describe("GhosttyTerminalSurface visibility", () => {
       expect(harness.renderedSnapshot.rowData[0]?.text).toContain("ready");
     },
   );
-});
-
-const cell = (text: string): GhosttyCell => ({
-  text,
-  wide: 0,
-  foreground: { r: 255, g: 255, b: 255 },
-  background: { r: 0, g: 0, b: 0 },
-  bold: false,
-  italic: false,
-  invisible: false,
-  strikethrough: false,
-  overline: false,
-  underline: false,
-  selected: false,
-});
-
-describe("terminalLinkAtPositionWithRange", () => {
-  it.each([
-    { text: "https://example.com/日本", cols: 80, end: { x: 23, y: 0 } },
-    { text: "src/日本/main.ts:3:1", cols: 80, end: { x: 19, y: 0 } },
-    { text: "https://example.com/🙂", cols: 80, end: { x: 21, y: 0 } },
-    { text: "https://example.com/日本", cols: 23, end: { x: 1, y: 1 } },
-  ])("keeps every cell of $text clickable at $cols columns", async ({ text, cols, end }) => {
-    const core = await GhosttyTerminalCore.create(
-      cols,
-      3,
-      8,
-      16,
-      {
-        foreground: { r: 255, g: 255, b: 255 },
-        background: { r: 0, g: 0, b: 0 },
-        cursor: { r: 255, g: 255, b: 255 },
-      },
-      () => {},
-    );
-    try {
-      core.write(text + " next");
-      const rows = core.snapshot().rowData;
-      for (let y = 0; y <= end.y; y += 1) {
-        const lastColumn = y === end.y ? end.x : cols - 2;
-        for (let x = 0; x <= lastColumn; x += 1) {
-          expect(terminalLinkAtPositionWithRange(rows, y, x)).toEqual({
-            text,
-            range: { start: { x: 0, y: 0 }, end },
-          });
-        }
-      }
-      expect(terminalLinkAtPositionWithRange(rows, end.y, end.x + 1)).toBeNull();
-    } finally {
-      core.dispose();
-    }
-  });
-
-  it("activates a wrapped quoted Windows path from its spaces and position suffix", () => {
-    const row = (text: string, isWrapContinuation: boolean): GhosttyRow => ({
-      cells: Array.from(text, (character) => cell(character)),
-      text,
-      isWrapContinuation,
-      wrapsToNext: false,
-    });
-    const first = String.raw`"C:\Users\Jane `;
-    const second = String.raw`Doe\index.ts":12:7`;
-    const rows = [row(first, false), row(second, true)];
-    const expected = {
-      text: String.raw`C:\Users\Jane Doe\index.ts:12:7`,
-      range: { start: { x: 1, y: 0 }, end: { x: second.length - 1, y: 1 } },
-    };
-    expect(terminalLinkAtPositionWithRange(rows, 0, first.length - 1)).toEqual(expected);
-    expect(terminalLinkAtPositionWithRange(rows, 1, second.length - 1)).toEqual(expected);
-    expect(terminalLinkAtPositionWithRange(rows, 0, 0)).toBeNull();
-  });
-
-  it("maps terminal cells to UTF-16 offsets after a wide emoji", () => {
-    const cells = [
-      cell("🙂"),
-      cell(""),
-      ...Array.from("https://exa.test", (character) => cell(character)),
-    ];
-    const row: GhosttyRow = {
-      cells,
-      text: cells
-        .map((value) => value.text || " ")
-        .join("")
-        .trimEnd(),
-      isWrapContinuation: false,
-      wrapsToNext: false,
-    };
-
-    expect(terminalLinkAtPositionWithRange([row], 0, 2)?.text).toBe("https://exa.test");
-    expect(terminalLinkAtPositionWithRange([row], 0, cells.length - 1)?.text).toBe(
-      "https://exa.test",
-    );
-    expect(terminalLinkAtPositionWithRange([row], 0, 0)).toBeNull();
-    expect(terminalLinkAtPositionWithRange([row], 0, 8)?.range).toEqual({
-      start: { x: 2, y: 0 },
-      end: { x: cells.length - 1, y: 0 },
-    });
-  });
-
-  it("uses shared path matching and reconstructs soft-wrapped links", () => {
-    const row = (text: string, isWrapContinuation: boolean, wrapsToNext = false): GhosttyRow => ({
-      cells: Array.from(text.padEnd(16), (character) => cell(character)),
-      text: text.trimEnd(),
-      isWrapContinuation,
-      wrapsToNext,
-    });
-    const rows = [
-      row("https://example.", false),
-      row("com/reference", true),
-      row("~/project/file", false),
-      row("C:\\repo\\file.ts", false),
-      row("PS C:\\repo\\dir 1", false, true),
-      row("\\test> ", true),
-    ];
-
-    expect(terminalLinkAtPositionWithRange(rows, 0, 8)?.text).toBe("https://example.com/reference");
-    expect(terminalLinkAtPositionWithRange(rows, 1, 4)?.text).toBe("https://example.com/reference");
-    expect(terminalLinkAtPositionWithRange(rows, 2, 2)?.text).toBe("~/project/file");
-    expect(terminalLinkAtPositionWithRange(rows, 3, 4)?.text).toBe("C:\\repo\\file.ts");
-    expect(terminalLinkAtPositionWithRange(rows, 4, 13)).toEqual({
-      text: "C:\\repo\\dir 1\\test",
-      range: { start: { x: 3, y: 4 }, end: { x: 4, y: 5 } },
-    });
-    expect(terminalLinkAtPositionWithRange(rows, 5, 2)?.text).toBe("C:\\repo\\dir 1\\test");
-    expect(terminalLinkAtPositionWithRange(rows, 5, 5)).toBeNull();
-    expect(terminalLinkAtPositionWithRange(rows, 1, 4)).toEqual({
-      text: "https://example.com/reference",
-      range: {
-        start: { x: 0, y: 0 },
-        end: { x: 12, y: 1 },
-      },
-    });
-  });
-
-  it("refuses links truncated at the viewport edges instead of mis-resolving", () => {
-    const row = (text: string, isWrapContinuation: boolean, wrapsToNext = false): GhosttyRow => ({
-      cells: Array.from(text.padEnd(16), (character) => cell(character)),
-      text: text.trimEnd(),
-      isWrapContinuation,
-      wrapsToNext,
-    });
-    const headCut = [row("ple.com/missing", true), row("head", true)];
-    expect(terminalLinkAtPositionWithRange(headCut, 0, 4)).toBeNull();
-    const tailCut = [row("https://exa.test", false, true)];
-    expect(terminalLinkAtPositionWithRange(tailCut, 0, 8)).toBeNull();
-    const complete = [row("https://exa.test", false), row("", false)];
-    expect(terminalLinkAtPositionWithRange(complete, 0, 8)?.text).toBe("https://exa.test");
-    const wideFull: GhosttyRow = {
-      cells: [
-        { ...cell("🙂"), wide: 1 },
-        { ...cell(""), wide: 2 },
-        ...Array.from("https://t3.code", (character) => cell(character)),
-      ],
-      text: "🙂 https://t3.code",
-      isWrapContinuation: false,
-      wrapsToNext: true,
-    };
-    expect(terminalLinkAtPositionWithRange([wideFull], 0, 8)).toBeNull();
-    const unwrittenTail: GhosttyRow = {
-      cells: [
-        ...Array.from("https://exa.test", (character) => cell(character)),
-        cell(""),
-        cell(""),
-      ],
-      text: "https://exa.test",
-      isWrapContinuation: false,
-      wrapsToNext: false,
-    };
-    expect(terminalLinkAtPositionWithRange([unwrittenTail], 0, 8)?.text).toBe("https://exa.test");
-  });
 });
 
 describe("isTerminalCopyShortcut", () => {

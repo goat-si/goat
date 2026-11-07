@@ -32,6 +32,10 @@ import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as MemoryHubHttp from "../memory/MemoryHubHttp.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import {
+  codexAppServerIsolationAvailable,
+  codexSocketTransportMode,
+} from "../provider/CodexDetachedAppServerLive.ts";
 import * as Settings from "../serverSettings.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { makeAppServerLive } from "./hostAppServer.ts";
@@ -207,6 +211,7 @@ export const make = Effect.gen(function* () {
   const identity = yield* ServerEnvironmentIdentity;
   const hostPlatform = yield* HostProcess.Platform;
   const hostArchitecture = yield* HostProcess.Architecture;
+  const codexTransport = codexSocketTransportMode(hostPlatform, yield* HostProcess.Environment);
   const environmentId = yield* identity.getEnvironmentId;
   const { instanceId } = yield* RuntimeIdentity.RuntimeIdentity;
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
@@ -245,6 +250,7 @@ export const make = Effect.gen(function* () {
     sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
+      freshContext: true,
       // The core and owner memory RPC groups are always installed by ws.ts.
       memory: {
         protocolVersion: 1,
@@ -262,6 +268,7 @@ export const make = Effect.gen(function* () {
       connectionProbe: true,
       attachmentUploads: true,
       questionAttachments: true,
+      goatBotAttachments: true,
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
       pullRequestChecks: true,
@@ -271,6 +278,7 @@ export const make = Effect.gen(function* () {
       threadAutoSettlement: true,
       storageCleanup: true,
       storageCleanupRun: true,
+      worktreeRestore: true,
       databaseStorage: true,
       otlpEndpointCheck: true,
       projectWorktreeCleanup: true,
@@ -280,6 +288,9 @@ export const make = Effect.gen(function* () {
       storageUsage: true,
       threadAutoSettlementScope: true,
       threadRestartContinuation: true,
+      ...(codexAppServerIsolationAvailable(codexTransport)
+        ? { codexTurnSurvival: true, codexAppServerIsolation: true }
+        : {}),
       projectSettingsOverrides: true,
       projectProviderInstanceOverrides: true,
       providerInstancePreconditions: true,
@@ -310,6 +321,7 @@ export const make = Effect.gen(function* () {
       environmentIcon: true,
       projectCloneTracking: true,
       automaticServerUpdates: true,
+      projectOrganization: true,
       ignoredFileListing: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),
@@ -325,6 +337,10 @@ export const make = Effect.gen(function* () {
       channelLedger: true,
       goatBotHome: true,
       goatBotStatus: true,
+      goatBotChildWork: true,
+      goatBotProfiles: true,
+      goatBotProfileEdit: true,
+      goatBotTaskThreads: true,
       goatBotWaitingRead: true,
       // ChannelLayers assembles the live Slack runtime behind the slackChannel.* RPCs.
       slackChannel: true,

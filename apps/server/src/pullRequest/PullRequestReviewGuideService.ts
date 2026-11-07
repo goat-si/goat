@@ -326,9 +326,16 @@ const make = Effect.gen(function* () {
     yield* git.execute({
       operation: "PullRequestReviewGuideService.addWorktree",
       cwd: workspaceRoot,
-      args: ["worktree", "add", "--detach", "--quiet", path, resolvedHead.commitSha],
-      // A briefing only reads diffs. Hooks that install dependencies on a new
-      // worktree, like this repository's post-checkout, honor this opt-out.
+      args: [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "worktree",
+        "add",
+        "--detach",
+        "--quiet",
+        path,
+        resolvedHead.commitSha,
+      ],
       env: { GOAT_WORKTREE_SETUP: "0" },
       timeoutMs: 5 * 60_000,
     });

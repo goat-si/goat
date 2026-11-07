@@ -175,7 +175,17 @@ export const leaseUpdates = (input: {
           : undefined;
         const browserClaimVersion = snapshot?.revision ?? 0;
         const browserClaimBindings = snapshot?.bindings ?? [];
-        const browserClaims = snapshot?.claims ?? [];
+        const hosts = yield* (
+          settings.blockedBrowserHostsSnapshot ??
+          settings.getSettings.pipe(Effect.map((value) => value.blockedBrowserHosts))
+        ).pipe(Effect.option);
+        if (Option.isNone(hosts)) {
+          yield* Queue.offer(queue, { state: "ended", reason: "revoked" });
+          return yield* Queue.end(queue);
+        }
+        const browserClaims = (snapshot?.claims ?? []).map((claim) =>
+          hosts.value.length === 0 ? claim : { ...claim, blockedHosts: hosts.value },
+        );
         const claimedBrowserPids = snapshot?.pids ?? [];
         yield* Queue.offer(
           queue,
@@ -247,7 +257,7 @@ const makeReportLayer = (serverScope?: Scope.Scope) =>
           "browserClaimsSupported" in value
             ? value.browserClaimsSupported
               ? Effect.void
-              : grants.value.setDriverCapability(false)
+              : grants.value.stop(threadId)
             : grants.value.end(
                 threadId,
                 value.browserClaimEnded.claimId,
@@ -511,22 +521,122 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
         settings.value.cuaMovePointer !== "allowed" &&
         movesPersonPointer(call.value);
       let outsideManifest = false;
+      let blockedBrowser = false;
+      let blockedByJudge = false;
+      let blockedClaim: { readonly claimId: string; readonly claimGeneration: number } | undefined;
+      let selectedClaim: { readonly claimId: string; readonly claimGeneration: number } | undefined;
+      let selectedBind: { readonly claimId: string; readonly origin: string } | undefined;
+      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+      const judge = Effect.fn("ComputerUseLeaseRoute.judgeBrowserCall")(function* (
+        reserved: Extract<ComputerUseCallReservation, { action: "reserve" }>,
+      ) {
+        if (Option.isNone(grants))
+          return serverAdmitsBrowserCall(reserved.name, reserved.args, {
+            claims: [],
+            bindings: [],
+          });
+        const decision = yield* grants.value.judgeClaimCall(
+          threadId,
+          reserved.name,
+          reserved.args,
+          selectedClaim,
+          reserved.authority,
+        );
+        blockedByJudge = decision === "blocked" || typeof decision === "object";
+        if (typeof decision === "object") blockedClaim = decision.claim;
+        return decision === "admit";
+      });
       if (call.value.action === "reserve" && deniedApp === undefined && !pointerLocked) {
-        const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
-        const snapshot = Option.isSome(grants)
-          ? yield* grants.value.snapshotFor(threadId)
-          : { claims: [], bindings: [] };
-        outsideManifest = !serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot);
+        if (Option.isSome(grants)) {
+          const checked = yield* grants.value
+            .admitClaimCall(
+              threadId,
+              call.value.name,
+              call.value.args,
+              settings.value.blockedBrowserHosts,
+              undefined,
+              call.value.authority,
+            )
+            .pipe(Effect.option);
+          if (Option.isNone(checked)) return HttpServerResponse.empty({ status: 503 });
+          blockedBrowser = checked.value.status === "blocked";
+          outsideManifest = checked.value.status === "outside";
+          if (checked.value.status === "admit" && "claim" in checked.value)
+            selectedClaim = checked.value.claim;
+          if (checked.value.status === "admit" && "bind" in checked.value)
+            selectedBind = checked.value.bind;
+        } else
+          outsideManifest = !serverAdmitsBrowserCall(call.value.name, call.value.args, {
+            claims: [],
+            bindings: [],
+          });
       }
       const result = yield* Effect.gen(function* () {
-        const result: ComputerUseCallAdmission =
+        let result: ComputerUseCallAdmission =
           deniedApp !== undefined
             ? { status: "refused", detail: "app_not_allowed", app: deniedApp }
             : pointerLocked
               ? { status: "refused", detail: "pointer_locked" }
-              : outsideManifest
-                ? { status: "refused", detail: "outside_manifest" }
-                : yield* leases.callReservation(threadId, call.value);
+              : blockedBrowser
+                ? { status: "refused", detail: "blocked_url" }
+                : outsideManifest
+                  ? { status: "refused", detail: "outside_manifest" }
+                  : yield* leases.callReservation(threadId, call.value, judge);
+        if (result.status === "refused" && result.detail === "outside_manifest" && blockedByJudge) {
+          if (blockedClaim && Option.isSome(grants))
+            yield* grants.value.end(
+              threadId,
+              blockedClaim.claimId,
+              blockedClaim.claimGeneration,
+              "blocked_url",
+            );
+          result = { status: "refused", detail: "blocked_url" };
+        }
+        if (
+          call.value.action === "reserve" &&
+          (selectedClaim || selectedBind) &&
+          (result.status === "admitted" ||
+            (result.status === "refused" && result.detail === "outside_manifest")) &&
+          Option.isSome(grants)
+        ) {
+          const verified = yield* (
+            selectedBind
+              ? grants.value.verifyBindCall(
+                  threadId,
+                  call.value.name,
+                  call.value.args,
+                  settings.value.blockedBrowserHosts,
+                  selectedBind,
+                  call.value.authority,
+                )
+              : grants.value.admitClaimCall(
+                  threadId,
+                  call.value.name,
+                  call.value.args,
+                  settings.value.blockedBrowserHosts,
+                  selectedClaim,
+                  call.value.authority,
+                )
+          ).pipe(Effect.option);
+          if (Option.isNone(verified) || verified.value.status !== "admit") {
+            if (result.status === "admitted" && result.reservationId !== null)
+              yield* leases.callReservation(threadId, {
+                action: "release",
+                controlId: call.value.controlId,
+                connectionId: call.value.connectionId,
+                reservationId: result.reservationId,
+                completed: true,
+                notSent: true,
+              });
+            result = {
+              status: "refused",
+              detail:
+                Option.isSome(verified) && verified.value.status === "blocked"
+                  ? "blocked_url"
+                  : "outside_manifest",
+            };
+          }
+        }
         const stamp = historyStamp(yield* Clock.currentTimeMillis);
         if (call.value.action === "reserve" && result.status === "refused") {
           const sql = yield* Effect.serviceOption(SqlClient.SqlClient);

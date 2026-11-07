@@ -38,6 +38,7 @@ vi.mock("./contextChipParts", () => ({
   UnresolvedChip: () => null,
 }));
 vi.mock("./ChatMarkdown", () => ({ default: () => null }));
+vi.mock("./CapabilityContextChip", () => ({ CapabilityContextChip: () => null }));
 vi.mock("./files/AttachmentFilePreview", () => ({ ReadOnlySourcePreview: () => null }));
 
 import { environmentCatalog } from "~/connection/catalog";

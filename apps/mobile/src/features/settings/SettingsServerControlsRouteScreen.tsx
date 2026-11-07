@@ -1,7 +1,11 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { SettingsRow } from "./components/SettingsRow";
 import { AllowedApps } from "./computerUse/AllowedApps";
-import { AuthSettingsWriteScope, type EnvironmentId } from "@goat/contracts";
+import {
+  AuthSettingsWriteScope,
+  CODEX_APP_SERVER_ISOLATION_DEFAULT,
+  type EnvironmentId,
+} from "@goat/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -80,7 +84,7 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
     "agentWorkspaceAccess",
     "agentTerminalAccess",
   ],
-  maintenance: ["continueThreadsAfterServerUpdate"],
+  maintenance: ["continueThreadsAfterServerUpdate", "codexTurnsSurviveServerStop"],
 };
 
 const SUBMODULE_CHOICES: ReadonlyArray<{
@@ -342,6 +346,13 @@ function ServerSettingsDetail(props: {
     (target) =>
       target.environment.serverConfig.environment.capabilities.threadRestartContinuation === true,
   );
+  const supportsCodexSurvival = targets.every(
+    (target) => target.environment.serverConfig.environment.capabilities.codexTurnSurvival === true,
+  );
+  const supportsCodexIsolation = targets.every(
+    (target) =>
+      target.environment.serverConfig.environment.capabilities.codexAppServerIsolation === true,
+  );
   const supportsAutomaticServerUpdates = targets.every(
     (target) =>
       target.environment.serverConfig.environment.capabilities.automaticServerUpdates === true,
@@ -472,6 +483,67 @@ function ServerSettingsDetail(props: {
                       />
                     ))}
                   </SettingsSection>
+                  <SettingsSection
+                    title="Keep Codex turns running"
+                    trailing={
+                      pendingWrites === 0 && uniform("codexTurnsSurviveServerStop") === null ? (
+                        <MixedValuesLabel projectSelected={projectSelected} />
+                      ) : null
+                    }
+                  >
+                    {(
+                      [
+                        { mode: "off", label: "Off" },
+                        { mode: "restart", label: "Restarts and updates (default)" },
+                        { mode: "always", label: "Also after quitting the app" },
+                      ] as const
+                    ).map((choice, index) => (
+                      <SettingsChoiceRow
+                        key={choice.mode}
+                        label={choice.label}
+                        description="Keep the current Codex turn running on macOS or Linux."
+                        selected={uniform("codexTurnsSurviveServerStop") === choice.mode}
+                        separated={index > 0}
+                        disabled={
+                          disabledFor("codexTurnsSurviveServerStop") || !supportsCodexSurvival
+                        }
+                        onPress={() => write({ codexTurnsSurviveServerStop: choice.mode })}
+                      />
+                    ))}
+                  </SettingsSection>
+                  <SettingsSection
+                    title="Codex app-servers"
+                    trailing={
+                      pendingWrites === 0 && uniform("codexAppServerIsolation") === null ? (
+                        <MixedValuesLabel projectSelected={projectSelected} />
+                      ) : null
+                    }
+                  >
+                    {(
+                      [
+                        { mode: "thread", label: "One per thread" },
+                        { mode: "shared", label: "Shared" },
+                      ] as const
+                    ).map((choice, index) => (
+                      <SettingsChoiceRow
+                        key={choice.mode}
+                        label={
+                          choice.mode === CODEX_APP_SERVER_ISOLATION_DEFAULT
+                            ? `${choice.label} (default)`
+                            : choice.label
+                        }
+                        description={
+                          projectSelected
+                            ? "Environment-wide setting. Select All projects to change it."
+                            : "Applies to new Codex threads. Existing threads keep their process."
+                        }
+                        selected={uniform("codexAppServerIsolation") === choice.mode}
+                        separated={index > 0}
+                        disabled={disabledFor("codexAppServerIsolation") || !supportsCodexIsolation}
+                        onPress={() => write({ codexAppServerIsolation: choice.mode })}
+                      />
+                    ))}
+                  </SettingsSection>
                 </>
               ) : null}
 
@@ -503,6 +575,16 @@ function ServerSettingsDetail(props: {
                       value={uniform("defaultAutoPull")}
                       disabled={disabledFor("defaultAutoPull")}
                       onValueChange={(value) => write({ defaultAutoPull: value })}
+                    />
+                  </SettingsSection>
+                  <SettingsSection title="Clones">
+                    <SettingsSwitchRow
+                      icon="folder"
+                      label="Clone into host folders"
+                      subtitle="Clones go to github.com/owner/repo under the Add project folder, like ghq."
+                      value={uniform("ghqCloneLayout")}
+                      disabled={disabledFor("ghqCloneLayout")}
+                      onValueChange={(value) => write({ ghqCloneLayout: value })}
                     />
                   </SettingsSection>
                   <SettingsSection title="Worktrees">

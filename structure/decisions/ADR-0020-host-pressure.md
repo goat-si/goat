@@ -25,7 +25,7 @@
   - A composer banner in every thread on a pressured machine. It needs a host-status read per open
     thread, which samples CPU, so the notice goes into the orchestrating threads instead.
 - **Chosen.**
-  - Each server classifies itself (`HostPressureMonitor`, every 30 s): load per core, whole-host CPU,
+  - Each server classifies itself (`HostPressureMonitor`): load per core, whole-host CPU,
     free memory, free disk, and its own event-loop stalls. A machine reading raises the level after
     it holds for `sustainMs` (default 3 min). Stalls are a GOAT health signal judged over ten
     minutes, never one at a time: a build or test run routinely stalls the loop 2–4 s once, and
@@ -37,7 +37,16 @@
     `goat_host_status` entry as `pressure`, so remote pressure arrives with the existing fan-out; a
     host that predates it is stepped through the same hysteresis on the reading machine, and
     placement ranks that sustained level, never one sample.
-  - `PressureNudger` (every 60 s) reads this machine's level and, only for hosts with launch watches
+  - Sampling follows demand, like an agent cache's background refresh: a read answers from the held
+    level at once and keeps a 30 s sample going for two minutes after it; a raised level keeps it
+    going until it recovers. An idle server that nobody asks reads no memory or disk. Readings more
+    than 90 s apart restart the evidence that a level held, and only the latest stall survives
+    between readings, so stalls count as evidence only while someone is asking. The effect worker reads the held level
+    only, so its polling never keeps sampling alive. Signed-in clients, placement, pressure notices
+    and health share one read of each SSH host and reuse an answer under 30 s old; an agent's read
+    always asks the host.
+  - `PressureNudger` (every 60 s) reads this machine's level while work runs here or its row is
+    still open and, only for hosts with launch watches
     that still have runs to report, the fan-out. Recipients are the threads that started work
     there (`launchedBy` or subagent parent for local work, the watch's launcher for remote work)
     and their own launchers up to the thread a person started. Each recipient keeps one status row

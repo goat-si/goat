@@ -369,6 +369,25 @@ it.effect("reports both failures when the HTTPS retry fails too", () =>
 );
 
 it.effect.each([
+  "git@ssh.dev.azure.com:v3/Fabrikam/Project1/fab_repo",
+  "ssh://user:pa@rt@ssh.dev.azure.com/v3/Fabrikam/Project1/fab_repo",
+  "ssh://us%40er:pa%40ss@ssh.dev.azure.com/v3/Fabrikam/Project1/fab_repo",
+])("retries Azure SSH URL %s using its HTTPS host and repository path", (remoteUrl) =>
+  Effect.gen(function* () {
+    const urls: Array<string> = [];
+    const result = yield* cloneInTemporaryDirectory(rejectingSsh(urls, false), {
+      remoteUrl,
+    });
+
+    assert.deepStrictEqual(urls, [
+      remoteUrl,
+      "https://dev.azure.com/Fabrikam/Project1/_git/fab_repo",
+    ]);
+    assert.strictEqual(result.remoteUrl, "https://dev.azure.com/Fabrikam/Project1/_git/fab_repo");
+  }),
+);
+
+it.effect.each([
   ["the caller asked for SSH", "ssh", "authentication_failed"],
   ["git failed for another reason", undefined, "remote_unreachable"],
 ] as const)("does not retry over HTTPS when %s", ([, protocol, reason]) =>
@@ -629,6 +648,52 @@ it.effect("explains a rejected SSH push after creating the repository", () =>
     assert.instanceOf(error.cause, GitCommandError);
   }).pipe(Effect.provide(layer({ git: failingPush("authentication_failed") }))),
 );
+
+// regression: an auto-selected SSH remote kept failing every later fetch after a refused push
+it.effect("switches an auto-selected remote to HTTPS when the SSH push is refused", () => {
+  const gitArgs: Array<ReadonlyArray<string>> = [];
+  let pushAttempts = 0;
+  return Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const result = yield* service.publishRepository({
+      cwd: "/workspace",
+      provider: SourceControlProviderKind.make("github"),
+      repository: "octocat/goat",
+      visibility: "private",
+    });
+
+    assert.strictEqual(result.status, "pushed");
+    assert.strictEqual(result.remoteUrl, CLONE_URLS.url);
+    assert.strictEqual(pushAttempts, 2);
+    assert.deepStrictEqual(gitArgs, [
+      ["rev-parse", "--verify", "HEAD"],
+      ["remote", "set-url", "origin", CLONE_URLS.url],
+    ]);
+  }).pipe(
+    Effect.provide(
+      layer({
+        git: {
+          execute: (input) =>
+            Effect.sync(() => {
+              gitArgs.push(input.args);
+              return processOutput();
+            }),
+          pushCurrentBranch: (cwd) => {
+            pushAttempts += 1;
+            return pushAttempts === 1
+              ? failingPush("authentication_failed").pushCurrentBranch(cwd)
+              : Effect.succeed({
+                  status: "pushed" as const,
+                  branch: "main",
+                  upstreamBranch: "origin/main",
+                  setUpstream: true,
+                });
+          },
+        },
+      }),
+    ),
+  );
+});
 
 // regression: #19219 publishing did not explain why the first push failed
 it.effect("says the repository exists when an unclassified publish push fails", () =>

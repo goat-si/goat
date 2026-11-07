@@ -18,6 +18,7 @@ const REASON_TEXT: Readonly<Record<string, string>> = {
   updating: "OpenCodex is updating; each machine syncs right after its update",
   "connection-changed": "its link changed during the sync",
   "timed-out": "timed out",
+  interrupted: "the sync was interrupted",
 };
 
 function syncReasonText(reason: string | undefined): string {

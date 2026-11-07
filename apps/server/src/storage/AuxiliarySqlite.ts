@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- native SQLite lives only in the inline worker.
 import * as NodeWorkerThreads from "node:worker_threads";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -57,9 +58,11 @@ export class WorkerLauncher extends Context.Service<
 
 const workerLauncher = Layer.succeed(WorkerLauncher, {
   start: (input, receipts) => {
-    const worker = new NodeWorkerThreads.Worker(source, { eval: true, workerData: input });
+    const worker = guardErrors(
+      new NodeWorkerThreads.Worker(source, { eval: true, workerData: input }),
+      receipts.error,
+    );
     worker.on("message", receipts.message);
-    worker.on("error", receipts.error);
     worker.once("exit", receipts.exit);
     return {
       terminate: () => {

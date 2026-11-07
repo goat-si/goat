@@ -430,16 +430,7 @@ describe("orchestration v2 provider switching", () => {
             yield* wait(3);
           }
           if (replaceNative) {
-            const target = (yield* orchestrator.getThreadProjection(threadId)).providerThreads.find(
-              (thread) => thread.providerInstanceId === CLAUDE_MODEL_SELECTION.instanceId,
-            )!;
-            yield* orchestrator.dispatch({
-              type: "provider-session.detach",
-              commandId: CommandId.make("detach-for-native-replacement"),
-              threadId,
-              providerSessionId: target.providerSessionId!,
-            });
-            yield* worker.drain();
+            // Switching back to Codex already released Claude's session.
             yield* Ref.set(failResumeOnce, true);
           }
           if (scenario.includes("retry")) yield* Ref.set(failStartOnce, true);
@@ -2241,7 +2232,6 @@ describe("orchestration v2 provider switching", () => {
     ),
   );
 
-  // regression: #21314 a queued PR update must follow the provider that took over the thread
   it.live.each([
     ["automatic", "Claude"],
     ["queue.resume", "compatible Codex"],

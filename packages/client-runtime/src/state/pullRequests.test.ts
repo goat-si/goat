@@ -509,7 +509,7 @@ function session(client: WsRpcProtocolClient): RpcSession {
         client[WS_METHODS.pullRequestsInvalidate] ?? (() => Effect.void),
     },
     initialConfig: client[WS_METHODS.serverGetConfig]?.({}).pipe(Effect.orDie) ?? Effect.never,
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
     inboundFrames: Effect.succeed(0),
@@ -1427,7 +1427,7 @@ it.effect("updates cached labels after successful edits without rereading the ho
           host: "github.example.com",
         },
       };
-      const detail = atoms.detail(target);
+      const detail = atoms.detail({ ...target, input: { ...target.input, allowStale: false } });
       const candidates = atoms.labelCandidates(target);
       registry.mount(detail);
       const unmountCandidates = registry.mount(candidates);

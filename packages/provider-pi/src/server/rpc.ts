@@ -12,6 +12,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { AgentScope, handleAgentProcess } from "@goat/shared/AgentScope";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import {
   MAX_TOOL_OUTPUT_IMAGES,
@@ -66,6 +67,7 @@ export function parsePiModelSlug(slug: string): { provider: string; modelId: str
 }
 
 export interface PiRpcSpawnOptions {
+  readonly threadId?: string | undefined;
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly cwd: string | undefined;
@@ -97,14 +99,16 @@ const MAX_PI_RECORD_CHARS =
 function makeJsonlFramer() {
   let buffer = "";
   let dropping = false;
-  return (chunk: string): ReadonlyArray<string> => {
+  return (chunk: string) => {
     const lines: string[] = [];
+    const droppedLengths: number[] = [];
     let start = 0;
     while (start < chunk.length) {
       const newline = chunk.indexOf("\n", start);
       const end = newline < 0 ? chunk.length : newline;
       if (!dropping) {
         if (buffer.length + end - start > MAX_PI_RECORD_CHARS) {
+          droppedLengths.push(buffer.length + end - start);
           buffer = "";
           dropping = true;
         } else {
@@ -119,9 +123,21 @@ function makeJsonlFramer() {
       dropping = false;
       start = newline + 1;
     }
-    return lines;
+    return { lines, droppedLengths };
   };
 }
+
+// Report the observed length before LF arrives; an unterminated response can time out first.
+const logDroppedPiRecords = (droppedLengths: ReadonlyArray<number>) =>
+  Effect.forEach(
+    droppedLengths,
+    (recordLength) =>
+      Effect.logWarning("Dropping oversized pi stdout record.", {
+        recordLength,
+        maxRecordLength: MAX_PI_RECORD_CHARS,
+      }),
+    { discard: true },
+  );
 
 const UnknownFromJsonString = Schema.fromJsonString(Schema.Unknown);
 const decodeJsonLine = Schema.decodeSync(UnknownFromJsonString);
@@ -186,9 +202,16 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
         extendEnv: false,
         shell: spawnCommand.shell,
         detached: platform !== "win32",
+        stdin: { stream: "pipe", endOnDone: false },
       }),
     )
     .pipe(Effect.mapError((cause) => new PiRpcError({ operation: "spawn", cause })));
+
+  if (options.threadId !== undefined)
+    yield* (yield* AgentScope).watch({
+      process: handleAgentProcess(child),
+      threadId: options.threadId,
+    });
 
   let childExited = false;
   let diagnosingStdoutClose = false;
@@ -292,7 +315,8 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
       Stream.decodeText(),
       Stream.runForEach((chunk) =>
         Effect.gen(function* () {
-          const lines = frame(chunk);
+          const { lines, droppedLengths } = frame(chunk);
+          yield* logDroppedPiRecords(droppedLengths);
           for (const line of lines) {
             const record = parsePiRecord(line);
             if (record === undefined) {
@@ -306,7 +330,9 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
         }),
       ),
     );
-    for (const line of frame("\n")) {
+    const flushed = frame("\n");
+    yield* logDroppedPiRecords(flushed.droppedLengths);
+    for (const line of flushed.lines) {
       const trailing = parsePiRecord(line);
       if (trailing !== undefined) yield* routeRecord(trailing);
     }

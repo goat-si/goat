@@ -31,6 +31,7 @@ describe("iMessage sender", () => {
     child.stdin = new NodeStream.PassThrough();
     child.stdout = new NodeStream.PassThrough();
     child.stderr = new NodeStream.PassThrough();
+    Object.assign(child, { stdio: [child.stdin, child.stdout, child.stderr] });
     child.kill = () => {
       queueMicrotask(() => child.emit("close", null));
       return true;
@@ -57,6 +58,7 @@ describe("iMessage sender", () => {
       child.stdin = new NodeStream.PassThrough();
       child.stdout = new NodeStream.PassThrough();
       child.stderr = new NodeStream.PassThrough();
+      Object.assign(child, { stdio: [child.stdin, child.stdout, child.stderr] });
       child.kill = () => true;
       const fake = (() => {
         queueMicrotask(() => {
@@ -91,6 +93,7 @@ describe("iMessage sender", () => {
     child.stdin = new NodeStream.PassThrough();
     child.stdout = new NodeStream.PassThrough();
     child.stderr = new NodeStream.PassThrough();
+    Object.assign(child, { stdio: [child.stdin, child.stdout, child.stderr] });
     let kills = 0;
     child.kill = () => {
       kills += 1;
@@ -126,6 +129,7 @@ describe("iMessage sender", () => {
     child.stdin = new NodeStream.PassThrough();
     child.stdout = new NodeStream.PassThrough();
     child.stderr = new NodeStream.PassThrough();
+    Object.assign(child, { stdio: [child.stdin, child.stdout, child.stderr] });
     child.kill = () => true;
     let script = "";
     child.stdin.on("data", (chunk: Buffer) => {

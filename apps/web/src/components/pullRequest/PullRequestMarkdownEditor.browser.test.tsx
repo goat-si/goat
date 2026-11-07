@@ -1,11 +1,12 @@
 import { act, render, type Screen } from "../../../test/render";
-import { AuthSourceControlWriteScope, EnvironmentId } from "@goat/contracts";
+import { AuthSourceControlWriteScope, EnvironmentId, ProjectId } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 const permissions = vi.hoisted(() => ({
   allowed: new Set<string>(),
   listeners: new Set<() => void>(),
+  mentionTargets: [] as unknown[],
 }));
 
 vi.mock(import("~/state/session"), async (original) => {
@@ -26,6 +27,25 @@ vi.mock(import("~/state/session"), async (original) => {
   };
 });
 
+vi.mock(import("~/state/pullRequests"), async (original) => ({
+  ...(await original()),
+  usePullRequestFilterOptions: (targets: ReadonlyArray<unknown>) => {
+    if (targets.length > 0) permissions.mentionTargets.push(...targets);
+    return {
+      labels: [],
+      authors:
+        targets.length === 0
+          ? []
+          : [
+              { login: "alex", name: "Alex", avatarUrl: null },
+              { login: "sam", name: "Sam", avatarUrl: null },
+            ],
+      error: null,
+      isPending: false,
+    };
+  },
+}));
+
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 
 const secondary = EnvironmentId.make("secondary");
@@ -35,6 +55,7 @@ const onCancel = vi.fn<() => void>();
 function setup() {
   permissions.allowed.clear();
   permissions.listeners.clear();
+  permissions.mentionTargets.length = 0;
   onSave.mockReset();
   onCancel.mockReset();
 }
@@ -45,6 +66,12 @@ async function openEditor(options?: { value?: string; allowEmpty?: boolean }) {
       value={options?.value ?? "Original description"}
       cwd="/repo"
       environmentId={secondary}
+      mentionScope={{
+        environmentId: secondary,
+        projectId: ProjectId.make("project"),
+        repository: "acme/web",
+        host: "github.com",
+      }}
       label="Pull request description"
       saving={false}
       allowEmpty={options?.allowEmpty ?? false}
@@ -87,4 +114,37 @@ it("keeps an edited draft through revocation and saves it after access returns w
   await grant(true);
   await clickSave(screen);
   expect(onSave).toHaveBeenCalledExactlyOnceWith("Keep these unsaved edits");
+});
+
+it("completes an @mention on Enter and closes the list on Escape until the next keystroke", async () => {
+  setup();
+  permissions.allowed.add(secondary);
+  await using screen = await openEditor({ value: "" });
+  const textarea = screen.container.querySelector("textarea")!;
+  await userEvent.type(textarea, "Thanks @al");
+  await expect.element(page.getByRole("option", { name: /alex/ })).toBeVisible();
+  expect(permissions.mentionTargets).toContainEqual(
+    expect.objectContaining({
+      environmentId: secondary,
+      input: expect.objectContaining({
+        projectId: ProjectId.make("project"),
+        repository: "acme/web",
+        host: "github.com",
+      }),
+    }),
+  );
+
+  await userEvent.keyboard("{Enter}");
+  expect(textarea.value).toBe("Thanks @alex ");
+  await expect.element(page.getByRole("listbox")).not.toBeInTheDocument();
+
+  await userEvent.type(textarea, "and @");
+  await expect.element(page.getByRole("option", { name: /sam/ })).toBeVisible();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(page.getByRole("listbox")).not.toBeInTheDocument();
+  expect(onCancel).not.toHaveBeenCalled();
+
+  await userEvent.type(textarea, "s");
+  await expect.element(page.getByRole("option", { name: /sam/ })).toBeVisible();
+  expect(onSave).not.toHaveBeenCalled();
 });

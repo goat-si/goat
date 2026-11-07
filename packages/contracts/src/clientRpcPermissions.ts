@@ -22,7 +22,9 @@ import { SLACK_CHANNEL_WS_METHODS } from "./slackChannel.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: AuthOrchestrationReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,
+  [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,
   [WS_METHODS.decisionList]: AuthOrchestrationReadScope,
   [WS_METHODS.decisionGet]: AuthOrchestrationReadScope,
   [WS_METHODS.decisionRequest]: AuthOrchestrationOperateScope,
@@ -86,13 +88,17 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.memoryHubSettingsUpdate]: AuthSettingsWriteScope,
   [WS_METHODS.memoryReadSource]: AuthMemoryReadScope,
 
+  [WS_METHODS.browserClaimsWindows]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsClaim]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsAnswer]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsRevoke]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsEnd]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsList]: AuthOrchestrationReadScope,
+  [WS_METHODS.browserClaimsSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
+  [WS_METHODS.threadRestoreWorkspace]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverRespondWorktreeCleanupPreview]: AuthSettingsWriteScope,
   // Lets a copied state's automation act; settings:write already governs channels and links.
   [WS_METHODS.serverResumeAutomation]: AuthSettingsWriteScope,
   [WS_METHODS.serverCompactStorage]: AuthEnvironmentMaintainScope,
@@ -149,8 +155,12 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.notesMove]: AuthOrchestrationOperateScope,
   [WS_METHODS.notesDelete]: AuthOrchestrationOperateScope,
   [WS_METHODS.notesStartWork]: AuthOrchestrationOperateScope,
+  [WS_METHODS.notesAttach]: AuthOrchestrationOperateScope,
 
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: AuthOrchestrationOperateScope,
+  // A standing name and purpose are what ingest already allows: telling the bot what to do.
+  [CHANNEL_GATEWAY_WS_METHODS.updateBot]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: AuthSettingsWriteScope,
   [CHANNEL_GATEWAY_WS_METHODS.unlinkIdentity]: AuthSettingsWriteScope,
@@ -184,6 +194,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
+  [WS_METHODS.authAccessCreatePairing]: AuthAccessWriteScope,
+  [WS_METHODS.authAccessRevokePairing]: AuthAccessWriteScope,
+  [WS_METHODS.authAccessRevokeClient]: AuthAccessWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 
@@ -195,6 +208,14 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
+  if (
+    method === WS_METHODS.serverRefreshProviders &&
+    typeof input === "object" &&
+    input !== null &&
+    "reloadSecrets" in input &&
+    input.reloadSecrets === true
+  )
+    return [AuthOrchestrationReadScope, AuthProvidersManageScope];
   if (method === WS_METHODS.browserClaimsClaim)
     return [AuthOrchestrationOperateScope, AuthSettingsWriteScope];
   if (

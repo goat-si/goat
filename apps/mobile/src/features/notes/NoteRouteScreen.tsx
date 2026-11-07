@@ -12,7 +12,9 @@ import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScroll
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SelectableMarkdownText } from "../../native/SelectableMarkdownText";
-import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import type { MarkdownImageRenderer } from "../../native/SelectableMarkdownText.types";
+import { useNoteImageSource, useOpenNoteLink } from "./useNoteFiles";
+import { playableMediaLabel } from "./live-editor/note-editor-links";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { Button } from "../../components/ui/Button";
 import { applyNoteCheckboxEvent, type NoteCheckboxEvent } from "./note-markdown";
@@ -58,6 +60,7 @@ function NoteContent(props: NoteParams) {
     (entry) => entry.environmentId === environmentId && entry.path === props.path,
   );
   const { canEdit: canWrite, canStart, connected } = useNoteDraftAccess(environmentId);
+  const openNoteLink = useOpenNoteLink(environmentId, props.path);
   const read = useAtomCommand(notesRpc.read, notesCommandOptions);
   const remove = useAtomCommand(notesRpc.delete, notesCommandOptions);
   const [note, setNote] = useState<NoteDocument | null>(row?.current ?? null);
@@ -561,7 +564,9 @@ function NoteContent(props: NoteParams) {
               else if (!dirty && !saving) setEditing(false);
             }}
             onSourceChange={setShowSource}
-            onLink={(href) => void tryOpenExternalUrl(href, "markdown-link")}
+            environmentId={environmentId}
+            notePath={props.path}
+            onLink={openNoteLink}
             onUnavailable={(reason) => {
               setLiveUnavailable(reason);
             }}
@@ -633,6 +638,9 @@ function NoteContent(props: NoteParams) {
                 <NoteMarkdown
                   key={checkboxRender}
                   body={body}
+                  environmentId={environmentId}
+                  notePath={props.path}
+                  onLink={openNoteLink}
                   disabled={!canWrite || busy || row?.state === "conflict"}
                   onCheckbox={(event) => {
                     const next = applyNoteCheckboxEvent(localBody.current, event);
@@ -677,16 +685,36 @@ function NoteEditorScrollView(props: ComponentProps<typeof ScrollView>) {
 
 function NoteMarkdown(props: {
   readonly body: string;
+  readonly environmentId: EnvironmentId;
+  readonly notePath: string;
+  readonly onLink: (href: string) => void;
   readonly disabled: boolean;
   readonly onCheckbox: (event: NoteCheckboxEvent) => void;
 }) {
   const { nativeTextStyle } = useMarkdownPreviewStyles();
+  const resolveImageSource = useNoteImageSource(props.environmentId, props.notePath);
+  const { onLink } = props;
+  const renderImage: MarkdownImageRenderer = (image) => {
+    const label = playableMediaLabel(image.href, image.alt ?? "");
+    if (label === null) return null;
+    return (
+      <Text
+        accessibilityRole="link"
+        onPress={() => onLink(image.href)}
+        style={{ color: nativeTextStyle.linkColor }}
+      >
+        {label}
+      </Text>
+    );
+  };
   return (
     <SelectableMarkdownText
       markdown={props.body}
       preserveMarkdownSource
       textStyle={nativeTextStyle}
-      onLinkPress={(href) => void tryOpenExternalUrl(href, "markdown-link")}
+      resolveImageSource={resolveImageSource}
+      renderImage={renderImage}
+      onLinkPress={props.onLink}
       onTaskListItemPress={props.disabled ? undefined : props.onCheckbox}
     />
   );

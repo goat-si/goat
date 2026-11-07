@@ -96,6 +96,24 @@ it.layer(NodeServices.layer)("worktreesDirectory", (it) => {
     );
   });
 
+  it.effect("rejects existing and missing folders under the system temporary directories", () =>
+    Effect.gen(function* () {
+      const { fileSystem, path } = yield* setup;
+      const result = yield* resolveAvailableWorktreesDirectory(
+        { setting: "/private/tmp/goat-worktrees-never-created", defaultDir: "/default" },
+        fileSystem,
+        path,
+      );
+      assert.equal(result.unavailable?.reason, "invalid");
+      const existing = yield* resolveAvailableWorktreesDirectory(
+        { setting: "/tmp", defaultDir: "/default" },
+        fileSystem,
+        path,
+      );
+      assert.equal(existing.unavailable?.reason, "invalid");
+    }).pipe(Effect.scoped),
+  );
+
   describe("resolveAvailableWorktreesDirectory", () => {
     it.effect("uses the configured folder when available and falls back otherwise", () =>
       Effect.gen(function* () {

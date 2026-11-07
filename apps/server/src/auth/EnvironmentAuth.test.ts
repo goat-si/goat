@@ -418,13 +418,16 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     ),
   );
 
-  it.effect("prefers a bearer token over a stale legacy cookie", () =>
+  it.effect("prefers a bearer token over empty primary and stale legacy cookies (#27848)", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sessions = yield* SessionStore.SessionStore;
       const bearer = yield* serverAuth.issueSession();
       const verified = yield* serverAuth.authenticateHttpRequest({
-        cookies: { [sessions.legacyCookieName ?? LEGACY_SESSION_COOKIE_NAME]: "stale" },
+        cookies: {
+          [sessions.cookieName]: "",
+          [sessions.legacyCookieName ?? LEGACY_SESSION_COOKIE_NAME]: "stale",
+        },
         headers: { authorization: `Bearer ${bearer.token}` },
       } as never);
 
@@ -786,24 +789,27 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web" }))),
   );
 
-  it.effect("keeps bearer socket upgrades independent of the page origin", () =>
-    Effect.gen(function* () {
-      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-      const bearer = yield* serverAuth.issueSession();
-      const verified = yield* serverAuth.authenticateWebSocketUpgrade(
-        {
+  it.effect.each(["Bearer", "bearer", "bEaReR"])(
+    "accepts %s for HTTP and socket upgrades regardless of page origin",
+    (scheme) =>
+      Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const bearer = yield* serverAuth.issueSession();
+        const request = {
           url: "/ws",
           cookies: {},
           headers: {
             host: "192.168.1.50:3773",
             origin: "http://192.168.1.50:8080",
-            authorization: `Bearer ${bearer.token}`,
+            authorization: `${scheme} ${bearer.token}`,
           },
-        } as never,
-        "rpc",
-      );
-      expect(verified.sessionId).toBe(bearer.sessionId);
-    }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
+        } as never;
+        const verified = yield* serverAuth.authenticateWebSocketUpgrade(request, "rpc");
+        expect(verified.sessionId).toBe(bearer.sessionId);
+        expect((yield* serverAuth.authenticateHttpRequest(request)).sessionId).toBe(
+          bearer.sessionId,
+        );
+      }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
   );
 
   // An SSH client reuses its saved bearer while the host answers it as signed in, so that

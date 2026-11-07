@@ -5,7 +5,10 @@ import { sourceControlClients, type ChangeRequestTerminology } from "./sourceCon
 
 const PULL_REQUEST_NUMBER_PATTERN = /^#?(\d+)$/;
 
-export function parsePullRequestReference(input: string): string | null {
+export function parsePullRequestReference(
+  input: string,
+  provider?: { readonly kind: string; readonly baseUrl: string } | null,
+): string | null {
   const trimmed = input.trim();
   if (trimmed.length === 0) {
     return null;
@@ -25,6 +28,19 @@ export function parsePullRequestReference(input: string): string | null {
     )
   ) {
     return normalizedInput;
+  }
+
+  if (provider?.kind === "github") {
+    const url = URL.parse(normalizedInput);
+    const base = URL.parse(provider.baseUrl);
+    if (
+      url &&
+      base &&
+      url.origin === base.origin &&
+      sourceControlClients.get("github").parseChangeRequestUrl(url)
+    ) {
+      return normalizedInput;
+    }
   }
 
   const numberMatch = PULL_REQUEST_NUMBER_PATTERN.exec(normalizedInput);
