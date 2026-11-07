@@ -1,14 +1,28 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
-import { botThreadKey, goatBotFaceLabel, presentTaskStatus } from "@goat/client-runtime/goatBot";
+import {
+  FACE_MOTION_RANK,
+  botThreadKey,
+  goatBotFaceLabel,
+  presentTaskStatus,
+} from "@goat/client-runtime/goatBot";
 import type { BotThreadRow } from "@goat/contracts";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  type ScrollViewInstance,
+  type ViewInstance,
+} from "react-native";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
-import { useMobileGoatBotFace } from "./useMobileGoatBotFace";
+import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
 
 /** New bot is disabled until bots can be created. */
 const ignorePress = () => undefined;
@@ -84,13 +98,32 @@ export function MobileBotRosterView(props: {
   onShowMore: () => void;
 }) {
   const mainFace = useMobileGoatBotFace(null);
-  const mainFaceLabel = goatBotFaceLabel(mainFace);
+  const mainFaceLabel = goatBotFaceLabel(mainFace.state);
+  const { scrollRef, rowRef, onScreen, measure, hold, settle, measureUnlessCoasting } =
+    useRowOnScreen();
+  const mainMotion = useMobileGoatBotFaceMotion(
+    mainFace.state,
+    FACE_MOTION_RANK.list,
+    mainFace.since,
+    onScreen,
+  );
   return (
-    <ScrollView className="flex-1 bg-screen" contentInsetAdjustmentBehavior="automatic">
+    <ScrollView
+      ref={scrollRef}
+      className="flex-1 bg-screen"
+      contentInsetAdjustmentBehavior="automatic"
+      onLayout={measure}
+      onScrollBeginDrag={hold}
+      onMomentumScrollBegin={hold}
+      onScrollEndDrag={measureUnlessCoasting}
+      onMomentumScrollEnd={settle}
+    >
       {props.header}
       {props.bots.map((bot) => (
         <View key={bot.profile?.botId ?? "main"}>
           <Pressable
+            ref={bot.kind === "main" ? rowRef : undefined}
+            onLayout={bot.kind === "main" ? measure : undefined}
             accessibilityRole="button"
             onPress={() => props.onOpenBot(bot)}
             accessibilityState={{ selected: bot.kind === "main" && props.selectedKey === "main" }}
@@ -102,7 +135,7 @@ export function MobileBotRosterView(props: {
             }
           >
             {bot.kind === "main" ? (
-              <GoatBotFaceAvatar state={mainFace} size={40} />
+              <GoatBotFaceAvatar state={mainFace.state} size={40} motion={mainMotion} />
             ) : (
               <View className="h-10 w-10 items-center justify-center rounded-full bg-grouped-card">
                 <Text className="text-lg text-foreground">
@@ -245,4 +278,59 @@ export function MobileBotRosterView(props: {
       </View>
     </ScrollView>
   );
+}
+
+/**
+ * Whether the main row is inside the roster's visible area, measured in window coordinates. False
+ * until measured and from a scroll's start to its end; a generation drops any measurement that
+ * lands after a scroll began, the layout changed or the roster unmounted.
+ */
+function useRowOnScreen() {
+  const scrollNode = useRef<ScrollViewInstance | null>(null);
+  const rowRef = useRef<ViewInstance>(null);
+  const generation = useRef(0);
+  const scrolling = useRef(false);
+  const [onScreen, setOnScreen] = useState(false);
+  const scrollRef = (node: ScrollViewInstance | null) => {
+    scrollNode.current = node;
+    return () => {
+      scrollNode.current = null;
+      generation.current += 1;
+    };
+  };
+  const measure = () => {
+    generation.current += 1;
+    const pass = generation.current;
+    const scroll = scrollNode.current;
+    const row = rowRef.current;
+    if (scrolling.current || scroll === null || row === null) return;
+    scroll.measureInWindow((_scrollX, scrollTop, _scrollWidth, scrollHeight) => {
+      row.measureInWindow((_rowX, rowTop, _rowWidth, rowHeight) => {
+        if (pass !== generation.current || scrolling.current) return;
+        setOnScreen(
+          rowHeight > 0 &&
+            scrollHeight > 0 &&
+            rowTop + rowHeight > scrollTop &&
+            rowTop < scrollTop + scrollHeight,
+        );
+      });
+    });
+  };
+  const hold = () => {
+    scrolling.current = true;
+    generation.current += 1;
+    setOnScreen(false);
+  };
+  const settle = () => {
+    scrolling.current = false;
+    measure();
+  };
+  // A drag released with speed coasts on; its momentum end measures instead.
+  const measureUnlessCoasting = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const velocity = event.nativeEvent.velocity;
+    if (velocity === undefined || (Math.abs(velocity.x) < 0.05 && Math.abs(velocity.y) < 0.05)) {
+      settle();
+    }
+  };
+  return { scrollRef, rowRef, onScreen, measure, hold, settle, measureUnlessCoasting };
 }

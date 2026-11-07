@@ -71,6 +71,7 @@ export function GoatBotSidebarTabs() {
                       >
                         <GoatBotSessionAvatar
                           size="sm"
+                          place="list"
                           threadRef={scopeThreadRef(
                             entry.profile.environmentId,
                             entry.profile.sessionThreadId,

@@ -1,0 +1,98 @@
+import { act, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
+import { goatBotFaceMotion } from "@goat/client-runtime/goatBot";
+import { expect, it, vi } from "vite-plus/test";
+
+const native = vi.hoisted(() => ({
+  loops: [] as Array<{ start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }>,
+  timings: [] as Array<{ useNativeDriver?: boolean }>,
+}));
+const header = vi.hoisted(() => ({ state: "idle" }));
+vi.mock("react-native", () => ({
+  View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Text: ({
+    children,
+    accessibilityLabel,
+  }: {
+    children?: ReactNode;
+    accessibilityLabel?: string;
+  }) => <span aria-label={accessibilityLabel}>{children}</span>,
+  StyleSheet: { absoluteFill: {} },
+  Easing: { linear: (value: number) => value },
+  useAnimatedValue: () => ({ setValue: () => {}, interpolate: () => 0 }),
+  Animated: {
+    View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    timing: (_value: unknown, config: { useNativeDriver?: boolean }) => {
+      native.timings.push(config);
+      return {};
+    },
+    loop: () => {
+      const loop = { start: vi.fn(), stop: vi.fn() };
+      native.loops.push(loop);
+      return loop;
+    },
+  },
+}));
+vi.mock("react-native-reanimated", () => {
+  const chain = { duration: () => chain, reduceMotion: () => chain };
+  return {
+    default: { View: ({ children }: { children?: ReactNode }) => <div>{children}</div> },
+    FadeIn: chain,
+    ReduceMotion: { System: "system" },
+  };
+});
+vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
+vi.mock("uniwind", () => ({ withUniwind: (component: unknown) => component }));
+vi.mock("../../native/StackHeader", () => ({
+  NativeStackScreenOptions: (props: { options: { headerTitle?: () => ReactNode } }) => (
+    <header>{props.options.headerTitle?.()}</header>
+  ),
+}));
+vi.mock("./useMobileGoatBotFace", () => ({
+  useMobileGoatBotFace: () => ({ state: header.state, since: null }),
+  useMobileGoatBotFaceMotion: () => null,
+}));
+
+import { GoatBotFace, GoatBotHeaderFace } from "./GoatBotFace";
+
+it("runs one native-driver loop while the face moves and stops it when the face stills or unmounts", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(document.createElement("div"));
+  const working = goatBotFaceMotion("working");
+  await act(async () => root.render(<GoatBotFace state="working" size={40} motion={working} />));
+  expect(native.loops).toHaveLength(1);
+  expect(native.loops[0]?.start).toHaveBeenCalledTimes(1);
+  expect(native.timings.every((config) => config.useNativeDriver === true)).toBe(true);
+  await act(async () => root.render(<GoatBotFace state="working" size={40} motion={null} />));
+  expect(native.loops[0]?.stop).toHaveBeenCalled();
+  await act(async () => root.render(<GoatBotFace state="working" size={40} motion={working} />));
+  expect(native.loops).toHaveLength(2);
+  await act(async () => root.unmount());
+  expect(native.loops[1]?.stop).toHaveBeenCalled();
+});
+
+it("starts no loop for a still face", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  native.loops.length = 0;
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<GoatBotFace state="idle" size={40} motion={null} />));
+  expect(native.loops).toHaveLength(0);
+  await act(async () => root.unmount());
+});
+
+it("names the bot's state on the header title text VoiceOver reads", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    header.state = "working";
+    await act(async () => root.render(<GoatBotHeaderFace activity={null} title="GOAT Bot" />));
+    const title = [...container.querySelectorAll("span")].find(
+      (span) => span.textContent === "GOAT Bot",
+    );
+    expect(title?.getAttribute("aria-label")).toBe("GOAT Bot, Working");
+  } finally {
+    header.state = "idle";
+    await act(async () => root.unmount());
+  }
+});
