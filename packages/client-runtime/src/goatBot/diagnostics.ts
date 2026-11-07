@@ -1,4 +1,5 @@
 import {
+  isChannelTaskTerminal,
   isGoatBotSessionThreadId,
   type BotThreadRow,
   type ChannelTaskChip,
@@ -98,7 +99,7 @@ export interface GoatBotDiagnosticsInput {
   /** Null until the bot's task rows have loaded; "unavailable" when its server cannot list them. */
   readonly rows: ReadonlyArray<BotThreadRow> | null | "failed" | "unavailable";
   /** The bot's own turns asking the person something; the task list leaves turns out. */
-  readonly turnsWaiting: number;
+  readonly turnsWaiting: ReadonlyArray<string>;
   /** "unavailable" when the home cannot report Slack, which hides the line. */
   readonly slack:
     | ReadonlyArray<
@@ -190,9 +191,12 @@ function modelLine(
 
 /**
  * The bot's own turns that ask the person a question, from the newest chip of each task in its
- * conversation. Turns never appear in the task list, so this is where such a question shows.
+ * conversation. The task list shows a turn only while work it launched still runs, so the chat is
+ * where such a question is always found.
  */
-export function goatBotTurnsWaiting(items: ReadonlyArray<GoatBotFaceTaskItem>): number {
+export function goatBotTurnsWaiting(
+  items: ReadonlyArray<GoatBotFaceTaskItem>,
+): ReadonlyArray<string> {
   const newest = new Map<string, ChannelTaskChip>();
   for (const { item } of items) {
     if (item.type !== "notification" || item.ledgerTask === undefined) continue;
@@ -200,7 +204,7 @@ export function goatBotTurnsWaiting(items: ReadonlyArray<GoatBotFaceTaskItem>): 
     if (previous === undefined || item.ledgerTask.taskVersion > previous.taskVersion)
       newest.set(item.ledgerTask.taskId, item.ledgerTask);
   }
-  let waiting = 0;
+  const waiting: string[] = [];
   for (const chip of newest.values()) {
     // Older chips lack their kind, but a turn's worker is always the bot's session thread.
     const turn =
@@ -208,9 +212,26 @@ export function goatBotTurnsWaiting(items: ReadonlyArray<GoatBotFaceTaskItem>): 
       (chip.kind === undefined &&
         chip.worker !== undefined &&
         isGoatBotSessionThreadId(chip.worker.threadId));
-    if (turn && chip.status === "waiting_input" && chip.openQuestionCount > 0) waiting++;
+    if (!turn || isChannelTaskTerminal(chip.status)) continue;
+    // Its own question, or one in work it launched that the server lifted onto it.
+    if (
+      (chip.status === "waiting_input" && chip.openQuestionCount > 0) ||
+      (chip.observed?.needsYou.length ?? 0) > 0
+    )
+      waiting.push(chip.taskId);
   }
   return waiting;
+}
+
+/** Waiting turns the task list does not already show as task rows, so none is counted twice. */
+export function goatBotTurnsOutsideList(
+  turns: ReadonlyArray<string>,
+  rows: ReadonlyArray<BotThreadRow>,
+): ReadonlyArray<string> {
+  const listed = new Set<string>(
+    rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+  );
+  return turns.filter((taskId) => !listed.has(taskId));
 }
 
 /** The line that points the person back to a question the bot asked in its chat. */
@@ -220,8 +241,11 @@ export function goatBotWaitingInChatText(botName: string): string {
 
 function workLine(
   rows: GoatBotDiagnosticsInput["rows"],
-  turnsWaiting: number,
+  turnsWaitingIds: ReadonlyArray<string>,
 ): GoatBotDiagnosticLine | null {
+  const turnsWaiting = Array.isArray(rows)
+    ? goatBotTurnsOutsideList(turnsWaitingIds, rows).length
+    : turnsWaitingIds.length;
   // A question in the chat is known without the task list, so it shows whatever the list's state.
   if (!Array.isArray(rows) && turnsWaiting > 0)
     return {
@@ -235,12 +259,16 @@ function workLine(
     return { key: "work", tone: "warn", text: "Couldn't load work", action: null };
   if (rows === null) return { key: "work", tone: "pending", text: "Loading work…", action: null };
   const tasks = rows.flatMap((row) => (row.kind === "task" ? [row.task] : []));
-  const running = tasks.filter((task) => task.status === "running").length;
+  // A listed turn whose chat says it waits on the person is waiting, whatever its row status.
+  const waitingTurns = new Set(turnsWaitingIds);
+  const running = tasks.filter(
+    (task) => task.status === "running" && !waitingTurns.has(task.taskId),
+  ).length;
   const starting = tasks.filter(
     (task) => task.status === "received" || task.status === "dispatching",
   ).length;
   const waiting = tasks
-    .filter((task) => task.status === "waiting_input")
+    .filter((task) => task.status === "waiting_input" || waitingTurns.has(task.taskId))
     .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   const waitingCount = waiting.length + turnsWaiting;
   const parts = [

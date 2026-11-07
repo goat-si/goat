@@ -114,3 +114,25 @@ it("cannot save without permission to edit the bot", async () => {
   await mount(async () => null, false);
   expect(save().disabled).toBe(true);
 });
+it("opens Edit with the bot's stored purpose and sends nothing when it is unchanged", async () => {
+  const onSubmit = vi.fn(async (_changes: object) => null);
+  const onClose = vi.fn();
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <MobileBotProfileSheet
+        mode="edit"
+        initial={{ name: "Scout", avatar: null, purpose: "Find sources and summarize them." }}
+        canSubmit
+        onSubmit={onSubmit}
+        onClose={onClose}
+      />,
+    ),
+  );
+  expect(field("Purpose").value).toBe("Find sources and summarize them.");
+  await act(async () => save().click());
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(onClose).toHaveBeenCalled();
+});

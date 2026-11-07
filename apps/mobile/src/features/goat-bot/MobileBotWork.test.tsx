@@ -83,6 +83,7 @@ const state = vi.hoisted(() => ({
   setEnabled: vi.fn(),
   runNow: vi.fn(),
   retry: vi.fn(),
+  openThread: vi.fn(),
 }));
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
@@ -170,7 +171,11 @@ function reset() {
   state.runNow.mockReset();
   state.retry.mockReset();
 }
-async function render(taskId?: ChannelTaskId, taskCard?: ReactNode, turnsWaiting = 0) {
+async function render(
+  taskId?: ChannelTaskId,
+  taskCard?: ReactNode,
+  turnsWaiting: readonly string[] = [],
+) {
   if (!root) root = createRoot(container);
   await act(async () =>
     root?.render(
@@ -180,6 +185,7 @@ async function render(taskId?: ChannelTaskId, taskCard?: ReactNode, turnsWaiting
         taskCard={taskCard}
         turnsWaiting={turnsWaiting}
         onOpenTask={() => {}}
+        onOpenThread={state.openThread}
       />,
     ),
   );
@@ -401,10 +407,70 @@ it("Library and Computer show their own views", async () => {
   expect(container.textContent).toContain("Loading machines…");
 });
 
+it("opens the coding thread a task launched, such as a bot turn's", async () => {
+  reset();
+  state.openThread.mockClear();
+  const at = "2026-11-07T10:00:00.000Z";
+  const rows = [
+    decodeRow({
+      kind: "task",
+      task: { taskId: "turn", title: "Start one task", status: "running", updatedAt: at },
+      view: { taskId: "turn", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    }),
+    decodeRow({
+      kind: "coding",
+      taskId: "turn",
+      environmentId: "env",
+      threadId: "thread:child",
+      state: "bound",
+      lastActivityAt: at,
+    }),
+  ];
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows } });
+  await render(ChannelTaskId.make("turn"));
+  await press("Open work thread");
+  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread:child" });
+});
+
+it("lists a turn's coding thread under it in Tasks and opens it", async () => {
+  reset();
+  state.openThread.mockClear();
+  const at = "2026-11-07T10:00:00.000Z";
+  const rows = [
+    decodeRow({
+      kind: "task",
+      task: { taskId: "turn", title: "Start one task", status: "running", updatedAt: at },
+      view: { taskId: "turn", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    }),
+    decodeRow({
+      kind: "coding",
+      taskId: "turn",
+      environmentId: "env",
+      threadId: "thread:child",
+      title: "Echo question probe",
+      state: "bound",
+      lastActivityAt: at,
+    }),
+  ];
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows } });
+  await render();
+  await press("Work");
+  expect(container.textContent).toContain("Start one task");
+  await press("Echo question probe");
+  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread:child" });
+  expect(container.textContent).not.toContain("Echo question probe");
+});
+
 it("points to the chat from Tasks when the bot asked a question there", async () => {
   reset();
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
-  await render(undefined, undefined, 1);
+  await render(undefined, undefined, ["turn-1"]);
   await press("Work");
   expect(container.textContent).toContain("GOAT Bot is waiting for your answer in the chat");
   expect(container.textContent).toContain("No tasks yet");
@@ -415,7 +481,7 @@ it("points to the chat from Tasks when the bot asked a question there", async ()
 it("offers the Work sheet, and with it Open the chat, only on the chat screen", async () => {
   reset();
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
-  await render(ChannelTaskId.make("task-1"), undefined, 1);
+  await render(ChannelTaskId.make("task-1"), undefined, ["turn-1"]);
   expect(
     [...container.querySelectorAll("button")].some((button) => button.textContent === "Work"),
   ).toBe(false);

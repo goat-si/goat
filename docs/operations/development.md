@@ -98,6 +98,8 @@ with `GOAT_DEV_SSH=on vp run dev` (or `dev:desktop`); the server logs a warning 
 sidebar shows an "SSH on" badge. The rule applies to any server with a dev URL, which every
 `vp run dev*` mode and the desktop dev backend pass. It covers SSH only: linked HTTPS hosts and
 cloud machines need copied `secrets`, and an agent that runs `ssh` itself is not stopped.
+Agents and GOAT Bot on a dev server work with this machine's real home folder and shell tools;
+the isolation covers GOAT's data and SSH only.
 
 ### Replay provider
 

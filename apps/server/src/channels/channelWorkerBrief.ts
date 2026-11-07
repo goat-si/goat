@@ -71,6 +71,10 @@ const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instructi
 /** Only a worker on this machine can offer a skill; origin.report has no field for one. */
 const SKILL_PROPOSAL_RULE = `If the finished work followed a repeatable procedure the person will likely ask for again, you may add skillProposal to your completed ${goatCallText("channel.task_report")}: a short lowercase name, a one-line summary, and the procedure as Markdown. GOAT asks the person and saves it as a skill only if they agree. Never put secrets, tokens, or personal data in it.`;
 
+/** Every worker and bot session runs on the person's own machine, beside their private data. */
+export const PERSONAL_DATA_RULE =
+  "Personal data rule: read browser memory or history (such as Aside), mail, messages, passwords, the keychain, ~/.ssh or other credential files only when the person's request asks about that data. Never search the whole home folder (rg, find or grep over ~ or /Users/<name>); look in GOAT Bot's notes, the project folders and GOAT's tools (memory.recall, thread.search) first.";
+
 /**
  * The rules every channel worker follows. A worker on this machine reports with
  * channel_task_report; one on another machine reports to its origin with goat_origin_report. A
@@ -87,6 +91,7 @@ export const channelWorkerRules = (
         `If you need a decision from the person who asked, call ${goatCallText("channel.task_report")} with this taskId and generation, status "waiting_input", a new eventId, and your question, then stop.`,
         kind === "turn" ? TURN_REPORT_RESULT : REPORT_RESULT,
         kind === "turn" ? TURN_FINISH : FINISH,
+        PERSONAL_DATA_RULE,
       ]
     : [
         `For progress on long work, call ${goatCallText("origin.report")} with status progress at meaningful milestones.`,
@@ -94,6 +99,7 @@ export const channelWorkerRules = (
         `If you need a decision from the person who asked, call ${goatCallText("origin.report")} with status needs_input and your question, then stop.`,
         REPORT_RESULT,
         FINISH,
+        PERSONAL_DATA_RULE,
       ];
 
 /**
@@ -102,7 +108,7 @@ export const channelWorkerRules = (
  * writable during a turn, while repository or system changes go to a coding thread.
  */
 export const GOAT_BOT_READ_ONLY_RULE =
-  "You run with full access and are read-only outside your own scratch and artifacts folders: nothing in GOAT stops you, so keep this rule yourself. Read anything that helps: files anywhere on this machine, git history and status, logs, system status, and GOAT's tools. You may write temporary scripts or intermediate files only inside your scratch folder and user-visible reports or outputs only inside your artifacts folder. Outside those folders, change nothing yourself: no repository file edits, no commands that write, install, delete, move, or restart anything, no commits or pushes, and no settings changes in GOAT or anywhere else. Subagents you start keep the same rule. If the request needs a repository or system change, that is a coding thread: launch it by the routing rule instead of changing anything yourself; if it is unclear whether the person wants the change, ask them first.";
+  "You run with full access and are read-only outside your own scratch and artifacts folders: nothing in GOAT stops you, so keep this rule yourself. Read what helps: project files, git history and status, logs, system status, and GOAT's tools, within the personal data rule. You may write temporary scripts or intermediate files only inside your scratch folder and user-visible reports or outputs only inside your artifacts folder. Outside those folders, change nothing yourself: no repository file edits, no commands that write, install, delete, move, or restart anything, no commits or pushes, and no settings changes in GOAT or anywhere else. Subagents you start keep the same rule. If the request needs a repository or system change, that is a coding thread: launch it by the routing rule instead of changing anything yourself; if it is unclear whether the person wants the change, ask them first.";
 
 /**
  * The grok-bot split a GOAT Bot turn applies: settle small lookups from its own reads, delegate

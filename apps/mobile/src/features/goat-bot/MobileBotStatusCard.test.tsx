@@ -136,7 +136,7 @@ async function render(props: Partial<React.ComponentProps<typeof MobileBotStatus
         member={null}
         rows={[]}
         refreshRows={state.refreshRows}
-        turnsWaiting={0}
+        turnsWaiting={[]}
         onOpenChat={state.openChat}
         onOpenTask={onOpenTask}
         {...props}
@@ -238,7 +238,7 @@ it("says Ready for a healthy main bot once its work has loaded", async () => {
 it("says the bot waits for an answer in the chat when its own turn asked a question", async () => {
   state.homeConnected = true;
   state.openChat.mockClear();
-  await render({ rows: [], turnsWaiting: 1 });
+  await render({ rows: [], turnsWaiting: ["turn-1"] });
   expect(container.textContent).toContain("Needs attention");
   expect(container.textContent).toContain("1 waiting for your answer");
   expect(container.textContent).not.toContain("Ready");
@@ -249,7 +249,7 @@ it("says the bot waits for an answer in the chat when its own turn asked a quest
 it("offers both the waiting task and the chat when each holds a question", async () => {
   state.homeConnected = true;
   state.openChat.mockClear();
-  const onOpenTask = await render({ rows: [waiting], turnsWaiting: 1 });
+  const onOpenTask = await render({ rows: [waiting], turnsWaiting: ["turn-1"] });
   expect(container.textContent).toContain("2 waiting for your answer");
   await act(async () => button("Answer")?.click());
   expect(onOpenTask).toHaveBeenCalledWith("ask");

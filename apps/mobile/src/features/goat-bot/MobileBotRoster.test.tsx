@@ -133,8 +133,12 @@ it("restores a deleted member after the person confirms", async () => {
   await act(async () =>
     root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} onOpenChild={() => {}} />),
   );
-  const members = state.members as { onPressDeleted: (bot: object) => void };
-  await act(async () => members.onPressDeleted({ ...member, state: "deleted" }));
+  const members = state.members as {
+    canRestore: boolean;
+    onRestoreDeleted: (bot: object) => void;
+  };
+  expect(members.canRestore).toBe(true);
+  await act(async () => members.onRestoreDeleted({ ...member, state: "deleted" }));
   await act(async () => choose("Restore"));
   expect(state.manage.restore).toHaveBeenCalledWith({ ...member, state: "deleted" });
   await act(async () => root.unmount());

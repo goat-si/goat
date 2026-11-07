@@ -57,7 +57,7 @@ export function GoatBotStatusCard({
   readonly environmentId: EnvironmentId | null;
   readonly member: BotProfile | null;
   readonly rows: GoatBotDiagnosticsInput["rows"];
-  readonly turnsWaiting: number;
+  readonly turnsWaiting: ReadonlyArray<string>;
   /** Called when a link leads back to the chat, so a sheet over it can close. */
   readonly onShowChat?: (() => void) | undefined;
   readonly className?: string;
@@ -118,7 +118,7 @@ export function GoatBotStatusCard({
           }),
     canChangeModel,
     rows: homeId === null || homeId === callerEnvironmentId ? rows : "unavailable",
-    turnsWaiting: homeId === null || homeId === callerEnvironmentId ? turnsWaiting : 0,
+    turnsWaiting: homeId === null || homeId === callerEnvironmentId ? turnsWaiting : [],
     slack: !slackSupported ? "unavailable" : slack.error ? "failed" : (slack.data ?? "loading"),
     slackLive,
     canConfigureSlack,

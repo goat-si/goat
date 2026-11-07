@@ -29,7 +29,11 @@ import {
   releaseGoatBotAttachments,
 } from "./GoatBotComposerAttachments";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import {
+  startOpeningDetail,
+  useSelectWorkspaceDetail,
+} from "../workspace/useSelectWorkspaceDetail";
+import { botThreadDetail, openBotThreadAction } from "./goatBotThreadNavigation";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
@@ -43,6 +47,7 @@ import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotCo
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { MobileBotWork } from "./MobileBotWork";
+import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const rowKey = (row: GoatBotRow) => row.id;
@@ -205,6 +210,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly onSelectTask?: (taskId: ChannelTaskId) => void;
   /** The environment whose bot history is shown; thread links in bot text open there. */
   readonly environmentId?: EnvironmentId | null;
+  /** Who the conversation belongs to; a member bot labels its own updates. */
+  readonly botName?: string;
 }) {
   const { row } = props;
   const { themeAppearance } = useAppearancePreferences();
@@ -299,7 +306,9 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   return (
     <View className="items-start gap-1" style={{ marginTop: layout.marginTop }}>
       {row.proactive && row.firstInGroup ? (
-        <Text className="text-xs text-foreground-muted">GOAT Bot · Update</Text>
+        <Text className="text-xs text-foreground-muted">
+          {props.botName ?? "GOAT Bot"} · Update
+        </Text>
       ) : null}
       <GoatBotBubble side="in" tail={layout.tail}>
         {(textColor) => (
@@ -379,6 +388,8 @@ export function GoatBotScreen(props: {
   readonly taskId?: ChannelTaskId;
   /** A member bot whose conversation this is; the main bot's when absent. */
   readonly member?: BotProfile | null;
+  /** Restores a deleted member; absent when this person may not manage bots. */
+  readonly onRestoreMember?: (() => Promise<boolean>) | undefined;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
   /** Floating tabs cover the bottom of the screen; the composer rests above them. */
   readonly floatingTabs?: { readonly bottomSafeArea: number };
@@ -395,12 +406,14 @@ export function GoatBotScreen(props: {
   const selectDetail = useSelectWorkspaceDetail();
   const navigation = useNavigation();
   const selectThread = useCallback(
-    (thread: ThreadSelection) =>
-      selectDetail({
-        name: "Thread",
-        params: { environmentId: String(thread.environmentId), threadId: String(thread.id) },
-      }),
-    [selectDetail],
+    (thread: ThreadSelection) => {
+      const detail = botThreadDetail(thread);
+      // Android shows one page at a time; iOS opens the thread over the bot, so Back returns to it.
+      if (Platform.OS === "android") return selectDetail(detail);
+      startOpeningDetail(detail);
+      navigation.dispatch(openBotThreadAction(thread));
+    },
+    [selectDetail, navigation],
   );
   const onSelectThread = props.onSelectThread ?? selectThread;
   const onSelectTask = useCallback(
@@ -462,6 +475,7 @@ export function GoatBotScreen(props: {
         onSelectThread={onSelectThread}
         onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
         environmentId={session.historyEnvironmentId}
+        botName={title}
       />
     ),
     [
@@ -474,6 +488,7 @@ export function GoatBotScreen(props: {
       taskId,
       session.supportsTaskThreads,
       session.historyEnvironmentId,
+      title,
     ],
   );
   const send = () => {
@@ -523,6 +538,7 @@ export function GoatBotScreen(props: {
           taskId={taskId}
           visible={props.visible}
           onOpenTask={onSelectTask}
+          onOpenThread={onSelectThread}
           member={
             member
               ? {
@@ -544,11 +560,7 @@ export function GoatBotScreen(props: {
         />
       </View>
       {member?.state === "deleted" ? (
-        <View accessibilityRole="alert" className="gap-2 border-b border-border px-4 py-3">
-          <Text className="text-sm text-foreground-muted">
-            {member.name} was deleted. Its conversation is archived; restore it from the bot list.
-          </Text>
-        </View>
+        <MobileDeletedBotBanner member={member} onRestore={props.onRestoreMember} />
       ) : null}
       {hasBanner ? (
         <View
@@ -667,6 +679,7 @@ export function GoatBotScreen(props: {
             onChangeText={setText}
             multiline
             editable={session.canSend}
+            accessibilityState={{ disabled: !session.canSend }}
             onContentSizeChange={(event) =>
               setInputHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))
             }

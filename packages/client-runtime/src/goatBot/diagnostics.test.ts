@@ -66,7 +66,7 @@ function healthy(patch: Partial<GoatBotDiagnosticsInput> = {}): GoatBotDiagnosti
     model,
     canChangeModel: true,
     rows: [],
-    turnsWaiting: 0,
+    turnsWaiting: [],
     slack: "unavailable",
     slackLive: null,
     canConfigureSlack: true,
@@ -172,14 +172,14 @@ describe("diagnoseGoatBot", () => {
   });
 
   it("counts a bot turn that waits for an answer, which the task list leaves out", () => {
-    const delegated = healthy({ rows: [], turnsWaiting: 1 });
+    const delegated = healthy({ rows: [], turnsWaiting: ["turn"] });
     expect(line(delegated, "work")).toMatchObject({
       tone: "warn",
       text: "1 waiting for your answer",
       action: { kind: "open_chat", label: "Open the chat" },
     });
     expect(diagnoseGoatBot(delegated).verdict).toBe("attention");
-    const both = healthy({ rows: [task("q", "waiting_input")], turnsWaiting: 1 });
+    const both = healthy({ rows: [task("q", "waiting_input")], turnsWaiting: ["turn"] });
     expect(line(both, "work")).toMatchObject({
       text: "2 waiting for your answer",
       action: { kind: "open_task", taskId: "q" },
@@ -190,9 +190,28 @@ describe("diagnoseGoatBot", () => {
     ).toBeUndefined();
   });
 
+  it("counts a waiting turn once when the task list also lists it", () => {
+    const listed = healthy({ rows: [task("turn", "waiting_input")], turnsWaiting: ["turn"] });
+    expect(line(listed, "work")).toMatchObject({
+      text: "1 waiting for your answer",
+      action: { kind: "open_task", taskId: "turn" },
+    });
+    expect(line(listed, "work")?.alsoAction).toBeUndefined();
+  });
+
+  it("counts a listed running turn that waits on the person as waiting, not running", () => {
+    const listed = healthy({ rows: [task("turn", "running")], turnsWaiting: ["turn"] });
+    expect(line(listed, "work")).toMatchObject({
+      tone: "warn",
+      text: "1 waiting for your answer",
+      action: { kind: "open_task", taskId: "turn" },
+    });
+    expect(line(listed, "work")?.alsoAction).toBeUndefined();
+  });
+
   it("still reports a waiting turn when the task list is loading, failed or unavailable", () => {
     for (const rows of [null, "failed", "unavailable"] as const) {
-      expect(line(healthy({ rows, turnsWaiting: 1 }), "work")).toMatchObject({
+      expect(line(healthy({ rows, turnsWaiting: ["turn"] }), "work")).toMatchObject({
         tone: "warn",
         text: "1 waiting for your answer",
         action: { kind: "open_chat" },
@@ -392,7 +411,41 @@ describe("goatBotTurnsWaiting", () => {
       notification({ taskId: "turn-c", kind: "turn", status: "completed", taskVersion: 3 }),
       notification({ taskId: "work-a", kind: "work", ...asking }),
     ];
-    expect(goatBotTurnsWaiting(items as never)).toBe(1);
+    expect(goatBotTurnsWaiting(items as never)).toEqual(["turn-a"]);
+  });
+
+  it("counts a running turn whose launched work waits on the person, until it ends", () => {
+    const waitingOn = (kind: string) => ({
+      pullRequests: [],
+      needsYou: [{ kind, since: "2026-11-07T09:00:00.000Z" }],
+    });
+    const items = [
+      notification({
+        taskId: "turn-q",
+        kind: "turn",
+        status: "running",
+        observed: waitingOn("question"),
+      }),
+      notification({
+        taskId: "turn-a",
+        kind: "turn",
+        status: "running",
+        observed: waitingOn("approval"),
+      }),
+      notification({
+        taskId: "turn-done",
+        kind: "turn",
+        status: "completed",
+        observed: waitingOn("question"),
+      }),
+      notification({
+        taskId: "turn-free",
+        kind: "turn",
+        status: "running",
+        observed: { pullRequests: [], needsYou: [] },
+      }),
+    ];
+    expect(goatBotTurnsWaiting(items as never)).toEqual(["turn-q", "turn-a"]);
   });
 
   it("treats an older chip without a kind as a turn when the bot's session ran it", () => {
@@ -404,6 +457,6 @@ describe("goatBotTurnsWaiting", () => {
         worker: { threadId: "goat-bot-session:abc", generation: 1 },
       }),
     ];
-    expect(goatBotTurnsWaiting(items as never)).toBe(1);
+    expect(goatBotTurnsWaiting(items as never)).toEqual(["old-turn"]);
   });
 });

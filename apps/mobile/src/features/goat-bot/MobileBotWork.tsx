@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
   isRetryableTaskStatus,
@@ -46,6 +47,11 @@ export function MobileBotWork(props: {
   readonly taskCard?: ReactNode;
   readonly visible: boolean;
   readonly onOpenTask: (id: ChannelTaskId) => void;
+  /** Opens a coding thread the task started. */
+  readonly onOpenThread: (thread: {
+    readonly environmentId: EnvironmentId;
+    readonly id: ThreadId;
+  }) => void;
   /** A member bot's work; the main bot's when absent. */
   readonly member?: {
     readonly botId: BotId;
@@ -54,7 +60,7 @@ export function MobileBotWork(props: {
     readonly defaultModelSelection: BotProfile["defaultModelSelection"];
   } | null;
   /** The bot's own turns asking a question in the chat behind this sheet. */
-  readonly turnsWaiting?: number;
+  readonly turnsWaiting?: ReadonlyArray<string>;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
   readonly onDraft?: ((text: string) => void) | undefined;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
@@ -193,6 +199,18 @@ export function MobileBotWork(props: {
                   {task.row.view.doneAt ? "Reopen" : "Mark done"}
                 </Text>
               </Pressable>
+              {task.threads.map((thread) => (
+                <Pressable
+                  key={`${thread.environmentId}:${thread.threadId}`}
+                  accessibilityRole="button"
+                  className="min-h-[44px] justify-center"
+                  onPress={() =>
+                    props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
+                  }
+                >
+                  <Text className="text-foreground underline">Open work thread</Text>
+                </Pressable>
+              ))}
               {task.subagents.map((agent) => (
                 <Text key={agent.childWorkId} className="text-foreground-muted">
                   {agent.host ?? agent.destinationHint ?? "Subagent"} · {agent.label}
@@ -236,7 +254,7 @@ export function MobileBotWork(props: {
               !enabled ? "unavailable" : threads.error ? "failed" : threads.isSuccess ? rows : null
             }
             refreshRows={threads.refresh}
-            turnsWaiting={props.turnsWaiting ?? 0}
+            turnsWaiting={props.turnsWaiting ?? []}
             onOpenChat={() => setOpen(false)}
             onOpenTask={(id) => {
               setOpen(false);
@@ -261,7 +279,8 @@ export function MobileBotWork(props: {
             ))}
           </View>
           <ScrollView>
-            {tab === "Tasks" && (props.turnsWaiting ?? 0) > 0 ? (
+            {tab === "Tasks" &&
+            goatBotTurnsOutsideList(props.turnsWaiting ?? [], rows).length > 0 ? (
               <Pressable
                 accessibilityRole="button"
                 onPress={() => setOpen(false)}
@@ -301,17 +320,39 @@ export function MobileBotWork(props: {
                   <View key={label} className="gap-2 py-2">
                     <Text className="font-semibold text-foreground">{label}</Text>
                     {tasks.map(({ row }) => (
-                      <Pressable
-                        key={row.task.taskId}
-                        accessibilityRole="button"
-                        className="min-h-[44px] justify-center"
-                        onPress={() => {
-                          setOpen(false);
-                          props.onOpenTask(row.task.taskId);
-                        }}
-                      >
-                        <Text className="text-foreground">{row.task.title}</Text>
-                      </Pressable>
+                      <View key={row.task.taskId}>
+                        <Pressable
+                          accessibilityRole="button"
+                          className="min-h-[44px] justify-center"
+                          onPress={() => {
+                            setOpen(false);
+                            props.onOpenTask(row.task.taskId);
+                          }}
+                        >
+                          <Text className="text-foreground">{row.task.title}</Text>
+                        </Pressable>
+                        {rows.map((coding) =>
+                          coding.kind === "coding" && coding.taskId === row.task.taskId ? (
+                            <Pressable
+                              key={coding.environmentId + ":" + coding.threadId}
+                              accessibilityRole="button"
+                              accessibilityLabel={"GOAT thread: " + (coding.title || "GOAT thread")}
+                              className="ml-4 min-h-[44px] justify-center"
+                              onPress={() => {
+                                setOpen(false);
+                                props.onOpenThread({
+                                  environmentId: coding.environmentId,
+                                  id: coding.threadId,
+                                });
+                              }}
+                            >
+                              <Text numberOfLines={1} className="text-foreground-muted">
+                                {coding.title || "GOAT thread"}
+                              </Text>
+                            </Pressable>
+                          ) : null,
+                        )}
+                      </View>
                     ))}
                   </View>
                 ))

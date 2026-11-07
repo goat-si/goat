@@ -8,6 +8,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import type { BotProfile, BotThreadRow } from "@goat/contracts";
 import {
+  Platform,
   Pressable,
   ScrollView,
   Text,
@@ -17,7 +18,9 @@ import {
   type ScrollViewInstance,
   type ViewInstance,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
@@ -105,10 +108,17 @@ export function MobileBotRosterView(props: {
     readonly onNewBot: () => void;
     /** Edit, hide, show, delete or restore; the panel asks what to do. */
     readonly onLongPressBot: (bot: BotRosterEntry) => void;
-    readonly onPressDeleted: (bot: BotProfile) => void;
+    /** Whether this person may restore a deleted bot; its row then offers Restore. */
+    readonly canRestore: boolean;
+    readonly onRestoreDeleted: (bot: BotProfile) => void;
   };
 }) {
   const [hiddenOpen, setHiddenOpen] = useState(false);
+  const insets = useSafeAreaInsets();
+  // Like the other workspace lists: the last row clears the tab bar; iOS already insets the safe area.
+  const bottomClearance =
+    Math.max(insets.bottom, useWorkspaceTabs()?.bottomClearance ?? 0) -
+    (Platform.OS === "ios" ? insets.bottom : 0);
   const mainFace = useMobileGoatBotFace(null);
   const mainFaceLabel = goatBotFaceLabel(mainFace.state);
   const { scrollRef, rowRef, onScreen, measure, hold, settle, measureUnlessCoasting } =
@@ -124,6 +134,7 @@ export function MobileBotRosterView(props: {
       ref={scrollRef}
       className="flex-1 bg-screen"
       contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={{ paddingBottom: bottomClearance }}
       onLayout={measure}
       onScrollBeginDrag={hold}
       onMomentumScrollBegin={hold}
@@ -313,17 +324,29 @@ export function MobileBotRosterView(props: {
             Deleted bots
           </Text>
           {props.members.deleted.map((profile) => (
-            <Pressable
-              key={profile.botId}
-              accessibilityRole="button"
-              accessibilityLabel={`${profile.name}, deleted`}
-              accessibilityHint="Restore this bot"
-              onPress={() => props.members?.onPressDeleted(profile)}
-              className="min-h-[44px] flex-row items-center justify-between px-4 py-3"
-            >
-              <Text className="text-foreground-muted">{profile.name}</Text>
-              <Text className="text-foreground">Restore</Text>
-            </Pressable>
+            <View key={profile.botId} className="flex-row items-center pr-4">
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${profile.name}, deleted`}
+                accessibilityHint="Opens its archived conversation"
+                {...(props.members?.canRestore
+                  ? { onLongPress: () => props.members?.onRestoreDeleted(profile) }
+                  : {})}
+                onPress={() => props.onOpenBot({ kind: "member", profile })}
+                className="min-h-[44px] flex-1 flex-row items-center justify-between px-4 py-3"
+              >
+                <Text className="text-foreground-muted">{profile.name}</Text>
+                <Text className="text-foreground-muted">Deleted</Text>
+              </Pressable>
+              {props.members?.canRestore ? (
+                <Button
+                  label="Restore"
+                  accessibilityLabel={`Restore ${profile.name}`}
+                  tone="text"
+                  onPress={() => props.members?.onRestoreDeleted(profile)}
+                />
+              ) : null}
+            </View>
           ))}
         </View>
       ) : null}
