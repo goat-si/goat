@@ -32,8 +32,9 @@ const NO_SLACK_EVENT = Atom.make<AsyncResult.AsyncResult<SlackChannelStatusEvent
 const TONE_DOT: Record<GoatBotDiagnosticTone, string> = {
   ok: "bg-adaptive-emerald-600-400",
   pending: "bg-foreground-muted",
-  warn: "bg-warning",
-  error: "bg-danger",
+  // The plain warning and danger colors are pale fills for surfaces; a dot needs the solid tone.
+  warn: "bg-warning-foreground",
+  error: "bg-danger-foreground",
 };
 
 /**
