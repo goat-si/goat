@@ -36,8 +36,54 @@ describe("note drafts", () => {
   });
 
   it("an undated note says so", () => {
-    expect(noteDateLabel(null)).toBe("Undated");
-    expect(noteDateLabel("2026-11-07")).toBe("2026-11-07");
+    expect(noteDateLabel({ date: null })).toBe("Undated");
+    expect(noteDateLabel({ date: "2026-11-07" })).toBe("2026-11-07");
+  });
+});
+
+describe("noteDateLabel", () => {
+  // 02:10 in Seoul on Nov 8 is still Nov 7 in UTC, the day the line was written with.
+  const asked = {
+    date: "2026-11-07",
+    source: {
+      kind: "shown" as const,
+      inputId: "in-1",
+      channel: "goat" as const,
+      botId: BotId.make("main"),
+      from: "Juni",
+      at: "2026-11-07T17:10:00.000Z",
+    },
+  };
+
+  it("dates a note by when it was asked, in the viewer's time zone, across UTC midnight", () => {
+    expect(noteDateLabel(asked, "Asia/Seoul")).toBe("2026-11-08");
+    expect(noteDateLabel(asked, "UTC")).toBe("2026-11-07");
+    expect(
+      noteDateLabel(
+        {
+          ...asked,
+          date: "2026-11-08",
+          source: { ...asked.source, at: "2026-11-08T03:00:00.000Z" },
+        },
+        "America/Los_Angeles",
+      ),
+    ).toBe("2026-11-07");
+  });
+
+  it("matches the source label's day for the same note and time zone", () => {
+    const now = Date.parse("2026-11-08T00:00:00.000Z");
+    expect(goatBotNoteSourceLabel(asked.source, { now, timeZone: "Asia/Seoul" })).toContain(
+      "Nov 8",
+    );
+    expect(noteDateLabel(asked, "Asia/Seoul")).toBe("2026-11-08");
+  });
+
+  it("keeps the line's own date without a request time, and says Undated without either", () => {
+    expect(noteDateLabel({ date: "2026-11-07", source: { kind: "elsewhere" } }, "Asia/Seoul")).toBe(
+      "2026-11-07",
+    );
+    expect(noteDateLabel({ date: "2025-03-04" }, "Asia/Seoul")).toBe("2025-03-04");
+    expect(noteDateLabel({ date: null, source: { kind: "elsewhere" } }, "UTC")).toBe("Undated");
   });
 });
 

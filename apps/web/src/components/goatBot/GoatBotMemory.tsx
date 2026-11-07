@@ -137,7 +137,7 @@ function NoteList({
                     key={`${revision}:${note.index}`}
                     className="space-y-1 border-b border-border pb-3"
                   >
-                    <p className="text-xs">{noteDateLabel(note.date)}</p>
+                    <p className="text-xs">{noteDateLabel(note)}</p>
                     {source !== null && <p className="text-xs">{source}</p>}
                     <p className="whitespace-pre-wrap">{note.text}</p>
                     <p className="text-xs">
@@ -170,7 +170,7 @@ function NoteRow({
   const draft = wording === null ? null : changeNoteDraft(note, wording);
   return (
     <li className="space-y-1 border-b border-border pb-3" aria-describedby={textId}>
-      <p className="text-xs text-muted-foreground">{noteDateLabel(note.date)}</p>
+      <p className="text-xs text-muted-foreground">{noteDateLabel(note)}</p>
       {source !== null && <p className="text-xs text-muted-foreground">{source}</p>}
       <p id={textId} className="whitespace-pre-wrap">
         {note.text}
