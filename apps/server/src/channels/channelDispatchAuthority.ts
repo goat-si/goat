@@ -5,7 +5,7 @@ import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 
-const MEMORY_RANK = { none: 0, read: 1, read_write: 2 } as const;
+export const MEMORY_RANK = { none: 0, read: 1, read_write: 2 } as const;
 
 /** A run's memory for this task: its recorded ceiling, lowered to the requester's scopes now. */
 export const sessionMemoryCeiling = (

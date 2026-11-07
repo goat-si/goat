@@ -233,13 +233,17 @@ describe("GOAT Bot session runs after the first at the requester's memory ceilin
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("forwards follow-ups at the teammate's ceiling, lowered with their link", () => {
+  it.effect("forwards follow-ups at the teammate's ceiling, never into a run above it", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
       yield* setupBot;
       yield* linkTeammateWithMemory(["memory:read", "memory:write"]);
       const task = yield* dispatchNow("look: task", "memory-follow-1");
       assert.strictEqual(task.target?.memoryGrantCeiling, "read_write");
+      // The session's run holds what its launch carried, as the orchestrator stores it.
+      const threadId = task.worker!.threadId;
+      const [run] = harness.world.runs.get(threadId)!;
+      harness.world.runs.set(threadId, [{ ...run!, memoryGrantCeiling: "read_write" }]);
       const gateway = yield* ChannelGateway.ChannelGateway;
       const reception = yield* ChannelReceptionService.ChannelReceptionService;
       const ledger = yield* ChannelLedger.ChannelLedger;
@@ -256,11 +260,20 @@ describe("GOAT Bot session runs after the first at the requester's memory ceilin
             yield* dispatcher.forward(pending, runtime.ownerToken);
         });
       yield* followUp("check logs", "memory-follow-2");
-      assert.strictEqual(sendOf(harness, "check logs").memoryGrantCeiling, "read_write");
+      const steered = sendOf(harness, "check logs");
+      assert.strictEqual(steered.mode, "steer");
+      assert.strictEqual(steered.memoryGrantCeiling, "read_write");
       const sql = yield* SqlClient.SqlClient;
       yield* sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:read","orchestration:operate","memory:read"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
       yield* followUp("check disks", "memory-follow-3");
-      assert.strictEqual(sendOf(harness, "check disks").memoryGrantCeiling, "read");
+      // The running run may still write memory, so the lowered follow-up waits as its own run.
+      const queued = sendOf(harness, "check disks");
+      assert.strictEqual(queued.mode, "queue");
+      assert.strictEqual(queued.memoryGrantCeiling, "read");
+      const runs = harness.world.runs.get(threadId)!;
+      assert.lengthOf(runs, 2);
+      assert.strictEqual(runs[1]!.status, "queued");
+      assert.strictEqual((yield* ledger.getTask(task.taskId))!.task.worker?.runId, runs[1]!.id);
     }).pipe(Effect.provide(harness.layer));
   });
 

@@ -82,6 +82,7 @@ import { refuseForward } from "./channelForwardRefusal.ts";
 import { turnInstruction } from "./channelWorkerBrief.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 import {
+  holdsMoreMemory,
   isSessionTask,
   isTerminalRun,
   type SessionRow,
@@ -652,7 +653,6 @@ const make = Effect.gen(function* () {
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
     );
     if (requester === undefined) return { _tag: "permission_changed" } as const;
-    // Each run this send starts gets the requester's memory; a steer keeps its run's.
     const memoryGrantCeiling = sessionMemoryCeiling(requester, task.target);
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const attempt = (mode: "steer" | "queue", which: ReturnType<typeof turnSteerIdsFor>) =>
@@ -678,6 +678,7 @@ const make = Effect.gen(function* () {
     let which = ids.first;
     let sent =
       current !== undefined &&
+      !holdsMoreMemory(current, memoryGrantCeiling) &&
       (firstIntent.length > 0 || (!isTerminalRun(current) && current.status !== "queued"))
         ? yield* attempt("steer", ids.first)
         : undefined;

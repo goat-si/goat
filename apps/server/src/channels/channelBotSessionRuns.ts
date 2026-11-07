@@ -7,6 +7,7 @@ import {
   type ChannelTaskId,
   type MessageId,
   isGoatBotSessionThreadId,
+  type MemoryTaskGrantCeiling,
   type OrchestrationV2Run,
   type RunId,
   type ThreadId,
@@ -14,10 +15,17 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
+import { MEMORY_RANK } from "./channelDispatchAuthority.ts";
 
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 export const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
   TERMINAL_RUN.has(run.status);
+
+/** A steer keeps its run's memory, so a run holding more than the requester has now takes none. */
+export const holdsMoreMemory = (
+  run: Pick<OrchestrationV2Run, "memoryGrantCeiling">,
+  ceiling: MemoryTaskGrantCeiling,
+) => MEMORY_RANK[run.memoryGrantCeiling ?? "none"] > MEMORY_RANK[ceiling];
 
 export interface SessionIntent {
   readonly thread_id: ThreadId;
