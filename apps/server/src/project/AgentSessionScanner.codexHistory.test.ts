@@ -38,9 +38,7 @@ const runRecentThreads = (input: {
     const outcomes = yield* scanner
       .recentThreads(input.workspaceRoot, [], { includePi: true })
       .pipe(Stream.runCollect);
-    return Array.from(outcomes).flatMap((outcome) =>
-      outcome._tag === "Importable" ? [outcome.thread] : [],
-    );
+    return Array.from(outcomes);
   }).pipe(
     Effect.provide(
       AgentSessionScanner.layer.pipe(
@@ -80,7 +78,7 @@ const runRecentThreads = (input: {
   );
 
 it.layer(NodeServices.layer)("Codex inherited history", (it) => {
-  it.effect("imports a rewound Codex thread with the history its new rollout inherits", () =>
+  it.effect("retries a rewound Codex thread after its missing parent becomes available", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
@@ -114,11 +112,6 @@ it.layer(NodeServices.layer)("Codex inherited history", (it) => {
         .join("");
 
       yield* writeTranscript({
-        filePath: path.join(sessionsDir, `rollout-2026-08-24T10-00-00-${threadId}.jsonl`),
-        contents: `${keptHistory}${prompt("Rewound request")}\n${reply("Rewound reply")}\n`,
-        mtimeMs: nowMs - 60_000,
-      });
-      yield* writeTranscript({
         filePath: path.join(
           sessionsDir,
           `rollout-2026-08-24T11-00-00-${threadId}_${rolloutId}.jsonl`,
@@ -143,11 +136,27 @@ it.layer(NodeServices.layer)("Codex inherited history", (it) => {
         mtimeMs: nowMs,
       });
 
-      const threads = yield* runRecentThreads({
+      const beforeParent = yield* runRecentThreads({
         claudeHomePath,
         codexHomePath,
         workspaceRoot: workspace,
       });
+      expect(beforeParent.map((outcome) => outcome._tag)).toEqual(["Skipped"]);
+
+      yield* writeTranscript({
+        filePath: path.join(sessionsDir, `rollout-2026-08-24T10-00-00-${threadId}.jsonl`),
+        contents: `${keptHistory}${prompt("Rewound request")}\n${reply("Rewound reply")}\n`,
+        mtimeMs: nowMs - 60_000,
+      });
+
+      const outcomes = yield* runRecentThreads({
+        claudeHomePath,
+        codexHomePath,
+        workspaceRoot: workspace,
+      });
+      const threads = outcomes.flatMap((outcome) =>
+        outcome._tag === "Importable" ? [outcome.thread] : [],
+      );
 
       expect(
         threads.map((thread) => ({
