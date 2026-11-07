@@ -1,3 +1,5 @@
+import { GIT_FOR_WINDOWS_BUILDS } from "./gitWindowsReads.ts";
+export { runsGitWithoutConsole } from "./gitWindowsReads.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -690,7 +692,6 @@ export const resolveCommandPath = Effect.fn("shell.resolveCommandPath")(function
 });
 
 // Git 2.56 x64 uses ucrt64; ARM64 uses clangarm64; older x64/32-bit builds use mingw64/mingw32.
-const GIT_FOR_WINDOWS_BUILDS = ["ucrt64", "clangarm64", "mingw64", "mingw32"] as const;
 
 function isFileSync(filePath: string): boolean {
   try {
