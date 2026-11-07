@@ -523,6 +523,7 @@ export function GoatBotScreen(props: {
           taskId={taskId}
           visible={props.visible}
           onOpenTask={onSelectTask}
+          onOpenThread={onSelectThread}
           member={
             member
               ? {

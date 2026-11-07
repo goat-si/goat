@@ -1,4 +1,5 @@
 import {
+  goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
   presentTaskStatus,
@@ -69,7 +70,7 @@ export function GoatBotWorkPanel({
           onShowChat={onShowChat}
         />
         <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
-          {turnsWaiting > 0 ? (
+          {goatBotTurnsOutsideList(turnsWaiting, rows).length > 0 ? (
             <p className="mb-3">
               {goatBotWaitingInChatText(member?.name ?? "GOAT Bot")}.{" "}
               <Link

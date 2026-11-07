@@ -6,7 +6,11 @@ import { userEvent } from "vite-plus/test/browser";
 import "~/index.css";
 import { render } from "../../../test/render";
 
-const mocks = vi.hoisted(() => ({ tasks: [] as unknown[], setEnabled: vi.fn(), turnsWaiting: 0 }));
+const mocks = vi.hoisted(() => ({
+  tasks: [] as unknown[],
+  setEnabled: vi.fn(),
+  turnsWaiting: [] as string[],
+}));
 vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({ rows: [] }),
   useBotThreads: () => ({
@@ -52,7 +56,7 @@ vi.mock("~/state/channels", () => ({
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
-function setup(tasks: unknown[], turnsWaiting = 0) {
+function setup(tasks: unknown[], turnsWaiting: string[] = []) {
   mocks.tasks = tasks;
   mocks.turnsWaiting = turnsWaiting;
   mocks.setEnabled.mockReset();
@@ -111,7 +115,7 @@ it("a refused pause keeps the routine's stored state and shows why", async () =>
 });
 
 it("points to the chat when the bot asked a question there that no task thread shows", async () => {
-  setup([], 1);
+  setup([], ["turn-1"]);
   const onShowChat = vi.fn();
   await using screen = await render(
     <GoatBotWorkPanel
