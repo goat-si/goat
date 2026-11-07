@@ -6,6 +6,7 @@ import {
   type GoatBotEnvironmentInput,
 } from "@goat/client-runtime/goatBot";
 import {
+  BotProfile,
   EnvironmentId,
   ChannelTaskId,
   OrchestrationV2TurnItemJson,
@@ -138,8 +139,9 @@ const registry = Object.assign(AtomRegistry.make(), {
 let root: Root | null = null;
 let session: ReturnType<typeof useMobileGoatBotSession>;
 let taskId: ChannelTaskId | undefined;
+let member: BotProfile | null = null;
 function Consumer() {
-  const value = useMobileGoatBotSession(true, taskId);
+  const value = useMobileGoatBotSession(true, taskId, member);
   useLayoutEffect(() => {
     session = value;
   }, [value]);
@@ -165,6 +167,7 @@ function bot(environmentId: EnvironmentId): ChannelBotRef {
 }
 beforeEach(() => {
   taskId = undefined;
+  member = null;
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   harness.environments = [];
   harness.botRef = null;
@@ -898,5 +901,52 @@ it("filters the task conversation and sends messages with its task id", async ()
     taskId: "task-1",
     text: "Follow up",
   });
+  await botSessions.disposeMobileGoatBotEnvironment(env);
+});
+
+const decodeProfile = Schema.decodeSync(BotProfile);
+it("sends a member's message to the member's own conversation, and stops once it is deleted", async () => {
+  const env = EnvironmentId.make("member-conversation");
+  harness.environments = [environment(env)];
+  harness.botRef = bot(env);
+  harness.items = [];
+  const profile = (state: "active" | "deleted") =>
+    decodeProfile({
+      botId: "research",
+      role: "member",
+      name: "Research",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+      defaultProjectId: null,
+      environmentId: env,
+      sessionThreadId: "thread-research",
+      createdAt: "2026-11-07T00:00:00.000Z",
+      updatedAt: "2026-11-07T00:00:00.000Z",
+      state,
+    });
+  member = profile("active");
+  const sent = Promise.withResolvers<{ conversationKey: string; replyAddress: object }>();
+  harness.run.mockImplementation(async (_registry, _command, args) => {
+    if (args.input?.intent === "message") {
+      sent.resolve(args.input);
+      return { _tag: "Success", value: { inputId: "accepted", state: "accepted" } };
+    }
+    return { _tag: "Success", value: bot(env) };
+  });
+  await render();
+  expect(session.threadId).toBe("thread-research");
+  await act(async () => {
+    expect(session.onSend("find sources")).toBe(true);
+  });
+  expect(await sent.promise).toMatchObject({
+    conversationKey: "thread-research",
+    replyAddress: { kind: "goat", environmentId: env, threadId: "thread-research" },
+    text: "find sources",
+  });
+  member = profile("deleted");
+  await render();
+  expect(session.canSend).toBe(false);
+  expect(session.onSend("still there?")).toBe(false);
   await botSessions.disposeMobileGoatBotEnvironment(env);
 });

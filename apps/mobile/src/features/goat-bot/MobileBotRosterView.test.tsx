@@ -1,7 +1,7 @@
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { BotThreadRow } from "@goat/contracts";
+import { BotProfile, BotThreadRow } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 type Rect = readonly [number, number, number, number];
@@ -104,8 +104,18 @@ vi.mock("../../components/ui/AppText", () => ({
 }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => <span /> }));
 vi.mock("../../components/ui/Button", () => ({
-  Button: ({ label, disabled }: { label: string; disabled?: boolean }) => (
-    <button disabled={disabled}>{label}</button>
+  Button: ({
+    label,
+    disabled,
+    onPress,
+  }: {
+    label: string;
+    disabled?: boolean;
+    onPress?: () => void;
+  }) => (
+    <button disabled={disabled} onClick={onPress}>
+      {label}
+    </button>
   ),
 }));
 import { MobileBotRosterView, MobileHomeSegments } from "./MobileBotRosterView";
@@ -120,6 +130,7 @@ const task = decodeRow({
   unread: true,
   mainMessagesSinceQuiet: 0,
 });
+const decodeProfile = Schema.decodeUnknownSync(BotProfile);
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(async () => {
@@ -463,4 +474,69 @@ it("ignores a layout change while the roster scrolls", async () => {
   } finally {
     face.items = [];
   }
+});
+
+it("offers New bot, a member's own row, and the hidden and deleted bots when the server has members", async () => {
+  const profile = (botId: string, name: string, extra: object = {}) =>
+    decodeProfile({
+      botId,
+      role: "member",
+      name,
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+      defaultProjectId: null,
+      environmentId: "env",
+      sessionThreadId: `thread-${botId}`,
+      createdAt: at,
+      updatedAt: at,
+      ...extra,
+    });
+  const research = profile("research", "Research");
+  const quiet = profile("quiet", "Quiet", { hidden: true });
+  const gone = profile("gone", "Gone", { state: "deleted" });
+  const open = vi.fn();
+  const newBot = vi.fn();
+  const pressDeleted = vi.fn();
+  root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <MobileBotRosterView
+        bots={[
+          { kind: "main", profile: null },
+          { kind: "member", profile: research },
+        ]}
+        rows={[]}
+        hasMore={false}
+        slackEnabled={false}
+        selectedKey="bot:research"
+        onOpenBot={open}
+        onOpenChild={() => {}}
+        onLongPressTask={() => {}}
+        onShowMore={() => {}}
+        members={{
+          hidden: [quiet],
+          deleted: [gone],
+          canCreate: true,
+          onNewBot: newBot,
+          onLongPressBot: () => {},
+          onPressDeleted: pressDeleted,
+        }}
+      />,
+    ),
+  );
+  const button = (label: string) =>
+    [...container.querySelectorAll("button")].find((element) =>
+      element.textContent?.includes(label),
+    );
+  expect(button("Research")?.getAttribute("aria-pressed")).toBe("true");
+  expect(container.textContent).not.toContain("Coming soon");
+  await act(async () => button("New bot")?.click());
+  expect(newBot).toHaveBeenCalledOnce();
+  expect(container.textContent).not.toContain("Quiet");
+  await act(async () => button("Hidden bots (1)")?.click());
+  await act(async () => button("Quiet")?.click());
+  expect(open).toHaveBeenCalledWith({ kind: "member", profile: quiet });
+  await act(async () => button("Restore")?.click());
+  expect(pressDeleted).toHaveBeenCalledWith(gone);
 });

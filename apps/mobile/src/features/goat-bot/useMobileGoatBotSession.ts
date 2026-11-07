@@ -17,6 +17,7 @@ import {
   settleGoatBotEnsure,
   startGoatBotEnsure,
   syncGoatBotEnsure,
+  memberBotRef,
   type GoatBotEnsureMachine,
   type GoatBotAvailability,
   type GoatBotPendingInput,
@@ -24,7 +25,13 @@ import {
 import { goatBotIngestInput } from "@goat/client-runtime/state/channels";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type { ChannelBotRef, ChannelTaskId, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
+import type {
+  BotProfile,
+  ChannelBotRef,
+  ChannelTaskId,
+  EnvironmentId,
+  ScopedThreadRef,
+} from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import {
   useCallback,
@@ -72,6 +79,18 @@ interface Session {
   readonly pending: ReadonlyArray<GoatBotPendingInput>;
   readonly retain: (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => void;
   readonly dispose: () => void;
+  /** Conversation threads of member bots a screen here confirmed active; their messages may send. */
+  readonly members: ReadonlySet<string>;
+}
+
+/** The confirmed main bot when a message may go to this thread: main's own or an active member's. */
+function sendTarget(
+  current: Session | undefined,
+  bot: { readonly environmentId: EnvironmentId; readonly threadId: string },
+) {
+  const main = current?.bot;
+  if (!main || main.environmentId !== bot.environmentId) return null;
+  return main.threadId === bot.threadId || current.members.has(bot.threadId) ? main : null;
 }
 
 const sessions = new Map<EnvironmentId, Session>();
@@ -96,6 +115,13 @@ export async function disposeMobileGoatBotEnvironment(environmentId: Environment
   session.dispose();
   sessions.delete(environmentId);
   for (const listener of listeners) listener();
+}
+
+/** A member's conversation, before the main bot is confirmed on this connection too. */
+function memberBotTarget(member: BotProfile, main: ChannelBotRef | null) {
+  return main === null
+    ? { environmentId: member.environmentId, threadId: member.sessionThreadId }
+    : memberBotRef(member, main);
 }
 
 function newSession(environmentId: EnvironmentId): Session {
@@ -208,19 +234,14 @@ function newSession(environmentId: EnvironmentId): Session {
         current?.connected === true &&
         current.canOperate &&
         current.machine.ensure.state === "confirmed" &&
-        current.bot?.environmentId === bot.environmentId &&
-        current.bot.threadId === bot.threadId
+        sendTarget(current, bot) !== null
       );
     },
     send: async ({ clientKey, text, attachments, receivedAt, bot, taskId }) => {
-      const fullBot = sessions.get(environmentId)?.bot;
-      if (
-        !fullBot ||
-        fullBot.threadId !== bot.threadId ||
-        fullBot.environmentId !== bot.environmentId
-      ) {
-        throw new Error("GOAT Bot isn't available");
-      }
+      const main = sendTarget(sessions.get(environmentId), bot);
+      if (!main) throw new Error("GOAT Bot isn't available");
+      // Each message goes to the bot it was written to, in the main bot's project.
+      const fullBot = { ...main, threadId: bot.threadId };
       // Upload code loads only for messages that carry files.
       let files;
       if (attachments.length === 0) {
@@ -301,6 +322,7 @@ function newSession(environmentId: EnvironmentId): Session {
     canOperate: false,
     queue,
     pending: EMPTY_PENDING,
+    members: new Set(),
     retain: (key, attachments) => {
       retained.set(
         key,
@@ -341,7 +363,15 @@ function useResidentThreadProjection(ref: ScopedThreadRef | null) {
   return thread?.projection ?? null;
 }
 
-export function useMobileGoatBotSession(visible: boolean, requestedTaskId?: ChannelTaskId | null) {
+/**
+ * GOAT Bot's conversation on this phone. With a member, the same environment session sends to
+ * that member's own conversation once the environment's bot is confirmed.
+ */
+export function useMobileGoatBotSession(
+  visible: boolean,
+  requestedTaskId?: ChannelTaskId | null,
+  member: BotProfile | null = null,
+) {
   const home = useMobileGoatBotHomeMode();
   const environment = home.home.supported
     ? pickGoatBotEnvironment(home.environments, home.botRef)
@@ -354,7 +384,10 @@ export function useMobileGoatBotSession(visible: boolean, requestedTaskId?: Chan
   const taskId = supportsTaskThreads ? requestedTaskId : null;
   const threads = useEnvironmentQuery(
     environmentId !== null && environment?.connected && supportsTaskThreads
-      ? channelEnvironment.listBotThreads({ environmentId, input: {} })
+      ? channelEnvironment.listBotThreads({
+          environmentId,
+          input: member === null ? {} : { botId: member.botId },
+        })
       : null,
   );
   const knownTaskIds = useMemo(
@@ -576,9 +609,22 @@ export function useMobileGoatBotSession(visible: boolean, requestedTaskId?: Chan
       });
     }
   }, [visible, confirmedBot, shell, shellReadiness.status]);
+  // The shell watch above stays on the main bot; a member's state comes from its profile.
+  const memberActive = member !== null && member.state !== "deleted";
+  const memberThreadId = member?.sessionThreadId ?? null;
+  // oxlint-disable-next-line goat/react-effect-budget -- Publish the member's state to the environment's send queue, which outlives this screen.
+  useEffect(() => {
+    if (environmentId === null || memberThreadId === null || !session) return;
+    if (session.members.has(memberThreadId) === memberActive) return;
+    const members = new Set(session.members);
+    if (memberActive) members.add(memberThreadId);
+    else members.delete(memberThreadId);
+    update(environmentId, { ...session, members });
+  }, [environmentId, memberThreadId, memberActive, session]);
+  const target = member === null ? bot : memberBotTarget(member, bot);
   const visibleTurnItems = useThreadVisibleTurnItems({
-    environmentId: visible ? (bot?.environmentId ?? null) : null,
-    threadId: visible ? (bot?.threadId ?? null) : null,
+    environmentId: visible ? (target?.environmentId ?? null) : null,
+    threadId: visible ? (target?.threadId ?? null) : null,
   });
   const queue = session?.queue;
   useEffect(() => {
@@ -592,7 +638,33 @@ export function useMobileGoatBotSession(visible: boolean, requestedTaskId?: Chan
     }
     queue.acknowledge(keys);
   }, [visible, queue, visibleTurnItems]);
-  const pendingInputs = session?.pending ?? EMPTY_PENDING;
+  // The roster refreshes the main bot's task list; a member's follows its own conversation here.
+  const channelRevision =
+    member === null
+      ? null
+      : visibleTurnItems
+          .filter(
+            ({ item }) =>
+              (item.type === "notification" && item.ledgerTask !== undefined) ||
+              ((item.type === "user_message" || item.type === "assistant_message") &&
+                item.channel !== undefined),
+          )
+          .map(({ sourceItemId, item }) => sourceItemId + ":" + item.updatedAt)
+          .join("|");
+  const refreshThreads = threads.refresh;
+  // oxlint-disable-next-line goat/react-effect-budget -- Refresh a member's task list when channel records in its conversation change.
+  useEffect(() => {
+    if (channelRevision !== null) refreshThreads();
+  }, [channelRevision, refreshThreads]);
+  const targetThreadId = target?.threadId ?? null;
+  const allPending = session?.pending ?? EMPTY_PENDING;
+  const pendingInputs = useMemo(
+    () =>
+      allPending.filter(
+        (input) => input.threadId === undefined || input.threadId === targetThreadId,
+      ),
+    [allPending, targetThreadId],
+  );
   const rows = useMemo(
     () =>
       buildGoatBotTimeline({
@@ -649,20 +721,26 @@ export function useMobileGoatBotSession(visible: boolean, requestedTaskId?: Chan
         : resolved.kind
       : resolved.kind;
   const canSend =
-    visible && homeReady && canSendToGoatBot(resolved, canOperate) && confirmedBot !== null;
+    visible &&
+    homeReady &&
+    canSendToGoatBot(resolved, canOperate) &&
+    confirmedBot !== null &&
+    (member === null || memberActive);
+  const sendBot =
+    confirmedBot === null || member === null ? confirmedBot : memberBotRef(member, confirmedBot);
   const attachmentSupport =
     capabilities?.goatBotAttachments === true && capabilities.attachmentUploads === true
       ? { maxUploadBytes: capabilities.fileAttachments?.maxUploadBytes ?? null }
       : null;
   const onSend = useCallback(
     (text: string, attachments: ReadonlyArray<DraftComposerAttachment> = []) => {
-      if (!canSend || !confirmedBot || (!text.trim() && attachments.length === 0)) return false;
+      if (!canSend || !sendBot || (!text.trim() && attachments.length === 0)) return false;
       if (!queue || !session) return false;
-      const key = queue.submit(text.trim(), confirmedBot, attachments, taskId ?? undefined);
+      const key = queue.submit(text.trim(), sendBot, attachments, taskId ?? undefined);
       session.retain(key, attachments);
       return true;
     },
-    [canSend, confirmedBot, queue, session, taskId],
+    [canSend, sendBot, queue, session, taskId],
   );
   const onRetryInput = useCallback(
     (key: string) => {
@@ -685,7 +763,9 @@ export function useMobileGoatBotSession(visible: boolean, requestedTaskId?: Chan
     rows,
     supportsTaskThreads,
     /** The environment of the bot whose history is shown; before a move confirms, the old one. */
-    historyEnvironmentId: bot?.environmentId ?? null,
+    historyEnvironmentId: target?.environmentId ?? null,
+    /** The conversation shown: the member's own, else the main bot's. */
+    threadId: target?.threadId ?? null,
     replyingSince,
     activity,
     canSend,

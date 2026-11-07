@@ -13,6 +13,7 @@ import {
   type GoatBotFaceInput,
   type GoatBotFaceState,
 } from "@goat/client-runtime/goatBot";
+import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import { useIsFocused } from "@react-navigation/native";
 import * as DateTime from "effect/DateTime";
 import { useEffect, useState, useSyncExternalStore } from "react";
@@ -24,14 +25,19 @@ import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
 /**
- * The main bot's face, from its conversation shell and the task chips in its conversation, which
- * the roster and chat already hold. Mobile has no waiting badge, so every waiting chip counts.
+ * A bot's face, from its conversation shell and the task chips in its conversation, which the
+ * roster and chat already hold: the main bot's unless a member's conversation is given. Mobile has
+ * no waiting badge, so every waiting chip counts.
  */
-export function useMobileGoatBotFace(activity: GoatBotFaceInput["activity"]): {
+export function useMobileGoatBotFace(
+  activity: GoatBotFaceInput["activity"],
+  conversation?: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | null,
+): {
   readonly state: GoatBotFaceState;
   readonly since: number | null;
 } {
-  const { botRef } = useMobileGoatBotHomeMode();
+  const home = useMobileGoatBotHomeMode();
+  const botRef = conversation === undefined ? home.botRef : conversation;
   const shell = useThreadShell(
     botRef ? scopeThreadRef(botRef.environmentId, botRef.threadId) : null,
   );
