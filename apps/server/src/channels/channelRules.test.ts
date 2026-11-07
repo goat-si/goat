@@ -357,7 +357,13 @@ describe("linked account permissions", () => {
     ]);
     assert.isTrue(mayAnswerFor({ ...environmentOwner, principalId: "owner" }, writer));
     // The person who asked keeps directing their own work after losing memory; their runs follow.
-    assert.isTrue(mayAnswerFor({ ...asker, grantedScopes: ["orchestration:operate"] }, writer));
+    // Only on the same connection: the same principal elsewhere is compared like anyone else.
+    const lost = {
+      ...asker,
+      grantedScopes: ["orchestration:operate"] as Array<AuthEnvironmentScope>,
+    };
+    assert.isTrue(mayAnswerFor(lost, writer, true));
+    assert.isFalse(mayAnswerFor(lost, writer));
   });
 });
 
