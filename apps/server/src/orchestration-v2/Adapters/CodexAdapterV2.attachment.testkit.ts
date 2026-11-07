@@ -66,9 +66,14 @@ export const unusedRegistry = {
   currentMemoryPolicy: () => Effect.succeed(undefined),
 } satisfies McpSessionRegistry.McpSessionRegistry["Service"];
 
-/** Opens one replayed Codex session and records the thread requests the adapter sends. */
+/**
+ * Opens one replayed Codex session and records the thread requests the adapter sends. With
+ * `heldAs`, the session resumes the thread instead of starting it, as a restarted server does, and
+ * Codex reports the thread with that status before the resume (`notLoaded` when it holds none).
+ */
 const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   transcript: CodexReplay.CodexAppServerReplayTranscript,
+  heldAs?: string,
 ) {
   const driver = yield* CodexReplay.makeReplayDriver(transcript);
   const threadConfigs: Array<Record<string, unknown>> = [];
@@ -105,7 +110,18 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
                 raw: {
                   ...client.raw,
                   request: (method, params) =>
-                    record(method, params).pipe(Effect.andThen(client.raw.request(method, params))),
+                    record(method, params).pipe(
+                      Effect.andThen(
+                        heldAs !== undefined && method === "thread/read"
+                          ? Effect.succeed({
+                              thread: {
+                                id: (params as { threadId: string }).threadId,
+                                status: { type: heldAs },
+                              },
+                            })
+                          : client.raw.request(method, params),
+                      ),
+                    ),
                 },
               }) satisfies CodexClient.CodexAppServerClient["Service"],
           ),
@@ -131,11 +147,40 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     modelSelection: CODEX_TEST_MODEL_SELECTION,
     runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
   });
-  const providerThread = yield* runtime.ensureThread({
-    threadId,
-    modelSelection: CODEX_TEST_MODEL_SELECTION,
-    runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-  });
+  const now = yield* DateTime.now;
+  const providerThread =
+    heldAs === undefined
+      ? yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        })
+      : yield* runtime.resumeThread({
+          threadId,
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          providerThread: {
+            id: M.ProviderThreadId.make(`provider-thread-${transcript.scenario}`),
+            driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+            providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+            providerSessionId: ProviderSessionId.make("before-restart"),
+            appThreadId: threadId,
+            ownerNodeId: null,
+            nativeThreadRef: {
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeId: transcript.scenario,
+              strength: "strong",
+            },
+            nativeConversationHeadRef: null,
+            status: "idle",
+            firstRunOrdinal: 1,
+            lastRunOrdinal: 1,
+            handoffIds: [],
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
   const terminals = yield* Queue.unbounded<{
     readonly providerTurnId: string;
     readonly status: string;
@@ -481,6 +526,10 @@ export const fixture = (scenario: string) => {
       Effect.provideService(McpSessionRegistry.McpSessionRegistry, registry),
     );
   const open = openWith(unusedRegistry);
+  const openResumed = (heldAs: string) =>
+    openReplay(makeCodexReplayTranscript({ scenario, entries }), heldAs).pipe(
+      Effect.provideService(McpSessionRegistry.McpSessionRegistry, unusedRegistry),
+    );
   return {
     config,
     nativeThreadId,
@@ -499,6 +548,7 @@ export const fixture = (scenario: string) => {
     status,
     open,
     openWith,
+    openResumed,
   };
 };
 
