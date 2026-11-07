@@ -182,11 +182,22 @@ export const makeChannelBotNoteWriter = (
     const grantOpen = Effect.map(ledger.listTasksByStatus(OPEN_STATUSES), (open) =>
       open.some((stored) => stored.task.notesChangeRequested !== undefined),
     );
-    // A restart re-runs an input whose note was saved before a refusal could apply.
-    const alreadySaved = (inputId: string) =>
+    /**
+     * A restart re-runs an input whose note was saved before a refusal could apply. Its first
+     * answer, read from the file and never written again: a task holding a grant may be editing it.
+     */
+    const savedBefore = (inputId: string, replaces: string | undefined) =>
       readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES).pipe(
-        Effect.map((read) => read !== null && decode(read.bytes).includes(noteSource(inputId))),
-        Effect.orElseSucceed(() => false),
+        Effect.map((read) => {
+          const source = noteSource(inputId);
+          if (read === null) return undefined;
+          const text = decode(read.bytes);
+          if (!text.includes(source)) return undefined;
+          const first = parseChannelBotNoteLines(text).find((line) => line.raw.includes(source));
+          const unmatched = replaces !== undefined && first?.replaces === undefined;
+          return { notice: unmatched ? CHANNEL_COPY.noteCorrectionUnmatched : undefined };
+        }),
+        Effect.orElseSucceed(() => undefined),
       );
     const append = (note: string, readAt: string, inputId: string, replaces?: string) =>
       appendChannelBotNote(fs, files, note, readAt, inputId, replaces).pipe(
@@ -209,7 +220,10 @@ export const makeChannelBotNoteWriter = (
       gate.withPermits(1)(
         Effect.gen(function* () {
           const busy = yield* grantOpen.pipe(Effect.orElseSucceed(() => true));
-          if (busy && !(yield* alreadySaved(inputId))) return CHANNEL_COPY.noteEditBusy;
+          if (busy) {
+            const prior = yield* savedBefore(inputId, replaces);
+            return prior === undefined ? CHANNEL_COPY.noteEditBusy : prior.notice;
+          }
           return yield* append(note, readAt, inputId, replaces);
         }),
       );
@@ -229,7 +243,7 @@ export const makeChannelBotNoteWriter = (
       gate.withPermits(1)(
         Effect.gen(function* () {
           const refused = yield* guard;
-          if (refused !== undefined && !(yield* alreadySaved(inputId))) return { refused };
+          if (refused !== undefined) return (yield* savedBefore(inputId, replaces)) ?? { refused };
           return { notice: yield* append(note, readAt, inputId, replaces) };
         }),
       );
