@@ -27,7 +27,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
-import { mainBotKey, memberBotKey } from "./channelBotLedger.ts";
+import { botProfileKey, mainBotKey, memberBotKey } from "./channelBotLedger.ts";
 import { bindingIdFor, contentHashFor, conversationIdFor, inputIdFor } from "./channelIds.ts";
 import { makeCreatedTasks } from "./channelTaskWrites.ts";
 import {
@@ -90,6 +90,14 @@ const acceptFor = (
 ) =>
   Effect.gen(function* () {
     const ledger = yield* ChannelLedger.ChannelLedger;
+    const sql = yield* SqlClient.SqlClient;
+    // The ledger stores a member's input only while the member is active.
+    if (botId !== MAIN) {
+      const profile = { botId, role: "member", state: "active" };
+      yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+        VALUES (${botProfileKey(ownerId, botId)}, ${JSON.stringify(profile)}, ${NOW})
+        ON CONFLICT (key) DO NOTHING`;
+    }
     const message = goatMessage(key, threadId, text);
     const conversationId = conversationIdFor({ ownerId, ...message });
     return yield* ledger.acceptInput({

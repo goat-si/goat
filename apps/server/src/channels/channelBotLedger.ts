@@ -20,8 +20,11 @@ const MemberState = Schema.Struct({ bot: ChannelBotRef, ownerId: Schema.String, 
 const encodeMain = Schema.encodeSync(Schema.fromJsonString(MainState));
 const decodeMain = Schema.decodeUnknownSync(Schema.fromJsonString(MainState));
 const decodeMember = Schema.decodeUnknownSync(Schema.fromJsonString(MemberState));
+const encodeMember = Schema.encodeSync(Schema.fromJsonString(MemberState));
 
 export const mainBotKey = (ownerId: string) => "bot:" + ownerId;
+export const botProfileKey = (ownerId: string, botId: string) =>
+  "bot-profile:" + encodeURIComponent(ownerId) + ":" + encodeURIComponent(botId);
 export const memberBotKey = (ownerId: string, botId: string) =>
   "bot: " + encodeURIComponent(ownerId) + ":" + encodeURIComponent(botId);
 
@@ -52,6 +55,24 @@ export interface ChannelBotLedgerOps {
     readonly now: string;
   }) => Effect.Effect<ChannelBotRef, ChannelLedgerError>;
   /**
+   * The active bot a new message on this thread is for, scoped to the owner: main, or a member
+   * that is active. Undefined for any other thread.
+   */
+  readonly resolveIngressBot: (
+    ownerId: string,
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    { readonly botId: BotId; readonly bot: ChannelBotRef } | undefined,
+    ChannelLedgerError
+  >;
+  /** Records a member's ref unless one exists; returns whichever is stored. */
+  readonly setMemberBotIfAbsent: (input: {
+    readonly ownerId: string;
+    readonly botId: BotId;
+    readonly bot: ChannelBotRef;
+    readonly now: string;
+  }) => Effect.Effect<ChannelBotRef, ChannelLedgerError>;
+  /**
    * Gives tasks back the bot of the input that created them. An older build creates tasks with
    * the column default, main, even for a member's input; the input row keeps its bot. Returns
    * how many tasks changed; a second run changes none.
@@ -69,6 +90,14 @@ const checkedOwner = (ownerId: string) =>
     : Effect.fail(
         new ChannelLedgerError({ reason: "persistence", detail: "Invalid channel owner id." }),
       );
+
+/** Whether a member's profile is active; run inside the transaction that stores its input. */
+export const isActiveMember = (sql: SqlClient.SqlClient, ownerId: string, botId: string) =>
+  sql<{ readonly found: number }>`
+    SELECT 1 AS found FROM channel_runtime_state WHERE key = ${botProfileKey(ownerId, botId)}
+      AND json_extract(value_json, '$.role') = 'member'
+      AND COALESCE(json_extract(value_json, '$.state'), 'active') = 'active'
+  `.pipe(Effect.map((rows) => rows.length > 0));
 
 export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
   const readMain = (ownerId: string) =>
@@ -99,18 +128,8 @@ export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
   const getBotById: ChannelBotLedgerOps["getBotById"] = (ownerId, botId) =>
     botId === MAIN_BOT_ID
       ? getBot(ownerId)
-      : sql<{ readonly value_json: string }>`
-          SELECT value_json FROM channel_runtime_state WHERE key = ${memberBotKey(ownerId, botId)}
-        `.pipe(
-          Effect.flatMap((rows) =>
-            Effect.try(() => {
-              if (rows[0] === undefined) return undefined;
-              const stored = decodeMember(rows[0].value_json);
-              return stored.ownerId === ownerId && stored.botId === botId
-                ? { bot: stored.bot }
-                : undefined;
-            }),
-          ),
+      : readMember(ownerId, botId).pipe(
+          Effect.map((bot) => (bot === undefined ? undefined : { bot })),
           Effect.mapError(toLedgerError("getBotById")),
         );
 
@@ -163,6 +182,71 @@ export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
       Effect.mapError(toLedgerError("replaceBot")),
     );
 
+  const readMember = (ownerId: string, botId: string) =>
+    sql<{ readonly value_json: string }>`
+      SELECT value_json FROM channel_runtime_state WHERE key = ${memberBotKey(ownerId, botId)}
+    `.pipe(
+      Effect.flatMap((rows) =>
+        Effect.try(() => {
+          if (rows[0] === undefined) return undefined;
+          const stored = decodeMember(rows[0].value_json);
+          return stored.ownerId === ownerId && stored.botId === botId ? stored.bot : undefined;
+        }),
+      ),
+    );
+
+  const resolveIngressBot: ChannelBotLedgerOps["resolveIngressBot"] = Effect.fn(
+    "ChannelLedger.resolveIngressBot",
+  )(
+    function* (ownerId, threadId) {
+      const main = yield* readMain(yield* checkedOwner(ownerId));
+      if (main?.bot.threadId === threadId) return { botId: BotId.make(MAIN_BOT_ID), bot: main.bot };
+      // Member keys are "bot: ...": the range from "bot: " to "bot:!" holds exactly those.
+      const rows = yield* sql<{ readonly key: string; readonly value_json: string }>`
+        SELECT key, value_json FROM channel_runtime_state
+        WHERE key >= 'bot: ' AND key < 'bot:!'
+          AND json_extract(value_json, '$.bot.threadId') = ${threadId}
+      `;
+      for (const row of rows) {
+        const stored = yield* Effect.try(() => decodeMember(row.value_json));
+        if (stored.ownerId !== ownerId || row.key !== memberBotKey(ownerId, stored.botId)) continue;
+        if (!(yield* isActiveMember(sql, ownerId, stored.botId))) return undefined;
+        return { botId: stored.botId, bot: stored.bot };
+      }
+      return undefined;
+    },
+    Effect.mapError(toLedgerError("resolveIngressBot")),
+  );
+
+  const setMemberBotIfAbsent: ChannelBotLedgerOps["setMemberBotIfAbsent"] = (input) =>
+    checkedOwner(input.ownerId).pipe(
+      Effect.andThen(
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const value = encodeMember({
+              bot: input.bot,
+              ownerId: input.ownerId,
+              botId: input.botId,
+            });
+            yield* sql`
+              INSERT INTO channel_runtime_state (key, value_json, updated_at)
+              VALUES (${memberBotKey(input.ownerId, input.botId)}, ${value}, ${input.now})
+              ON CONFLICT (key) DO NOTHING
+            `;
+            const stored = yield* readMember(input.ownerId, input.botId);
+            if (stored === undefined) {
+              return yield* new ChannelLedgerError({
+                reason: "persistence",
+                detail: "Another record holds this member bot's key.",
+              });
+            }
+            return stored;
+          }),
+        ),
+      ),
+      Effect.mapError(toLedgerError("setMemberBotIfAbsent")),
+    );
+
   // Walks only member inputs (a partial index) and the tasks each one created.
   const repairTaskBots: ChannelBotLedgerOps["repairTaskBots"] = () =>
     sql<{ readonly task_id: string }>`
@@ -182,5 +266,13 @@ export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
       Effect.mapError(toLedgerError("repairTaskBots")),
     );
 
-  return { getBot, getBotById, setBotIfAbsent, replaceBot, repairTaskBots };
+  return {
+    getBot,
+    getBotById,
+    setBotIfAbsent,
+    replaceBot,
+    resolveIngressBot,
+    setMemberBotIfAbsent,
+    repairTaskBots,
+  };
 };

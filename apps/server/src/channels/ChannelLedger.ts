@@ -5,7 +5,7 @@ import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate
 import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
-import { botLedger, type ChannelBotLedgerOps } from "./channelBotLedger.ts";
+import { botLedger, type ChannelBotLedgerOps, isActiveMember } from "./channelBotLedger.ts";
 /**
  * ChannelLedger - durable state for channel input, tasks, and deliveries.
  *
@@ -257,6 +257,8 @@ export class ChannelLedger extends Context.Service<
       readonly statuses?: ReadonlyArray<ChannelTaskStatus> | undefined;
       readonly limit: number;
       readonly cursor?: string | undefined;
+      /** Only this bot's tasks; every bot's when absent. */
+      readonly botId?: BotId | undefined;
     }) => Effect.Effect<
       { readonly tasks: ReadonlyArray<ChannelTask>; readonly nextCursor: string | undefined },
       ChannelLedgerError
@@ -297,6 +299,7 @@ export class ChannelLedger extends Context.Service<
     readonly countWaitingTasks: (
       ownerId: string,
       readThrough?: string,
+      botId?: BotId,
     ) => Effect.Effect<number, ChannelLedgerError>;
     readonly findTaskByWorkerThread: (
       threadId: ThreadId,
@@ -910,6 +913,15 @@ const make = Effect.gen(function* () {
             }
             return toIngestResult(inboxSnapshot(found), true);
           }
+          // The decisive check against a delete: both are write transactions, so one sees the other.
+          if (input.botId !== undefined && input.botId !== MAIN_BOT_ID) {
+            if (!(yield* isActiveMember(sql, input.ownerId, input.botId))) {
+              return yield* new ChannelLedgerError({
+                reason: "bot_inactive",
+                detail: "The bot is not active.",
+              });
+            }
+          }
           yield* sql`
             INSERT INTO channel_conversations (
               conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at
@@ -1095,6 +1107,7 @@ const make = Effect.gen(function* () {
           input.statuses === undefined || input.statuses.length === 0
             ? sql``
             : sql`AND status IN ${sql.in(input.statuses)}`;
+        const botFilter = input.botId === undefined ? sql`` : sql`AND bot_id = ${input.botId}`;
         const cursorFilter =
           cursorAt === undefined || cursorId === undefined
             ? sql``
@@ -1105,7 +1118,7 @@ const make = Effect.gen(function* () {
           SELECT task_id, updated_at, owner_id, task_json, pending_answer_message_id,
             completion_hold, bot_id
           FROM channel_tasks
-          WHERE owner_id = ${input.ownerId} ${statusFilter} ${cursorFilter}
+          WHERE owner_id = ${input.ownerId} ${botFilter} ${statusFilter} ${cursorFilter}
           ORDER BY updated_at DESC, task_id DESC
           LIMIT ${input.limit + 1}
         `;
@@ -1250,11 +1263,11 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("listRemoteCheckUpdates")),
       ),
 
-    countWaitingTasks: (ownerId, readThrough) =>
+    countWaitingTasks: (ownerId, readThrough, botId = BotId.make(MAIN_BOT_ID)) =>
       sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
         FROM channel_tasks
-        WHERE owner_id = ${ownerId}
+        WHERE owner_id = ${ownerId} AND bot_id = ${botId}
           AND (
             status = 'waiting_input'
             OR (

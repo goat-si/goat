@@ -33,6 +33,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as AutomationHold from "../automationHold.ts";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
@@ -87,6 +88,7 @@ const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
   const sessionFirst = yield* ChannelSessionFirst.ChannelSessionFirst;
+  const members = yield* ChannelBotMembers.ChannelBotMembers;
   const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
   const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
@@ -336,6 +338,7 @@ const make = Effect.gen(function* () {
   const recover = Effect.gen(function* () {
     const now = DateTime.formatIso(yield* DateTime.now);
     yield* ledger.settleInterruptedDeliveries({ owner, now });
+    yield* members.reconcileAll;
     yield* sessionFirst.observe(owner);
     yield* sessionFirst.deadlines(owner);
   });

@@ -165,7 +165,7 @@ import { withSocketFrameParts, WS_RPC_SERVER_OPTIONS } from "./rpc/socketFramePa
 export { WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
-import * as ChannelBotProfiles from "./channels/ChannelBotProfiles.ts";
+import * as ChannelBotMembers from "./channels/ChannelBotMembers.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
@@ -1305,7 +1305,7 @@ export const layerWsRpc = (
       const channelGateway = yield* ChannelGateway.ChannelGateway;
       const channelLedger = yield* ChannelLedger.ChannelLedger;
       const channelBots = yield* ChannelBotRegistry.ChannelBotRegistry;
-      const channelBotProfiles = yield* ChannelBotProfiles.ChannelBotProfiles;
+      const channelBotMembers = yield* ChannelBotMembers.ChannelBotMembers;
       const channelIdentities = yield* ChannelIdentityService.ChannelIdentityService;
       const slackChannelSettings = yield* SlackChannelSettings.SlackChannelSettings;
       const channelEnvironmentId = yield* (yield* ServerEnvironment.ServerEnvironment)
@@ -1950,8 +1950,8 @@ export const layerWsRpc = (
       );
       const channelHandlers = ServerWsChannelRpcGroup.of({
         [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
-        [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: () => channelBots.status(channelOwner),
-        ...ChannelBotProfiles.rpcHandlers(channelBotProfiles, channelOwner),
+        ...ChannelBotRegistry.statusHandler(channelBots, channelOwner),
+        ...ChannelBotMembers.rpcHandlers(channelBotMembers, channelOwner),
         ...ChannelBotThreads.rpcHandlers(yield* ChannelBotThreads.ChannelBotThreads, channelOwner),
         // Waits only for durable storage; the reply arrives later on the bot thread.
         [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
@@ -1973,6 +1973,7 @@ export const layerWsRpc = (
             .listTasks({
               ownerId: channelOwner.ownerId,
               statuses: input.status,
+              botId: input.botId,
               limit: input.limit ?? 50,
               cursor: input.cursor,
             })

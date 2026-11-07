@@ -1,11 +1,11 @@
 import {
   BotId,
   BotProfile,
-  CHANNEL_GATEWAY_WS_METHODS,
   ChannelBotRef,
   ChannelGatewayError,
   type ChannelUpdateBotInput,
   MAIN_BOT_ID,
+  type ModelSelection,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -14,6 +14,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
+import { botProfileKey, memberBotKey } from "./channelBotLedger.ts";
 
 const MainRecord = Schema.Struct({
   botId: BotProfile.fields.botId,
@@ -26,11 +27,22 @@ const MainRecord = Schema.Struct({
   createdAt: BotProfile.fields.createdAt,
   updatedAt: BotProfile.fields.updatedAt,
 });
-const MemberRecord = Schema.Struct({ ...BotProfile.fields, role: Schema.Literal("member") });
+/** A thread step a delete or restore committed and has not finished yet. */
+const Lifecycle = Schema.Struct({
+  pending: Schema.Literals(["archive", "unarchive"]),
+  at: Schema.String,
+});
+// Keeps every field older builds require of a member row, so they can still list profiles.
+const MemberRecord = Schema.Struct({
+  ...BotProfile.fields,
+  role: Schema.Literal("member"),
+  lifecycle: Schema.optionalKey(Lifecycle),
+});
+export type MemberRecord = typeof MemberRecord.Type;
 const ProfileRecord = Schema.Union([MainRecord, MemberRecord]);
 type ProfileRecord = typeof ProfileRecord.Type;
 const decodeProfile = Schema.decodeUnknownSync(Schema.fromJsonString(ProfileRecord));
-const encodeProfile = Schema.encodeSync(Schema.fromJsonString(ProfileRecord));
+export const encodeProfile = Schema.encodeSync(Schema.fromJsonString(ProfileRecord));
 const decodeBot = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ bot: ChannelBotRef })),
 );
@@ -49,6 +61,7 @@ export class ChannelBotProfiles extends Context.Service<
   {
     readonly list: (
       owner: ProfileOwner,
+      options?: { readonly includeDeleted?: boolean | undefined },
     ) => Effect.Effect<ReadonlyArray<BotProfile>, ChannelGatewayError>;
     readonly update: (
       input: ChannelUpdateBotInput,
@@ -59,6 +72,11 @@ export class ChannelBotProfiles extends Context.Service<
       ownerId: string,
       botId: BotId,
     ) => Effect.Effect<BotIdentity, ChannelGatewayError>;
+    /** The model a member was given; null for main, which follows the GOAT Bot setting. */
+    readonly modelFor: (
+      ownerId: string,
+      botId: BotId,
+    ) => Effect.Effect<ModelSelection | null, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotProfiles") {}
 
@@ -76,6 +94,23 @@ const checkedProfile = (prefix: string, key: string, json: string) => {
   return profile;
 };
 
+/** A member as a client sees it: no lifecycle bookkeeping. */
+export const memberProfile = ({ lifecycle: _lifecycle, ...profile }: MemberRecord): BotProfile =>
+  profile;
+
+/** The stored profile row, or undefined; runs in the caller's transaction when there is one. */
+export const readProfileRecord = (sql: SqlClient.SqlClient, ownerId: string, botId: string) =>
+  sql<{ readonly value_json: string }>`
+    SELECT value_json FROM channel_runtime_state WHERE key = ${botProfileKey(ownerId, botId)}`.pipe(
+    Effect.flatMap((rows) =>
+      Effect.try(() =>
+        rows[0] === undefined
+          ? undefined
+          : checkedProfile(keyPrefix(ownerId), botProfileKey(ownerId, botId), rows[0].value_json),
+      ),
+    ),
+  );
+
 const isGatewayError = Schema.is(ChannelGatewayError);
 const persistenceFailed = Effect.mapError((cause: unknown) =>
   isGatewayError(cause) ? cause : new ChannelGatewayError({ reason: "persistence_failed" }),
@@ -84,7 +119,7 @@ const persistenceFailed = Effect.mapError((cause: unknown) =>
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  /** Every profile with its bot joined in, adopting the main bot once it exists. Runs inside a transaction. */
+  /** Every profile with its bot ref joined in, adopting the main bot once it exists. In a transaction. */
   const readProfiles = Effect.fn("ChannelBotProfiles.readProfiles")(function* (
     ownerId: string,
     now: string,
@@ -127,24 +162,40 @@ const make = Effect.gen(function* () {
     const members = decoded.profiles
       .filter((profile) => profile.role === "member")
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    // A member is listed once its ref exists; until then its create is still finishing.
+    const refRows =
+      members.length === 0
+        ? []
+        : yield* sql<{ readonly key: string }>`
+            SELECT key FROM channel_runtime_state
+            WHERE key IN ${sql.in(members.map((member) => memberBotKey(ownerId, member.botId)))}`;
+    const launched = new Set(refRows.map((row) => row.key));
+    const listedMembers = members
+      .filter((member) => launched.has(memberBotKey(ownerId, member.botId)))
+      .map(memberProfile);
     const bots: ReadonlyArray<BotProfile> =
       decoded.bot === undefined || main === undefined
-        ? members
+        ? listedMembers
         : [
             {
               ...main,
               environmentId: decoded.bot.environmentId,
               sessionThreadId: decoded.bot.threadId,
             },
-            ...members,
+            ...listedMembers,
           ];
     return { prefix, bots, records: main === undefined ? members : [main, ...members] };
   });
 
-  const list = Effect.fn("ChannelBotProfiles.list")(function* (owner: ProfileOwner) {
+  const list = Effect.fn("ChannelBotProfiles.list")(function* (
+    owner: ProfileOwner,
+    options: { readonly includeDeleted?: boolean | undefined } = {},
+  ) {
     const now = DateTime.formatIso(yield* DateTime.now);
     return yield* sql.withTransaction(readProfiles(owner.ownerId, now)).pipe(
-      Effect.map(({ bots }) => bots),
+      Effect.map(({ bots }) =>
+        options.includeDeleted === true ? bots : bots.filter((bot) => bot.state !== "deleted"),
+      ),
       Effect.tapError((cause) => Effect.logWarning("GOAT Bot profiles read failed", { cause })),
       persistenceFailed,
     );
@@ -161,7 +212,7 @@ const make = Effect.gen(function* () {
           const { prefix, bots, records } = yield* readProfiles(owner.ownerId, now);
           const listed = bots.find((bot) => bot.botId === input.botId);
           const record = records.find((profile) => profile.botId === input.botId);
-          if (listed === undefined || record === undefined) {
+          if (listed === undefined || record === undefined || listed.state === "deleted") {
             return yield* new ChannelGatewayError({ reason: "not_found" });
           }
           const changes = {
@@ -191,32 +242,31 @@ const make = Effect.gen(function* () {
     ownerId: string,
     botId: BotId,
   ) {
-    const prefix = keyPrefix(ownerId);
-    const key = prefix + encodeURIComponent(botId);
-    return yield* sql<{ readonly value_json: string }>`
-      SELECT value_json FROM channel_runtime_state WHERE key = ${key}`.pipe(
-      Effect.flatMap((rows) =>
-        Effect.try(() => {
-          if (rows[0] === undefined) {
-            if (botId === MAIN_BOT_ID) return DEFAULT_BOT_IDENTITY;
-            throw new Error("A member bot without a profile");
-          }
-          const profile = checkedProfile(prefix, key, rows[0].value_json);
-          return { name: profile.name, purpose: profile.purpose };
-        }),
+    return yield* readProfileRecord(sql, ownerId, botId).pipe(
+      Effect.flatMap((profile) =>
+        profile !== undefined
+          ? Effect.succeed({ name: profile.name, purpose: profile.purpose })
+          : botId === MAIN_BOT_ID
+            ? Effect.succeed(DEFAULT_BOT_IDENTITY)
+            : Effect.fail(new ChannelGatewayError({ reason: "not_found" })),
       ),
       Effect.tapError((cause) => Effect.logWarning("GOAT Bot identity read failed", { cause })),
       persistenceFailed,
     );
   });
 
-  return ChannelBotProfiles.of({ list, update, identity });
+  const modelFor = Effect.fn("ChannelBotProfiles.modelFor")(function* (
+    ownerId: string,
+    botId: BotId,
+  ) {
+    if (botId === MAIN_BOT_ID) return null;
+    return yield* readProfileRecord(sql, ownerId, botId).pipe(
+      Effect.map((profile) => profile?.defaultModelSelection ?? null),
+      Effect.tapError((cause) => Effect.logWarning("GOAT Bot model read failed", { cause })),
+      persistenceFailed,
+    );
+  });
+
+  return ChannelBotProfiles.of({ list, update, identity, modelFor });
 });
 export const layer = Layer.effect(ChannelBotProfiles, make);
-
-export const rpcHandlers = (service: ChannelBotProfiles["Service"], owner: ProfileOwner) => ({
-  [CHANNEL_GATEWAY_WS_METHODS.listBots]: () =>
-    service.list(owner).pipe(Effect.map((bots) => ({ bots }))),
-  [CHANNEL_GATEWAY_WS_METHODS.updateBot]: (input: ChannelUpdateBotInput) =>
-    service.update(input, owner).pipe(Effect.map((bot) => ({ bot }))),
-});

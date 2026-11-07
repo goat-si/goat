@@ -1,14 +1,17 @@
 import {
+  BotId,
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelChildWork,
   ChannelGatewayError,
   ChannelTask,
   type BotThreadRow,
+  type ChannelListBotThreadsInput,
   type ChannelListBotThreadsResult,
   ChannelTaskView,
   type ChannelListChildWorkInput,
   type ChannelListChildWorkResult,
   type ChannelUpdateTaskViewInput,
+  MAIN_BOT_ID,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -37,6 +40,7 @@ export class ChannelBotThreads extends Context.Service<
     ) => Effect.Effect<ChannelTaskView, ChannelGatewayError>;
     readonly list: (
       owner: ChannelConnectionOwner,
+      botId?: BotId,
     ) => Effect.Effect<ChannelListBotThreadsResult, ChannelGatewayError>;
     readonly listChildWork: (
       input: ChannelListChildWorkInput,
@@ -50,8 +54,11 @@ const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const views = yield* TaskViews.ChannelTaskViews;
   const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
-  const list = Effect.fn("ChannelBotThreads.list")(function* (owner: ChannelConnectionOwner) {
-    const bot = yield* ledger.getBot(owner.ownerId).pipe(Effect.mapError(failed));
+  const list = Effect.fn("ChannelBotThreads.list")(function* (
+    owner: ChannelConnectionOwner,
+    botId: BotId = BotId.make(MAIN_BOT_ID),
+  ) {
+    const bot = yield* ledger.getBotById(owner.ownerId, botId).pipe(Effect.mapError(failed));
     if (bot === undefined) return { rows: [], mainMessageCount: 0 };
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     const cutoff = now - 3 * 24 * 60 * 60 * 1000;
@@ -59,8 +66,8 @@ const make = Effect.gen(function* () {
       readonly count: number;
     }>`SELECT count(*) AS count FROM channel_inbox i
       JOIN channel_conversations c ON c.conversation_id = i.conversation_id
-      WHERE c.owner_id = ${owner.ownerId} AND c.kind = 'goat' AND c.conversation_key = ${bot.bot.threadId}
-        AND i.owner_id = ${owner.ownerId} AND i.state != 'rejected'
+      WHERE c.owner_id = ${owner.ownerId} AND c.kind = 'goat'
+        AND i.owner_id = ${owner.ownerId} AND i.bot_id = ${botId} AND i.state != 'rejected'
         AND json_extract(i.message_json, '$.intent') = 'message'
         AND json_extract(i.message_json, '$.taskId') IS NULL
         AND json_extract(i.message_json, '$.actor.senderThreadId') IS NULL`.pipe(
@@ -91,8 +98,8 @@ const make = Effect.gen(function* () {
       readonly task_json: string;
     }>`SELECT t.task_json FROM channel_tasks t
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
-      WHERE t.owner_id = ${owner.ownerId} AND c.owner_id = ${owner.ownerId}
-        AND c.kind = 'goat' AND c.conversation_key = ${bot.bot.threadId}
+      WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId} AND c.owner_id = ${owner.ownerId}
+        AND c.kind = 'goat'
         AND COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'
         AND (t.status NOT IN ('completed', 'failed', 'cancelled')
           OR COALESCE(json_extract(t.task_json, '$.completedAt'), t.updated_at) >= ${cutoffIso}
@@ -199,7 +206,8 @@ export const rpcHandlers = (
   service: ChannelBotThreads["Service"],
   owner: ChannelConnectionOwner,
 ) => ({
-  [CHANNEL_GATEWAY_WS_METHODS.listBotThreads]: () => service.list(owner),
+  [CHANNEL_GATEWAY_WS_METHODS.listBotThreads]: (input: ChannelListBotThreadsInput) =>
+    service.list(owner, input.botId),
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: (input: ChannelUpdateTaskViewInput) =>
     service.update(input, owner),
   [CHANNEL_GATEWAY_WS_METHODS.listChildWork]: (input: ChannelListChildWorkInput) =>
