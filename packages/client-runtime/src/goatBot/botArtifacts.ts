@@ -13,7 +13,7 @@ export type BotArtifactRead =
       readonly status: "ok";
       readonly mimeType: string;
       readonly size: number;
-      readonly bytes: Uint8Array;
+      readonly bytes: Uint8Array<ArrayBuffer>;
     }
   | { readonly status: "too_large"; readonly size: number; readonly maxBytes: number }
   | { readonly status: "busy" }
@@ -30,7 +30,7 @@ async function readOnce(
   readChunk: (input: ChannelReadBotArtifactInput) => Promise<ChannelReadBotArtifactResult>,
   signal: AbortSignal | undefined,
 ): Promise<Attempt> {
-  let buffer: Uint8Array | null = null;
+  let buffer: Uint8Array<ArrayBuffer> | null = null;
   let version = "";
   let filled = 0;
   for (;;) {
