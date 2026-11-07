@@ -1,7 +1,10 @@
 import type { EnvironmentId } from "@goat/contracts";
 import { resolveThreadListStatus } from "@goat/client-runtime/state/thread-list-priority";
 import { canSnooze, snoozeWakeLabel } from "@goat/client-runtime/state/thread-settled";
-import { resolveSettledThreadTimestamp } from "@goat/client-runtime/state/thread-sort";
+import {
+  resolveSettledThreadTimestamp,
+  resolveThreadActivityTimestamp,
+} from "@goat/client-runtime/state/thread-sort";
 
 import { relativeTime } from "../../lib/time";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -231,7 +234,7 @@ function resolveThreadListV2ItemTimeLabel(
   const settledTimestamp =
     variant === "slim" && !snoozed ? resolveSettledThreadTimestamp(thread) : null;
   return relativeTime(
-    settledTimestamp ?? thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
+    settledTimestamp ?? resolveThreadActivityTimestamp(thread) ?? thread.createdAt,
   );
 }
 
