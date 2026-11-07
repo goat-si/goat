@@ -9,6 +9,13 @@ import type * as ChannelLedger from "./ChannelLedger.ts";
 import { numberedChoiceLines } from "./channelDecisionChoices.ts";
 import { deliveryIdFor } from "./channelIds.ts";
 
+/**
+ * The request a turn's answer replies to. Clients show an assistant result without one as an
+ * unprompted update, so the answer would read as a second message after the receipt.
+ */
+export const turnAnswerReplyTo = (task: ChannelTask, kind: ChannelOutboundKind) =>
+  task.kind === "turn" && kind === "result" ? task.originInputId : undefined;
+
 /** One reply to the sender, with any choices shaped for the channel it goes to. */
 export const replyDelivery = (input: {
   readonly causeKey: string;
@@ -16,6 +23,8 @@ export const replyDelivery = (input: {
   readonly kind: ChannelOutboundKind;
   readonly text: string;
   readonly inputId?: ChannelInputId | undefined;
+  /** Links the message to an input without making this the input's own reply row. */
+  readonly replyTo?: ChannelInputId | undefined;
   readonly task?: ChannelTask | undefined;
   readonly mentionActorId?: string | undefined;
   readonly options?: ReadonlyArray<string> | undefined;
@@ -39,7 +48,9 @@ export const replyDelivery = (input: {
       destination: input.destination,
       kind: input.kind,
       text,
-      ...(input.inputId === undefined ? {} : { inReplyToInputId: input.inputId }),
+      ...((input.inputId ?? input.replyTo) === undefined
+        ? {}
+        : { inReplyToInputId: input.inputId ?? input.replyTo }),
       ...(input.task === undefined
         ? {}
         : { taskId: input.task.taskId, taskVersion: input.task.version }),
