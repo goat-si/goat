@@ -9,6 +9,7 @@ import * as Renderer from "@goat/provider-core/server/memoryContext";
 import { redactMemoryText, scanMemoryValue } from "../MemorySecretScanner.ts";
 import { MemoryAccessError } from "../MemoryService.ts";
 import { MemoryStoreConflict } from "../MemoryStore.ts";
+import { withStoreReclaim } from "../MemoryStoreReclaim.ts";
 import type {
   ImportBatch,
   ImportCandidate,
@@ -645,7 +646,9 @@ export const makeProviderMemoryImport: MakeProviderMemoryImport = (
         for (const preparation of prepared) {
           const commit = (p: typeof preparation) =>
             ports.commit({ ...p, registrationVersion: r.version, registration: r, batch }, permit);
-          const item = yield* commit(preparation).pipe(
+          // A full store gets one automatic cleanup and a fresh commit before the item is refused.
+          const item = yield* Effect.suspend(() => commit(preparation)).pipe(
+            withStoreReclaim(primitives.environmentId),
             Effect.catchTags({
               MemoryCapacityError: (error) => {
                 const capacity = {

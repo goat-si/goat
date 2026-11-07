@@ -54,6 +54,15 @@ const expectIssue = (snapshot: ImportSnapshot, issue: M.MemoryImportIssue) =>
   });
 
 describe("ClaudeMemoryImporter", () => {
+  fixtureTest("a topic saved with a UTF-8 byte order mark imports like the same topic", (base) =>
+    Effect.gen(function* () {
+      const plain = yield* parseClaudeMemory(files(base, [["topic.md", topic()]]));
+      const marked = yield* parseClaudeMemory(files(base, [["topic.md", `\uFEFF${topic()}`]]));
+      assert.equal(candidate(plain).title, "Guidance");
+      assert.deepEqual(marked, plain);
+    }),
+  );
+
   it.effect.each(["claude-topic-v1", "claude-topic-metadata-v1"] as const)(
     "extracts the fixed %s fixture",
     (profile) =>

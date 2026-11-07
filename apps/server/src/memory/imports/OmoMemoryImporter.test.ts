@@ -51,6 +51,18 @@ const failure = (input: ImportSnapshot, issue: M.MemoryImportIssue) =>
   });
 
 describe("Omo committed memory parser", () => {
+  it.effect("a note saved with a UTF-8 byte order mark imports like the same note", () =>
+    Effect.gen(function* () {
+      const plain = candidate(yield* parseOmoMemory(snapshot({ "notes/month.md": note() })));
+      const marked = candidate(
+        yield* parseOmoMemory(snapshot({ "notes/month.md": `\uFEFF${note()}` })),
+      );
+      assert.equal(plain.payload.text, "hello");
+      // The item keeps the source file's byte count, which includes the 3-byte mark.
+      assert.deepEqual(marked, { ...plain, byteCount: plain.byteCount + 3 });
+    }),
+  );
+
   it.effect(
     "consumes the frozen committed fixture, with strict payload and no registered evidence",
     () =>

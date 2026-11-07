@@ -2683,7 +2683,7 @@ it("renders save failure, retries only on click and shows totals across chunks",
   save.mockRestore();
   await click("Retry saving import");
   expect(inputs.filter((i) => i.action === "apply")).toHaveLength(2);
-  expect(container.textContent).toContain("33 rejected");
+  expect(container.textContent).toContain("Could not import: 33. Source changed");
   expect(container.textContent).toContain("2 chunks completed");
 });
 

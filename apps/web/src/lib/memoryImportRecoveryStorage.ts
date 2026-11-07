@@ -6,8 +6,12 @@ import {
   type MemoryImportRecoveryStorage,
 } from "@goat/client-runtime/memory-import-recovery";
 
-export const unsafeImportBrowserMessage =
-  "This browser can't safely run imports. Use a current browser or the desktop app.";
+/** Web Locks exist only in secure contexts, so any browser on a plain-http address lacks them. */
+export function unsafeImportBrowserMessage() {
+  return globalThis.isSecureContext === false
+    ? "Imports need a secure connection. Open GOAT over HTTPS, for example with Tailscale HTTPS in Settings → Connections, or use the desktop app."
+    : "This browser can't safely run imports. Use a current browser or the desktop app.";
+}
 export const changedImportDestinationMessage =
   "Destination changed. Choose a scope and preview again.";
 export function canSafelyImport() {
@@ -39,7 +43,7 @@ export function memoryImportRecoveryStorage(
     store = {
       load: (destination) => withDestinationLock(destination, () => base.load(destination)),
       save: (destination, operationId) => {
-        if (!canSafelyImport()) return Promise.reject(new Error(unsafeImportBrowserMessage));
+        if (!canSafelyImport()) return Promise.reject(new Error(unsafeImportBrowserMessage()));
         return withDestinationLock(destination, () => base.save(destination, operationId));
       },
       clear: (destination, operationId) =>
@@ -81,7 +85,7 @@ export function createMemoryImportAdmission(
     recovery: {
       ...memoryImportRecoveryStorage(storage),
       save: (target: MemoryImportDestination, operationId: Parameters<typeof base.save>[1]) => {
-        if (!canSafelyImport()) return Promise.reject(new Error(unsafeImportBrowserMessage));
+        if (!canSafelyImport()) return Promise.reject(new Error(unsafeImportBrowserMessage()));
         return withDestinationLock(target, async () => {
           const generation = await storage.getItem(memoryImportGenerationKey(target));
           if (!validGeneration(generation) || previewGeneration !== generation) {
