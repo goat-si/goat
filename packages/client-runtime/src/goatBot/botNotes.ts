@@ -22,7 +22,34 @@ export function changeNoteDraft(note: ChannelBotNote, newText: string): string |
     : goatBotChangeNoteMessage(note.text, wording);
 }
 
-export const noteDateLabel = (date: string | null) => date ?? "Undated";
+/** A moment's calendar day as YYYY-MM-DD in the given time zone (the device's when absent). */
+const localDay = (epochMs: number, timeZone: string | undefined) => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone,
+  }).formatToParts(epochMs);
+  const part = (type: "year" | "month" | "day") =>
+    parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+};
+
+/**
+ * The day a note row shows. A note with a request time is dated by it in the viewer's time zone,
+ * the same day its source label shows; the line's own date is the server's and may be another
+ * zone's day. Hand-written lines and notes from another conversation keep the line's date.
+ */
+export function noteDateLabel(
+  note: { readonly date: string | null; readonly source?: ChannelBotNoteSource | undefined },
+  timeZone?: string,
+): string {
+  if (note.source?.kind === "shown") {
+    const at = Date.parse(note.source.at);
+    if (Number.isFinite(at)) return localDay(at, timeZone);
+  }
+  return note.date ?? "Undated";
+}
 
 const tagOf = (error: unknown) =>
   typeof error === "object" && error !== null && "_tag" in error ? error._tag : undefined;
