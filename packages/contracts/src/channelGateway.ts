@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { BotId, BotProfile } from "./botProfile.ts";
+import { BotId, BotProfile, BotRole } from "./botProfile.ts";
 import { AuthEnvironmentScopes } from "./auth.ts";
 import {
   EnvironmentId,
@@ -299,6 +299,18 @@ export const ChannelListBotsInput = Schema.Struct({
 export const ChannelListBotsResult = Schema.Struct({ bots: Schema.Array(BotProfile) });
 export type ChannelListBotsInput = typeof ChannelListBotsInput.Type;
 export type ChannelListBotsResult = typeof ChannelListBotsResult.Type;
+
+/** A bot as agents see it: who it is and its conversation, nothing else a person set. */
+export const ChannelBotSummary = Schema.Struct({
+  botId: BotId,
+  role: BotRole,
+  name: BotProfile.fields.name,
+  purpose: BotProfile.fields.purpose,
+  hidden: Schema.Boolean,
+  sessionThreadId: ThreadId,
+});
+export const ChannelBotListResult = Schema.Struct({ bots: Schema.Array(ChannelBotSummary) });
+export type ChannelBotListResult = typeof ChannelBotListResult.Type;
 
 /** Changes only the keys sent. A null avatar returns the bot to its default face. */
 export const ChannelUpdateBotInput = Schema.Struct({
