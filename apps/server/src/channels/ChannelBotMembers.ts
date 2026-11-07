@@ -191,21 +191,24 @@ const make = Effect.gen(function* () {
   );
 
   /** Members of one owner, or of every owner, that still have something to finish. */
+  /** One batch of unfinished members after "after", in key order, and the last key read. */
   const unfinished = Effect.fn("ChannelBotMembers.unfinished")(function* (
     ownerId: string | undefined,
+    after: string,
   ) {
     const prefix =
       ownerId === undefined ? PROFILE_PREFIX : PROFILE_PREFIX + encodeURIComponent(ownerId) + ":";
+    const from = after > prefix ? after : prefix;
     // A member's ref key is its profile key with "bot: " in place of the profile prefix.
     const rows = yield* sql<{ readonly key: string }>`
         SELECT p.key FROM channel_runtime_state p
-        WHERE p.key >= ${prefix} AND p.key < ${prefix.slice(0, -1) + ";"}
+        WHERE p.key > ${from} AND p.key < ${prefix.slice(0, -1) + ";"}
           AND json_extract(p.value_json, '$.role') = 'member'
           AND (json_extract(p.value_json, '$.lifecycle.pending') IS NOT NULL
             OR (COALESCE(json_extract(p.value_json, '$.state'), 'active') = 'active'
               AND NOT EXISTS (SELECT 1 FROM channel_runtime_state r
                 WHERE r.key = 'bot: ' || substr(p.key, ${PROFILE_PREFIX.length + 1}))))
-        LIMIT ${RECONCILE_BATCH}`;
+        ORDER BY p.key LIMIT ${RECONCILE_BATCH}`;
     const found: Array<{ readonly ownerId: string; readonly record: MemberRecord }> = [];
     for (const row of rows) {
       const [owner, bot] = row.key.slice(PROFILE_PREFIX.length).split(":");
@@ -214,20 +217,32 @@ const make = Effect.gen(function* () {
       const record = yield* readMember(memberOwner, decodeURIComponent(bot));
       if (record !== undefined) found.push({ ownerId: memberOwner, record });
     }
-    return found;
+    return { found, last: rows.at(-1)?.key, full: rows.length === RECONCILE_BATCH };
   });
 
-  const reconcile = (ownerId: string | undefined) =>
-    unfinished(ownerId).pipe(
-      Effect.flatMap((members) =>
-        Effect.forEach(members, (member) => finishMember(member.ownerId, member.record), {
-          discard: true,
-        }),
-      ),
-      Effect.catchCause((cause) =>
-        Effect.logWarning("GOAT Bot member reconcile failed", { cause }),
-      ),
-    );
+  /**
+   * Walks every unfinished member in key order, one batch per permit, so a member that keeps
+   * failing never holds back the ones after it and a long pass never blocks a person's step.
+   */
+  const reconcile = Effect.fn("ChannelBotMembers.reconcile")(
+    function* (ownerId: string | undefined) {
+      let after = "";
+      for (;;) {
+        const batch = yield* serial(
+          unfinished(ownerId, after).pipe(
+            Effect.tap(({ found }) =>
+              Effect.forEach(found, (member) => finishMember(member.ownerId, member.record), {
+                discard: true,
+              }),
+            ),
+          ),
+        );
+        if (!batch.full || batch.last === undefined) return;
+        after = batch.last;
+      }
+    },
+    Effect.catchCause((cause) => Effect.logWarning("GOAT Bot member reconcile failed", { cause })),
+  );
 
   const create: ChannelBotMembers["Service"]["create"] = (input, owner) =>
     serial(
@@ -365,7 +380,7 @@ const make = Effect.gen(function* () {
     );
 
   const list: ChannelBotMembers["Service"]["list"] = (input, owner) =>
-    serial(reconcile(owner.ownerId)).pipe(
+    reconcile(owner.ownerId).pipe(
       Effect.andThen(profiles.list(owner, { includeDeleted: input.includeDeleted })),
     );
 
@@ -375,7 +390,7 @@ const make = Effect.gen(function* () {
     remove,
     restore,
     list,
-    reconcileAll: serial(reconcile(undefined)),
+    reconcileAll: reconcile(undefined),
     update: profiles.update,
   });
 });
