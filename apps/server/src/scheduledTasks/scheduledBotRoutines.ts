@@ -63,7 +63,13 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
     },
     owner: RoutineOwner | undefined,
   ) {
-    if (!(yield* isBotThread(input.threadId))) return null;
+    // Saving a routine without moving it keeps its bot binding, even if that thread was replaced.
+    const bound = yield* sql<{ readonly thread_id: string | null }>`
+      SELECT thread_id FROM scheduled_tasks WHERE task_id = ${input.taskId} AND owner_json IS NOT NULL`.pipe(
+      Effect.mapError((cause) => taskError("Could not read the routine's owner.", { cause })),
+    );
+    const keepsBinding = input.threadId !== null && bound[0]?.thread_id === input.threadId;
+    if (!keepsBinding && !(yield* isBotThread(input.threadId))) return null;
     if (input.schedule.type === "webhook")
       return yield* taskError("A GOAT Bot routine runs on a schedule, not a webhook.", {
         taskId: input.taskId,
@@ -84,17 +90,21 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
       ),
     );
 
-  /** none: an ordinary task; unowned: a bot routine that cannot run; linkable: the channel path. */
+  /**
+   * none: an ordinary task; unowned: a bot routine that cannot run; linkable: the channel path.
+   * A stored owner marks the binding for good: a bot thread replaced since stays answer-only, and
+   * the gateway refuses it if no bot takes that thread any more.
+   */
   const kind = Effect.fn("ScheduledBotRoutines.kind")(function* (task: ScheduledTask) {
-    if (!(yield* isBotThread(task.threadId))) return { type: "none" } as const;
     const rows = yield* sql<{ readonly owner_json: string | null }>`
       SELECT owner_json FROM scheduled_tasks WHERE task_id = ${task.id}`.pipe(
       Effect.mapError((cause) => taskError("Could not read the routine's owner.", { cause })),
     );
     const owner = Option.flatMap(Option.fromNullishOr(rows[0]?.owner_json), decodeOwner);
-    return Option.isNone(owner)
+    if (Option.isSome(owner)) return { type: "linkable", owner: owner.value } as const;
+    return (yield* isBotThread(task.threadId))
       ? ({ type: "unowned" } as const)
-      : ({ type: "linkable", owner: owner.value } as const);
+      : ({ type: "none" } as const);
   });
 
   /** Runs inside the admission transaction, so no admitted bot firing lacks its input. */

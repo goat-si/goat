@@ -177,3 +177,40 @@ it.effect("a routine bound to a GOAT Bot thread before owners existed fails and 
     { botThreads: new Set([botThread]) },
   ),
 );
+it.effect("a routine keeps its GOAT Bot binding after the bot's thread is replaced", () => {
+  const botThreads = new Set([botThread]);
+  return withWebhookService(
+    ({ service, sql }) =>
+      Effect.gen(function* () {
+        const input = yield* routineInput();
+        const task = (yield* service.upsert(input, { memoryGrantCeiling: "none", owner })).task;
+        // The registry replaced the bot's thread: the old one is no longer a bot thread.
+        botThreads.delete(botThread);
+        yield* service.upsert(
+          { ...input, title: "Morning check-in" },
+          {
+            memoryGrantCeiling: "none",
+            owner,
+          },
+        );
+        const [saved] = yield* sql<{
+          owner_json: string | null;
+        }>`SELECT owner_json FROM scheduled_tasks`;
+        assert.deepStrictEqual(JSON.parse(saved?.owner_json ?? "null"), owner);
+        yield* service.runNow({ id: task.id });
+        // Still a channel firing: linked for the bot, never sent to the thread directly.
+        const links = yield* sql<LinkRow>`SELECT * FROM scheduled_task_channel_inputs`;
+        assert.lengthOf(links, 1);
+        const firings = yield* sql<{ message_id: string; status: string }>`
+          SELECT message_id, status FROM scheduled_task_runs`;
+        assert.deepStrictEqual(
+          firings.map((firing) => [
+            firing.message_id.startsWith("scheduled-task-routine:"),
+            firing.status,
+          ]),
+          [[true, "dispatching"]],
+        );
+      }),
+    { botThreads },
+  );
+});

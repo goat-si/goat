@@ -147,6 +147,16 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /** One routine's failure is logged and retried next pass; the routines after it go on. */
+  const isolated = (firingId: string, step: Effect.Effect<boolean, ChannelLedgerError>) =>
+    step.pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("GOAT Bot routine step failed", { firingId, cause }).pipe(
+          Effect.as(false),
+        ),
+      ),
+    );
+
   const ingestPending = Effect.gen(function* () {
     const rows = yield* sql<PendingRow>`
       SELECT firing_id, task_id, payload_json FROM scheduled_task_channel_inputs
@@ -154,8 +164,10 @@ const make = Effect.gen(function* () {
       Effect.mapError(persistence("list pending routine inputs")),
     );
     const at = DateTime.formatIso(yield* DateTime.now);
-    for (const row of rows) yield* ingestOne(row, at);
-    return rows.length;
+    let moved = 0;
+    for (const row of rows)
+      if (yield* isolated(row.firing_id, ingestOne(row, at).pipe(Effect.as(true)))) moved += 1;
+    return moved;
   }).pipe(Effect.withSpan("ChannelRoutineIntake.ingestPending"));
 
   const settle = Effect.gen(function* () {
@@ -168,6 +180,7 @@ const make = Effect.gen(function* () {
       ORDER BY l.created_at, l.firing_id LIMIT ${BATCH}`.pipe(
       Effect.mapError(persistence("list finished routine inputs")),
     );
+    let settled = 0;
     for (const row of rows) {
       const failure =
         row.inbox_state === "replied" && row.failure_json === null
@@ -176,12 +189,12 @@ const make = Effect.gen(function* () {
               onNone: () => ANSWER_FAILED,
               onSome: (decoded) => decoded.message,
             });
-      yield* finish(
+      const step = finish(
         row.firing_id,
         failure === undefined ? { type: "completed" } : { type: "failed", error: failure },
         at,
-      );
-      yield* settleLink(row.firing_id, failure ?? null, at);
+      ).pipe(Effect.andThen(settleLink(row.firing_id, failure ?? null, at)), Effect.as(true));
+      if (yield* isolated(row.firing_id, step)) settled += 1;
     }
     const cutoff = DateTime.formatIso(
       DateTime.subtractDuration(clock, Duration.days(SETTLED_LINK_DAYS)),
@@ -189,7 +202,7 @@ const make = Effect.gen(function* () {
     yield* sql`DELETE FROM scheduled_task_channel_inputs WHERE state = 'settled' AND settled_at < ${cutoff}`.pipe(
       Effect.mapError(persistence("prune routine links")),
     );
-    return rows.length;
+    return settled;
   }).pipe(Effect.withSpan("ChannelRoutineIntake.settle"));
 
   return ChannelRoutineIntake.of({ ingestPending, settle });

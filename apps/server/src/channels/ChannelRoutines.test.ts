@@ -24,7 +24,8 @@ import {
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
-import { ROUTINE_COPY } from "./channelRoutineInputs.ts";
+import { inputIdFor } from "./channelIds.ts";
+import { ROUTINE_COPY, ROUTINE_KEY_PREFIX } from "./channelRoutineInputs.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import {
@@ -362,4 +363,30 @@ describe("GOAT Bot routines", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+});
+describe("GOAT Bot routine resilience", () => {
+  it.effect("a routine that keeps failing does not hold back the routines after it", () => {
+    const harness = makeHarness();
+    harness.script.current = routineScript([]);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const stuck = yield* admit("Look over my tasks", "a-stuck");
+      // Another link already holds the input id this firing derives, so storing it fails each pass.
+      const taken = inputIdFor({
+        ownerId,
+        kind: "goat",
+        connectionId: ChannelGateway.GOAT_CONNECTION_ID,
+        idempotencyKey: ROUTINE_KEY_PREFIX + stuck.firingId,
+      });
+      yield* sql`INSERT INTO scheduled_task_channel_inputs
+        (firing_id, task_id, input_id, payload_json, state, created_at)
+        VALUES ('stray', 'stray', ${taken}, '{}', 'settled', ${AT})`;
+      const later = yield* admit("Look over my tasks", "b-later");
+      yield* runtime.drain;
+      assert.strictEqual((yield* firing(later.firingId))?.status, "completed");
+      assert.deepInclude(yield* linkOf(stuck.firingId), { state: "pending" });
+    }).pipe(Effect.provide(harness.layer));
+  });
 });
