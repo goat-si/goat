@@ -499,7 +499,13 @@ const make = Effect.gen(function* () {
         // The newest run since the bound one is the task's current run: a follow-up or a
         // restart continuation replaces the run it follows.
         const floor = bound?.ordinal ?? 0;
-        current = resultRuns.findLast((run) => run.ordinal >= floor);
+        // Bound to a notice (a recovered send, or a follow-up that joined one), the task's own
+        // newest run still answers it; the notice answers through channelNoticeAnswers.
+        current =
+          resultRuns.findLast((run) => run.ordinal >= floor) ??
+          (bound !== undefined && scoped.value.notices.has(bound.userMessageId)
+            ? resultRuns.at(-1)
+            : undefined);
       }
       if (current === undefined) return false;
 

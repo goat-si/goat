@@ -9,6 +9,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
 import { receptionDecisionChannels } from "./testkit/channelReceptionHarness.ts";
 import {
   botMessages,
@@ -79,6 +80,41 @@ describe("a background command's notice run is never its request's result", () =
       const delivered = yield* texts;
       assert.include(delivered, "Book the van for Friday.");
       assert.notInclude(delivered, "The payments key is in the Ops vault.");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("settles the turn on its own answer when the task was bound to the notice run", () => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* gateway.ingest(goatInput("look: plan the logistics", "b1"), rpcContext);
+      yield* runtime.drain;
+      yield* reports.reconcile(runtime.ownerToken);
+      const turn = yield* onlyTask;
+      const session = turn.worker!.threadId;
+      harness.world.setStatus(session, 1, "completed", "Book the van for Friday.");
+      const notice = harness.world.addRun(session, MessageId.make("message:command-notice"));
+      noticeRunsOf(harness.world).set(notice.id, turn.worker!.runId);
+      harness.world.setStatus(session, 2, "completed", "The payments key is in the Ops vault.");
+      // A recovered send binds the task to its newest owned run, which is the notice.
+      const stored = (yield* ledger.getTask(turn.taskId))!;
+      yield* commitTransition(
+        ledger,
+        stored,
+        {
+          type: "task.worker.bound",
+          payload: { worker: { ...stored.task.worker!, runId: notice.id } },
+        },
+        { owner: runtime.ownerToken },
+      );
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.strictEqual((yield* ledger.getTask(turn.taskId))?.task.status, "completed");
+      assert.include(yield* texts, "Book the van for Friday.");
     }).pipe(Effect.provide(harness.layer));
   });
 });
