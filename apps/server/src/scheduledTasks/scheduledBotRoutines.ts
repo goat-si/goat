@@ -50,7 +50,9 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
       ? Effect.succeed(false)
       : directory.value
           .isBotThread(ThreadId.make(threadId))
-          .pipe(Effect.mapError((cause) => taskError("Could not read GOAT Bot threads.", { cause })));
+          .pipe(
+            Effect.mapError((cause) => taskError("Could not read GOAT Bot threads.", { cause })),
+          );
 
   /** A routine in a bot conversation needs the person who set it up and a timer schedule. */
   const checkUpsert = Effect.fn("ScheduledBotRoutines.checkUpsert")(function* (
@@ -77,7 +79,9 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
     sql`UPDATE scheduled_tasks SET owner_json = ${owner === null ? null : encodeOwner(owner)}
       WHERE task_id = ${taskId}`.pipe(
       Effect.asVoid,
-      Effect.mapError((cause) => taskError("Could not save the routine's owner.", { taskId, cause })),
+      Effect.mapError((cause) =>
+        taskError("Could not save the routine's owner.", { taskId, cause }),
+      ),
     );
 
   /** none: an ordinary task; unowned: a bot routine that cannot run; linkable: the channel path. */

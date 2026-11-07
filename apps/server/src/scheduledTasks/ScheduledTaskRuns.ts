@@ -600,9 +600,8 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
     function* (input) {
       const changed = yield* sql.withTransaction(
         Effect.gen(function* () {
-          const row = (
-            yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE firing_id=${input.firingId}`
-          )[0];
+          const row =
+            (yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE firing_id=${input.firingId}`)[0];
           if (row === undefined || !row.message_id.startsWith(ROUTINE_MESSAGE_PREFIX)) return false;
           const next = channelSnapshot(yield* readSnapshot(row), input.outcome, input.at);
           if (next !== undefined) {
@@ -626,7 +625,8 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
     "ScheduledTaskRuns.readFiring",
   )(
     function* (firingId) {
-      const row = (yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE firing_id=${firingId}`)[0];
+      const row =
+        (yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE firing_id=${firingId}`)[0];
       return row === undefined ? null : yield* readSnapshot(row);
     },
     Effect.mapError(failure("Could not read scheduled firing.")),

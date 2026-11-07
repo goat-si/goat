@@ -37,7 +37,9 @@ it.effect("only a person's owner context can bind a routine to a GOAT Bot thread
         );
         assert.include(webhook.message, "schedule");
         yield* service.upsert(input, { memoryGrantCeiling: "none", owner });
-        const rows = yield* sql<{ owner_json: string | null }>`SELECT owner_json FROM scheduled_tasks`;
+        const rows = yield* sql<{
+          owner_json: string | null;
+        }>`SELECT owner_json FROM scheduled_tasks`;
         assert.deepStrictEqual(
           rows.map((row) => JSON.parse(row.owner_json ?? "null")),
           [owner],
@@ -55,10 +57,13 @@ it.effect("a GOAT Bot routine firing freezes its input with the admission and se
         const task = (yield* service.upsert(input, { memoryGrantCeiling: "none", owner })).task;
         yield* service.runNow({ id: task.id });
         // The routine changes after admission; the stored input does not.
-        yield* service.upsert({ ...input, prompt: "Something else." }, {
-          memoryGrantCeiling: "none",
-          owner,
-        });
+        yield* service.upsert(
+          { ...input, prompt: "Something else." },
+          {
+            memoryGrantCeiling: "none",
+            owner,
+          },
+        );
         const links = yield* sql<LinkRow>`SELECT * FROM scheduled_task_channel_inputs`;
         assert.lengthOf(links, 1);
         assert.strictEqual(links[0]?.state, "pending");
@@ -70,7 +75,9 @@ it.effect("a GOAT Bot routine firing freezes its input with the admission and se
         });
         const firings = yield* sql<{ firing_id: string; status: string }>`
           SELECT firing_id, status FROM scheduled_task_runs`;
-        assert.deepStrictEqual(firings, [{ firing_id: links[0]?.firing_id ?? "", status: "dispatching" }]);
+        assert.deepStrictEqual(firings, [
+          { firing_id: links[0]?.firing_id ?? "", status: "dispatching" },
+        ]);
       }),
     { botThreads: new Set([botThread]) },
   ),

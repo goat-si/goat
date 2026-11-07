@@ -70,11 +70,7 @@ import {
   releaseWebhookReplay,
 } from "./webhookDedupe.ts";
 import { describeFailedWebhookFilter, findFailedWebhookFilter } from "./webhookFilter.ts";
-import {
-  redactHeaders,
-  redactQuery,
-  renderWebhookPrompt,
-} from "./webhookTemplate.ts";
+import { redactHeaders, redactQuery, renderWebhookPrompt } from "./webhookTemplate.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
 import { webhookEndpoint } from "./webhookEndpoint.ts";
 import {
@@ -772,17 +768,25 @@ export const layer = Layer.effect(
             if (webhook !== undefined && claim.dispatch)
               yield* sql`UPDATE scheduled_task_webhook_pending SET state='running' WHERE delivery_id=${webhook.deliveryId}`;
             if (routine.type === "linkable" && claim.dispatch)
-              yield* botRoutines.link({ task: active, owner: routine.owner, firingId: commandId, at: startedAtIso });
+              yield* botRoutines.link({
+                task: active,
+                owner: routine.owner,
+                firingId: commandId,
+                at: startedAtIso,
+              });
             return claim;
           });
-          const claim =
-            yield* webhook === undefined && routine.type !== "linkable"
-              ? admission
-              : sql.withTransaction(admission);
+          const claim = yield* webhook === undefined && routine.type !== "linkable"
+            ? admission
+            : sql.withTransaction(admission);
           if (webhook !== undefined) yield* Ref.set(webhook.admitted, true);
           yield* notifyChanged;
           if (routine.type === "linkable")
-            return { task: active, threadId: active.threadId, firing: yield* scheduledRuns.readFiring(commandId) };
+            return {
+              task: active,
+              threadId: active.threadId,
+              firing: yield* scheduledRuns.readFiring(commandId),
+            };
           if (!claim.dispatch) {
             const firing = yield* scheduledRuns.finishDispatch({
               firingId: commandId,
