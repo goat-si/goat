@@ -2,21 +2,21 @@
 
 > T3 축의 기준선이다. Cua Driver 축은 [20_cua_baseline](./20_cua_baseline.md).
 
-> 갱신: 2026-11-06 (사이클 261103 기록 닫기와 사이클 261106 수동 선별. 내용 기준 reviewed-through `42a0e917cf`, merge-base는 `2c592a108`. 261106 랜딩 dev 커밋은 다음 사이클 카드가 적는다)
+> 갱신: 2026-11-07 (사이클 261106 기록 닫기와 사이클 261107 수동 선별. 내용 기준 reviewed-through `83a3674ffd`, merge-base는 `2c592a108`. 261107 랜딩 dev 커밋은 다음 사이클 카드가 적는다)
 
 ## 현재 기준선
 
-| 항목                          | 값                                                                                                                                             |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| upstream                      | `pingdotgg/t3code` `main` (remote `upstream`, `tagopt --no-tags`)                                                                              |
-| GOAT 통합 브랜치              | `goat-si/goat` `dev`                                                                                                                           |
-| reviewed-through (merge-base) | `2c592a108` 2026-10-24 fix(client-runtime): avoid duplicate handoff previews during startup (#24349)                                           |
-| reviewed-through (내용 기준)  | `42a0e917cf` 2026-11-05 feat(gitlab): link issue, merge request, commit and user references (#30524). 사이클 261106 랜딩, 다음 사이클의 시작점 |
-| 스캔한 GOAT dev               | `94b7037214` ci(nightly): install libsecret headers for the hosted JS bundle job (#2560)                                                       |
-| GOAT 고유 커밋                | 2073                                                                                                                                           |
-| upstream 앞섬                 | 0 (2026-10-24 KST)                                                                                                                             |
-| trial merge 충돌              | 없음 ([10.013](./_fin/10/10.013_t3_chase_cycle_261024b.md))                                                                                    |
-| Node 고정                     | 루트 `engines.node` `26.12.1`, 서버 `^24.16.0 \|\| >=26.1.0` ([10.011](./_fin/10/10.011_t3_chase_node_pin.md), PR #1587)                       |
+| 항목                          | 값                                                                                                                               |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| upstream                      | `pingdotgg/t3code` `main` (remote `upstream`, `tagopt --no-tags`)                                                                |
+| GOAT 통합 브랜치              | `goat-si/goat` `dev`                                                                                                             |
+| reviewed-through (merge-base) | `2c592a108` 2026-10-24 fix(client-runtime): avoid duplicate handoff previews during startup (#24349)                             |
+| reviewed-through (내용 기준)  | `83a3674ffd` 2026-11-07 fix(web): isolate scrollbar styles from iframe owners (#32398). 사이클 261107 랜딩, 다음 사이클의 시작점 |
+| 스캔한 GOAT dev               | `e5a7e4b522` fix(mobile): Settings search X, new note focus, 44pt pills, thread row icon, GOAT Bot profile order (#2585)         |
+| GOAT 고유 커밋                | 2073                                                                                                                             |
+| upstream 앞섬                 | 0 (2026-10-24 KST)                                                                                                               |
+| trial merge 충돌              | 없음 ([10.013](./_fin/10/10.013_t3_chase_cycle_261024b.md))                                                                      |
+| Node 고정                     | 루트 `engines.node` `26.12.1`, 서버 `^24.16.0 \|\| >=26.1.0` ([10.011](./_fin/10/10.011_t3_chase_node_pin.md), PR #1587)         |
 
 `de49d637d`(2026-10-10)가 GOAT가 갈라진 fork point다. upstream 머지가 dev에 들어갈 때마다 merge-base가 그 머지의
 upstream parent로 전진하고, 그 값이 다음 reviewed-through가 된다. 이 표는 `devlog/_chase/scan.sh` 출력의 요약이며,
@@ -43,4 +43,5 @@ upstream은 하루에 약 50-100커밋씩 움직인다. 사이클이 길어질�
 | 261029  | 2026-10-29 | `36d4d711b7..9826dbb990`                       | 169  | 수동   | 30 take, 50 adapt, 75 skip, 14 보류. 합친 PR #2163 → dev `a4a06af2ac`                  | 10.018     |
 | 261031  | 2026-10-31 | `9826dbb990..79f1fadfc6`                       | 568  | 수동   | 271 take, 153 adapt, 112 skip, 20 미룸, 12 결정 대기. 합친 PR #2344 → dev `4032f37f3c` | 10.019     |
 | 261103  | 2026-11-03 | `79f1fadfc6..cefb544af3`                       | 485  | 수동   | 162 take, 237 adapt, 69 skip, 17 결정. 합친 PR #2533 → dev `350d99869a`                | 10.020     |
-| 261106  | 2026-11-06 | `cefb544af3..42a0e917cf`                       | 344  | 수동   | 47 take, 197 adapt, 45 skip, 55 미룸(6 결정 포함). 합친 PR (이 카드의 PR 절)           | 10.021     |
+| 261106  | 2026-11-06 | `cefb544af3..42a0e917cf`                       | 344  | 수동   | 47 take, 197 adapt, 45 skip, 55 미룸(6 결정 포함). 합친 PR #2561 → dev `cef8330992`    | 10.021     |
+| 261107  | 2026-11-07 | `42a0e917cf..83a3674ffd`                       | 153  | 수동   | 38 take, 76 adapt, 23 skip, 15 미룸, 1 결정 대기. 합친 PR #2634                        | 10.022     |
