@@ -40,7 +40,7 @@ export function AgentMessageSentByLabel(props: {
     senderShell === null && remoteSender === undefined
       ? "Sent from another thread"
       : `Sent by ${title} from another thread`;
-  const className = "mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted opacity-60";
+  const className = "mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted";
   const target =
     openableRemote !== null
       ? {

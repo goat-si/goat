@@ -4,6 +4,14 @@ import type { ComponentProps, ReactNode } from "react";
 import { Pressable, View } from "react-native";
 import { THREAD_WORK_ROW_MIN_HEIGHT, type deriveThreadWorkLogSizing } from "../../lib/layout";
 
+const ROW_SIDE_SLOP = 4;
+/**
+ * Rows that open and close work stand next to other tappable rows, where vertical hit slop
+ * steals their taps, so they take a real 44pt height with the content centred.
+ */
+export const EXPANDABLE_ROW_MIN_HEIGHT = 44;
+const EXPANDABLE_ROW_HIT_SLOP = { left: ROW_SIDE_SLOP, right: ROW_SIDE_SLOP } as const;
+
 export function WorkLogBlock({
   children,
   layout = "standalone",
@@ -31,16 +39,28 @@ export function WorkLogIconSlot({ children }: { children: ReactNode }) {
 export function WorkLogPressable({
   children,
   rowSizing,
+  expandable = false,
   ...props
 }: Omit<ComponentProps<typeof Pressable>, "children" | "className" | "style" | "hitSlop"> & {
   children: ReactNode;
   rowSizing?: ReturnType<typeof deriveThreadWorkLogSizing>;
+  /** Rows that open and close a group are 44pt tall; plain rows keep their height and a small slop. */
+  expandable?: boolean;
 }) {
+  const contentHeight = rowSizing?.estimatedRowHeight ?? THREAD_WORK_ROW_MIN_HEIGHT;
   return (
-    <Pressable {...props} hitSlop={4} className="rounded-md px-0.5 py-0 active:bg-subtle">
+    <Pressable
+      {...props}
+      hitSlop={expandable ? EXPANDABLE_ROW_HIT_SLOP : ROW_SIDE_SLOP}
+      className="rounded-md px-0.5 py-0 active:bg-subtle"
+    >
       <View
         className="flex-row items-center gap-1.5"
-        style={{ minHeight: rowSizing?.estimatedRowHeight ?? THREAD_WORK_ROW_MIN_HEIGHT }}
+        style={{
+          minHeight: expandable
+            ? Math.max(EXPANDABLE_ROW_MIN_HEIGHT, contentHeight)
+            : contentHeight,
+        }}
       >
         {children}
       </View>

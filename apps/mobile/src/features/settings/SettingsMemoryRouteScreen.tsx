@@ -170,7 +170,7 @@ function MemoryConfirmation({
 }) {
   return (
     <Modal visible transparent animationType="none" onRequestClose={onClose}>
-      <View className="flex-1 justify-center bg-background p-6" accessibilityViewIsModal>
+      <View className="flex-1 justify-center bg-screen p-6" accessibilityViewIsModal>
         <Copy>{title}</Copy>
         <Copy>{message}</Copy>
         <Action label="Cancel" onPress={onClose} />

@@ -1,8 +1,16 @@
+import { useAtomValue } from "@effect/atom-react";
 import { groupBotWork, presentTaskStatus } from "@goat/client-runtime/goatBot";
-import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type { ChannelTaskId, ChannelUpdateTaskViewInput } from "@goat/contracts";
+import { botRoutineRows, type BotRoutineRow } from "@goat/client-runtime/scheduledTasks";
+import {
+  isAtomCommandInterrupted,
+  runAtomCommand,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
+import type { ChannelTaskId, ChannelUpdateTaskViewInput, EnvironmentId } from "@goat/contracts";
 import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
+import { useNowMinuteMs } from "../../lib/clock";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
@@ -81,9 +89,10 @@ export function MobileBotWork(props: {
       });
     }
   }, [props.visible, props.taskId, unreadAt, environmentId, enabled, refreshThreads]);
-  const boundRoutines = (routines.data?.tasks ?? []).filter(
-    (routine) => routine.threadId === home.botRef?.threadId,
-  );
+  const now = useNowMinuteMs();
+  const boundRoutines = home.botRef
+    ? botRoutineRows(routines.data?.tasks ?? [], home.botRef.threadId, now)
+    : [];
   return (
     <>
       {props.taskId ? (
@@ -247,11 +256,9 @@ export function MobileBotWork(props: {
                 </Pressable>
               ) : !routines.data ? (
                 <Text className="text-foreground-muted">Loading routines…</Text>
-              ) : boundRoutines.length ? (
+              ) : boundRoutines.length && environmentId ? (
                 boundRoutines.map((routine) => (
-                  <Text key={routine.id} className="text-foreground">
-                    {routine.title}
-                  </Text>
+                  <MobileRoutineRow key={routine.id} environmentId={environmentId} row={routine} />
                 ))
               ) : (
                 <Text className="text-foreground-muted">
@@ -271,5 +278,66 @@ export function MobileBotWork(props: {
         </View>
       </Modal>
     </>
+  );
+}
+
+function MobileRoutineRow(props: {
+  readonly environmentId: EnvironmentId;
+  readonly row: BotRoutineRow;
+}) {
+  const { environmentId, row } = props;
+  const canOperate = useAtomValue(
+    serverEnvironment.setScheduledTaskEnabled.permissionAtom(environmentId),
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const toggle = async (enabled: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      serverEnvironment.setScheduledTaskEnabled,
+      { environmentId, input: { id: row.id, enabled } },
+      { label: "GOAT Bot routine enabled", reportFailure: false },
+    );
+    setBusy(false);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const failure = squashAtomCommandFailure(result);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  };
+  return (
+    <View className="gap-1 border-b border-border py-2">
+      <View className="flex-row items-center gap-3">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
+          onPress={() => setExpanded((value) => !value)}
+          className="min-h-[44px] flex-1 justify-center"
+        >
+          <Text className="font-semibold text-foreground">{row.title}</Text>
+          <Text className="text-foreground-muted">
+            {row.scheduleText} · {row.nextText}
+          </Text>
+          <Text className={row.lastFailed ? "text-danger-foreground" : "text-foreground-muted"}>
+            {row.lastText}
+          </Text>
+        </Pressable>
+        <ThemedSwitch
+          accessibilityLabel={`${row.enabled ? "Pause" : "Resume"} ${row.title}`}
+          disabled={busy || !canOperate}
+          value={row.enabled}
+          onValueChange={(enabled) => void toggle(enabled)}
+        />
+      </View>
+      {expanded ? <Text className="text-foreground-muted">{row.prompt}</Text> : null}
+      {error !== null ? (
+        <Text accessibilityRole="alert" className="text-danger-foreground">
+          Couldn't {row.enabled ? "pause" : "resume"} this routine: {error}
+        </Text>
+      ) : null}
+    </View>
   );
 }

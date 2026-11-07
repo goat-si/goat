@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
+import { GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { useBotRoster } from "./useBotRoster";
 
@@ -25,11 +26,8 @@ export function GoatBotWorkPanel({
   );
   const work = groupBotWork(rows, [], environmentId);
   const tasks = [...work.inProgress, ...work.done];
-  const boundRoutines = (routines.data?.tasks ?? []).filter(
-    (routine) => routine.threadId === threadId,
-  );
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4 text-sm">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 text-sm">
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         <div className="pr-10">
           <TabsList aria-label="GOAT Bot work">
@@ -62,15 +60,12 @@ export function GoatBotWorkPanel({
           )}
         </TabsPanel>
         <TabsPanel value="Routines" className="mt-4 min-h-0 overflow-y-auto">
-          {boundRoutines.length ? (
-            boundRoutines.map((routine) => (
-              <p key={routine.id} className="py-1">
-                {routine.title}
-              </p>
-            ))
-          ) : (
-            <p>Ask GOAT Bot in chat to set up a routine.</p>
-          )}
+          <GoatBotRoutines
+            environmentId={environmentId}
+            threadId={threadId}
+            tasks={routines.data?.tasks ?? []}
+            error={routines.error}
+          />
         </TabsPanel>
         <TabsPanel value="Library" className="mt-4">
           <p>Files GOAT Bot saves will appear here.</p>

@@ -2,6 +2,7 @@ import { Button } from "../../components/ui/Button";
 import type {
   ProviderApprovalDecision,
   ProviderApprovalOption,
+  ProviderRequestKind,
   RuntimeRequestId,
 } from "@goat/contracts";
 import {
@@ -9,15 +10,27 @@ import {
   fullAccessOverrideExplanation,
 } from "@goat/client-runtime/state/thread-requests";
 import { useState } from "react";
-import { Pressable, View } from "react-native";
+import {
+  type LayoutChangeEvent,
+  Pressable,
+  ScrollView,
+  type StyleProp,
+  View,
+  type ViewStyle,
+} from "react-native";
+import Animated, { type AnimatedStyle } from "react-native-reanimated";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import type { PendingApproval } from "../../lib/threadActivity";
+import { approvalActionsFitPinned } from "./approvalCardLayout";
 
 export interface PendingApprovalCardProps {
   readonly canOperateThread: boolean;
   readonly approval: PendingApproval;
   readonly respondingApprovalId: RuntimeRequestId | null;
+  /** Caps the card; the request text scrolls while the actions stay in view. */
+  readonly maxHeightStyle?: StyleProp<AnimatedStyle<StyleProp<ViewStyle>>>;
   readonly onRespond: (
     requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
@@ -30,6 +43,16 @@ const DEFAULT_APPROVAL_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
   { decision: "decline", label: "Decline" },
 ];
 
+const APPROVAL_TITLE: Record<ProviderRequestKind, string> = {
+  command: "Run a command",
+  "file-read": "Read a file",
+  "file-change": "Change files",
+  "mcp-elicitation": "App access",
+  permission: "App permission",
+};
+
+type MeasuredPart = "header" | "actions" | "card";
+
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const options: ReadonlyArray<ProviderApprovalOption> =
     props.approval.options ?? DEFAULT_APPROVAL_OPTIONS;
@@ -37,16 +60,42 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const canRespond = props.approval.responseCapability === "live";
   const disabled = !canRespond || props.respondingApprovalId === props.approval.requestId;
   const [explanationOpen, setExplanationOpen] = useState(false);
-  return (
-    <View className="gap-2.5 rounded-[20px] border border-border bg-card-alt p-4">
-      <Text className="font-goat-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
-        Approval needed
-      </Text>
+  const [measured, setMeasured] = useState({ header: 0, actions: 0, card: 0 });
+  const measure = (part: MeasuredPart) => (event: LayoutChangeEvent) => {
+    const height = event.nativeEvent.layout.height;
+    setMeasured((current) => (current[part] === height ? current : { ...current, [part]: height }));
+  };
+  const pinned = approvalActionsFitPinned({
+    headerHeight: measured.header,
+    actionsHeight: measured.actions,
+    cardHeight: measured.card,
+  });
+
+  const header = (
+    <View className="gap-3" onLayout={measure("header")}>
+      <View className="flex-row items-center gap-1.5">
+        <SymbolView
+          name="exclamationmark.shield"
+          size={13}
+          tintColorClassName="accent-warning-foreground"
+          type="monochrome"
+        />
+        <Text
+          accessibilityRole="header"
+          className="font-goat-medium text-xs text-warning-foreground"
+        >
+          Approval needed
+        </Text>
+      </View>
       <Text className="font-goat-bold text-lg text-foreground">
-        {props.approval.appName ?? props.approval.requestKind}
+        {props.approval.appName ?? APPROVAL_TITLE[props.approval.requestKind]}
       </Text>
+    </View>
+  );
+  const request = (
+    <>
       {props.approval.detail ? (
-        <Text className="font-sans text-sm leading-normal text-foreground-secondary">
+        <Text selectable className="font-sans text-sm leading-normal text-foreground-secondary">
           {props.approval.detail}
         </Text>
       ) : null}
@@ -80,7 +129,11 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
       {warning ? (
         <Text className="font-sans text-xs leading-normal text-warning-foreground">{warning}</Text>
       ) : null}
-      <View className="flex-row flex-wrap gap-2.5">
+    </>
+  );
+  const actions = (
+    <View className="gap-3" onLayout={measure("actions")}>
+      <View className="flex-row flex-wrap gap-2">
         {options.map((option) => (
           <Button
             key={option.decision}
@@ -103,5 +156,36 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
         </Text>
       ) : null}
     </View>
+  );
+  const scrollProps = {
+    bounces: false,
+    className: "min-h-0",
+    contentContainerClassName: "gap-3",
+    keyboardShouldPersistTaps: "handled",
+    nestedScrollEnabled: true,
+    style: { flexShrink: 1 },
+  } as const;
+
+  return (
+    <Animated.View
+      className="gap-3 overflow-hidden rounded-[20px] border border-border bg-card-alt p-4"
+      style={props.maxHeightStyle}
+      onLayout={measure("card")}
+    >
+      {pinned ? (
+        <>
+          {header}
+          <ScrollView {...scrollProps}>{request}</ScrollView>
+          {actions}
+        </>
+      ) : (
+        // Too little room to pin the actions beside the request: scroll everything so they stay reachable.
+        <ScrollView {...scrollProps}>
+          {header}
+          {request}
+          {actions}
+        </ScrollView>
+      )}
+    </Animated.View>
   );
 }

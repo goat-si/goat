@@ -526,6 +526,7 @@ export function ComposerContextReferenceChip(props: {
   label: string;
 }): ReactElement {
   const records = use(ComposerContextRecordsContext);
+  const { environmentId } = use(ComposerContextActionsContext);
   // A capability chip is whole in its id; there is no draft record to look up.
   const capability =
     props.kind === "capability" ? turnCapabilityForContextId(props.contextId) : undefined;
@@ -535,6 +536,8 @@ export function ComposerContextReferenceChip(props: {
         capability={capability}
         label={props.label}
         app={appIdForContextId(props.contextId) !== undefined}
+        contextId={props.contextId}
+        environmentId={environmentId}
       />
     );
   return composerContextPresentationRegistry.render(props.kind, records.get(props.contextId), {

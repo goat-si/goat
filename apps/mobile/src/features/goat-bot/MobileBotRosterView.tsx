@@ -6,6 +6,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
+import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useMobileGoatBotFace } from "./useMobileGoatBotFace";
 
@@ -48,7 +49,13 @@ export function MobileHomeSegments(props: {
               : "min-h-[44px] flex-1 items-center justify-center rounded-md px-3 py-2"
           }
         >
-          <Text className="text-sm font-semibold text-foreground">{label}</Text>
+          <Text
+            numberOfLines={1}
+            maxFontSizeMultiplier={MOBILE_CHROME_MAX_FONT_SCALE}
+            className="text-sm font-semibold text-foreground"
+          >
+            {label}
+          </Text>
         </Pressable>
       ))}
     </View>

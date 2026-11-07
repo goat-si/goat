@@ -26,8 +26,17 @@ const TONE_CLASS_NAMES = {
   text: ["bg-transparent", "text-primary-text"],
 } as const;
 
+const TONE_LABEL_WEIGHT = {
+  contrast: "font-goat-semibold",
+  primary: "font-goat-semibold",
+  secondary: "font-goat-medium",
+  danger: "font-goat-semibold",
+  text: "font-goat-medium",
+} as const;
+
 export function Button(props: ButtonProps) {
-  const [containerClassName, labelClassName] = TONE_CLASS_NAMES[props.tone ?? "secondary"];
+  const tone = props.tone ?? "secondary";
+  const [containerClassName, labelClassName] = TONE_CLASS_NAMES[tone];
   const disabled = Boolean(props.disabled || props.loading);
   return (
     <Pressable
@@ -56,7 +65,8 @@ export function Button(props: ButtonProps) {
       ) : null}
       <AppText
         className={cn(
-          "min-w-0 shrink text-center font-goat-medium",
+          "min-w-0 shrink text-center",
+          TONE_LABEL_WEIGHT[tone],
           disabled ? "text-foreground-muted" : labelClassName,
         )}
       >

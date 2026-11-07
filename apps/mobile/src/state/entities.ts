@@ -8,6 +8,7 @@ import type {
   EnvironmentThreadShell,
 } from "@goat/client-runtime/state/shell";
 import {
+  ComposerContextId,
   EnvironmentId,
   ThreadId,
   type ComposerContextRecord,
@@ -17,6 +18,7 @@ import {
 } from "@goat/contracts";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { hasThreadLinks, relabelThreadLinks, resolveThreadLinkRef } from "@goat/shared/threadLinks";
+import { formatComposerContextHref } from "@goat/shared/composerContextReferences";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -25,6 +27,7 @@ import { useMemo } from "react";
 import { threadChipTargets } from "../lib/enrichedLinkPresentation";
 import { resolveProjectChipIcon } from "../lib/projectIcon";
 import { projectGlyphImageAtom, projectGlyphKey } from "../native/ProjectChipIconImages";
+import { useAppChipIcons } from "./appChipIcons";
 import { projectFaviconUrlAtom } from "./assets";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom, serverEnvironment } from "./server";
@@ -198,17 +201,26 @@ export function useLiveThreadLinkLabels(markdown: string, environmentId: Environ
   );
 }
 
-export function useThreadChipIcons(
+/** The icon each chip in a message shows by its link: a thread's project, or an app's own. */
+export function useContextChipIcons(
   environmentId: EnvironmentId,
   markdown: string,
   records?: ReadonlyArray<ComposerContextRecord>,
 ): ReadonlyMap<string, string> {
   const targets = threadChipTargets(environmentId, markdown, records);
-  return useAtomValue(
+  const threadIcons = useAtomValue(
     targets.length === 0
       ? EMPTY_THREAD_CHIP_ICONS_ATOM
       : threadChipIconsAtom(JSON.stringify(targets)),
   );
+  const appIcons = useAppChipIcons(environmentId, markdown);
+  return useMemo(() => {
+    if (appIcons.size === 0) return threadIcons;
+    const icons = new Map(threadIcons);
+    for (const [contextId, file] of appIcons)
+      icons.set(formatComposerContextHref("capability", ComposerContextId.make(contextId)), file);
+    return icons;
+  }, [threadIcons, appIcons]);
 }
 
 export function useEnvironmentServerConfig(
