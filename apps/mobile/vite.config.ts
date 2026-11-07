@@ -38,6 +38,7 @@ const reactTests = [
   "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
   "src/features/decisions/DecisionDurableCard.test.tsx",
   "src/features/decisions/useDecisionInbox.test.tsx",
+  "src/features/goat-bot/MobileBotProfileSheet.test.tsx",
   "src/features/goat-bot/MobileBotRosterView.test.tsx",
   "src/features/goat-bot/MobileBotWork.test.tsx",
   "src/features/goat-bot/MobileBotRoster.test.tsx",
