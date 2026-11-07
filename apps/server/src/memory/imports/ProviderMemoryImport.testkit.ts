@@ -55,7 +55,7 @@ const processing: M.MemoryProcessingStatus = {
     projectionWatermark: 0,
   },
 };
-export const storage: M.MemoryStorageStatus = {
+const storage: M.MemoryStorageStatus = {
   quotas: [],
   tables: [],
   measuredAtUtc: null,
