@@ -4,7 +4,8 @@ Mention the GOAT bot in a Slack channel or send it a direct message, and GOAT
 answers in that Slack thread, starts the work in its own coding thread, and
 posts the result back to the same thread. The conversation stays in Slack; the
 GOAT Bot shows the work and its final report. On web and desktop, choose **Bots**
-in the sidebar to find the main bot and its task threads.
+in the sidebar to find the main bot and its task threads. Slack and iMessage reach
+the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
 
 ## Set up
 

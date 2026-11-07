@@ -544,7 +544,6 @@ function NoteContent(props: NoteParams) {
             ref={liveEditor}
             value={body}
             lineBreak={liveBreak}
-            autoFocus={props.create}
             config={{ editable: canEditBody, readOnly: busy || !restored, theme: editorTheme }}
             onChange={(next, checkbox) => {
               setBody(next);

@@ -57,6 +57,7 @@ import {
   slackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
+import { receptionDecisionChannels } from "./testkit/channelReceptionHarness.ts";
 
 const MAIN = BotId.make("main");
 const stranger = { ...owner, ownerId: "environment:stranger" };
@@ -723,6 +724,49 @@ describe("a member's model", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("a member's turn answers as a reply to the request in its own thread only", () => {
+    const harness = makeHarness({
+      botWorkspace: true,
+      channelsLayer: receptionDecisionChannels,
+      settingsLayer: ServerSettings.layerTest({
+        textGenerationModelSelection: modelSelection,
+        defaultRuntimeMode: "full-access",
+        goatBotModelSelection: botModel,
+      }).pipe(Layer.orDie),
+    });
+    harness.script.current = (input) => {
+      const text = input.inputText ?? "";
+      return input.mode === "input" && text.startsWith("look:")
+        ? Effect.succeed({
+            replyText: "Looking now.",
+            action: { type: "run_turn" as const, title: "the build", instruction: text },
+          })
+        : defaultScript(input);
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const member = yield* createMember("turn-reply");
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* send(member.sessionThreadId, "look: the build", "turn-reply");
+      yield* runtime.drain;
+      const [task] = (yield* ledger.listTasks({ ownerId, botId: member.botId, limit: 5 })).tasks;
+      harness.world.setStatus(task!.worker!.threadId, 1, "completed", "The build is green.");
+      yield* (yield* ChannelWorkerReports.ChannelWorkerReports).reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const { messages } = yield* threads.getThreadRecords(member.sessionThreadId, ["messages"]);
+      const replies = (text: string) =>
+        messages.filter(
+          (message) =>
+            message.text === text && message.channel?.inReplyToInputId === task!.originInputId,
+        );
+      assert.lengthOf(replies("Looking now."), 1);
+      assert.lengthOf(replies("The build is green."), 1);
+      assert.notInclude((yield* threadView(botThreadId)).texts, "The build is green.");
+    }).pipe(Effect.provide(harness.layer));
+  });
 });
 
 describe("member limits", () => {

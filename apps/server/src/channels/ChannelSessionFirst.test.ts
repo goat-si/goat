@@ -93,6 +93,8 @@ describe("session first receipts", () => {
         const { messages } = yield* botMessages;
         const answers = messages.filter((message) => message.text === "Four.");
         assert.lengthOf(answers, 1);
+        // Receipt or narrated result, the answer replies to the question it answers.
+        assert.strictEqual(answers[0]?.channel?.inReplyToInputId, input.inputId);
         assert.isFalse(messages.some((message) => message.text === "Done."));
         const page = yield* ledger.outcomeDeliveries([task.taskId]);
         assert.strictEqual(page.get(task.taskId), "delivered");
