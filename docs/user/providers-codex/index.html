@@ -155,7 +155,10 @@ interrupted threads.</p>
 <p>After GOAT reconnects, progress from a surviving turn appears when the turn
 finishes. GOAT tools are unavailable for the rest of that turn. You can stop the
 turn, but Steer is refused while GOAT is waiting for it. Goal threads do not
-survive a restart; once blocked work has stopped, you can continue the thread.</p>
+survive a restart; once blocked work has stopped, you can continue the thread.
+The next turn GOAT starts in that thread reloads the conversation so GOAT tools
+work again, which also stops background terminals from before the restart, such
+as a dev server.</p>
 <h2 id="give-each-thread-its-own-codex-app-server">Give each thread its own Codex app-server</h2>
 <p>On macOS and Linux, <strong>Settings → General → Codex app-servers</strong> controls how many
 Codex processes an environment runs. <strong>Shared</strong>, the default, runs one app-server
