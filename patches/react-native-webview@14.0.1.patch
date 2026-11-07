@@ -55,7 +55,7 @@ index 80c68034b193a47bedb56ca527352de9548e8ac6..374f824283903c55627ad850dcf20ba1
      protected void onSizeChanged(int w, int h, int ow, int oh) {
          super.onSizeChanged(w, h, ow, oh);
 diff --git a/apple/RNCWebViewImpl.m b/apple/RNCWebViewImpl.m
-index 38904266dc37b006274104f4680778ffbfece369..7a383dbd21c869c7bc4b3e6e3a9c5cad5564eb9b 100644
+index 38904266dc37b006274104f4680778ffbfece369..4001990b2b4ae54b3a414b9f5ed61b92997acab5 100644
 --- a/apple/RNCWebViewImpl.m
 +++ b/apple/RNCWebViewImpl.m
 @@ -923,8 +923,14 @@ -(void)setKeyboardDisplayRequiresUserAction:(BOOL)keyboardDisplayRequiresUserAct
@@ -73,7 +73,7 @@ index 38904266dc37b006274104f4680778ffbfece369..7a383dbd21c869c7bc4b3e6e3a9c5cad
      if([[view.class description] hasPrefix:@"WK"])
        subview = view;
    }
-@@ -944,9 +950,14 @@ -(void)setKeyboardDisplayRequiresUserAction:(BOOL)keyboardDisplayRequiresUserAct
+@@ -944,9 +950,19 @@ -(void)setKeyboardDisplayRequiresUserAction:(BOOL)keyboardDisplayRequiresUserAct
      // iOS 13.0.0 - Future
      SEL selector = sel_getUid("_elementDidFocus:userIsInteracting:blurPreviousNode:activityStateChanges:userObject:");
      method = class_getInstanceMethod(class, selector);
@@ -81,6 +81,11 @@ index 38904266dc37b006274104f4680778ffbfece369..7a383dbd21c869c7bc4b3e6e3a9c5cad
 +    NSLog(@"[RNCWebView] keyboard focus hook %@ on %@", method ? @"installed" : @"missing", class);
 +#endif
 +    if (method == NULL) return;
++    // The hook is class-wide; wrap each WebKit class once, not once per WebView.
++    static NSMutableSet<Class> *hookedFocusClasses;
++    hookedFocusClasses = hookedFocusClasses ?: [NSMutableSet set];
++    if ([hookedFocusClasses containsObject:class]) return;
++    [hookedFocusClasses addObject:class];
      IMP original = method_getImplementation(method);
 -    override = imp_implementationWithBlock(^void(id me, void* arg0, __unused BOOL arg1, BOOL arg2, BOOL arg3, id arg4) {
 -      ((void (*)(id, SEL, void*, BOOL, BOOL, BOOL, id))original)(me, selector, arg0, TRUE, arg2, arg3, arg4);
