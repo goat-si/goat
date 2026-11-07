@@ -85,6 +85,8 @@ type Survivors = Readonly<
 export interface HeldReplay {
   readonly statuses: ReadonlyArray<string>;
   readonly survivors?: Survivors;
+  /** Threads Codex lists only from its second listing on, as if started during the first check. */
+  readonly lateSurvivors?: Survivors;
   /** How Codex refuses thread/loaded/list, if it does. */
   readonly listError?: CodexErrors.CodexAppServerRequestError;
   readonly threadId?: ThreadId;
@@ -105,17 +107,20 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
 ) {
   const heldAs = held?.statuses;
   const statuses = [...(heldAs ?? [])];
-  const survivors = held?.survivors ?? {};
+  let listings = 0;
+  const listed = () => ({ ...held?.survivors, ...(listings > 1 ? held?.lateSurvivors : {}) });
   const answerHeld = (method: string, params: unknown) => {
-    if (method === "thread/loaded/list")
+    if (method === "thread/loaded/list") {
+      listings++;
       return held?.listError === undefined
         ? Effect.succeed({
-            data: [transcript.scenario, ...Object.keys(survivors)],
+            data: [transcript.scenario, ...Object.keys(listed())],
             nextCursor: null,
           })
         : Effect.fail(held.listError);
+    }
     const threadId = (params as { threadId: string }).threadId;
-    const survivor = survivors[threadId];
+    const survivor = listed()[threadId];
     if (survivor?.malformed) return Effect.succeed({ thread: { id: threadId } });
     return Effect.succeed({
       thread: {

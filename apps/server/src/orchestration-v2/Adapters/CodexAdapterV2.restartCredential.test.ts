@@ -190,6 +190,36 @@ describe("A held conversation after a server restart", () => {
       ).pipe(Effect.provide(layerAdapterTest)),
   );
 
+  it.effect("a subagent started during the check defers the reload even within one second", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = fixture("restart-late-child");
+        const grandchild = child(f) + "-agent";
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.resume(2, {});
+        // Codex keeps update times in whole seconds: only the second listing shows the new thread.
+        f.goalGet(3, f.nativeThreadId, { result: { goal: null } });
+        f.goalGet(4, child(f), { result: { goal: null } });
+        yield* f.turnStart(5, 1, false);
+        f.turnCompleted(1);
+        const conversation = [f.nativeThreadId, child(f), grandchild];
+        yield* f.turnStart(f.reload(6, undefined, { threads: conversation }), 2, noted);
+        f.turnCompleted(2);
+        const replay = yield* f.openHeld({
+          statuses: ["idle"],
+          survivors: { [child(f)]: { parent: f.nativeThreadId, statuses: ["idle"] } },
+          lateSurvivors: { [grandchild]: { parent: child(f), statuses: ["idle"] } },
+        });
+        for (const ordinal of [1, 2]) {
+          yield* replay.startTurn(ordinal);
+          yield* replay.terminal;
+        }
+        assert.deepEqual(goatHeaders(replay.threadConfigs), [f.config.authorizationHeader]);
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
   it.effect.each([
     {
       failure: "the loaded-thread listing fails",
