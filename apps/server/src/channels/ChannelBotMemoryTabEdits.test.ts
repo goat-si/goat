@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   goatBotChangeNoteMessage,
   goatBotForgetNoteMessage,
+  type ChannelTaskId,
   type ChannelReceptionInput,
   type ChannelReceptionResult,
 } from "@goat/contracts";
@@ -11,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -18,7 +20,9 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { NOTES_HEADER, parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
-import { inputIdFor } from "./channelIds.ts";
+import { inputIdFor, taskIdFor } from "./channelIds.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
+import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
 import {
   botMessages,
   defaultScript,
@@ -35,8 +39,11 @@ import {
 const fridays = "I deploy on Fridays.";
 
 /** A harness whose model answers `decide` and records every input it was asked about. */
-const harnessFor = (decide: (text: string) => Partial<ChannelReceptionResult> = () => ({})) => {
-  const harness = makeHarness();
+const harnessFor = (
+  decide: (text: string) => Partial<ChannelReceptionResult> = () => ({}),
+  options: Parameters<typeof makeHarness>[0] = {},
+) => {
+  const harness = makeHarness(options);
   const asked: Array<string> = [];
   harness.script.current = (input: ChannelReceptionInput) => {
     if (input.mode !== "input") return defaultScript(input);
@@ -48,7 +55,11 @@ const harnessFor = (decide: (text: string) => Partial<ChannelReceptionResult> = 
     };
     return Effect.succeed(result);
   };
-  return { asked, layer: harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)) };
+  return {
+    asked,
+    harness,
+    layer: harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+  };
 };
 
 const notesFiles = Effect.gen(function* () {
@@ -240,6 +251,220 @@ describe("Memory tab requests to change or forget a note", () => {
       yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
       assert.strictEqual(yield* readNotes, text);
       assert.include(yield* replies, CHANNEL_COPY.noteEditBusy);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+// The default routing hands most messages to the bot's session; the tab's sentences stay here.
+describe("Memory tab requests with the default session routing", () => {
+  const sessionHarness = (decide?: (text: string) => Partial<ChannelReceptionResult>) =>
+    harnessFor(decide, { botWorkspace: true });
+
+  const routing = (value: "session" | "reception") =>
+    Effect.flatMap(ServerSettings.ServerSettingsService, (settings) =>
+      settings.updateSettings({ goatBotSessionRouting: value }),
+    );
+
+  /** A request the session takes as its own task; its first answer frees the conversation. */
+  const runningTask = (harness: ReturnType<typeof makeSessionHarness>) =>
+    Effect.gen(function* () {
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        goatInput("Inspect disks", "work"),
+        rpcContext,
+      );
+      yield* runtime.drain;
+      const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!;
+      harness.assistant(task.task, "Working.");
+      yield* runtime.drain;
+      return (yield* ledger.getTask(task.task.taskId))!;
+    });
+
+  const threadHarness = () => {
+    const harness = makeSessionHarness();
+    return {
+      harness,
+      layer: harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+    };
+  };
+
+  const inThread = (text: string, key: string, taskId: ChannelTaskId) =>
+    Effect.gen(function* () {
+      const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        { ...goatInput(text, key), taskId },
+        rpcContext,
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      return input.inputId;
+    });
+
+  const repliesTo = (inputId: string) =>
+    Effect.map(botMessages, (page) =>
+      page.messages.filter((message) => message.channel?.inReplyToInputId === inputId),
+    );
+
+  it.effect("Ask to forget is answered here, without a session turn", () => {
+    const { asked, harness, layer } = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* writeNotes(NOTES_HEADER + line(fridays, "earlier") + "\n");
+      const message = goatBotForgetNoteMessage(fridays);
+      yield* send(message, "tab-forget");
+      assert.strictEqual(yield* readNotes, NOTES_HEADER);
+      assert.include(yield* replies, CHANNEL_COPY.noteForgotten);
+      assert.notInclude(asked, message);
+      assert.lengthOf(harness.world.launches, 0);
+      assert.strictEqual(yield* taskCount, 0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("Ask to change appends with a replaces marker, without a session turn", () => {
+    const { asked, harness, layer } = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* writeNotes(NOTES_HEADER + line(fridays, "earlier") + "\n");
+      const message = goatBotChangeNoteMessage(fridays, "I deploy on Mondays.");
+      yield* send(message, "tab-change");
+      const notes = parseChannelBotNoteLines(yield* readNotes);
+      assert.strictEqual(notes.at(-1)?.text, "I deploy on Mondays.");
+      assert.isDefined(notes.find((note) => note.text === fridays)?.replacedBy);
+      assert.include(yield* replies, CHANNEL_COPY.noteChanged);
+      assert.notInclude(asked, message);
+      assert.lengthOf(harness.world.launches, 0);
+      assert.strictEqual(yield* taskCount, 0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a change replayed after a restart answers the same and saves one line", () => {
+    const { harness, layer } = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const fs = yield* FileSystem.FileSystem;
+      const files = yield* writeNotes(NOTES_HEADER + line(fridays, "earlier") + "\n");
+      const message = goatBotChangeNoteMessage(fridays, "I deploy on Mondays.");
+      // The first pass saved the line, then the server stopped before the result committed.
+      const inputId = inputIdFor({ ...goatInput(message, "tab-change"), ownerId });
+      yield* appendChannelBotNote(
+        fs,
+        files,
+        "I deploy on Mondays.",
+        "2026-11-02T10:00:00Z",
+        inputId,
+        fridays,
+      );
+      const before = yield* readNotes;
+      yield* send(message, "tab-change");
+      assert.strictEqual(yield* readNotes, before);
+      assert.include(yield* replies, CHANNEL_COPY.noteChanged);
+      assert.lengthOf(harness.world.launches, 0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a Slack person whose link was removed is refused, without a session turn", () => {
+    const { harness, layer } = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const text = NOTES_HEADER + line(fridays, "earlier") + "\n";
+      yield* writeNotes(text);
+      yield* (yield* ChannelLedger.ChannelLedger).unlinkIdentity({
+        connectionId: "slack-1",
+        externalActorId: "U1",
+      });
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        slackInput(goatBotForgetNoteMessage(fridays), "slack-forget"),
+        slackContext,
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      assert.strictEqual(yield* readNotes, text);
+      assert.lengthOf(harness.world.launches, 0);
+      assert.strictEqual(yield* taskCount, 0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("Ask to forget in a finished task's thread is answered here", () => {
+    const { harness, layer } = threadHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* writeNotes(NOTES_HEADER + line(fridays, "earlier") + "\n");
+      const work = yield* runningTask(harness);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* commitTransition(
+        ledger,
+        work,
+        { type: "task.completed", payload: { generation: work.task.generation, summary: "Done" } },
+        { owner: (yield* ChannelRuntime.ChannelRuntime).ownerToken },
+      );
+      const launches = harness.world.launches.length;
+      const inputId = yield* inThread(
+        goatBotForgetNoteMessage(fridays),
+        "thread-forget",
+        work.task.taskId,
+      );
+      assert.strictEqual(yield* readNotes, NOTES_HEADER);
+      assert.deepStrictEqual(
+        (yield* repliesTo(inputId)).map((message) => message.text),
+        [CHANNEL_COPY.noteForgotten],
+      );
+      assert.lengthOf(harness.world.launches, launches);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each(["session", "reception"] as const)(
+    "Ask to forget in a running task's thread goes to that task, as before (%s)",
+    (setting) => {
+      const { harness, layer } = threadHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const text = NOTES_HEADER + line(fridays, "earlier") + "\n";
+        yield* writeNotes(text);
+        const work = yield* runningTask(harness);
+        yield* routing(setting);
+        const launches = harness.world.launches.length;
+        const tasks = yield* taskCount;
+        const inputId = yield* inThread(
+          goatBotForgetNoteMessage(fridays),
+          "thread-forget",
+          work.task.taskId,
+        );
+        assert.strictEqual(yield* readNotes, text);
+        assert.deepStrictEqual(
+          (yield* repliesTo(inputId)).map((message) => message.text),
+          ["I'll send that to the task."],
+        );
+        assert.strictEqual(yield* taskCount, tasks);
+        assert.lengthOf(harness.world.launches, launches);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("a forget waits while a tidy task reception started is still open", () => {
+    const { harness, layer } = sessionHarness((text) =>
+      text.startsWith("Please tidy")
+        ? {
+            replyText: "Tidying your notes now.",
+            action: {
+              type: "run_turn",
+              title: "Tidy notes",
+              instruction: "Tidy the notes file.",
+              notesChangeRequested: "Please tidy my notes",
+            },
+          }
+        : {},
+    );
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const text = NOTES_HEADER + line(fridays, "earlier") + "\n";
+      yield* writeNotes(text);
+      yield* routing("reception");
+      yield* send("Please tidy my notes", "tidy");
+      yield* routing("session");
+      const launches = harness.world.launches.length;
+      yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
+      assert.strictEqual(yield* readNotes, text);
+      assert.include(yield* replies, CHANNEL_COPY.noteEditBusy);
+      assert.lengthOf(harness.world.launches, launches);
     }).pipe(Effect.provide(layer));
   });
 });
