@@ -221,7 +221,9 @@ export function goatBotTurnsOutsideList(
   turns: ReadonlyArray<string>,
   rows: ReadonlyArray<BotThreadRow>,
 ): ReadonlyArray<string> {
-  const listed = new Set(rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])));
+  const listed = new Set<string>(
+    rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+  );
   return turns.filter((taskId) => !listed.has(taskId));
 }
 
