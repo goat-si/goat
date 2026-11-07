@@ -480,6 +480,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       .pipe(Effect.forkScoped);
 
     const exit = yield* handle.exitCode.pipe(
+      Effect.withSpan("desktop.backendProcess.awaitExit"),
       Effect.map((exitCode) => ({
         code: Option.some(exitCode),
         reason: `code=${exitCode}`,
@@ -518,6 +519,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     }).pipe(
       Effect.timeout(options.outputDrainTimeout ?? DEFAULT_BACKEND_OUTPUT_DRAIN_TIMEOUT),
       Effect.ignore,
+      Effect.withSpan("desktop.backendProcess.drainOutput"),
     );
     yield* Effect.forEach(outputFibers, Fiber.interrupt, {
       concurrency: "unbounded",
