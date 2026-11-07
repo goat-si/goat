@@ -378,6 +378,18 @@ export const fixture = (scenario: string) => {
       },
       error === undefined ? answer(id, thread) : { type: "emit_inbound", frame: { id, error } },
     );
+  // Before resuming a thread it has no record of, the adapter asks whether Codex holds it already.
+  const read = (id: number, status: string, thread = nativeThreadId) =>
+    entries.push(
+      {
+        type: "expect_outbound",
+        frame: { id, method: "thread/read", params: { threadId: thread, includeTurns: false } },
+      },
+      {
+        type: "emit_inbound",
+        frame: { id, result: { thread: { id: thread, status: { type: status } } } },
+      },
+    );
   const reload = (
     first: number,
     cua?: Record<string, unknown>,
@@ -541,6 +553,7 @@ export const fixture = (scenario: string) => {
     goalGet,
     answer,
     resume,
+    read,
     reload,
     turnStart,
     turnSteer,

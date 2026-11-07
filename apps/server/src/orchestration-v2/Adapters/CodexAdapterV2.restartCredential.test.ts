@@ -23,13 +23,12 @@ describe("Codex credential after a server restart", () => {
           yield* replay.startTurn(1);
           yield* replay.terminal;
           assert.include(replay.requests, "thread/unsubscribe");
-          assert.deepEqual(
-            replay.threadConfigs.map((config) => config["mcp_servers.goat"]),
-            [
-              f.threadParams().config["mcp_servers.goat"],
-              f.threadParams().config["mcp_servers.goat"],
-            ],
+          const headers = replay.threadConfigs.map(
+            (config) =>
+              (config["mcp_servers.goat"] as { http_headers: { Authorization: string } })
+                .http_headers.Authorization,
           );
+          assert.deepEqual(headers, [f.config.authorizationHeader, f.config.authorizationHeader]);
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
