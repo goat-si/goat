@@ -4,6 +4,9 @@
  * a save never interleave. A forget rewrites memory.md through a temp file and a rename; workers
  * that edit the file by hand do not take this lock (see the residuals in the forget below).
  */
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- staging names only need to be unique.
+import * as NodeCrypto from "node:crypto";
+
 import {
   goatBotChangeNoteMessage,
   goatBotForgetNoteMessage,
@@ -75,6 +78,9 @@ export interface NoteWriterHooks {
 }
 
 const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+// A forget rewrites the file, so it keeps a byte order mark and refuses bytes that are not UTF-8.
+const strictDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const BOM = "\uFEFF";
 
 const sameBytes = (left: Uint8Array, right: Uint8Array) =>
   left.length === right.length && left.every((byte, index) => byte === right[index]);
@@ -189,7 +195,13 @@ export const makeChannelBotNoteWriter = (
       message: string,
       original: Uint8Array,
     ) {
-      const text = decode(original);
+      const decoded = yield* Effect.try({
+        try: () => strictDecoder.decode(original),
+        catch: () => "not UTF-8",
+      }).pipe(Effect.option);
+      if (decoded._tag === "None") return CHANNEL_COPY.noteEditFailed;
+      const bom = decoded.value.startsWith(BOM) ? BOM : "";
+      const text = decoded.value.slice(bom.length);
       const lines = parseChannelBotNoteLines(text);
       const target = lines.find(
         (line) => line.replacedBy === undefined && goatBotForgetNoteMessage(line.text) === message,
@@ -198,17 +210,19 @@ export const makeChannelBotNoteWriter = (
       const next = withoutNote(text, lines, target.text);
       if (next === undefined) return CHANNEL_COPY.noteEditFailed;
       const mode = (yield* fs.stat(files.notes)).mode;
-      // Edits run one at a time under the gate, so one staging name beside the file is enough.
-      const staged = files.notes + ".edit";
+      // Created exclusively under a fresh name, so no existing file or link is ever written.
+      const staged = files.notes + ".edit-" + NodeCrypto.randomUUID();
+      let created = false;
       const replaced = yield* Effect.gen(function* () {
-        yield* fs.writeFileString(staged, next.text);
+        yield* fs.writeFileString(staged, bom + next.text, { flag: "wx" });
+        created = true;
         yield* fs.chmod(staged, mode & 0o777);
         yield* hooks.beforeCompare ?? Effect.void;
         const current = yield* readNotes;
         if (current === null || !sameBytes(current.bytes, original)) return false;
         yield* fs.rename(staged, files.notes);
         return true;
-      }).pipe(Effect.onExit(() => fs.remove(staged).pipe(Effect.ignore)));
+      }).pipe(Effect.onExit(() => (created ? fs.remove(staged).pipe(Effect.ignore) : Effect.void)));
       if (!replaced) return undefined;
       yield* hooks.afterRename ?? Effect.void;
       const check = yield* readNotes.pipe(Effect.option);

@@ -232,6 +232,38 @@ describe("Memory tab note edits", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("a forget keeps a byte order mark and never touches a file at another name", () =>
+    Effect.gen(function* () {
+      const keep = line("Keep me.", "b") + "\n";
+      const { edit, read, fs, files } = yield* setup(
+        "\uFEFF" + NOTES_HEADER + line(fridays, "a") + "\n" + keep,
+      );
+      yield* fs.writeFileString(files.notes + ".edit", "someone else's file");
+      assert.strictEqual(
+        yield* edit(goatBotForgetNoteMessage(fridays)),
+        CHANNEL_COPY.noteForgotten,
+      );
+      assert.strictEqual(yield* fs.readFileString(files.notes + ".edit"), "someone else's file");
+      const bytes = yield* fs.readFile(files.notes);
+      assert.deepStrictEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+      assert.strictEqual((yield* read).replace(/^\uFEFF/u, ""), NOTES_HEADER + keep);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("a forget leaves a file that is not UTF-8 exactly as it was", () =>
+    Effect.gen(function* () {
+      const { edit, fs, files } = yield* setup("");
+      const encoded = new TextEncoder().encode(NOTES_HEADER + line(fridays, "a") + "\n");
+      const original = new Uint8Array([...encoded, 0xff, 0xfe, 0x0a]);
+      yield* fs.writeFile(files.notes, original);
+      assert.strictEqual(
+        yield* edit(goatBotForgetNoteMessage(fridays)),
+        CHANNEL_COPY.noteEditFailed,
+      );
+      assert.deepStrictEqual([...(yield* fs.readFile(files.notes))], [...original]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("a file over 1 MiB is not edited", () =>
     Effect.gen(function* () {
       const filler = line("x".repeat(400), "fill") + "\n";
