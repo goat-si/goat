@@ -68,12 +68,23 @@ const link = (user: string, displayName: string) =>
     );
   });
 
-const narrow = (user: string) =>
-  Effect.flatMap(
-    SqlClient.SqlClient,
-    (sql) =>
-      sql`UPDATE channel_identities SET granted_scopes_json = ${JSON.stringify(WITHOUT_MEMORY)} WHERE connection_id = 'slack-1' AND external_actor_id = ${user}`,
-  );
+type AccessChange = "memory" | "operate" | "mode" | "unlinked";
+
+const change = (user: string, what: AccessChange = "memory") =>
+  Effect.flatMap(SqlClient.SqlClient, (sql) => {
+    switch (what) {
+      case "memory":
+        return sql`UPDATE channel_identities SET granted_scopes_json = ${JSON.stringify(WITHOUT_MEMORY)} WHERE connection_id = 'slack-1' AND external_actor_id = ${user}`;
+      case "operate":
+        return sql`UPDATE channel_identities SET granted_scopes_json = ${JSON.stringify(["orchestration:read", "memory:read"])} WHERE connection_id = 'slack-1' AND external_actor_id = ${user}`;
+      case "mode":
+        return sql`UPDATE channel_identities SET runtime_mode_ceiling = 'approval-required' WHERE connection_id = 'slack-1' AND external_actor_id = ${user}`;
+      case "unlinked":
+        return sql`DELETE FROM channel_identities WHERE connection_id = 'slack-1' AND external_actor_id = ${user}`;
+    }
+  });
+
+const narrow = (user: string) => change(user);
 
 const say = (user: string, text: string, key: string) =>
   Effect.flatMap(ChannelGateway.ChannelGateway, (gateway) =>
@@ -128,11 +139,28 @@ describe("an answer to work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("says it may have reached the host when an earlier send's outcome was lost", () => {
+  it.effect.each(["operate", "mode", "unlinked"] as const)(
+    "is not sent once its sender's access changed (%s)",
+    (what) => {
+      const { machine, harness } = remoteHarness();
+      return Effect.gen(function* () {
+        yield* askedOnMachine(machine);
+        machine.down = true;
+        yield* say("U1", "answer: use main", "answer");
+        yield* settle();
+        yield* change("U1", what);
+        machine.down = false;
+        yield* reasked("Colleague's access changed after they answered");
+        assert.lengthOf(machine.sends, 0);
+        assert.lengthOf(yield* pendingForwards, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("is not sent again when an earlier send failed and its sender then lost access", () => {
     const { machine, harness } = remoteHarness();
     return Effect.gen(function* () {
       yield* askedOnMachine(machine);
-      // The host takes the answer, but the reply is lost, so the forward stays pending.
       machine.refuseSendWith = "host_unavailable";
       yield* say("U1", "answer: use main", "answer");
       yield* until("first send", () => machine.sends.length >= 1);
@@ -194,6 +222,73 @@ describe("an answer to work on another machine", () => {
       const text = task.openQuestions.at(-1)!.text;
       assert.isTrue(text.startsWith("I may not have passed on an answer to mac-studio:"));
       assert.notInclude(text, "N".repeat(81));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "tells the requester it may have arrived when the host took it but the reply was lost",
+    () => {
+      const { machine, harness } = remoteHarness();
+      return Effect.gen(function* () {
+        yield* askedOnMachine(machine);
+        const correlationId = correlationOf(machine);
+        const runsBefore = machine.runs(correlationId).length;
+        const sql = yield* SqlClient.SqlClient;
+        let attempts = 0;
+        // The host takes the first send; the sender loses access just before the retry.
+        machine.beforeHostCall = (call) =>
+          call.tool === "goat_thread_send" && ++attempts === 2
+            ? sql`UPDATE channel_identities SET granted_scopes_json = ${JSON.stringify(WITHOUT_MEMORY)} WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`.pipe(
+                Effect.asVoid,
+                Effect.orDie,
+              )
+            : Effect.void;
+        machine.dropSendReply = true;
+        yield* say("U1", "answer: use main", "answer");
+        const task = yield* reasked("I may not have passed on an answer to mac-studio:");
+        assert.isTrue(task.openQuestions.at(-1)!.text.includes("Answer again if it still matters"));
+        assert.lengthOf(
+          machine.sends.filter((send) => (send.message as string).includes("use main")),
+          1,
+        );
+        assert.lengthOf(machine.runs(correlationId), runsBefore + 1);
+        assert.lengthOf(yield* pendingForwards, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("waits, unsent, while the requester themself may no longer direct the work", () => {
+    const { machine, harness } = remoteHarness();
+    return Effect.gen(function* () {
+      yield* askedOnMachine(machine);
+      machine.down = true;
+      yield* say("U1", "answer: use main", "answer");
+      yield* settle();
+      yield* change("U2", "unlinked");
+      machine.down = false;
+      yield* settle();
+      assert.lengthOf(machine.sends, 0);
+      assert.lengthOf(yield* pendingForwards, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  // Answers recorded before senders were stored keep the requester-only check they had.
+  it.effect("is sent for an answer recorded without its sender", () => {
+    const { machine, harness } = remoteHarness();
+    return Effect.gen(function* () {
+      yield* askedOnMachine(machine);
+      machine.down = true;
+      yield* say("U1", "answer: use main", "answer");
+      yield* settle();
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_task_events SET event_json = json_remove(event_json, '$.payload.sender') WHERE type = 'task.question.answered'`;
+      const stored = yield* sql<{
+        readonly senders: number;
+      }>`SELECT COUNT(*) AS senders FROM channel_task_events WHERE type = 'task.question.answered' AND json_extract(event_json, '$.payload.sender') IS NOT NULL`;
+      assert.strictEqual(stored[0]!.senders, 0);
+      yield* narrow("U1");
+      machine.down = false;
+      yield* until("legacy answer sent", () => sent(machine, "use main"));
     }).pipe(Effect.provide(harness.layer));
   });
 });

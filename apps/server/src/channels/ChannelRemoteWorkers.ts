@@ -801,7 +801,7 @@ const make = Effect.gen(function* () {
     return requester.runtimeModeCeiling;
   });
 
-  const callHost = (
+  const callHost = <E extends Superseded | SenderRefused>(
     input: {
       readonly host: string;
       readonly tool: string;
@@ -812,7 +812,7 @@ const make = Effect.gen(function* () {
       readonly requireReady?: true;
       readonly memoryGrantCeiling?: MemoryTaskGrantCeiling;
     },
-    authorize: Effect.Effect<RuntimeMode, Superseded | SenderRefused>,
+    authorize: Effect.Effect<RuntimeMode, E>,
   ) => ssh.callHostTool(input, authorize);
 
   const listRemoteProjects = (
