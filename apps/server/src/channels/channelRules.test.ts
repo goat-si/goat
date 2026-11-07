@@ -218,6 +218,15 @@ describe("task transitions", () => {
         event("task.retry.requested", { generation: 2 }),
       ).ok,
     );
+    // Answered (received again), only completion settles it; while asking, a stop still works.
+    const stop = event("task.cancelled", {});
+    assert.isFalse(applyChannelTaskEvent(task({ ...waiting, skillProposal }), stop).ok);
+    assert.isTrue(
+      applyChannelTaskEvent(
+        task({ ...waiting, skillProposal, status: "waiting_input", openQuestions: [asked] }),
+        stop,
+      ).ok,
+    );
   });
 
   it("records a worker observation without moving the task, and keeps only pull requests once it ends", () => {

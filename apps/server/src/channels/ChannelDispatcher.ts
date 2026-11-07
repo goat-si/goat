@@ -816,6 +816,8 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const stored = yield* ledger.getTask(taskId);
       if (stored === undefined) return;
+      if (stored.task.skillProposal !== undefined)
+        return yield* skillProposals.advance(stored, owner);
       let dispatchRequester = stored.task.requester;
       if (stored.task.status === "received") {
         const requester = yield* requesterForDispatch(stored.task).pipe(
@@ -840,8 +842,6 @@ const make = Effect.gen(function* () {
         }
         dispatchRequester = requester;
       }
-      if (stored.task.skillProposal !== undefined)
-        return yield* skillProposals.advance(stored, owner);
       // A generation that may already run on another machine never starts anywhere else.
       if (stored.task.status === "received" || stored.task.status === "dispatching") {
         // An automatic placement in flight owns the task until it claims or gives up; its own

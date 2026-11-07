@@ -17,7 +17,7 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { makeChannelSkillProposals } from "./channelSkillProposals.ts";
-import { mayAnswerTask } from "./channelSkillProposalText.ts";
+import { mayAnswerTask, skillFileText } from "./channelSkillProposalText.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   botMessages,
@@ -44,6 +44,18 @@ const harnessCapturing = () => {
   const inputs: Array<ChannelReceptionInput> = [];
   harness.script.current = (input) => {
     inputs.push(input);
+    // The open-work and work reads are the other way a pass can see a question's text.
+    if (input.mode === "input" && input.inputText === "what is open?" && input.readsAllowed)
+      return Effect.succeed({
+        replyText: "Checking.",
+        action: {
+          type: "read",
+          reads: [
+            { kind: "pending", query: "open" },
+            { kind: "work", query: "deploy" },
+          ],
+        },
+      });
     return defaultScript(input);
   };
   return { harness, inputs };
@@ -128,9 +140,11 @@ describe("GOAT Bot skill proposals", () => {
         const shown = (yield* botMessages).messages.map((message) => message.text).join("\n");
         assert.include(shown, BODY);
 
-        // A message while the question is open: the model sees the proposal's first line only.
+        // A message while the question is open: every pass and read sees the first line only.
+        const launches = harness.world.launches.length;
         yield* send("what is open?", "while-open");
-        const seen = JSON.stringify(inputs.at(-1));
+        assert.isDefined(inputs.at(-1)?.readResults);
+        const seen = JSON.stringify(inputs.slice(-2));
         assert.include(seen, "Save this as a skill? deploy-check");
         assert.notInclude(seen, BODY);
 
@@ -146,6 +160,7 @@ describe("GOAT Bot skill proposals", () => {
         assert.strictEqual(done?.resultSummary, "Saved the skill deploy-check.");
         assert.lengthOf(yield* completions(source.taskId), 1);
         // Never a worker: no claim, no launch.
+        assert.strictEqual(harness.world.launches.length, launches);
         const sql = yield* SqlClient.SqlClient;
         const claimed = yield* sql`SELECT 1 FROM channel_task_events
           WHERE task_id = ${done!.taskId} AND type = 'task.dispatch.claimed'`;
@@ -336,6 +351,57 @@ describe("GOAT Bot skill proposals", () => {
           name.endsWith(".tmp"),
         );
         assert.deepStrictEqual(leftovers, []);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "a save whose record rolled back after the link is finished as saved on the next pass",
+    () => {
+      const { harness } = harnessCapturing();
+      return Effect.gen(function* () {
+        yield* finishWith(harness);
+        const asked = (yield* proposalTask)!;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(asked.taskId))!,
+          {
+            type: "task.question.answered",
+            payload: { questionId: asked.openQuestions[0]!.questionId, answer: "Save" },
+          },
+          { owner: runtime.ownerToken },
+        );
+        // What a link followed by a failed commit leaves: the approved file, the task still received.
+        const [answer] = yield* ledger.recentAnswers(asked.taskId, 1);
+        const expected = skillFileText({
+          taskId: asked.taskId,
+          proposal: asked.skillProposal!,
+          approvedAt: answer!.occurredAt,
+        });
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const dir = yield* skillsDir;
+        yield* fs.makeDirectory(dir, { recursive: true });
+        const target = path.join(dir, "deploy-check.md");
+        yield* fs.writeFileString(target, expected);
+        // A stop cannot strand it: an answered proposal only completes.
+        assert.strictEqual((yield* ledger.getTask(asked.taskId))?.task.status, "received");
+        assert.isUndefined(
+          yield* commitTransition(
+            ledger,
+            (yield* ledger.getTask(asked.taskId))!,
+            { type: "task.cancelled", payload: {} },
+            { owner: runtime.ownerToken },
+          ),
+        );
+        yield* runtime.drain;
+        const done = yield* proposalTask;
+        assert.strictEqual(done?.status, "completed");
+        assert.strictEqual(done?.resultSummary, "Saved the skill deploy-check.");
+        assert.strictEqual(yield* fs.readFileString(target), expected);
+        assert.lengthOf(yield* completions(asked.taskId), 1);
       }).pipe(Effect.provide(harness.layer));
     },
   );

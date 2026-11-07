@@ -53,6 +53,13 @@ const skillProposalRule = (task: ChannelTask, event: ChannelTaskEvent): string |
   }
   if (event.type === "task.dispatch.claimed" || event.type === "task.retry.requested")
     return "A skill proposal task is never dispatched or retried.";
+  // Once answered, a Save may already be linked: only completion settles it, so file and record agree.
+  if (
+    task.status === "received" &&
+    event.type !== "task.question.opened" &&
+    event.type !== "task.completed"
+  )
+    return "An answered skill proposal task only completes.";
   if (event.type === "task.completed" && task.openQuestions.length > 0)
     return "A skill proposal task finishes only after its question is answered.";
   return undefined;
