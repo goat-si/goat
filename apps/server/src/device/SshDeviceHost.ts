@@ -61,18 +61,32 @@ const Started = Schema.Struct({
 const decodeProbe = Schema.decodeUnknownEffect(Schema.fromJsonString(Probe));
 const decodeStarted = Schema.decodeUnknownEffect(Schema.fromJsonString(Started));
 const decodeStopped = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ cleanupWarning: Schema.String })),
+  Schema.fromJsonString(
+    Schema.Struct({ cleanupWarning: Schema.String, stopError: Schema.optionalKey(Schema.String) }),
+  ),
 );
-const logCleanupWarning = (hostId: string, cleanupWarning: string | undefined) =>
-  cleanupWarning === undefined
+const logCleanupWarning = (
+  hostId: string,
+  outcome: { readonly cleanupWarning?: string; readonly stopError?: string } | undefined,
+) =>
+  outcome?.cleanupWarning === undefined
     ? Effect.void
-    : Effect.logWarning(
-        "agent-device runner cleanup did not finish; its daemon stopped without it",
-        {
-          hostId,
-          cleanupWarning,
-        },
-      );
+    : outcome.stopError === undefined
+      ? Effect.logWarning(
+          "agent-device runner cleanup did not finish; its daemon stopped without it",
+          {
+            hostId,
+            cleanupWarning: outcome.cleanupWarning,
+          },
+        )
+      : Effect.logWarning(
+          "agent-device did not stop; its daemon and runners may still be running",
+          {
+            hostId,
+            cleanupWarning: outcome.cleanupWarning,
+            stopError: outcome.stopError,
+          },
+        );
 const targetFor = (config: SshDeviceHostConfig) => ({
   alias: config.target,
   hostname: config.target,
@@ -107,10 +121,7 @@ const bootstrap = (
 const stopRemote = (config: SshDeviceHostConfig, owner: string, mode: "stop-agent" | "stop") =>
   bootstrap(config, owner, mode).pipe(
     Effect.tap(({ stdout }) =>
-      logCleanupWarning(
-        config.id,
-        Option.getOrUndefined(decodeStopped(stdout.trim()))?.cleanupWarning,
-      ),
+      logCleanupWarning(config.id, Option.getOrUndefined(decodeStopped(stdout.trim()))),
     ),
   );
 
@@ -306,7 +317,7 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
           }),
       ),
     );
-    yield* logCleanupWarning(config.id, remote.cleanupWarning);
+    yield* logCleanupWarning(config.id, remote);
     summary = {
       ...summary,
       platforms: remote.platforms,

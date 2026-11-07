@@ -41,11 +41,12 @@ const startedAt = Date.now();
 const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', timeout: 30000, ...options });
 const read = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 // A plain stop leaves XCTest runners alive for reuse; --clean ends them, and a plain stop follows a failed clean.
+const describeRun = (result) => result.error?.message || ('exit ' + (result.status ?? result.signal) + ': ' + (result.stdout || '').slice(0, 400));
 const stopDaemon = (entry, cleanMs, plainMs) => {
   const clean = run(process.execPath, [entry, 'daemon', 'stop', '--clean', '--state-dir', state], { timeout: cleanMs });
   if (clean.status === 0) return clean;
-  const cleanupWarning = clean.error?.message || ('exit ' + clean.status + ': ' + (clean.stdout || '').slice(0, 400));
-  return { ...run(process.execPath, [entry, 'daemon', 'stop', '--state-dir', state], { timeout: plainMs }), cleanupWarning };
+  const plain = run(process.execPath, [entry, 'daemon', 'stop', '--state-dir', state], { timeout: plainMs });
+  return { ...plain, cleanupWarning: describeRun(clean), ...(plain.status === 0 ? {} : { stopError: describeRun(plain) }) };
 };
 const probePlatforms = () => {
   const ios = process.platform === 'darwin' && run('xcrun', ['simctl', 'help']).status === 0;
@@ -174,7 +175,7 @@ async function install(name, version, entry) {
       const remaining = startedAt + 38000 - Date.now();
       const cleanMs = Math.max(1000, Math.min(25000, remaining - 8000));
       const stopped = stopDaemon(entry, cleanMs, Math.max(1000, remaining - cleanMs));
-      if (stopped.cleanupWarning) console.log(JSON.stringify({ cleanupWarning: stopped.cleanupWarning }));
+      if (stopped.cleanupWarning) console.log(JSON.stringify({ cleanupWarning: stopped.cleanupWarning, stopError: stopped.stopError }));
     }
     return;
   }
