@@ -6,6 +6,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
+import type { SecureFocus } from "./atspiFocus.ts";
 import {
   connect,
   decodeHello,
@@ -186,7 +187,7 @@ describe("Linux readiness grants (#1392)", () => {
 
   // Measured on Xvfb: the driver turns org.a11y.Status IsEnabled on, but a Chromium opened
   // before that never joins the AT-SPI registry until it restarts.
-  const readinessOf = (focusByPid: Record<number, Awaited<ReturnType<typeof unregistered>>>) =>
+  const readinessOf = (focusByPid: Record<number, SecureFocus>) =>
     readLinuxReadiness(
       {
         session,
@@ -218,8 +219,12 @@ describe("Linux readiness grants (#1392)", () => {
       },
       15_000,
     );
-  const unregistered = async () =>
-    ({ known: false, secure: false, windows: 0, unregistered: true }) as const;
+  const unregistered = async (): Promise<SecureFocus> => ({
+    known: false,
+    secure: false,
+    windows: 0,
+    unregistered: true,
+  });
 
   it("an app missing from an AT-SPI registry that answered asks for a restart, never for AT-SPI to be turned on", async () => {
     const missing = await readinessOf({ 30: await unregistered() });

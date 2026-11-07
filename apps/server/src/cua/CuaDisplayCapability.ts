@@ -130,12 +130,85 @@ export function ldconfigLibraries(output: string): ReadonlySet<string> {
   return names;
 }
 
-/** What the pinned Linux driver binary links against, with the Debian/Ubuntu package for each. */
+/** Package managers whose package names below were checked against each distribution. */
+export type LinuxPackageManager = "apt" | "dnf" | "pacman";
+
+/** The package manager of the distribution an os-release file describes, by ID then ID_LIKE. */
+export function linuxPackageManager(osRelease: string): LinuxPackageManager | "zypper" | null {
+  const field = (name: string) =>
+    new RegExp(`^${name}=["']?([^"'\\n]*)`, "mu")
+      .exec(osRelease)?.[1]
+      ?.toLowerCase()
+      .split(/\s+/u) ?? [];
+  for (const id of [...field("ID"), ...field("ID_LIKE")]) {
+    if (id === "debian" || id === "ubuntu") return "apt";
+    if (id === "fedora" || id === "rhel" || id === "centos") return "dnf";
+    if (id === "arch") return "pacman";
+    if (id === "suse" || id.startsWith("opensuse")) return "zypper";
+  }
+  return null;
+}
+
+type LinuxPackage = "x11" | "xi" | "xkbcommon" | "atspi" | "xvfb" | "xauth" | "xcompmgr";
+
+const PACKAGES: Record<LinuxPackageManager, Record<LinuxPackage, string>> = {
+  apt: {
+    x11: "libx11-6",
+    xi: "libxi6",
+    xkbcommon: "libxkbcommon0",
+    atspi: "at-spi2-core",
+    xvfb: "xvfb",
+    xauth: "xauth",
+    xcompmgr: "xcompmgr",
+  },
+  dnf: {
+    x11: "libX11",
+    xi: "libXi",
+    xkbcommon: "libxkbcommon",
+    atspi: "at-spi2-core",
+    xvfb: "xorg-x11-server-Xvfb",
+    xauth: "xorg-x11-xauth",
+    xcompmgr: "xcompmgr",
+  },
+  pacman: {
+    x11: "libx11",
+    xi: "libxi",
+    xkbcommon: "libxkbcommon",
+    atspi: "at-spi2-core",
+    xvfb: "xorg-server-xvfb",
+    xauth: "xorg-xauth",
+    xcompmgr: "xcompmgr",
+  },
+};
+
+const INSTALL: Record<LinuxPackageManager, string> = {
+  apt: "sudo apt install",
+  dnf: "sudo dnf install",
+  pacman: "sudo pacman -S",
+};
+
+/** The command that installs these packages, or null where the names were not checked. */
+function installCommand(
+  manager: LinuxDisplayFacts["packageManager"],
+  packages: ReadonlyArray<LinuxPackage>,
+): string | null {
+  if (manager === null || manager === "zypper") return null;
+  return `${INSTALL[manager]} ${packages.map((name) => PACKAGES[manager][name]).join(" ")}`;
+}
+
+/** What the pinned Linux driver binary links against. */
 const LINUX_DRIVER_LIBRARIES = [
-  { soname: "libX11.so.6", package: "libx11-6" },
-  { soname: "libXi.so.6", package: "libxi6" },
-  { soname: "libxkbcommon.so.0", package: "libxkbcommon0" },
+  { soname: "libX11.so.6", package: "x11" },
+  { soname: "libXi.so.6", package: "xi" },
+  { soname: "libxkbcommon.so.0", package: "xkbcommon" },
 ] as const;
+
+/**
+ * A virtual display a server started without DISPLAY finds on its own: xvfb-run passes Xvfb an
+ * -auth file the probe reads from its command line, and xcompmgr lets one window be captured.
+ */
+export const LINUX_VIRTUAL_DISPLAY =
+  'setsid xvfb-run -a -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
 
 export interface LinuxDisplayFacts {
   readonly user: string;
@@ -166,6 +239,14 @@ export interface LinuxDisplayFacts {
   readonly atSpi: boolean;
   /** Why the session bus or AT-SPI is missing, for the reason. */
   readonly busIssues: ReadonlyArray<string>;
+  /** From /etc/os-release; null when unknown. */
+  readonly packageManager: LinuxPackageManager | "zypper" | null;
+  /** Which tools the virtual display command needs are on PATH. */
+  readonly tools: {
+    readonly xvfbRun: boolean;
+    readonly xauth: boolean;
+    readonly xcompmgr: boolean;
+  };
 }
 
 function missingLibraries(facts: LinuxDisplayFacts) {
@@ -174,8 +255,45 @@ function missingLibraries(facts: LinuxDisplayFacts) {
     : [];
 }
 
-const missingLibrariesReason = (missing: ReturnType<typeof missingLibraries>) =>
-  `Computer use needs ${missing.map((library) => library.soname).join(", ")} on this computer (Debian/Ubuntu: apt install ${missing.map((library) => library.package).join(" ")}).`;
+const missingLibrariesReason = (
+  missing: ReturnType<typeof missingLibraries>,
+  manager: LinuxDisplayFacts["packageManager"],
+) => {
+  const command = installCommand(
+    manager,
+    missing.map((library) => library.package),
+  );
+  return `Computer use needs ${missing.map((library) => library.soname).join(", ")} on this computer.${command ? ` Install with: ${command}` : " Install them from your distribution's packages."}`;
+};
+
+function virtualDisplayRemedy(facts: LinuxDisplayFacts): string {
+  const missing = (
+    [
+      ["xvfb", "Xvfb (with xvfb-run)", facts.tools.xvfbRun],
+      ["xauth", "xauth", facts.tools.xauth],
+      ["xcompmgr", "xcompmgr", facts.tools.xcompmgr],
+    ] as const
+  ).filter(([, , found]) => !found);
+  const command = installCommand(
+    facts.packageManager,
+    missing.map(([name]) => name),
+  );
+  const install =
+    missing.length === 0
+      ? ""
+      : command
+        ? ` Install it with: ${command}.`
+        : ` Install ${missing.map(([, label]) => label).join(", ")} from your distribution's packages.`;
+  return `Sign in to a desktop session on this computer, or run computer use in a virtual display, which GOAT looks for each time it checks.${install} ${install ? "Then start it" : "Start one"} with: ${LINUX_VIRTUAL_DISPLAY}`;
+}
+
+/** What to do when app controls cannot be read: a shared session bus, or AT-SPI itself. */
+function accessibilityRemedy(facts: LinuxDisplayFacts): string {
+  if (facts.sessionBus === null)
+    return ` Computer use and the apps it reads must share one D-Bus session bus: sign in to this computer as ${facts.user}, or keep ${facts.user}'s user session running with loginctl enable-linger, and start the apps in that session.`;
+  const command = installCommand(facts.packageManager, ["atspi"]);
+  return ` If at-spi2-core is not installed, install it${command ? `: ${command}.` : " from your distribution's packages."}`;
+}
 
 export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
   // The driver is handed DISPLAY=:N, which is screen 0 of that display.
@@ -218,7 +336,7 @@ export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
       if (missing.length > 0)
         return {
           capability: "unavailable",
-          reason: missingLibrariesReason(missing),
+          reason: missingLibrariesReason(missing, facts.packageManager),
           display: wayland.display,
           environment,
         };
@@ -238,7 +356,7 @@ export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
           ? `${facts.user} cannot open the X display${refused.length > 1 ? "s" : ""} here (${refused.map((entry) => `:${entry.display}`).join(", ")}): the X server refused the connection.`
           : facts.wayland
             ? `The Wayland session named in this server's environment (${facts.wayland.display}) is not running, and no X display is reachable for ${facts.user}.`
-            : `No X display is reachable for ${facts.user}. Sign in to a desktop session on this computer or start Xvfb.`,
+            : `No X display is reachable for ${facts.user}. ${virtualDisplayRemedy(facts)}`,
       environment: [],
     };
   }
@@ -252,7 +370,7 @@ export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
   if (missing.length > 0) {
     return {
       capability: "unavailable",
-      reason: missingLibrariesReason(missing),
+      reason: missingLibrariesReason(missing, facts.packageManager),
       display,
       environment,
     };
@@ -260,7 +378,7 @@ export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
   if (!facts.atSpi) {
     return {
       capability: "partial",
-      reason: `Agents can take screenshots and use the mouse and keyboard on ${display}, but cannot read app controls: ${facts.busIssues.join(" and ") || "AT-SPI did not answer"}.`,
+      reason: `Agents can take screenshots and use the mouse and keyboard on ${display}, but cannot read app controls: ${facts.busIssues.join(" and ") || "AT-SPI did not answer"}.${accessibilityRemedy(facts)}`,
       display,
       environment,
     };
@@ -573,6 +691,12 @@ const probeLinux = Effect.fnUntraced(function* () {
   const uid = yield* HostProcess.UserId;
   const user = (yield* HostProcess.Username) ?? "this user";
   const exists = (file: string) => fs.exists(file).pipe(Effect.orElseSucceed(() => false));
+  // A tool the virtual display command runs, wherever this server's PATH would find it.
+  const onPath = Effect.fnUntraced(function* (name: string) {
+    for (const directory of (environment.PATH || "/usr/local/bin:/usr/bin:/bin").split(":"))
+      if (directory && (yield* exists(path.join(directory, name)))) return true;
+    return false;
+  });
 
   // The Wayland session this server belongs to, named or the one its session type implies. It
   // is settled before any X socket is tried: a server in a Wayland session never looks for X.
@@ -670,6 +794,17 @@ const probeLinux = Effect.fnUntraced(function* () {
     runtimeDir,
     atSpi: buses.atSpi,
     busIssues: buses.issues,
+    packageManager: linuxPackageManager(
+      yield* fs.readFileString("/etc/os-release").pipe(
+        Effect.catch(() => fs.readFileString("/usr/lib/os-release")),
+        Effect.orElseSucceed(() => ""),
+      ),
+    ),
+    tools: {
+      xvfbRun: yield* onPath("xvfb-run"),
+      xauth: yield* onPath("xauth"),
+      xcompmgr: yield* onPath("xcompmgr"),
+    },
   });
 });
 
