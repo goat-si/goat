@@ -17,6 +17,7 @@ import * as MemoryStore from "../memory/MemoryStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
+import * as ChannelBotEvents from "./ChannelBotEvents.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelBotArtifacts from "./ChannelBotArtifacts.ts";
@@ -68,12 +69,15 @@ const layerTimeline = Layer.mergeAll(
   ChannelBotArtifacts.layer,
 ).pipe(Layer.provideMerge(layerFoundation));
 
+// Event lines record through the timeline, so they are built on top of it.
+const layerEvents = ChannelBotEvents.layer.pipe(Layer.provideMerge(layerTimeline));
+
 const layerGateway = Layer.mergeAll(
   ChannelGateway.layer,
   ChannelBotRegistry.layer,
   ChannelBotMembers.layer,
   ChannelIdentityService.layer,
-).pipe(Layer.provideMerge(layerTimeline));
+).pipe(Layer.provideMerge(layerEvents));
 
 /** The live Slack runtime and settings. The SDK stays a requirement so tests can fake it. */
 const layerSlackLive = SlackChannelSettingsLive.layer.pipe(
