@@ -16,6 +16,8 @@ const MEMBER_THREAD_PREFIX = "channel-member-bot:";
  */
 export function useGoatBotMemberAt(
   target: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | null,
+  /** The thread is the main bot's, so its chat needs the main profile's name. */
+  mainThread = false,
 ): {
   readonly member: BotProfile | null;
   /** The main bot's profile from the same list, which names the main chat. */
@@ -29,9 +31,14 @@ export function useGoatBotMemberAt(
   const presentation = useEnvironment(environmentId);
   const capabilities = presentation?.serverConfig?.environment.capabilities;
   const supported = environmentId !== null && capabilities?.goatBotMembers === true;
-  // The roster's own list (useBotRoster): it also names the main chat where profiles exist.
+  // The roster's own list (useBotRoster). Without members, only the main bot's thread reads it,
+  // for its name, and only while connected, as the roster does.
+  const readsMain =
+    mainThread &&
+    presentation?.connection.phase === "connected" &&
+    capabilities?.goatBotProfiles === true;
   const profiles = useEnvironmentQuery(
-    environmentId !== null && (supported || capabilities?.goatBotProfiles === true)
+    environmentId !== null && (supported || readsMain)
       ? channelEnvironment.listBots({
           environmentId,
           input: supported ? { includeDeleted: true } : {},

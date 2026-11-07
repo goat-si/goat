@@ -110,15 +110,34 @@ it("names the main chat from a server that keeps profiles but not members", asyn
   };
   server.query = { data: { bots: [main] }, error: null, isPending: false };
   server.listed = [];
-  function MainName() {
-    return (
-      <output>
-        {useGoatBotMemberAt({ environmentId, threadId: ThreadId.make("bot") }).main?.name}
-      </output>
+  function MainName(props: { readonly threadId: string; readonly main: boolean }) {
+    const lookup = useGoatBotMemberAt(
+      { environmentId, threadId: ThreadId.make(props.threadId) },
+      props.main,
     );
+    return <output>{lookup.main?.name}</output>;
   }
-  await using screen = await render(<MainName />, { router: false }); // A hook check.
-  expect(screen.container.textContent).toBe("Goaty");
-  // The roster's own list: without members it reads live bots only.
-  expect(server.listed.at(-1)).toEqual({});
+  {
+    await using screen = await render(<MainName threadId="bot" main />, { router: false }); // A hook check.
+    expect(screen.container.textContent).toBe("Goaty");
+    // The roster's own list: without members it reads live bots only.
+    expect(server.listed).toEqual([{}]);
+  }
+  // An ordinary coding thread never asks for the bot list on such a server.
+  server.listed = [];
+  {
+    await using _ordinary = await render(<MainName threadId="ordinary" main={false} />, {
+      router: false, // A hook check.
+    });
+    expect(server.listed).toEqual([]);
+  }
+  // Nor does the main thread while its computer is offline.
+  server.presentation = {
+    connection: { phase: "offline" },
+    serverConfig: { environment: { capabilities: { goatBotProfiles: true } } },
+  };
+  {
+    await using _offline = await render(<MainName threadId="bot" main />, { router: false }); // A hook check.
+    expect(server.listed).toEqual([]);
+  }
 });

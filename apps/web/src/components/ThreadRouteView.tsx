@@ -57,6 +57,7 @@ export function ThreadRouteView({
     );
   const goatBotMemberLookup = useGoatBotMemberAt(
     target.kind === "server" ? target.threadRef : null,
+    goatBotTarget,
   );
   const goatBotMember = goatBotMemberLookup.member;
   // A thread that may be a member's waits for the bot list, and never falls back to a coding view.
