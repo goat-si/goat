@@ -7,7 +7,10 @@ import "~/index.css";
 import { render } from "../../../test/render";
 
 const mocks = vi.hoisted(() => ({ tasks: [] as unknown[], setEnabled: vi.fn() }));
-vi.mock("./useBotRoster", () => ({ useBotRoster: () => ({ rows: [] }) }));
+vi.mock("./useBotRoster", () => ({
+  useBotRoster: () => ({ rows: [] }),
+  useBotThreads: () => ({ rows: [], loaded: true, refresh: () => {} }),
+}));
 vi.mock("~/state/entities", () => ({ useThreadShell: () => null }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({ data: { tasks: mocks.tasks }, error: null }),

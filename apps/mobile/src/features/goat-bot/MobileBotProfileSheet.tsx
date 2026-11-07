@@ -1,5 +1,5 @@
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 const INPUT = "rounded-lg border border-border-subtle px-3 py-2 text-base text-foreground";
@@ -11,6 +11,8 @@ export function MobileBotProfileSheet(props: {
   readonly canSubmit: boolean;
   readonly onSubmit: (changes: Partial<BotProfileValues>) => Promise<string | null>;
   readonly onClose: () => void;
+  /** More fields after the profile, such as a new bot's model. */
+  readonly children?: ReactNode;
 }) {
   const [name, setName] = useState(props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
@@ -104,6 +106,7 @@ export function MobileBotProfileSheet(props: {
             onChangeText={setPurpose}
             className={INPUT + " min-h-[120px]"}
           />
+          {props.children}
           {error ? (
             <Text accessibilityRole="alert" className="text-danger-foreground">
               {error}

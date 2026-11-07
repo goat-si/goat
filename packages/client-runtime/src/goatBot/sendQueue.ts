@@ -77,6 +77,7 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
   const changed = () => {
     snapshot = entries.map((entry) => ({
       clientKey: entry.clientKey,
+      threadId: entry.bot.threadId,
       ...(entry.taskId === undefined ? {} : { taskId: entry.taskId }),
       text: entry.text,
       ...(entry.attachments.length === 0
@@ -95,10 +96,18 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
     const next = entries.find((entry) => entry.state === "queued");
     if (next === undefined) return;
     if (!options.canDispatch(next.bot)) {
+      // Only this bot's messages wait for a retry; another bot's queue keeps going.
+      const target = next.bot;
       for (const entry of entries) {
-        if (entry.state === "queued") entry.state = "failed";
+        if (
+          entry.state === "queued" &&
+          entry.bot.environmentId === target.environmentId &&
+          entry.bot.threadId === target.threadId
+        )
+          entry.state = "failed";
       }
       changed();
+      pump();
       return;
     }
     busy = true;

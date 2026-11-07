@@ -43,7 +43,10 @@ vi.mock("~/state/channels", async (original) => ({
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: () => async () => ({ _tag: "Success" }),
 }));
-vi.mock("./useBotRoster", () => ({ useBotRoster: () => ({ rows: [], refresh: () => {} }) }));
+vi.mock("./useBotRoster", () => ({
+  useBotRoster: () => ({ rows: [], refresh: () => {} }),
+  useBotThreads: () => ({ rows: [], loaded: true, refresh: () => {} }),
+}));
 vi.mock("./GoatBotWorkDetails", () => ({ GoatBotWorkDetails: () => null }));
 vi.mock("~/hooks/useResizableWidth", () => ({
   RESIZABLE_WIDTH_PROPERTY: "--resizable-width",

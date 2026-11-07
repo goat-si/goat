@@ -1,0 +1,182 @@
+import { botRosterGroups } from "@goat/client-runtime/goatBot";
+import { BotProfile, ChannelGatewayError, EnvironmentId } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+import {
+  cloneElement,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+  useSyncExternalStore,
+} from "react";
+import { expect, it, vi } from "vite-plus/test";
+import { page, userEvent } from "vite-plus/test/browser";
+import { render } from "../../../test/render";
+import "~/index.css";
+
+const server = vi.hoisted(() => ({
+  bots: [] as Array<unknown>,
+  listeners: new Set<() => void>(),
+  busy: false,
+  toasts: [] as Array<{ title: string; description?: string }>,
+}));
+const publish = () => {
+  for (const listener of server.listeners) listener();
+};
+
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
+  useParams: () => ({}),
+  Link: ({
+    children,
+    params: _params,
+    to,
+    ...props
+  }: ComponentProps<"a"> & { params?: object; to: string }) => (
+    <a {...props} href={to}>
+      {children}
+    </a>
+  ),
+}));
+vi.mock("@effect/atom-react", async (original) => ({
+  ...(await original<typeof import("@effect/atom-react")>()),
+  useAtomValue: () => true,
+}));
+vi.mock("~/state/channels", () => {
+  const command = (tag: string) => ({ tag, permissionAtom: () => null });
+  return {
+    channelEnvironment: {
+      setBotHidden: command("hide"),
+      deleteBot: command("delete"),
+      restoreBot: command("restore"),
+      updateBot: command("update"),
+    },
+  };
+});
+// A fake server: each command changes the stored bots the way channel.* does, and the roster
+// re-renders from them, so a test sees the row move the way a person would.
+vi.mock("~/state/use-atom-command", () => ({
+  useAtomCommand:
+    (command: { tag: string }) =>
+    async ({ input }: { input: { botId: string; hidden?: boolean } }) => {
+      const index = server.bots.findIndex((bot) => (bot as BotProfile).botId === input.botId);
+      const bot = server.bots[index] as BotProfile;
+      if (command.tag === "delete" && server.busy)
+        return { _tag: "Failure", cause: new ChannelGatewayError({ reason: "bot_busy" }) };
+      const next =
+        command.tag === "hide"
+          ? { ...bot, hidden: input.hidden }
+          : command.tag === "delete"
+            ? { ...bot, state: "deleted" as const }
+            : command.tag === "restore"
+              ? { ...bot, state: "active" as const }
+              : bot;
+      server.bots = server.bots.with(index, next);
+      publish();
+      return { _tag: "Success", value: { bot: next } };
+    },
+}));
+vi.mock("@goat/client-runtime/state/runtime", async (original) => ({
+  ...(await original<typeof import("@goat/client-runtime/state/runtime")>()),
+  squashAtomCommandFailure: (result: { cause: unknown }) => result.cause,
+}));
+vi.mock("../ui/toast", () => ({
+  toastManager: {
+    add: (toast: { title: string; description?: string }) => server.toasts.push(toast),
+  },
+}));
+vi.mock("./GoatBotAvatar", () => ({ GoatBotSessionAvatar: () => null }));
+vi.mock("./useGoatBotMemberStatus", () => ({ useGoatBotMemberWaitingCount: () => 0 }));
+vi.mock("../ui/sidebar", () => ({
+  SidebarGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  SidebarMenu: ({ children }: { children: ReactNode }) => <ul>{children}</ul>,
+  SidebarMenuItem: ({ children }: { children: ReactNode }) => <li>{children}</li>,
+  SidebarMenuButton: ({ render: link, children }: { render: ReactElement; children: ReactNode }) =>
+    cloneElement(link, {}, children),
+}));
+
+import { GoatBotMemberRoster } from "./GoatBotMemberRows";
+
+const decodeProfile = Schema.decodeSync(BotProfile);
+const environmentId = EnvironmentId.make("env-1");
+const profile = (botId: string, name: string) =>
+  decodeProfile({
+    botId,
+    role: "member",
+    name,
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId,
+    sessionThreadId: `thread-${botId}`,
+    createdAt: "2026-11-07T00:00:00.000Z",
+    updatedAt: "2026-11-07T00:00:00.000Z",
+  });
+
+function Roster() {
+  const bots = useSyncExternalStore(
+    (listener) => {
+      server.listeners.add(listener);
+      return () => server.listeners.delete(listener);
+    },
+    () => server.bots,
+  ) as BotProfile[];
+  return <GoatBotMemberRoster environmentId={environmentId} groups={botRosterGroups(bots)} />;
+}
+
+function setup() {
+  server.bots = [profile("research", "Research")];
+  server.busy = false;
+  server.toasts = [];
+}
+
+it("hides a member under Hidden bots and shows it again", async () => {
+  setup();
+  await using _screen = await render(<Roster />, { router: false });
+  await userEvent.click(page.getByRole("button", { name: "Research options" }));
+  await userEvent.click(page.getByRole("menuitem", { name: "Hide" }));
+  const hidden = page.getByRole("button", { name: "Hidden bots (1)" });
+  await expect.element(hidden).toBeVisible();
+  await expect.element(page.getByRole("link", { name: "Research" })).not.toBeInTheDocument();
+  await userEvent.click(hidden);
+  await userEvent.click(page.getByRole("button", { name: "Research options" }));
+  await userEvent.click(page.getByRole("menuitem", { name: "Show" }));
+  await expect.element(page.getByRole("link", { name: "Research" })).toBeVisible();
+  await expect.element(page.getByText(/Hidden bots/)).not.toBeInTheDocument();
+});
+
+it("asks before deleting and tells the person to stop open tasks when the bot is busy", async () => {
+  setup();
+  server.busy = true;
+  await using _screen = await render(<Roster />, { router: false });
+  await userEvent.click(page.getByRole("button", { name: "Research options" }));
+  await userEvent.click(page.getByRole("menuitem", { name: "Delete" }));
+  await expect
+    .element(page.getByText("Its conversation is archived; you can restore it."))
+    .toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "Delete" }));
+  await vi.waitFor(() =>
+    expect(server.toasts).toEqual([
+      {
+        type: "error",
+        title: "Couldn't delete Research",
+        description: "Stop its open tasks first.",
+      },
+    ]),
+  );
+  await expect.element(page.getByRole("link", { name: "Research" })).toBeVisible();
+});
+
+it("moves a deleted member to Deleted bots and restores it", async () => {
+  setup();
+  await using _screen = await render(<Roster />, { router: false });
+  await userEvent.click(page.getByRole("button", { name: "Research options" }));
+  await userEvent.click(page.getByRole("menuitem", { name: "Delete" }));
+  await userEvent.click(page.getByRole("button", { name: "Delete" }));
+  const restore = page.getByRole("button", { name: "Restore Research" });
+  await expect.element(restore).toBeVisible();
+  await expect.element(page.getByRole("link", { name: "Research" })).not.toBeInTheDocument();
+  await userEvent.click(restore);
+  await expect.element(page.getByRole("link", { name: "Research" })).toBeVisible();
+  await expect.element(page.getByText("Deleted bots")).not.toBeInTheDocument();
+});

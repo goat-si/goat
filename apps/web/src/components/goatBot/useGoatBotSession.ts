@@ -17,6 +17,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type {
+  BotProfile,
   ChannelBotRef,
   ChannelGatewayError,
   ChannelTaskId,
@@ -41,9 +42,11 @@ import { useEnvironmentQuery } from "~/state/query";
 import {
   goatBotHomeReadBack,
   goatBotSupportUnknown,
+  memberBotRef,
   pickGoatBotEnvironment,
   resolveGoatBotAvailability,
   resolveGoatBotHomeSelection,
+  type GoatBotAvailability,
   type GoatBotEnvironmentInput,
 } from "@goat/client-runtime/goatBot";
 import {
@@ -68,6 +71,8 @@ interface Session {
   readonly canOperate: boolean;
   readonly legacyAutoRetried: boolean;
   readonly queue: GoatBotSendQueue<GoatBotDraftAttachment>;
+  /** Conversation threads of member bots a chat here confirmed active; their messages may send. */
+  readonly members: ReadonlySet<string>;
 }
 
 const useSessions = create<{ sessions: ReadonlyMap<EnvironmentId, Session>; revision: number }>(
@@ -121,7 +126,7 @@ function newQueue(environmentId: EnvironmentId) {
         session.port !== null &&
         session.machine.ensure.state === "confirmed" &&
         session.machine.ensure.bot.environmentId === bot.environmentId &&
-        session.machine.ensure.bot.threadId === bot.threadId
+        (session.machine.ensure.bot.threadId === bot.threadId || session.members.has(bot.threadId))
       );
     },
     send: async ({ clientKey, text, attachments, receivedAt, bot, taskId }) => {
@@ -205,6 +210,7 @@ function useObservedEnvironments() {
         canOperate: false,
         legacyAutoRetried: false,
         queue: previous?.queue ?? newQueue(environment.environmentId),
+        members: previous?.members ?? new Set(),
       });
     }
   }, [environments, homeKey]);
@@ -290,8 +296,58 @@ function useGoatBotWorking(visibleTurnItems: ReadonlyArray<OrchestrationV2Projec
   });
 }
 
-/** One ensure and send queue per environment, shared by the entry route and thread view. */
-export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: ChannelTaskId | null) {
+/**
+ * Sets the members whose messages may leave this environment's queue to the roster's active ones,
+ * so a member deleted while its chat is closed stops sending.
+ */
+export function syncGoatBotMemberThreads(
+  environmentId: EnvironmentId,
+  bots: ReadonlyArray<BotProfile>,
+): void {
+  const current = useSessions.getState().sessions.get(environmentId);
+  if (!current) return;
+  const members = new Set(
+    bots
+      .filter(
+        (bot) =>
+          bot.role === "member" && bot.state !== "deleted" && bot.environmentId === environmentId,
+      )
+      .map((bot) => bot.sessionThreadId as string),
+  );
+  if (members.size === current.members.size && [...members].every((id) => current.members.has(id)))
+    return;
+  update(environmentId, { ...current, members });
+}
+
+/** Lets a member's messages through the queue while it is active, and stops them once deleted. */
+function useMemberRegistration(environmentId: EnvironmentId | null, member: BotProfile | null) {
+  const threadId = member?.sessionThreadId ?? null;
+  const active = member !== null && member.state !== "deleted";
+  const sessionExists = useSessions(
+    (state) => environmentId !== null && state.sessions.has(environmentId),
+  );
+  // oxlint-disable-next-line goat/react-effect-budget -- Publish the member's state to the environment's send queue, which outlives this view.
+  useEffect(() => {
+    if (environmentId === null || threadId === null || !sessionExists) return;
+    const current = useSessions.getState().sessions.get(environmentId);
+    if (!current || current.members.has(threadId) === active) return;
+    const members = new Set(current.members);
+    if (active) members.add(threadId);
+    else members.delete(threadId);
+    update(environmentId, { ...current, members });
+  }, [environmentId, threadId, active, sessionExists]);
+}
+
+/**
+ * One ensure and send queue per environment, shared by the entry route and thread view. With a
+ * member, the same session sends to that member's own conversation once the environment's bot is
+ * confirmed.
+ */
+export function useGoatBotSession(
+  visibleTurnItems = EMPTY_ITEMS,
+  taskId?: ChannelTaskId | null,
+  member: BotProfile | null = null,
+) {
   const { enabled, environment, environments, home, port } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
   const bootstrapped = useEnvironmentShellsBootstrapped(environmentId);
@@ -417,7 +473,8 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: Chann
     legacyShell,
   ]);
 
-  const availability = !enabled
+  useMemberRegistration(environmentId, member);
+  const mainAvailability = !enabled
     ? { kind: "unsupported" as const }
     : resolveGoatBotAvailability({
         environments,
@@ -430,6 +487,18 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: Chann
             ? session.machine.ensure
             : { state: "idle" },
       });
+  // A member answers only through its own environment's session.
+  const availability: GoatBotAvailability =
+    member === null || mainAvailability.kind !== "ready"
+      ? mainAvailability
+      : member.environmentId !== mainAvailability.bot.environmentId
+        ? {
+            kind: "error",
+            environmentId: member.environmentId,
+            message: `${member.name} runs on another computer.`,
+          }
+        : { ...mainAvailability, bot: memberBotRef(member, mainAvailability.bot) };
+  const targetThreadId = member?.sessionThreadId ?? botRef?.threadId ?? null;
   const queue = session?.queue;
   useEffect(() => {
     const keys = new Set<string>();
@@ -451,7 +520,10 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: Chann
       : serverConfigs.get(readyBot.environmentId)?.environment.capabilities;
   const threads = useEnvironmentQuery(
     readyBot !== null && capabilities?.goatBotTaskThreads === true
-      ? channelEnvironment.listBotThreads({ environmentId: readyBot.environmentId, input: {} })
+      ? channelEnvironment.listBotThreads({
+          environmentId: readyBot.environmentId,
+          input: member === null ? {} : { botId: member.botId },
+        })
       : null,
   );
   const knownTaskIds = (threads.data?.rows ?? []).flatMap((row) =>
@@ -460,12 +532,19 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: Chann
   const rowsForTask = (selectedTask: ChannelTaskId | null | undefined) =>
     buildGoatBotTimeline({
       visibleTurnItems,
-      pendingInputs: pendingInputsAt(queue, revision),
+      pendingInputs: pendingInputsAt(queue, revision).filter(
+        (input) => input.threadId === undefined || input.threadId === targetThreadId,
+      ),
       readers: goatBotItemReaders,
       knownTaskIds,
       ...(selectedTask === undefined ? {} : { taskId: selectedTask }),
     });
   const rows = rowsForTask(taskId);
+  const sendable =
+    availability.kind === "ready" &&
+    canOperate &&
+    member?.state !== "deleted" &&
+    queue !== undefined;
   const attachmentSupport: GoatBotAttachmentSupport | null =
     capabilities?.goatBotAttachments === true && capabilities.attachmentUploads === true
       ? { maxUploadBytes: capabilities.fileAttachments?.maxUploadBytes ?? null }
@@ -485,19 +564,19 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: Chann
       text: string,
       attachments: ReadonlyArray<GoatBotDraftAttachment> = [],
     ) => {
-      if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
+      if (!sendable || availability.kind !== "ready") return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
       queue.submit(text, availability.bot, attachments, selectedTask);
       return true;
     },
     onSend: (text: string, attachments: ReadonlyArray<GoatBotDraftAttachment> = []) => {
-      if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
+      if (!sendable || availability.kind !== "ready") return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
       queue.submit(text, availability.bot, attachments, taskId ?? undefined);
       return true;
     },
     onRetryInput: (key: string) => {
-      if (availability.kind === "ready" && canOperate) queue?.retry(key);
+      if (sendable) queue?.retry(key);
     },
     onDiscardInput: (key: string) => queue?.discard(key),
     onRetryAvailability: () => {

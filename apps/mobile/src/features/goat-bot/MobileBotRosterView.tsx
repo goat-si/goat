@@ -6,7 +6,7 @@ import {
   goatBotFaceLabel,
   presentTaskStatus,
 } from "@goat/client-runtime/goatBot";
-import type { BotThreadRow } from "@goat/contracts";
+import type { BotProfile, BotThreadRow } from "@goat/contracts";
 import {
   Pressable,
   ScrollView,
@@ -23,8 +23,9 @@ import { Button } from "../../components/ui/Button";
 import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
+import { useMobileMemberWaitingCount } from "./useMobileMemberStatus";
 
-/** New bot is disabled until bots can be created. */
+/** Servers without member bots keep New bot disabled. */
 const ignorePress = () => undefined;
 import { DONE_STATUS_LABEL, STATUS_LABEL_BY_STATUS } from "../threads/thread-list-v2-row-meta";
 import type { ThreadListV2Status } from "../threads/threadListV2";
@@ -96,7 +97,18 @@ export function MobileBotRosterView(props: {
   ) => void;
   onLongPressTask: (row: Extract<BotThreadRow, { kind: "task" }>) => void;
   onShowMore: () => void;
+  /** Member bots: shown ones are in `bots`; these two lists carry the reverse states. */
+  members?: {
+    readonly hidden: ReadonlyArray<BotProfile>;
+    readonly deleted: ReadonlyArray<BotProfile>;
+    readonly canCreate: boolean;
+    readonly onNewBot: () => void;
+    /** Edit, hide, show, delete or restore; the panel asks what to do. */
+    readonly onLongPressBot: (bot: BotRosterEntry) => void;
+    readonly onPressDeleted: (bot: BotProfile) => void;
+  };
 }) {
+  const [hiddenOpen, setHiddenOpen] = useState(false);
   const mainFace = useMobileGoatBotFace(null);
   const mainFaceLabel = goatBotFaceLabel(mainFace.state);
   const { scrollRef, rowRef, onScreen, measure, hold, settle, measureUnlessCoasting } =
@@ -126,10 +138,14 @@ export function MobileBotRosterView(props: {
             onLayout={bot.kind === "main" ? measure : undefined}
             accessibilityRole="button"
             onPress={() => props.onOpenBot(bot)}
-            accessibilityState={{ selected: bot.kind === "main" && props.selectedKey === "main" }}
+            onLongPress={props.members ? () => props.members?.onLongPressBot(bot) : undefined}
+            accessibilityState={{
+              selected:
+                props.selectedKey === (bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`),
+            }}
             accessibilityLabel={`${bot.profile?.name ?? "GOAT Bot"}${bot.kind === "main" && mainFaceLabel ? `, ${mainFaceLabel}` : ""}${bot.kind === "main" && props.unread ? ", unread" : ""}`}
             className={
-              bot.kind === "main" && props.selectedKey === "main"
+              props.selectedKey === (bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`)
                 ? "flex-row items-center gap-3 bg-thread-selected px-4 py-3"
                 : "flex-row items-center gap-3 px-4 py-3"
             }
@@ -137,11 +153,7 @@ export function MobileBotRosterView(props: {
             {bot.kind === "main" ? (
               <GoatBotFaceAvatar state={mainFace.state} size={40} motion={mainMotion} />
             ) : (
-              <View className="h-10 w-10 items-center justify-center rounded-full bg-grouped-card">
-                <Text className="text-lg text-foreground">
-                  {(bot.profile?.name ?? "GOAT Bot").slice(0, 1)}
-                </Text>
-              </View>
+              <MemberFace bot={bot.profile} />
             )}
             <View className="min-w-0 flex-1">
               <Text className="font-semibold text-foreground">
@@ -266,17 +278,102 @@ export function MobileBotRosterView(props: {
           ) : null}
         </View>
       ))}
+      {props.members && props.members.hidden.length > 0 ? (
+        <View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: hiddenOpen }}
+            onPress={() => setHiddenOpen((open) => !open)}
+            className="min-h-[44px] justify-center px-4 py-3"
+          >
+            <Text className="text-foreground-muted">
+              Hidden bots ({props.members.hidden.length})
+            </Text>
+          </Pressable>
+          {hiddenOpen
+            ? props.members.hidden.map((profile) => (
+                <Pressable
+                  key={profile.botId}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${profile.name}, hidden`}
+                  onPress={() => props.onOpenBot({ kind: "member", profile })}
+                  onLongPress={() => props.members?.onLongPressBot({ kind: "member", profile })}
+                  className="flex-row items-center gap-3 px-4 py-3"
+                >
+                  <MemberFace bot={profile} />
+                  <Text className="text-foreground">{profile.name}</Text>
+                </Pressable>
+              ))
+            : null}
+        </View>
+      ) : null}
+      {props.members && props.members.deleted.length > 0 ? (
+        <View>
+          <Text accessibilityRole="header" className="px-4 pt-3 text-foreground-muted">
+            Deleted bots
+          </Text>
+          {props.members.deleted.map((profile) => (
+            <Pressable
+              key={profile.botId}
+              accessibilityRole="button"
+              accessibilityLabel={`${profile.name}, deleted`}
+              accessibilityHint="Restore this bot"
+              onPress={() => props.members?.onPressDeleted(profile)}
+              className="min-h-[44px] flex-row items-center justify-between px-4 py-3"
+            >
+              <Text className="text-foreground-muted">{profile.name}</Text>
+              <Text className="text-foreground">Restore</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       <View className="px-4 py-3">
-        <Button
-          label="New bot · Coming soon"
-          icon="plus"
-          disabled
-          fullWidth
-          accessibilityHint="Creating more bots is coming soon."
-          onPress={ignorePress}
-        />
+        {props.members ? (
+          <Button
+            label="New bot"
+            icon="plus"
+            disabled={!props.members.canCreate}
+            fullWidth
+            onPress={props.members.onNewBot}
+          />
+        ) : (
+          <Button
+            label="New bot · Coming soon"
+            icon="plus"
+            disabled
+            fullWidth
+            accessibilityHint="Creating more bots is coming soon."
+            onPress={ignorePress}
+          />
+        )}
       </View>
     </ScrollView>
+  );
+}
+
+/**
+ * A member's face from its own conversation shell and waiting count, with the count beside it;
+ * still, since only the main row and headers move.
+ */
+function MemberFace({ bot }: { readonly bot: BotProfile }) {
+  const waitingCount = useMobileMemberWaitingCount(bot);
+  const face = useMobileGoatBotFace(
+    null,
+    { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
+    { waitingCount },
+  );
+  return (
+    <View className="flex-row items-center gap-1">
+      <GoatBotFaceAvatar state={face.state} size={40} motion={null} />
+      {waitingCount > 0 ? (
+        <Text
+          accessibilityLabel={`${waitingCount} waiting for you`}
+          className="text-xs font-semibold text-foreground"
+        >
+          {waitingCount}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 

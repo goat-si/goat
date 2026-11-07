@@ -1,5 +1,5 @@
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import { Button } from "../ui/button";
 import {
@@ -27,6 +27,8 @@ export function GoatBotProfileDialog(props: {
   readonly canSubmit: boolean;
   readonly onSubmit: (changes: GoatBotProfileChanges) => Promise<string | null>;
   readonly onClose: () => void;
+  /** More fields after the profile, such as a new bot's model. */
+  readonly children?: ReactNode;
 }) {
   const [name, setName] = useState(props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
@@ -96,6 +98,7 @@ export function GoatBotProfileDialog(props: {
                 onChange={(event) => setPurpose(event.target.value)}
               />
             </label>
+            {props.children}
             {blankName ? (
               <p className="text-sm text-muted-foreground">The bot needs a name.</p>
             ) : null}

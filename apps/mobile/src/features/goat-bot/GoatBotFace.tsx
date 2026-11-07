@@ -194,8 +194,10 @@ function GoatBotHeaderTitle(props: {
 export function GoatBotHeaderFace(props: {
   readonly activity: GoatBotFaceInput["activity"];
   readonly title: string;
+  /** A member bot's conversation; the main bot's when absent. */
+  readonly conversation?: Parameters<typeof useMobileGoatBotFace>[1];
 }) {
-  const face = useMobileGoatBotFace(props.activity);
+  const face = useMobileGoatBotFace(props.activity, props.conversation);
   // The header shows whenever its screen is focused, which the motion hook already checks.
   const motion = useMobileGoatBotFaceMotion(face.state, FACE_MOTION_RANK.header, face.since, true);
   const { state } = face;
@@ -207,7 +209,7 @@ export function GoatBotHeaderFace(props: {
   return (
     <NativeStackScreenOptions
       options={{ headerTitle: renderTitle }}
-      optionsVersion={`${state}:${motion === null ? "still" : "moving"}`}
+      optionsVersion={`${title}:${state}:${motion === null ? "still" : "moving"}`}
     />
   );
 }

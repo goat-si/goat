@@ -6,6 +6,7 @@ import {
   type GoatBotRef,
 } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import type { BotProfile } from "@goat/contracts";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { useContext } from "react";
 
@@ -32,6 +33,7 @@ import {
 import { GoatBotMainAvatar } from "./GoatBotAvatar";
 import { useGoatBotPreferred } from "./GoatBotModeButton";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
+import { GoatBotMainMenu } from "./GoatBotMemberRows";
 import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 import { useGoatBotReadMenu } from "./useGoatBotReadMenu";
 
@@ -41,16 +43,30 @@ type GoatBotReadMenuProps = ReturnType<typeof useGoatBotReadMenu>;
 export function GoatBotSidebarRow({
   name = "GOAT Bot",
   slackEnabled = false,
-}: { name?: string; slackEnabled?: boolean } = {}) {
+  main = null,
+}: { name?: string; slackEnabled?: boolean; main?: BotProfile | null } = {}) {
   const port = useContext(GoatBotChannelContext);
   const enabled = useGoatBotPreferred();
   return enabled ? (
-    <GoatBotSidebarObserver key={port ? "port" : "none"} name={name} slackEnabled={slackEnabled} />
+    <GoatBotSidebarObserver
+      key={port ? "port" : "none"}
+      name={name}
+      slackEnabled={slackEnabled}
+      main={main}
+    />
   ) : null;
 }
 
 /** Observes the bot without creating a bot thread. */
-function GoatBotSidebarObserver({ name, slackEnabled }: { name: string; slackEnabled: boolean }) {
+function GoatBotSidebarObserver({
+  name,
+  slackEnabled,
+  main,
+}: {
+  name: string;
+  slackEnabled: boolean;
+  main: BotProfile | null;
+}) {
   const count = useGoatBotWaitingCount();
   const readMenu = useGoatBotReadMenu(count);
   const botRef = useGlobalAgentStore((state) => state.botRef);
@@ -94,6 +110,7 @@ function GoatBotSidebarObserver({ name, slackEnabled }: { name: string; slackEna
               at={shell?.updatedAt ?? null}
             />
           )}
+          {main ? <GoatBotMainMenu environmentId={main.environmentId} main={main} /> : null}
         </SidebarMenuItem>
       </SidebarMenu>
     </SidebarGroup>
