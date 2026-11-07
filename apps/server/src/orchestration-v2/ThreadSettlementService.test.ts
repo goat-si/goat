@@ -51,7 +51,6 @@ import {
 } from "./ThreadSettlementService.admission-test-cases.ts";
 import { settlementSweepCacheTests } from "./ThreadSettlementService.cache-test-cases.ts";
 import { settlementShellHintTests } from "./ThreadSettlementService.shell-hint-test-cases.ts";
-
 import {
   NOW_MS,
   DAY_MS,
@@ -644,6 +643,7 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
               : snapshot.threads.filter((thread) => thread.id === threadId),
           ),
         ),
+      getThreadWorktreePaths: () => Effect.succeed([]),
       getThread: (threadId) =>
         Effect.gen(function* () {
           if (!(yield* SkipThreadArchiveRestore))

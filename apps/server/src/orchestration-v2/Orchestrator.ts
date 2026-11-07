@@ -196,7 +196,11 @@ import {
   withServerAttribution,
 } from "./GuestShareDecider.ts";
 import { makeGuestShare } from "./goat/GuestShare.ts";
-import { computerUseStopEffect, delegatedTasksStopEffect } from "./goat/ThreadStopEffects.ts";
+import {
+  computerUseStopEffect,
+  delegatedTasksStopEffect,
+  threadCloseEffects,
+} from "./goat/ThreadStopEffects.ts";
 import { makeReviewContinuation } from "./goat/ReviewContinuation.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
@@ -4071,17 +4075,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     }
 
-    if (command.type === "thread.archive") {
-      yield* Ref.update(effects, (existing) => [
-        ...existing,
-        {
-          id: `effect:${command.commandId}:terminal.cleanup`,
-          commandId: command.commandId,
-          threadId: command.threadId,
-          request: { type: "terminal.cleanup" },
-        } satisfies PendingOrchestrationEffectV2,
-      ]);
-    }
+    if (command.type === "thread.archive" || command.type === "thread.settle")
+      yield* Ref.update(effects, (existing) => [...existing, ...threadCloseEffects(command)]);
   });
 
   const dispatchProviderSessionDetach = Effect.fn("orchestrationV2.dispatch.providerSessionDetach")(

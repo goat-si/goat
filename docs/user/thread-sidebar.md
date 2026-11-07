@@ -316,12 +316,14 @@ Manually settling an idle thread dismisses unanswered async questions without
 sending an answer or restarting the agent. Settling also closes the thread's
 terminals that wait at an idle prompt, and keeps their output. A terminal that
 runs a command, such as a dev server, stays open.
+Settling or archiving also ends the thread's device sessions; see [Devices](devices.md).
 
 To reclaim disk space from settled work, turn on **Run in the thread's worktree when the
 thread settles** for one of the project's actions, for example `cargo clean`. It runs each time
 a thread in its own worktree settles, manually or automatically, even if a terminal there still
 runs a command such as a dev server. Threads in the project's main checkout skip it. Its terminal
 closes when the command succeeds and stays open when it fails.
+A task an agent delegated skips it while any other thread uses the same checkout.
 
 On web and desktop, press a thread's **Settle** button and drag up or down to
 settle every thread in that section between it and the one you release on.
@@ -331,6 +333,9 @@ Press `Escape` while dragging to cancel.
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
 thread. An empty thread's inactivity counts from when it was created.
+A task an agent delegated settles as soon as it finished and its result reached
+the thread that delegated it, unless the task failed, has a pull request, or its
+project turned automatic settlement off. A new message reopens it.
 Work in progress, pending questions or approvals, and background work the agent
 is waiting on prevent automatic settlement. An open pull request does not prevent inactivity
 settlement unless you turn on **Keep threads with a PR** in **Settings → General**,
