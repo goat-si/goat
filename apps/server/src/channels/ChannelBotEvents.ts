@@ -53,7 +53,7 @@ export interface BotEventsDeps {
   readonly record: ChannelBotTimeline.ChannelBotTimeline["Service"]["record"];
 }
 
-export const recordKeyFor = (event: QueuedEvent) =>
+const recordKeyFor = (event: QueuedEvent) =>
   "event:" + event.kind + ":" + event.id + ":" + event.changeId;
 
 export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotEventsDeps) {
