@@ -1141,7 +1141,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           </Pressable>
         ) : null}
         {props.environmentLabel ? (
-          <View className="min-w-0 max-w-[40%] flex-row items-center gap-1">
+          <View className="min-w-0 max-w-[40%] shrink flex-row items-center gap-1">
             {props.environmentMachine ? (
               <EnvironmentMachineSymbol
                 kind={props.environmentMachine}
@@ -1168,7 +1168,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           </View>
         ) : null}
         {providerInstance ? (
-          <View className="flex-row items-center">
+          <View className="shrink-0 flex-row items-center">
             {providerDrivers.slice(0, -1).map(
               (driver, index) => (
                 /* oxlint-disable react/no-array-index-key -- Provider history can repeat a driver; these decorative icons have no local state. */ <View

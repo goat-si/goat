@@ -1,5 +1,3 @@
-import noteEditorAsset from "@goat/mobile-note-editor/note-editor.html";
-import { Asset } from "expo-asset";
 import { useEffect, useEffectEvent, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { Platform, View, useWindowDimensions } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
@@ -15,6 +13,7 @@ import {
   type NoteLineBreak,
 } from "./note-editor-protocol";
 import { NoteEditorBridge } from "./note-editor-bridge";
+import { loadEditorUri } from "./note-editor-asset";
 import { useNoteImageResolver } from "../useNoteFiles";
 import type { EnvironmentId } from "@goat/contracts";
 
@@ -22,18 +21,6 @@ const READY_TIMEOUT_MS = 10_000;
 // How often to ask again for the page's text while React Native's copy may be stale.
 const RESYNC_RETRY_MS = 1_000;
 const SYNC_TIMEOUT_MS = 5_000;
-let editorUri: Promise<string> | null = null;
-/** Copies the bundled editor page to a readable file the first time a note opens. */
-function loadEditorUri() {
-  editorUri ??= Asset.fromModule(noteEditorAsset)
-    .downloadAsync()
-    .then((asset) => asset.localUri ?? asset.uri)
-    .catch((error: unknown) => {
-      editorUri = null;
-      throw error;
-    });
-  return editorUri;
-}
 
 export function useNoteEditorTheme(): NoteEditorTheme {
   const { appearance, themeVariables: theme, themeAppearance } = useAppearancePreferences();
@@ -191,6 +178,8 @@ function NoteEditorPage({
   };
   const [bridge] = useState(() => new NoteEditorBridge(props.value));
   const sentConfig = useRef(JSON.stringify(props.config));
+  // CodeMirror drops focus while the page is not editable, so wait until access arrives.
+  const focusPending = useRef(props.autoFocus === true);
   const [openedAt] = useState(() => performance.now());
   const [boot] = useState(
     () =>
@@ -258,6 +247,10 @@ function NoteEditorPage({
       sentConfig.current = config;
       send({ type: "config", config: props.config });
     }
+    if (focusPending.current && props.config.editable) {
+      focusPending.current = false;
+      send({ type: "command", command: "focus" });
+    }
   });
   const onMessage = (event: WebViewMessageEvent) => {
     const message = parseNoteEditorMessage(event.nativeEvent.data);
@@ -273,7 +266,6 @@ function NoteEditorPage({
               message.bootMs +
               " ms)",
           );
-        if (props.autoFocus) send({ type: "command", command: "focus" });
         return;
       case "change":
       case "doc": {
