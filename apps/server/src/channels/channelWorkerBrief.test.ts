@@ -43,6 +43,25 @@ describe("channel worker brief", () => {
     assert.notInclude(GOAT_BOT_READ_ONLY_RULE, "files anywhere on this machine");
   });
 
+  it("reads mail and messages only through a connected connector, never around a missing one", () => {
+    for (const brief of [
+      workerInstruction(task, files),
+      turnInstruction(task, files, false),
+      remoteWorkerMessage(task, { notes: EMPTY_NOTES, skills: [] }),
+      GOAT_BOT_SESSION_RULES,
+    ]) {
+      assert.include(brief, "only through a connector already connected for that account");
+      assert.include(brief, "say the person needs to connect one first");
+      assert.include(brief, "no signed-in browser session, no other CLI or app, no files on disk");
+      assert.include(brief, "no updating, installing, or signing in to a tool to get there");
+    }
+    // A bot turn changes no tool's state, whatever the request.
+    assert.include(
+      turnInstruction(task, files, false),
+      "no updating, installing, or signing in to apps, CLIs, browsers, or extensions",
+    );
+  });
+
   it("tells agents that read the notes file which of two lines wins", () => {
     assert.include(workerInstruction(task, files), NOTES_REPLACED_RULE);
     assert.include(turnInstruction(task, files, false), NOTES_REPLACED_RULE);
