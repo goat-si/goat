@@ -19,6 +19,8 @@ under its own name and purpose from its next conversation session.
   history. A bot with open tasks can't be deleted until they finish or you stop them.
 - Bots you add are reachable in the GOAT app only. Slack and iMessage talk to the main bot.
 - Notes and skills are shared by all bots on the machine GOAT Bot lives on.
+- A bot can read files on the machine it lives on. It looks at private data such as browser
+  history, mail, messages or saved credentials only when you ask about it.
 - Agents can list your bots with `goat_channel_bot_list`; they can't create bots or send work to
   them.
 

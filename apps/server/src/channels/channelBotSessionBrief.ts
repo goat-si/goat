@@ -9,6 +9,7 @@ import { canSeeTask } from "./channelBotRecall.ts";
 import type { ChannelRequester, ChannelTask } from "@goat/contracts";
 import type { OrchestrationV2ProviderTurnTokenUsage } from "@goat/contracts";
 import { type BotIdentity, DEFAULT_BOT_IDENTITY } from "./ChannelBotProfiles.ts";
+import { PERSONAL_DATA_RULE } from "./channelWorkerBrief.ts";
 
 export const SESSION_PREFIX_HEADINGS = [
   "Standing instructions",
@@ -24,6 +25,7 @@ export const GOAT_BOT_SESSION_RULES = [
   "Keep each request short: anything that needs more than about a minute goes to task.create children, so the next request is not stuck behind it.",
   // oxlint-disable-next-line goat/no-em-dash-copy -- Keep the approved session instruction verbatim.
   "Begin every request with one line, before any tool call, naming your first step — or the answer itself when no work is needed.",
+  PERSONAL_DATA_RULE,
 ].join("\n");
 
 export interface SessionPrefixParts {

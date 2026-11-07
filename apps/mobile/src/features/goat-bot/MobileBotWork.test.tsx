@@ -435,6 +435,38 @@ it("opens the coding thread a task launched, such as a bot turn's", async () => 
   expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread:child" });
 });
 
+it("lists a turn's coding thread under it in Tasks and opens it", async () => {
+  reset();
+  state.openThread.mockClear();
+  const at = "2026-11-07T10:00:00.000Z";
+  const rows = [
+    decodeRow({
+      kind: "task",
+      task: { taskId: "turn", title: "Start one task", status: "running", updatedAt: at },
+      view: { taskId: "turn", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    }),
+    decodeRow({
+      kind: "coding",
+      taskId: "turn",
+      environmentId: "env",
+      threadId: "thread:child",
+      title: "Echo question probe",
+      state: "bound",
+      lastActivityAt: at,
+    }),
+  ];
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows } });
+  await render();
+  await press("Work");
+  expect(container.textContent).toContain("Start one task");
+  await press("Echo question probe");
+  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread:child" });
+  expect(container.textContent).not.toContain("Echo question probe");
+});
+
 it("points to the chat from Tasks when the bot asked a question there", async () => {
   reset();
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
