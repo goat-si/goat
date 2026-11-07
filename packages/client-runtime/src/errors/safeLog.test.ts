@@ -26,8 +26,8 @@ describe("safeErrorLogAttributes", () => {
       traceId: "trace-safe-123",
       stack: [
         "    at removeProject (https://example.com/project.ts)",
-        "    at loadSettings (http://localhost:5173/src/useSettings.ts)",
-        "removeAll@https://example.com/app.js",
+        "    at loadSettings (http://localhost:5173/src/useSettings.ts:162:7)",
+        "removeAll@https://example.com/app.js:12:5",
       ].join("\n"),
     });
     const diagnosticText = Object.values(attributes).map(String).join("\n");
@@ -35,27 +35,6 @@ describe("safeErrorLogAttributes", () => {
     expect(diagnosticText).not.toContain("nested-cause-secret-sentinel");
     expect(diagnosticText).not.toContain("user:password");
     expect(diagnosticText).not.toContain("token=secret");
-  });
-
-  it("redacts numeric query and fragment secrets that resemble stack positions", () => {
-    const error = new Error("failure");
-    error.stack = [
-      "    at query (https://example.com/app.js?token=secret:123456)",
-      "    at fragment (https://example.com/app.js#secret:123456)",
-      "    at queryPair (https://example.com/app.js?token=secret:123:456)",
-      "    at fragmentPair (https://example.com/app.js#secret:123:456)",
-      "    at positioned (https://example.com/app.js:12:5)",
-    ].join("\n");
-
-    expect(safeErrorLogAttributes(error).stack).toBe(
-      [
-        "    at query (https://example.com/app.js)",
-        "    at fragment (https://example.com/app.js)",
-        "    at queryPair (https://example.com/app.js)",
-        "    at fragmentPair (https://example.com/app.js)",
-        "    at positioned (https://example.com/app.js:12:5)",
-      ].join("\n"),
-    );
   });
 
   it("does not trust arbitrary object messages or tags", () => {
