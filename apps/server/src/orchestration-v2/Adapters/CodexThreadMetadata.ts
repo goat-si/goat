@@ -57,6 +57,7 @@ const LoadedThreadPage = Schema.Struct({
 const LoadedThread = Schema.Struct({
   thread: Schema.Struct({
     parentThreadId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    source: Schema.optionalKey(Schema.Unknown),
     status: Schema.Struct({ type: Schema.String }),
     updatedAt: Schema.Number,
   }),
@@ -64,6 +65,18 @@ const LoadedThread = Schema.Struct({
 const decodeLoadedThreadPage = Schema.decodeUnknownEffect(LoadedThreadPage);
 const decodeLoadedThread = Schema.decodeUnknownEffect(LoadedThread);
 const QUIET = new Set(["idle", "notLoaded", "systemError"]);
+
+/** A subagent names its parent in `parentThreadId` or only in the spawn record of its source. */
+const parentOf = (thread: (typeof LoadedThread.Type)["thread"]) => {
+  if (thread.parentThreadId != null) return thread.parentThreadId;
+  const source = thread.source as
+    | { readonly subAgent?: { readonly thread_spawn?: { readonly parent_thread_id?: unknown } } }
+    | null
+    | undefined;
+  const parent =
+    typeof source === "object" ? source?.subAgent?.thread_spawn?.parent_thread_id : undefined;
+  return typeof parent === "string" ? parent : undefined;
+};
 
 type Raw = Pick<CodexClient.CodexAppServerClient["Service"]["raw"], "request">;
 type Survivor = { readonly threadId: string; readonly status: string; readonly updatedAt: number };
@@ -93,10 +106,11 @@ const loadedDescendants = Effect.fn("CodexAdapterV2.loadedDescendants")(
     for (const threadId of loaded) {
       if (roots.includes(threadId)) continue;
       const { thread } = yield* readLoaded(raw, threadId);
-      if (thread.parentThreadId != null)
+      const parent = parentOf(thread);
+      if (parent !== undefined)
         children.set(threadId, {
           threadId,
-          parent: thread.parentThreadId,
+          parent,
           status: thread.status.type,
           updatedAt: thread.updatedAt,
         });

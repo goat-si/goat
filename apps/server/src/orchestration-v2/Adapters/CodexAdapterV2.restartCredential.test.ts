@@ -96,35 +96,42 @@ describe("Codex credential after a server restart", () => {
     ).pipe(Effect.provide(layerAdapterTest)),
   );
 
-  it.effect("a subagent still running from before the restart defers its parent's reload", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = fixture("restart-child");
-        const child = "restart-child-agent";
-        const sessions = yield* McpProviderSessions.McpProviderSessions;
-        yield* sessions.set(f.config);
-        f.resume(2, {});
-        // The child Codex lists still works, so the first turn starts without a reload.
-        yield* f.turnStart(3, 1, false);
-        f.turnCompleted(1);
-        // Once Codex reports the child idle and no goal is active, the next turn reloads.
-        yield* f.turnStart(
-          f.reload(4, undefined, { threads: [f.nativeThreadId, child] }),
-          2,
-          noted,
-        );
-        f.turnCompleted(2);
-        const replay = yield* f.openHeld({
-          statuses: ["idle"],
-          survivors: { [child]: { parent: f.nativeThreadId, statuses: ["active", "idle"] } },
-        });
-        for (const ordinal of [1, 2]) {
-          yield* replay.startTurn(ordinal);
-          yield* replay.terminal;
-        }
-        assert.deepEqual(goatHeaders(replay.threadConfigs), [f.config.authorizationHeader]);
-      }),
-    ).pipe(Effect.provide(layerAdapterTest)),
+  it.effect.each([
+    { names: "parentThreadId", parentInSource: false },
+    { names: "only its spawn source", parentInSource: true },
+  ])(
+    "a subagent still running from before the restart defers its parent's reload ($names)",
+    ({ parentInSource }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = fixture("restart-child" + (parentInSource ? "-source" : ""));
+          const child = f.nativeThreadId + "-agent";
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          f.resume(2, {});
+          // The child Codex lists still works, so the first turn starts without a reload.
+          yield* f.turnStart(3, 1, false);
+          f.turnCompleted(1);
+          // Once Codex reports the child idle and no goal is active, the next turn reloads.
+          yield* f.turnStart(
+            f.reload(4, undefined, { threads: [f.nativeThreadId, child] }),
+            2,
+            noted,
+          );
+          f.turnCompleted(2);
+          const replay = yield* f.openHeld({
+            statuses: ["idle"],
+            survivors: {
+              [child]: { parent: f.nativeThreadId, statuses: ["active", "idle"], parentInSource },
+            },
+          });
+          for (const ordinal of [1, 2]) {
+            yield* replay.startTurn(ordinal);
+            yield* replay.terminal;
+          }
+          assert.deepEqual(goatHeaders(replay.threadConfigs), [f.config.authorizationHeader]);
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect("a thread Codex loaded from the resume keeps the credential without a reload", () =>

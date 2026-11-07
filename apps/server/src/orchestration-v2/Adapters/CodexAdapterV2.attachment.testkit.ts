@@ -77,6 +77,8 @@ type Survivors = Readonly<
       readonly updates?: Array<number>;
       /** Codex answers its reads without a status. */
       readonly malformed?: boolean;
+      /** Codex names the parent only in the thread's spawn source. */
+      readonly parentInSource?: boolean;
     }
   >
 >;
@@ -138,7 +140,15 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     return Effect.succeed({
       thread: {
         id: threadId,
-        ...(survivor === undefined ? {} : { parentThreadId: survivor.parent }),
+        ...(survivor === undefined
+          ? {}
+          : survivor.parentInSource
+            ? {
+                source: {
+                  subAgent: { thread_spawn: { parent_thread_id: survivor.parent, depth: 1 } },
+                },
+              }
+            : { parentThreadId: survivor.parent }),
         status: { type: nextOf(survivor?.statuses ?? statuses) },
         updatedAt: nextOf(survivor?.updates ?? [1]),
       },
