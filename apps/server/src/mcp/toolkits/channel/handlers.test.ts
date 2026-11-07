@@ -458,8 +458,16 @@ it.effect("agents list only their owner's active bots and only who each bot is",
     yield* members.setHidden({ botId: quiet.botId, hidden: true }, owner);
     const gone = yield* create("Gone");
     yield* members.remove({ botId: gone.botId }, owner);
-    // A create that has not launched yet: the profile row exists, its bot ref does not.
     const sql = yield* SqlClient.SqlClient;
+    // A delete committed and still archiving: its bot ref remains until the archive finishes.
+    const leaving = yield* create("Leaving");
+    yield* sql`UPDATE channel_runtime_state SET value_json = ${encodeProfile({
+      ...leaving,
+      role: "member",
+      state: "deleted",
+      lifecycle: { pending: "archive", at: leaving.createdAt },
+    })} WHERE key = ${botProfileKey(ownerId, leaving.botId)}`;
+    // A create that has not launched yet: the profile row exists, its bot ref does not.
     yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
       (${botProfileKey(ownerId, "unlaunched")},
        ${encodeProfile({ ...helper, botId: BotId.make("unlaunched"), name: "Unlaunched" })},
