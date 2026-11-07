@@ -311,7 +311,14 @@ const taskCacheConfig = {
 export default defineConfig({
   run: {
     cache: taskCacheConfig,
-    tasks: cachedTestTasks(process.env.GOAT_CACHED_TESTS),
+    tasks: {
+      ...cachedTestTasks(process.env.GOAT_CACHED_TESTS),
+      "knip:check:all": {
+        command: 'node -e ""',
+        dependsOn: ["knip:check:files", "knip:check:exports"],
+        cache: false,
+      },
+    },
   },
   resolve: {
     alias: {
