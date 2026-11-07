@@ -378,7 +378,7 @@ it.layer(NodeServices.layer)("project deletion with native V2 threads", (it) => 
 });
 
 it.layer(NodeServices.layer)("project lookup with unavailable workspaces", (it) => {
-  it.effect.each(["id", "stored path"] as const)(
+  it.effect.each(["id", "stored path", "relative path", "trailing separator"] as const)(
     "removes an empty project by %s after its directory is gone",
     (identifier) =>
       Effect.gen(function* () {
@@ -388,7 +388,7 @@ it.layer(NodeServices.layer)("project lookup with unavailable workspaces", (it) 
         yield* runCli([
           "project",
           "remove",
-          identifier === "id" ? project.id : workspaceRoot,
+          { id: project.id, "stored path": workspaceRoot, "relative path": NodePath.relative(process.cwd(), workspaceRoot), "trailing separator": `${workspaceRoot}${NodePath.sep}` }[identifier],
           "--base-dir",
           baseDir,
         ]);
