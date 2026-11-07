@@ -13,10 +13,11 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelSessionTaskActions from "./channelSessionTaskActions.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { ask, botModel, sessionHarness } from "./ChannelBotSession.testkit.ts";
+import { ask, botModel, runsOf, sessionHarness } from "./ChannelBotSession.testkit.ts";
 import {
   environmentId,
   goatInput,
@@ -28,8 +29,8 @@ import {
   slackInput,
 } from "./testkit/ChannelHarness.ts";
 
-/** The teammate's message in one Slack thread, read but not yet dispatched. */
-const receiveFromTeammate = (text: string, key: string) =>
+/** A Slack user's message in one Slack thread, read but not yet dispatched. */
+const receiveFromTeammate = (text: string, key: string, user = "U2") =>
   Effect.gen(function* () {
     const gateway = yield* ChannelGateway.ChannelGateway;
     const reception = yield* ChannelReceptionService.ChannelReceptionService;
@@ -37,16 +38,16 @@ const receiveFromTeammate = (text: string, key: string) =>
     const ledger = yield* ChannelLedger.ChannelLedger;
     yield* runtime.drain;
     const ingested = yield* gateway.ingest(
-      slackInput(text, key, "1760000000.000900", "U2"),
+      slackInput(text, key, "1760000000.000900", user),
       slackMemoryContext,
     );
     yield* reception.receive(ingested.inputId, runtime.ownerToken);
     return (yield* ledger.getTask(taskIdFor(ingested.inputId, 0)))!.task;
   });
 
-const dispatchNow = (text: string, key: string) =>
+const dispatchNow = (text: string, key: string, user = "U2") =>
   Effect.gen(function* () {
-    const task = yield* receiveFromTeammate(text, key);
+    const task = yield* receiveFromTeammate(text, key, user);
     const runtime = yield* ChannelRuntime.ChannelRuntime;
     yield* (yield* ChannelDispatcher.ChannelDispatcher).dispatch(task.taskId, runtime.ownerToken);
     return (yield* (yield* ChannelLedger.ChannelLedger).getTask(task.taskId))!.task;
@@ -370,4 +371,27 @@ describe("someone else directing a person's GOAT Bot work", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+});
+
+describe("a session run directing another person's work", () => {
+  it.effect("acts with its requester's current memory, not the one recorded on their task", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkTeammateWithMemory(["memory:read"]);
+      yield* linkTeammateWithMemory(["memory:read"], "U1", "colleague");
+      const source = yield* dispatchNow("look: source", "tool-source");
+      const target = yield* dispatchNow("look: target", "tool-target", "U1");
+      assert.notStrictEqual(source.worker?.threadId, target.worker?.threadId);
+      const threadId = source.worker!.threadId;
+      const caller = { threadId, runId: runsOf(harness, threadId)[0]!.id };
+      const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
+      const followUp = (clientRequestId: string) =>
+        actions.followUp({ caller, taskId: target.taskId, text: "continue", clientRequestId });
+      assert.strictEqual((yield* followUp("while-read"))?.type, "task.followup.received");
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:read","orchestration:operate"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+      assert.strictEqual((yield* Effect.flip(followUp("after-losing-memory"))).reason, "not_found");
+    }).pipe(Effect.provide(harness.layer));
+  });
 });
