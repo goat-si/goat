@@ -61,6 +61,7 @@ export * from "./channelReception.ts";
 export * from "./goatBotSessionThread.ts";
 export * from "./channelGateway.ts";
 export * from "./channelBotNotes.ts";
+export * from "./channelBotArtifacts.ts";
 export * from "./slackChannel.ts";
 export * from "./cloudMachines.ts";
 export * from "./hubNodes.ts";
