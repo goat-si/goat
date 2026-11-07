@@ -82,12 +82,14 @@ const facts = (overrides: Partial<LinuxDisplayFacts> = {}): LinuxDisplayFacts =>
   runtimeDir: "/run/user/1000",
   atSpi: true,
   busIssues: [],
+  busNamed: false,
   packageManager: "apt",
   tools: { xvfbRun: true, xauth: true, xcompmgr: true },
   ...overrides,
 });
 
-const HEADLESS_START = 'setsid xvfb-run -a -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
+const HEADLESS_START =
+  'setsid xvfb-run -n 99 -f "$HOME/.Xauthority" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
 
 describe("Linux remedies name what to install and run", () => {
   it("reads the package manager from os-release, through ID_LIKE for derivatives", () => {
@@ -105,6 +107,8 @@ describe("Linux remedies name what to install and run", () => {
     const ready = classifyLinux(facts({ displays: [] }));
     expect(ready.capability).toBe("unavailable");
     expect(ready.reason).toContain(HEADLESS_START);
+    // Apps a person starts reach it by its number; the cookie is in their own Xauthority.
+    expect(ready.reason).toContain("DISPLAY=:99");
     expect(ready.reason).not.toContain("install");
     const fedora = classifyLinux(
       facts({
@@ -171,6 +175,17 @@ describe("Linux remedies name what to install and run", () => {
     );
     expect(noBus.reason).toContain("must share one D-Bus session bus");
     expect(noBus.reason).not.toContain("at-spi2-core");
+    expect(noBus.reason).not.toContain("restart GOAT");
+    // A server started with a bus address tries only that one, so a new bus needs a restart.
+    const stale = classifyLinux(
+      facts({
+        atSpi: false,
+        sessionBus: null,
+        busNamed: true,
+        busIssues: ["the D-Bus session bus at unix:path=/tmp/gone does not answer"],
+      }),
+    );
+    expect(stale.reason).toContain("restart GOAT without DBUS_SESSION_BUS_ADDRESS");
   });
 });
 
@@ -427,7 +442,7 @@ describe("classifyLinux", () => {
   it("is unavailable without a reachable display, naming refused displays", () => {
     expect(classifyLinux(facts({ displays: [] }))).toMatchObject({
       capability: "unavailable",
-      reason: `No X display is reachable for root. Sign in to a desktop session on this computer, or run computer use in a virtual display, which GOAT looks for each time it checks. Start one with: ${HEADLESS_START}`,
+      reason: `No X display is reachable for root. Sign in to a desktop session on this computer, or run computer use in a virtual display, which GOAT looks for each time it checks. Start one with: ${HEADLESS_START} Agents open apps there themselves; to start one yourself, put DISPLAY=:99 in front of its command.`,
       environment: [],
     });
     const refused = classifyLinux(

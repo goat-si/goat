@@ -204,11 +204,12 @@ const LINUX_DRIVER_LIBRARIES = [
 ] as const;
 
 /**
- * A virtual display a server started without DISPLAY finds on its own: xvfb-run passes Xvfb an
- * -auth file the probe reads from its command line, and xcompmgr lets one window be captured.
+ * A virtual display a server started without DISPLAY finds on its own, by socket and the cookie
+ * in the person's own Xauthority, where their apps find it too; xcompmgr lets one window be
+ * captured.
  */
 const LINUX_VIRTUAL_DISPLAY =
-  'setsid xvfb-run -a -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
+  'setsid xvfb-run -n 99 -f "$HOME/.Xauthority" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
 
 export interface LinuxDisplayFacts {
   readonly user: string;
@@ -239,6 +240,8 @@ export interface LinuxDisplayFacts {
   readonly atSpi: boolean;
   /** Why the session bus or AT-SPI is missing, for the reason. */
   readonly busIssues: ReadonlyArray<string>;
+  /** The server was started with DBUS_SESSION_BUS_ADDRESS, so it tries no other bus. */
+  readonly busNamed: boolean;
   /** From /etc/os-release; null when unknown. */
   readonly packageManager: LinuxPackageManager | "zypper" | null;
   /** Which tools the virtual display command needs are on PATH. */
@@ -284,13 +287,13 @@ function virtualDisplayRemedy(facts: LinuxDisplayFacts): string {
       : command
         ? ` Install it with: ${command}.`
         : ` Install ${missing.map(([, label]) => label).join(", ")} from your distribution's packages.`;
-  return `Sign in to a desktop session on this computer, or run computer use in a virtual display, which GOAT looks for each time it checks.${install} ${install ? "Then start it" : "Start one"} with: ${LINUX_VIRTUAL_DISPLAY}`;
+  return `Sign in to a desktop session on this computer, or run computer use in a virtual display, which GOAT looks for each time it checks.${install} ${install ? "Then start it" : "Start one"} with: ${LINUX_VIRTUAL_DISPLAY} Agents open apps there themselves; to start one yourself, put DISPLAY=:99 in front of its command.`;
 }
 
 /** What to do when app controls cannot be read: a shared session bus, or AT-SPI itself. */
 function accessibilityRemedy(facts: LinuxDisplayFacts): string {
   if (facts.sessionBus === null)
-    return ` Computer use and the apps it reads must share one D-Bus session bus: sign in to this computer as ${facts.user}, or keep ${facts.user}'s user session running with loginctl enable-linger, and start the apps in that session.`;
+    return ` Computer use and the apps it reads must share one D-Bus session bus: sign in to this computer as ${facts.user}, or keep ${facts.user}'s user session running with loginctl enable-linger, and start the apps in that session.${facts.busNamed ? " GOAT was started with DBUS_SESSION_BUS_ADDRESS and tries only that bus, so restart GOAT without DBUS_SESSION_BUS_ADDRESS, or with the address of a bus that is running." : ""}`;
   const command = installCommand(facts.packageManager, ["atspi"]);
   return ` If at-spi2-core is not installed, install it${command ? `: ${command}.` : " from your distribution's packages."}`;
 }
@@ -794,6 +797,7 @@ const probeLinux = Effect.fnUntraced(function* () {
     runtimeDir,
     atSpi: buses.atSpi,
     busIssues: buses.issues,
+    busNamed: Boolean(environment.DBUS_SESSION_BUS_ADDRESS?.trim()),
     packageManager: linuxPackageManager(
       yield* fs.readFileString("/etc/os-release").pipe(
         Effect.catch(() => fs.readFileString("/usr/lib/os-release")),
