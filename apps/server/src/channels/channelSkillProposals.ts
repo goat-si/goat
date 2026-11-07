@@ -128,30 +128,45 @@ export const makeSkillProposalAnswers = Effect.gen(function* () {
   // With the owner token, unique per save attempt across processes; a temp file is never reopened.
   const attempts = yield* Ref.make(0);
 
-  /** Links the prepared file into place: saved, taken by a different file, or failed. */
-  const place = (tmp: string, target: string, bytes: Uint8Array) =>
-    fs.link(tmp, target).pipe(
-      Effect.as("saved" as const),
+  /** What is at the skill's path now: these exact bytes, another file, or nothing. */
+  const found = (target: string, bytes: Uint8Array) =>
+    fs.stat(target).pipe(
+      Effect.flatMap((info) =>
+        Number(info.size) !== bytes.length
+          ? Effect.succeed("taken" as const)
+          : fs
+              .readFile(target)
+              .pipe(
+                Effect.map((read) =>
+                  sameBytes(read, bytes) ? ("saved" as const) : ("taken" as const),
+                ),
+              ),
+      ),
       Effect.catchTags({
         PlatformError: (cause) =>
-          cause.reason._tag !== "AlreadyExists"
-            ? Effect.succeed("failed" as const)
-            : fs.stat(target).pipe(
-                Effect.flatMap((info) =>
-                  Number(info.size) !== bytes.length
-                    ? Effect.succeed("taken" as const)
-                    : fs
-                        .readFile(target)
-                        .pipe(
-                          Effect.map((found) =>
-                            sameBytes(found, bytes) ? ("saved" as const) : ("taken" as const),
-                          ),
-                        ),
-                ),
-                Effect.orElseSucceed(() => "failed" as const),
-              ),
+          Effect.succeed(
+            cause.reason._tag === "NotFound" ? ("missing" as const) : ("failed" as const),
+          ),
       }),
     );
+
+  /**
+   * Links the prepared file into place. Without a prepared file (it could not be written), an
+   * earlier attempt's link may still be there, so the path decides.
+   */
+  const place = (tmp: string | undefined, target: string, bytes: Uint8Array) =>
+    (tmp === undefined
+      ? found(target, bytes)
+      : fs.link(tmp, target).pipe(
+          Effect.as("saved" as const),
+          Effect.catchTags({
+            PlatformError: (cause) =>
+              cause.reason._tag === "AlreadyExists"
+                ? found(target, bytes)
+                : Effect.succeed("failed" as const),
+          }),
+        )
+    ).pipe(Effect.map((outcome) => (outcome === "missing" ? ("failed" as const) : outcome)));
 
   const sweep = Effect.gen(function* () {
     const names = yield* fs.readDirectory(files.skills).pipe(Effect.orElseSucceed(() => []));
@@ -203,11 +218,9 @@ export const makeSkillProposalAnswers = Effect.gen(function* () {
             current.task.openQuestions.length > 0
           )
             return;
-          const outcome = !save
-            ? "declined"
-            : prepared
-              ? yield* place(tmp, target, bytes)
-              : "failed";
+          const outcome = save
+            ? yield* place(prepared ? tmp : undefined, target, bytes)
+            : "declined";
           const summary =
             outcome === "saved"
               ? "Saved the skill " + proposal.name + "."

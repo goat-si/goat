@@ -405,4 +405,50 @@ describe("GOAT Bot skill proposals", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect(
+    "a retry that cannot write its temp file still reports the save an earlier link left",
+    () => {
+      const { harness } = harnessCapturing();
+      return Effect.gen(function* () {
+        yield* finishWith(harness);
+        const asked = (yield* proposalTask)!;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(asked.taskId))!,
+          {
+            type: "task.question.answered",
+            payload: { questionId: asked.openQuestions[0]!.questionId, answer: "Save" },
+          },
+          { owner: runtime.ownerToken },
+        );
+        const [answer] = yield* ledger.recentAnswers(asked.taskId, 1);
+        const expected = skillFileText({
+          taskId: asked.taskId,
+          proposal: asked.skillProposal!,
+          approvedAt: answer!.occurredAt,
+        });
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const dir = yield* skillsDir;
+        yield* fs.makeDirectory(dir, { recursive: true });
+        const target = path.join(dir, "deploy-check.md");
+        yield* fs.writeFileString(target, expected);
+        // The runtime's first save attempt's temp path, taken, so its exclusive write fails.
+        const firstTemp =
+          ".deploy-check.md." +
+          asked.taskId.replace(":", "-") +
+          "." +
+          runtime.ownerToken.toLowerCase().replace(/[^a-z0-9]+/gu, "-") +
+          "-0.tmp";
+        yield* fs.makeDirectory(path.join(dir, firstTemp));
+        yield* runtime.drain;
+        const done = yield* proposalTask;
+        assert.strictEqual(done?.resultSummary, "Saved the skill deploy-check.");
+        assert.strictEqual(yield* fs.readFileString(target), expected);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
