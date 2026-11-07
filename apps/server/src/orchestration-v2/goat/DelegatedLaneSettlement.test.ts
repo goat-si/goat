@@ -282,19 +282,22 @@ it.effect("a lane keeps its project's opt-out and its pull request rules", () =>
   ),
 );
 
-it.effect("a settled lane never runs a settle script in its parent's checkout", () =>
+it.effect("a settled lane never runs a settle script in a checkout another thread uses", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const lane = {
-        ...appThread(childId, "settled", "/worktrees/shared"),
+      const laneIn = (id: string, worktreePath: string): OrchestrationV2AppThread => ({
+        ...appThread(id, "settled", worktreePath),
         lineage: {
           rootThreadId: parentId,
           parentThreadId: parentId,
           relationshipToParent: "subagent",
         },
-      } satisfies OrchestrationV2AppThread;
-      // The parent is settled now but can resume in that checkout at any moment.
+      });
+      // Every other thread here is settled now, but any of them can resume in that checkout.
+      const lane = laneIn(childId, "/worktrees/shared");
       const parent = appThread(parentId, "settled", "/worktrees/shared");
+      const isolated = laneIn("isolated-lane", "/worktrees/isolated");
+      const isolatedSharer = laneIn("isolated-sharer", "/worktrees/isolated");
       const own = appThread("own-worktree", "settled", "/worktrees/own");
       const settledEvent = (settledThread: OrchestrationV2AppThread) =>
         ({
@@ -303,10 +306,14 @@ it.effect("a settled lane never runs a settle script in its parent's checkout", 
           payload: settledThread,
         }) as never;
       yield* sweep(
-        { lane: child({ status: "failed" }), threads: [lane, parent, own] },
+        {
+          lane: child({ status: "failed" }),
+          threads: [lane, parent, isolated, isolatedSharer, own],
+        },
         (publish, _setResultRun, scripts) =>
           Effect.gen(function* () {
             yield* publish(settledEvent(lane));
+            yield* publish(settledEvent(isolated));
             yield* publish(settledEvent(own));
             // Events are handled in order, so the second script proves the first event is done.
             assert.strictEqual(yield* Queue.take(scripts), own.id);

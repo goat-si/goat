@@ -700,14 +700,12 @@ export const make = Effect.gen(function* () {
       if (thread.settledOverride !== "settled") return;
       const settledAtMs = toMillis(thread.settledAt);
       if (settledAtMs === null || settleActionRunAt.get(threadId) === settledAtMs) return;
-      // A task lane in its parent's checkout does not own it: the parent can resume there at any time.
-      const parentId = thread.lineage.parentThreadId;
-      if (parentId !== null && (yield* readThreadMetadata(parentId)).worktreePath === worktreePath)
-        return;
-      // Another unsettled thread on the checkout may still be working there.
       const sharers = (yield* projections.getThreadWorktreePaths()).filter(
         (entry) => entry.threadId !== threadId && entry.worktreePath === worktreePath,
       );
+      // A task lane settles on its own while others on its checkout, settled or not, can resume there.
+      if (thread.lineage.relationshipToParent === "subagent" && sharers.length > 0) return;
+      // Another unsettled thread on the checkout may still be working there.
       for (const sharer of sharers) {
         if ((yield* readThreadMetadata(sharer.threadId)).settledOverride !== "settled") return;
       }
