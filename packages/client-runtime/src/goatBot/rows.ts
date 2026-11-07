@@ -157,6 +157,8 @@ export type GoatBotRow =
       readonly replyTo: string | null;
       /** Answers to pick, only while nothing has been sent since the question. */
       readonly options: ReadonlyArray<string>;
+      /** The task a picked answer goes to, so it answers this question wherever it is pressed. */
+      readonly answerTaskId?: string;
       readonly memory?: MemoryReportReference;
       readonly firstInGroup: boolean;
       readonly groupPosition: GoatBotGroupPosition;
@@ -362,6 +364,8 @@ export function buildGoatBotTimeline(input: {
             ? (inputTexts.get(presentation.replyToKey)?.slice(0, 160) ?? null)
             : null,
         options: open === false ? NO_OPTIONS : (presentation?.options ?? NO_OPTIONS),
+        // Only a server that names the question also routes an answer sent to its task.
+        ...(open === true && presentation?.taskId ? { answerTaskId: presentation.taskId } : {}),
         ...(presentation?.memory === undefined ? {} : { memory: presentation.memory }),
       });
       previousInputKey = null;
@@ -402,7 +406,11 @@ export function buildGoatBotTimeline(input: {
   const pending: UngroupedRow[] = input.pendingInputs
     .filter(
       (entry) =>
-        (input.taskId === undefined || (entry.taskId ?? null) === input.taskId) &&
+        (input.taskId === undefined ||
+          (entry.taskId ?? null) === input.taskId ||
+          (input.taskId === null &&
+            entry.taskId !== undefined &&
+            newestCards.get(entry.taskId)?.askInChat === true)) &&
         !committedRequestKeys.has(entry.clientKey) &&
         (entry.requestKey === null || !committedRequestKeys.has(entry.requestKey)),
     )

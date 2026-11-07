@@ -719,6 +719,38 @@ describe("questions a task asks in the main chat", () => {
     // A card from a server that does not list open questions keeps the later-message rule.
     expect(optionsIn(null, items, { n1: proposal(1) })).toEqual([["b1", []]]);
   });
+
+  it("sends a pressed answer to the question's task, and shows that send in the main chat", () => {
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      bot("b1", "2026-10-12T12:00:01Z", "Save this as a skill? deploy-check"),
+    ];
+    const answerTasks = (cards: Record<string, GoatBotTaskCard>) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: rowsOf(items),
+          pendingInputs: [
+            {
+              clientKey: "c1",
+              taskId: "proposal",
+              text: "Save",
+              createdAt: "2026-10-12T12:00:02Z",
+              state: "sending",
+              requestKey: null,
+            },
+          ],
+          readers: readers({ b1: asked }, cards),
+          taskId: null,
+        }),
+      ).map((row) => (row.kind === "bot" ? [row.id, row.answerTaskId] : [row.id]));
+    expect(answerTasks({ n1: proposal(1, ["q-save"]) })).toEqual([
+      ["n1"],
+      ["b1", "proposal"],
+      ["pending:c1"],
+    ]);
+    // A server that does not name open questions may not route an answer sent to a task.
+    expect(answerTasks({ n1: proposal(1) })).toEqual([["n1"], ["b1", undefined], ["pending:c1"]]);
+  });
 });
 
 describe("goatBotReplyingSince", () => {
