@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
@@ -24,6 +25,34 @@ import {
 const fixtureTime = Date.parse("2026-10-14T00:00:00.000Z");
 
 describe("MemoryCompactor pressure", () => {
+  it.effect("only operations the checkpoint covers set the next cleanup time", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(fixtureTime);
+      yield* seed;
+      yield* push();
+      const store = yield* Store.MemoryStore;
+      const observed = Store.MemoryStore.of({
+        ...store,
+        storeBudgetBytes: () =>
+          Effect.succeed({ bytes: M.MEMORY_STORE_TARGET_BYTES, basis: "used" as const }),
+      });
+      const compactor = yield* Compactor.make.pipe(
+        Effect.provideService(Store.MemoryStore, observed),
+        Effect.provideService(Hub.MemoryHubConfiguration, {
+          read: Effect.succeed({ memorySpaceId: space, hubEnvironmentId: hubEnv }),
+        }),
+      );
+      yield* compactor.reclaim(principal());
+      const now = yield* Clock.currentTimeMillis;
+      const covered = yield* store.transact(store.pressureEligibilityTx(space, now));
+      assert.strictEqual(covered.nextEligibleAtMs, now + M.MEMORY_LOG_PRESSURE_RETENTION_MS);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM memory_hub_operations WHERE space=${space}`;
+      yield* sql`INSERT INTO memory_hub_operations(hub_sequence,space,operation_id,memory_id,origin_environment,operation_digest,entry_json,committed_at) VALUES (0,${space},'00000000-0000-4000-8000-000000999999',${memoryId},${hubEnv},${"d".repeat(64)},'{}',${now})`;
+      const uncovered = yield* store.transact(store.pressureEligibilityTx(space, now));
+      assert.isNull(uncovered.nextEligibleAtMs);
+    }).pipe(Effect.provide(live)),
+  );
   it.effect("pressure compaction keeps the event an undelivered report still reads", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(fixtureTime);

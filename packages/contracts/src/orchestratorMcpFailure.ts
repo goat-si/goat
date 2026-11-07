@@ -133,5 +133,10 @@ export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFa
     remoteCode: Schema.optionalKey(Schema.String),
     /** The read path that tells whether a write with an unknown outcome happened. */
     reconcile: Schema.optionalKey(Schema.String),
+    /**
+     * A domain literal that classifies this failure more precisely than code. Builds that do not
+     * know the field ignore it and classify by code, so it can be added without a new reason.
+     */
+    classification: Schema.optionalKey(Schema.String),
   },
 ) {}

@@ -110,8 +110,7 @@ const storeFullFailure = (error: unknown) =>
   error.current !== undefined
     ? new M.OrchestratorMcpFailure({
         code: "capacity_exceeded",
-        // remoteCode is a free string, so builds that predate this classification still decode it.
-        remoteCode: "memory_store_full",
+        classification: "memory_store_full",
         message: M.memoryStoreFullMessage({
           current: error.current,
           limit: error.limit,

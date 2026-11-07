@@ -1,6 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { MemoryStoreReclaimResult } from "./MemoryStoreReclaim.ts";
 import { memoryFailure } from "../mcp/toolkits/memory/handlers.ts";
+import { storedEnvelope } from "../mcp/toolkits/agentSurface/dispatchEnvelope.ts";
+import { declaredFailureLiteral } from "@goat/contracts/agentSurface/envelope";
+import * as Fiber from "effect/Fiber";
 import * as Settings from "../serverSettings.ts";
 import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
@@ -8,7 +11,6 @@ import searchMigration from "../persistence/Migrations/090_MemorySearchCounters.
 import * as Service from "./MemoryService.ts";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -141,6 +143,35 @@ const sample = (day: number, value = day): M.MemoryStorageSample => {
 const encodeFailure = Schema.encodeSync(M.OrchestratorMcpFailure);
 const decodeFailure = Schema.decodeUnknownSync(M.OrchestratorMcpFailure);
 const isMcpFailure = Schema.is(M.OrchestratorMcpFailure);
+// The failure's fields as of 0102c72f82, before classification existed: what older builds decode.
+const decodeBaseFailure = Schema.decodeUnknownSync(
+  Schema.TaggedStruct("OrchestratorMcpFailure", {
+    code: M.OrchestratorMcpFailureCode,
+    message: Schema.String,
+    reason: Schema.optionalKey(M.OrchestratorMcpFailureReason),
+    mayHaveStarted: Schema.optionalKey(Schema.Boolean),
+    remoteCode: Schema.optionalKey(Schema.String),
+    reconcile: Schema.optionalKey(Schema.String),
+  }),
+);
+const storeFull = () =>
+  Effect.gen(function* () {
+    const failure = yield* Effect.flip(
+      memoryFailure("goat_memory_remember")(
+        new Store.MemoryCapacityError({
+          dimension: "live_payload_bytes",
+          current: 117_727_232,
+          limit: M.MEMORY_STORE_BUDGET_BYTES,
+          budget: "store",
+          reclaim: "completed",
+          reclaimable: 0,
+        }),
+      ),
+    );
+    assert.isTrue(isMcpFailure(failure), "a store-full refusal is an OrchestratorMcpFailure");
+    if (!isMcpFailure(failure)) return yield* Effect.die("unexpected refusal shape");
+    return failure;
+  });
 const fixtureNow = Date.parse(now);
 const overBudgetSample = () =>
   Effect.gen(function* () {
@@ -166,37 +197,65 @@ const writeOnce = Effect.gen(function* () {
 });
 
 describe("MemoryStoreReclaim", () => {
-  it.effect("writes queued behind one reclaim reuse it instead of compacting again", () =>
+  it.effect("writes that arrive while a reclaim runs share it instead of compacting again", () =>
+    Effect.gen(function* () {
+      const reclaim = yield* Quota.MemoryStoreReclaim;
+      let compactions = 0;
+      yield* reclaim.bindHub(
+        Option.some({
+          memorySpaceId: space,
+          reclaim: Effect.sync(() => compactions++).pipe(Effect.andThen(Effect.sleep(1000))),
+        }),
+      );
+      const both = yield* Effect.all([reclaim.reclaim(env), reclaim.reclaim(env)], {
+        concurrency: "unbounded",
+      }).pipe(Effect.forkChild);
+      yield* TestClock.adjust(1000);
+      yield* Fiber.join(both);
+      assert.strictEqual(compactions, 1);
+    }).pipe(Effect.provide(services)),
+  );
+  it.effect("a reclaim requested after the previous one finished runs again", () =>
     Effect.gen(function* () {
       const reclaim = yield* Quota.MemoryStoreReclaim;
       let compactions = 0;
       yield* reclaim.bindHub(
         Option.some({ memorySpaceId: space, reclaim: Effect.sync(() => compactions++) }),
       );
-      const refusedAt = yield* Clock.currentTimeMillis;
-      yield* Effect.all([reclaim.reclaim(env, refusedAt), reclaim.reclaim(env, refusedAt)], {
-        concurrency: "unbounded",
-      });
-      assert.strictEqual(compactions, 1);
+      yield* reclaim.reclaim(env);
+      yield* reclaim.reclaim(env);
+      assert.strictEqual(compactions, 2);
     }).pipe(Effect.provide(services)),
   );
-  it.effect("the store-full refusal still decodes with the existing failure schema", () =>
+  it.effect("the store-full refusal decodes with the failure fields older builds know", () =>
     Effect.gen(function* () {
-      const refusal = new Store.MemoryCapacityError({
-        dimension: "live_payload_bytes",
-        current: 117_727_232,
-        limit: M.MEMORY_STORE_BUDGET_BYTES,
-        budget: "store",
-        reclaim: "completed",
-        reclaimable: 0,
-      });
-      const failure = yield* Effect.flip(memoryFailure("goat_memory_remember")(refusal));
-      assert.isTrue(isMcpFailure(failure), "a store-full refusal is an OrchestratorMcpFailure");
-      if (!isMcpFailure(failure)) return;
-      assert.deepInclude(decodeFailure(encodeFailure(failure)), {
+      const wire = encodeFailure(yield* storeFull());
+      assert.deepInclude(decodeBaseFailure(wire), { code: "capacity_exceeded" });
+      assert.deepInclude(decodeFailure(wire), {
         code: "capacity_exceeded",
-        remoteCode: "memory_store_full",
+        classification: "memory_store_full",
       });
+    }),
+  );
+  it.effect("goat_call and stored results both answer a store-full refusal as not retryable", () =>
+    Effect.gen(function* () {
+      const failure = yield* storeFull();
+      const result = {
+        isError: true,
+        content: [{ type: "text", text: JSON.stringify(encodeFailure(failure)) }],
+      };
+      // The live dispatch reclassifies by the captured error; a stored write by its literal.
+      for (const captured of [failure, declaredFailureLiteral(failure)]) {
+        const envelope = storedEnvelope("goat_memory_remember", {}, "write", result, captured);
+        assert.deepInclude(envelope, { status: "error" });
+        if (envelope.status !== "error") continue;
+        assert.deepInclude(envelope.error, {
+          code: "failed_precondition",
+          reason: "memory_store_full",
+          retryable: false,
+        });
+        assert.include(envelope.error.message, M.MEMORY_STORE_FULL_LABEL);
+      }
     }),
   );
   it.effect("remember on an over-budget store is saved after one automatic reclaim", () =>
@@ -273,7 +332,7 @@ describe("MemoryStoreReclaim", () => {
       assert.deepInclude(final, {
         _tag: "OrchestratorMcpFailure",
         code: "capacity_exceeded",
-        remoteCode: "memory_store_full",
+        classification: "memory_store_full",
       });
       assert.include(final.message, M.MEMORY_STORE_FULL_LABEL);
       assert.include(final.message, "memory_outbox");

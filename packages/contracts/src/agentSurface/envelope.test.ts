@@ -296,7 +296,7 @@ describe("fromToolResult", () => {
                 text: JSON.stringify({
                   _tag: "OrchestratorMcpFailure",
                   code: "capacity_exceeded",
-                  remoteCode: "memory_store_full",
+                  classification: "memory_store_full",
                   message: "Memory storage limit reached: 112.3 MiB of 100.0 MiB used.",
                 }),
               },
@@ -308,7 +308,7 @@ describe("fromToolResult", () => {
       ),
     ).toMatchObject({
       code: "failed_precondition",
-      reason: "capacity_exceeded",
+      reason: "memory_store_full",
       message: "Memory storage limit reached: 112.3 MiB of 100.0 MiB used.",
       retryable: false,
     });

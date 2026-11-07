@@ -1,11 +1,11 @@
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
 import type * as Store from "./MemoryStore.ts";
 import { MemoryCapacityError, Transaction } from "./store/StoreModel.ts";
 
@@ -25,11 +25,8 @@ interface HubReclaim {
 export class MemoryStoreReclaim extends Context.Service<
   MemoryStoreReclaim,
   {
-    /** A reclaim that finished at or after requestedAt is reused rather than repeated. */
-    readonly reclaim: (
-      environmentId: M.EnvironmentId,
-      requestedAt: number,
-    ) => Effect.Effect<MemoryStoreReclaimResult>;
+    /** Callers that arrive while a reclaim runs share its result; later callers start another. */
+    readonly reclaim: (environmentId: M.EnvironmentId) => Effect.Effect<MemoryStoreReclaimResult>;
     /** The hub composition binds its compactor once this environment hosts a ready hub. */
     readonly bindHub: (hub: Option.Option<HubReclaim>) => Effect.Effect<void>;
   }
@@ -43,25 +40,37 @@ export const makeStoreReclaim = Effect.fnUntraced(function* (
   ) => Effect.Effect<unknown, { readonly _tag: string }>,
 ) {
   const hub = yield* Ref.make(Option.none<HubReclaim>());
-  const lock = yield* Semaphore.make(1);
-  // Writes that queued behind a reclaim reuse its result instead of compacting again.
-  const latest = yield* Ref.make(
-    Option.none<{ readonly at: number; readonly result: MemoryStoreReclaimResult }>(),
-  );
+  const inFlight = yield* Ref.make(Option.none<Deferred.Deferred<MemoryStoreReclaimResult>>());
   const failed = (stage: string) => (error: { readonly _tag: string }) =>
     Effect.logWarning("Memory store reclaim failed", { stage, errorTag: error._tag }).pipe(
       Effect.as(false),
     );
   const reclaim = Effect.fn("MemoryStoreReclaim.reclaim")(function* (
     environmentId: M.EnvironmentId,
-    requestedAt: number,
   ) {
-    const previous = yield* Ref.get(latest);
-    if (Option.isSome(previous) && previous.value.at >= requestedAt) return previous.value.result;
-    const result = yield* reclaimNow(environmentId);
-    yield* Ref.set(latest, Option.some({ at: yield* Clock.currentTimeMillis, result }));
-    return result;
-  }, lock.withPermits(1));
+    const own = yield* Deferred.make<MemoryStoreReclaimResult>();
+    const running = yield* Ref.modify(
+      inFlight,
+      (
+        current,
+      ): readonly [
+        Option.Option<Deferred.Deferred<MemoryStoreReclaimResult>>,
+        Option.Option<Deferred.Deferred<MemoryStoreReclaimResult>>,
+      ] => (Option.isSome(current) ? [current, current] : [Option.none(), Option.some(own)]),
+    );
+    if (Option.isSome(running)) return yield* Deferred.await(running.value);
+    return yield* reclaimNow(environmentId).pipe(
+      Effect.tap((result) => Deferred.succeed(own, result)),
+      // An interrupted reclaim must not leave waiters hanging or block the next one.
+      Effect.ensuring(
+        Deferred.succeed(own, {
+          outcome: "failed",
+          eligibleLogicalBytes: 0,
+          nextEligibleAtMs: null,
+        }).pipe(Effect.andThen(Ref.set(inFlight, Option.none()))),
+      ),
+    );
+  });
   const reclaimNow = Effect.fnUntraced(function* (environmentId: M.EnvironmentId) {
     const bound = yield* Ref.get(hub);
     const compacted = Option.isNone(bound)
@@ -110,7 +119,6 @@ export const withStoreReclaim =
     self.pipe(
       Effect.catch((error: E) =>
         Effect.gen(function* () {
-          const refusedAt = yield* Clock.currentTimeMillis;
           if (
             !isCapacityError(error) ||
             error.budget !== "store" ||
@@ -119,7 +127,7 @@ export const withStoreReclaim =
             return yield* Effect.fail(error);
           const service = yield* Effect.serviceOption(MemoryStoreReclaim);
           if (Option.isNone(service)) return yield* error;
-          const result = yield* service.value.reclaim(environmentId, refusedAt);
+          const result = yield* service.value.reclaim(environmentId);
           return yield* self.pipe(
             Effect.mapError((retry: E) =>
               isCapacityError(retry) && retry.budget === "store"

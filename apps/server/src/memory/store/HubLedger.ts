@@ -596,20 +596,23 @@ export const makeHubLedger = (
     yield* Transaction;
     const retention = yield* readHubRetentionTx(space);
     if (!retention.checkpointId) return { eligibleLogicalBytes: 0, nextEligibleAtMs: null };
+    const covered = yield* coveredOperationsTx(space, retention.checkpointId);
     const eligible = yield* coveredLogRowsTx({
       space,
       floor: retention.retentionFloor,
       cutoff: logCutoff(now, true),
-      covered: yield* coveredOperationsTx(space, retention.checkpointId),
+      covered,
       maxRows: Number.POSITIVE_INFINITY,
     });
+    // Only rows the checkpoint covers ever become removable, so only they set the next time.
     const waiting = yield* stored(
       "hub-compact-next-eligible",
       sql<{
-        at: number | null;
-      }>`SELECT min(committed_at) AS at FROM memory_hub_operations WHERE space=${space} AND hub_sequence<=${retention.retentionFloor} AND committed_at>${logCutoff(now, true)} AND operation_id NOT IN (SELECT json_extract(o.metadata_json,'$.operationId') FROM memory_outbox o WHERE o.space=${space} AND o.status IN ('pending','running','retry') AND json_extract(o.metadata_json,'$.operationId') IS NOT NULL)`,
+        operation_id: string;
+        at: number;
+      }>`SELECT operation_id,committed_at AS at FROM memory_hub_operations WHERE space=${space} AND hub_sequence<=${retention.retentionFloor} AND committed_at>${logCutoff(now, true)} AND operation_id NOT IN (SELECT json_extract(o.metadata_json,'$.operationId') FROM memory_outbox o WHERE o.space=${space} AND o.status IN ('pending','running','retry') AND json_extract(o.metadata_json,'$.operationId') IS NOT NULL) ORDER BY committed_at`,
     );
-    const next = waiting[0]?.at;
+    const next = waiting.find((row) => covered.has(row.operation_id))?.at;
     return {
       eligibleLogicalBytes: [...eligible.operations, ...eligible.events].reduce(
         (sum, row) => sum + row.bytes,
