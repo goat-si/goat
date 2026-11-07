@@ -11,11 +11,13 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
+import { inputIdFor } from "./channelIds.ts";
 import {
   botMessages,
   defaultScript,
   goatInput,
   makeHarness,
+  ownerId,
   rpcContext,
   setupBot,
 } from "./testkit/ChannelHarness.ts";
@@ -93,6 +95,39 @@ describe("GOAT Bot note corrections through reception", () => {
       assert.notInclude(saved, "(replaces:");
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
+
+  it.effect(
+    "a pass re-run after the note was saved still tells the person it matched nothing",
+    () => {
+      const { harness } = harnessFor(() => ({
+        remember: "I deploy on Mondays.",
+        rememberQuote: "Actually I deploy on Mondays",
+        replacesNote: "I deploy on Sundays.",
+      }));
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const fs = yield* FileSystem.FileSystem;
+        const files = yield* notesFiles;
+        // The first pass saved the note, then the server stopped before the result committed.
+        const inputId = inputIdFor({ ...goatInput("", "correct"), ownerId });
+        yield* appendChannelBotNote(fs, files, fridays, "2026-11-01T10:00:00Z", "earlier");
+        yield* appendChannelBotNote(
+          fs,
+          files,
+          "I deploy on Mondays.",
+          "2026-11-02T10:00:00Z",
+          inputId,
+        );
+        const saved = yield* fs.readFileString(files.notes);
+        yield* send("Actually I deploy on Mondays", "correct");
+        const texts = (yield* botMessages).messages.map((message) => message.text).join("\n");
+        assert.include(texts, "Got it. " + CHANNEL_COPY.noteCorrectionUnmatched);
+        assert.strictEqual(yield* fs.readFileString(files.notes), saved);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
 
   it.effect("a correction the person did not ask for in this message changes nothing", () => {
     const { harness } = harnessFor(() => ({
