@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { resolveGoatMcpToolDefinition } from "@goat/shared/goatMcpToolPresentation";
 
 import { summarizeGoatToolCalls, type GoatToolSummaryCall } from "./goatToolSummary.ts";
 
@@ -37,6 +38,18 @@ describe("summarizeGoatToolCalls", () => {
     );
     expect(summarizeGoatToolCalls("channel-bot-home-claim", [claim(false)]).label).toBe(
       "Tried to move GOAT Bot to this machine",
+    );
+  });
+
+  it("never says GOAT Bot's notes changed when the request was refused", () => {
+    const refused = completed(
+      { kind: "remember", quote: "remember that staging is staging-02" },
+      { outcome: "refused", reason: "busy", told: true, message: "Not changed." },
+    );
+    const notes = resolveGoatMcpToolDefinition("goat_channel_notes_change");
+    expect(notes?.labels[2]).toBe("Requested");
+    expect(summarizeGoatToolCalls(notes!.summaryAction, [refused]).label).toBe(
+      "Requested GOAT Bot notes changes 1 time",
     );
   });
 

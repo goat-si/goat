@@ -658,8 +658,8 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "channel-task-report",
   ),
   goat_channel_notes_change: tool(
-    ["Change", "Changing", "Changed", "GOAT Bot's notes"],
-    "channel-task-report",
+    ["Request", "Requesting", "Requested", "a GOAT Bot notes change"],
+    "channel-notes-change",
   ),
   channel_task_move: tool(
     ["Continue", "Continuing", "Continued", "a GOAT task on another machine"],
