@@ -209,9 +209,10 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
   const list = Effect.fn("ChannelBotArtifacts.list")(function* () {
     yield* home.requireHome;
     const rootStat = yield* lstat(root).pipe(
-      Effect.map(Option.some),
-      Effect.catch((error) =>
-        error.reason === "not_found" ? Effect.succeedNone : Effect.fail(error),
+      Effect.asSome,
+      Effect.catchIf(
+        (error) => error.reason === "not_found",
+        () => Effect.succeedNone,
       ),
     );
     if (Option.isNone(rootStat) || !rootStat.value.isDirectory()) {
@@ -263,8 +264,9 @@ export const make = Effect.fn("ChannelBotArtifacts.make")(function* (
         }),
       ).pipe(
         // A folder removed while the walk runs is skipped; any other failure fails the list.
-        Effect.catch((error) =>
-          error.reason === "not_found" ? Effect.succeed(true) : Effect.fail(error),
+        Effect.catchIf(
+          (error) => error.reason === "not_found",
+          () => Effect.succeed(true),
         ),
       );
     for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
