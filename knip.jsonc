@@ -151,9 +151,8 @@
         "src/features/browser/preview-stream.browser.ts!",
         "src/features/notes/live-editor/note-editor.browser.ts!",
       ],
-      // Fonts are configured as asset paths; Expo autolinks the native packages.
+      // Expo autolinks the native packages.
       "ignoreDependencies": [
-        "@expo-google-fonts/dm-sans",
         "@goat/mobile-highlights-native",
         "@goat/mobile-review-diff-native",
         "@goat/mobile-terminal-native",
