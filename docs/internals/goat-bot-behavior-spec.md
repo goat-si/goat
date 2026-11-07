@@ -431,6 +431,15 @@ did not show it, not that it is absent. "GOAT now" is dev at
 | Model per bot                        | Text generation model only                                                                         | Per bot engine                  | `/model` per channel             | Per bot                       | Per agent                                      | **Match**: picker like a main thread                                                                                                          |
 | Audit of trigger                     | Requester recorded per task                                                                        | Inspector                       | Logs                             | Audit row with trigger        | Logs                                           | **Match**: person / routine / delegation on every action                                                                                      |
 
+A second study on 2026-11-07 read [threebot](https://github.com/RokaSwK/threebot),
+[Pero](https://github.com/perokit/pero), [Boop Agent](https://github.com/raroque/boop-agent),
+[Codync](https://github.com/leepokai/Codync), [Angelia](https://github.com/korengast/angelia),
+[OpenFolk](https://github.com/OpenFolk/OpenFolk), and OpenClaw's and Hermes's current docs. GOAT took
+bot faces, editable profiles, member bots, the Work panel's routine, memory and status views, and
+check-in routines from it. It kept requester-scoped sessions and per-requester approvals where those
+bots share one main session, approve for a whole chat, or approve unattended work, and it kept faces
+still except for short moves while a bot reads or works.
+
 ## Gaps, in priority order
 
 1. **Memory and work-history reads** (P1). Shipped in #459; corrections replace the note they
@@ -446,8 +455,13 @@ did not show it, not that it is absent. "GOAT now" is dev at
 5. **Stop all** (P5) for a requester, including subagents.
 6. **Concurrency cap** of about four runs per requester with a visible queue.
 7. **Subagent approvals** surfaced to the requester as cards.
-8. **Model picker** per bot in web, desktop and mobile settings.
-9. **Routines and tell-me-when** from chat, with unattended deny.
+8. **Model picker** per bot in web, desktop and mobile settings. A member bot gets its model
+   when it is created (#2589) and runs on it, else on GOAT Bot's model. Remaining: changing a
+   member's model after creation.
+9. **Routines and tell-me-when** from chat, with unattended deny. Routines bound to a bot show in
+   its Work panel with schedule, last run and a pause switch (#2575), and a check-in preset
+   answers only when something needs the person and never approves (#2596). Remaining: one-shot
+   watches created from chat that stop after firing.
 10. **Slack buttons and iMessage numbered replies** for decision cards.
 11. **Attachments** out, and in from Slack and iMessage.
 12. **Trigger audit** on every action.
