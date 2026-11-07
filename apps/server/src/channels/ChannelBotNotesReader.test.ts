@@ -13,7 +13,8 @@ import * as ServerConfig from "../config.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotNotesReader from "./ChannelBotNotesReader.ts";
 import { channelNotesRevision } from "./channelBriefs.ts";
-import { appendChannelBotNote, channelBotFilesFor, NOTES_HEADER } from "./channelBotNotes.ts";
+import { NOTES_HEADER } from "./channelBotNoteLines.ts";
+import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
@@ -86,6 +87,26 @@ describe("ChannelBotNotesReader", () => {
       ]);
       assert.isFalse(result.truncated);
       assert.strictEqual(result.revision, yield* channelNotesRevision(files.notes));
+    }).pipe(Effect.provide(readerLayer())),
+  );
+
+  it.effect("lists replaced notes with the line that replaced them", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const files = yield* notesFile;
+      yield* appendChannelBotNote(fs, files, "Fridays.", "2026-11-01T10:00:00Z", "input-1");
+      yield* appendChannelBotNote(
+        fs,
+        files,
+        "Mondays.",
+        "2026-11-02T10:00:00Z",
+        "input-2",
+        "Fridays.",
+      );
+      assert.deepStrictEqual((yield* list).notes, [
+        { index: 1, date: "2026-11-02", text: "Mondays.", replaces: "Fridays." },
+        { index: 0, date: "2026-11-01", text: "Fridays.", replacedBy: 1 },
+      ]);
     }).pipe(Effect.provide(readerLayer())),
   );
 

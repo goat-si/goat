@@ -67,3 +67,142 @@ it.effect("creates no notes file for an empty note", () =>
     expect(yield* fs.exists(files.notes)).toBe(false);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+describe("corrections, newest wins", () => {
+  const fridays = "I deploy on Fridays.";
+  const setup = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const files = channelBotFilesFor(path, yield* fs.makeTempDirectoryScoped());
+    yield* appendChannelBotNote(fs, files, fridays, "2026-11-01T10:00:00Z", "input-1");
+    return { fs, files };
+  });
+
+  it.effect("a correction hides the note it replaces from the notes every reader gets", () =>
+    Effect.gen(function* () {
+      const { fs, files } = yield* setup;
+      const outcome = yield* appendChannelBotNote(
+        fs,
+        files,
+        "I deploy on Mondays.",
+        "2026-11-02T10:00:00Z",
+        "input-2",
+        fridays,
+      );
+      expect(outcome).toEqual({ correction: "replaced" });
+      expect((yield* fs.readFileString(files.notes)).trimEnd().split("\n").at(-1)).toBe(
+        '- 2026-11-02: I deploy on Mondays. (asked in input-2) (replaces: "I deploy on Fridays.")',
+      );
+      expect(yield* readChannelBotNotes(fs, files)).toBe(
+        '- 2026-11-02: I deploy on Mondays. (asked in input-2) (replaces: "I deploy on Fridays.")',
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("corrections saved in order leave only the newest, even when both name the first", () =>
+    Effect.gen(function* () {
+      const { fs, files } = yield* setup;
+      yield* appendChannelBotNote(
+        fs,
+        files,
+        "Mondays.",
+        "2026-11-02T10:00:00Z",
+        "input-2",
+        fridays,
+      );
+      const second = yield* appendChannelBotNote(
+        fs,
+        files,
+        "Tuesdays.",
+        "2026-11-03T10:00:00Z",
+        "input-3",
+        fridays,
+      );
+      expect(second).toEqual({ correction: "replaced" });
+      expect(yield* readChannelBotNotes(fs, files)).toBe(
+        '- 2026-11-03: Tuesdays. (asked in input-3) (replaces: "Mondays.")',
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("a correction naming the full dated line replaces that note", () =>
+    Effect.gen(function* () {
+      const { fs, files } = yield* setup;
+      const outcome = yield* appendChannelBotNote(
+        fs,
+        files,
+        "Mondays.",
+        "2026-11-02T10:00:00Z",
+        "input-2",
+        "- 2026-11-01:  I deploy on   Fridays. (asked in input-1)",
+      );
+      expect(outcome).toEqual({ correction: "replaced" });
+      expect(yield* readChannelBotNotes(fs, files)).not.toContain("Fridays. (asked in input-1)\n");
+      expect((yield* readChannelBotNotes(fs, files)).split("\n")).toHaveLength(1);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("an unmatched correction keeps the note plainly and reports it again on a re-run", () =>
+    Effect.gen(function* () {
+      const { fs, files } = yield* setup;
+      for (let pass = 0; pass < 2; pass++) {
+        expect(
+          yield* appendChannelBotNote(
+            fs,
+            files,
+            "Mondays.",
+            "2026-11-02T10:00:00Z",
+            "input-2",
+            "I deploy on Sundays.",
+          ),
+        ).toEqual({ correction: "unmatched" });
+      }
+      const text = yield* fs.readFileString(files.notes);
+      expect(text.match(/asked in input-2/gu)).toHaveLength(1);
+      expect(text).not.toContain("(replaces:");
+      expect((yield* readChannelBotNotes(fs, files)).split("\n")).toHaveLength(2);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("deleting the replacing line by hand brings the older note back", () =>
+    Effect.gen(function* () {
+      const { fs, files } = yield* setup;
+      yield* appendChannelBotNote(
+        fs,
+        files,
+        "Mondays.",
+        "2026-11-02T10:00:00Z",
+        "input-2",
+        fridays,
+      );
+      const text = yield* fs.readFileString(files.notes);
+      yield* fs.writeFileString(files.notes, text.replace(/^.*Mondays.*\n/mu, ""));
+      expect(yield* readChannelBotNotes(fs, files)).toBe(
+        "- 2026-11-01: I deploy on Fridays. (asked in input-1)",
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("only a marker at the end of a line, after its source, replaces a note", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const files = channelBotFilesFor(path, yield* fs.makeTempDirectoryScoped());
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      const lines = [
+        "- 2026-01-01: foo (asked in x) (asked in a)",
+        '- 2026-01-02: new (asked in channel-input:123) (replaces: "foo (asked in x)")',
+        '- 2026-01-03: keep (replaces: "new") (asked in b)',
+        "- 2026-01-04: odd (asked in c) (replaces: nope)",
+        '- 2026-01-05: say ")" and \\ (asked in in(1)) (replaces: "odd (asked in c) (replaces: nope)")',
+        '- 2026-01-06: quoted (asked in d) (replaces: "say \\")\\" and \\\\")',
+      ];
+      yield* fs.writeFileString(files.notes, lines.join("\n") + "\n");
+      expect((yield* readChannelBotNotes(fs, files)).split("\n")).toEqual([
+        lines[1],
+        lines[2],
+        lines[5],
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});

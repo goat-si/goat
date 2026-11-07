@@ -9,6 +9,10 @@ export const ChannelBotNote = Schema.Struct({
   /** `YYYY-MM-DD`. */
   date: Schema.NullOr(Schema.String),
   text: Schema.String,
+  /** The text of the earlier note this line replaced. */
+  replaces: Schema.optionalKey(Schema.String),
+  /** `index` of the later line that replaced this note; such a note no longer applies. */
+  replacedBy: Schema.optionalKey(NonNegativeInt),
 });
 export type ChannelBotNote = typeof ChannelBotNote.Type;
 

@@ -47,6 +47,8 @@ export const CHANNEL_COPY = {
     "I couldn't pass that approval on. Open the work's thread in GOAT to answer it there.",
   approvalRemoteRefused:
     "I couldn't pass that approval on. That machine can't take approvals from here. Update GOAT there, or answer it in the thread.",
+  noteCorrectionUnmatched:
+    "I saved that, but couldn't find the earlier note it changes. If an older note says otherwise, ask me to forget it.",
 } as const;
 
 /** What a model reads for a person's message: its text, then the names of the files sent with it. */

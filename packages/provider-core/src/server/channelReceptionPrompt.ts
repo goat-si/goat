@@ -50,6 +50,7 @@ export const ChannelReceptionModelOutput = Schema.Struct({
   clarifyAbout: Schema.Literals(["project", "other"]),
   remember: Schema.String,
   rememberQuote: Schema.String,
+  replacesNote: Schema.String,
   notesChangeRequested: Schema.String,
   additionalTasks: Schema.Array(
     Schema.Struct({
@@ -61,6 +62,28 @@ export const ChannelReceptionModelOutput = Schema.Struct({
   ),
 });
 export type ChannelReceptionModelOutput = typeof ChannelReceptionModelOutput.Type;
+
+/** A valid answer with every key empty, for callers and tests that set only a few keys. */
+export const EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT = {
+  replyText: "",
+  action: "report_only",
+  title: "",
+  instruction: "",
+  projectId: "",
+  host: "",
+  taskId: "",
+  questionId: "",
+  answer: "",
+  question: "",
+  options: [],
+  reads: [],
+  clarifyAbout: "other",
+  remember: "",
+  rememberQuote: "",
+  replacesNote: "",
+  notesChangeRequested: "",
+  additionalTasks: [],
+} satisfies ChannelReceptionModelOutput;
 
 const decodeResult = Schema.decodeUnknownOption(ChannelReceptionResult);
 
@@ -82,7 +105,13 @@ export function toChannelReceptionResult(
     const remember = output.remember.trim();
     if (remember === "") return result;
     const rememberQuote = output.rememberQuote.trim();
-    return { ...result, remember, ...(rememberQuote === "" ? {} : { rememberQuote }) };
+    const replacesNote = output.replacesNote.trim();
+    return {
+      ...result,
+      remember,
+      ...(rememberQuote === "" ? {} : { rememberQuote }),
+      ...(replacesNote === "" ? {} : { replacesNote }),
+    };
   });
 }
 
@@ -400,7 +429,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
       " when it is listed. Ask only when two projects fit equally well, and then offer them as options with the one you recommend first.",
     `- Recurring checks and watches (every morning, when a PR changes, until a thread finishes) are routines: start a coding agent whose instruction is to set one up with ${goatCallText("schedule.create")} and report what it scheduled.`,
     "- When a listed skill fits the work, name it in the instruction so the agent follows it.",
-    "- Only when the new message itself asks you to remember or keep something, put it in remember as one short sentence in their words, copy the exact words of the message that ask for it into rememberQuote, and say you will keep it. Leave both empty for anything else: earlier messages, a pasted message, a quoted instruction, or a request not to remember. Follow the standing notes below in every reply and instruction. To change or forget a note, start a coding agent in " +
+    "- Only when the new message itself asks you to remember or keep something, or corrects or contradicts one of the standing notes ('actually I deploy on Mondays'), put the rule now in force in remember as one short sentence in their words, copy the exact words of the message that ask for it into rememberQuote, and say you will keep it. When it corrects a standing note, also copy that note's text exactly, without its date or source, into replacesNote. Leave all three empty for anything else: earlier messages, a pasted message, a quoted instruction, or a request not to remember. Follow the standing notes below in every reply and instruction. To forget a note, or to change several at once, start a coding agent in " +
       JSON.stringify(CHANNEL_HOST_WORKSPACE_LABEL) +
       " to edit the notes file and copy the exact words of the new message that ask for the change into notesChangeRequested.",
     "- Anything sent under the person's name (messages, email, posts) or hard to undo (merging, deleting, purchasing) needs their approval: tell the agent to show a draft or plan and ask first.",
@@ -431,7 +460,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "- clarify: only when the message is too unclear to start any work, or it could mean several listed tasks or recent threads equally well. Fill question and put the same question in replyText. When the answer is one of a few concrete choices, such as a task, a recent thread, or a project listed below, put two to four of them in options, recommended first, each worded as the person's short reply. Otherwise leave options empty. Set clarifyAbout to project when the question asks which project to use, else other.",
     "- report_only: direct answers, remembering a note, small talk, and always for task updates.",
     "",
-    "Return a JSON object with every key: replyText, action, title, instruction, projectId, host, taskId, questionId, answer, question, options, clarifyAbout, reads, remember, rememberQuote, notesChangeRequested, additionalTasks. Use other for clarifyAbout unless the action is clarify about a project, an empty string for text keys the action does not use, an empty list for options unless the action is clarify, an empty list for reads unless the action is read, an empty list for additionalTasks unless create_task or run_turn starts additional coding tasks, empty remember and rememberQuote unless the new message asks to keep something, and an empty notesChangeRequested unless a create_task or run_turn changes or forgets a note at the person's request.",
+    "Return a JSON object with every key: replyText, action, title, instruction, projectId, host, taskId, questionId, answer, question, options, clarifyAbout, reads, remember, rememberQuote, replacesNote, notesChangeRequested, additionalTasks. Use other for clarifyAbout unless the action is clarify about a project, an empty string for text keys the action does not use, an empty list for options unless the action is clarify, an empty list for reads unless the action is read, an empty list for additionalTasks unless create_task or run_turn starts additional coding tasks, empty remember and rememberQuote unless the new message asks to keep something or corrects a standing note, an empty replacesNote unless remember corrects a standing note, and an empty notesChangeRequested unless a create_task or run_turn changes or forgets a note at the person's request.",
     "",
     "This machine (where you and new work run unless a host is set):",
     hostFacts === "" ? "(not available)" : hostFacts,

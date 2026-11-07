@@ -51,6 +51,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
@@ -221,6 +222,16 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
+  // One note decision at a time, so a correction sees the note the one before it saved.
+  const notesGate = yield* Semaphore.make(1);
+  const saveNote = (note: string, readAt: string, inputId: string, replaces?: string) =>
+    notesGate
+      .withPermits(1)(appendChannelBotNote(fileSystem, botFiles, note, readAt, inputId, replaces))
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(Effect.as(undefined)),
+        ),
+      );
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
@@ -1262,11 +1273,10 @@ const make = Effect.gen(function* () {
       }
       // Saved before the result commits so a restart re-runs this input and saves it then; the note
       // names its input, so a second pass for the same input does not add it twice.
-      if (decision.remember !== undefined && rememberRefusal === undefined) {
-        yield* appendChannelBotNote(fileSystem, botFiles, decision.remember, readAt, inputId).pipe(
-          Effect.catch((cause) => Effect.logWarning("GOAT Bot note was not saved", { cause })),
-        );
-      }
+      const noteSaved =
+        decision.remember !== undefined && rememberRefusal === undefined
+          ? yield* saveNote(decision.remember, readAt, inputId, decision.replacesNote)
+          : undefined;
 
       let replyText = decision.replyText;
       let finalDecision = decision;
@@ -1554,6 +1564,8 @@ const make = Effect.gen(function* () {
       }
 
       const relatedTask = createdTasks[0]?.task;
+      if (noteSaved?.correction === "unmatched")
+        replyText += " " + CHANNEL_COPY.noteCorrectionUnmatched;
       deliveries.unshift(
         replyDelivery({
           causeKey: "reply:" + inputId,

@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ChannelTaskId } from "@goat/contracts";
 
+import { NOTES_REPLACED_RULE } from "./channelBotNotes.ts";
+
 import {
   channelWorkerRules,
   REMOTE_MESSAGE_CHARS,
@@ -24,6 +26,11 @@ const files = {
 };
 
 describe("channel worker brief", () => {
+  it("tells agents that read the notes file which of two lines wins", () => {
+    assert.include(workerInstruction(task, files), NOTES_REPLACED_RULE);
+    assert.include(turnInstruction(task, files, false), NOTES_REPLACED_RULE);
+  });
+
   it("gives workers on both machines the same confirmation, progress and result rules", () => {
     const local = channelWorkerRules("local");
     const remote = channelWorkerRules("remote");

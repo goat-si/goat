@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   type TextGenerationError,
 } from "@goat/contracts";
+import { EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT } from "@goat/provider-core/server/channelReceptionPrompt";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { writeFakeCli } from "@goat/provider-testing/fakeCli";
 import { createModelSelection } from "@goat/shared/model";
@@ -91,23 +92,12 @@ it.live.each(cases)(
       const log = home + "/launches.jsonl";
       const output = reception
         ? {
+            ...EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT,
             replyText: "On it.",
             action: "create_task",
             title: "Fixture task",
             instruction: "Run the fixture",
             projectId: "project-1",
-            host: "",
-            taskId: "",
-            questionId: "",
-            answer: "",
-            question: "",
-            options: [],
-            reads: [],
-            remember: "",
-            rememberQuote: "",
-            notesChangeRequested: "",
-            additionalTasks: [],
-            clarifyAbout: "other",
           }
         : { title: "Home title" };
       const binary = writeFakeCodex({ home, log, version, validConfig, output });
