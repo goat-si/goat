@@ -106,7 +106,7 @@ import {
   parseApprovalReply,
   whichApproval,
 } from "./channelApprovalCards.ts";
-import { replyDelivery } from "./channelReplyDelivery.ts";
+import { replyDelivery, turnAnswerReplyTo } from "./channelReplyDelivery.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
 import { makeRoutineInputs, ROUTINE_COPY, routineDecision } from "./channelRoutineInputs.ts";
 import { openQuestionTask } from "./channelQuestionAnswers.ts";
@@ -1700,12 +1700,14 @@ const make = Effect.gen(function* () {
         origin.kind !== "goat" && (base.kind === "result" || base.kind === "failure")
           ? channelEvidenceSentence(task.observed?.result)
           : null;
+      const replyTo = turnAnswerReplyTo(task, base.kind);
       const deliveries = [
         replyDelivery({
           causeKey: "narration:" + pending.event.eventId + ":origin",
           destination: origin,
           kind: base.kind,
           text: evidence === null ? worded : worded + "\n\n" + evidence,
+          replyTo,
           task,
           mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
           options: "options" in base ? base.options : undefined,
@@ -1725,6 +1727,7 @@ const make = Effect.gen(function* () {
             destination: botAddress(bot),
             kind: base.kind,
             text: worded,
+            replyTo,
             task,
           }),
         );
