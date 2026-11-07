@@ -1,4 +1,5 @@
 import { layerLaunchWatches, layerPressureAdmission } from "./fleet/pressure/LaunchWatchLayers.ts";
+import * as ChannelLaunchWakesLive from "./mcp/channelLaunchWakes.ts";
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 import * as VoiceRoutes from "./speech/layers.ts";
 import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
@@ -805,6 +806,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       Layer.provide(RuntimeLayer.layerEventSink),
       Layer.provide(SshRemoteDispatchLive.layer),
       Layer.provide(Layer.merge(layerMemoryService, layerMemorySync)),
+      // The same layerLaunchWatches reference as below, so the build keeps one launch watch.
+      Layer.provide(ChannelLaunchWakesLive.layer.pipe(Layer.provide(layerLaunchWatches))),
     ),
   ),
   Layer.provideMerge(layerHubProxy),

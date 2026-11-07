@@ -116,11 +116,22 @@ it.effect("a launched thread's end wake belongs to the task whose run launched t
         wakeRun("unrecorded", 6, wakeId(thread, "", "thread:elsewhere")),
         wakeRun("subagent", 7, wakeId(thread, "", "thread:helper")),
         wakeRun("ambiguous", 8, wakeId(thread, "", "thread:twin")),
+        wakeRun(
+          "question",
+          9,
+          "message:launch-watch:" +
+            [thread, "", "thread:probe"].map(encodeURIComponent).join(":") +
+            ":question:run:thread:probe:1:q1",
+        ),
       ],
       messages: [],
     };
     const ids = (runs: ReadonlyArray<OrchestrationV2Run>) => runs.map((owned) => owned.id);
-    assert.deepStrictEqual(ids(yield* sessionTaskRuns(sql, thread, records, taskA)), ["a", "wake"]);
+    assert.deepStrictEqual(ids(yield* sessionTaskRuns(sql, thread, records, taskA)), [
+      "a",
+      "wake",
+      "question",
+    ]);
     assert.deepStrictEqual(ids(yield* sessionTaskRuns(sql, thread, records, taskB)), ["b"]);
     assert.deepStrictEqual(
       ids(yield* sessionTaskRuns(sql, thread, records, { ...taskA, generation: 1 })),

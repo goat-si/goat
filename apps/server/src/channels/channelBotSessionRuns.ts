@@ -14,7 +14,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
-import { LAUNCH_WATCH_MESSAGE_PREFIX } from "../mcp/launchWatch.ts";
+import { parseLaunchWake } from "./channelLaunchWake.ts";
 
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 export const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
@@ -44,14 +44,6 @@ const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId:
     SELECT * FROM channel_bot_session_runs WHERE thread_id = ${threadId} AND message_id = ${messageId}
   `.pipe(Effect.map((rows) => rows[0]));
 
-const decoded = (segment: string | undefined) => {
-  try {
-    return segment === undefined ? undefined : decodeURIComponent(segment);
-  } catch {
-    return undefined;
-  }
-};
-
 /**
  * The run that launched the coding thread a launch-watch wake on this session reports on, from
  * the thread's child-work record. Undefined for any other message, another launcher, or a thread
@@ -62,11 +54,9 @@ export const launchWakeParentRun = (
   threadId: string,
   messageId: string,
 ) => {
-  if (!messageId.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX)) return Effect.succeed(undefined);
-  // launcher:host:thread:event, each part URI-encoded, so none of them holds a colon.
-  const [launcher, host, launched] = messageId.slice(LAUNCH_WATCH_MESSAGE_PREFIX.length).split(":");
-  const childThreadId = decoded(launched);
-  if (decoded(launcher) !== threadId || host !== "" || !childThreadId)
+  const wake = parseLaunchWake(messageId);
+  const childThreadId = wake?.thread;
+  if (wake === undefined || wake.launcher !== threadId || wake.host !== "" || !childThreadId)
     return Effect.succeed(undefined);
   // Two launches recorded for one thread cannot say which run the wake continues: none is picked.
   return sql<{ readonly run_id: RunId | null }>`
