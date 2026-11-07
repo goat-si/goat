@@ -99,17 +99,7 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
         ]);
         harness.world.runtimeRequests.set("thread:done", [request("old", "command")]);
         harness.world.runtimeRequests.set("thread:stale", [request("stale", "user_input")]);
-        // The same thread is also the worker's subagent; its requests must not count twice.
-        harness.world.subagents.set(task.worker!.threadId, [
-          {
-            childThreadId: ThreadId.make("thread:live"),
-            status: "running",
-            origin: "app_owned",
-          } as unknown as OrchestrationV2Subagent,
-        ]);
-
-        yield* reports.reconcile(runtime.ownerToken);
-        assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, [
+        const expected = [
           {
             kind: "approval",
             since,
@@ -119,8 +109,21 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
             },
           },
           { kind: "question", since },
-        ]);
+        ];
+        yield* reports.reconcile(runtime.ownerToken);
+        assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, expected);
         assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 1);
+
+        // The same thread can also be the worker's subagent; each request still counts once.
+        harness.world.subagents.set(task.worker!.threadId, [
+          {
+            childThreadId: ThreadId.make("thread:live"),
+            status: "running",
+            origin: "app_owned",
+          } as unknown as OrchestrationV2Subagent,
+        ]);
+        yield* reports.reconcile(runtime.ownerToken);
+        assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, expected);
 
         harness.world.runtimeRequests.set("thread:live", []);
         yield* reports.reconcile(runtime.ownerToken);
