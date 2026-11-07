@@ -17,6 +17,19 @@ type Lane = Pick<
   | "branchPullRequest"
 >;
 
+/** The checks that need no reads: a finished task.create child without a pull request. */
+export const isDelegatedLaneCandidate = (lane: Lane) =>
+  lane.lineage.relationshipToParent === "subagent" &&
+  lane.lineage.parentThreadId !== null &&
+  lane.forkedFrom?.type === "node" &&
+  lane.status === "completed" &&
+  lane.latestRunId !== null &&
+  lane.latestRunCompletedAt !== null &&
+  // A lane with a pull request settles by the pull request rules instead.
+  visibleThreadPullRequests(lane.pullRequests ?? []).length === 0 &&
+  lane.linkedPullRequest == null &&
+  lane.branchPullRequest == null;
+
 /**
  * A task.create child whose latest run completed and whose result for that run reached its parent
  * is done; settling it releases what it still holds. Failed or interrupted children stay open for
@@ -27,18 +40,7 @@ export const makeDelegatedLaneSettlement = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   return Effect.fn("DelegatedLaneSettlement.settledAt")(function* (lane: Lane) {
     const parentId = lane.lineage.parentThreadId;
-    if (
-      lane.lineage.relationshipToParent !== "subagent" ||
-      parentId === null ||
-      lane.forkedFrom?.type !== "node" ||
-      lane.status !== "completed" ||
-      lane.latestRunId === null ||
-      lane.latestRunCompletedAt === null ||
-      // A lane with a pull request settles by the pull request rules instead.
-      visibleThreadPullRequests(lane.pullRequests ?? []).length > 0 ||
-      lane.linkedPullRequest != null ||
-      lane.branchPullRequest != null
-    )
+    if (!isDelegatedLaneCandidate(lane) || parentId === null || lane.latestRunCompletedAt === null)
       return null;
     if (yield* orchestrator.delegatedTaskResultPending(lane.id)) return null;
     const child = yield* projections.getThreadRecords(lane.id, ["runs"]);

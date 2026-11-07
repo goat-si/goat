@@ -39,7 +39,10 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as SettlementAdmission from "./settlementAdmission.ts";
 import { SkipThreadArchiveRestore } from "./ThreadArchiveGate.ts";
-import { makeDelegatedLaneSettlement } from "./goat/DelegatedLaneSettlement.ts";
+import {
+  isDelegatedLaneCandidate,
+  makeDelegatedLaneSettlement,
+} from "./goat/DelegatedLaneSettlement.ts";
 
 export interface SettlementPullRequest {
   readonly state: "open" | "closed" | "merged";
@@ -377,7 +380,8 @@ export const make = Effect.gen(function* () {
         autoSettleOnMerge: projectSettings.sidebarAutoSettleOnMerge,
         autoSettleKeepPullRequests: projectSettings.sidebarAutoSettleKeepPullRequests,
       });
-      if (due !== null) dueThreads.add(thread.id);
+      // A finished task lane can settle before any date is due.
+      if (due !== null || isDelegatedLaneCandidate(thread)) dueThreads.add(thread.id);
       const key = JSON.stringify([
         thread,
         projects.get(thread.projectId)?.workspaceRoot,
