@@ -33,6 +33,7 @@ const run = Effect.fn("LinuxArm64Sea.run")(function* (
 
 export const injectLinuxArm64Sea = Effect.fn("LinuxArm64Sea.inject")(function* (input: {
   bundlePath: string;
+  cliAssetPath: string;
   outputPath: string;
   nodePath: string;
   verbose: boolean;
@@ -46,11 +47,14 @@ export const injectLinuxArm64Sea = Effect.fn("LinuxArm64Sea.inject")(function* (
     configPath,
     yield* encodeJson({
       main: input.bundlePath,
+      assets: { "binMain.mjs": input.cliAssetPath },
       output: blobPath,
       mainFormat: "module",
       disableExperimentalSEAWarning: true,
       // Node SEA useCodeCache breaks import(), which the server needs.
       useCodeCache: false,
+      // The bootstrap loads the embedded CLI with require(esm).
+      execArgv: ["--require-module"],
     }),
   );
   yield* run(input.nodePath, ["--experimental-sea-config", configPath], input.verbose);

@@ -107,7 +107,9 @@ describe("Linux ARM64 SEA injection", () => {
         const nodePath = path.join(temp, "selected-node");
         const outputPath = path.join(temp, "goat");
         const bundlePath = path.join(temp, "bin.mjs");
+        const cliAssetPath = path.join(temp, "binMain.mjs");
         yield* fs.writeFileString(bundlePath, "export {};\n");
+        yield* fs.writeFileString(cliAssetPath, "export {};\n");
         const selectedNode = `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
@@ -125,13 +127,15 @@ if (args[0] === '--experimental-sea-config') {
         yield* fs.writeFileString(nodePath, selectedNode);
         yield* fs.chmod(nodePath, 0o755);
         const result = yield* Effect.result(
-          injectLinuxArm64Sea({ bundlePath, outputPath, nodePath, verbose: false }),
+          injectLinuxArm64Sea({ bundlePath, cliAssetPath, outputPath, nodePath, verbose: false }),
         );
         if (mode === "success") {
           expect(result._tag).toBe("Success");
           const output = yield* fs.readFileString(outputPath);
           expect(output.startsWith(selectedNode)).toBe(true);
           expect(output).toContain(JSON.stringify(bundlePath));
+          expect(output).toContain(JSON.stringify(cliAssetPath));
+          expect(output).toContain('"execArgv":["--require-module"]');
           expect(output).toContain('"mainFormat":"module"');
           expect(output).toContain('"useCodeCache":false');
           expect((yield* fs.stat(outputPath)).mode & 0o111).not.toBe(0);

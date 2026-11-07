@@ -16,6 +16,7 @@ import { resolveSeaBuildTarget } from "../../../scripts/lib/sea-build-target.ts"
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import {
+  ServerCliBootstrapTooLargeError,
   ServerCliCommandExitError,
   ServerCliDevelopmentIconSourceMissingError,
   ServerCliDevelopmentIconTargetMissingError,
@@ -130,29 +131,41 @@ const buildExeCmd = Command.make(
         }),
       );
       const spawnCommand = yield* resolveSpawnCommand("vp", ["pack"]);
-      yield* runCommand(
-        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-          cwd: serverDir,
-          env: {
-            ...process.env,
-            GOAT_PACK_EXE: injectLinuxArm64 ? "bundle" : "1",
-            GOAT_PACK_EXE_TARGET: target ?? "",
-          },
-          stdout: config.verbose ? "inherit" : "ignore",
-          stderr: "inherit",
-          shell: spawnCommand.shell,
-        }),
-      );
-
-      // Executables reject non-builtin imports even when bundling succeeds; inspect the emitted graph.
+      const cliAssetDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cli-asset-" });
+      const pack = (packMode: "bundle" | "bootstrap" | "1") =>
+        runCommand(
+          ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+            cwd: serverDir,
+            env: {
+              ...process.env,
+              GOAT_PACK_EXE: packMode,
+              GOAT_CLI_ASSET_DIR: cliAssetDir,
+              GOAT_PACK_EXE_TARGET: target ?? "",
+            },
+            stdout: config.verbose ? "inherit" : "ignore",
+            stderr: "inherit",
+            shell: spawnCommand.shell,
+          }),
+        );
+      yield* pack("bundle");
+      const cliAssetPath = path.join(cliAssetDir, "binMain.mjs");
+      yield* pack(injectLinuxArm64 ? "bootstrap" : "1");
       const bundlePath = path.join(serverDir, "dist-exe/bin.mjs");
-      const specifiers = findEsmImportsOfExternalPackages(yield* fs.readFileString(bundlePath));
-      if (specifiers.length > 0) {
-        return yield* new ServerCliExecutableImportError({ bundlePath, specifiers });
+      for (const candidate of [bundlePath, cliAssetPath]) {
+        const specifiers = findEsmImportsOfExternalPackages(yield* fs.readFileString(candidate));
+        if (specifiers.length > 0)
+          return yield* new ServerCliExecutableImportError({ bundlePath: candidate, specifiers });
       }
+      const bootstrapBytes = (yield* fs.stat(bundlePath)).size;
+      if (bootstrapBytes > 1024 * 1024)
+        return yield* new ServerCliBootstrapTooLargeError({
+          bootstrapPath: bundlePath,
+          bytes: Number(bootstrapBytes),
+        });
       if (injectLinuxArm64) {
         yield* injectLinuxArm64Sea({
           bundlePath,
+          cliAssetPath,
           outputPath: path.join(serverDir, "dist-exe/goat"),
           nodePath: process.execPath,
           verbose: config.verbose,
