@@ -222,14 +222,19 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
-  // One note decision at a time, so a correction sees the note the one before it saved.
+  // One note decision at a time; the result is what the reply must add, if anything.
   const notesGate = yield* Semaphore.make(1);
   const saveNote = (note: string, readAt: string, inputId: string, replaces?: string) =>
     notesGate
       .withPermits(1)(appendChannelBotNote(fileSystem, botFiles, note, readAt, inputId, replaces))
       .pipe(
+        Effect.map(({ correction }) =>
+          correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
+        ),
         Effect.catch((cause) =>
-          Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(Effect.as(undefined)),
+          Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
+            Effect.as(CHANNEL_COPY.noteNotSaved),
+          ),
         ),
       );
   const platform = yield* HostProcess.Platform;
@@ -1273,7 +1278,7 @@ const make = Effect.gen(function* () {
       }
       // Saved before the result commits so a restart re-runs this input and saves it then; the note
       // names its input, so a second pass for the same input does not add it twice.
-      const noteSaved =
+      const noteNotice =
         decision.remember !== undefined && rememberRefusal === undefined
           ? yield* saveNote(decision.remember, readAt, inputId, decision.replacesNote)
           : undefined;
@@ -1564,8 +1569,7 @@ const make = Effect.gen(function* () {
       }
 
       const relatedTask = createdTasks[0]?.task;
-      if (noteSaved?.correction === "unmatched")
-        replyText += " " + CHANNEL_COPY.noteCorrectionUnmatched;
+      if (noteNotice !== undefined) replyText += " " + noteNotice;
       deliveries.unshift(
         replyDelivery({
           causeKey: "reply:" + inputId,

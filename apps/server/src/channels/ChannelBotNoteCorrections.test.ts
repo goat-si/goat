@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelReceptionResult } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -9,17 +10,24 @@ import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
-import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
+import {
+  appendChannelBotNote,
+  channelBotFilesFor,
+  readChannelBotNotes,
+} from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import { inputIdFor } from "./channelIds.ts";
 import {
   botMessages,
   defaultScript,
   goatInput,
+  linkSlackUser,
   makeHarness,
   ownerId,
   rpcContext,
   setupBot,
+  slackContext,
+  slackInput,
 } from "./testkit/ChannelHarness.ts";
 
 const fridays = "I deploy on Fridays.";
@@ -143,6 +151,63 @@ describe("GOAT Bot note corrections through reception", () => {
       const before = yield* fs.readFileString(files.notes);
       yield* send("What day is it?", "unrelated");
       assert.strictEqual(yield* fs.readFileString(files.notes), before);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
+
+  it.effect("a note that cannot be saved is reported in the reply", () => {
+    const { harness } = harnessFor(() => ({
+      remember: "I deploy on Mondays.",
+      rememberQuote: "Remember I deploy on Mondays",
+    }));
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const fs = yield* FileSystem.FileSystem;
+      // A directory where the notes file belongs makes every read and write fail.
+      yield* fs.makeDirectory((yield* notesFiles).notes, { recursive: true });
+      yield* send("Remember I deploy on Mondays", "remember");
+      const texts = (yield* botMessages).messages.map((message) => message.text).join("\n");
+      assert.include(texts, "Got it. " + CHANNEL_COPY.noteNotSaved);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
+
+  it.effect("corrections from two conversations at once leave a single rule in force", () => {
+    const harness = makeHarness();
+    const bothDecided = Deferred.makeUnsafe<void>();
+    let deciding = 0;
+    harness.script.current = (input) => {
+      if (input.mode !== "input") return defaultScript(input);
+      const day = (input.inputText ?? "").includes("Tuesdays") ? "Tuesdays" : "Mondays";
+      return Effect.gen(function* () {
+        // Both receptions decide before either saves, so only the gate can order the saves.
+        deciding++;
+        if (deciding === 2) yield* Deferred.succeed(bothDecided, undefined);
+        yield* Deferred.await(bothDecided);
+        return {
+          replyText: "Got it.",
+          action: { type: "report_only" },
+          remember: "I deploy on " + day + ".",
+          rememberQuote: "Actually I deploy on " + day,
+          replacesNote: fridays,
+        } satisfies ChannelReceptionResult;
+      });
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const fs = yield* FileSystem.FileSystem;
+      const files = yield* notesFiles;
+      yield* appendChannelBotNote(fs, files, fridays, "2026-11-01T10:00:00Z", "earlier");
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("Actually I deploy on Mondays", "goat-fix"), rpcContext);
+      yield* gateway.ingest(slackInput("Actually I deploy on Tuesdays", "slack-fix"), slackContext);
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      assert.strictEqual(deciding, 2);
+      const current = (yield* readChannelBotNotes(fs, files)).split("\n");
+      assert.lengthOf(current, 1);
+      assert.match(
+        current[0] ?? "",
+        /I deploy on (Mondays|Tuesdays)\. .*\(replaces: "I deploy on (Mondays|Tuesdays)\."\)$/u,
+      );
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
 });
