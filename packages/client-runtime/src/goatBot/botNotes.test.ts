@@ -85,6 +85,12 @@ describe("noteDateLabel", () => {
     expect(noteDateLabel({ date: "2025-03-04" }, "Asia/Seoul")).toBe("2025-03-04");
     expect(noteDateLabel({ date: null, source: { kind: "elsewhere" } }, "UTC")).toBe("Undated");
   });
+
+  it("falls back to the line's date, then Undated, when the request time does not parse", () => {
+    const garbled = { ...asked.source, at: "not a time" };
+    expect(noteDateLabel({ date: "2026-11-07", source: garbled }, "Asia/Seoul")).toBe("2026-11-07");
+    expect(noteDateLabel({ date: null, source: garbled }, "Asia/Seoul")).toBe("Undated");
+  });
 });
 
 describe("botNotesFailure", () => {
