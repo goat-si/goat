@@ -20,15 +20,18 @@ GOAT builds released before this endpoint existed send these events to the endpo
 Events do not include prompts, responses, file contents, authentication tokens, conversation IDs,
 raw provider events, or child-agent output. Child-agent token use is excluded from the totals.
 
-GOAT also sends relay connection traces to Axiom to diagnose GOAT Connect connectivity.
+To disable product events, set `GOAT_TELEMETRY_ENABLED=false` in the server's
+environment before starting it. This setting does not disable OpenTelemetry exports to your own
+receiver. The desktop app reads the variable from your shell profile (for example `~/.zshrc`) on
+macOS and Linux, so export it there and restart the app. On Windows, set it as a user environment
+variable. A browser or mobile client does not read the server's environment variables.
 
-To disable product events and relay tracing, set `GOAT_TELEMETRY_ENABLED=false` in the server's
-environment before starting it. Relay tracing also stops when `GOAT_OTEL_SDK_DISABLED` or
-`OTEL_SDK_DISABLED` turns OpenTelemetry export off. The web app in a browser, including one the
-`goat` CLI opens, does not read these variables.
+## Mobile diagnostics
 
-The desktop app reads `GOAT_TELEMETRY_ENABLED` from your shell profile (for example `~/.zshrc`) on macOS and
-Linux, so export it there and restart the app. On Windows, set it as a user environment variable.
+In the mobile app, **Settings > Diagnostics** lets you copy a startup crash report or a thread
+stream report. The reports stay on the device until you share them. A crash report can include an
+error message and component stack; the message can quote a value the app was handling. Review it
+before sharing.
 
 ## Export diagnostics to your own receiver
 
@@ -36,6 +39,11 @@ To send traces, metrics, or logs to an OpenTelemetry receiver, open
 **Settings > General > Diagnostics**, select an environment, and enter each signal's OTLP HTTP
 endpoint under **OpenTelemetry export** (for example `http://localhost:4318/v1/traces`). Save, then
 restart that environment's server. The receiver must be reachable from the server's machine.
+These exports are separate from product usage events and can include diagnostic information about the server and connected web or desktop
+client. Error messages may contain values being handled by the app. Set `GOAT_OTEL_SDK_DISABLED=true`
+(or `OTEL_SDK_DISABLED=true` when `GOAT_OTEL_SDK_DISABLED` is unset) in the server environment to
+disable OpenTelemetry exports, including endpoints configured here; restart the server after changing
+environment variables.
 **Test** sends an empty export from the server to check an endpoint before or after you save it;
 saved endpoints are checked when the section opens. Checks send authentication headers only to
 the signal's currently running endpoint and do not follow redirects. To check a new endpoint
