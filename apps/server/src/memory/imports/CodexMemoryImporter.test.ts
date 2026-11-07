@@ -52,6 +52,32 @@ const failure = (snapshot: ImportSnapshot, issue: M.MemoryImportIssue) =>
   });
 
 describe("Codex memory pure profiles", () => {
+  it.effect("a handbook saved with a UTF-8 byte order mark imports like the same handbook", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { snapshot } = yield* buildMemoryImportFixture("codex-handbook-v1");
+        const plain = yield* parseCodexMemory(files(snapshot, { "MEMORY.md": handbook() }));
+        const marked = yield* parseCodexMemory(
+          files(snapshot, { "MEMORY.md": `\uFEFF${handbook()}` }),
+        );
+        assert.equal(candidates(plain).length, 1);
+        assert.deepEqual(marked, plain);
+        // The byte count still covers the mark, and only a leading mark is skipped.
+        const [source] = files(snapshot, { "MEMORY.md": `\uFEFF${handbook()}` }).files;
+        yield* failure(
+          { ...snapshot, files: [{ ...source!, byteCount: source!.byteCount - 3 }] },
+          "source_changed",
+        );
+        const interior = candidates(
+          yield* parseCodexMemory(
+            files(snapshot, { "MEMORY.md": `\uFEFF${handbook("Keep \uFEFF inside.")}` }),
+          ),
+        );
+        assert.include(interior[0]!.payload.text, "Keep \uFEFF inside.");
+      }),
+    ),
+  );
+
   it.effect.each(["codex-handbook-v1", "codex-ad-hoc-v1"] as const)(
     "extracts frozen %s fixture and strict payload",
     (profile) =>
@@ -318,6 +344,10 @@ describe("Codex memory pure profiles", () => {
             files(adHoc.snapshot, {
               [note]: '{"type":"session_meta","payload":{}}\n{"type":"event_msg"}',
             }),
+            "unsupported_format",
+          );
+          yield* failure(
+            files(adHoc.snapshot, { [note]: '\uFEFF{"type":"session_meta","payload":{}}' }),
             "unsupported_format",
           );
           const blank = yield* parseCodexMemory(files(adHoc.snapshot, { [note]: " \n " }));

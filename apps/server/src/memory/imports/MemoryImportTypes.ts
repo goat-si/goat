@@ -27,6 +27,10 @@ export type ImportSlot = {
  */
 export const provenanceImportFormat = (format: M.MemoryImportSourceFormat): M.MemoryImportFormat =>
   format === "aside" ? "omo" : format;
+/** Windows PowerShell 5.1 and older Notepad start UTF-8 files with a byte order mark. Byte counts
+ * still cover it; only the structure parsers skip it. */
+export const withoutByteOrderMark = (text: string) =>
+  text.startsWith("\uFEFF") ? text.slice(1) : text;
 export type ImportRegistrationLookup = ImportAddress &
   (
     | { readonly by: "source"; readonly sourceId: M.MemoryImportSourceId }

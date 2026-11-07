@@ -1,7 +1,10 @@
 import {
   MEMORY_IMPORT_PREVIEW_MAX_ITEMS,
+  MEMORY_STORE_FULL_LABEL,
   MemoryImportRpcError,
+  isMemoryStoreBudgetCapacity,
   type MemoryCapacityDimension,
+  type MemoryCapacityExceeded,
   type MemoryImportIssue,
   type MemoryImportOutcome,
   type MemoryImportSourceFormat,
@@ -17,26 +20,39 @@ import type { MemoryImportDestination, MemoryImportRecoveryStore } from "./memor
 
 const isMemoryImportRpcError = Schema.is(MemoryImportRpcError);
 
+// Where each server reads provider memories, relative to the home folder of the device.
+const memoryImportLocations: Record<MemoryImportSourceFormat, string> = {
+  codex: ".codex/memories (MEMORY.md, or notes in extensions/ad_hoc/notes)",
+  claude: ".claude/projects/<project>/memory",
+  omo: ".omo/memory/agents/<agent>/repo",
+  aside: ".aside/u/<store>/memory",
+};
+
 /** A short reason for an import refusal, for the settings UI. */
 export function memoryImportIssueReason(
   issue: MemoryImportIssue,
   scope: "request" | "item" = "request",
+  format?: MemoryImportSourceFormat,
 ): string {
   switch (issue) {
     case "unsupported_format":
       return "This provider's memory format is not supported.";
     case "source_missing":
-      return "That memory store or profile is not on this device.";
+      return format
+        ? `No ${memoryImportFormatLabels[format]} memories were found on this device. GOAT looks in ${memoryImportLocations[format]} in your home folder.`
+        : "That memory store or profile is not on this device.";
     case "source_unreadable":
       return "The memory store could not be read.";
     case "invalid_utf8":
       return "A memory file is not valid text.";
     case "path_rejected":
-      return "A memory file is outside the allowed location.";
+      return scope === "item"
+        ? "A memory file is outside the allowed location."
+        : "A memory folder or file is a link, a junction or outside the allowed location. GOAT does not follow links; keep the memory folder as a regular folder in your home folder.";
     case "limit_exceeded":
       return scope === "item"
         ? "This memory exceeds the import size limit."
-        : `This folder has more than ${MEMORY_IMPORT_PREVIEW_MAX_ITEMS} items.`;
+        : `This source is over an import limit: up to ${MEMORY_IMPORT_PREVIEW_MAX_ITEMS} memories per preview, 256 KiB per file and 8 MiB in total. Two other previews running at once also hit this limit.`;
     case "source_changed":
       return "The source changed. Preview again before importing.";
     case "scope_unmapped":
@@ -58,9 +74,145 @@ export function memoryImportIssueReason(
   }
 }
 
+const memoryCapacityLabels: Record<MemoryCapacityDimension, string> = {
+  body: "Memory text size limit reached",
+  user_items: "User memory count limit reached",
+  project_items: "Project memory count limit reached",
+  thread_summaries: "Thread summary count limit reached",
+  thread_items: "Thread memory count limit reached",
+  space_live_items: "Memory space count limit reached",
+  environment_live_items: "Environment memory count limit reached",
+  live_payload_bytes: "Memory content storage limit reached",
+  history: "Memory history limit reached",
+  import_session_items: "Import session item limit reached",
+  import_session_bytes: "Import session size limit reached",
+  import_live_items: "Imported memory count limit reached",
+  import_live_bytes: "Imported memory storage limit reached",
+  import_source_items: "Source item limit reached",
+  import_aliases: "Import link limit reached",
+  import_digests: "Import fingerprint limit reached",
+  permanent_metadata: "Memory metadata storage limit reached",
+  lifetime_ids: "Memory identifier limit reached",
+  receipts: "Saved result limit reached",
+  log_tail_rows: "Sync event count limit reached",
+  log_tail_bytes: "Sync event storage limit reached",
+  work_items: "Pending work count limit reached",
+  work_bytes: "Pending work storage limit reached",
+  report_items: "Report count limit reached",
+  report_bytes: "Report storage limit reached",
+  relay_environment: "Device relay storage limit reached",
+  relay_hub: "Hub relay storage limit reached",
+  members: "Connected device limit reached",
+  checkpoint_handles: "Checkpoint count limit reached",
+  checkpoint_staging: "Checkpoint staging limit reached",
+  derived_cache: "Memory cache storage limit reached",
+  fts_indexed_text: "Search index size limit reached",
+  fts_admission_brake: "Search indexing paused at the storage limit",
+  import_lineage_records: "Import history count limit reached",
+  import_lineage_bytes: "Import history storage limit reached",
+};
+const forgetToFree =
+  "Forget memories you no longer need in Settings → Memory to free space, then preview again";
+const waitToFree = "GOAT frees this as pending work and syncing finish; try again later";
+// The whole-store budget shares live_payload_bytes on the wire; forgetting frees only its own text.
+const storeFullNextStep =
+  "Automatic cleanup already ran and could not make room. Forgetting a memory frees only its own text, so it helps only when many memories are no longer needed";
+// Only limits a person can free get a next step; the rest stay a plain limit message.
+const capacityNextSteps: Partial<Record<MemoryCapacityDimension, string>> = {
+  body: "Shorten this memory, then try again",
+  user_items: forgetToFree,
+  project_items: forgetToFree,
+  thread_summaries: forgetToFree,
+  thread_items: forgetToFree,
+  space_live_items: forgetToFree,
+  environment_live_items: forgetToFree,
+  live_payload_bytes: forgetToFree,
+  import_live_items: forgetToFree,
+  import_live_bytes: forgetToFree,
+  fts_indexed_text: forgetToFree,
+  import_session_items: "Import fewer memories at a time",
+  import_session_bytes: "Import fewer memories at a time",
+  work_items: waitToFree,
+  work_bytes: waitToFree,
+  report_items: waitToFree,
+  report_bytes: waitToFree,
+  log_tail_rows: waitToFree,
+  log_tail_bytes: waitToFree,
+  relay_environment: waitToFree,
+  relay_hub: waitToFree,
+  checkpoint_staging: waitToFree,
+  members: "Remove a device in the hub's Memory settings before adding another",
+};
+
+/** What is full and how to free it, from a capacity refusal. */
+function memoryImportCapacityMessage(capacity: MemoryCapacityExceeded): string {
+  if (isMemoryStoreBudgetCapacity(capacity)) {
+    const mib = (bytes: number) => `${(bytes / 1048576).toFixed(1)} MiB`;
+    return `${MEMORY_STORE_FULL_LABEL}: ${mib(capacity.current)} of ${mib(capacity.limit)} used. ${storeFullNextStep}.`;
+  }
+  const next = capacityNextSteps[capacity.dimension];
+  return `Memory storage is full: ${memoryCapacityLabels[capacity.dimension]} (${capacity.current} of ${capacity.limit}).${next ? ` ${next}.` : ""}`;
+}
+
 /** The typed refusal's reason, or null when the failure is not a memory-import error. */
-export function memoryImportRequestFailureMessage(error: unknown): string | null {
-  return isMemoryImportRpcError(error) ? memoryImportIssueReason(error.issue) : null;
+export function memoryImportRequestFailureMessage(
+  error: unknown,
+  format?: MemoryImportSourceFormat,
+): string | null {
+  if (!isMemoryImportRpcError(error)) return null;
+  return error.capacity
+    ? memoryImportCapacityMessage(error.capacity)
+    : memoryImportIssueReason(error.issue, "request", format);
+}
+
+const memoryImportOutcomeLabels: Record<MemoryImportOutcome, string> = {
+  created: "Added",
+  revised: "Updated",
+  noop: "Unchanged",
+  aliased: "Linked to an existing memory",
+  suppressed: "Previously forgotten; not imported",
+  rejected: "Could not import",
+  conflicted: "Conflicting memories on hold",
+};
+const memoryImportIssueLabels: Record<MemoryImportIssue, string> = {
+  unsupported_format: "Unsupported source format",
+  source_missing: "Source no longer available",
+  source_unreadable: "Source could not be read",
+  invalid_utf8: "Source text encoding is not supported",
+  path_rejected: "Source location is not allowed",
+  limit_exceeded: "Import limit reached",
+  source_changed: "Source changed; preview again",
+  scope_unmapped: "Choose a destination scope",
+  mapping_changed: "Destination changed; preview again",
+  bootstrap_required: "Set up memory before importing",
+  secret_detected: "Sensitive content blocked",
+  storage_failed: "Could not save imported memory",
+  operation_id_reused: "Import request expired; preview again",
+  capacity_exceeded: "Storage limit reached",
+};
+
+/** Totals across settled chunks, with the reason for every refusal and what storage is full. */
+export function memoryImportResultLines(counts: MemoryImportCounts): readonly string[] {
+  const lines = <K extends string>(names: Record<K, string>, values: Partial<Record<K, number>>) =>
+    (Object.keys(names) as K[]).flatMap((key) => {
+      const count = values[key] ?? 0;
+      return count ? [`${names[key]}: ${count}`] : [];
+    });
+  const capacity = lines(memoryCapacityLabels, counts.capacity);
+  return [
+    ...lines(memoryImportOutcomeLabels, counts.outcomes),
+    ...lines(memoryImportIssueLabels, counts.issues),
+    ...(counts.storeFull
+      ? [`${MEMORY_STORE_FULL_LABEL}: ${counts.storeFull}`, storeFullNextStep]
+      : []),
+    ...capacity,
+    ...new Set(
+      (Object.keys(counts.capacity) as MemoryCapacityDimension[]).flatMap((dimension) => {
+        const next = counts.capacity[dimension] ? capacityNextSteps[dimension] : undefined;
+        return next ? [next] : [];
+      }),
+    ),
+  ];
 }
 
 export const memoryImportFormatLabels: Record<MemoryImportSourceFormat, string> = {
@@ -100,6 +252,8 @@ export interface MemoryImportCounts {
   readonly outcomes: Readonly<Partial<Record<MemoryImportOutcome, number>>>;
   readonly issues: Readonly<Partial<Record<MemoryImportIssue, number>>>;
   readonly capacity: Readonly<Partial<Record<MemoryCapacityDimension, number>>>;
+  /** Refusals by the whole-store budget, kept apart from the live payload limit it shares. */
+  readonly storeFull?: number;
 }
 export interface MemoryImportChunkSummary extends MemoryImportCounts {
   readonly operationId: MemoryOperationId;
@@ -155,10 +309,12 @@ export function reduceMemoryImportProgress(
       const outcomes = { ...counts.outcomes };
       const issues = { ...counts.issues };
       const capacity = { ...counts.capacity };
+      let storeFull = 0;
       for (const item of event.receipt.items) {
         outcomes[item.outcome] = (outcomes[item.outcome] ?? 0) + 1;
         if (item.issue !== undefined) issues[item.issue] = (issues[item.issue] ?? 0) + 1;
-        if (item.capacity !== undefined) {
+        if (item.capacity !== undefined && isMemoryStoreBudgetCapacity(item.capacity)) storeFull++;
+        else if (item.capacity !== undefined) {
           const dimension = item.capacity.dimension;
           capacity[dimension] = (capacity[dimension] ?? 0) + 1;
         }
@@ -169,6 +325,7 @@ export function reduceMemoryImportProgress(
         outcomes,
         issues,
         capacity,
+        ...(storeFull ? { storeFull } : {}),
       };
       const existing = state.chunkSummaries.findIndex((s) => s.operationId === summary.operationId);
       // A selection admits at most four chunks. Status replaces that operation's summary.
@@ -180,6 +337,7 @@ export function reduceMemoryImportProgress(
         outcomes: Partial<Record<MemoryImportOutcome, number>>;
         issues: Partial<Record<MemoryImportIssue, number>>;
         capacity: Partial<Record<MemoryCapacityDimension, number>>;
+        storeFull?: number;
       };
       for (const chunk of chunkSummaries) {
         for (const key of Object.keys(chunk.outcomes) as MemoryImportOutcome[])
@@ -188,6 +346,7 @@ export function reduceMemoryImportProgress(
           totals.issues[key] = (totals.issues[key] ?? 0) + chunk.issues[key]!;
         for (const key of Object.keys(chunk.capacity) as MemoryCapacityDimension[])
           totals.capacity[key] = (totals.capacity[key] ?? 0) + chunk.capacity[key]!;
+        if (chunk.storeFull) totals.storeFull = (totals.storeFull ?? 0) + chunk.storeFull;
       }
       return {
         ...state,

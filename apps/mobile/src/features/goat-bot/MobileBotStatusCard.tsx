@@ -32,13 +32,14 @@ const NO_SLACK_EVENT = Atom.make<AsyncResult.AsyncResult<SlackChannelStatusEvent
 const TONE_DOT: Record<GoatBotDiagnosticTone, string> = {
   ok: "bg-adaptive-emerald-600-400",
   pending: "bg-foreground-muted",
-  warn: "bg-warning",
-  error: "bg-danger",
+  // The plain warning and danger colors are pale fills for surfaces; a dot needs the solid tone.
+  warn: "bg-warning-foreground",
+  error: "bg-danger-foreground",
 };
 
 /**
  * Whether the bot can work now, and why not, at the top of the Work sheet. Mobile has no model or
- * Slack settings screens, so it only offers moving the home and opening a waiting task.
+ * Slack settings screens, so it only offers moving the home and going to what waits for an answer.
  */
 export function MobileBotStatusCard(props: {
   readonly environmentId: EnvironmentId | null;
@@ -48,6 +49,8 @@ export function MobileBotStatusCard(props: {
   } | null;
   readonly rows: GoatBotDiagnosticsInput["rows"];
   readonly refreshRows: () => void;
+  readonly turnsWaiting: number;
+  readonly onOpenChat: () => void;
   readonly onOpenTask: (taskId: ChannelTaskId) => void;
 }) {
   const { member } = props;
@@ -109,6 +112,7 @@ export function MobileBotStatusCard(props: {
       : null,
     canChangeModel: false,
     rows: rowsFromHome ? props.rows : "unavailable",
+    turnsWaiting: rowsFromHome ? props.turnsWaiting : 0,
     slack: !slackSupported ? "unavailable" : slack.error ? "failed" : (slack.data ?? "loading"),
     slackLive,
     canConfigureSlack: false,
@@ -121,28 +125,23 @@ export function MobileBotStatusCard(props: {
         <View key={line.key} className="flex-row flex-wrap items-center gap-2">
           <View className={`size-2 rounded-full ${TONE_DOT[line.tone]}`} />
           <Text className="flex-1 text-foreground">{line.text}</Text>
-          {line.action?.kind === "claim_home" ? (
-            <Pressable
-              accessibilityRole="button"
-              disabled={home.busy}
-              onPress={() => {
-                if (line.action?.kind === "claim_home") home.changeHome(line.action.environmentId);
-              }}
-              className="min-h-[44px] justify-center px-2"
-            >
-              <Text className="text-foreground">{line.action.label}</Text>
-            </Pressable>
-          ) : line.action?.kind === "open_task" ? (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                if (line.action?.kind === "open_task") props.onOpenTask(line.action.taskId);
-              }}
-              className="min-h-[44px] justify-center px-2"
-            >
-              <Text className="text-foreground">{line.action.label}</Text>
-            </Pressable>
-          ) : null}
+          {[line.action, line.alsoAction ?? null].map((action) =>
+            action === null ? null : (
+              <Pressable
+                key={action.kind}
+                accessibilityRole="button"
+                disabled={action.kind === "claim_home" && home.busy}
+                onPress={() => {
+                  if (action.kind === "claim_home") home.changeHome(action.environmentId);
+                  else if (action.kind === "open_chat") props.onOpenChat();
+                  else if (action.kind === "open_task") props.onOpenTask(action.taskId);
+                }}
+                className="min-h-[44px] justify-center px-2"
+              >
+                <Text className="text-foreground">{action.label}</Text>
+              </Pressable>
+            ),
+          )}
         </View>
       ))}
       {home.error ? <Text className="text-danger-foreground">{home.error}</Text> : null}

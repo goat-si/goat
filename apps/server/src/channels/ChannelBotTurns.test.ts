@@ -260,7 +260,7 @@ describe("reception-created GOAT Bot turns", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("delivers the turn's own answer as written", () => {
+  it.effect("delivers the turn's own answer as written, as a reply to the request", () => {
     const harness = harnessWith(botModel);
     const reworded: Array<string> = [];
     harness.script.current = (input) => {
@@ -283,10 +283,45 @@ describe("reception-created GOAT Bot turns", () => {
       );
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
-      const texts = (yield* botMessages).messages.map((message) => message.text);
-      assert.isTrue(texts.some((text) => text.startsWith("Docker images take 41 GB")));
+      const { messages } = yield* botMessages;
+      const texts = messages.map((message) => message.text);
+      const answer = messages.find((message) =>
+        message.text.startsWith("Docker images take 41 GB"),
+      );
+      // A reply to the request, so clients show it under the question instead of as an update.
+      assert.strictEqual(answer?.channel?.inReplyToInputId, task.originInputId);
       assert.isFalse(texts.some((text) => text.startsWith("Done: Look into it")));
       assert.deepStrictEqual(reworded, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("answers a Slack turn in the request's thread and mirrors it as a reply", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(slackInput("look: why is the disk full?", "Ev9"), slackContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      harness.world.setStatus(task.worker!.threadId, 1, "completed", "Docker images take 41 GB.");
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      // Slack threads every reply under the request's root message.
+      const results = harness.slackSent.filter((send) => send.message.kind === "result");
+      assert.lengthOf(results, 1);
+      const destination = results[0]!.message.destination;
+      assert.strictEqual(
+        destination.kind === "slack" ? destination.rootTs : "",
+        "1760000000.000100",
+      );
+      const mirrored = (yield* botMessages).messages.filter(
+        (message) => message.text === "Docker images take 41 GB.",
+      );
+      assert.lengthOf(mirrored, 1);
+      assert.strictEqual(mirrored[0]?.channel?.inReplyToInputId, task.originInputId);
     }).pipe(Effect.provide(harness.layer));
   });
 

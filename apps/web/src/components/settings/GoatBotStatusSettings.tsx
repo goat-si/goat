@@ -21,6 +21,7 @@ export function GoatBotStatusSettings() {
         className="px-3 py-3 sm:px-4"
         environmentId={environmentId}
         member={null}
+        turnsWaiting={threads.turnsWaiting}
         rows={
           !listsTasks
             ? "unavailable"

@@ -95,7 +95,11 @@ export function WorkspaceToolbar(props: {
   // Screens' programmatic dismissals on navigation never call it. A presented sidebar stays
   // visible while its detail owns navigation focus.
   const searchClosed = () => {
-    const hostVisible = navigation.isFocused() || primaryColumn?.presented === true;
+    // Settings opens as a route above the workspace's Home route; its list is on top until a page opens.
+    const settingsOnTop =
+      selectedTab === "settings" && navigation.getState()?.routes.at(-1)?.name === "Settings";
+    const hostVisible =
+      navigation.isFocused() || primaryColumn?.presented === true || settingsOnTop;
     // A retained slot's late close must not clear the query it keeps for its return.
     if (tab.searchMode === "resting" || !hostVisible || !tabActive || !isTabActive(selectedTab))
       return;

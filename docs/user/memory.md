@@ -28,11 +28,15 @@ If search coverage is incomplete or unavailable, an empty result does not prove 
 
 In **Settings → Memory → Import memories**, choose Codex, Claude, or OMO and the destination scope. Discover available profiles on the selected device, preview one, choose the memories, confirm your selection, then apply the import. Up to 32 memories are applied per batch. Other providers are not supported for import.
 
+GOAT reads each provider's memories from your home folder on the selected device: Codex from `.codex/memories` (the task groups in `MEMORY.md`, or the notes in `extensions/ad_hoc/notes` when there is no `MEMORY.md`), Claude from `.claude/projects/<project>/memory`, and OMO from `.omo/memory/agents`, which needs Git 2.48 or later. GOAT does not follow links or junctions in these folders, so keep them as regular folders.
+
 Servers that support it also offer **Aside**. Discovery lists each Aside store on the device by semantic folder (for example `1/agent` or `1/projects`), and nothing is read until you choose one. Only the `## Current` section of each page is imported, one memory per `###` heading; history, dated logs and the `MEMORY.md`/`USER.md` briefings are skipped. Pages with an unexpected layout, sections over 16 KiB and pages over 256 KiB are listed with the reason and never shortened. A folder with more than 128 importable sections cannot be previewed. Pages from `projects/` import only into a project scope. Import each Aside store on one device and let memory sharing carry it to the others.
 
 **Stop import** stops later batches; a batch already sent may still be applied. After partial completion, a lost response, or a restart, use **Check import result** to check the saved operation. This never applies it again automatically. If asked to preview again, review the latest result before starting another import.
 
-If your browser cannot safely run imports, use a current browser or the desktop app. You can still check a saved import result. Imports leave provider originals unchanged, and forgotten memories are not imported again.
+Importing from a browser needs a secure connection: open GOAT over HTTPS, for example with [Tailscale HTTPS](./remote-access.md#tailscale-https), or use the desktop app. You can still check a saved import result. Imports leave provider originals unchanged, and forgotten memories are not imported again.
+
+If memory storage is full, the import result names the limit that was reached and, when you can free it, what to do: for most limits, forget memories you no longer need, then preview again. When the whole memory store is full, GOAT runs its automatic cleanup once before refusing a memory; forgetting then helps only when many memories are no longer needed.
 
 ## Share between devices
 

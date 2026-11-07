@@ -56,6 +56,15 @@ two generations. Reads change nothing, so a reception retried after a crash read
   iMessage link is read again on every permit check, and agents over MCP use their own memory
   tools instead. Reception writes GOAT memory only through the coding threads it starts, which get
   the requester's memory ceiling.
+- **Note edits.** The Memory tab asks for a change or a forget with two fixed sentences from
+  `packages/contracts/src/channelBotNotes.ts`. Reception answers a message that is exactly one of
+  them itself, before the model and without a task
+  ([`channelBotNoteTabEdits.ts`](../../apps/server/src/channels/channelBotNoteTabEdits.ts)), so
+  changing those sentences changes the server's contract too. A change appends the new note with a
+  replaces marker; a forget rewrites `memory.md` without the note, the notes it replaced and quotes
+  of them. Both run under the lock reception saves notes with, but notes-change workers edit the
+  file by hand outside it, so a write racing a forget can be lost or bring removed words back; the
+  forget reads the file once more and says so when it sees that.
 - **Work.** A `work` read matches the owner's 200 most recently updated tasks by task id, a
   linked pull request (by repository and number when the question names a repository), or shared
   words, and returns each task's request, result, machine, open questions and pull requests with

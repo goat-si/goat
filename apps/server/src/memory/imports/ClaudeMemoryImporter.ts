@@ -5,7 +5,11 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { isMap, isScalar, parseDocument } from "yaml";
 import { scanMemoryValue } from "../MemorySecretScanner.ts";
-import type { ImportParsedItem, MemoryImportParser } from "./MemoryImportTypes.ts";
+import {
+  withoutByteOrderMark,
+  type ImportParsedItem,
+  type MemoryImportParser,
+} from "./MemoryImportTypes.ts";
 
 const normalize = (text: string) => text.normalize("NFC").replace(/\r\n/g, "\n").trim();
 const bytes = (text: string) => new TextEncoder().encode(text).length;
@@ -17,7 +21,7 @@ const FILE_MAX_BYTES = 256 * 1024;
 
 /** Parse only the two pinned Claude topic grammars; no generic YAML/Markdown fallback. */
 const header = (text: string, metadataProfile: boolean) => {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/.exec(text);
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/.exec(withoutByteOrderMark(text));
   if (!match) return undefined;
   const doc = parseDocument(match[1]!, { uniqueKeys: true, version: "1.2" });
   if (doc.errors.length || doc.warnings.length || !isMap(doc.contents)) return undefined;
