@@ -71,6 +71,9 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
+import { REMOTE_COPY } from "./channelRemoteCopy.ts";
+import { requesterForDelivery } from "./channelSenderAuthority.ts";
+import { refuseForward } from "./channelForwardRefusal.ts";
 import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
 import {
   answerForwardIdsFor,
@@ -130,83 +133,7 @@ const REPLICA_SWEEP_EVERY_MS = 60 * 60 * 1000;
 /** Copying again for the same remote turn is pointless; this is the turn's key. */
 const replicaKeyFor = (runId: string, status: string) => runId + ":" + status;
 
-/** What the requester reads. Fixed text: remote error text never reaches a channel. */
-export const REMOTE_COPY = {
-  unknownHost: (host: string, hosts: ReadonlyArray<string>) =>
-    "I can't send work to " +
-    host +
-    ". Which machine should run it? " +
-    [...hosts, "this machine"].join(", "),
-  unreachable: (host: string) =>
-    "I can't reach " +
-    host +
-    " right now. Answer with this machine to run it here, or ask again later.",
-  noProject: (host: string) =>
-    "There is no project on " +
-    host +
-    " to work in yet. Add one in GOAT there, then answer with its name.",
-  whichProject: (host: string, names: ReadonlyArray<string>) =>
-    "Which project on " + host + " should I use? " + names.join(", "),
-  projectGone: (host: string) =>
-    "That project is no longer on " + host + ". Which one should I use?",
-  launchRefused: (host: string) => "GOAT on " + host + " refused to start the work.",
-  memoryUnsupported: (host: string) =>
-    "GOAT on " +
-    host +
-    " can't apply the memory access this task may use. Update GOAT there and ask again.",
-  launchUncertain: (host: string) =>
-    "I can't tell whether the work started on " +
-    host +
-    ". Check its threads there before asking again.",
-  launchIncomplete: (host: string) => "The work on " + host + " did not start a run.",
-  reportsUnsupported: (host: string) =>
-    "GOAT on " + host + " is too old to report back. Update it there and ask again.",
-  lost: (host: string) => "The work on " + host + " is no longer reachable from here.",
-  outage: (host: string) =>
-    "I can't reach " + host + " right now. The work keeps running there; I'll reconnect.",
-  reconnected: (host: string) => "Reconnected to " + host + ".",
-  resumeBaseMissing: (host: string, fromHost: string) =>
-    "The project on " +
-    host +
-    " doesn't have the commits the work from " +
-    fromHost +
-    " builds on. Push them, or fetch them on " +
-    host +
-    ", and ask again.",
-  resumeRefConflict: (host: string) =>
-    "The project on " + host + " already has a different copy of this work. Ask again.",
-  resumeUnreadable: (host: string) =>
-    "I couldn't place the copied work on " + host + ". Ask again, or pick another machine.",
-  resumeUnreachable: (host: string) =>
-    "I can't reach " + host + " to continue the work there. Ask again, or pick another machine.",
-  staleMachineBack: (host: string) =>
-    host +
-    " is reachable again. It still has the earlier attempt's work; nothing from it reaches this task.",
-  answerRefused: (host: string, answer: string) =>
-    "The coding thread on " +
-    host +
-    " now runs above what this task may use, so I didn’t pass on your answer (“" +
-    answer +
-    "”). Lower the thread’s mode there and answer again, or answer in the thread.",
-  inboxOverflow: (count: number) =>
-    String(count) + " older progress reports from the other machine were dropped.",
-  projectModelMissing: (host: string, project: string) =>
-    "The model for " +
-    project +
-    " on " +
-    host +
-    " is not available there. Pick a default model for that project in GOAT on " +
-    host +
-    " and answer here.",
-  defaultModelMissing: (host: string, project: string) =>
-    "This machine's default model is not available on " +
-    host +
-    ". Pick a default model for " +
-    project +
-    " in GOAT on " +
-    host +
-    " and answer here.",
-} as const;
+export { REMOTE_COPY };
 
 const RemoteWorkerState = Schema.Struct({
   generation: PositiveInt,
@@ -383,6 +310,10 @@ const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "ro
 
 /** The task changed hands or moved on while a remote call was pending; nothing was sent. */
 class Superseded extends Data.TaggedError("ChannelRemoteSuperseded")<{}> {}
+/** The answer's sender may no longer direct this work; nothing is sent. */
+class SenderRefused extends Data.TaggedError("ChannelRemoteSenderRefused")<{
+  readonly name: string;
+}> {}
 
 const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
@@ -870,7 +801,7 @@ const make = Effect.gen(function* () {
     return requester.runtimeModeCeiling;
   });
 
-  const callHost = (
+  const callHost = <E extends Superseded | SenderRefused>(
     input: {
       readonly host: string;
       readonly tool: string;
@@ -881,7 +812,7 @@ const make = Effect.gen(function* () {
       readonly requireReady?: true;
       readonly memoryGrantCeiling?: MemoryTaskGrantCeiling;
     },
-    authorize: Effect.Effect<RuntimeMode, Superseded>,
+    authorize: Effect.Effect<RuntimeMode, E>,
   ) => ssh.callHostTool(input, authorize);
 
   const listRemoteProjects = (
@@ -2577,6 +2508,35 @@ const make = Effect.gen(function* () {
         return yield* ledger.completeForward({ owner, sequence: pending.sequence });
       }
       const ids = answerForwardIdsFor(event.eventId);
+      // Runs last in authorize, which the SSH layer repeats right before each request, so requester
+      // and sender are judged together at that point. A lost requester leaves the answer pending as
+      // authorityFor does; whether an earlier attempt reached the host stays unknown.
+      const senderGate = requesterForDelivery(stored.task, event.payload.sender).pipe(
+        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+        Effect.mapError(() => new Superseded()),
+        Effect.flatMap((authority): Effect.Effect<void, Superseded | SenderRefused> =>
+          authority._tag === "allowed"
+            ? Effect.void
+            : authority._tag === "sender_changed"
+              ? Effect.fail(new SenderRefused({ name: authority.name }))
+              : Effect.fail(new Superseded()),
+        ),
+      );
+      const refuseSender = (refused: SenderRefused) =>
+        refuseForward(
+          ledger,
+          stored,
+          REMOTE_COPY.senderChanged(refused.name, state.host),
+          owner,
+          pending.sequence,
+          [ids.messageId],
+        );
+      const before = yield* senderGate.pipe(Effect.result);
+      if (before._tag === "Failure")
+        return before.failure instanceof SenderRefused
+          ? yield* refuseSender(before.failure)
+          : undefined;
       const sent = yield* callHost(
         {
           host: state.host,
@@ -2592,9 +2552,12 @@ const make = Effect.gen(function* () {
           writes: true,
           timeoutMs: SEND_TIMEOUT_MS,
         },
-        authorityFor(stored.task.taskId, stored.task.generation, owner, false, false, state),
+        authorityFor(stored.task.taskId, stored.task.generation, owner, false, false, state).pipe(
+          Effect.tap(() => senderGate),
+        ),
       ).pipe(Effect.flatMap(decodeSent), Effect.result);
       if (sent._tag === "Failure") {
+        if (sent.failure instanceof SenderRefused) return yield* refuseSender(sent.failure);
         const code = remoteCode(sent.failure);
         if (
           code === "runtime_mode_escalation_denied" ||

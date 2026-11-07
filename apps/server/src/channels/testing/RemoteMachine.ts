@@ -124,6 +124,8 @@ export class RemoteMachine {
   holdWaitsFor: string | undefined;
   /** goat_thread_send fails with this remote code. */
   refuseSendWith: string | undefined;
+  /** goat_thread_send starts the run there, but its reply is lost on the way back. */
+  dropSendReply = false;
   /** The models orchestrator_capabilities lists; unset, the tool is refused (an older GOAT). */
   offeredModels: ReadonlyArray<{ readonly instance: string; readonly model: string }> | undefined;
   /** Models a truncated catalog leaves out of untargeted responses but a search still finds. */
@@ -581,6 +583,7 @@ export class RemoteMachine {
                 if (machine.sendNamesMissingRun) {
                   return { runId: runId + ":missing", messageId: "remote-message" };
                 }
+                if (machine.dropSendReply) return yield* machine.refused("host_unavailable");
                 return { runId, messageId: "remote-message" };
               }
               case "goat_origin_reports_wait": {
