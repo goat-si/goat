@@ -102,6 +102,7 @@ export const CUA_DRIVER_EXCLUDED_TOOLS = {
   browser_pointer: "browser tools need per-origin grants",
   browser_select: "browser tools need per-origin grants",
   browser_dialog: "browser tools need per-origin grants",
+  browser_fill_secret: "host-only secret fill; secrets stay in GOAT's secret store",
   browser_download: "saves files to disk; the manifest grants no file paths",
   browser_set_input_files: "uploads local files; the manifest grants no file paths",
   get_browser_state: "browser tools need per-origin grants",
