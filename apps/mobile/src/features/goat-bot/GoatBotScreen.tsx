@@ -3,6 +3,7 @@ import { LegendList } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   goatBotReceiptLabel,
+  goatBotNotesRefreshKey,
   hasGoatBotMarkdown,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
@@ -530,6 +531,8 @@ export function GoatBotScreen(props: {
                 }
               : null
           }
+          onDraft={session.canSend ? setText : undefined}
+          notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
           taskCard={
             taskCard ? (
               <GoatBotTaskCard card={taskCard.card} onSelectThread={onSelectThread} tail={false} />

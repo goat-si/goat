@@ -114,7 +114,8 @@ in the sidebar to find the main bot and its task threads.
   message you send asks for it, and each note names the message it came from.
   Notes live in
   `goat-bot/memory.md` in GOAT's data folder on that machine; edit the file
-  to change them. Put written procedures in `goat-bot/skills/` as Markdown
+  to change them, or open **Work → Memory** in GOAT to see them and ask GOAT
+  Bot to change or forget one. Put written procedures in `goat-bot/skills/` as Markdown
   files, and the bot points its coding agents to the one that fits. Work sent
   to another machine gets the notes, and any procedure the request names, in
   its first message.
