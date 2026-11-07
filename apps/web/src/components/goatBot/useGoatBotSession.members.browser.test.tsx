@@ -83,7 +83,7 @@ it("sends a member's message to its own conversation and keeps its pending row o
     })),
     ingest: vi.fn(async (_environmentId, input) => {
       ingested.push(input);
-      return held.promise;
+      return held;
     }),
     getBotStatus: vi.fn(async () => ({ bot: null, waitingCount: 0 })),
     listTasks: vi.fn(async () => ({ tasks: [] })),
