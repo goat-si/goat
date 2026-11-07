@@ -132,6 +132,7 @@ export const ChannelOutboundMessage = Schema.Struct({
   mentionActorId: Schema.optional(TrimmedNonEmptyString),
   /** Answers a question offers; transports without buttons list them in the text. */
   options: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  questionId: Schema.optional(ChannelQuestionId),
 });
 export type ChannelOutboundMessage = typeof ChannelOutboundMessage.Type;
 

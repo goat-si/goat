@@ -55,6 +55,10 @@ export interface GoatBotTaskCard {
   /** Pull requests the worker opened or linked, newest state first known. */
   readonly pullRequests: ReadonlyArray<GoatBotPullRequestLink>;
   readonly target: GoatBotCardTarget;
+  /** Its question belongs in the main chat as well as the task's own view. */
+  readonly askInChat?: boolean;
+  /** The task's open questions; absent on cards from servers that did not send them. */
+  readonly openQuestionIds?: ReadonlyArray<string>;
 }
 
 export interface GoatBotPullRequestLink {
@@ -77,6 +81,8 @@ export interface GoatBotMessagePresentation {
   readonly taskId?: string | null;
   /** Answers a bot question offers. */
   readonly options?: ReadonlyArray<string>;
+  /** The question those answers belong to. */
+  readonly questionId?: string;
   readonly memory?: MemoryReportReference;
 }
 
@@ -282,14 +288,27 @@ export function buildGoatBotTimeline(input: {
   readonly knownTaskIds?: ReadonlyArray<string>;
 }): GoatBotRow[] {
   const knownTasks = new Set(input.knownTaskIds ?? []);
+  // Each task's newest card, read before the messages so it also governs messages above it.
+  const newestCards = new Map<string, GoatBotTaskCard>();
   for (const { item } of input.visibleTurnItems) {
     if (item.type !== "notification") continue;
     const card = input.readers.taskCard(item);
-    if (card !== null) knownTasks.add(card.key);
+    if (card === null) continue;
+    knownTasks.add(card.key);
+    const newest = newestCards.get(card.key);
+    if (newest === undefined || card.revision > newest.revision) newestCards.set(card.key, card);
   }
   const includesMessage = (taskId: string | null | undefined) =>
     input.taskId === undefined ||
-    (input.taskId === null ? taskId == null || !knownTasks.has(taskId) : taskId === input.taskId);
+    (input.taskId === null
+      ? taskId == null || !knownTasks.has(taskId) || newestCards.get(taskId)?.askInChat === true
+      : taskId === input.taskId);
+  /** Whether a question's buttons still apply, when its task's card says; null when it cannot. */
+  const questionOpen = (taskId: string | null | undefined, questionId: string | undefined) => {
+    const open = taskId == null ? undefined : newestCards.get(taskId)?.openQuestionIds;
+    return questionId === undefined || open === undefined ? null : open.includes(questionId);
+  };
+  const cardDecidesOptions = new Set<string>();
   const committed: UngroupedRow[] = [];
   const committedRequestKeys = new Set<string>();
   const inputTexts = new Map<string, string>();
@@ -327,6 +346,8 @@ export function buildGoatBotTimeline(input: {
       const presentation = input.readers.message(item);
       if (!includesMessage(presentation?.taskId)) continue;
       const tone = presentation?.tone ?? "reply";
+      const open = questionOpen(presentation?.taskId, presentation?.questionId);
+      if (open !== null) cardDecidesOptions.add(item.id);
       committed.push({
         kind: "bot",
         id: item.id,
@@ -340,7 +361,7 @@ export function buildGoatBotTimeline(input: {
           presentation?.replyToKey && presentation.replyToKey !== previousInputKey
             ? (inputTexts.get(presentation.replyToKey)?.slice(0, 160) ?? null)
             : null,
-        options: presentation?.options ?? NO_OPTIONS,
+        options: open === false ? NO_OPTIONS : (presentation?.options ?? NO_OPTIONS),
         ...(presentation?.memory === undefined ? {} : { memory: presentation.memory }),
       });
       previousInputKey = null;
@@ -408,12 +429,18 @@ export function buildGoatBotTimeline(input: {
     }));
 
   const ordered = [...committed, ...pending];
-  // Choices answer the question they came with; anything the user sent since retires them.
+  // Choices answer the question they came with. The task's card says when that question closed;
+  // without it, anything the user sent since retires them.
   let answered = false;
   for (let index = ordered.length - 1; index >= 0; index--) {
     const row = ordered[index]!;
     if (row.kind === "user") answered = true;
-    else if (answered && row.kind === "bot" && row.options.length > 0) {
+    else if (
+      answered &&
+      row.kind === "bot" &&
+      row.options.length > 0 &&
+      !cardDecidesOptions.has(row.id)
+    ) {
       ordered[index] = { ...row, options: NO_OPTIONS };
     }
   }

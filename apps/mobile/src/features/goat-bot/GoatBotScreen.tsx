@@ -363,7 +363,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
               accessibilityRole="button"
               disabled={!props.canSend}
               onPress={() => props.onSend(answer)}
-              className="rounded-full border px-3 py-2"
+              className="min-h-11 justify-center rounded-full border px-3 py-2"
               style={{ borderColor: outgoingColor }}
             >
               <Text className="text-sm" style={{ color: outgoingColor }}>

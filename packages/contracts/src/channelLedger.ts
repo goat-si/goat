@@ -441,6 +441,10 @@ export const ChannelTaskChip = Schema.Struct({
   movedFrom: Schema.optional(ChannelTaskMove),
   /** The task's attempt when a person retried it; absent means the first. */
   generation: Schema.optional(PositiveInt),
+  /** A skill proposal: its question belongs in the main chat as well as the task's own view. */
+  askInChat: Schema.optional(Schema.Literal(true)),
+  /** Ids of the task's open questions; a question's buttons retire once its id is gone. */
+  openQuestionIds: Schema.optional(Schema.Array(ChannelQuestionId)),
 });
 export type ChannelTaskChip = typeof ChannelTaskChip.Type;
 

@@ -159,6 +159,8 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     attentionLabel: attentionLabel(chip),
     evidenceLabels: verificationLabels(chip, report.notRun),
     pullRequests: pullRequestLinks(chip),
+    ...(chip.askInChat === true ? { askInChat: true } : {}),
+    ...(chip.openQuestionIds === undefined ? {} : { openQuestionIds: chip.openQuestionIds }),
     target:
       chip.worker === undefined
         ? { kind: "none", label: workerlessLabel(chip.status) }
@@ -190,6 +192,7 @@ export const goatBotItemReaders: GoatBotItemReaders = {
       clientKey: item.type === "user_message" ? item.messageId : null,
       ...(meta.taskId === undefined ? {} : { taskId: meta.taskId }),
       ...(meta.options === undefined || meta.options.length === 0 ? {} : { options: meta.options }),
+      ...(meta.questionId === undefined ? {} : { questionId: meta.questionId }),
     };
   },
   taskCard: (item) =>

@@ -31,6 +31,7 @@ import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
 import { isTerminalThread, mainThreadInput } from "./channelTerminalThread.ts";
 import { isMemoryTabEdit } from "./channelBotNoteTabEdits.ts";
+import { makeInboundChoices } from "./channelInboundChoice.ts";
 import { makeCreatedTasks, prepareTransition } from "./channelTaskWrites.ts";
 
 export class ChannelSessionFirst extends Context.Service<
@@ -62,6 +63,7 @@ const mapError = (cause: unknown) =>
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const choices = makeInboundChoices(ledger);
   const sessions = yield* ChannelBotSession.ChannelBotSession;
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
@@ -204,6 +206,8 @@ const make = Effect.gen(function* () {
       const terminal =
         threadTask !== undefined &&
         ["completed", "failed", "cancelled"].includes(threadTask.task.status);
+      // A choice for a question no worker will pick up is reception's to record.
+      if (!terminal && (yield* choices.taskViewChoice(stored)) !== undefined) return false;
       if (!terminal) {
         const now = DateTime.formatIso(yield* DateTime.now);
         const receptionId = ChannelReceptionId.make("channel-task-thread:" + inputId);

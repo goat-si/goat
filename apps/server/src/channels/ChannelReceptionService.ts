@@ -886,7 +886,7 @@ const make = Effect.gen(function* () {
         : yield* answer(card);
     });
 
-  const { inboundChoice, isDeterministicReply } = makeInboundChoices(ledger);
+  const { inboundChoice, isDeterministicReply, taskViewChoice } = makeInboundChoices(ledger);
 
   const receive: ChannelReceptionService["Service"]["receive"] = (inputId, owner) =>
     Effect.gen(function* () {
@@ -909,7 +909,8 @@ const make = Effect.gen(function* () {
       const stored = yield* ledger.beginReception({ owner, inputId, receptionId, readAt });
       if (stored === undefined || stored.requester === undefined) return;
       const routine = yield* routineInputs.isRoutineInput(inputId);
-      if (yield* tt.shouldRefuseTaskThread(ledger, stored)) {
+      const viewChoice = routine ? undefined : yield* taskViewChoice(stored);
+      if (viewChoice === undefined && (yield* tt.shouldRefuseTaskThread(ledger, stored))) {
         yield* tt.refuseTaskThread(ledger, stored, owner);
         yield* wake.wake;
         return;
@@ -981,7 +982,9 @@ const make = Effect.gen(function* () {
       // A number or an option label is decided here, before the model. A number on an approval
       // card becomes that button's label ("Deny A1") so the approval parser and mayAnswerFor
       // run unchanged. Agents and routines never answer approvals or questions.
-      const choice = routine ? undefined : yield* inboundChoice(message, conversationId, tasks);
+      const choice = routine
+        ? undefined
+        : (viewChoice ?? (yield* inboundChoice(message, conversationId, tasks)));
       const approvalReply =
         choice?.type === "question"
           ? undefined
@@ -1696,6 +1699,7 @@ const make = Effect.gen(function* () {
           task,
           mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
           options: "options" in base ? base.options : undefined,
+          questionId: "questionId" in base ? base.questionId : undefined,
         }),
       ];
       // Work started elsewhere shows up in the bot as its card; its result is on the card, and
