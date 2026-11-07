@@ -484,6 +484,7 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   deleteBot: "channel.deleteBot",
   restoreBot: "channel.restoreBot",
   listBotThreads: "channel.listBotThreads",
+  listBotNotes: "channel.listBotNotes",
   listChildWork: "channel.listChildWork",
   updateTaskView: "channel.updateTaskView",
   ingest: "channel.ingest",
