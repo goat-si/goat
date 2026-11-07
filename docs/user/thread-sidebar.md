@@ -74,8 +74,6 @@ notes. **Check in on me** under **Routines** sets up a routine on the days and h
 choose: the bot looks over its tasks and writes only when something needs you.
 **Memory** shows the notes GOAT Bot keeps; **Ask to change** or **Ask to forget** puts a
 request quoting the note in the message box for you to send.
-**Library** lists files GOAT Bot saved; open one to preview or download it (on a phone, to
-view or share it). **Computer** shows which machines its running tasks use.
 
 The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
 sent something since you last opened it; the number badge counts tasks awaiting your
