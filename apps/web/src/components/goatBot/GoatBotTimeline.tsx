@@ -274,7 +274,9 @@ export function GoatBotTimeline({
                     ) : row.showReceipt ? (
                       <span
                         className="mt-1 text-xs leading-4 font-medium text-muted-foreground"
-                        aria-label={goatBotReceiptLabel(row.delivery, time)?.accessibleText}
+                        aria-label={
+                          goatBotReceiptLabel(row.delivery, time, botName)?.accessibleText
+                        }
                       >
                         {goatBotReceiptLabel(row.delivery, time)?.text}
                       </span>

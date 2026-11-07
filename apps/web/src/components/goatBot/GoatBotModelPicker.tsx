@@ -3,6 +3,7 @@ import { createModelSelection } from "@goat/shared/model";
 
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { toastManager } from "../ui/toast";
+import { useGoatBotName } from "./goatBotMemberContext";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
 import { useGoatBotModel } from "./useGoatBotModel";
 
@@ -21,6 +22,7 @@ export function GoatBotModelPicker() {
 function GoatBotHomeModelPicker({ environmentId }: { environmentId: EnvironmentId }) {
   const { activeEntry, selection, separate, entries, options, allowed, save } =
     useGoatBotModel(environmentId);
+  const botName = useGoatBotName();
   const modelName =
     activeEntry?.models.find((model) => model.slug === selection.model)?.name ?? selection.model;
   return (
@@ -32,7 +34,7 @@ function GoatBotHomeModelPicker({ environmentId }: { environmentId: EnvironmentI
       instanceEntries={entries}
       modelOptionsByInstance={options}
       popupAlign="end"
-      triggerAriaLabel={`GOAT Bot model: ${modelName}${separate ? "" : " (automatic)"}`}
+      triggerAriaLabel={`${botName} model: ${modelName}${separate ? "" : " (automatic)"}`}
       disabled={!allowed}
       onInstanceModelChange={(instanceId, model) => {
         void save({ goatBotModelSelection: createModelSelection(instanceId, model) }).then(
