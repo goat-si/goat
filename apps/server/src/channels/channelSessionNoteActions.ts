@@ -25,6 +25,7 @@ import { isUnlinkedPrincipal } from "./ChannelGateway.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import { quotedFromInput } from "./channelBotNotes.ts";
+import { isSessionTask } from "./channelBotSessionRuns.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import { currentRequester } from "./channelDispatchAuthority.ts";
 import { deliveryIdFor, toolSteerIdsFor, turnSteerIdsFor } from "./channelIds.ts";
@@ -104,7 +105,14 @@ const make = Effect.gen(function* () {
     const session = sessions[0];
     if (session === undefined) return yield* fail("forbidden");
     const stored = yield* ledger.getTask(taskId);
-    if (stored === undefined || stored.task.conversationId !== session.conversation_id)
+    // Only a local session turn: a retry refuses turns and a move needs a remote worker, so its
+    // generation never changes while a call it bound is in flight.
+    if (
+      stored === undefined ||
+      stored.task.conversationId !== session.conversation_id ||
+      stored.task.kind !== "turn" ||
+      !isSessionTask(stored.task)
+    )
       return yield* fail("not_found");
     const intents = yield* sql<{ readonly message_id: string; readonly kind: string }>`
       SELECT message_id, kind FROM channel_bot_session_runs
@@ -252,7 +260,8 @@ const make = Effect.gen(function* () {
         if (request.kind === "remember") {
           const note = request.note?.trim() ?? "";
           if (note === "") return yield* fail("invalid_input");
-          // Checked again under the writer's lock: the task may have moved on while it waited.
+          // Checked again under the writer's lock; this check orders the save, so a turn that
+          // finishes between it and the write finishes after the save.
           const written = yield* writer.saveIf(
             Effect.gen(function* () {
               const current = (yield* ledger.getTask(request.taskId)) ?? latest;

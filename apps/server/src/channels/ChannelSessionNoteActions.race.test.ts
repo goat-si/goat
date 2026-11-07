@@ -15,6 +15,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import { ask, runsOf, sessionHarness } from "./ChannelBotSession.testkit.ts";
+import * as ChannelBotThreads from "./ChannelBotThreads.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
@@ -24,7 +25,7 @@ import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import * as ChannelSessionNoteActions from "./channelSessionNoteActions.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { setupBot } from "./testkit/ChannelHarness.ts";
+import { owner as ownerFor, setupBot } from "./testkit/ChannelHarness.ts";
 
 /** The edges of a session notes change that need the service itself: races and a failed queue. */
 
@@ -287,5 +288,78 @@ it.effect("a remember waiting for the writer is not saved once its task was retr
     });
     assert.strictEqual(result.reason, "task_finished");
     assert.strictEqual(yield* fs.readFileString(notes.notes), NOTES_HEADER);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("a session turn is never retried into a new generation under a call it bound", () => {
+  const harness = sessionHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const asked = yield* turn(harness, "remember that staging is staging-02", "remember");
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const owner = (yield* ChannelRuntime.ChannelRuntime).ownerToken;
+    yield* commitTransition(
+      ledger,
+      (yield* ledger.getTask(asked.task.taskId))!,
+      { type: "task.completed", payload: { generation: asked.task.generation, summary: "Done" } },
+      { owner },
+    );
+    const threads = yield* ChannelBotThreads.ChannelBotThreads;
+    const retried = yield* Effect.flip(
+      threads.retry({ taskId: asked.task.taskId, clientRequestId: "again" }, ownerFor),
+    );
+    assert.strictEqual(retried.reason, "task_not_found");
+    const task = yield* ledger.getTask(asked.task.taskId);
+    assert.strictEqual(task?.task.generation, asked.task.generation);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("a remember whose check passed is saved when the turn finishes before the write", () => {
+  const harness = sessionHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const fs = yield* FileSystem.FileSystem;
+    const notes = yield* files;
+    yield* fs.makeDirectory(notes.dir, { recursive: true });
+    yield* fs.writeFileString(notes.notes, NOTES_HEADER);
+    const asked = yield* turn(harness, "remember that staging is staging-02", "remember");
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const owner = (yield* ChannelRuntime.ChannelRuntime).ownerToken;
+    const writer = yield* ChannelBotNoteWriter;
+    const finish = Effect.gen(function* () {
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(asked.task.taskId))!,
+        { type: "task.completed", payload: { generation: asked.task.generation, summary: "Done" } },
+        { owner },
+      );
+    });
+    const actions = yield* actionsWith(
+      Layer.succeed(ChannelBotNoteWriter, {
+        ...writer,
+        // The turn finishes after the check under the lock passed, before the line is written.
+        saveIf: ((guard, ...rest) =>
+          writer.saveIf(
+            Effect.tap(guard, (refused) =>
+              refused === undefined ? Effect.orDie(finish) : Effect.void,
+            ),
+            ...rest,
+          )) as typeof writer.saveIf,
+      }) as never,
+    );
+    const result = yield* actions.change({
+      caller: asked.caller,
+      taskId: asked.task.taskId,
+      inputId: asked.inputId,
+      kind: "remember",
+      note: "Staging is staging-02.",
+      quote: "remember that staging is staging-02",
+    });
+    assert.strictEqual(result.outcome, "saved");
+    assert.strictEqual((yield* ledger.getTask(asked.task.taskId))?.task.status, "completed");
+    assert.include(
+      yield* fs.readFileString(notes.notes),
+      "Staging is staging-02. (asked in " + asked.inputId + ")",
+    );
   }).pipe(Effect.provide(harness.layer));
 });
