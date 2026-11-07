@@ -22,6 +22,9 @@ body {
 }
 #editor .cm-content {
   padding: 12px 0 35vh;
+  /* Fill the page so a tap anywhere below a short note starts editing there. */
+  min-height: 100%;
+  box-sizing: border-box;
   color: var(--goat-text);
   caret-color: var(--goat-accent);
 }
