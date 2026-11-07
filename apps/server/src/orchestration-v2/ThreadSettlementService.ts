@@ -37,6 +37,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as SettlementAdmission from "./settlementAdmission.ts";
 import { SkipThreadArchiveRestore } from "./ThreadArchiveGate.ts";
+import { makeDelegatedLaneSettlement } from "./goat/DelegatedLaneSettlement.ts";
 
 export interface SettlementPullRequest {
   readonly state: "open" | "closed" | "merged";
@@ -304,6 +305,7 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const shellClosedThreads = new Set<ThreadId>();
+  const delegatedLaneSettledAt = yield* makeDelegatedLaneSettlement;
   const terminals = yield* TerminalManager.TerminalManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   // Repeated thread.settled retains settledAt; run the action only once per settlement.
@@ -406,14 +408,16 @@ export const make = Effect.gen(function* () {
           thread.projectId,
         ).settings;
         const decisionNow = yield* DateTime.now;
-        const settledAt = resolveAutoSettlementAt({
-          thread,
-          pullRequest,
-          nowMs: DateTime.toEpochMillis(decisionNow),
-          autoSettleAfterDays: currentSettings.sidebarAutoSettleAfterDays,
-          autoSettleOnMerge: currentSettings.sidebarAutoSettleOnMerge,
-          autoSettleKeepPullRequests: currentSettings.sidebarAutoSettleKeepPullRequests,
-        });
+        const settledAt =
+          (yield* delegatedLaneSettledAt(thread)) ??
+          resolveAutoSettlementAt({
+            thread,
+            pullRequest,
+            nowMs: DateTime.toEpochMillis(decisionNow),
+            autoSettleAfterDays: currentSettings.sidebarAutoSettleAfterDays,
+            autoSettleOnMerge: currentSettings.sidebarAutoSettleOnMerge,
+            autoSettleKeepPullRequests: currentSettings.sidebarAutoSettleKeepPullRequests,
+          });
         if (settledAt === null) return thread;
         const uuid = yield* crypto.randomUUIDv4();
         yield* orchestrator.dispatch({
@@ -719,6 +723,11 @@ export const make = Effect.gen(function* () {
 
   const processEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
+      // A parent records a lane's result after the lane's own run ended.
+      case "context-transfer.created":
+        return event.payload.type === "subagent_result"
+          ? enqueueThread(event.payload.sourceThreadId)
+          : Effect.void;
       case "thread.deleted":
       case "thread.archived":
         return Effect.sync(() => {
