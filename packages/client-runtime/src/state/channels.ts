@@ -105,6 +105,16 @@ export function createChannelEnvironmentAtoms<R, E>(
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotNotes,
       staleTimeMs: 2_000,
     }),
+    listBotArtifacts: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:list-bot-artifacts",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts,
+      staleTimeMs: 2_000,
+    }),
+    /** One chunk of a Library file; callers read a file one chunk at a time. */
+    readBotArtifact: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:read-bot-artifact",
+      tag: CHANNEL_GATEWAY_WS_METHODS.readBotArtifact,
+    }),
     listChildWork: (target: Parameters<typeof childWorkQuery>[0]) =>
       childWorkFamily(JSON.stringify(target)),
     updateTaskView: createEnvironmentRpcCommand(runtime, {
