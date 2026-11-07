@@ -20,6 +20,7 @@ export function filterSpeechModels(
       return (
         Number(b.selected) - Number(a.selected) ||
         Number(b.installed) - Number(a.installed) ||
+        Number(b.recommended === true) - Number(a.recommended === true) ||
         a.name.localeCompare(b.name)
       );
     });

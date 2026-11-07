@@ -34,6 +34,7 @@ export const SpeechModelList = Schema.Struct({
       size: Schema.Number,
       installed: Schema.Boolean,
       selected: Schema.Boolean,
+      recommended: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 });

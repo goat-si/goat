@@ -39,3 +39,50 @@ it("filters models and orders them by the selected criterion", () => {
     "a",
   ]);
 });
+
+it("ranks recommended downloads after selected and installed models", () => {
+  const models = [
+    {
+      id: "alpha",
+      name: "Alpha",
+      description: "",
+      size: 1,
+      installed: false,
+      selected: false,
+      recommended: false,
+    },
+    {
+      id: "zulu",
+      name: "Zulu",
+      description: "",
+      size: 1,
+      installed: false,
+      selected: false,
+      recommended: true,
+    },
+    {
+      id: "installed",
+      name: "Installed",
+      description: "",
+      size: 1,
+      installed: true,
+      selected: false,
+      recommended: false,
+    },
+    {
+      id: "selected",
+      name: "Selected",
+      description: "",
+      size: 1,
+      installed: false,
+      selected: true,
+      recommended: false,
+    },
+  ];
+  expect(filterSpeechModels(models, "", false, "recommended").map((model) => model.id)).toEqual([
+    "selected",
+    "installed",
+    "zulu",
+    "alpha",
+  ]);
+});
