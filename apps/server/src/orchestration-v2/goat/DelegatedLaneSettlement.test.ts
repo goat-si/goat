@@ -124,10 +124,11 @@ const sweep = Effect.fn("sweep")(function* (
             records(threadId).pipe(Effect.map((value) => value as never)),
           getThread: (threadId) =>
             Effect.succeed(threads.find((thread) => thread.id === threadId)!),
-          getThreadWorktreePaths: () =>
+          getThreadWorktreePaths: (options) =>
             Effect.succeed(
               threads.flatMap((thread) =>
-                thread.worktreePath === null
+                thread.worktreePath === null ||
+                (thread.archivedAt !== null && options?.includeArchived !== true)
                   ? []
                   : [{ threadId: thread.id, worktreePath: thread.worktreePath }],
               ),
@@ -295,7 +296,8 @@ it.effect("a settled lane never runs a settle script in a checkout another threa
       });
       // Every other thread here is settled now, but any of them can resume in that checkout.
       const lane = laneIn(childId, "/worktrees/shared");
-      const parent = appThread(parentId, "settled", "/worktrees/shared");
+      // An archived parent can be unarchived and resumed in its checkout.
+      const parent = { ...appThread(parentId, null, "/worktrees/shared"), archivedAt: completedAt };
       const isolated = laneIn("isolated-lane", "/worktrees/isolated");
       const isolatedSharer = laneIn("isolated-sharer", "/worktrees/isolated");
       const own = appThread("own-worktree", "settled", "/worktrees/own");
