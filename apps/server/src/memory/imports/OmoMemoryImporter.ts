@@ -4,7 +4,11 @@ import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { scanMemoryValue } from "../MemorySecretScanner.ts";
-import type { ImportParsedItem, MemoryImportParser } from "./MemoryImportTypes.ts";
+import {
+  withoutByteOrderMark,
+  type ImportParsedItem,
+  type MemoryImportParser,
+} from "./MemoryImportTypes.ts";
 
 const validPayload = Schema.is(M.MemoryPayload);
 const PROFILE = "omo-memory-core-beta63";
@@ -23,7 +27,7 @@ const safeSelector = (selector: string) =>
 
 /** Scan decoded aliases even when another header field will reject the item. */
 const hasDecodedAliasSecret = (text: string) => {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const lines = withoutByteOrderMark(text).replace(/\r\n/g, "\n").split("\n");
   if (lines[0] !== "---") return false;
   const end = lines.indexOf("---", 1);
   for (const line of lines.slice(1, end < 0 ? undefined : end)) {
@@ -48,7 +52,7 @@ const hasDecodedAliasSecret = (text: string) => {
 
 /** beta63 uses first-colon scalar fields, not general YAML or includes. */
 const header = (text: string) => {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const lines = withoutByteOrderMark(text).replace(/\r\n/g, "\n").split("\n");
   if (lines[0] !== "---") return undefined;
   const end = lines.indexOf("---", 1);
   if (end < 0) return undefined;

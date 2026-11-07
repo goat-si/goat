@@ -1,4 +1,9 @@
-import { groupBotWork, presentTaskStatus } from "@goat/client-runtime/goatBot";
+import {
+  goatBotTurnsOutsideList,
+  goatBotWaitingInChatText,
+  groupBotWork,
+  presentTaskStatus,
+} from "@goat/client-runtime/goatBot";
 import type { BotThreadRow, EnvironmentId, ThreadId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
@@ -22,16 +27,19 @@ export function GoatBotWorkPanel({
   threadId,
   onDraft,
   notesRefreshKey,
+  onShowChat,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
+  /** Called when a link leads back to the chat, so a sheet over it can close. */
+  onShowChat?: (() => void) | undefined;
   /** Puts a message in this chat's composer; absent while the chat cannot send. */
   onDraft?: ((text: string) => void) | undefined;
   notesRefreshKey?: string | undefined;
 }) {
   const [tab, setTab] = useState<Tab>("Tasks");
   const member = useGoatBotMember();
-  const { rows, supported, loaded, failed } = useBotThreads(
+  const { rows, supported, loaded, failed, turnsWaiting } = useBotThreads(
     environmentId,
     memberThreadsKey(member),
   );
@@ -58,8 +66,23 @@ export function GoatBotWorkPanel({
           environmentId={environmentId}
           member={member}
           rows={!supported ? "unavailable" : failed ? "failed" : loaded ? rows : null}
+          turnsWaiting={turnsWaiting}
+          onShowChat={onShowChat}
         />
         <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
+          {goatBotTurnsOutsideList(turnsWaiting, rows).length > 0 ? (
+            <p className="mb-3">
+              {goatBotWaitingInChatText(member?.name ?? "GOAT Bot")}.{" "}
+              <Link
+                to="/bot"
+                search={goatBotSearch(member)}
+                onClick={onShowChat}
+                className="underline"
+              >
+                Open the chat
+              </Link>
+            </p>
+          ) : null}
           {tasks.length === 0 ? (
             <p>No task threads yet. Ask GOAT Bot to start work.</p>
           ) : (

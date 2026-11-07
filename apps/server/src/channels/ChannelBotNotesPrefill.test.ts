@@ -17,11 +17,13 @@ import {
 
 const note = 'Call the build "green" only when (all) checks pass.';
 
+// An exact prefilled sentence is applied by the server (ChannelBotMemoryTabEdits.test.ts); one the
+// person extended still goes to the model, and the quote check must accept the note's punctuation.
 it.effect.each([
-  ["forget", goatBotForgetNoteMessage(note)],
-  ["change", goatBotChangeNoteMessage(note, "Call it green when CI passes.")],
+  ["forget", goatBotForgetNoteMessage(note) + " and the one about CI"],
+  ["change", goatBotChangeNoteMessage(note, "Call it green when CI passes.") + ", please"],
 ] as const)(
-  "the %s message a client prefills lets reception hand the quoted note to a worker",
+  "an extended %s message a client prefilled lets reception hand the quoted note to a worker",
   ([kind, message]) => {
     const harness = makeHarness();
     // The model quotes the note from the person's message, as the reception contract asks.
@@ -33,7 +35,8 @@ it.effect.each([
               type: "create_task",
               title: "Update a note",
               instruction: "Update the requested note.",
-              notesChangeRequested: note,
+              // The note sits JSON-quoted in the sentence, so the model copies it as written there.
+              notesChangeRequested: JSON.stringify(note).slice(1, -1),
             },
           })
         : defaultScript(input);
@@ -44,7 +47,7 @@ it.effect.each([
         rpcContext,
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-      assert.strictEqual((yield* onlyTask).notesChangeRequested, note);
+      assert.strictEqual((yield* onlyTask).notesChangeRequested, JSON.stringify(note).slice(1, -1));
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   },
 );

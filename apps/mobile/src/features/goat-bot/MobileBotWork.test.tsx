@@ -171,7 +171,11 @@ function reset() {
   state.runNow.mockReset();
   state.retry.mockReset();
 }
-async function render(taskId?: ChannelTaskId, taskCard?: ReactNode) {
+async function render(
+  taskId?: ChannelTaskId,
+  taskCard?: ReactNode,
+  turnsWaiting: readonly string[] = [],
+) {
   if (!root) root = createRoot(container);
   await act(async () =>
     root?.render(
@@ -179,6 +183,7 @@ async function render(taskId?: ChannelTaskId, taskCard?: ReactNode) {
         visible
         taskId={taskId}
         taskCard={taskCard}
+        turnsWaiting={turnsWaiting}
         onOpenTask={() => {}}
         onOpenThread={state.openThread}
       />,
@@ -428,4 +433,25 @@ it("opens the coding thread a task launched, such as a bot turn's", async () => 
   await render(ChannelTaskId.make("turn"));
   await press("Open work thread");
   expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread:child" });
+});
+
+it("points to the chat from Tasks when the bot asked a question there", async () => {
+  reset();
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  await render(undefined, undefined, ["turn-1"]);
+  await press("Work");
+  expect(container.textContent).toContain("GOAT Bot is waiting for your answer in the chat");
+  expect(container.textContent).toContain("No tasks yet");
+  await press("Open the chat");
+  expect(container.textContent).not.toContain("waiting for your answer in the chat");
+});
+
+it("offers the Work sheet, and with it Open the chat, only on the chat screen", async () => {
+  reset();
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  await render(ChannelTaskId.make("task-1"), undefined, ["turn-1"]);
+  expect(
+    [...container.querySelectorAll("button")].some((button) => button.textContent === "Work"),
+  ).toBe(false);
+  expect(container.textContent).not.toContain("waiting for your answer in the chat");
 });

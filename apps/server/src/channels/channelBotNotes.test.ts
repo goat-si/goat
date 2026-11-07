@@ -20,10 +20,32 @@ describe("quotedFromInput", () => {
     ["  \n\t", "remember that", false],
     ["remember that", "", false],
     ["remember that", "What machine is this?", false],
-    ["remember that", "Remember that", false],
+    ["remember that", "Remember that", true],
     ["reply in Korean", "reply in English", false],
+    ["Actually I deploy on Mondays.", "Actually I deploy on Mondays", true],
+    ["\u201CReply in Korean\u201D", 'Please "reply in Korean"', true],
+    ["Use the read\u2011only mode", "use the read-only mode", true],
+    ["C++", "I write C", false],
+    ["$5", "it costs 5 dollars", false],
+    ["deploy", "the deployment is fine", false],
+    ["...", "remember that...", false],
+    [
+      "\uD55C\uAD6D\uC5B4\uB85C \uB2F5\uD574",
+      "\uC55E\uC73C\uB85C \uD55C\uAD6D\uC5B4\uB85C \uB2F5\uD574\uC918",
+      true,
+    ],
+    [
+      "\uC601\uC5B4\uB85C \uB2F5\uD574",
+      "\uC55E\uC73C\uB85C \uD55C\uAD6D\uC5B4\uB85C \uB2F5\uD574\uC918",
+      false,
+    ],
   ])("matches %j against %j: %s", (quote, input, matches) => {
     expect(quotedFromInput(quote, input)).toBe(matches);
+  });
+
+  it("checks a word against a long run of letters without matching inside it", () => {
+    expect(quotedFromInput("a", "a".repeat(32_000))).toBe(false);
+    expect(quotedFromInput("a", "a".repeat(32_000) + " a")).toBe(true);
   });
 });
 

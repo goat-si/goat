@@ -78,10 +78,10 @@ import * as tt from "./channelTaskThreadRefusal.ts";
 import {
   channelBotFilesFor,
   listChannelBotSkills,
-  makeChannelBotNoteSaver,
   quotedFromInput,
   readChannelBotNotes,
 } from "./channelBotNotes.ts";
+import { droppedNoteNotice, makeChannelBotNoteWriter } from "./channelBotNoteTabEdits.ts";
 import {
   boundRecall,
   canSeeTask,
@@ -224,7 +224,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
-  const saveNote = yield* makeChannelBotNoteSaver(fileSystem, botFiles);
+  const botNotes = yield* makeChannelBotNoteWriter(fileSystem, botFiles, ledger);
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
@@ -1006,7 +1006,7 @@ const make = Effect.gen(function* () {
             : undefined;
       const answer =
         approvalReply === undefined
-          ? undefined
+          ? yield* botNotes.tabEdit(message, inputId, readAt, routine ? undefined : judgedNow)
           : yield* decideApprovalReply(
               approvalReply,
               conversationId,
@@ -1278,8 +1278,8 @@ const make = Effect.gen(function* () {
       // names its input, so a second pass for the same input does not add it twice.
       const noteNotice =
         decision.remember !== undefined && rememberRefusal === undefined
-          ? yield* saveNote(decision.remember, readAt, inputId, decision.replacesNote)
-          : undefined;
+          ? yield* botNotes.save(decision.remember, readAt, inputId, decision.replacesNote)
+          : droppedNoteNotice(rememberRefusal);
 
       let replyText = decision.replyText;
       let finalDecision = decision;

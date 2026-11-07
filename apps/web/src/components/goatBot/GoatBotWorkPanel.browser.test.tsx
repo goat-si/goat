@@ -6,10 +6,21 @@ import { userEvent } from "vite-plus/test/browser";
 import "~/index.css";
 import { render } from "../../../test/render";
 
-const mocks = vi.hoisted(() => ({ tasks: [] as unknown[], setEnabled: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  tasks: [] as unknown[],
+  setEnabled: vi.fn(),
+  turnsWaiting: [] as string[],
+}));
 vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({ rows: [] }),
-  useBotThreads: () => ({ rows: [], loaded: true, refresh: () => {} }),
+  useBotThreads: () => ({
+    rows: [],
+    supported: true,
+    loaded: true,
+    failed: false,
+    turnsWaiting: mocks.turnsWaiting,
+    refresh: () => {},
+  }),
 }));
 vi.mock("~/state/entities", () => ({
   useThreadShell: () => null,
@@ -45,8 +56,9 @@ vi.mock("~/state/channels", () => ({
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
-function setup(tasks: unknown[]) {
+function setup(tasks: unknown[], turnsWaiting: string[] = []) {
   mocks.tasks = tasks;
+  mocks.turnsWaiting = turnsWaiting;
   mocks.setEnabled.mockReset();
 }
 
@@ -100,4 +112,24 @@ it("a refused pause keeps the routine's stored state and shows why", async () =>
     .element(screen.getByRole("alert"))
     .toHaveTextContent("Couldn't pause this routine: Denied");
   await expect.element(toggle).toHaveAttribute("aria-checked", "true");
+});
+
+it("points to the chat when the bot asked a question there that no task thread shows", async () => {
+  setup([], ["turn-1"]);
+  const onShowChat = vi.fn();
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      onShowChat={onShowChat}
+    />,
+    { router: "/bot?task=old" },
+  );
+  await expect
+    .element(screen.getByText("GOAT Bot is waiting for your answer in the chat", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("link", { name: "Open the chat" }));
+  expect(onShowChat).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/bot"));
+  expect(screen.router?.state.location.search).toEqual({});
 });

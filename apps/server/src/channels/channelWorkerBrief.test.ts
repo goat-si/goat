@@ -6,6 +6,8 @@ import { EMPTY_NOTES } from "./channelBotNotesRecall.ts";
 
 import {
   channelWorkerRules,
+  GOAT_BOT_READ_ONLY_RULE,
+  GOAT_BOT_SUPERVISOR_RULE,
   REMOTE_MESSAGE_CHARS,
   remoteWorkerMessage,
   skillsNamedIn,
@@ -30,6 +32,22 @@ describe("channel worker brief", () => {
   it("tells agents that read the notes file which of two lines wins", () => {
     assert.include(workerInstruction(task, files), NOTES_REPLACED_RULE);
     assert.include(turnInstruction(task, files, false), NOTES_REPLACED_RULE);
+  });
+
+  it("lets a turn edit only the notes file, and only when the person asked to change a note", () => {
+    const plain = turnInstruction(task, files, true);
+    assert.include(plain, "Leave the notes file unchanged");
+    assert.notInclude(plain, "Exception to the read-only rule");
+    const asked = turnInstruction(
+      { ...task, notesChangeRequested: "forget the draft rule" },
+      files,
+      true,
+    );
+    const exception = asked.indexOf("Exception to the read-only rule above");
+    assert.isAbove(exception, asked.indexOf(GOAT_BOT_READ_ONLY_RULE));
+    assert.isAbove(exception, asked.indexOf(GOAT_BOT_SUPERVISOR_RULE));
+    assert.include(asked.slice(exception), files.notes);
+    assert.notInclude(asked, "Leave the notes file unchanged");
   });
 
   it("gives workers on both machines the same confirmation, progress and result rules", () => {

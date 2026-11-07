@@ -3,7 +3,11 @@ import * as NodeChildProcess from "node:child_process";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- acquisition validates absolute server paths.
 import * as NodePath from "node:path";
 import { guardChild } from "@goat/shared/errorGuards";
-import { MemoryImportRpcError, type MemoryImportIssue } from "@goat/contracts";
+import {
+  MemoryImportRpcError,
+  type MemoryImportIssue,
+  type MemoryImportSourceFormat,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { scanMemoryValue } from "../MemorySecretScanner.ts";
 import type { MemoryImportReaderConfig } from "./MemoryImportReader.ts";
@@ -36,6 +40,22 @@ export const asideSelection = (selection: string) => {
     throw error("path_rejected");
   return { slot: selection.slice(0, at), directory };
 };
+
+// Codex keeps rollout summaries, skills and its own Git history beside the importable notes, and
+// Claude topics are top-level files; descending elsewhere only spends the entry budget.
+const CODEX_DIRECTORIES = new Set(["extensions", "extensions/ad_hoc", "extensions/ad_hoc/notes"]);
+/** Entries a copy walk passes over without opening, following or counting them. Aside reads only
+ * regular pages directly in the selected directory; OMO copies its Git directory whole. */
+export const skippedEntry = (
+  format: MemoryImportSourceFormat,
+  selector: string,
+  entry: { isSymbolicLink(): boolean; isFile(): boolean; isDirectory(): boolean },
+) =>
+  format === "aside"
+    ? entry.isSymbolicLink() || !entry.isFile()
+    : format !== "omo" &&
+      entry.isDirectory() &&
+      !(format === "codex" && CODEX_DIRECTORIES.has(selector));
 
 export const safe = (value: string) => {
   if (
