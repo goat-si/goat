@@ -6,7 +6,7 @@ import type { ModelSelection, ServerSettings } from "@goat/contracts";
 import { resolveGoatBotModelSelection } from "@goat/shared/serverSettings";
 import * as Effect from "effect/Effect";
 
-export const botModelCandidates = (
+const botModelCandidates = (
   memberModel: ModelSelection | null,
   settings: ServerSettings,
 ): ReadonlyArray<ModelSelection> => [
@@ -14,7 +14,7 @@ export const botModelCandidates = (
   ...(settings.goatBotModelSelection === null ? [] : [settings.goatBotModelSelection]),
 ];
 
-export const botDefaultModel = (settings: ServerSettings) =>
+const botDefaultModel = (settings: ServerSettings) =>
   resolveGoatBotModelSelection({ ...settings, goatBotModelSelection: null });
 
 /** The first candidate `offered` accepts, else the default; a skipped one is logged. */
