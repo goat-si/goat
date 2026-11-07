@@ -806,4 +806,16 @@ describe("GOAT Bot event lines", () => {
     );
     expect(rows).toEqual([]);
   });
+
+  it("shows event lines in the main chat that leaves task messages out (taskId null, as mobile asks)", () => {
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([event("e1", "2026-10-12T12:00:01Z", "Renamed to Scout")]),
+        pendingInputs: [],
+        readers: readers(),
+        taskId: null,
+      }),
+    );
+    expect(rows.map((row) => [row.kind, row.id])).toEqual([["event", "e1"]]);
+  });
 });

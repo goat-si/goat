@@ -348,8 +348,8 @@ export function buildGoatBotTimeline(input: {
     }
     if (item.type === "notification") {
       if (item.source.kind === "goat_bot_event" && item.ledgerTask === undefined) {
-        // Event lines describe the bot, so a single task's view leaves them out.
-        if (input.taskId === undefined) {
+        // Event lines describe the bot: the main chat shows them, a single task's view does not.
+        if (input.taskId == null) {
           previousInputKey = null;
           committed.push({
             kind: "event",

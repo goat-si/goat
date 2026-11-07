@@ -122,7 +122,7 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
       text: event.text.trim().slice(0, MAX_TEXT),
       changeId: NodeCrypto.randomUUID(),
     };
-    const outcome = yield* Effect.sync(() => {
+    const register = Effect.sync(() => {
       const queue = queues.get(key);
       if (queue === undefined) {
         if (queues.size >= BOT_EVENT_LIMITS.bots) return "too_many_bots" as const;
@@ -141,8 +141,16 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
       total += 1;
       return "queued" as const;
     });
-    if (outcome === "started") yield* work(key).pipe(Effect.forkIn(scope));
-    else if (outcome !== "queued")
+    // A new queue and its worker start together: an interruption between them would leave a
+    // queue that no worker drains. The worker itself stays interruptible by the scope.
+    const outcome = yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const registered = yield* register;
+        if (registered === "started") yield* restore(work(key)).pipe(Effect.forkIn(scope));
+        return registered;
+      }),
+    );
+    if (outcome !== "started" && outcome !== "queued")
       yield* Effect.logWarning("GOAT Bot event line dropped: queue full", {
         botId: event.botId,
         kind: event.kind,

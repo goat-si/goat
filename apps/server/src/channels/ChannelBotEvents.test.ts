@@ -167,4 +167,22 @@ describe("ChannelBotEvents", () => {
       assert.isFalse(timeline.recorded.some((attempt) => attempt.text === "over the total"));
     }).pipe(Effect.scoped),
   );
+
+  it.effect("closing the scope stops a worker still waiting on its timeline", () =>
+    Effect.gen(function* () {
+      const inFlight = yield* Deferred.make<void>();
+      const timeline = fakeTimeline({
+        gate: yield* Deferred.make<void>(),
+        onAttempt: () => Deferred.succeed(inFlight, undefined).pipe(Effect.asVoid),
+      });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const events = yield* makeWith(timeline.deps);
+          yield* events.emit(line("ada", "never recorded"));
+          yield* Deferred.await(inFlight);
+        }),
+      );
+      assert.deepStrictEqual(timeline.recorded, []);
+    }),
+  );
 });
