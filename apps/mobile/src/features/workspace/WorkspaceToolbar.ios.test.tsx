@@ -117,6 +117,7 @@ function renderSearch(tab: WorkspaceSearchTab, query: string) {
     mocks.options?.headerSearchBarOptions as unknown as {
       ref: { current: unknown };
       onBlur: () => void;
+      onClose?: () => void;
       onFocus: () => void;
       onSearchButtonPress: () => void;
     };
@@ -124,16 +125,25 @@ function renderSearch(tab: WorkspaceSearchTab, query: string) {
   return { root, native, search, state };
 }
 
-it("closing a phone's Settings search with its X clears the query that kept filtering", () => {
-  using _frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
-  const { root, native, search, state } = renderSearch("settings", "zzz");
-  act(() => search().onBlur());
-  expect(state().tabs.settings).toMatchObject({ query: "", searchMode: "resting" });
-  expect(native.clearText).toHaveBeenCalled();
-  act(() => root.unmount());
-});
+it.each(["settings", "threads"] as const)(
+  "closing %s search with its X clears the query that kept filtering, with or without the keyboard",
+  (tab) => {
+    using _frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+    const typing = renderSearch(tab, "zzz");
+    act(() => typing.search().onClose?.());
+    expect(typing.state().tabs[tab]).toMatchObject({ query: "", searchMode: "resting" });
+    expect(typing.native.clearText).toHaveBeenCalled();
+    act(() => typing.root.unmount());
 
-it("keeps the Settings query when the Search key or a pushed page ends editing", () => {
+    const keyboardDown = renderSearch(tab, "zzz");
+    act(() => keyboardDown.search().onBlur());
+    act(() => keyboardDown.search().onClose?.());
+    expect(keyboardDown.state().tabs[tab]).toMatchObject({ query: "", searchMode: "resting" });
+    act(() => keyboardDown.root.unmount());
+  },
+);
+
+it("keeps the Settings query when the Search key ends editing or a pushed page closes search", () => {
   using _frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
   const searchKey = renderSearch("settings", "theme");
   act(() => searchKey.search().onSearchButtonPress());
@@ -144,6 +154,7 @@ it("keeps the Settings query when the Search key or a pushed page ends editing",
   const pushed = renderSearch("settings", "theme");
   mocks.screenFocused = false;
   act(() => pushed.search().onBlur());
+  act(() => pushed.search().onClose?.());
   expect(pushed.state().tabs.settings).toMatchObject({ query: "theme", searchMode: "expanded" });
   act(() => pushed.root.unmount());
 });

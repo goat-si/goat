@@ -49,7 +49,6 @@ export function WorkspaceToolbar(props: {
   const navigation = useNavigation();
   const { panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const searchRef = useRef<SearchBarCommands>(null);
-  const searchKeyBlur = useRef(false);
   // The Settings list takes the selected tab's place, so search follows it.
   const selectedTab = workspace.settingsOpen ? "settings" : workspace.state.selectedTab;
   const tab = workspace.state.tabs[selectedTab];
@@ -92,22 +91,13 @@ export function WorkspaceToolbar(props: {
     if (tab.searchMode === "expanded") searchRef.current?.setText(tab.query);
     workspace.dispatch({ type: "search", tab: selectedTab });
   }, [tab.searchMode, tab.query, enterSearch, workspace, selectedTab]);
-  const searchBlurred = () => {
-    const fromSearchKey = searchKeyBlur.current;
-    searchKeyBlur.current = false;
-    // iOS 27's integrated X ends search with only a blur. A phone's Settings list never dismisses
-    // the keyboard itself, so a blur there that neither the Search key nor a push caused is the X.
-    if (
-      selectedTab === "settings" &&
-      deviceType === "phone" &&
-      NATIVE_LIQUID_GLASS_SUPPORTED &&
-      !fromSearchKey &&
-      navigation.isFocused() &&
-      isTabActive(selectedTab)
-    ) {
-      searchRef.current?.clearText();
-      cancelSearch();
-    } else workspace.dispatch({ type: "expand", tab: selectedTab });
+  // The patched RNSSearchBar reports UIKit's own dismissal, such as integrated search's X, as
+  // onClose. Screens' programmatic dismissals on navigation never call it.
+  const searchClosed = () => {
+    if (tab.searchMode === "resting" || !navigation.isFocused() || !isTabActive(selectedTab))
+      return;
+    searchRef.current?.clearText();
+    cancelSearch();
   };
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   // The sidebar remains visible while its detail owns navigation focus.
@@ -194,11 +184,9 @@ export function WorkspaceToolbar(props: {
                   placeholder: searchLabel,
                   cancelButtonHidden: foldedSearch,
                   onFocus: searchFocused,
-                  onBlur: searchBlurred,
-                  onSearchButtonPress: () => {
-                    searchKeyBlur.current = true;
-                    searchRef.current?.blur();
-                  },
+                  onBlur: () => workspace.dispatch({ type: "expand", tab: selectedTab }),
+                  onClose: searchClosed,
+                  onSearchButtonPress: () => searchRef.current?.blur(),
                   onChangeText: ({ nativeEvent }) =>
                     workspace.dispatch({
                       type: "query",
