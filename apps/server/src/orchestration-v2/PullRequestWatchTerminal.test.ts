@@ -11,6 +11,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
@@ -506,3 +507,40 @@ describe("a watch that cannot read its pull request", () => {
       }).pipe(Effect.provide(layerTest)),
   );
 });
+
+it.effect("reads a watched pull request before another project's fingerprint returns", () =>
+  Effect.gen(function* () {
+    const slow = yield* watchedThread("pipeline-slow");
+    const fast = yield* watchedThread("pipeline-fast");
+    const fastRead = yield* Deferred.make<void>();
+    const reactor = yield* PullRequestWatchReactor.make.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          ServerSettings.layerTest(),
+          Layer.mock(PullRequestService.PullRequestService)({
+            watchFingerprint: (input) =>
+              input.projectId === slow.projectId
+                ? Deferred.await(fastRead).pipe(Effect.as(null))
+                : Effect.succeed(null),
+            detail: (input) =>
+              (input.projectId === fast.projectId
+                ? Deferred.succeed(fastRead, undefined)
+                : Effect.void
+              ).pipe(Effect.as(detailOf(input.projectId, openAt("aaaa111", [failed("ci")])))),
+            activity: () =>
+              Effect.succeed({
+                comments: [],
+                commentCount: 0,
+                commentsTruncated: false,
+                reviewThreads: [],
+                commits: [],
+              }),
+          }),
+        ),
+      ),
+    );
+    yield* reactor.sweep;
+    assert.isTrue(yield* Deferred.isDone(fastRead));
+  }).pipe(Effect.provide(layerTest)),
+);

@@ -27,6 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 
 import {
@@ -698,22 +699,24 @@ export const make = Effect.gen(function* () {
       }
     }
     const due = groups.filter((group) => (readRetryAt.get(group.key)?.at ?? 0) <= now);
-    const fingerprints = yield* Effect.forEach(due, fingerprintOf, {
-      concurrency: "unbounded",
-    });
+    const reads = yield* Semaphore.make(4);
     yield* Effect.forEach(
       due,
-      (group, index) => {
-        const fingerprint = fingerprints[index]!;
-        return fingerprint === "paused"
-          ? Effect.void
-          : readGroup(group, fingerprint).pipe(
-              Effect.catchCause(
-                logFailure("pull request watch check failed", { pullRequest: group.key }),
-              ),
-            );
-      },
-      { concurrency: 4, discard: true },
+      (group) =>
+        fingerprintOf(group).pipe(
+          Effect.flatMap((fingerprint) =>
+            fingerprint === "paused"
+              ? Effect.void
+              : reads.withPermits(1)(
+                  readGroup(group, fingerprint).pipe(
+                    Effect.catchCause(
+                      logFailure("pull request watch check failed", { pullRequest: group.key }),
+                    ),
+                  ),
+                ),
+          ),
+        ),
+      { concurrency: "unbounded", discard: true },
     );
   }).pipe(
     Effect.catchCause(logFailure("pull request watch sweep failed", {})),
