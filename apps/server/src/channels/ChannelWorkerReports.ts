@@ -865,8 +865,8 @@ const make = Effect.gen(function* () {
       ) {
         return yield* new ChannelGatewayError({ reason: "forbidden" });
       }
-      // In a GOAT Bot session only the task's newest run may report for it; an earlier run's
-      // delayed report, or another task's, is refused.
+      // In a GOAT Bot session only the task's newest result run may report for it; an earlier
+      // run's delayed report, another task's, or a background command's notice is refused.
       if (isGoatBotSessionThreadId(worker.threadId)) {
         const caller = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
         const runId = Option.isSome(caller) ? caller.value.thread?.runId : undefined;
@@ -877,7 +877,7 @@ const make = Effect.gen(function* () {
           const own = yield* sessionTaskRuns(sql, worker.threadId, records, stored.task).pipe(
             Effect.orElseSucceed((): ReadonlyArray<OrchestrationV2Run> => []),
           );
-          if (own.at(-1)?.id !== runId)
+          if (resultRunsOf(own, noticeMessageIds(records.messages)).at(-1)?.id !== runId)
             return yield* new ChannelGatewayError({ reason: "forbidden" });
         }
       }

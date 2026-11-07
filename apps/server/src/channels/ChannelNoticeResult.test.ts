@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -166,6 +167,52 @@ describe("a follow-up while a background command's notice runs", () => {
       assert.isDefined(send);
       assert.notStrictEqual(send?.targetRunId, notice.id);
       assert.notStrictEqual(harness.world.steered.get(send!.messageId), notice.id);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+describe("a background command's notice run cannot report for its request", () => {
+  it.effect("a task report from the notice is refused while the task's own run still may", () => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* gateway.ingest(goatInput("look: plan the logistics", "r1"), rpcContext);
+      yield* runtime.drain;
+      yield* reports.reconcile(runtime.ownerToken);
+      const turn = yield* onlyTask;
+      const session = turn.worker!.threadId;
+      const notice = harness.world.addRun(session, MessageId.make("message:command-notice"));
+      noticeRunsOf(harness.world).set(notice.id, turn.worker!.runId);
+      const reportAs = (runId: string, eventId: string) =>
+        reports
+          .report(
+            {
+              taskId: turn.taskId,
+              generation: turn.generation,
+              eventId: eventId as never,
+              status: "running",
+              summary: "Still looking.",
+            },
+            session,
+          )
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, {
+              thread: {
+                threadId: session,
+                providerSessionId: "credential",
+                providerInstanceId: botModel.instanceId,
+                runId,
+              },
+            } as never),
+            Effect.as("accepted"),
+            Effect.catchTags({ ChannelGatewayError: (error) => Effect.succeed(error.reason) }),
+          );
+      assert.strictEqual(yield* reportAs(notice.id, "from-notice"), "forbidden");
+      assert.strictEqual(yield* reportAs(turn.worker!.runId!, "from-own"), "accepted");
+      assert.strictEqual((yield* ledger.getTask(turn.taskId))?.task.status, "running");
     }).pipe(Effect.provide(harness.layer));
   });
 });

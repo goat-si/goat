@@ -15,7 +15,6 @@ import { replyDelivery } from "./channelReplyDelivery.ts";
 
 /** What the bot answers when a notice has nothing new for the person. */
 export const NO_REPLY = "NO_REPLY";
-const DAYS = 7;
 const PER_PASS = 20;
 const ENDED = ["completed", "failed", "cancelled", "interrupted", "rolled_back"];
 
@@ -63,8 +62,8 @@ export const deliverNoticeAnswers = Effect.fn("ChannelWorkerReports.noticeAnswer
     const { sql, ledger, threads } = deps;
     const now = yield* DateTime.now;
     const nowIso = DateTime.formatIso(now);
-    const since = DateTime.formatIso(DateTime.subtract(now, { days: DAYS }));
-    // Oldest first; a run whose read failed waits for its retry time, so later ones still go.
+    // Oldest first, at any age; a run whose read failed waits for its retry time, so later ones
+    // still go. Answered and skipped runs carry a marker and drop out.
     const due = yield* sql<{
       readonly thread_id: ThreadId;
       readonly run_id: string;
@@ -78,7 +77,6 @@ export const deliverNoticeAnswers = Effect.fn("ChannelWorkerReports.noticeAnswer
     WHERE r.thread_id >= 'goat-bot-session:' AND r.thread_id < 'goat-bot-session;'
       AND json_extract(m.payload_json, '$.notification.aboutRunId') IS NOT NULL
       AND r.status IN ${sql.in(ENDED)}
-      AND json_extract(r.payload_json, '$.completedAt') >= ${since}
       AND (s.key IS NULL OR (json_extract(s.value_json, '$.state') = 'retry'
         AND json_extract(s.value_json, '$.nextAt') <= ${nowIso}))
     ORDER BY json_extract(r.payload_json, '$.completedAt'), r.run_id

@@ -258,6 +258,35 @@ describe("a background command's answer goes to the request whose run started it
       assert.strictEqual((yield* attempts())[0]?.attempts, 2);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
+
+  it.effect(
+    "still answers a notice, unread or waiting to retry, that ended more than a week ago",
+    () =>
+      Effect.gen(function* () {
+        const old = (run: string, answer: string) => ({
+          thread: session,
+          run,
+          about: "run:logistics",
+          status: "completed",
+          answer,
+          completedAt: at,
+        });
+        const notices = [old("run:unread", "First."), old("run:retrying", "Second.")];
+        const sql = yield* seed(notices);
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+        VALUES ('notice-answer:goat-bot-session:set3:run:retrying',
+          ${JSON.stringify({ state: "retry", attempts: 9, nextAt: at })}, ${at})`;
+        const { sent, deps } = world(notices, tasks);
+        yield* TestClock.adjust("8 days");
+        yield* deliverNoticeAnswers({ sql, ...deps });
+        assert.sameMembers(
+          sent.map((delivery) => delivery.message.text),
+          ["First.", "Second."],
+        );
+        yield* deliverNoticeAnswers({ sql, ...deps });
+        assert.lengthOf(sent, 2);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
 });
 
 describe("a notice answer's shape and place", () => {
