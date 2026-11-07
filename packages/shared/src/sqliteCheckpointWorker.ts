@@ -6,7 +6,7 @@ import { checkpointWorkerSource } from "./sqliteWorkerSources.ts";
 
 export const CHECKPOINT_FRAMES = 1000;
 const CHECKPOINT_IDLE_MS = 100;
-export const CHECKPOINT_BACKPRESSURE_FRAMES = 10 * CHECKPOINT_FRAMES;
+export const CHECKPOINT_BACKPRESSURE_FRAMES = 32_768;
 
 export const openCheckpointWorker = (
   filename: string,

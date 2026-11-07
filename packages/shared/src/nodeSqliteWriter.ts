@@ -16,6 +16,7 @@ import type { Connection } from "effect/sql/SqlConnection";
 import { SqlError, classifySqliteError } from "effect/sql/SqlError";
 import type { SqliteClientConfig } from "./nodeSqliteClient.ts";
 import { hasLargeBinding, sqliteParameters } from "./nodeSqliteParameters.ts";
+import { CHECKPOINT_BACKPRESSURE_FRAMES } from "./sqliteCheckpointWorker.ts";
 import { writerWorkerSource } from "./sqliteWriterWorkerSource.ts";
 import { connectionOwner, recordSlowSql } from "./slowSqlOperations.ts";
 
@@ -104,6 +105,7 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
               readonly: options.readonly ?? false,
               allowExtension: options.allowExtension ?? false,
               checkpoint: isFileDatabase && Boolean(options.checkpointWorker),
+              backpressureFrames: CHECKPOINT_BACKPRESSURE_FRAMES,
               protectJournal:
                 isFileDatabase && Boolean(options.readerWorker || options.checkpointWorker),
               prepareCacheSize: options.prepareCacheSize ?? 200,
