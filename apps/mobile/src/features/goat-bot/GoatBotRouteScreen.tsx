@@ -17,7 +17,7 @@ export function GoatBotRouteScreen({
   const { botRef } = useMobileGoatBotHomeMode();
   const preview = useMobileBotPreview();
   const botId = route.params?.botId;
-  const { member, missing } = useMobileGoatBotMember(botId);
+  const { member, main, missing } = useMobileGoatBotMember(botId);
   const manage = useMobileBotManage(member?.environmentId ?? null);
   const environmentId = botRef?.environmentId;
   const threadId = botRef?.threadId;
@@ -43,6 +43,7 @@ export function GoatBotRouteScreen({
     <GoatBotScreen
       visible={focused}
       member={member}
+      main={main}
       onRestoreMember={
         member !== null && member.state === "deleted" && manage.canManage
           ? () => manage.restore(member)

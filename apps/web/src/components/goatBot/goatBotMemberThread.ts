@@ -1,4 +1,4 @@
-import { findMemberBot } from "@goat/client-runtime/goatBot";
+import { botRosterGroups, findMemberBot } from "@goat/client-runtime/goatBot";
 import type { BotProfile, EnvironmentId, ThreadId } from "@goat/contracts";
 
 import { useEnvironment } from "~/state/environments";
@@ -8,6 +8,22 @@ import { useEnvironmentQuery } from "~/state/query";
 // Member conversations get stable ids with this prefix (apps/server/src/channels/channelIds.ts,
 // memberBotLaunchIdsFor). Used only to wait for the bot list, never to decide a thread is a bot.
 const MEMBER_THREAD_PREFIX = "channel-member-bot:";
+
+/** The main bot's profile, which names its chat. Reads the roster's own query (useBotRoster). */
+export function useGoatBotMainProfile(environmentId: EnvironmentId | null): BotProfile | null {
+  const presentation = useEnvironment(environmentId);
+  const capabilities = presentation?.serverConfig?.environment.capabilities;
+  const connected = presentation?.connection.phase === "connected";
+  const profiles = useEnvironmentQuery(
+    connected && environmentId !== null && capabilities?.goatBotProfiles === true
+      ? channelEnvironment.listBots({
+          environmentId,
+          input: capabilities.goatBotMembers === true ? { includeDeleted: true } : {},
+        })
+      : null,
+  );
+  return botRosterGroups(profiles.data?.bots ?? []).main;
+}
 
 /**
  * The member bot whose conversation this thread is, deleted ones included, so the thread renders

@@ -3,6 +3,7 @@ import { LegendList } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   goatBotReceiptLabel,
+  goatBotName,
   goatBotNotesRefreshKey,
   hasGoatBotMarkdown,
   type GoatBotRow,
@@ -388,6 +389,8 @@ export function GoatBotScreen(props: {
   readonly taskId?: ChannelTaskId;
   /** A member bot whose conversation this is; the main bot's when absent. */
   readonly member?: BotProfile | null;
+  /** The main bot's profile, which names its chat; absent before the server keeps profiles. */
+  readonly main?: BotProfile | null;
   /** Restores a deleted member; absent when this person may not manage bots. */
   readonly onRestoreMember?: (() => Promise<boolean>) | undefined;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
@@ -396,7 +399,7 @@ export function GoatBotScreen(props: {
 }) {
   const member = props.member ?? null;
   const session = useMobileGoatBotSession(props.visible, props.taskId ?? null, member);
-  const title = member?.name ?? "GOAT Bot";
+  const title = goatBotName(member ?? props.main ?? null);
   const taskId = session.supportsTaskThreads ? props.taskId : undefined;
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;

@@ -150,6 +150,11 @@ function attentionText(chip: ChannelTaskChip): string | null {
   return chip.status === "waiting_input" ? "Waiting for you" : null;
 }
 
+/** Whether a task waits on the person, by its status or by what its work asks them. */
+export function goatBotTaskWaitsOnPerson(chip: ChannelTaskChip): boolean {
+  return attentionText(chip) !== null;
+}
+
 function requestText(kind: string, blocking: boolean | undefined): string | null {
   if (blocking === false || kind === "dynamic_tool_call") return null;
   if (kind === "user_input") return "Waiting for your answer";

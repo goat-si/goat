@@ -6,6 +6,8 @@ import type {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
+import { goatBotTaskWaitsOnPerson } from "./activity.ts";
+
 /** What a bot's face shows. Each is a still drawing; a change fades once at most. */
 export type GoatBotFaceState =
   | "idle"
@@ -275,8 +277,10 @@ export function goatBotFaceTasks(items: ReadonlyArray<GoatBotFaceTaskItem>): Goa
   let activeSince: number | null = null;
   for (const chip of newestChips.values()) {
     const status = chip.status;
-    if (status === "waiting_input") waiting++;
-    else if (status === "received" || status === "dispatching" || status === "running") {
+    const going = status === "received" || status === "dispatching" || status === "running";
+    // A running turn whose coding thread asks something waits on the person too.
+    if (status === "waiting_input" || (going && goatBotTaskWaitsOnPerson(chip))) waiting++;
+    else if (going) {
       active++;
       const since = Date.parse(chip.createdAt);
       if (Number.isFinite(since) && (activeSince === null || since > activeSince)) {
