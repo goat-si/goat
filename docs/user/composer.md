@@ -245,18 +245,13 @@ models on a connected environment in **Settings → Microphone**.
 
 ## Voice input on desktop and web
 
-Click the composer's microphone to record, then confirm to insert the text or send it.
-
-By default, the desktop app uses this computer's Codex sign-in or OpenCodex to
-transcribe. In a browser, the thread's environment uses its transcription service.
-The recorder shows where transcription runs.
-
-You can instead choose **Transcribe on** a connected environment from the
-composer's dictation options. This sends recordings to that environment and uses a
-speech model installed there. The choice belongs to this device; select **Use
-existing voice input** to turn it off. Someone with voice management permission can
-download, select, or remove models from **Manage voice models** in the same menu.
-Connections through a hub do not currently support this option.
+Click the composer's microphone and choose a connected environment for local-model
+transcription, or turn voice input off. This device-only choice sends recordings to
+the selected environment. Choose **Manage voice models** from the dictation options
+to download or select a model; GOAT suggests one for your language when available.
+You can also select **Use existing voice input** from those options to use the
+existing transcription service. Connections through a hub do not support local-model
+transcription. Once configured, record and confirm to insert the text or send it.
 After choosing an environment, you can also dictate into review and citation
 comments. In the desktop Browser, the same choice applies to annotation comments.
 

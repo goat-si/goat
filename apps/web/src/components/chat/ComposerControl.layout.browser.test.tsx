@@ -129,6 +129,7 @@ it("offers destination choice before recording on first use", async () => {
         destinations: [{ environmentId: EnvironmentId.make("local"), label: "Local" }],
         enable,
         disable,
+        useExisting: vi.fn(),
       }}
     />,
   );

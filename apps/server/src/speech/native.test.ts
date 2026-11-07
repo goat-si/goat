@@ -175,3 +175,16 @@ it("kills a hung streaming feed without waiting for native cleanup", async () =>
   await model.dispose();
   await rejected;
 });
+
+it("uses the model's advertised language spelling for WAV transcription", async () => {
+  const module =
+    `data:text/javascript,${encodeURIComponent(`export const TranscribeModel = { load: async () => ({ capabilities: { languages: ["de-DE"], maxAudioMs: 0 }, supports: () => false, transcribe: async (_pcm, options) => ({ text: options.language ?? "auto" }) }) };`)} `.trim();
+  const model = await loadNativeSpeechModel("unused.gguf", new AbortController().signal, module);
+  try {
+    expect(await model.transcribeWav(new Uint8Array(new Int16Array([0, 0, 0]).buffer), "de")).toBe(
+      "de-DE",
+    );
+  } finally {
+    await model.dispose();
+  }
+});
