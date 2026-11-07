@@ -183,6 +183,9 @@ async function setup(
     machines: [machine("laptop", fixture.primary), machine("studio", fixture.studio)],
     threads: [],
     totals: { running: 0, attention: 0, reported: 0, machines: 2 },
+    hiddenCloudAliases: [],
+    hiddenRoutes: [],
+    idleCloudMachines: [],
   };
   return fixture.snapshot as never;
 }

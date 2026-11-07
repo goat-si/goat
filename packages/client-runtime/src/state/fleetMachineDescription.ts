@@ -73,3 +73,6 @@ export function fleetMachineWork(
 export const isFleetMachineBusy = (
   machine: Pick<FleetMachine, "running" | "attention" | "reported">,
 ) => machine.running + machine.attention + machine.reported > 0;
+
+/** What a running Boat machine with nothing on it says, since Boat bills it while it runs. */
+export const FLEET_IDLE_BILLING_LABEL = "Billing while idle";

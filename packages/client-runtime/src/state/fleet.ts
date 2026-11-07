@@ -1,19 +1,24 @@
-import type {
-  CloudMachine,
-  EnvironmentId,
-  EnvironmentMachineKind,
-  ExecutionEnvironmentPlatformOs,
-  OrchestrationV2ThreadShell,
-  ProviderDriverKind,
-  RemoteLaunch,
-  ScopedThreadRef,
+import {
+  isCloudMachineAlias,
+  type CloudMachine,
+  type EnvironmentId,
+  type EnvironmentMachineKind,
+  type ExecutionEnvironmentPlatformOs,
+  type OrchestrationV2ThreadShell,
+  type ProviderDriverKind,
+  type RemoteLaunch,
+  type ScopedThreadRef,
 } from "@goat/contracts";
 import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 
-import { identifyBoatMachine, type BoatMachineIdentity } from "../cloudMachines.ts";
+import {
+  identifyBoatMachine,
+  type BoatMachineIdentity,
+  type BoatMachineStatus,
+} from "../cloudMachines.ts";
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
 import { foldLaunchedThreads, type LaunchFoldThread } from "./launchFold.ts";
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
@@ -429,6 +434,17 @@ export interface FleetSnapshot {
     /** Answering GOAT servers, the same number the rail counts. */
     readonly machines: number;
   };
+  /**
+   * Boat machines Fleet leaves out because nothing uses them: by alias, which names one sandbox
+   * whichever server reports it, and by each route a server reached them through.
+   */
+  readonly hiddenCloudAliases: ReadonlyArray<string>;
+  readonly hiddenRoutes: ReadonlyArray<{ readonly via: EnvironmentId; readonly alias: string }>;
+  /** Running Boat machines nothing runs on, with the server whose cloud machine list owns each. */
+  readonly idleCloudMachines: ReadonlyArray<{
+    readonly machineId: string;
+    readonly owner: EnvironmentId;
+  }>;
 }
 
 export interface FleetRemoteSource {
@@ -439,6 +455,14 @@ export interface FleetRemoteSource {
 
 const UNKNOWN_AGENT = "unknown";
 const UNKNOWN_AGENT_LABEL = "Unknown agent";
+
+/** Boat states that bill or need the user, so Fleet keeps the machine even with nothing on it. */
+const BOAT_IN_USE: ReadonlySet<BoatMachineStatus> = new Set([
+  "running",
+  "starting",
+  "stopping",
+  "failed",
+]);
 
 /**
  * Oldest first, so a new thread joins at the end and a status change or a
@@ -511,6 +535,8 @@ export function buildFleet(input: {
   }
   const nodeOf = (environmentId: EnvironmentId) =>
     machines.get(machineId(owners.get(environmentId) ?? environmentId));
+  const recordOwners = new Map<string, EnvironmentId>();
+  const hiddenCloudAliases = new Set<string>();
   const connectedIds = new Set(
     input.environments
       .filter((environment) => environment.connected !== false)
@@ -678,14 +704,14 @@ export function buildFleet(input: {
       if (cloud.deletePending || cloud.presence === "not_found") {
         // No node for a machine on its way out, but a connected one still says why it is going.
         const environmentId = resolveAlias(cloud.alias);
-        if (environmentId !== undefined) {
-          const node = nodeOf(environmentId);
-          if (node !== undefined) node.boat = identifyBoatMachine({ record: cloud, aliases: [] });
-        }
+        const node = environmentId === undefined ? undefined : nodeOf(environmentId);
+        if (node === undefined) hiddenCloudAliases.add(cloud.alias);
+        else node.boat = identifyBoatMachine({ record: cloud, aliases: [] });
         continue;
       }
       const machine = hostMachine(cloud.alias, "cloud", cloud.label);
       machine.boat = identifyBoatMachine({ record: cloud, aliases: [] });
+      if (!recordOwners.has(machine.id)) recordOwners.set(machine.id, dispatcher);
       if (machine.kind === "environment" && machine.label !== cloud.label) {
         machine.subtitle = cloud.label;
       }
@@ -740,6 +766,27 @@ export function buildFleet(input: {
     if (machine.boat !== null && machine.kind === "ssh") machine.kind = "cloud";
   }
 
+  // A Boat machine shows while it bills, needs the user, answers, or runs work; Settings keeps the rest.
+  const hiddenRoutes: Array<{ via: EnvironmentId; alias: string }> = [];
+  const idleCloudMachines: Array<{ machineId: string; owner: EnvironmentId }> = [];
+  for (const [id, machine] of machines) {
+    if (machine.boat === null) continue;
+    const busy = machine.running + machine.attention + machine.reported > 0;
+    const owner = recordOwners.get(id);
+    if (!busy && machine.boat.status === "running" && owner !== undefined)
+      idleCloudMachines.push({ machineId: id, owner });
+    if (busy || machine.answering || BOAT_IN_USE.has(machine.boat.status)) continue;
+    machines.delete(id);
+    hiddenRoutes.push(...machine.reportedAliases);
+    const environmentAliases =
+      machine.environmentId === null ? [] : (aliasesOf.get(machine.environmentId) ?? []);
+    for (const alias of [
+      ...machine.reportedAliases.map((route) => route.alias),
+      ...environmentAliases,
+    ])
+      if (isCloudMachineAlias(alias)) hiddenCloudAliases.add(alias);
+  }
+
   threads.sort(compareFleetThreads);
   const list = [...machines.values()].map(({ agents, ...machine }): FleetMachine => ({
     ...machine,
@@ -754,6 +801,9 @@ export function buildFleet(input: {
       reported: list.reduce((sum, machine) => sum + machine.reported, 0),
       machines: list.filter((machine) => machine.answering).length,
     },
+    hiddenCloudAliases: [...hiddenCloudAliases],
+    hiddenRoutes,
+    idleCloudMachines,
   };
 }
 

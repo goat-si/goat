@@ -168,7 +168,14 @@ function setup(): FleetSnapshot {
     ]),
   );
   useUiStateStore.setState({ fleetConsoleCollapsed: false });
-  return { machines, threads: [], totals: { machines: 3, running: 0, attention: 0, reported: 0 } };
+  return {
+    machines,
+    threads: [],
+    totals: { machines: 3, running: 0, attention: 0, reported: 0 },
+    hiddenCloudAliases: [],
+    hiddenRoutes: [],
+    idleCloudMachines: [],
+  };
 }
 
 it("shows one Home pool with via Hub device references and account detail without extra quota rows", async () => {

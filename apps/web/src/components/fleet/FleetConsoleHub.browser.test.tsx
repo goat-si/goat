@@ -140,7 +140,14 @@ function setup(): FleetSnapshot {
     ],
   ]);
   useUiStateStore.setState({ fleetConsoleCollapsed: false });
-  return { machines, threads: [], totals: { machines: 1, running: 0, attention: 0, reported: 0 } };
+  return {
+    machines,
+    threads: [],
+    totals: { machines: 1, running: 0, attention: 0, reported: 0 },
+    hiddenCloudAliases: [],
+    hiddenRoutes: [],
+    idleCloudMachines: [],
+  };
 }
 
 it("folds every hub device into one Hub entry and names the Home on its Children", async () => {

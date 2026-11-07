@@ -54,6 +54,12 @@ const LABELS: Record<CloudAgentProvider, string> = {
 };
 const ORDER: ReadonlyArray<CloudAgentProvider> = ["claudeCloud", "cursorCloud", "devinCloud"];
 
+/** How long Fleet keeps a run after it last changed, unless it is still running. */
+const FLEET_CLOUD_RUN_RECENT_MS = 15 * 60_000;
+
+const shownUntil = (run: Pick<FleetCloudRun, "updatedAt">) =>
+  Date.parse(run.updatedAt) + FLEET_CLOUD_RUN_RECENT_MS;
+
 function stateOf(run: CloudRunSummary): FleetCloudRunState {
   if (run.tracking === "link-only") return "link-only";
   return run.status === "running" || run.status === "submitting" ? "running" : "finished";
@@ -61,20 +67,26 @@ function stateOf(run: CloudRunSummary): FleetCloudRunState {
 
 const shortRepository = (repository: string) => repository.replace(/^https:\/\/github\.com\//u, "");
 
-/** Running first, then most recently changed, so finished runs settle below live ones. */
+/**
+ * Running first, then most recently changed, so finished runs settle below live ones. A run that
+ * is not running stays until 15 minutes after it last changed; a provider with none left is dropped.
+ */
 export function groupCloudAgentRuns(
   sources: ReadonlyArray<FleetCloudRunSource>,
+  nowMs: number,
 ): ReadonlyArray<FleetCloudAgentGroup> {
   const byProvider = new Map<CloudAgentProvider, FleetCloudRun[]>();
   for (const source of sources) {
     for (const run of source.runs) {
+      const state = stateOf(run);
+      if (state !== "running" && !(nowMs < shownUntil(run))) continue;
       const list = byProvider.get(run.provider) ?? [];
       list.push({
         key: `${source.environmentId}:${run.threadId}`,
         ref: scopeThreadRef(source.environmentId, run.threadId),
         provider: run.provider,
         title: run.title,
-        state: stateOf(run),
+        state,
         status: run.status,
         url: run.url ?? null,
         repository: shortRepository(run.repository),
@@ -105,4 +117,17 @@ export function groupCloudAgentRuns(
       },
     ];
   });
+}
+
+/** When the next shown run that is not running leaves Fleet, or null when none will. */
+export function nextCloudRunExpiry(groups: ReadonlyArray<FleetCloudAgentGroup>): number | null {
+  let next: number | null = null;
+  for (const group of groups) {
+    for (const run of group.runs) {
+      if (run.state === "running") continue;
+      const until = shownUntil(run);
+      if (next === null || until < next) next = until;
+    }
+  }
+  return next;
 }
