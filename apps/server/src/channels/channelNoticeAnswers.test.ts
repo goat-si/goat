@@ -38,6 +38,8 @@ interface Notice {
   readonly about: string;
   readonly status: string;
   readonly answer?: string;
+  /** Everything the run wrote, oldest first, when it wrote more than its final answer. */
+  readonly answers?: ReadonlyArray<string>;
   readonly completedAt: string;
 }
 
@@ -89,7 +91,12 @@ const world = (notices: ReadonlyArray<Notice>, tasks: Record<string, unknown>) =
               : {
                   messages: notices
                     .filter((notice) => filter.messageRunIds?.includes(notice.run))
-                    .map((notice) => ({ text: notice.answer ?? "", streaming: false })),
+                    .flatMap((notice) =>
+                      (notice.answers ?? [notice.answer ?? ""]).map((text) => ({
+                        text,
+                        streaming: false,
+                      })),
+                    ),
                 },
           ),
   } as never;
@@ -280,4 +287,57 @@ describe("a notice answer's shape and place", () => {
     );
     assert.lengthOf(runs, 2);
   });
+});
+describe("which answer a notice run gives, and to whom", () => {
+  it.effect("stays quiet when the run wrote on the way but ended with an empty answer", () =>
+    Effect.gen(function* () {
+      const notices = [
+        {
+          thread: session,
+          run: "run:midway",
+          about: "run:logistics",
+          status: "completed",
+          answers: ["Checking the vault now.", ""],
+          completedAt: at,
+        },
+      ];
+      const sql = yield* seed(notices);
+      const { sent, deps } = world(notices, tasks);
+      yield* deliverNoticeAnswers({ sql, ...deps });
+      assert.lengthOf(sent, 0);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("answers each request whose run started a command, under that request only", () =>
+    Effect.gen(function* () {
+      const notices = [
+        {
+          thread: session,
+          run: "run:about-logistics",
+          about: "run:logistics",
+          status: "completed",
+          answer: "The van is booked.",
+          completedAt: at,
+        },
+        {
+          thread: session,
+          run: "run:about-a",
+          about: "run:question-a",
+          status: "completed",
+          answer: "It is in the Ops vault.",
+          completedAt: "1970-01-01T00:00:01.000Z",
+        },
+      ];
+      const sql = yield* seed(notices);
+      const { sent, deps } = world(notices, tasks);
+      yield* deliverNoticeAnswers({ sql, ...deps });
+      assert.deepStrictEqual(
+        sent.map((delivery) => [delivery.message.inReplyToInputId, delivery.message.text]),
+        [
+          [logistics.input, "The van is booked."],
+          [questionA.input, "It is in the Ops vault."],
+        ],
+      );
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
 });

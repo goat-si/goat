@@ -11,7 +11,9 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import { resolveSessionRun } from "../channels/channelBotSessionRuns.ts";
 import { HOST_PRESSURE_MESSAGE_PREFIX } from "../fleet/pressure/pressureModel.ts";
 import { finishedWake, newLaunchWatch } from "../mcp/launchWatch.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -247,4 +249,58 @@ it.effect("command notices each wait as their own turn and keep the run they rep
       "run:question-a",
     ]);
   }).pipe(Effect.provide(layer)),
+);
+it.effect("a stored command notice belongs to the task whose run started the command", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create"),
+      threadId: supervisor,
+      projectId: ProjectId.make("project:notice-digest"),
+      title: "Supervisor",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("logistics"),
+      threadId: supervisor,
+      messageId: MessageId.make("message:logistics"),
+      text: "Plan the logistics.",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const started = (yield* store.getThreadProjection(supervisor)).runs[0]!;
+    yield* sql`INSERT INTO channel_bot_session_runs
+      (thread_id, message_id, task_id, task_generation, kind, created_at)
+      VALUES (${supervisor}, 'message:logistics', 'task:logistics', 1, 'task', '1970-01-01T00:00:00.000Z')`;
+    yield* orchestrator.dispatch(
+      notice({
+        commandId: "command-ended",
+        messageId: "message:command-ended",
+        text: "Command ended.",
+        notification: {
+          source: { kind: "command" },
+          outcome: "completed",
+          summary: "Command ended",
+          aboutRunId: started.id,
+        },
+      }),
+    );
+    const projection = yield* store.getThreadProjection(supervisor);
+    const noticeRun = projection.runs.find((run) => run.userMessageId === "message:command-ended")!;
+    const owner = yield* resolveSessionRun(sql, supervisor, projection, noticeRun.id);
+    expect(owner?.task_id).toBe("task:logistics");
+  }).pipe(Effect.provide(Layer.merge(layer, databaseLayer))),
 );

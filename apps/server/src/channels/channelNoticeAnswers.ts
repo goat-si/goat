@@ -156,9 +156,10 @@ const judge = Effect.fn("ChannelWorkerReports.judgeNoticeAnswer")(function* (
     messageRoles: ["assistant"],
     messageRunIds: [run.id],
   });
+  // The run's last word decides: text it wrote on the way is not its answer.
   const text =
     answers.messages
-      .filter((message) => !message.streaming && message.text.trim() !== "")
+      .filter((message) => !message.streaming)
       .at(-1)
       ?.text.trim() ?? "";
   if (text === "" || text === NO_REPLY) return { state: "skipped", reason: "silent" } as const;
