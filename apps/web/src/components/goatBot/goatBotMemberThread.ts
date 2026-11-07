@@ -24,9 +24,8 @@ export function useGoatBotMemberAt(
 } {
   const environmentId = target?.environmentId ?? null;
   const presentation = useEnvironment(environmentId);
-  const supported =
-    environmentId !== null &&
-    presentation?.serverConfig?.environment.capabilities.goatBotMembers === true;
+  const capabilities = presentation?.serverConfig?.environment.capabilities;
+  const supported = environmentId !== null && capabilities?.goatBotMembers === true;
   const profiles = useEnvironmentQuery(
     supported
       ? channelEnvironment.listBots({ environmentId, input: { includeDeleted: true } })
@@ -36,16 +35,24 @@ export function useGoatBotMemberAt(
     target === null
       ? null
       : findMemberBot(profiles.data?.bots, target.environmentId, target.threadId);
+  // Before the server's capabilities arrive, a member-looking thread waits too.
   const candidate =
-    supported &&
     member === null &&
     target !== null &&
-    target.threadId.startsWith(MEMBER_THREAD_PREFIX);
+    target.threadId.startsWith(MEMBER_THREAD_PREFIX) &&
+    (capabilities === undefined || supported);
+  const phase = presentation?.connection.phase;
+  const unreachable = phase !== undefined && phase !== "connecting" && phase !== "connected";
+  const failed = profiles.data === null && profiles.error !== null;
+  const unavailable =
+    candidate && (capabilities === undefined ? unreachable : failed && !profiles.isPending);
   return {
     member,
     pending:
-      candidate && (profiles.isPending || (profiles.data === null && profiles.failure === null)),
-    unavailable: candidate && profiles.data === null && profiles.failure !== null,
+      candidate &&
+      !unavailable &&
+      (capabilities === undefined || profiles.isPending || profiles.data === null),
+    unavailable,
     retry: profiles.refresh,
   };
 }
