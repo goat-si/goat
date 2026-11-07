@@ -163,6 +163,38 @@ describe.each(["session", "local"] as const)("a %s worker's delivery from someon
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect(
+    "records a refusal and its notice together, so a crash then restored access delivers",
+    () => {
+      const { harness, opening } = harnesses[kind]();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* link("U2", "teammate", ["memory:read"]);
+        yield* link("U1", "colleague", ["memory:read"]);
+        const stored = yield* start(opening, "start");
+        yield* say("U1", "more:" + stored.task.taskId + " colleague note", "follow");
+        yield* narrow("U1", ["orchestration:read", "orchestration:operate"]);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const complete = ledger.completeForward;
+        Object.assign(ledger, {
+          completeForward: () => Effect.die("crash before the refusal commits"),
+        });
+        const [pending] = yield* ledger.listPendingForwards(10);
+        yield* (yield* ChannelDispatcher.ChannelDispatcher)
+          .forward(pending!, runtime.ownerToken)
+          .pipe(Effect.exit);
+        Object.assign(ledger, { completeForward: complete });
+        assert.lengthOf(yield* notices(stored.task.taskId), 0);
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
+        yield* narrow("U1", ["orchestration:read", "orchestration:operate", "memory:read"]);
+        yield* forwardAll;
+        assert.isTrue(harness.world.sends.some((send) => send.text.includes("colleague note")));
+        assert.lengthOf(yield* notices(stored.task.taskId), 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("asks again when an answer's sender lost access after it was accepted", () => {
     const { harness, opening } = harnesses[kind]();
     return Effect.gen(function* () {

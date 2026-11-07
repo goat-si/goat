@@ -437,6 +437,11 @@ export class ChannelLedger extends Context.Service<
       readonly owner: string;
       readonly sequence: number;
       readonly clearPendingAnswerMessageId?: string | undefined;
+      /** Written in the same transaction, and only when this call completes the forward. */
+      readonly deliveries?: {
+        readonly rows: ReadonlyArray<ChannelOutboxInsert>;
+        readonly now: string;
+      };
     }) => Effect.Effect<void, ChannelLedgerError>;
     readonly enqueueDeliveries: (
       deliveries: ReadonlyArray<ChannelOutboxInsert>,
@@ -1604,7 +1609,7 @@ const make = Effect.gen(function* () {
             Effect.mapError(toLedgerError("outcomeDeliveries")),
           ),
 
-    ...forwardQueries(sql, toLedgerError, fence),
+    ...forwardQueries(sql, toLedgerError, fence, insertDeliveries),
 
     enqueueDeliveries: (deliveries, now) =>
       insertDeliveries(deliveries, now).pipe(Effect.mapError(toLedgerError("enqueueDeliveries"))),

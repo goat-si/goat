@@ -47,8 +47,8 @@ export const senderAnswerRefused = (name: string) =>
 
 /**
  * Drops a follow-up whose sender may no longer direct the work: one notice to the conversation
- * (its delivery id comes from the event, so a replay posts nothing more), then the forward ends,
- * lifting the fence only when this follow-up holds it. The task runs on.
+ * written in the same transaction that ends the forward (so a crash leaves neither, and the next
+ * pass checks again), lifting the fence only when this follow-up holds it. The task runs on.
  */
 export const refuseSenderFollowUp = Effect.fn("channel.refuseSenderFollowUp")(function* (
   ledger: ChannelLedger.ChannelLedger["Service"],
@@ -64,32 +64,32 @@ export const refuseSenderFollowUp = Effect.fn("channel.refuseSenderFollowUp")(fu
   const latest = (yield* ledger.getTask(stored.task.taskId)) ?? stored;
   const causeKey = "sender-refused:" + input.eventId;
   const deliveryId = deliveryIdFor(causeKey);
-  yield* ledger.enqueueDeliveries(
-    [
-      {
-        deliveryId,
-        causeKey,
-        taskId: latest.task.taskId,
-        message: {
-          deliveryId,
-          destination: latest.task.originAddress,
-          kind: "receipt",
-          text:
-            "I didn't pass on " +
-            input.name +
-            "'s follow-up: their access changed after they sent it.",
-          taskId: latest.task.taskId,
-          taskVersion: latest.task.version,
-        },
-      },
-    ],
-    DateTime.formatIso(yield* DateTime.now),
-  );
   const fence = latest.pendingAnswerMessageId;
   yield* ledger.completeForward({
     owner: input.owner,
     sequence: input.sequence,
     clearPendingAnswerMessageId:
       fence !== undefined && input.own.includes(fence) ? fence : undefined,
+    deliveries: {
+      rows: [
+        {
+          deliveryId,
+          causeKey,
+          taskId: latest.task.taskId,
+          message: {
+            deliveryId,
+            destination: latest.task.originAddress,
+            kind: "receipt",
+            text:
+              "I didn't pass on " +
+              input.name +
+              "'s follow-up: their access changed after they sent it.",
+            taskId: latest.task.taskId,
+            taskVersion: latest.task.version,
+          },
+        },
+      ],
+      now: DateTime.formatIso(yield* DateTime.now),
+    },
   });
 });
