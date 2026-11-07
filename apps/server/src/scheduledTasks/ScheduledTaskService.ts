@@ -60,7 +60,7 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
+import { isMissedFixedTimeRun, isSameSchedule, iso, nextRunAt } from "./Schedule.ts";
 import {
   acceptImmediateWebhookDedupe,
   acceptWebhookDedupe,
@@ -77,6 +77,7 @@ import { webhookEndpoint } from "./webhookEndpoint.ts";
 import {
   BOT_ROUTINE_NEEDS_OWNER,
   makeScheduledBotRoutines,
+  routineOwnerOf,
   ROUTINE_MESSAGE_PREFIX,
   type RoutineOwner,
 } from "./scheduledBotRoutines.ts";
@@ -245,27 +246,8 @@ export class ScheduledTaskService extends Context.Service<
   }
 >()("goat/scheduledTasks/ScheduledTaskService") {}
 
-function iso(value: DateTime.DateTime): string {
-  return DateTime.formatIso(DateTime.toUtc(value));
-}
-
 const decodeLastRunJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ScheduledTaskRun));
 const localNow = DateTime.withCurrentZoneLocal(DateTime.nowInCurrentZone);
-
-function nextRunAt(
-  task: Pick<ScheduledTask, "enabled" | "schedule">,
-  from: DateTime.DateTime,
-): string | null {
-  if (!task.enabled) return null;
-  // A stored interval can decode yet overflow the representable DateTime
-  // range; an unrepresentable occurrence means the task has no next run.
-  try {
-    const next = nextScheduledRunAt(task.schedule, from);
-    return next !== null && Number.isFinite(DateTime.toEpochMillis(next)) ? iso(next) : null;
-  } catch {
-    return null;
-  }
-}
 
 // Runs per task row; list and lookup operations already own the span.
 
@@ -302,6 +284,7 @@ const decodeRow = Effect.fnUntraced(
       lastRunError: row.last_run_error,
       runCount: row.run_count,
       ...(webhook === undefined ? {} : { webhook }),
+      ...(Option.isSome(routineOwnerOf(row.owner_json)) ? { goatBotRoutine: true } : {}),
     });
   },
   (effect, row, _origin?) =>
@@ -475,6 +458,7 @@ export const layer = Layer.effect(
         t.webhook_token,
         t.webhook_secret,
         t.webhook_secret_ref,
+        t.owner_json,
         r.snapshot_json AS last_run_json
       FROM scheduled_tasks t
       LEFT JOIN scheduled_task_runs r ON r.firing_id=t.last_firing_id AND r.task_id=t.task_id AND r.task_created_at=t.created_at
@@ -515,6 +499,7 @@ export const layer = Layer.effect(
         t.webhook_token,
         t.webhook_secret,
         t.webhook_secret_ref,
+        t.owner_json,
         r.snapshot_json AS last_run_json
       FROM scheduled_tasks t
       LEFT JOIN scheduled_task_runs r ON r.firing_id=t.last_firing_id AND r.task_id=t.task_id AND r.task_created_at=t.created_at
