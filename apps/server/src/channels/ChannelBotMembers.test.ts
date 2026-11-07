@@ -5,7 +5,9 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   BotId,
   BotProfile,
+  ChannelChildWorkId,
   ChannelGatewayError,
+  ChannelTaskId,
   ChatAttachmentId,
   CommandId,
   GOAT_BOT_SESSION_THREAD_PREFIX,
@@ -36,6 +38,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import * as ChildStore from "./channelChildWorkStore.ts";
 import { memberBotKey } from "./channelBotLedger.ts";
 import { botModel } from "./ChannelBotSession.testkit.ts";
 import {
@@ -291,6 +294,56 @@ describe("two bots", () => {
       });
       assert.strictEqual((yield* registry.status(owner, member.botId)).waitingCount, 0);
       assert.strictEqual((yield* registry.status(owner)).waitingCount, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("lists a member's turn with live child work under that member only", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const botThreads = yield* ChannelBotThreads.ChannelBotThreads;
+      const member = yield* createMember("turn-child");
+      yield* send(member.sessionThreadId, "do: check the build", "m-turn");
+      yield* runtime.drain;
+      const [stored] = yield* sql<{ readonly task_id: string; readonly generation: number }>`
+        SELECT task_id, generation FROM channel_tasks WHERE bot_id = ${member.botId}`;
+      assert.isDefined(stored);
+      yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.kind', 'turn') WHERE task_id = ${stored!.task_id}`;
+      const memberTasks = () =>
+        botThreads
+          .list(owner, member.botId)
+          .pipe(
+            Effect.map((result) =>
+              result.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+            ),
+          );
+      assert.deepStrictEqual(yield* memberTasks(), []);
+
+      yield* (yield* ChildStore.ChannelChildWorkStore).admitReserved(
+        {
+          ownerId,
+          taskId: ChannelTaskId.make(stored!.task_id),
+          childWorkId: ChannelChildWorkId.make("member-child"),
+          generation: stored!.generation,
+          callerThreadId: member.sessionThreadId,
+          requestKey: "member-child",
+          promptDigest: "digest",
+          surface: "thread_launch",
+          destination: { threadId: ThreadId.make("thread:member-child") },
+          state: "bound",
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+        100,
+      );
+      assert.deepStrictEqual(yield* memberTasks(), [stored!.task_id]);
+      const mainRows = (yield* botThreads.list(owner)).rows;
+      assert.notInclude(
+        mainRows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+        stored!.task_id,
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 
