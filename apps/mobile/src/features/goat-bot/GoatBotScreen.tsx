@@ -527,10 +527,12 @@ export function GoatBotScreen(props: {
               ? {
                   botId: member.botId,
                   threadId: member.sessionThreadId,
+                  name: member.name,
                   defaultModelSelection: member.defaultModelSelection,
                 }
               : null
           }
+          turnsWaiting={session.turnsWaiting}
           onDraft={session.canSend ? setText : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
           taskCard={

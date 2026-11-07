@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { groupBotWork, presentTaskStatus } from "@goat/client-runtime/goatBot";
+import {
+  goatBotWaitingInChatText,
+  groupBotWork,
+  presentTaskStatus,
+} from "@goat/client-runtime/goatBot";
 import { botRoutineRows, type BotRoutineRow } from "@goat/client-runtime/scheduledTasks";
 import {
   isAtomCommandInterrupted,
@@ -42,8 +46,11 @@ export function MobileBotWork(props: {
   readonly member?: {
     readonly botId: BotId;
     readonly threadId: ThreadId;
+    readonly name: string;
     readonly defaultModelSelection: BotProfile["defaultModelSelection"];
   } | null;
+  /** The bot's own turns asking a question in the chat behind this sheet. */
+  readonly turnsWaiting?: number;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
   readonly onDraft?: ((text: string) => void) | undefined;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
@@ -213,6 +220,8 @@ export function MobileBotWork(props: {
               !enabled ? "unavailable" : threads.error ? "failed" : threads.isSuccess ? rows : null
             }
             refreshRows={threads.refresh}
+            turnsWaiting={props.turnsWaiting ?? 0}
+            onOpenChat={() => setOpen(false)}
             onOpenTask={(id) => {
               setOpen(false);
               props.onOpenTask(id);
@@ -236,6 +245,17 @@ export function MobileBotWork(props: {
             ))}
           </View>
           <ScrollView>
+            {tab === "Tasks" && (props.turnsWaiting ?? 0) > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setOpen(false)}
+                className="min-h-[44px] justify-center"
+              >
+                <Text className="text-foreground">
+                  {goatBotWaitingInChatText(member?.name ?? "GOAT Bot")}. Open the chat
+                </Text>
+              </Pressable>
+            ) : null}
             {tab === "Tasks" ? (
               !enabled ? (
                 <Text className="text-foreground-muted">

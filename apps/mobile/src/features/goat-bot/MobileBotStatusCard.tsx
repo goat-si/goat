@@ -38,7 +38,7 @@ const TONE_DOT: Record<GoatBotDiagnosticTone, string> = {
 
 /**
  * Whether the bot can work now, and why not, at the top of the Work sheet. Mobile has no model or
- * Slack settings screens, so it only offers moving the home and opening a waiting task.
+ * Slack settings screens, so it only offers moving the home and going to what waits for an answer.
  */
 export function MobileBotStatusCard(props: {
   readonly environmentId: EnvironmentId | null;
@@ -48,6 +48,8 @@ export function MobileBotStatusCard(props: {
   } | null;
   readonly rows: GoatBotDiagnosticsInput["rows"];
   readonly refreshRows: () => void;
+  readonly turnsWaiting: number;
+  readonly onOpenChat: () => void;
   readonly onOpenTask: (taskId: ChannelTaskId) => void;
 }) {
   const { member } = props;
@@ -109,6 +111,7 @@ export function MobileBotStatusCard(props: {
       : null,
     canChangeModel: false,
     rows: rowsFromHome ? props.rows : "unavailable",
+    turnsWaiting: rowsFromHome ? props.turnsWaiting : 0,
     slack: !slackSupported ? "unavailable" : slack.error ? "failed" : (slack.data ?? "loading"),
     slackLive,
     canConfigureSlack: false,
@@ -128,6 +131,14 @@ export function MobileBotStatusCard(props: {
               onPress={() => {
                 if (line.action?.kind === "claim_home") home.changeHome(line.action.environmentId);
               }}
+              className="min-h-[44px] justify-center px-2"
+            >
+              <Text className="text-foreground">{line.action.label}</Text>
+            </Pressable>
+          ) : line.action?.kind === "open_chat" ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={props.onOpenChat}
               className="min-h-[44px] justify-center px-2"
             >
               <Text className="text-foreground">{line.action.label}</Text>

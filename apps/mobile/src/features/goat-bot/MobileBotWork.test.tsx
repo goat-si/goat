@@ -152,11 +152,17 @@ function reset() {
   state.routines.refresh.mockClear();
   state.setEnabled.mockReset();
 }
-async function render(taskId?: ChannelTaskId, taskCard?: ReactNode) {
+async function render(taskId?: ChannelTaskId, taskCard?: ReactNode, turnsWaiting = 0) {
   if (!root) root = createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotWork visible taskId={taskId} taskCard={taskCard} onOpenTask={() => {}} />,
+      <MobileBotWork
+        visible
+        taskId={taskId}
+        taskCard={taskCard}
+        turnsWaiting={turnsWaiting}
+        onOpenTask={() => {}}
+      />,
     ),
   );
 }
@@ -305,4 +311,15 @@ it("Library and Computer show their own views", async () => {
   expect(container.textContent).toContain("Files need a newer GOAT server.");
   await press("Computer");
   expect(container.textContent).toContain("Loading machines…");
+});
+
+it("points to the chat from Tasks when the bot asked a question there", async () => {
+  reset();
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  await render(undefined, undefined, 1);
+  await press("Work");
+  expect(container.textContent).toContain("GOAT Bot is waiting for your answer in the chat");
+  expect(container.textContent).toContain("No tasks yet");
+  await press("Open the chat");
+  expect(container.textContent).not.toContain("waiting for your answer in the chat");
 });

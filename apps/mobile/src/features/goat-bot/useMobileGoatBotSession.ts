@@ -9,6 +9,7 @@ import {
   canSendToGoatBot,
   goatBotActivity,
   goatBotActivityTask,
+  goatBotTurnsWaiting,
   goatBotReplyingSince,
   initialGoatBotEnsure,
   observeResidentAtom,
@@ -680,6 +681,7 @@ export function useMobileGoatBotSession(
     [visibleTurnItems],
   );
   const reading = useReplying(replyingSince, visible);
+  const turnsWaiting = useMemo(() => goatBotTurnsWaiting(visibleTurnItems), [visibleTurnItems]);
   const activityTask = useMemo(
     () => goatBotActivityTask({ visibleTurnItems, readers: goatBotItemReaders }),
     [visibleTurnItems],
@@ -767,6 +769,8 @@ export function useMobileGoatBotSession(
     threadId: target?.threadId ?? null,
     replyingSince,
     activity,
+    /** The bot's own turns asking a question in this chat, which the task list never shows. */
+    turnsWaiting,
     canSend,
     /** Null when this server's GOAT Bot cannot take files. */
     attachmentSupport,
