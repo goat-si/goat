@@ -13,6 +13,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 const session = vi.hoisted(() => ({
   rows: [] as GoatBotRow[],
+  canSend: true,
   onSend: vi.fn(() => true),
   notes: [] as Array<{ index: number; date: string | null; text: string }>,
   refresh: vi.fn(),
@@ -44,13 +45,16 @@ vi.mock("react-native", () => ({
     value,
     onChangeText,
     accessibilityLabel,
+    accessibilityState,
   }: {
     value?: string;
     onChangeText?: (text: string) => void;
     accessibilityLabel?: string;
+    accessibilityState?: { disabled?: boolean };
   }) => (
     <textarea
       aria-label={accessibilityLabel}
+      aria-disabled={accessibilityState?.disabled}
       value={value}
       onChange={(event) => onChangeText?.(event.currentTarget.value)}
     />
@@ -107,7 +111,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
   useMobileGoatBotSession: () => ({
     availability: "ready",
     rows: session.rows,
-    canSend: true,
+    canSend: session.canSend,
     attachmentSupport: null,
     onSend: session.onSend,
     onRetryInput: () => {},
@@ -196,6 +200,7 @@ async function render() {
   };
 }
 function setup() {
+  session.canSend = true;
   session.rows = [];
   session.notes = [note];
   session.onSend.mockClear();
@@ -332,6 +337,7 @@ it("shows a deleted member's banner and drops it once the restored profile arriv
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  session.canSend = false;
   await act(async () =>
     root.render(
       <GoatBotScreen visible member={member("deleted")} onRestoreMember={async () => true} />,
@@ -339,8 +345,13 @@ it("shows a deleted member's banner and drops it once the restored profile arriv
   );
   expect(container.textContent).toContain("Scout was deleted");
   expect(buttonIn(container, "Restore")).toBeDefined();
+  // VoiceOver hears a composer it cannot type into as dimmed.
+  const composer = () => container.querySelector('[aria-label="Message Scout"]');
+  expect(composer()?.getAttribute("aria-disabled")).toBe("true");
+  session.canSend = true;
   await act(async () => root.render(<GoatBotScreen visible member={member("active")} />));
   expect(container.textContent).not.toContain("Scout was deleted");
+  expect(composer()?.getAttribute("aria-disabled")).toBe("false");
   await act(async () => root.unmount());
   container.remove();
 });

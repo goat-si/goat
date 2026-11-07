@@ -670,6 +670,7 @@ export function GoatBotScreen(props: {
             onChangeText={setText}
             multiline
             editable={session.canSend}
+            accessibilityState={{ disabled: !session.canSend }}
             onContentSizeChange={(event) =>
               setInputHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))
             }
