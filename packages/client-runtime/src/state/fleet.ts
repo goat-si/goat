@@ -674,8 +674,11 @@ export function buildFleet(input: {
       const environmentId = resolveAlias(alias);
       const node = environmentId === undefined ? undefined : nodeOf(environmentId);
       if (node !== undefined) return named(node);
-      // One alias in one SSH config is one host, whichever server reading it dispatched there.
-      const id = JSON.stringify(["ssh", scopeOf(dispatcher), alias]);
+      // One alias in one SSH config is one host, whichever server reading it dispatched there. A
+      // Boat alias names one sandbox in every config, so its record and launches meet on one node.
+      const id = isCloudMachineAlias(alias)
+        ? JSON.stringify(["boat", alias])
+        : JSON.stringify(["ssh", scopeOf(dispatcher), alias]);
       const existing = machines.get(id);
       if (existing !== undefined) return named(existing);
       const viaLabel = labelOf.get(dispatcherOwner) ?? dispatcherLabel;

@@ -229,11 +229,11 @@ counting, such as an unreachable server or an SSH host another machine reported,
 behind the **+N** beside the count.
 
 A Boat cloud machine appears while it is starting, running, stopping or failed, while it answers
-as a GOAT server, or while work runs on it. A stopped one leaves Fleet and stays in
-**Settings → Connections → Cloud machines**; it comes back when you resume it. A running machine
-with nothing on it stays, with a warning that Boat bills it while it sits idle. Cloud agent
-runs, such as Claude Cloud or Cursor Cloud, appear while they run and for 15
-minutes after they last changed; open older ones from the thread list.
+as a GOAT server, or while work runs on it. A stopped one that does not answer and has nothing
+running on it leaves Fleet and stays in **Settings → Connections → Cloud machines**; it comes back
+when you resume it. A running machine with nothing on it stays, with a warning that Boat bills it
+while it sits idle. Cloud agent runs, such as Claude Cloud or Cursor Cloud, appear while they run
+and for 15 minutes after they last changed; open older ones from the thread list.
 
 On mobile, **Fleet** is the first tab of **Usage**, and Usage opens on it, once the phone reaches
 more than one machine or is connected to a hub. It shows the same counts and lists the running

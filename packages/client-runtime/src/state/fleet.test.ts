@@ -577,6 +577,26 @@ describe("buildFleet", () => {
     expect(build(true).machines.map((machine) => machine.label)).toEqual(["Mac", "Box"]);
   });
 
+  it("draws one Boat machine when its record and a launch on it come from servers in different SSH configs", () => {
+    const studio = EnvironmentId.make("studio");
+    const fleet = buildFleet({
+      environments: [env(local, "Mac"), env(studio, "Studio")],
+      primaryEnvironmentId: local,
+      shells: [],
+      remote: [
+        { dispatcherEnvironmentId: local, launches: [], cloudMachines: [cloud()] },
+        {
+          dispatcherEnvironmentId: studio,
+          launches: [launch({ host: CLOUD_ALIAS })],
+          cloudMachines: [],
+        },
+      ],
+    });
+    const boats = fleet.machines.filter((machine) => machine.boat !== null);
+    expect(boats.map((machine) => [machine.label, machine.reported])).toEqual([["Cloud box", 1]]);
+    expect(fleet.idleCloudMachines).toEqual([]);
+  });
+
   it("names the server that supplied an idle running Boat machine's record as its owner", () => {
     const studio = EnvironmentId.make("studio");
     const fleet = buildFleet({
