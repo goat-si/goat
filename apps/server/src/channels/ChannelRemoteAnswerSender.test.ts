@@ -272,6 +272,49 @@ describe("an answer to work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect(
+    "waits, unsent, when the requester is unlinked between the two checks before the request",
+    () => {
+      const { machine, harness } = remoteHarness();
+      return Effect.gen(function* () {
+        yield* askedOnMachine(machine);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const sql = yield* SqlClient.SqlClient;
+        const findIdentity = ledger.findIdentity;
+        let armed = false;
+        let unlinked = false;
+        // authorityFor reads the requester first; the unlink lands right after, before senderGate.
+        Object.assign(ledger, {
+          findIdentity: (input: Parameters<typeof findIdentity>[0]) => {
+            if (!armed || input.externalActorId !== "U2") return findIdentity(input);
+            armed = false;
+            return findIdentity(input).pipe(
+              Effect.tap(() =>
+                sql`DELETE FROM channel_identities WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`.pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      unlinked = true;
+                    }),
+                  ),
+                  Effect.orDie,
+                ),
+              ),
+            );
+          },
+        });
+        machine.beforeHostCall = (call) =>
+          Effect.sync(() => {
+            if (call.tool === "goat_thread_send") armed = true;
+          });
+        yield* say("U1", "answer: use main", "answer");
+        yield* settle();
+        assert.isTrue(unlinked);
+        assert.isFalse(sent(machine, "use main"));
+        assert.lengthOf(yield* pendingForwards, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   // Answers recorded before senders were stored keep the requester-only check they had.
   it.effect("is sent for an answer recorded without its sender", () => {
     const { machine, harness } = remoteHarness();
