@@ -21,8 +21,10 @@ it.effect("bounds streaming recovery reads by candidate runs and preserves messa
     const other = yield* createThread("streaming-other");
     const empty = yield* createThread("streaming-empty");
     const statements: Array<ReturnType<Statement.Statement<unknown>["compile"]>> = [];
+    let reads = 0;
     const observe: Statement.Transformer = (statement) => {
       const compiled = statement.compile();
+      if (/^\s*SELECT/i.test(compiled[0])) reads++;
       if (compiled[0].includes("SELECT message.payload_json")) statements.push(compiled);
       return Effect.succeed(statement);
     };
@@ -96,12 +98,20 @@ it.effect("bounds streaming recovery reads by candidate runs and preserves messa
       .getRuntimeRecoveryProjection(empty)
       .pipe(Effect.provideService(Statement.CurrentTransformer, observe));
     assert.deepEqual(emptyProjection.messages, []);
+    assert.equal(reads, 4);
     assert.equal(statements.length, 2);
     for (const [query, params] of statements) {
       const plan = yield* sql.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, params);
-      assert.isTrue(plan[0]?.detail.includes("SEARCH run "), JSON.stringify(plan));
+      assert.isTrue(
+        plan.some((row) => row.detail.includes("SEARCH message_run ")),
+        JSON.stringify(plan),
+      );
       assert.isTrue(
         plan.some((row) => row.detail.includes("messages_run_idx")),
+        JSON.stringify(plan),
+      );
+      assert.isFalse(
+        plan.some((row) => /\bSCAN message\b/.test(row.detail)),
         JSON.stringify(plan),
       );
       assert.isFalse(
