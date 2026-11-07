@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   ChannelChildWorkId,
+  type ChannelTaskNeedsYou,
   NodeId,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
@@ -99,7 +100,7 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
         ]);
         harness.world.runtimeRequests.set("thread:done", [request("old", "command")]);
         harness.world.runtimeRequests.set("thread:stale", [request("stale", "user_input")]);
-        const expected = [
+        const expected: ReadonlyArray<ChannelTaskNeedsYou> = [
           {
             kind: "approval",
             since,
