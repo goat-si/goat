@@ -13,4 +13,6 @@ export * from "./botRoster.ts";
 export * from "./botWork.ts";
 export * from "./face.ts";
 export * from "./faceMotion.ts";
+export * from "./botNotes.ts";
+export * from "./diagnostics.ts";
 export * from "./retry.ts";

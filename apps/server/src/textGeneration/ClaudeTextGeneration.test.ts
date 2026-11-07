@@ -25,6 +25,7 @@ import {
   SYNTHETIC_CLAUDE_THINKING_MODEL,
 } from "../provider/ClaudeModelCatalog.testFixtures.ts";
 import * as TextGeneration from "./TextGeneration.ts";
+import { EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT } from "@goat/provider-core/server/channelReceptionPrompt";
 import { sanitizeThreadTitle } from "@goat/provider-core/server/textGenerationUtils";
 import { makeClaudeTextGeneration } from "./ClaudeTextGeneration.ts";
 import { ClaudeMemoryRegistryQuery, verifyClaudeMemoryHooks } from "./ClaudeMemoryIsolation.ts";
@@ -1251,23 +1252,10 @@ it.layer(layerClaudeTextGenerationTest)("channel reception", (it) => {
       {
         output: JSON.stringify({
           structured_output: {
+            ...EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT,
             replyText: "Which project?",
             action: "clarify",
-            title: "",
-            instruction: "",
-            projectId: "",
-            host: "",
-            taskId: "",
-            questionId: "",
-            answer: "",
             question: "Which project?",
-            options: [],
-            reads: [],
-            remember: "",
-            rememberQuote: "",
-            notesChangeRequested: "",
-            additionalTasks: [],
-            clarifyAbout: "other",
           },
         }),
         cwdMustNotBe: process.cwd(),

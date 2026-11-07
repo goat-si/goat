@@ -14,6 +14,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import type {
   BotId,
+  BotProfile,
   ChannelTaskId,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
@@ -30,10 +31,12 @@ import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
+import { MobileBotMemory } from "./MobileBotMemory";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
-const tabs = ["Tasks", "Routines", "Library", "Computer"] as const;
+const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
 
 export function MobileBotWork(props: {
   readonly taskId?: ChannelTaskId;
@@ -41,7 +44,15 @@ export function MobileBotWork(props: {
   readonly visible: boolean;
   readonly onOpenTask: (id: ChannelTaskId) => void;
   /** A member bot's work; the main bot's when absent. */
-  readonly member?: { readonly botId: BotId; readonly threadId: ThreadId } | null;
+  readonly member?: {
+    readonly botId: BotId;
+    readonly threadId: ThreadId;
+    readonly defaultModelSelection: BotProfile["defaultModelSelection"];
+  } | null;
+  /** Puts a message in the chat's composer; absent while the chat cannot send. */
+  readonly onDraft?: ((text: string) => void) | undefined;
+  /** Changes when the bot answers or a task moves on, which may have changed the notes. */
+  readonly notesRefreshKey?: string | undefined;
 }) {
   const home = useMobileGoatBotHomeMode();
   const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
@@ -212,6 +223,18 @@ export function MobileBotWork(props: {
           >
             <Text className="text-foreground">Close</Text>
           </Pressable>
+          <MobileBotStatusCard
+            environmentId={environmentId}
+            member={member}
+            rows={
+              !enabled ? "unavailable" : threads.error ? "failed" : threads.isSuccess ? rows : null
+            }
+            refreshRows={threads.refresh}
+            onOpenTask={(id) => {
+              setOpen(false);
+              props.onOpenTask(id);
+            }}
+          />
           <View className="flex-row flex-wrap gap-4 py-4">
             {tabs.map((name) => (
               <Pressable
@@ -310,6 +333,23 @@ export function MobileBotWork(props: {
                   Ask GOAT Bot in chat to set up a routine.
                 </Text>
               )
+            ) : null}
+            {tab === "Memory" ? (
+              <MobileBotMemory
+                environmentId={environmentId}
+                connected={selected?.connected === true}
+                supported={capabilities?.goatBotNotes === true}
+                member={member !== null}
+                onDraft={
+                  props.onDraft
+                    ? (text) => {
+                        setOpen(false);
+                        props.onDraft?.(text);
+                      }
+                    : undefined
+                }
+                refreshKey={props.notesRefreshKey}
+              />
             ) : null}
             {tab === "Library" ? (
               <Text className="text-foreground-muted">Files GOAT Bot saves will appear here.</Text>

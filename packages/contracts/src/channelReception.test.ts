@@ -28,6 +28,10 @@ describe("reception results", () => {
     };
     expect(decode(legacy)).toEqual(legacy);
     expect(decode(legacy)).not.toHaveProperty("rememberQuote");
+    expect(decode(legacy)).not.toHaveProperty("replacesNote");
+    expect(decode({ ...legacy, rememberQuote: "keep", replacesNote: "Reply in English." })).toEqual(
+      { ...legacy, rememberQuote: "keep", replacesNote: "Reply in English." },
+    );
     expect(decode({ ...legacy, rememberQuote: "remember that" })).toMatchObject({
       rememberQuote: "remember that",
     });

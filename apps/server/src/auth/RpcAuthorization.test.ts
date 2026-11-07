@@ -6,6 +6,7 @@ import {
   AuthDiagnosticsReadScope,
   AuthEnvironmentMaintainScope,
   AuthFilesystemReadScope,
+  AuthMemoryReadScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthProvidersManageScope,
@@ -63,6 +64,32 @@ describe("RPC authorization scopes", () => {
       const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall([], method, {}));
       expect(denied.requiredPermission).toBe(AuthOrchestrationReadScope);
       yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationReadScope], method, {});
+    }),
+  );
+  it.effect("requires memory read to list GOAT Bot's notes", () =>
+    Effect.gen(function* () {
+      const method = CHANNEL_GATEWAY_WS_METHODS.listBotNotes;
+      for (const scopes of [[], [AuthOrchestrationReadScope]]) {
+        const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall(scopes, method, {}));
+        expect(denied.requiredPermission).toBe(AuthMemoryReadScope);
+      }
+      yield* RpcAuthorization.authorizeRpcCall([AuthMemoryReadScope], method, {});
+    }),
+  );
+  it.effect("requires filesystem read to list and open GOAT Bot's saved files", () =>
+    Effect.gen(function* () {
+      for (const [method, input] of [
+        [CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts, {}],
+        [CHANNEL_GATEWAY_WS_METHODS.readBotArtifact, { relativePath: "a.txt" }],
+      ] as const) {
+        for (const scopes of [[], [AuthOrchestrationReadScope]]) {
+          const denied = yield* Effect.flip(
+            RpcAuthorization.authorizeRpcCall(scopes, method, input),
+          );
+          expect(denied.requiredPermission).toBe(AuthFilesystemReadScope);
+        }
+        yield* RpcAuthorization.authorizeRpcCall([AuthFilesystemReadScope], method, input);
+      }
     }),
   );
   it.effect("refuses a bot profile edit to a read-only session", () =>

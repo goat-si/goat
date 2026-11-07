@@ -6,27 +6,13 @@ import * as Schema from "effect/Schema";
 import {
   buildChannelReceptionPrompt,
   ChannelReceptionModelOutput,
+  EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT,
   toChannelReceptionResult,
 } from "./channelReceptionPrompt.ts";
 
 const emptyOutput = {
+  ...EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT,
   replyText: "Okay.",
-  action: "report_only",
-  title: "",
-  instruction: "",
-  projectId: "",
-  host: "",
-  taskId: "",
-  questionId: "",
-  answer: "",
-  question: "",
-  options: [],
-  clarifyAbout: "other",
-  reads: [],
-  remember: "",
-  rememberQuote: "",
-  notesChangeRequested: "",
-  additionalTasks: [],
 } satisfies ChannelReceptionModelOutput;
 
 const decodeModelOutput = Schema.decodeUnknownSync(ChannelReceptionModelOutput);
@@ -69,6 +55,27 @@ describe("channel reception note request conversion", () => {
       replyText: "Okay.",
       action: { type: "report_only" },
       remember: "Reply in Korean.",
+    });
+  });
+
+  it("attaches the note a correction replaces only when there is a note to remember", () => {
+    expect(
+      convert({ remember: "Mondays.", rememberQuote: "Actually", replacesNote: " Fridays. " }),
+    ).toEqual({
+      replyText: "Okay.",
+      action: { type: "report_only" },
+      remember: "Mondays.",
+      rememberQuote: "Actually",
+      replacesNote: "Fridays.",
+    });
+    expect(convert({ remember: "", replacesNote: "Fridays." })).toEqual({
+      replyText: "Okay.",
+      action: { type: "report_only" },
+    });
+    expect(convert({ remember: "Mondays.", replacesNote: " " })).toEqual({
+      replyText: "Okay.",
+      action: { type: "report_only" },
+      remember: "Mondays.",
     });
   });
 

@@ -24,6 +24,7 @@ import * as TextGeneration from "./TextGeneration.ts";
 import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
 import * as Hold from "../memory/MemoryGenerationHold.ts";
 import { writeFakeCli } from "@goat/provider-testing/fakeCli";
+import { EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT } from "@goat/provider-core/server/channelReceptionPrompt";
 import { strictOutputSchemaViolations } from "@goat/provider-core/server/strictOutputSchema";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 const isSetupError = Schema.is(ProviderSetupError);
@@ -759,23 +760,12 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
 
 it.layer(layerCodexTextGenerationTest)("channel reception", (it) => {
   const receptionOutput = JSON.stringify({
+    ...EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT,
     replyText: "On it.",
     action: "create_task",
     title: "Re-verify the call",
     instruction: "Run the Opus 5.5 call again and report latency.",
     projectId: "project-1",
-    host: "",
-    taskId: "",
-    questionId: "",
-    answer: "",
-    question: "",
-    options: [],
-    reads: [],
-    remember: "",
-    rememberQuote: "",
-    notesChangeRequested: "",
-    additionalTasks: [],
-    clarifyAbout: "other",
   });
   const receptionInput = {
     mode: "input" as const,

@@ -168,6 +168,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: AuthOrchestrationOperateScope,
+  // The notes file is remembered context, like the memory reads above.
+  [CHANNEL_GATEWAY_WS_METHODS.listBotNotes]: AuthMemoryReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.retryTask]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: AuthOrchestrationOperateScope,

@@ -21,7 +21,7 @@ import {
   GOATCLAW_SUPERVISOR_ASKS,
   GOATCLAW_SUPERVISOR_DELEGATION,
 } from "../goatclaw/RoleTemplates.ts";
-import type { ChannelBotFiles } from "./channelBotNotes.ts";
+import { NOTES_REPLACED_RULE, type ChannelBotFiles } from "./channelBotNotes.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /** At most this many skills, each cut to this many characters, ride a remote worker's message. */
@@ -128,7 +128,9 @@ export const workerInstruction = (task: BriefTask, files: ChannelBotFiles) =>
     ...workerHeader(task),
     "Standing notes from the person are in " +
       files.notes +
-      "; follow them. Reusable procedures (skills) are in " +
+      "; follow them. " +
+      NOTES_REPLACED_RULE +
+      " Reusable procedures (skills) are in " +
       files.skills +
       "; read the one the instruction names.",
     task.notesChangeRequested === undefined
@@ -146,7 +148,8 @@ export const turnInstruction = (task: BriefTask, files: ChannelBotFiles, supervi
     "You are GOAT Bot handling this message yourself. Your final message is your answer to the person: write it in the language of their request, not your default language, outcome first and as long as the content needs.",
     "Look things up directly: read and search files, read GOAT Bot's notes (" +
       files.notes +
-      "), use GOAT memory, and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads.",
+      "), use GOAT memory, and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads. " +
+      NOTES_REPLACED_RULE,
     "Your scratch folder for temporary files is " +
       files.scratch +
       " and your artifacts folder for saved outputs is " +

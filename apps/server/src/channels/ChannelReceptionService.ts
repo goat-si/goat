@@ -76,9 +76,9 @@ import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as tt from "./channelTaskThreadRefusal.ts";
 import {
-  appendChannelBotNote,
   channelBotFilesFor,
   listChannelBotSkills,
+  makeChannelBotNoteSaver,
   quotedFromInput,
   readChannelBotNotes,
 } from "./channelBotNotes.ts";
@@ -97,6 +97,7 @@ import {
   threadDigest,
 } from "./channelBotRecall.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
+import { makeRemoteThreadRecall } from "./channelRemoteRecall.ts";
 import {
   approvalCard,
   type ApprovalReply,
@@ -223,11 +224,13 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
+  const saveNote = yield* makeChannelBotNoteSaver(fileSystem, botFiles);
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
   const memoryService = yield* Effect.serviceOption(MemoryService.MemoryService);
   const memorySync = yield* Effect.serviceOption(MemorySyncService.MemorySyncService);
+  const remoteThreadRecall = yield* makeRemoteThreadRecall;
 
   // Facts that do not change while the server runs.
   const linuxName =
@@ -541,13 +544,7 @@ const make = Effect.gen(function* () {
             return taskDigest(task) + "\nIts coding thread has not started.";
           }
           if (worker.host !== undefined) {
-            // Remote threads are read through their reports, which the ledger already holds.
-            return (
-              taskDigest(task) +
-              "\nIts thread runs on " +
-              worker.host +
-              "; only its reports reach this machine."
-            );
+            return yield* remoteThreadRecall(task, { ...worker, host: worker.host }, viewer);
           }
           // Only the newest runs' messages are loaded; a long thread is never read whole.
           const { runs } = yield* threads.getThreadRecords(worker.threadId, ["runs"]);
@@ -1279,11 +1276,10 @@ const make = Effect.gen(function* () {
       }
       // Saved before the result commits so a restart re-runs this input and saves it then; the note
       // names its input, so a second pass for the same input does not add it twice.
-      if (decision.remember !== undefined && rememberRefusal === undefined) {
-        yield* appendChannelBotNote(fileSystem, botFiles, decision.remember, readAt, inputId).pipe(
-          Effect.catch((cause) => Effect.logWarning("GOAT Bot note was not saved", { cause })),
-        );
-      }
+      const noteNotice =
+        decision.remember !== undefined && rememberRefusal === undefined
+          ? yield* saveNote(decision.remember, readAt, inputId, decision.replacesNote)
+          : undefined;
 
       let replyText = decision.replyText;
       let finalDecision = decision;
@@ -1571,6 +1567,7 @@ const make = Effect.gen(function* () {
       }
 
       const relatedTask = createdTasks[0]?.task;
+      if (noteNotice !== undefined) replyText += " " + noteNotice;
       deliveries.unshift(
         replyDelivery({
           causeKey: "reply:" + inputId,

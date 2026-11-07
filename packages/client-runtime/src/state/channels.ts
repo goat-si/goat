@@ -100,6 +100,11 @@ export function createChannelEnvironmentAtoms<R, E>(
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
       staleTimeMs: 2_000,
     }),
+    listBotNotes: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:list-bot-notes",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBotNotes,
+      staleTimeMs: 2_000,
+    }),
     listChildWork: (target: Parameters<typeof childWorkQuery>[0]) =>
       childWorkFamily(JSON.stringify(target)),
     updateTaskView: createEnvironmentRpcCommand(runtime, {

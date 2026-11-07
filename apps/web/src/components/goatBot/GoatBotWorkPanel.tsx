@@ -6,23 +6,33 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotRoutines } from "./GoatBotRoutines";
+import { GoatBotMemory } from "./GoatBotMemory";
+import { GoatBotStatusCard } from "./GoatBotStatusCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { goatBotSearch, memberThreadsKey, useGoatBotMember } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
 
-const tabs = ["Tasks", "Routines", "Library", "Computer"] as const;
+const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
 type Tab = (typeof tabs)[number];
 
 export function GoatBotWorkPanel({
   environmentId,
   threadId,
+  onDraft,
+  notesRefreshKey,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
+  /** Puts a message in this chat's composer; absent while the chat cannot send. */
+  onDraft?: ((text: string) => void) | undefined;
+  notesRefreshKey?: string | undefined;
 }) {
   const [tab, setTab] = useState<Tab>("Tasks");
   const member = useGoatBotMember();
-  const { rows } = useBotThreads(environmentId, memberThreadsKey(member));
+  const { rows, supported, loaded, failed } = useBotThreads(
+    environmentId,
+    memberThreadsKey(member),
+  );
   const routines = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
@@ -32,14 +42,21 @@ export function GoatBotWorkPanel({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 text-sm">
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         <div className="pr-10">
-          <TabsList aria-label="GOAT Bot work">
+          {/* Five tabs do not fit the panel at equal widths, so each keeps its label and the row wraps. */}
+          <TabsList aria-label="GOAT Bot work" className="flex-wrap">
             {tabs.map((name) => (
-              <TabsTab key={name} value={name}>
+              <TabsTab key={name} value={name} className="flex-none">
                 {name}
               </TabsTab>
             ))}
           </TabsList>
         </div>
+        <GoatBotStatusCard
+          className="mt-4 rounded-lg border border-border p-3"
+          environmentId={environmentId}
+          member={member}
+          rows={!supported ? "unavailable" : failed ? "failed" : loaded ? rows : null}
+        />
         <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
           {tasks.length === 0 ? (
             <p>No task threads yet. Ask GOAT Bot to start work.</p>
@@ -67,6 +84,13 @@ export function GoatBotWorkPanel({
             threadId={threadId}
             tasks={routines.data?.tasks ?? []}
             error={routines.error}
+          />
+        </TabsPanel>
+        <TabsPanel value="Memory" className="mt-4 min-h-0 overflow-y-auto">
+          <GoatBotMemory
+            environmentId={environmentId}
+            onDraft={onDraft}
+            refreshKey={notesRefreshKey}
           />
         </TabsPanel>
         <TabsPanel value="Library" className="mt-4">
