@@ -23,6 +23,8 @@ vi.mock("~/state/server", () => ({
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: { execute: typeof mocks.setEnabled }) => command.execute,
 }));
+vi.mock("~/state/entities", () => ({ useServerConfigs: () => new Map() }));
+vi.mock("~/state/channels", () => ({ channelEnvironment: { listBotNotes: () => null } }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
 function setup(tasks: unknown[]) {
@@ -40,6 +42,8 @@ it("shows the empty state for each work tab", async () => {
     .toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Routines" }));
   await expect.element(screen.getByText("Ask GOAT Bot in chat to set up a routine.")).toBeVisible();
+  await userEvent.click(screen.getByRole("tab", { name: "Memory" }));
+  await expect.element(screen.getByText("Notes need a newer GOAT server.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
   await expect.element(screen.getByText("Files GOAT Bot saves will appear here.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Computer" }));

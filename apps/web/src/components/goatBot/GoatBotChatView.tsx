@@ -31,6 +31,7 @@ import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   canSendToGoatBot,
+  goatBotNotesRefreshKey,
   type GoatBotAvailability,
   type GoatBotRemoval,
 } from "@goat/client-runtime/goatBot";
@@ -113,6 +114,13 @@ export function GoatBotChatView({
   const canSend = !removed && canSendToGoatBot(availability, canOperate);
   const acceptsFiles = canSend && attachmentSupport !== null;
   const composerRef = useRef<GoatBotComposerHandle>(null);
+  const onDraft = canSend
+    ? (text: string) => {
+        if (narrow) setPanelOpen(false);
+        composerRef.current?.replaceText(text);
+      }
+    : undefined;
+  const notesRefreshKey = goatBotNotesRefreshKey(rows);
   const [dragActive, setDragActive] = useState(false);
   if (!acceptsFiles && dragActive) setDragActive(false);
   const addDroppedFiles = useStableCallback((files: File[]) =>
@@ -295,14 +303,24 @@ export function GoatBotChatView({
       </div>
       {bot && panelOpen && !narrow && (
         <aside aria-label="GOAT Bot work" className="flex w-80 shrink-0 border-l border-border">
-          <GoatBotWorkPanel environmentId={bot.environmentId} threadId={bot.threadId} />
+          <GoatBotWorkPanel
+            environmentId={bot.environmentId}
+            threadId={bot.threadId}
+            onDraft={onDraft}
+            notesRefreshKey={notesRefreshKey}
+          />
         </aside>
       )}
       {bot && narrow && (
         <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
           <SheetPopup>
             <SheetTitle className="sr-only">GOAT Bot work</SheetTitle>
-            <GoatBotWorkPanel environmentId={bot.environmentId} threadId={bot.threadId} />
+            <GoatBotWorkPanel
+              environmentId={bot.environmentId}
+              threadId={bot.threadId}
+              onDraft={onDraft}
+              notesRefreshKey={notesRefreshKey}
+            />
           </SheetPopup>
         </Sheet>
       )}

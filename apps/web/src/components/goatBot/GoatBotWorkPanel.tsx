@@ -6,19 +6,25 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotRoutines } from "./GoatBotRoutines";
+import { GoatBotMemory } from "./GoatBotMemory";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { goatBotSearch, memberThreadsKey, useGoatBotMember } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
 
-const tabs = ["Tasks", "Routines", "Library", "Computer"] as const;
+const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
 type Tab = (typeof tabs)[number];
 
 export function GoatBotWorkPanel({
   environmentId,
   threadId,
+  onDraft,
+  notesRefreshKey,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
+  /** Puts a message in this chat's composer; absent while the chat cannot send. */
+  onDraft?: ((text: string) => void) | undefined;
+  notesRefreshKey?: string | undefined;
 }) {
   const [tab, setTab] = useState<Tab>("Tasks");
   const member = useGoatBotMember();
@@ -67,6 +73,13 @@ export function GoatBotWorkPanel({
             threadId={threadId}
             tasks={routines.data?.tasks ?? []}
             error={routines.error}
+          />
+        </TabsPanel>
+        <TabsPanel value="Memory" className="mt-4 min-h-0 overflow-y-auto">
+          <GoatBotMemory
+            environmentId={environmentId}
+            onDraft={onDraft}
+            refreshKey={notesRefreshKey}
           />
         </TabsPanel>
         <TabsPanel value="Library" className="mt-4">
