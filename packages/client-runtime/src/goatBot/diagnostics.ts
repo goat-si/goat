@@ -191,7 +191,8 @@ function modelLine(
 
 /**
  * The bot's own turns that ask the person a question, from the newest chip of each task in its
- * conversation. Turns never appear in the task list, so this is where such a question shows.
+ * conversation. The task list shows a turn only while work it launched still runs, so the chat is
+ * where such a question is always found.
  */
 export function goatBotTurnsWaiting(
   items: ReadonlyArray<GoatBotFaceTaskItem>,

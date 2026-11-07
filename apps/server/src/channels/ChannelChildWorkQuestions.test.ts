@@ -18,10 +18,12 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import {
+  botMessages,
   goatInput,
   linkSlackUser,
   makeHarness,
   onlyTask,
+  owner,
   ownerId,
   rpcContext,
   setupBot,
@@ -49,6 +51,42 @@ const responses = (harness: ReturnType<typeof makeHarness>) =>
   harness.world.commands.flatMap((command) =>
     command.type === "runtime-request.respond" ? [command] : [],
   );
+
+const cards = Effect.map(
+  botMessages,
+  (records) => records.messages.filter((message) => message.channel?.kind === "question").length,
+);
+
+/** Links a Slack user with the given ceiling and scopes, as a person would with a code. */
+const linkSlackPerson = (
+  user: string,
+  runtimeModeCeiling: "approval-required" | "auto-accept-edits",
+  grantedScopes: ReadonlyArray<"orchestration:read" | "orchestration:operate">,
+) =>
+  Effect.gen(function* () {
+    const identities = yield* ChannelIdentityService.ChannelIdentityService;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const { code } = yield* identities.createLink(
+      { connectionId: "slack-1", runtimeModeCeiling, grantedScopes: [...grantedScopes] },
+      owner,
+    );
+    yield* gateway.linkIdentity(
+      {
+        connectionId: "slack-1",
+        externalActorId: user,
+        code,
+        idempotencyKey: "link-" + user,
+        replyAddress: {
+          kind: "slack",
+          connectionId: "slack-1",
+          teamId: "T1",
+          channelId: "D1",
+          rootTs: "1",
+        },
+      },
+      slackContext,
+    );
+  });
 
 /** A coding thread the task launched, recorded as child work in the given state. */
 const launch = Effect.fn(function* (
@@ -134,6 +172,43 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
   );
 
   it.effect(
+    "keeps a launched thread's approval through a failed read and sends its card once",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* gateway.ingest(goatInput("do: start the build", "c1"), rpcContext);
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        yield* launch(task, "live", "bound");
+        // A launched thread that was deleted asks nothing and does not hold the pass.
+        yield* launch(task, "deleted", "bound");
+        harness.world.runs.set("thread:live", []);
+        harness.world.runtimeRequests.set("thread:live", [request("approval", "command")]);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        const seen = (yield* onlyTask).observed?.needsYou;
+        assert.strictEqual(seen?.length, 1);
+        assert.strictEqual(yield* cards, 1);
+
+        harness.world.recordFailures.add("thread:live");
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, seen);
+
+        harness.world.recordFailures.delete("thread:live");
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, seen);
+        assert.strictEqual(yield* cards, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
     "lets the person answer a launched thread's approval, and refuses someone unlinked",
     () => {
       const harness = makeHarness();
@@ -166,6 +241,72 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
         yield* gateway.ingest(slackInput("approve", "Ev3"), slackContext);
         yield* runtime.drain;
         assert.strictEqual(responses(harness).length, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "refuses a launched thread's approval from a lower ceiling, a read-only link, a stranger and an agent",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        yield* linkSlackPerson("U2", "approval-required", [
+          "orchestration:read",
+          "orchestration:operate",
+        ]);
+        yield* linkSlackPerson("U3", "auto-accept-edits", ["orchestration:read"]);
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* gateway.ingest(slackInput("do: deploy staging", "Ev1"), slackContext);
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        yield* launch(task, "deploy", "bound");
+        harness.world.runs.set("thread:deploy", []);
+        harness.world.runtimeRequests.set("thread:deploy", [request("run", "command")]);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+
+        const root = "1760000000.000100";
+        yield* gateway.ingest(slackInput("approve", "Ev2", root, "U2"), slackContext);
+        yield* gateway.ingest(slackInput("approve", "Ev3", root, "U3"), slackContext);
+        yield* gateway.ingest(slackInput("approve", "Ev4", root, "U9"), slackContext);
+        yield* gateway.ingest(
+          {
+            kind: "mcp",
+            connectionId: "mcp",
+            conversationKey: "default",
+            externalMessageId: "agent-approve",
+            idempotencyKey: "agent-approve",
+            actor: { senderThreadId: ThreadId.make("thread:some-agent") },
+            replyAddress: {
+              kind: "mcp",
+              connectionId: "mcp",
+              requestNamespace: "ns-1",
+              conversationKey: "default",
+            },
+            text: "approve A1",
+            attachments: [],
+            receivedAt: since,
+            intent: "message",
+          },
+          {
+            ...owner,
+            principalId: "mcp:ns-1",
+            grantedScopes: ["orchestration:read", "orchestration:operate"],
+            caller: { type: "mcp", requestNamespace: "ns-1" },
+          },
+        );
+        yield* runtime.drain;
+        assert.strictEqual(responses(harness).length, 0);
+
+        yield* gateway.ingest(slackInput("approve", "Ev5", root, "U1"), slackContext);
+        yield* runtime.drain;
+        const [answered] = responses(harness);
+        assert.strictEqual(answered?.threadId, ThreadId.make("thread:deploy"));
+        assert.strictEqual(answered?.decision, "accept");
       }).pipe(Effect.provide(harness.layer));
     },
   );
