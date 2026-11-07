@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import ChatView from "./ChatView";
 import { GoatBotThreadView } from "./goatBot/GoatBotThreadView";
 import { useGoatBotMemberAt } from "./goatBot/goatBotMemberThread";
+import { GoatBotMemberUnavailable } from "./goatBot/GoatBotMemberUnavailable";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { resolveDraftPromotionNavigationTarget, threadHasStarted } from "./ChatView.logic";
 import { waitForDraftHeroTransition } from "./chat/draftHeroTransition";
@@ -54,9 +55,12 @@ export function ThreadRouteView({
       { environmentId: target.threadRef.environmentId, id: target.threadRef.threadId },
       goatBotRef,
     );
-  const { member: goatBotMember, resolving: goatBotMemberResolving } = useGoatBotMemberAt(
+  const goatBotMemberLookup = useGoatBotMemberAt(
     target.kind === "server" ? target.threadRef : null,
   );
+  const goatBotMember = goatBotMemberLookup.member;
+  // A thread that may be a member's waits for the bot list, and never falls back to a coding view.
+  const goatBotMemberPending = goatBotMemberLookup.pending || goatBotMemberLookup.unavailable;
   const goatBotThread = goatBotTarget || goatBotMember !== null;
   const draftId = target.kind === "draft" ? target.draftId : null;
   const draftSession = useComposerDraftStore((store) =>
@@ -90,10 +94,6 @@ export function ThreadRouteView({
 
   const shellStatus = useEnvironmentShellStatus(serverThreadRef?.environmentId ?? null);
   const serverThreadShell = serverThread;
-  // Until the bot list answers, a missing thread or one in the bot project may be a member's.
-  const goatBotMemberPending =
-    goatBotMemberResolving &&
-    (serverThreadShell === null || serverThreadShell.projectId === goatBotRef?.projectId);
   const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
   const bootstrapComplete = isThreadRouteSnapshotAuthoritative(shellStatus);
   const draftThread = useComposerDraftStore((store) =>
@@ -225,6 +225,8 @@ export function ThreadRouteView({
         member={goatBotMember}
       />
     );
+  } else if (goatBotMemberLookup.unavailable) {
+    view = <GoatBotMemberUnavailable onRetry={goatBotMemberLookup.retry} />;
   } else if (goatBotMemberPending) {
     view = null;
   } else if (renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)) {
