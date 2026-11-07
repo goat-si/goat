@@ -1,6 +1,6 @@
 import { useActiveNewTask } from "../../state/active-new-task";
 import { Toolbar } from "../../components/ui/Toolbar";
-import { useFocusEffect, useIsFocused } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused, useNavigation } from "@react-navigation/native";
 import { use, useCallback, useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import { isDuoDevice } from "../../lib/device-type";
@@ -46,8 +46,10 @@ export function WorkspaceToolbar(props: {
     activeNewTask === null;
   const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
   const focused = useIsFocused();
+  const navigation = useNavigation();
   const { panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const searchRef = useRef<SearchBarCommands>(null);
+  const searchKeyBlur = useRef(false);
   // The Settings list takes the selected tab's place, so search follows it.
   const selectedTab = workspace.settingsOpen ? "settings" : workspace.state.selectedTab;
   const tab = workspace.state.tabs[selectedTab];
@@ -84,13 +86,29 @@ export function WorkspaceToolbar(props: {
     workspace.recordScrollOffset(selectedTab, tab.searchEntryOffset);
     workspace.dispatch({ type: "cancel", tab: selectedTab });
   }, [workspace, selectedTab, tab.searchEntryOffset]);
-  const searchFocused = useCallback(
-    () =>
-      tab.searchMode === "resting"
-        ? enterSearch()
-        : workspace.dispatch({ type: "search", tab: selectedTab }),
-    [tab.searchMode, enterSearch, workspace, selectedTab],
-  );
+  const searchFocused = useCallback(() => {
+    if (tab.searchMode === "resting") return enterSearch();
+    // The integrated X can empty the field without a change event; show the query still filtering.
+    if (tab.searchMode === "expanded") searchRef.current?.setText(tab.query);
+    workspace.dispatch({ type: "search", tab: selectedTab });
+  }, [tab.searchMode, tab.query, enterSearch, workspace, selectedTab]);
+  const searchBlurred = () => {
+    const fromSearchKey = searchKeyBlur.current;
+    searchKeyBlur.current = false;
+    // iOS 27's integrated X ends search with only a blur. A phone's Settings list never dismisses
+    // the keyboard itself, so a blur there that neither the Search key nor a push caused is the X.
+    if (
+      selectedTab === "settings" &&
+      deviceType === "phone" &&
+      NATIVE_LIQUID_GLASS_SUPPORTED &&
+      !fromSearchKey &&
+      navigation.isFocused() &&
+      isTabActive(selectedTab)
+    ) {
+      searchRef.current?.clearText();
+      cancelSearch();
+    } else workspace.dispatch({ type: "expand", tab: selectedTab });
+  };
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   // The sidebar remains visible while its detail owns navigation focus.
   const searchHostVisible = focused || primaryColumn?.presented === true;
@@ -176,8 +194,11 @@ export function WorkspaceToolbar(props: {
                   placeholder: searchLabel,
                   cancelButtonHidden: foldedSearch,
                   onFocus: searchFocused,
-                  onBlur: () => workspace.dispatch({ type: "expand", tab: selectedTab }),
-                  onSearchButtonPress: () => searchRef.current?.blur(),
+                  onBlur: searchBlurred,
+                  onSearchButtonPress: () => {
+                    searchKeyBlur.current = true;
+                    searchRef.current?.blur();
+                  },
                   onChangeText: ({ nativeEvent }) =>
                     workspace.dispatch({
                       type: "query",

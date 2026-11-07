@@ -11,6 +11,7 @@ const reactTests = [
   "src/features/notes/live-editor/note-editor-images.dom.test.ts",
   "src/features/notes/useNoteFiles.test.tsx",
   "src/features/notes/live-editor/NoteLiveEditor.test.tsx",
+  "src/features/workspace/WorkspaceToolbar.ios.test.tsx",
   "src/features/settings/WorktreeCleanupSection.test.tsx",
   "src/features/threads/ThreadWorkspaceBanner.test.tsx",
   "src/features/threads/SecretRequestCard.test.tsx",
