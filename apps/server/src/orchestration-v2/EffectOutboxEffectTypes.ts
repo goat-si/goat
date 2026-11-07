@@ -11,6 +11,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "scheduled-tasks.cleanup",
   "terminal.cleanup",
   "preview.cleanup",
+  "device.release",
   "attachment.cleanup",
   "thread-title.generate",
   "delegated-tasks.stop",

@@ -213,3 +213,25 @@ describe("DevicePanel host probe", () => {
     ]);
   });
 });
+
+describe("DevicePanel device owners", () => {
+  it("names the thread that started a running device and the other threads that have it open", async () => {
+    setup();
+    currentState = {
+      ...deviceState,
+      devices: [{ ...phone, booted: true }],
+      sessions: [
+        { ...deviceState.sessions[0]!, threadId: ThreadId.make("thread-3") },
+        { ...deviceState.sessions[0]!, threadId: threadA.threadId },
+      ],
+      bootedBy: [
+        { hostId: "local", deviceId: "phone", deviceName: "Phone", threadId: threadB.threadId },
+      ],
+    };
+    await using screen = await render(devicePanel(threadA), { container });
+
+    await expect.element(screen.getByText(/Started by/)).toBeVisible();
+    const owners = screen.getByText(/Started by/).element().textContent;
+    expect(owners).toBe("Started by another thread · open in another thread");
+  });
+});
