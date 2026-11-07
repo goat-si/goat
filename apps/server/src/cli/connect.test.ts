@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The unlink test exercises a local HTTP listener.
+import * as NodeHttp from "node:http";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Console from "effect/Console";
 import * as Deferred from "effect/Deferred";
@@ -5,8 +7,10 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Layer from "effect/Layer";
-import { HttpClient } from "effect/http";
-import { EnvironmentId } from "@goat/contracts";
+import { FetchHttpClient, HttpClient } from "effect/http";
+import { AuthSessionId, EnvironmentId } from "@goat/contracts";
+import { guardErrors } from "@goat/shared/errorGuards";
+import * as DateTime from "effect/DateTime";
 import * as ServerConfig from "../config.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
@@ -22,6 +26,10 @@ import * as TestConsole from "effect/testing/TestConsole";
 import * as FileSystem from "effect/FileSystem";
 import * as NetService from "@goat/shared/Net";
 import { connectCommand, acquireRelayClientForLink, disconnectCloud } from "./connect.ts";
+import {
+  makePersistedServerRuntimeState,
+  persistServerRuntimeState,
+} from "../serverRuntimeState.ts";
 
 const managedExecutable = {
   status: "available",
@@ -57,6 +65,102 @@ it.effect("does not install the relay client when the user declines the managed 
     assert.isTrue(Option.isNone(result));
     assert.equal(installCalls, 0);
   }),
+);
+
+it.live.each([false, true])(
+  "unlink contacts the recorded server only when its process is alive: %s",
+  (alive) =>
+    Effect.gen(function* () {
+      const requests: string[] = [];
+      const warnings: string[] = [];
+      const values = new Map<string, Uint8Array>([
+        [CLOUD_LINKED_USER_ID, new TextEncoder().encode("user-1")],
+      ]);
+      const listener = yield* Effect.acquireRelease(
+        Effect.callback<NodeHttp.Server, Error>((resume) => {
+          const server = guardErrors(
+            NodeHttp.createServer((request, response) => {
+              requests.push(`${request.method} ${request.url}`);
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(JSON.stringify({ ok: true, endpointRuntimeStatus: null }));
+            }),
+            (error) => resume(Effect.fail(error)),
+          );
+          server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
+        }),
+        (server) => Effect.sync(() => server.close()),
+      );
+      const address = listener.address();
+      if (address === null || typeof address === "string") {
+        return yield* Effect.die(new Error("Expected a TCP address"));
+      }
+      const config = yield* ServerConfig.ServerConfig;
+      const state = yield* makePersistedServerRuntimeState({
+        config: { host: "127.0.0.1", devUrl: undefined },
+        port: address.port,
+      });
+      yield* persistServerRuntimeState({
+        path: config.serverRuntimeStatePath,
+        state: { ...state, pid: alive ? process.pid : 4_194_305 },
+      });
+      const console = yield* Console.Console;
+      yield* disconnectCloud({ clearAuthorization: false }).pipe(
+        Effect.provideService(Console.Console, {
+          ...console,
+          warn: (...args) => warnings.push(args.join(" ")),
+        }),
+        Effect.provideService(ServerSecretStore.ServerSecretStore, {
+          get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
+          set: (name, value) => Effect.sync(() => void values.set(name, value)),
+          remove: (name) => Effect.sync(() => void values.delete(name)),
+          create: () => Effect.die("unused"),
+          getOrCreateRandom: () => Effect.die("unused"),
+        }),
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(CliTokenManager.CloudCliTokenManager, { getExisting: Effect.succeedNone }),
+            Layer.mock(EnvironmentAuth.EnvironmentAuth, {
+              setCloudLinkTrust: () => Effect.void,
+              issueSession: () =>
+                Effect.succeed({
+                  sessionId: AuthSessionId.make("test-session"),
+                  token: "test-token",
+                  method: "bearer-access-token" as const,
+                  scopes: [],
+                  subject: "cloud-cli",
+                  client: { deviceType: "unknown" as const },
+                  expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00Z"),
+                }),
+              revokeSession: () => Effect.succeed(true),
+            }),
+          ),
+        ),
+        Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
+          getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-1")),
+        }),
+      );
+      if (alive) {
+        assert.deepEqual(requests, ["POST /api/connect/unlink"]);
+        assert.isFalse(values.has(CLOUD_LINKED_USER_ID));
+        assert.notInclude(warnings.join("\n"), "cloudflared process may still be running");
+      } else {
+        assert.deepEqual(requests, []);
+        assert.isTrue(values.has(CLOUD_LINKED_USER_ID));
+        assert.equal(new TextDecoder().decode(values.get(CLOUD_WITHDRAWAL_FENCE)), "pending");
+        assert.include(warnings.join("\n"), "cloudflared process may still be running");
+        assert.include(warnings.join("\n"), "before relinking");
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          FetchHttpClient.layer,
+          ServerConfig.layerTest("/", { prefix: "goat-connect-unlink-test-" }).pipe(
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    ),
 );
 
 it.effect.each(["credential-failure", "pending-delete"] as const)(
