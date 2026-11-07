@@ -146,7 +146,7 @@ export const prepare = Effect.fn("ProviderRuntimeShutdown.prepare")(function* (i
   return {
     ...prepared,
     summary: {
-      candidates: ordinary.candidates + prepared.threads.size,
+      candidates: candidates.length,
       continued: ordinary.continued + prepared.threads.size,
     },
   };
