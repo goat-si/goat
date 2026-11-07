@@ -67,7 +67,10 @@ const missingOrFailed = (cause: unknown) =>
     : failed();
 
 const idOf = (stat: NodeFS.BigIntStats) => stat.dev + ":" + stat.ino;
-const versionOf = (stat: NodeFS.BigIntStats) => idOf(stat) + ":" + stat.size + ":" + stat.mtimeNs;
+// ctime moves on every write or utimes and cannot be set back, so a same-length rewrite whose
+// mtime was restored still changes the version.
+const versionOf = (stat: NodeFS.BigIntStats) =>
+  idOf(stat) + ":" + stat.size + ":" + stat.mtimeNs + ":" + stat.ctimeNs;
 // Only names read() accepts unchanged are listed: no leading dot, colon, backslash or edge spaces.
 const plainName = (name: string) =>
   !name.startsWith(".") && !/[:\\]/u.test(name) && name === name.trim();

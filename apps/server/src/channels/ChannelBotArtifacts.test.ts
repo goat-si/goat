@@ -334,6 +334,41 @@ describe("ChannelBotArtifacts read", () => {
     }).pipe(Effect.provide(artifactsLayer({ afterRead: Effect.sync(() => grow.run()) })));
   });
 
+  // Same inode, same length, mtime put back: only the change time can tell.
+  const rewriteInPlace = (file: string) => {
+    const fd = NodeFS.openSync(file, "r+");
+    NodeFS.writeSync(fd, "abcd", 0);
+    NodeFS.closeSync(fd);
+    NodeFS.utimesSync(file, 1_700_000_000, 1_700_000_000);
+  };
+
+  it.effect("answers changed for a same-length rewrite whose time was put back", () => {
+    const rewrite = { run: () => {} };
+    return Effect.gen(function* () {
+      const { at } = yield* folders;
+      write(at("same.txt"), "01234567", 1_700_000_000);
+      const first = yield* read("same.txt");
+      if (first.status !== "chunk") return assert.fail("expected a chunk");
+      rewriteInPlace(at("same.txt"));
+      assert.deepStrictEqual(yield* read("same.txt", 4, first.version), {
+        status: "changed",
+        relativePath: "same.txt",
+      });
+      rewrite.run = () => rewriteInPlace(at("same.txt"));
+      assert.deepStrictEqual(yield* read("same.txt"), {
+        status: "changed",
+        relativePath: "same.txt",
+      });
+    }).pipe(
+      Effect.provide(
+        artifactsLayer({
+          limits: { chunkBytes: 4, maxBytes: 10 },
+          afterRead: Effect.sync(() => rewrite.run()),
+        }),
+      ),
+    );
+  });
+
   it.effect("ends a file cleanly at its size and refuses offsets past it", () =>
     Effect.gen(function* () {
       const { at } = yield* folders;
