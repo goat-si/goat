@@ -16,7 +16,12 @@ import { GoatBotLibrary } from "./GoatBotLibrary";
 import { GoatBotMemory } from "./GoatBotMemory";
 import { GoatBotStatusCard } from "./GoatBotStatusCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
-import { goatBotSearch, memberThreadsKey, useGoatBotMember } from "./goatBotMemberContext";
+import {
+  goatBotSearch,
+  memberThreadsKey,
+  useGoatBotMember,
+  useGoatBotName,
+} from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
 
 const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
@@ -39,6 +44,7 @@ export function GoatBotWorkPanel({
 }) {
   const [tab, setTab] = useState<Tab>("Tasks");
   const member = useGoatBotMember();
+  const botName = useGoatBotName();
   const { rows, supported, loaded, failed, turnsWaiting } = useBotThreads(
     environmentId,
     memberThreadsKey(member),
@@ -72,7 +78,7 @@ export function GoatBotWorkPanel({
         <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
           {goatBotTurnsOutsideList(turnsWaiting, rows).length > 0 ? (
             <p className="mb-3">
-              {goatBotWaitingInChatText(member?.name ?? "GOAT Bot")}.{" "}
+              {goatBotWaitingInChatText(botName)}.{" "}
               <Link
                 to="/bot"
                 search={goatBotSearch(member)}

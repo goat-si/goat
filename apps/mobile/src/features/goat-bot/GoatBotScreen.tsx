@@ -553,6 +553,7 @@ export function GoatBotScreen(props: {
               : null
           }
           turnsWaiting={session.turnsWaiting}
+          botName={title}
           onDraft={session.canSend ? setText : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
           taskCard={

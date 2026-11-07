@@ -27,7 +27,7 @@ import {
 } from "react";
 
 import { usePrimarySettings } from "~/hooks/useSettings";
-import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
+import { goatBotSearch, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { cn } from "~/lib/utils";
 import { observeResize } from "~/lib/observeResize";
@@ -71,6 +71,7 @@ export function GoatBotTimeline({
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const member = useGoatBotMember();
+  const botName = useGoatBotName();
   const taskFocus = getTaskPaneFocus();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Messages sent while this view is mounted, by send key, and the server id each one received.
@@ -165,7 +166,7 @@ export function GoatBotTimeline({
       >
         <ol
           ref={listRef}
-          aria-label="Conversation with GOAT Bot"
+          aria-label={`Conversation with ${botName}`}
           className="mx-auto flex w-full max-w-3xl flex-col px-4 py-4"
         >
           {rows.map((row, index) => {
@@ -285,7 +286,7 @@ export function GoatBotTimeline({
                       {row.proactive && row.firstInGroup ? (
                         <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                           <BellIcon className="size-3.5" aria-hidden />
-                          {member?.name ?? "GOAT Bot"} · Update
+                          {botName} · Update
                         </div>
                       ) : null}
                       {row.replyTo ? (
