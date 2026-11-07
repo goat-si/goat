@@ -223,6 +223,7 @@ export function ThreadRouteView({
         environmentId={target.threadRef.environmentId}
         threadId={target.threadRef.threadId}
         member={goatBotMember}
+        main={goatBotMemberLookup.main}
       />
     );
   } else if (goatBotMemberLookup.unavailable) {

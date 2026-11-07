@@ -1,4 +1,5 @@
 import { useContext, useEffect } from "react";
+import { botRosterGroups } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useGlobalAgentStore } from "../globalAgentStore";
@@ -18,6 +19,7 @@ import { GoatBotChatView } from "../components/goatBot/GoatBotChatView";
 import { GoatBotChannelContext } from "../components/goatBot/goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "../components/goatBot/goatBotHooks";
 import {
+  GoatBotMainProfileContext,
   GoatBotMemberContext,
   goatBotSearch,
   useGoatBotMember,
@@ -53,6 +55,7 @@ function GoatBotRouteSession() {
     botId === undefined
       ? null
       : (roster.bots?.find((bot) => bot.role === "member" && bot.botId === botId) ?? null);
+  const main = botRosterGroups(roster.bots ?? []).main;
   // A named bot this client does not know yet waits for the roster; it never opens main instead.
   const memberUnknown = botId !== undefined && member === null;
   const memberResolving = memberUnknown && (!roster.botsLoaded || roster.botsPending);
@@ -84,33 +87,42 @@ function GoatBotRouteSession() {
   if (memberUnknown && !memberResolving) return <GoatBotMemberMissing />;
   if (bot && task && session.supportsTaskThreads)
     return (
-      <GoatBotMemberContext value={member}>
-        <GoatBotTaskRoute environmentId={bot.environmentId} session={session} taskId={task} />
-      </GoatBotMemberContext>
+      <GoatBotMainProfileContext value={main}>
+        <GoatBotMemberContext value={member}>
+          <GoatBotTaskRoute environmentId={bot.environmentId} session={session} taskId={task} />
+        </GoatBotMemberContext>
+      </GoatBotMainProfileContext>
     );
   return (
-    <GoatBotMemberContext value={member}>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-        <GoatBotChatView
-          {...session}
-          {...(memberResolving && roster.environmentId !== null
-            ? { availability: { kind: "connecting" as const, environmentId: roster.environmentId } }
-            : {})}
-          environmentId={bot?.environmentId ?? null}
-          legacyAgentRoute={legacyAgentRoute}
-          homeMove={
-            moveTarget
+    <GoatBotMainProfileContext value={main}>
+      <GoatBotMemberContext value={member}>
+        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+          <GoatBotChatView
+            {...session}
+            {...(memberResolving && roster.environmentId !== null
               ? {
-                  label: moveTarget.label,
-                  busy: homeSettings.busy,
-                  onMove: () => homeSettings.changeHome(moveTarget.environmentId),
+                  availability: {
+                    kind: "connecting" as const,
+                    environmentId: roster.environmentId,
+                  },
                 }
-              : undefined
-          }
-          homeMoveError={homeSettings.error}
-        />
-      </SidebarInset>
-    </GoatBotMemberContext>
+              : {})}
+            environmentId={bot?.environmentId ?? null}
+            legacyAgentRoute={legacyAgentRoute}
+            homeMove={
+              moveTarget
+                ? {
+                    label: moveTarget.label,
+                    busy: homeSettings.busy,
+                    onMove: () => homeSettings.changeHome(moveTarget.environmentId),
+                  }
+                : undefined
+            }
+            homeMoveError={homeSettings.error}
+          />
+        </SidebarInset>
+      </GoatBotMemberContext>
+    </GoatBotMainProfileContext>
   );
 }
 

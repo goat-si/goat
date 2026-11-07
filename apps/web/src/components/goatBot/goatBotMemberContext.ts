@@ -1,11 +1,22 @@
+import { goatBotName } from "@goat/client-runtime/goatBot";
 import type { BotProfile } from "@goat/contracts";
 import { createContext, useContext } from "react";
 
 /** The member bot whose chat, task pane or work panel is open; null for the main bot. */
 export const GoatBotMemberContext = createContext<BotProfile | null>(null);
 
+/** The main bot's profile where its route has read the bot list; null otherwise. */
+export const GoatBotMainProfileContext = createContext<BotProfile | null>(null);
+
 export function useGoatBotMember(): BotProfile | null {
   return useContext(GoatBotMemberContext);
+}
+
+/** What the open chat is called: the member's name, else the main bot's, else GOAT Bot. */
+export function useGoatBotName(): string {
+  const member = useContext(GoatBotMemberContext);
+  const main = useContext(GoatBotMainProfileContext);
+  return goatBotName(member ?? main);
 }
 
 /** The /bot search that keeps a task link on the bot it belongs to. */

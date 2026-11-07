@@ -9,22 +9,6 @@ import { useEnvironmentQuery } from "~/state/query";
 // memberBotLaunchIdsFor). Used only to wait for the bot list, never to decide a thread is a bot.
 const MEMBER_THREAD_PREFIX = "channel-member-bot:";
 
-/** The main bot's profile, which names its chat. Reads the roster's own query (useBotRoster). */
-export function useGoatBotMainProfile(environmentId: EnvironmentId | null): BotProfile | null {
-  const presentation = useEnvironment(environmentId);
-  const capabilities = presentation?.serverConfig?.environment.capabilities;
-  const connected = presentation?.connection.phase === "connected";
-  const profiles = useEnvironmentQuery(
-    connected && environmentId !== null && capabilities?.goatBotProfiles === true
-      ? channelEnvironment.listBots({
-          environmentId,
-          input: capabilities.goatBotMembers === true ? { includeDeleted: true } : {},
-        })
-      : null,
-  );
-  return botRosterGroups(profiles.data?.bots ?? []).main;
-}
-
 /**
  * The member bot whose conversation this thread is, deleted ones included, so the thread renders
  * as that bot and never as a coding thread. Reads the roster's own cached list. A thread that may
@@ -34,6 +18,8 @@ export function useGoatBotMemberAt(
   target: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | null,
 ): {
   readonly member: BotProfile | null;
+  /** The main bot's profile from the same list, which names the main chat. */
+  readonly main: BotProfile | null;
   readonly pending: boolean;
   readonly unavailable: boolean;
   /** Reads the bot list again; null while the computer is unreachable, since GOAT reconnects itself. */
@@ -65,6 +51,7 @@ export function useGoatBotMemberAt(
     candidate && (capabilities === undefined ? unreachable : failed && !profiles.isPending);
   return {
     member,
+    main: botRosterGroups(profiles.data?.bots ?? []).main,
     pending:
       candidate &&
       !unavailable &&

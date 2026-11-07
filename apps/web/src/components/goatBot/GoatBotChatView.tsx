@@ -21,8 +21,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "
 import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { GoatBotAvatar, GoatBotMainAvatar, GoatBotSessionAvatar } from "./GoatBotAvatar";
-import { useGoatBotMember } from "./goatBotMemberContext";
-import { useGoatBotMainProfile } from "./goatBotMemberThread";
+import { useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
@@ -32,7 +31,6 @@ import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   canSendToGoatBot,
-  goatBotName,
   goatBotNotesRefreshKey,
   type GoatBotAvailability,
   type GoatBotRemoval,
@@ -109,8 +107,7 @@ export function GoatBotChatView({
   const [panelOpen, setPanelOpen] = useState(false);
   const member = useGoatBotMember();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
-  const main = useGoatBotMainProfile(environmentId);
-  const title = goatBotName(member ?? main);
+  const title = useGoatBotName();
   const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const bot = availability.kind === "ready" ? availability.bot : null;
   const removed = removal !== null;
