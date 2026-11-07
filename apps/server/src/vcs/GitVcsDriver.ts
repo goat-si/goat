@@ -359,6 +359,7 @@ export interface GitWorkspaceSnapshotResult {
   readonly commitOid: string;
   readonly addedUntrackedPaths: ReadonlyArray<string>;
 }
+
 export class GitVcsDriver extends Context.Service<
   GitVcsDriver,
   {

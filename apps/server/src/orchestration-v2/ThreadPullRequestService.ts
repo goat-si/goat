@@ -1,4 +1,3 @@
-import { BackgroundGitWork } from "../vcs/BackgroundGitWork.ts";
 import { projectRepositories } from "../pullRequest/projectRepositories.ts";
 import {
   CommandId,
@@ -354,7 +353,6 @@ export const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker((request: RefreshRequest) =>
     synchronize(request).pipe(
-      Effect.provideService(BackgroundGitWork, true),
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterruptsOnly(cause),
         (cause) =>
