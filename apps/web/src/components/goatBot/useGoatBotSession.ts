@@ -540,6 +540,11 @@ export function useGoatBotSession(
       ...(selectedTask === undefined ? {} : { taskId: selectedTask }),
     });
   const rows = rowsForTask(taskId);
+  const sendable =
+    availability.kind === "ready" &&
+    canOperate &&
+    member?.state !== "deleted" &&
+    queue !== undefined;
   const attachmentSupport: GoatBotAttachmentSupport | null =
     capabilities?.goatBotAttachments === true && capabilities.attachmentUploads === true
       ? { maxUploadBytes: capabilities.fileAttachments?.maxUploadBytes ?? null }
@@ -559,19 +564,19 @@ export function useGoatBotSession(
       text: string,
       attachments: ReadonlyArray<GoatBotDraftAttachment> = [],
     ) => {
-      if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
+      if (!sendable || availability.kind !== "ready") return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
       queue.submit(text, availability.bot, attachments, selectedTask);
       return true;
     },
     onSend: (text: string, attachments: ReadonlyArray<GoatBotDraftAttachment> = []) => {
-      if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
+      if (!sendable || availability.kind !== "ready") return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
       queue.submit(text, availability.bot, attachments, taskId ?? undefined);
       return true;
     },
     onRetryInput: (key: string) => {
-      if (availability.kind === "ready" && canOperate) queue?.retry(key);
+      if (sendable) queue?.retry(key);
     },
     onDiscardInput: (key: string) => queue?.discard(key),
     onRetryAvailability: () => {

@@ -144,3 +144,29 @@ it("opens a member's task from that member's own list and marks it done there", 
   );
   await vi.waitFor(() => expect(state.refresh).toHaveBeenCalled());
 });
+
+it("a deleted member's task link says it was deleted and sends nothing", async () => {
+  state.send.mockClear();
+  const member = decodeProfile({
+    botId: "research",
+    role: "member",
+    name: "Research",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId: "env",
+    sessionThreadId: "thread-research",
+    state: "deleted",
+    createdAt: "2026-11-04T10:00:00.000Z",
+    updatedAt: "2026-11-04T10:00:00.000Z",
+  });
+  await using screen = await render(
+    <GoatBotMemberContext value={member}>
+      <Pane onClose={() => undefined} />
+    </GoatBotMemberContext>,
+  );
+  const composer = screen.getByPlaceholder("Research was deleted");
+  await expect.element(composer).toBeDisabled();
+  expect(state.send).not.toHaveBeenCalled();
+});

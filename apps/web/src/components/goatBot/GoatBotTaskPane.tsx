@@ -56,7 +56,8 @@ export function GoatBotTaskPane({
       if (result._tag === "Success") refresh();
     });
   }, [canUpdate, environmentId, taskId, readThrough, update, refresh]);
-  const canSend = canSendToGoatBot(session.availability, session.canOperate);
+  const memberDeleted = member?.state === "deleted";
+  const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
   return (
     <section
       aria-label="Task thread"
@@ -162,7 +163,9 @@ export function GoatBotTaskPane({
         placeholder={
           canSend
             ? `Message ${member?.name ?? "GOAT Bot"}`
-            : `${member?.name ?? "GOAT Bot"} isn't available`
+            : memberDeleted
+              ? `${member.name} was deleted`
+              : `${member?.name ?? "GOAT Bot"} isn't available`
         }
         attachmentSupport={session.attachmentSupport}
         onSend={(text, attachments) => session.onSendToTask(taskId, text, attachments)}
