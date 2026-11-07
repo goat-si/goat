@@ -76,7 +76,6 @@ export const channelEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
-    idempotency: "domain",
     idempotencyReason:
       "A note is saved once per input, and an edit is recorded once for the task holding it.",
     annotations: { title: "Change GOAT Bot's notes", idempotentHint: true, openWorldHint: true },
