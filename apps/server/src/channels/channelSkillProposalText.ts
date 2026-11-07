@@ -15,7 +15,7 @@ import {
 
 import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
 import { scanMemoryValue } from "../memory/MemorySecretScanner.ts";
-import { mayAnswerFor } from "./ChannelGateway.ts";
+import { mayDirect } from "./ChannelGateway.ts";
 
 const HEADER_VALUE_CHARS = 120;
 
@@ -27,8 +27,12 @@ export const questionTextForModel = (task: ChannelTask, question: ChannelOpenQue
   task.skillProposal === undefined ? question.text : (question.text.split("\n", 1)[0] ?? "");
 
 /** The saved file names its approver, so only the person who asked may answer a proposal. */
-export const mayAnswerTask = (answerer: ChannelRequester, task: ChannelTask) =>
-  mayAnswerFor(answerer, task.requester) &&
+export const mayAnswerTask = (
+  answerer: ChannelRequester,
+  task: ChannelTask,
+  connectionId?: string,
+) =>
+  mayDirect(answerer, connectionId, task) &&
   (task.skillProposal === undefined || answerer.principalId === task.requester.principalId);
 
 export const isSkillProposalAnswer = (answer: string) =>

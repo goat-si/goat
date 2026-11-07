@@ -13,7 +13,8 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ChannelLedger from "./ChannelLedger.ts";
-import { mayAnswerFor } from "./ChannelGateway.ts";
+import { mayDirect, originConnectionOf } from "./ChannelGateway.ts";
+import { senderOf } from "./channelSenderAuthority.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import {
@@ -91,15 +92,16 @@ const make = Effect.gen(function* () {
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
     );
     if (requester === undefined) return yield* fail("forbidden");
+    const connectionId = originConnectionOf(source.task);
     const target = yield* ledger.getTask(input.taskId);
     if (
       target === undefined ||
       target.ownerId !== requester.ownerId ||
       target.task.conversationId !== session.conversation_id ||
-      !mayAnswerFor(requester, target.task.requester)
+      !mayDirect(requester, connectionId, target.task)
     )
       return yield* fail("not_found");
-    return { target, requester };
+    return { target, requester, sender: senderOf(requester, connectionId) };
   });
   const findEvent = Effect.fn("ChannelSessionTaskActions.findEvent")(function* (
     taskId: ChannelTaskId,
@@ -116,7 +118,7 @@ const make = Effect.gen(function* () {
   return ChannelSessionTaskActions.of({
     checkCaller,
     followUp: Effect.fn("ChannelSessionTaskActions.followUp")(function* (input) {
-      const { target, requester } = yield* authorize(input);
+      const { target, requester, sender } = yield* authorize(input);
       const key = toolForwardKeyFor(input.caller.runId, input.taskId, input.clientRequestId);
       const existing = yield* findEvent(input.taskId, "task.followup.received", "forwardKey", key);
       if (existing !== undefined) return existing;
@@ -137,6 +139,7 @@ const make = Effect.gen(function* () {
             text: input.text,
             from: requester.displayName,
             generation: target.task.generation,
+            sender,
           },
         },
         DateTime.formatIso(yield* DateTime.now),
@@ -184,7 +187,7 @@ const make = Effect.gen(function* () {
       return prepared.event;
     }),
     answer: Effect.fn("ChannelSessionTaskActions.answer")(function* (input) {
-      const { target } = yield* authorize(input);
+      const { target, sender } = yield* authorize(input);
       const existing = yield* findEvent(
         input.taskId,
         "task.question.answered",
@@ -202,7 +205,7 @@ const make = Effect.gen(function* () {
         target,
         {
           type: "task.question.answered",
-          payload: { questionId: input.questionId, answer: input.answer },
+          payload: { questionId: input.questionId, answer: input.answer, sender },
         },
         DateTime.formatIso(yield* DateTime.now),
         bot?.bot,

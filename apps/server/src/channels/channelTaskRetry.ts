@@ -25,7 +25,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { isActiveMember } from "./channelBotLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
-import { mayAnswerFor } from "./ChannelGateway.ts";
+import { GOAT_CONNECTION_ID, mayDirect } from "./ChannelGateway.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -207,7 +207,7 @@ export const makeTaskRetry = Effect.gen(function* () {
     const stored = yield* ledger.getTask(input.taskId);
     if (stored === undefined || stored.ownerId !== owner.ownerId || stored.task.kind === "turn")
       return yield* new ChannelGatewayError({ reason: "task_not_found" });
-    if (!mayAnswerFor(callerFor(owner), stored.task.requester))
+    if (!mayDirect(callerFor(owner), GOAT_CONNECTION_ID, stored.task))
       return yield* new ChannelGatewayError({ reason: "forbidden" });
     const eventId = taskRetryEventIdFor(input.taskId, input.clientRequestId);
     const replayed = yield* retryGeneration(eventId);

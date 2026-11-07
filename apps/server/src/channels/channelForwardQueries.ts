@@ -1,12 +1,16 @@
 import type { ChannelTaskId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
-import type { ChannelLedgerError } from "./ChannelLedger.ts";
+import type { ChannelLedgerError, ChannelOutboxInsert } from "./ChannelLedger.ts";
 
-export const forwardQueries = <E>(
+export const forwardQueries = <E, F>(
   sql: SqlClient.SqlClient,
   toLedgerError: (detail: string) => (cause: unknown) => ChannelLedgerError,
   fence: (owner: string) => Effect.Effect<void, E>,
+  insertDeliveries: (
+    rows: ReadonlyArray<ChannelOutboxInsert>,
+    now: string,
+  ) => Effect.Effect<void, F>,
 ) => ({
   hasPendingForward: (taskId: ChannelTaskId) =>
     sql<{ readonly found: number }>`
@@ -40,6 +44,10 @@ export const forwardQueries = <E>(
     readonly owner: string;
     readonly sequence: number;
     readonly clearPendingAnswerMessageId?: string | undefined;
+    readonly deliveries?: {
+      readonly rows: ReadonlyArray<ChannelOutboxInsert>;
+      readonly now: string;
+    };
   }) =>
     sql
       .withTransaction(
@@ -56,6 +64,8 @@ export const forwardQueries = <E>(
             AND pending_answer_message_id = ${input.clearPendingAnswerMessageId}
         `;
           }
+          if (completed[0] !== undefined && input.deliveries !== undefined)
+            yield* insertDeliveries(input.deliveries.rows, input.deliveries.now);
         }),
       )
       .pipe(Effect.mapError(toLedgerError("completeForward"))),

@@ -272,3 +272,43 @@ it.effect(
     }).pipe(Effect.provide(harness.layer));
   },
 );
+
+it.effect("an agent's follow-up and answer results leave out the sender the server keeps", () => {
+  const harness = sessionHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const source = yield* ask("look: source", "sender-source");
+    const target = yield* ask("look: target", "sender-target");
+    const threadId = source.worker!.threadId;
+    const caller = { threadId, runId: runsOf(harness, threadId)[0]!.id };
+    const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
+    const input = { caller, taskId: target.taskId, text: "continue", clientRequestId: "sender" };
+    const first = yield* actions.followUp(input);
+    // A repeated call returns the event already recorded.
+    const again = yield* actions.followUp(input);
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const questionId = ChannelQuestionId.make("sender-question");
+    yield* commitTransition(
+      ledger,
+      (yield* ledger.getTask(target.taskId))!,
+      {
+        type: "task.question.opened",
+        payload: { question: { questionId, text: "Which?", askedAt: "2026-10-12T00:00:00.000Z" } },
+      },
+      { owner: runtime.ownerToken },
+    );
+    const answered = yield* actions.answer({
+      caller,
+      taskId: target.taskId,
+      questionId,
+      answer: "one",
+    });
+    for (const event of [first, again, answered]) {
+      // The server keeps who sent it, for delivery to check; the agent's result does not carry it.
+      assert.property(event!.payload, "sender");
+      assert.notProperty(ChannelHandlers.withoutSender(event)!.payload, "sender");
+    }
+    assert.isNull(ChannelHandlers.withoutSender(null));
+  }).pipe(Effect.provide(harness.layer));
+});
