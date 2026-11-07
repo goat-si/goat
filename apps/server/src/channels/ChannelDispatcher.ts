@@ -68,6 +68,7 @@ import {
 } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
+import { requesterForDelivery, senderAnswerRefused } from "./channelSenderAuthority.ts";
 import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
@@ -1130,11 +1131,11 @@ const make = Effect.gen(function* () {
         return;
       }
       const ids = answerForwardIdsFor(event.eventId);
-      const requester = yield* requesterForDispatch(stored.task).pipe(
+      const authority = yield* requesterForDelivery(stored.task, event.payload.sender).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       );
-      if (requester === undefined) {
+      if (authority._tag !== "allowed") {
         const projection = yield* threads
           .getThreadRecords(worker.threadId, ["messages", "runs"])
           .pipe(Effect.option);
@@ -1149,7 +1150,9 @@ const make = Effect.gen(function* () {
         yield* refuseForward(
           ledger,
           stored,
-          "The requester’s permission changed; your answer was not sent. Open the thread in GOAT.",
+          authority._tag === "sender_changed"
+            ? senderAnswerRefused(authority.name)
+            : "The requester’s permission changed; your answer was not sent. Open the thread in GOAT.",
           owner,
           pending.sequence,
           [ids.messageId],
@@ -1182,7 +1185,7 @@ const make = Effect.gen(function* () {
         })
         .pipe(
           Effect.provideService(DispatchModeLimit, {
-            runtimeMode: requester.runtimeModeCeiling,
+            runtimeMode: authority.requester.runtimeModeCeiling,
             interactionMode: "default",
             refused,
           }),

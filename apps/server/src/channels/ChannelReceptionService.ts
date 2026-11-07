@@ -65,13 +65,15 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
-import { isUnlinkedPrincipal, lowerRuntimeMode, mayAnswerFor } from "./ChannelGateway.ts";
+import { isUnlinkedPrincipal, mayDirect } from "./ChannelGateway.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
+import { currentRequester } from "./channelDispatchAuthority.ts";
+import { type ApprovalVia, senderOf } from "./channelSenderAuthority.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as tt from "./channelTaskThreadRefusal.ts";
@@ -707,15 +709,15 @@ const make = Effect.gen(function* () {
     decision: ApprovalReply["decision"],
     answerer: ChannelRequester | undefined,
     inputId: ChannelInputId,
-    via: ChannelRequester["originKind"],
+    via: ApprovalVia,
   ) =>
     Effect.gen(function* () {
-      if (answerer === undefined || !mayAnswerFor(answerer, card.task.requester)) {
+      if (answerer === undefined || !mayDirect(answerer, via.connectionId, card.task)) {
         return CHANNEL_COPY.approvalNotAllowed;
       }
       const host = card.approval.host;
       if (host !== undefined) {
-        const reason = approvalReason(decision, answerer, via);
+        const reason = approvalReason(decision, answerer, via.kind);
         const sent = yield* ssh
           .callHostTool(
             {
@@ -763,7 +765,7 @@ const make = Effect.gen(function* () {
           respondedBy: {
             type: "client",
             label: "GOAT Bot",
-            reason: approvalReason(decision, answerer, via),
+            reason: approvalReason(decision, answerer, via.kind),
           },
         })
         .pipe(
@@ -849,7 +851,7 @@ const make = Effect.gen(function* () {
     conversationId: ChannelConversationId,
     inputId: ChannelInputId,
     answerer: Effect.Effect<ChannelRequester | undefined, ChannelLedger.ChannelLedgerError>,
-    via: ChannelRequester["originKind"],
+    via: ApprovalVia,
   ) =>
     Effect.gen(function* () {
       const listed = openApprovalCards(yield* ledger.listConversationNeedsYou(conversationId));
@@ -966,32 +968,14 @@ const make = Effect.gen(function* () {
 
       // The person as they stand now: a Slack link removed or narrowed since the message
       // arrived counts.
-      const judgedNow = Effect.gen(function* () {
-        if (message.kind !== "slack" && message.kind !== "imessage") return requester;
-        const linked =
-          requester.externalActorId === undefined
-            ? undefined
-            : yield* identityNow({
-                connectionId: message.connectionId,
-                externalActorId: requester.externalActorId,
-              });
-        if (
-          linked === undefined ||
-          linked.ownerId !== requester.ownerId ||
-          linked.principalId !== requester.principalId
-        )
-          return undefined;
-        return {
-          ...requester,
-          runtimeModeCeiling: lowerRuntimeMode(
-            requester.runtimeModeCeiling,
-            linked.runtimeModeCeiling,
-          ),
-          grantedScopes: requester.grantedScopes.filter((scope) =>
-            linked.grantedScopes.includes(scope),
-          ),
-        };
-      });
+      const judgedNow = currentRequester(requester, message.connectionId).pipe(
+        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+      );
+      // Whether this message's sender may direct someone's task: their own task on this
+      // connection, or another's within that person's limits.
+      const directs = (who: ChannelRequester | undefined, task: ChannelTask) =>
+        who !== undefined && mayDirect(who, message.connectionId, task);
       const tasks = yield* ledger.listConversationTasks(conversationId);
 
       // A number or an option label is decided here, before the model. A number on an approval
@@ -1007,13 +991,7 @@ const make = Effect.gen(function* () {
       const answer =
         approvalReply === undefined
           ? yield* botNotes.tabEdit(message, inputId, readAt, routine ? undefined : judgedNow)
-          : yield* decideApprovalReply(
-              approvalReply,
-              conversationId,
-              inputId,
-              judgedNow,
-              message.kind,
-            );
+          : yield* decideApprovalReply(approvalReply, conversationId, inputId, judgedNow, message);
       if (answer !== undefined) {
         yield* ledger.completeReception({
           owner,
@@ -1369,7 +1347,7 @@ const make = Effect.gen(function* () {
           replyText =
             "That work isn't running anymore. Tell me what you'd like done and I'll start it.";
           finalDecision = { replyText, action: { type: "report_only" } };
-        } else if (sender === undefined || !mayAnswerFor(sender, storedTask.task.requester)) {
+        } else if (sender === undefined || !directs(sender, storedTask.task)) {
           replyText = CHANNEL_COPY.answerNotAllowed;
           finalDecision = { replyText, action: { type: "report_only" } };
         } else {
@@ -1382,6 +1360,7 @@ const make = Effect.gen(function* () {
                 text: message.text,
                 from: sender.displayName,
                 generation: storedTask.task.generation,
+                sender: senderOf(sender, message.connectionId),
               },
             },
             now,
@@ -1422,8 +1401,7 @@ const make = Effect.gen(function* () {
               task.status === "dispatching" ||
               task.status === "running" ||
               task.status === "waiting_input") &&
-            sender !== undefined &&
-            mayAnswerFor(sender, task.requester),
+            directs(sender, task),
         );
         const stopped: Array<string> = [];
         for (const task of stoppable) {
@@ -1469,7 +1447,7 @@ const make = Effect.gen(function* () {
         } else if (storedTask === undefined || storedTask.task.conversationId !== conversationId) {
           replyText = "I couldn’t match that to work in this conversation. Which task do you mean?";
           finalDecision = { replyText, action: { type: "clarify", question: replyText } };
-        } else if (mover === undefined || !mayAnswerFor(mover, storedTask.task.requester)) {
+        } else if (mover === undefined || !directs(mover, storedTask.task)) {
           replyText = CHANNEL_COPY.agentCannotMoveWork;
           finalDecision = { replyText, action: { type: "report_only" } };
         } else {
@@ -1505,7 +1483,7 @@ const make = Effect.gen(function* () {
         if (refused !== undefined) {
           finalDecision = refused;
           replyText = finalDecision.replyText;
-        } else if (answerer === undefined || !mayAnswerFor(answerer, stored.task.requester)) {
+        } else if (answerer === undefined || !directs(answerer, stored.task)) {
           replyText = CHANNEL_COPY.answerNotAllowed;
           finalDecision = { replyText, action: { type: "report_only" } };
         } else {
@@ -1524,7 +1502,11 @@ const make = Effect.gen(function* () {
             stored,
             {
               type: "task.question.answered",
-              payload: { questionId: action.questionId, answer: action.answer },
+              payload: {
+                questionId: action.questionId,
+                answer: action.answer,
+                sender: senderOf(answerer, message.connectionId),
+              },
             },
             now,
             bot,

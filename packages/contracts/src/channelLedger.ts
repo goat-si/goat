@@ -304,6 +304,16 @@ const ChannelTaskEventBaseFields = {
   actor: ChannelTaskEventActor,
 } as const;
 
+/**
+ * Who sent a follow-up or an answer, and on which connection, so delivery can check that they may
+ * still direct the work. Events stored before this was recorded have none.
+ */
+export const ChannelTaskSender = Schema.Struct({
+  requester: ChannelRequester,
+  connectionId: Schema.optional(TrimmedNonEmptyString),
+});
+export type ChannelTaskSender = typeof ChannelTaskSender.Type;
+
 const taskEvent = <Type extends ChannelTaskEventType, Payload extends Schema.Struct.Fields>(
   type: Type,
   payload: Payload,
@@ -348,6 +358,7 @@ export const ChannelTaskEvent = Schema.Union([
     questionId: ChannelQuestionId,
     answer: Schema.String,
     projectChoice: Schema.optional(ChannelAnswerProjectChoice),
+    sender: Schema.optional(ChannelTaskSender),
   }),
   /**
    * A later message about this work, recorded with the reply to it and then sent to the task's
@@ -360,6 +371,7 @@ export const ChannelTaskEvent = Schema.Union([
     from: TrimmedNonEmptyString,
     /** The generation it was written to; a later generation's worker never receives it. */
     generation: PositiveInt,
+    sender: Schema.optional(ChannelTaskSender),
   }),
   taskEvent("task.completion.proposed", { proposal: ChannelProposedCompletion }),
   taskEvent("task.completed", {

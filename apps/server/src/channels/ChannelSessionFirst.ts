@@ -22,7 +22,8 @@ import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelWake from "./ChannelWake.ts";
-import { mayAnswerFor } from "./ChannelGateway.ts";
+import { mayDirect } from "./ChannelGateway.ts";
+import { senderOf } from "./channelSenderAuthority.ts";
 import { resolveSessionRun } from "./channelBotSessionRuns.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
@@ -189,7 +190,7 @@ const make = Effect.gen(function* () {
         target !== undefined &&
         target.ownerId === requester.ownerId &&
         target.task.conversationId === stored.snapshot.conversationId &&
-        mayAnswerFor(requester, target.task.requester)
+        mayDirect(requester, stored.message.connectionId, target.task)
       )
         threadTask = target;
       const terminal =
@@ -227,6 +228,7 @@ const make = Effect.gen(function* () {
                     text: stored.message.text,
                     from: requester.displayName,
                     generation: threadTask.task.generation,
+                    sender: senderOf(requester, stored.message.connectionId),
                   },
                 },
                 now,

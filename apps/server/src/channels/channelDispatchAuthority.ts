@@ -15,35 +15,43 @@ export const sessionMemoryCeiling = (
   return MEMORY_GRANT_RANK[allowed] < MEMORY_GRANT_RANK[recorded] ? allowed : recorded;
 };
 
+/**
+ * A linked account as it stands now on its own connection: scopes narrowed to its link and the
+ * lower runtime mode; undefined once the link is gone or now belongs to someone else.
+ */
+export const currentRequester = Effect.fn("channel.currentRequester")(function* (
+  snapshot: ChannelRequester,
+  connectionId: string | undefined,
+) {
+  if (snapshot.originKind !== "slack" && snapshot.originKind !== "imessage") return snapshot;
+  if (snapshot.externalActorId === undefined || connectionId === undefined) return undefined;
+  const current = yield* currentChannelIdentity({
+    connectionId,
+    externalActorId: snapshot.externalActorId,
+  });
+  if (
+    current === undefined ||
+    current.ownerId !== snapshot.ownerId ||
+    current.principalId !== snapshot.principalId
+  )
+    return undefined;
+  return {
+    ...snapshot,
+    grantedScopes: snapshot.grantedScopes.filter((scope) => current.grantedScopes.includes(scope)),
+    runtimeModeCeiling: lowerRuntimeMode(snapshot.runtimeModeCeiling, current.runtimeModeCeiling),
+  };
+});
+
 /** Intake is a snapshot; a queued task cannot keep a revoked or reassigned external grant. */
 export const requesterForDispatch = Effect.fn("channel.requesterForDispatch")(function* (
   task: ChannelTask,
 ) {
-  let requester = task.requester;
   const address = task.originAddress;
-  if (address.kind === "slack" || address.kind === "imessage") {
-    if (requester.externalActorId === undefined) return undefined;
-    const current = yield* currentChannelIdentity({
-      connectionId: address.connectionId,
-      externalActorId: requester.externalActorId,
-    });
-    if (
-      current === undefined ||
-      current.ownerId !== requester.ownerId ||
-      current.principalId !== requester.principalId
-    )
-      return undefined;
-    requester = {
-      ...requester,
-      grantedScopes: requester.grantedScopes.filter((scope) =>
-        current.grantedScopes.includes(scope),
-      ),
-      runtimeModeCeiling: lowerRuntimeMode(
-        requester.runtimeModeCeiling,
-        current.runtimeModeCeiling,
-      ),
-    };
-  }
+  const requester =
+    address.kind === "slack" || address.kind === "imessage"
+      ? yield* currentRequester(task.requester, address.connectionId)
+      : task.requester;
+  if (requester === undefined) return undefined;
   if (!requester.grantedScopes.includes("orchestration:operate")) return undefined;
   const target = task.target;
   if (task.status !== "received" && target?.remote !== undefined) {
