@@ -138,6 +138,195 @@ const operation = (store: Store.MemoryStore["Service"], value: M.MemoryUpsertInp
   );
 
 describe("r4 authoritative lineage", () => {
+  it.effect("pressure compaction preserves a pending forget intent and its sync work", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(at);
+        const h = yield* makeEnvironment(hubId);
+        yield* h.sql`INSERT INTO memory_hub_members(space,environment,credential_digest,credential_version,status,joined_at) VALUES (${space},${hubId},${"a".repeat(64)},1,'active',0)`;
+        const value = input(25);
+        yield* h.service.upsert(value, Effect.void);
+        const op = yield* operation(h.store, value);
+        const receipt = yield* h.service.admitHubOperation({
+          authority: authority(hubId),
+          operation: op,
+        });
+        yield* h.service.settleHubAcknowledgement({
+          memorySpaceId: space,
+          hubEnvironmentId: hubId,
+          localEnvironmentId: hubId,
+          workId: `sync:${space}:${op.operationId}`,
+          operation: { operationId: op.operationId, operationDigest: receipt.operationDigest },
+          receipt,
+          reauthorize: Effect.void,
+        });
+        const checkpoint = yield* h.store.transact(
+          h.store.prepareHubProducerCheckpointTx({
+            authority: authority(hubId),
+            checkpointId: "forget-pressure",
+            hubEnvironmentId: hubId,
+          }),
+        );
+        yield* h.store.transact(
+          h.store.publishCheckpointAndFloorTx({
+            memorySpaceId: space,
+            checkpointId: checkpoint.checkpointId,
+            expectedFloor: 0,
+            nextFloor: checkpoint.checkpointSequence,
+            now: at,
+          }),
+        );
+        const forgetId = M.MemoryOperationId.make(id(9025));
+        yield* h.service.forget(
+          {
+            memorySpaceId: space,
+            memoryId: value.memoryId,
+            operationId: forgetId,
+            expectedHeads: [op.revision.revisionId],
+          },
+          Effect.void,
+        );
+        yield* h.sql`INSERT INTO memory_pending_forget_intents(space,memory_id,operation_id,requested_at_utc,attempts,submission_state) VALUES (${space},${value.memoryId},${forgetId},'2026-10-15T00:00:00.000Z',0,'unsubmitted')`;
+        yield* h.store.transact(
+          h.store.compactEligibleHistoryTx({
+            memorySpaceId: space,
+            expectedFloor: checkpoint.checkpointSequence,
+            now: at + 86_400_001,
+            limit: M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS,
+            pressure: true,
+          }),
+        );
+        assert.lengthOf(
+          yield* h.sql`SELECT 1 FROM memory_pending_forget_intents WHERE operation_id=${forgetId}`,
+          1,
+        );
+        assert.lengthOf(
+          yield* h.sql`SELECT 1 FROM memory_outbox WHERE id=${`sync:${space}:${forgetId}`}`,
+          1,
+        );
+      }),
+    ),
+  );
+  it.effect(
+    "pressure removes covered events while keeping completed sync, payload and receipt",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(at);
+          const h = yield* makeEnvironment(hubId);
+          yield* h.sql`INSERT INTO memory_hub_members(space,environment,credential_digest,credential_version,status,joined_at) VALUES (${space},${hubId},${"a".repeat(64)},1,'active',0)`;
+          const value = input(21);
+          yield* h.service.upsert(value, Effect.void);
+          const op = yield* operation(h.store, value);
+          const receipt = yield* h.service.admitHubOperation({
+            authority: authority(hubId),
+            operation: op,
+          });
+          const workId = `sync:${space}:${op.operationId}`;
+          yield* h.service.settleHubAcknowledgement({
+            memorySpaceId: space,
+            hubEnvironmentId: hubId,
+            localEnvironmentId: hubId,
+            workId,
+            operation: { operationId: op.operationId, operationDigest: receipt.operationDigest },
+            receipt,
+            reauthorize: Effect.void,
+          });
+          const checkpoint = yield* h.store.transact(
+            h.store.prepareHubProducerCheckpointTx({
+              authority: authority(hubId),
+              checkpointId: "pressure-test",
+              hubEnvironmentId: hubId,
+            }),
+          );
+          yield* h.store.transact(
+            h.store.publishCheckpointAndFloorTx({
+              memorySpaceId: space,
+              checkpointId: checkpoint.checkpointId,
+              expectedFloor: 0,
+              nextFloor: checkpoint.checkpointSequence,
+              now: at,
+            }),
+          );
+          const now = at + 86_400_001;
+          const status = yield* h.store.transact(
+            h.store.compactEligibleHistoryTx({
+              memorySpaceId: space,
+              expectedFloor: checkpoint.checkpointSequence,
+              now,
+              limit: M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS,
+              pressure: true,
+            }),
+          );
+          assert.isAbove(status.removedRows, 0);
+          assert.lengthOf(yield* h.sql`SELECT 1 FROM memory_outbox WHERE id=${workId}`, 1);
+          assert.lengthOf(
+            yield* h.sql`SELECT 1 FROM memory_events WHERE operation_id=${op.operationId}`,
+            0,
+          );
+          assert.lengthOf(
+            yield* h.sql`SELECT 1 FROM memory_payloads WHERE payload_ref=${op.revision.payloadRef}`,
+            1,
+          );
+          assert.isDefined(yield* h.store.receipt(space, op.operationId));
+        }),
+      ),
+  );
+  it.effect("a repeated acknowledgement remains idempotent after pressure compaction", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(at);
+        const h = yield* makeEnvironment(hubId);
+        const e = h;
+        yield* h.sql`INSERT INTO memory_hub_members(space,environment,credential_digest,credential_version,status,joined_at) VALUES (${space},${hubId},${"a".repeat(64)},1,'active',0)`;
+        const value = input(10);
+        yield* e.service.upsert(value, Effect.void);
+        const op = yield* operation(e.store, value);
+        const receipt = yield* h.service.admitHubOperation({
+          authority: authority(hubId),
+          operation: op,
+        });
+        const ack = {
+          memorySpaceId: space,
+          hubEnvironmentId: hubId,
+          localEnvironmentId: hubId,
+          workId: `sync:${space}:${op.operationId}`,
+          operation: { operationId: op.operationId, operationDigest: receipt.operationDigest },
+          receipt,
+          reauthorize: Effect.void,
+        };
+        yield* e.service.settleHubAcknowledgement(ack);
+        const checkpoint = yield* h.store.transact(
+          h.store.prepareHubProducerCheckpointTx({
+            authority: authority(hubId),
+            checkpointId: "ack-pressure",
+            hubEnvironmentId: hubId,
+          }),
+        );
+        yield* h.store.transact(
+          h.store.publishCheckpointAndFloorTx({
+            memorySpaceId: space,
+            checkpointId: checkpoint.checkpointId,
+            expectedFloor: 0,
+            nextFloor: checkpoint.checkpointSequence,
+            now: at,
+          }),
+        );
+        yield* h.store.transact(
+          h.store.compactEligibleHistoryTx({
+            memorySpaceId: space,
+            expectedFloor: checkpoint.checkpointSequence,
+            now: at + 86_400_001,
+            limit: M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS,
+            pressure: true,
+          }),
+        );
+        assert.lengthOf(yield* e.sql`SELECT 1 FROM memory_outbox WHERE id=${ack.workId}`, 1);
+        const repeated = yield* e.service.settleHubAcknowledgement(ack);
+        assert.isFalse(repeated.incorporated);
+      }),
+    ),
+  );
   it.effect(
     "H-R3-2 normalizes direct edges and refuses unavailable payloads and 100 to 101 closure",
     () =>

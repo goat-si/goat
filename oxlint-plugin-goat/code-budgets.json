@@ -71,7 +71,7 @@
   "apps/mobile/src/features/settings/SettingsProjectOverviewRouteScreen.tsx": { "nonNull": 1 },
   "apps/mobile/src/features/settings/SettingsProviderAccountsRouteScreen.tsx": { "nonNull": 6 },
   "apps/mobile/src/features/settings/SettingsRouteScreen.tsx": { "nonNull": 1 },
-  "apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx": { "lines": 1355 },
+  "apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx": { "lines": 1202 },
   "apps/mobile/src/features/settings/provider-accounts-selection.ts": { "nonNull": 1 },
   "apps/mobile/src/features/sharing/incoming-share-inbox.ts": { "nonNull": 1 },
   "apps/mobile/src/features/terminal/ThreadTerminalRouteScreen.tsx": { "lines": 1040 },

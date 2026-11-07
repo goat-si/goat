@@ -6,6 +6,7 @@ import "vite-plus/test/config";
 const reactTests = [
   "src/features/keyboard/keyboardControllerState.test.tsx",
   "src/features/settings/ClaudeAccountControls.test.tsx",
+  "src/features/settings/ScheduledTaskContextSections.test.tsx",
   "src/features/threads/CustomAnswerInput.test.tsx",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/notes/live-editor/note-editor-images.dom.test.ts",

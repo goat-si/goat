@@ -42,6 +42,13 @@ export class MemoryCapacityError extends Schema.TaggedError<MemoryCapacityError>
     limit: Schema.Int,
     current: Schema.optionalKey(Schema.Int),
     reclaimable: Schema.optionalKey(Schema.Int),
+    /** "store": the whole-store budget brake, which one automatic reclaim may release. */
+    budget: Schema.optionalKey(Schema.Literal("store")),
+    reclaim: Schema.optionalKey(Schema.Literals(["completed", "unsupported", "failed"])),
+    nextEligibleAtMs: Schema.optionalKey(Schema.Int),
+    largestTables: Schema.optionalKey(
+      Schema.Array(Schema.Struct({ table: Schema.String, bytes: Schema.Int })),
+    ),
   },
 ) {
   override get message() {
