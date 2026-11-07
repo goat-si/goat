@@ -1,7 +1,15 @@
-import { MIN_SCHEDULED_TASK_INTERVAL_MS, type ScheduledTaskSchedule } from "@goat/contracts";
+import {
+  MIN_SCHEDULED_TASK_INTERVAL_MS,
+  type ScheduledTask,
+  type ScheduledTaskSchedule,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 const MINUTE_MS = 60_000;
+
+export function iso(value: DateTime.DateTime): string {
+  return DateTime.formatIso(DateTime.toUtc(value));
+}
 
 function parseTimeOfDay(value: string): { hour: number; minute: number } | null {
   const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(value.trim());
@@ -70,4 +78,20 @@ export function isMissedFixedTimeRun(
 ): boolean {
   if (schedule.type !== "fixed_time") return false;
   return DateTime.toEpochMillis(now) - DateTime.toEpochMillis(dueAt) > MISSED_FIXED_TIME_GRACE_MS;
+}
+
+/** The next run as stored, or null when disabled or the occurrence is unrepresentable. */
+export function nextRunAt(
+  task: Pick<ScheduledTask, "enabled" | "schedule">,
+  from: DateTime.DateTime,
+): string | null {
+  if (!task.enabled) return null;
+  // A stored interval can decode yet overflow the representable DateTime
+  // range; an unrepresentable occurrence means the task has no next run.
+  try {
+    const next = nextScheduledRunAt(task.schedule, from);
+    return next !== null && Number.isFinite(DateTime.toEpochMillis(next)) ? iso(next) : null;
+  } catch {
+    return null;
+  }
 }

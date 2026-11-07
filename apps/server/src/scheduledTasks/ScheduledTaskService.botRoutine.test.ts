@@ -229,6 +229,53 @@ it.effect("a routine keeps its GOAT Bot binding after the bot's thread is replac
     {},
   );
 });
+it.effect("a GOAT Bot routine says so to clients, even after its bot thread is replaced", () =>
+  withWebhookService(
+    ({ service, sql }) =>
+      Effect.gen(function* () {
+        yield* registerBot(sql);
+        const saved = yield* service.upsert(yield* routineInput(), {
+          memoryGrantCeiling: "none",
+          owner,
+        });
+        assert.strictEqual(saved.task.goatBotRoutine, true);
+        yield* service.upsert(
+          yield* routineInput({ id: "scheduled-task:coding", threadId: "coding-thread" }),
+          { memoryGrantCeiling: "none", owner },
+        );
+        yield* service.upsert(
+          yield* routineInput({
+            id: "scheduled-task:fresh",
+            threadId: null,
+            notificationPolicy: "all_runs",
+          }),
+          { memoryGrantCeiling: "none" },
+        );
+        yield* sql`DELETE FROM channel_runtime_state`;
+        const marked = (yield* service.list()).tasks.map(
+          (task) => `${task.id}: ${task.goatBotRoutine === true ? "GOAT Bot" : "-"}`,
+        );
+        assert.sameMembers(marked, [
+          "goat-bot-check-in:goat-bot-thread: GOAT Bot",
+          "scheduled-task:coding: -",
+          "scheduled-task:fresh: -",
+        ]);
+      }),
+    {},
+  ),
+);
+it.effect("an owner the server cannot read does not mark a routine as GOAT Bot's", () =>
+  withWebhookService(
+    ({ service, sql }) =>
+      Effect.gen(function* () {
+        yield* registerBot(sql);
+        yield* service.upsert(yield* routineInput(), { memoryGrantCeiling: "none", owner });
+        yield* sql`UPDATE scheduled_tasks SET owner_json = '{"principalId":1}'`;
+        assert.isUndefined((yield* service.list()).tasks[0]?.goatBotRoutine);
+      }),
+    {},
+  ),
+);
 it.effect("a routine and its owner are saved together or not at all", () =>
   withWebhookService(
     ({ service, sql }) =>

@@ -27,4 +27,5 @@ export interface ScheduledTaskRow {
   readonly webhook_token: string | null;
   readonly webhook_secret: string | null;
   readonly webhook_secret_ref: string | null;
+  readonly owner_json?: string | null;
 }
