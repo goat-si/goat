@@ -502,7 +502,7 @@ describe("buildFleet", () => {
 
   it("keeps a cloud machine separate when nothing ties it to a connection", () => {
     const fleet = buildFleet({
-      environments: [env(local, "Mac"), env(remote, "Box", [CLOUD_ALIAS])],
+      environments: [env(local, "Mac"), env(remote, "Box", ["box"])],
       primaryEnvironmentId: remote,
       shells: [],
       remote: [
@@ -522,6 +522,8 @@ describe("buildFleet", () => {
       "cloud",
     ]);
     expect(fleet.machines[2]).toMatchObject({ label: "Cloud box", subtitle: "via Mac" });
+    // A machine on its way out has no node, and its alias still claims its host readings.
+    expect(fleet.hiddenCloudAliases).toEqual(["boat-bx_zzzzzzzz"]);
   });
 
   it("leaves a stopped Boat machine nothing runs on out of Fleet, and keeps one starting or with work", () => {
@@ -597,6 +599,19 @@ describe("buildFleet", () => {
     expect(fleet.idleCloudMachines).toEqual([]);
   });
 
+  it("joins a Boat server one source resolved with the record another SSH config reports", () => {
+    const studio = EnvironmentId.make("studio");
+    const fleet = buildFleet({
+      environments: [env(local, "Mac"), env(remote, "Box", [CLOUD_ALIAS]), env(studio, "Studio")],
+      primaryEnvironmentId: local,
+      shells: [shell(remote, "t1")],
+      remote: [{ dispatcherEnvironmentId: studio, launches: [], cloudMachines: [cloud()] }],
+    });
+    const boats = fleet.machines.filter((machine) => machine.boat !== null);
+    expect(boats.map((machine) => [machine.environmentId, machine.running])).toEqual([[remote, 1]]);
+    expect(fleet.idleCloudMachines).toEqual([]);
+  });
+
   it("names the server that supplied an idle running Boat machine's record as its owner", () => {
     const studio = EnvironmentId.make("studio");
     const fleet = buildFleet({
@@ -619,7 +634,9 @@ describe("buildFleet", () => {
     });
     const box = fleet.machines.find((machine) => machine.environmentId === remote)!;
     expect(box.boat).toEqual({ status: "running", source: "record" });
-    expect(fleet.idleCloudMachines).toEqual([{ machineId: box.id, owner: studio }]);
+    expect(fleet.idleCloudMachines).toEqual([
+      { machineId: box.id, owner: studio, ownerLabel: "Studio" },
+    ]);
   });
 
   it("falls back to the reserved alias only when no record describes the host", () => {

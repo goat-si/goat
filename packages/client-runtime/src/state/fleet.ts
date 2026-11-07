@@ -444,6 +444,7 @@ export interface FleetSnapshot {
   readonly idleCloudMachines: ReadonlyArray<{
     readonly machineId: string;
     readonly owner: EnvironmentId;
+    readonly ownerLabel: string;
   }>;
 }
 
@@ -649,6 +650,15 @@ export function buildFleet(input: {
       if (cached !== null && !resolvedHosts.has(key)) resolvedHosts.set(key, cached.environmentId);
     }
   }
+  // A Boat alias names one sandbox in every SSH config, so a server it resolves to anywhere is it.
+  const boatServers = new Map<string, EnvironmentId>();
+  for (const [alias, environmentId] of environmentBySshAlias)
+    if (isCloudMachineAlias(alias)) boatServers.set(alias, environmentId);
+  for (const [key, environmentId] of resolvedHosts) {
+    const alias = (JSON.parse(key) as [string, string])[1];
+    if (isCloudMachineAlias(alias) && !boatServers.has(alias))
+      boatServers.set(alias, environmentId);
+  }
 
   for (const { source, groups } of reports) {
     const dispatcher = source.dispatcherEnvironmentId;
@@ -660,7 +670,8 @@ export function buildFleet(input: {
       scopeOf(dispatcher) === scopeOf(input.primaryEnvironmentId);
     const resolveAlias = (alias: string) =>
       resolvedHosts.get(hostKey(dispatcher, alias)) ??
-      (sharesClientAliases ? environmentBySshAlias.get(alias) : undefined);
+      (sharesClientAliases ? environmentBySshAlias.get(alias) : undefined) ??
+      boatServers.get(alias);
     const hostMachine = (alias: string, kind: "ssh" | "cloud", label: string) => {
       const named = (machine: MutableMachine) => {
         if (
@@ -771,13 +782,14 @@ export function buildFleet(input: {
 
   // A Boat machine shows while it bills, needs the user, answers, or runs work; Settings keeps the rest.
   const hiddenRoutes: Array<{ via: EnvironmentId; alias: string }> = [];
-  const idleCloudMachines: Array<{ machineId: string; owner: EnvironmentId }> = [];
+  const idleCloudMachines: Array<{ machineId: string; owner: EnvironmentId; ownerLabel: string }> =
+    [];
   for (const [id, machine] of machines) {
     if (machine.boat === null) continue;
     const busy = machine.running + machine.attention + machine.reported > 0;
     const owner = recordOwners.get(id);
     if (!busy && machine.boat.status === "running" && owner !== undefined)
-      idleCloudMachines.push({ machineId: id, owner });
+      idleCloudMachines.push({ machineId: id, owner, ownerLabel: labelOf.get(owner) ?? owner });
     if (busy || machine.answering || BOAT_IN_USE.has(machine.boat.status)) continue;
     machines.delete(id);
     hiddenRoutes.push(...machine.reportedAliases);

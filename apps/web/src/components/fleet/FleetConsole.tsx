@@ -521,13 +521,9 @@ function FleetConsoleExpanded(props: {
     stalls,
     childSetups: fleetChildSetups(rows, snapshot.machines, status.reports),
     idleBilling: new Map(
-      snapshot.idleCloudMachines.map(({ machineId, owner }) => [
+      snapshot.idleCloudMachines.map(({ machineId, owner, ownerLabel }) => [
         machineId,
-        {
-          owner,
-          ownerLabel: environments.find((env) => env.environmentId === owner)?.label ?? owner,
-          ownedHere: owner === primaryEnvironmentId,
-        },
+        { owner, ownerLabel, ownedHere: owner === primaryEnvironmentId },
       ]),
     ),
   });

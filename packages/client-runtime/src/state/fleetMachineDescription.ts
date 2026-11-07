@@ -74,5 +74,6 @@ export const isFleetMachineBusy = (
   machine: Pick<FleetMachine, "running" | "attention" | "reported">,
 ) => machine.running + machine.attention + machine.reported > 0;
 
-/** What a running Boat machine with nothing on it says, since Boat bills it while it runs. */
-export const FLEET_IDLE_BILLING_LABEL = "Billing while idle";
+/** What a running Boat machine with nothing on it says: Boat bills it, and who can stop it. */
+export const fleetIdleBillingLabel = (ownerLabel: string) =>
+  "Billing while idle · stop it from " + ownerLabel;
