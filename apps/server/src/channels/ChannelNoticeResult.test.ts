@@ -1,10 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelReceptionInput } from "@goat/contracts";
-import { MessageId, ProviderInstanceId } from "@goat/contracts";
+import { MessageId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -36,12 +37,20 @@ const harnessFor = () => {
     }).pipe(Layer.orDie),
   });
   harness.script.current = (input: ChannelReceptionInput) =>
-    input.mode === "input" && (input.inputText ?? "").startsWith("look:")
+    input.mode === "input" && (input.inputText ?? "").startsWith("also:")
       ? Effect.succeed({
-          replyText: "On it.",
-          action: { type: "run_turn" as const, title: "Plan the logistics", instruction: "plan" },
+          replyText: "Passing that on.",
+          action: {
+            type: "follow_up" as const,
+            taskId: input.tasks.find((task) => task.status === "running")!.taskId,
+          },
         })
-      : defaultScript(input);
+      : input.mode === "input" && (input.inputText ?? "").startsWith("look:")
+        ? Effect.succeed({
+            replyText: "On it.",
+            action: { type: "run_turn" as const, title: "Plan the logistics", instruction: "plan" },
+          })
+        : defaultScript(input);
   return harness;
 };
 
@@ -115,6 +124,48 @@ describe("a background command's notice run is never its request's result", () =
       yield* runtime.drain;
       assert.strictEqual((yield* ledger.getTask(turn.taskId))?.task.status, "completed");
       assert.include(yield* texts, "Book the van for Friday.");
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+describe("a follow-up while a background command's notice runs", () => {
+  it.effect("goes to the task's own next run, never into the notice", () => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("look: plan the logistics", "f1"), rpcContext);
+      yield* runtime.drain;
+      yield* reports.reconcile(runtime.ownerToken);
+      const turn = yield* onlyTask;
+      const session = turn.worker!.threadId;
+      // Its own run ended, but a coding thread it launched still runs, so the task stays open.
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const admission = yield* childWork.admit({
+        callerThreadId: session,
+        callerRunId: turn.worker!.runId,
+        surface: "thread_launch",
+        prompt: "keep working in a worktree",
+        destinationKey: "codex/gpt-6.1-sol",
+      });
+      if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+      const child = ThreadId.make("thread:still-running");
+      harness.world.addRun(child, MessageId.make("msg:still-running"));
+      yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: child }));
+      yield* childWork.markBound(admission.record, { threadId: child });
+      harness.world.setStatus(session, 1, "completed", "Book the van for Friday.");
+      const notice = harness.world.addRun(session, MessageId.make("message:command-notice"));
+      noticeRunsOf(harness.world).set(notice.id, turn.worker!.runId);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* gateway.ingest(goatInput("also: and book a driver", "f2"), rpcContext);
+      yield* runtime.drain;
+      const send = harness.world.sends.find((candidate) =>
+        candidate.text.includes("book a driver"),
+      );
+      assert.isDefined(send);
+      assert.notStrictEqual(send?.targetRunId, notice.id);
+      assert.notStrictEqual(harness.world.steered.get(send!.messageId), notice.id);
     }).pipe(Effect.provide(harness.layer));
   });
 });

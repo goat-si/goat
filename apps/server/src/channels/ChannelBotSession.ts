@@ -53,7 +53,7 @@ import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
-import { ChannelLaunchWakes, owesLaunched } from "./channelLaunchedResults.ts";
+import { ChannelLaunchWakes, owesLaunched, ownResultRuns } from "./channelLaunchedResults.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
@@ -618,7 +618,7 @@ const make = Effect.gen(function* () {
     const projectId = ProjectId.make((yield* requireTarget(task)).projectId);
     const records = yield* readRecords(threads, threadId);
     const own = yield* sessionTaskRuns(sql, threadId, records, task);
-    const current = own.at(-1);
+    const current = ownResultRuns(own, records.messages).at(-1);
     // A replay after a crash finds the run its first send started instead of sending again.
     const already = records.runs.find(
       (run) =>
