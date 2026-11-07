@@ -231,6 +231,7 @@ const CHANNEL_GATEWAY_FAILURE_MESSAGES = {
   task_not_found: "The requested channel task does not exist.",
   not_home: "GOAT Bot runs on another machine in this cluster.",
   bot_busy: "This bot still has work in progress.",
+  bot_limit: "This owner already has the most bots allowed.",
 } as const;
 
 export const ChannelGatewayErrorReason = Schema.Literals(
