@@ -26,6 +26,8 @@ import { serverEnvironment } from "../../state/server";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
+import { MobileBotComputer } from "./MobileBotComputer";
+import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
@@ -333,12 +335,18 @@ export function MobileBotWork(props: {
               />
             ) : null}
             {tab === "Library" ? (
-              <Text className="text-foreground-muted">Files GOAT Bot saves will appear here.</Text>
+              <MobileBotLibrary
+                environmentId={environmentId}
+                connected={selected?.connected === true}
+                supported={capabilities?.goatBotLibrary === true}
+              />
             ) : null}
             {tab === "Computer" ? (
-              <Text className="text-foreground-muted">
-                Machines GOAT Bot works on will appear here.
-              </Text>
+              <MobileBotComputer
+                environmentId={environmentId}
+                connected={selected?.connected === true}
+                botId={member?.botId ?? null}
+              />
             ) : null}
           </ScrollView>
         </View>
