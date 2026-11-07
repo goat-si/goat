@@ -15,9 +15,11 @@ const state = vi.hoisted(() => ({
   supported: true,
   data: null as unknown,
   failure: null as unknown,
+  minute: "2026-11-07T12:00",
   refresh: vi.fn(),
   requested: vi.fn(),
 }));
+vi.mock("~/hooks/useNowMinute", () => ({ useNowMinute: () => state.minute }));
 vi.mock("~/state/entities", () => ({
   useServerConfigs: () =>
     new Map([["env", { environment: { capabilities: { goatBotNotes: state.supported } } }]]),
@@ -48,8 +50,11 @@ const decodeProfile = Schema.decodeSync(BotProfile);
 const older = { index: 0, date: null, text: "Keep replies short" };
 const newer = { index: 1, date: "2026-11-07", text: 'Reply in "Korean"' };
 
-function setup(options: { data?: unknown; failure?: unknown; supported?: boolean } = {}) {
+function setup(
+  options: { data?: unknown; failure?: unknown; supported?: boolean; minute?: string } = {},
+) {
   state.supported = options.supported ?? true;
+  state.minute = options.minute ?? "2026-11-07T12:00";
   state.data =
     options.data === undefined
       ? { revision: "r1", notes: [newer, older], truncated: false }
@@ -250,6 +255,35 @@ it("says where each note was asked for", async () => {
   expect(rows[0]).toMatch(/Slack, Juni, Nov [78]/);
   expect(rows[1]).toContain("Asked in another conversation");
   expect(rows[2]).not.toContain("Asked in");
+});
+
+it("dates a source against the real current instant, so a new local year adds no year", async () => {
+  // 20:00 UTC on Dec 31 is already Jan 1 in UTC+5 and later zones; the minute tick carries no offset.
+  const at = "2026-12-31T19:30:00.000Z";
+  setup({
+    minute: "2026-12-31T20:00",
+    data: {
+      revision: "r1",
+      notes: [
+        sourced(0, "Reply in Korean", {
+          source: {
+            kind: "shown",
+            inputId: "i",
+            channel: "slack",
+            botId: "main",
+            from: "Juni",
+            at,
+          },
+        }),
+      ],
+      truncated: false,
+    },
+  });
+  await using screen = await render(<GoatBotMemory environmentId={environmentId} />);
+  const day = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(
+    Date.parse(at),
+  );
+  await expect.element(screen.getByText(`Slack, Juni, ${day}`, { exact: true })).toBeVisible();
 });
 
 it("keeps replaced notes behind a toggle that works from the keyboard", async () => {

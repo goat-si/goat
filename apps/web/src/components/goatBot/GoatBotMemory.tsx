@@ -90,7 +90,8 @@ function NoteList({
   const view = goatBotNotesView({ notes, truncated });
   const [showReplaced, setShowReplaced] = useState(false);
   const replacedId = useId();
-  const now = Date.parse(useNowMinute());
+  // The minute tick is UTC without an offset, and Date.parse reads that form as local time.
+  const now = Date.parse(`${useNowMinute()}:00Z`);
   return (
     <>
       {truncated && (
