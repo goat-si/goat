@@ -32,6 +32,7 @@ import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "../../../channels/ChannelRemoteWorkers.ts";
 import * as ChannelRuntime from "../../../channels/ChannelRuntime.ts";
 import * as ChannelSessionTaskActions from "../../../channels/channelSessionTaskActions.ts";
+import * as ChannelSessionNoteActions from "../../../channels/channelSessionNoteActions.ts";
 import * as ChannelWorkerReports from "../../../channels/ChannelWorkerReports.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -163,10 +164,31 @@ const task_answerTool = Tool.make(agentSurfaceRegistry["channel.task_answer"].na
   success: Schema.NullOr(ChannelTaskEvent),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_answer"]));
 
+const ChannelNotesChangeTool = Tool.make(agentSurfaceRegistry["channel.notes_change"].name, {
+  ...shared,
+  dependencies: [...shared.dependencies, ChannelSessionNoteActions.ChannelSessionNoteActions],
+  description: agentSurfaceRegistry["channel.notes_change"].description,
+  parameters: Schema.Struct({
+    taskId: ChannelTaskId,
+    inputId: ChannelInputId,
+    kind: Schema.Literals(["remember", "edit"]),
+    quote: TrimmedNonEmptyString,
+    note: Schema.optional(TrimmedNonEmptyString),
+    replaces: Schema.optional(TrimmedNonEmptyString),
+  }),
+  success: Schema.Struct({
+    outcome: Schema.Literals(["saved", "granted", "refused"]),
+    reason: Schema.optional(Schema.String),
+    told: Schema.Boolean,
+    message: Schema.String,
+  }),
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.notes_change"]));
+
 export const ChannelToolkit = Toolkit.make(
   task_follow_upTool,
   task_stopTool,
   task_answerTool,
+  ChannelNotesChangeTool,
   ChannelIngestTool,
   ChannelInputGetTool,
   ChannelTaskGetTool,

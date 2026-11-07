@@ -40,6 +40,8 @@ import * as ChannelRoutineIntake from "./ChannelRoutineIntake.ts";
 import * as ChannelTaskExport from "./ChannelTaskExport.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelSessionTaskActions from "./channelSessionTaskActions.ts";
+import * as ChannelSessionNoteActions from "./channelSessionNoteActions.ts";
+import * as ChannelBotNoteWriter from "./channelBotNoteWriter.ts";
 import * as ChannelSessionFirst from "./ChannelSessionFirst.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -111,10 +113,13 @@ export const makeLayerServices = <E, R>(
     ),
     ChannelWorkerReports.layer,
     ChannelSessionTaskActions.layer,
+    ChannelSessionNoteActions.layer,
     ChannelDeliveryWorker.layer,
     // Routine firings bound to a bot thread become its input; needs the gateway below.
     ChannelRoutineIntake.layer,
   ).pipe(
+    // One notes writer, so reception, the Memory tab and session turns share its lock.
+    Layer.provideMerge(ChannelBotNoteWriter.layer),
     // Workers on other machines; needs SshRemoteDispatch from the server.
     Layer.provideMerge(ChannelRemoteWorkers.layer),
     Layer.provideMerge(layerSlack),

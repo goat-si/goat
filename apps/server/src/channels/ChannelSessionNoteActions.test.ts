@@ -62,9 +62,20 @@ const scopeFor = (caller: Caller) =>
     client: undefined,
   });
 
+/** The session thread as GOAT's MCP caller checks see it while the calling run works. */
+const liveShell = (caller: Caller) => ({
+  deletedAt: null,
+  archivedAt: null,
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  activeRunId: caller.runId,
+  runtimeMode: "full-access",
+  interactionMode: "default",
+});
+
 /** What the tool answers the session's model, or the failure it reports. */
-const callNotes = (caller: Caller, args: Record<string, unknown>) =>
+const callNotes = (harness: Harness, caller: Caller, args: Record<string, unknown>) =>
   Effect.gen(function* () {
+    harness.world.shells.set(caller.threadId, liveShell(caller) as never);
     const toolkit = yield* ChannelToolkit.pipe(
       Effect.provide(McpToolAccess.HandlersLayer.layer(ChannelHandlers.layer)),
     );
@@ -187,7 +198,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
         yield* writeNotes(NOTES_HEADER);
         const turn = yield* sessionTurn(harness, "remember that I deploy on Fridays", "remember");
         const inputId = inputIdIn(turn.sent, /Request input: (\S+)/u);
-        const result = yield* callNotes(turn.caller, {
+        const result = yield* callNotes(harness, turn.caller, {
           ...remember(turn, fridays, "remember that I deploy on Fridays"),
           inputId,
         });
@@ -204,6 +215,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
       yield* writeNotes(NOTES_HEADER + line(fridays, "earlier") + "\n");
       const turn = yield* sessionTurn(harness, "actually I deploy on Mondays", "correct");
       const result = yield* callNotes(
+        harness,
         turn.caller,
         remember(turn, "I deploy on Mondays.", "actually I deploy on Mondays", {
           replaces: fridays,
@@ -235,6 +247,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
       const first = yield* lookTurn(harness, "look into the deploy", "first");
       const second = yield* lookTurn(harness, "remember that I deploy on Fridays", "second");
       const result = yield* callNotes(
+        harness,
         first.caller,
         remember(second, fridays, "remember that I deploy on Fridays"),
       );
@@ -252,6 +265,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
       yield* (yield* SqlClient.SqlClient)`
         UPDATE channel_bot_session_runs SET run_id = NULL WHERE task_id = ${turn.task.taskId}`;
       const result = yield* callNotes(
+        harness,
         turn.caller,
         remember(turn, fridays, "remember that I deploy on Fridays"),
       );
@@ -267,12 +281,14 @@ describe("notes changes from a GOAT Bot session turn", () => {
       const first = yield* lookTurn(harness, "remember that I deploy on Fridays", "first");
       const second = yield* lookTurn(harness, "remember that staging is staging-02", "second");
       const queued = yield* callNotes(
+        harness,
         second.caller,
         remember(second, "Staging is staging-02.", "remember that staging is staging-02"),
       );
       assert.isDefined(queued.code);
       harness.world.setStatus(first.caller.threadId, 1, "completed");
       const finished = yield* callNotes(
+        harness,
         first.caller,
         remember(first, fridays, "remember that I deploy on Fridays"),
       );
@@ -296,6 +312,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
       );
       const before = yield* readNotes;
       const result = yield* callNotes(
+        harness,
         turn.caller,
         remember(turn, "I deploy every Friday.", "remember that I deploy on Fridays"),
       );
@@ -316,7 +333,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
         "also remember that staging is staging-02",
         "more",
       );
-      const result = yield* callNotes(turn.caller, {
+      const result = yield* callNotes(harness, turn.caller, {
         ...remember(turn, "Staging is staging-02.", "remember that staging is staging-02"),
         inputId: inputIdIn(more.sent, /\(input (\S+?)\)/u),
       });
@@ -347,7 +364,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
       yield* (yield* SqlClient.SqlClient)`
         UPDATE channel_inbox SET requester_json = ${JSON.stringify(sender)}
         WHERE input_id = ${more.inputId}`;
-      const result = yield* callNotes(turn.caller, {
+      const result = yield* callNotes(harness, turn.caller, {
         ...remember(turn, "Staging is staging-02.", "remember that staging is staging-02"),
         inputId: more.inputId,
       });
@@ -380,6 +397,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
       const carrier = runsOf(harness, target.caller.threadId).at(-1)!;
       assert.notStrictEqual(carrier.id, target.caller.runId);
       const result = yield* callNotes(
+        harness,
         { threadId: target.caller.threadId, runId: carrier.id },
         remember(target, fridays, "remember that I deploy on Fridays"),
       );
@@ -401,11 +419,13 @@ describe("notes changes from a GOAT Bot session turn", () => {
         "more",
       );
       const borrowed = yield* callNotes(
+        harness,
         turn.caller,
         remember(turn, "Staging is staging-02.", "remember that staging is staging-02"),
       );
       assert.strictEqual(borrowed.reason, "quote_not_in_input");
       const own = yield* callNotes(
+        harness,
         turn.caller,
         remember(turn, "Releases are on Fridays.", "remember that releases are on Fridays"),
       );
@@ -423,13 +443,14 @@ describe("notes changes from a GOAT Bot session turn", () => {
       const tidy = yield* lookTurn(harness, "tidy my notes", "tidy");
       const other = yield* lookTurn(harness, "remember that staging is staging-02", "other");
       assert.strictEqual(
-        (yield* callNotes(tidy.caller, edit(tidy, "tidy my notes"))).outcome,
+        (yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"))).outcome,
         "granted",
       );
       // The tidy turn's run ended but its task is still open, so the next run starts.
       harness.world.setStatus(tidy.caller.threadId, 1, "completed");
       const before = yield* readNotes;
       const result = yield* callNotes(
+        harness,
         other.caller,
         remember(other, "Staging is staging-02.", "remember that staging is staging-02"),
       );
@@ -445,14 +466,14 @@ describe("notes changes from a GOAT Bot session turn", () => {
       yield* setupBot;
       yield* writeNotes(NOTES_HEADER);
       const tidy = yield* lookTurn(harness, "tidy my notes", "tidy");
-      yield* callNotes(tidy.caller, edit(tidy, "tidy my notes"));
+      yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"));
       const more = yield* followUp(
         harness,
         tidy.task.taskId,
         "also remember that staging is staging-02",
         "more",
       );
-      const result = yield* callNotes(tidy.caller, {
+      const result = yield* callNotes(harness, tidy.caller, {
         ...remember(tidy, "Staging is staging-02.", "remember that staging is staging-02"),
         inputId: more.inputId,
       });
@@ -468,9 +489,9 @@ describe("notes changes from a GOAT Bot session turn", () => {
       return Effect.gen(function* () {
         yield* setupBot;
         const forget = yield* lookTurn(harness, "forget the deploy note", "forget");
-        yield* callNotes(forget.caller, edit(forget, "forget the deploy note"));
+        yield* callNotes(harness, forget.caller, edit(forget, "forget the deploy note"));
         const more = yield* followUp(harness, forget.task.taskId, "also tidy my notes", "more");
-        const result = yield* callNotes(forget.caller, {
+        const result = yield* callNotes(harness, forget.caller, {
           ...edit(forget, "tidy my notes"),
           inputId: more.inputId,
         });
@@ -488,11 +509,11 @@ describe("notes changes from a GOAT Bot session turn", () => {
       yield* setupBot;
       const tidy = yield* sessionTurn(harness, "tidy my notes", "tidy");
       assert.strictEqual(
-        (yield* callNotes(tidy.caller, edit(tidy, "tidy my notes"))).outcome,
+        (yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"))).outcome,
         "granted",
       );
       assert.strictEqual(
-        (yield* callNotes(tidy.caller, edit(tidy, "tidy my notes"))).outcome,
+        (yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"))).outcome,
         "granted",
       );
       const events = yield* (yield* SqlClient.SqlClient)<{ readonly count: number }>`
@@ -507,10 +528,12 @@ describe("notes changes from a GOAT Bot session turn", () => {
     return Effect.gen(function* () {
       yield* setupBot;
       yield* writeNotes(NOTES_HEADER);
-      const turn = yield* sessionTurn(harness, "remember that I deploy on Fridays", "quote");
+      // Reception already sent this turn's receipt; on a session-first turn the outbox would send
+      // the notice after the turn's answer, keeping one task's messages in order.
+      const turn = yield* lookTurn(harness, "remember that I deploy on Fridays", "quote");
       const args = remember(turn, fridays, "words the person never wrote");
-      assert.isTrue((yield* callNotes(turn.caller, args)).told);
-      yield* callNotes(turn.caller, args);
+      assert.isTrue((yield* callNotes(harness, turn.caller, args)).told);
+      yield* callNotes(harness, turn.caller, args);
       assert.deepStrictEqual(yield* notices, [CHANNEL_COPY.noteNotSaved]);
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
       const state = yield* (yield* SqlClient.SqlClient)<{ readonly state: string }>`
@@ -534,7 +557,7 @@ describe("notes changes from a GOAT Bot session turn", () => {
         { type: "task.completed", payload: { generation: turn.task.generation, summary: "Done" } },
         { owner: (yield* ChannelRuntime.ChannelRuntime).ownerToken },
       );
-      const result = yield* callNotes(turn.caller, edit(turn, "tidy my notes"));
+      const result = yield* callNotes(harness, turn.caller, edit(turn, "tidy my notes"));
       assert.strictEqual(result.reason, "task_finished");
       assert.deepStrictEqual(yield* notices, [CHANNEL_COPY.noteEditTaskDone]);
     }).pipe(Effect.provide(harness.layer));

@@ -16,6 +16,7 @@ import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "../../../channels/ChannelRemoteWorkers.ts";
 import * as ChannelRuntime from "../../../channels/ChannelRuntime.ts";
 import * as ChannelSessionTaskActions from "../../../channels/channelSessionTaskActions.ts";
+import * as ChannelSessionNoteActions from "../../../channels/channelSessionNoteActions.ts";
 import * as ChannelWorkerReports from "../../../channels/ChannelWorkerReports.ts";
 import { channelOwnerIdFor } from "../../../channels/channelOwner.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -100,6 +101,16 @@ const sessionPreflight = Effect.fn("channel.sessionPreflight")(function* () {
   return caller;
 });
 
+const sessionRun = Effect.fn("channel.sessionRun")(function* () {
+  const scope = yield* McpInvocationContext.McpInvocationContext;
+  if (scope.thread?.runId === undefined)
+    return yield* new OrchestratorMcpFailure({
+      code: "capability_denied",
+      message: "A GOAT Bot session run is required.",
+    });
+  return { threadId: scope.thread.threadId, runId: scope.thread.runId };
+});
+
 export const layer = McpToolAccess.toLayer(
   ChannelToolkit,
   Effect.gen(function* () {
@@ -125,6 +136,14 @@ export const layer = McpToolAccess.toLayer(
           return withoutSender(
             yield* actions.answer({ ...input, caller }).pipe(Effect.mapError(failureFor)),
           );
+        }),
+      ),
+      // The service binds the call to the run and the person's message itself, so a call that
+      // lands before the session recorded its run is still judged on what the run carries.
+      goat_channel_notes_change: McpToolAccess.writesAfter(sessionRun, (input, caller) =>
+        Effect.gen(function* () {
+          const notes = yield* ChannelSessionNoteActions.ChannelSessionNoteActions;
+          return yield* notes.change({ ...input, caller }).pipe(Effect.mapError(failureFor));
         }),
       ),
       channel_ingest: McpToolAccess.writes((input) =>

@@ -255,6 +255,8 @@ export const ChannelTask = Schema.Struct({
   completionReport: Schema.optional(ChannelTaskCompletionReport),
   /** The person's request, quoted from the origin input, to change or forget a GOAT Bot note. */
   notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
+  /** The input whose request notesChangeRequested quotes; absent means the origin input. */
+  notesChangeInputId: Schema.optional(ChannelInputId),
   proposedCompletion: Schema.optional(ChannelProposedCompletion),
   skillProposal: Schema.optional(ChannelTaskSkillProposal),
   openQuestions: Schema.Array(ChannelOpenQuestion),
@@ -289,6 +291,7 @@ export const ChannelTaskEventType = Schema.Literals([
   "task.retry.requested",
   "task.worker.observed",
   "task.moved",
+  "task.notes_change_requested",
 ]);
 export type ChannelTaskEventType = typeof ChannelTaskEventType.Type;
 
@@ -409,6 +412,15 @@ export const ChannelTaskEvent = Schema.Union([
     host: TrimmedNonEmptyString,
     fromHost: TrimmedNonEmptyString,
     replicaCapturedAt: IsoDateTime,
+  }),
+  /**
+   * A GOAT Bot turn may now edit the notes for one person's request, quoted from that input.
+   * The task holds it until it ends; another notes change waits meanwhile.
+   */
+  taskEvent("task.notes_change_requested", {
+    generation: PositiveInt,
+    quote: TrimmedNonEmptyString,
+    inputId: ChannelInputId,
   }),
 ]);
 export type ChannelTaskEvent = typeof ChannelTaskEvent.Type;

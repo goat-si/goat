@@ -50,7 +50,7 @@ describe("channel worker brief", () => {
 
   it("lets a turn edit only the notes file, and only when the person asked to change a note", () => {
     const plain = turnInstruction(task, files, true);
-    assert.include(plain, "Leave the notes file unchanged");
+    assert.include(plain, "Otherwise leave the notes file unchanged.");
     assert.notInclude(plain, "Exception to the read-only rule");
     const asked = turnInstruction(
       { ...task, notesChangeRequested: "forget the draft rule" },
