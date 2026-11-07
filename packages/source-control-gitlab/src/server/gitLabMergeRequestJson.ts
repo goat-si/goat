@@ -1,3 +1,9 @@
+import {
+  forkFields,
+  toChangedFiles,
+  forkMaintainerEdits,
+  type GitLabMaintainerEdits,
+} from "./gitLabDetailFields.ts";
 export {
   LIST_ITEM_GRAPHQL_FIELDS,
   LIST_STATES_GRAPHQL_QUERY,
@@ -75,6 +81,7 @@ const RawMergeRequestDiffRefs = Schema.Struct({
 });
 
 const RawMergeRequestSchema = Schema.Struct({
+  ...forkFields.fields,
   iid: Schema.Int,
   title: Schema.String,
   web_url: Schema.String,
@@ -217,7 +224,8 @@ export interface GitLabMergeRequestListItem {
   readonly labels: ReadonlyArray<PullRequestLabel>;
 }
 
-export interface GitLabMergeRequestDetail extends GitLabMergeRequestListItem {
+export interface GitLabMergeRequestDetail
+  extends GitLabMergeRequestListItem, GitLabMaintainerEdits {
   readonly body: string;
   readonly changedFiles: number;
   readonly mergedAt: string | null;
@@ -292,11 +300,6 @@ export function toLabels(
   });
 }
 
-function toChangedFiles(value: string | null | undefined): number {
-  const parsed = Number.parseInt(value?.trim() ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-}
-
 export function toPipelineStatus(value: string | null | undefined): PullRequestCheckStatus {
   switch (value?.trim().toLowerCase()) {
     case "success":
@@ -369,6 +372,7 @@ function toDetail(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): GitLab
       : raw.merge_when_pipeline_succeeds === true || raw.auto_merge_enabled === true;
   return {
     ...listItem,
+    ...forkMaintainerEdits(raw),
     body: raw.description ?? "",
     changedFiles: toChangedFiles(raw.changes_count),
     mergedAt: trimmed(raw.merged_at),

@@ -173,6 +173,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly number: number;
       /** `false` skips the stage and trigger job reads, as write permission checks do. */
       readonly downstreamChecks?: boolean;
+      readonly maintainerEdits?: boolean;
     }) => Effect.Effect<GitLabMergeRequestDetail, GitLabPullRequestCliError>;
 
     /** Approval and head pipeline state, read in one GraphQL request per 100 merge requests. */
@@ -337,6 +338,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly number: number;
       readonly title?: string | undefined;
       readonly description?: string | undefined;
+      readonly allowCollaboration?: boolean | undefined;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
     readonly commentOnMergeRequest: (input: {
@@ -1020,7 +1022,7 @@ export const make = Effect.gen(function* () {
 
   const { graphqlListPage, listStatesOf } = makeGitLabListReads(graphqlRead);
 
-  const { labelPermission, supportsGraphqlList, pipelineStageChecks } =
+  const { labelPermission, maintainerEditsPermission, supportsGraphqlList, pipelineStageChecks } =
     makeGitLabGraphqlSupport(graphqlRead);
 
   const mergeRequestStats = (input: {
@@ -1212,7 +1214,16 @@ export const make = Effect.gen(function* () {
           [mergeRequestDetail(input), labelPermission(input)],
           { concurrency: 2 },
         );
-        const detail = { ...read, viewerCanEditLabels };
+        const detail =
+          read.state === "open" &&
+          read.maintainerCanModify !== undefined &&
+          input.maintainerEdits !== false
+            ? {
+                ...read,
+                viewerCanEditLabels,
+                viewerCanEditMaintainerEdits: yield* maintainerEditsPermission(input),
+              }
+            : { ...read, viewerCanEditLabels };
         if (input.downstreamChecks === false || detail.headPipeline === undefined) return detail;
         const stages = yield* pipelineStageChecks({ ...input, url: detail.url });
         if (stages !== null) return { ...detail, checks: stages };
@@ -1637,6 +1648,9 @@ export const make = Effect.gen(function* () {
         stdin: JSON.stringify({
           ...(input.title === undefined ? {} : { title: input.title }),
           ...(input.description === undefined ? {} : { description: input.description }),
+          ...(input.allowCollaboration === undefined
+            ? {}
+            : { allow_collaboration: input.allowCollaboration }),
         }),
       }).pipe(Effect.asVoid);
     }),

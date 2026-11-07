@@ -44,7 +44,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   },
   reviewers: { request: true, listCandidates: true },
   labels: true,
-  edit: { changeRequest: true, comment: true },
+  edit: { changeRequest: true, comment: true, maintainerEdits: true },
 };
 
 const UNAVAILABLE_REQUIREMENT = {
@@ -69,6 +69,7 @@ const MERGE_ACTIONS: ReadonlySet<string> = new Set([
 export function gitLabViewerPermissions(input: {
   readonly viewerCanMerge: boolean;
   readonly viewerCanEditLabels?: boolean | undefined;
+  readonly viewerCanEditMaintainerEdits?: boolean | undefined;
 }): PullRequestViewerPermissions {
   return {
     actions: CAPABILITIES.actions.filter(
@@ -79,6 +80,7 @@ export function gitLabViewerPermissions(input: {
     verdicts: CAPABILITIES.review.verdicts,
     requestReviewers: true,
     labels: input.viewerCanEditLabels === true,
+    maintainerEdits: input.viewerCanEditMaintainerEdits === true,
     ...(input.viewerCanMerge ? { updateMethods: CAPABILITIES.updateMethods } : {}),
   };
 }
@@ -318,12 +320,17 @@ export const make = Effect.gen(function* () {
 
     // Merge settings only affect the detail panel's actions.
     getChangeRequestPreview: (input) =>
-      cli.getMergeRequestDetail(input).pipe(Effect.mapError(fail("getChangeRequestPreview"))),
+      cli
+        .getMergeRequestDetail({ ...input, maintainerEdits: false })
+        .pipe(Effect.mapError(fail("getChangeRequestPreview"))),
 
     getChangeRequestSummary: (input) =>
       Effect.all(
         [
-          mergeRequestWithStats(input),
+          mergeRequestWithStats(
+            input,
+            cli.getMergeRequestDetail({ ...input, maintainerEdits: false }),
+          ),
           listStates({
             cwd: input.cwd,
             host: input.host,
@@ -580,6 +587,9 @@ export const make = Effect.gen(function* () {
           number: input.number,
           ...(input.title === undefined ? {} : { title: input.title }),
           ...(input.body === undefined ? {} : { description: input.body }),
+          ...(input.maintainerCanModify === undefined
+            ? {}
+            : { allowCollaboration: input.maintainerCanModify }),
         })
         .pipe(Effect.mapError(fail("updateChangeRequest"))),
     ),

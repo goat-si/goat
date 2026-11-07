@@ -154,9 +154,17 @@ describe("gitLabViewerPermissions", () => {
       resolve: true,
       verdicts: ["comment", "approve", "request-changes"],
       requestReviewers: true,
+      maintainerEdits: false,
       labels: true,
       updateMethods: ["rebase"],
     });
+  });
+
+  it("allows maintainer edits only when GitLab permits them", () => {
+    expect(
+      gitLabViewerPermissions({ viewerCanMerge: false, viewerCanEditMaintainerEdits: true })
+        .maintainerEdits,
+    ).toBe(true);
   });
 
   it("keeps merge, now and later, from a viewer GitLab says cannot", () => {
@@ -166,6 +174,7 @@ describe("gitLabViewerPermissions", () => {
       resolve: true,
       verdicts: ["comment", "approve", "request-changes"],
       requestReviewers: true,
+      maintainerEdits: false,
       labels: false,
     });
   });

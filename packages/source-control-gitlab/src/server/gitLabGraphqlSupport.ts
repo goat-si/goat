@@ -1,4 +1,8 @@
 import {
+  MAINTAINER_EDITS_PERMISSION_GRAPHQL_QUERY,
+  decodeMaintainerEditsPermissionJson,
+} from "./gitLabMaintainerEdits.ts";
+import {
   PIPELINE_STAGES_GRAPHQL_QUERY,
   decodePipelineStageChecksJson,
 } from "./gitLabPipelineStages.ts";
@@ -47,6 +51,29 @@ export function makeGitLabGraphqlSupport(
       ),
     );
 
+  const maintainerEditsPermission = (input: {
+    readonly cwd: string;
+    readonly host?: string | undefined;
+    readonly repository: string;
+    readonly number: number;
+  }) =>
+    graphqlRead({
+      cwd: input.cwd,
+      host: input.host,
+      operation: "getMaintainerEditsPermission",
+      query: MAINTAINER_EDITS_PERMISSION_GRAPHQL_QUERY,
+      variables: { fullPath: input.repository, iid: String(input.number) },
+      decode: decodeMaintainerEditsPermissionJson,
+    }).pipe(
+      Effect.catchIf(
+        (cause) =>
+          cause._tag !== "GitLabCliUnavailableError" &&
+          cause._tag !== "GitLabCliAuthenticationError" &&
+          cause._tag !== "GitLabCliRateLimitError",
+        () => Effect.succeed(false),
+      ),
+    );
+
   const supportsGraphqlList = Effect.fn("GitLabPullRequestCli.supportsGraphqlList")(
     (input: { readonly cwd: string; readonly host?: string | undefined }) =>
       graphqlRead({
@@ -78,5 +105,5 @@ export function makeGitLabGraphqlSupport(
         }).pipe(Effect.orElseSucceed(() => null))
       : Effect.succeed(null);
 
-  return { labelPermission, supportsGraphqlList, pipelineStageChecks };
+  return { labelPermission, maintainerEditsPermission, supportsGraphqlList, pipelineStageChecks };
 }

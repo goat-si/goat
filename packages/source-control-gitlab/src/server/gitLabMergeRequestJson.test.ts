@@ -815,3 +815,18 @@ describe("decodeMergeMessagesJson", () => {
     expect(Result.isFailure(decoded)).toBe(true);
   });
 });
+
+it("exposes the maintainer edit setting only for fork merge requests", () => {
+  const fork = detailJson({
+    source_project_id: 40,
+    target_project_id: 12,
+    allow_collaboration: true,
+  });
+  const same = detailJson({
+    source_project_id: 12,
+    target_project_id: 12,
+    allow_collaboration: true,
+  });
+  expect(expectSuccess(decodeMergeRequestDetailJson(fork)).maintainerCanModify).toBe(true);
+  expect(expectSuccess(decodeMergeRequestDetailJson(same)).maintainerCanModify).toBeUndefined();
+});
