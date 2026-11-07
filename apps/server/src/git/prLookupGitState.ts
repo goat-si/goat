@@ -1,6 +1,7 @@
 import { GitCommandError } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import { gitWorkLane } from "../vcs/BackgroundGitWork.ts";
 import { makeGitMetadataFingerprint } from "../vcs/gitMetadataFingerprint.ts";
 
 const FRESH_READ_TTL_MS = 1_000;
@@ -15,9 +16,13 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
   const fingerprints = new Map<string, string>();
   const remembered = new Map<
     string,
-    { readonly startedAtMs: number; readonly completedAtMs: number; readonly value: string | null }
+    { readonly startedOrder: number; readonly completedAtMs: number; readonly value: string | null }
   >();
-  const pending = new Map<string, Effect.Effect<string | null, GitCommandError>>();
+  const pending = new Map<
+    string,
+    { readonly read: Effect.Effect<string | null, GitCommandError>; readonly order: number }
+  >();
+  let lastReadOrder = 0;
   // Closed and merged lookups confirmed against fresh git state, per cwd and branch.
   const verifiedTerminal = new Map<
     string,
@@ -126,21 +131,28 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
       return entry.value;
     }
     const generation = readGeneration(cwd);
-    const pendingKey = `${entryKey}\u0000${generation}`;
+    const lane = yield* gitWorkLane();
+    const pendingKey = `${entryKey}\u0000${generation}\u0000${lane}`;
     let shared = pending.get(pendingKey);
     if (shared === undefined) {
-      shared = yield* Effect.cached(
-        read.pipe(Effect.ensuring(Effect.sync(() => pending.delete(pendingKey)))),
-      );
-      pending.set(pendingKey, shared);
+      const order = ++lastReadOrder;
+      if (pending.size < options.capacity) {
+        const cached = yield* Effect.cached(
+          read.pipe(Effect.ensuring(Effect.sync(() => pending.delete(pendingKey)))),
+        );
+        shared = { read: cached, order };
+        pending.set(pendingKey, shared);
+      } else {
+        shared = { read, order };
+      }
     }
-    const value = yield* shared;
+    const value = yield* shared.read;
     const completedAtMs = yield* Clock.currentTimeMillis;
     const latest = remembered.get(entryKey);
     // A git mutation must not let an older in-flight read repopulate its cache.
     if (
       readGeneration(cwd) !== generation ||
-      (latest !== undefined && latest.startedAtMs > startedAtMs)
+      (latest !== undefined && latest.startedOrder > shared.order)
     )
       return value;
     remembered.delete(entryKey);
@@ -148,7 +160,7 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
       const oldest = remembered.keys().next().value;
       if (oldest !== undefined) remembered.delete(oldest);
     }
-    remembered.set(entryKey, { startedAtMs, completedAtMs, value });
+    remembered.set(entryKey, { startedOrder: shared.order, completedAtMs, value });
     return value;
   });
   // A closed or merged answer is re-checked against fresh git state before it is trusted. The
@@ -200,3 +212,37 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     verifyTerminal,
   };
 });
+
+export const makePrLookupCacheKey =
+  (prLookupEpoch: (cwd: string) => number) =>
+  (
+    cwd: string,
+    details: {
+      branch: string;
+      upstreamRef: string | null;
+      defaultBranch: string | null;
+      localBranchExists?: boolean;
+      remoteName?: string | null;
+    },
+    lane: string,
+  ) =>
+    [
+      cwd,
+      details.branch,
+      details.upstreamRef ?? "",
+      details.defaultBranch ?? "",
+      details.localBranchExists === false ? "0" : "1",
+      details.remoteName ?? "",
+      String(prLookupEpoch(cwd)),
+      lane,
+    ].join("\u0000");
+
+export const prLookupLaneKeys = (key: string) => {
+  const prefix = key.slice(0, key.lastIndexOf("\u0000") + 1);
+  return [
+    key,
+    ...["foreground", "background", "targeted"]
+      .map((lane) => `${prefix}${lane}`)
+      .filter((candidate) => candidate !== key),
+  ];
+};
