@@ -31,6 +31,27 @@ describe("safeErrorLogAttributes", () => {
     expect(diagnosticText).not.toContain("token=secret");
   });
 
+  it("redacts numeric query and fragment secrets that resemble stack positions", () => {
+    const error = new Error("failure");
+    error.stack = [
+      "    at query (https://example.com/app.js?token=secret:123456)",
+      "    at fragment (https://example.com/app.js#secret:123456)",
+      "    at queryPair (https://example.com/app.js?token=secret:123:456)",
+      "    at fragmentPair (https://example.com/app.js#secret:123:456)",
+      "    at positioned (https://example.com/app.js:12:5)",
+    ].join("\n");
+
+    expect(safeErrorLogAttributes(error).stack).toBe(
+      [
+        "    at query (https://example.com/app.js)",
+        "    at fragment (https://example.com/app.js)",
+        "    at queryPair (https://example.com/app.js)",
+        "    at fragmentPair (https://example.com/app.js)",
+        "    at positioned (https://example.com/app.js:12:5)",
+      ].join("\n"),
+    );
+  });
+
   it("does not trust arbitrary object messages or tags", () => {
     const attributes = safeErrorLogAttributes({
       _tag: "payload-secret-sentinel",
