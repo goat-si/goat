@@ -3,11 +3,13 @@ import { ChannelTaskId } from "@goat/contracts";
 
 import { NOTES_REPLACED_RULE } from "./channelBotNotes.ts";
 import { EMPTY_NOTES } from "./channelBotNotesRecall.ts";
+import { GOAT_BOT_SESSION_RULES } from "./channelBotSessionBrief.ts";
 
 import {
   channelWorkerRules,
   GOAT_BOT_READ_ONLY_RULE,
   GOAT_BOT_SUPERVISOR_RULE,
+  PERSONAL_DATA_RULE,
   REMOTE_MESSAGE_CHARS,
   remoteWorkerMessage,
   skillsNamedIn,
@@ -29,6 +31,18 @@ const files = {
 };
 
 describe("channel worker brief", () => {
+  it("keeps every bot and worker out of personal data the person did not ask about", () => {
+    for (const brief of [
+      workerInstruction(task, files),
+      turnInstruction(task, files, false),
+      remoteWorkerMessage(task, { notes: EMPTY_NOTES, skills: [] }),
+      GOAT_BOT_SESSION_RULES,
+    ])
+      assert.include(brief, PERSONAL_DATA_RULE);
+    // The read-only rule no longer invites reading anywhere on the machine.
+    assert.notInclude(GOAT_BOT_READ_ONLY_RULE, "files anywhere on this machine");
+  });
+
   it("tells agents that read the notes file which of two lines wins", () => {
     assert.include(workerInstruction(task, files), NOTES_REPLACED_RULE);
     assert.include(turnInstruction(task, files, false), NOTES_REPLACED_RULE);
