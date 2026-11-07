@@ -129,8 +129,16 @@ update GOAT first. <code>--archive</code> supplies only GOAT’s archive, so <co
 still needs network access to download OpenCodex unless a supported one is
 already installed.</p>
 <h2 id="desktop-app">Desktop app</h2>
-<p>Download a release from <a href="https://github.com/goat-si/goat-releases/releases">GitHub Releases</a>.
-On Debian and Ubuntu, install the <code>.deb</code> with <code>sudo apt install ./&lt;file&gt;.deb</code>.</p>
+<p>Download a release from <a href="https://github.com/goat-si/goat-releases/releases">GitHub Releases</a>.</p>
+<h3 id="linux">Linux</h3>
+<p>AppImage and <code>.deb</code> downloads are available for x86_64 and ARM64. Check your
+architecture with <code>uname -m</code>: choose <code>x86_64.AppImage</code> or <code>amd64.deb</code> for
+<code>x86_64</code>, and <code>arm64.AppImage</code> or <code>arm64.deb</code> for <code>aarch64</code>.</p>
+<p>On Debian and Ubuntu, install the <code>.deb</code> with <code>sudo apt install ./&lt;file&gt;.deb</code>.
+For an AppImage, open a terminal in the download folder and replace the filename
+below with the one you downloaded:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">chmod</span><span style="color:#9ECBFF"> +x</span><span style="color:#9ECBFF"> ./GOAT.AppImage</span></span>
+<span class="line"><span style="color:#B392F0">./GOAT.AppImage</span></span></code></pre>
 <p>The <code>.deb</code> updates itself like the other desktop builds. It asks for your
 password to install each update. If your desktop has no password prompt, the
 update fails. Download the new <code>.deb</code> and install it the same way.</p>

@@ -8,6 +8,8 @@ OpenAI and allow sharing of your ChatGPT plan.</p>
 <p>Manage shared usage and credits in ChatGPT through <strong>Manage usage</strong> in GOAT.
 If a request uses a feature that ChatGPT sharing does not support, use another
 provider for that request.</p>
+<p>Fast and Ultrafast speeds are unavailable with this connection. To use the speed
+options your account supports, <a href="#use-an-existing-codex-login">use an existing Codex login</a>.</p>
 <p>When reconnecting, choose the same account in GOAT and on OpenAI’s sign-in
 page. Disconnecting stops running threads but keeps their history and lets you
 reconnect later.</p>
@@ -17,6 +19,9 @@ localhost page into the sign-in panel, even if that page could not load.</p>
 <p>GOAT can use your installed Codex and its existing login. Run <code>codex login</code>
 on the environment’s machine to sign in. <a href="/goat/docs/user/install/#providers">Provider setup</a>
 covers installation and custom configuration.</p>
+<p>Running <code>codex login</code> does not change a managed ChatGPT connection. In
+<strong>Settings → Providers</strong>, add a Codex instance, choose <strong>Configure manually</strong>,
+and complete the wizard. Then select that instance from the thread’s model picker.</p>
 <h2 id="use-opencodex-home">Use OpenCodex Home</h2>
 <p>OpenCodex Home keeps your provider accounts on one machine and relays model
 requests from your other machines, its Children. Every Child shares Home’s

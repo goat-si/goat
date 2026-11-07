@@ -16,18 +16,26 @@ after that. If cleanup is down for more than about a day, deletion waits for it 
 <code>ingest.t3.codes</code>, which forwards them to PostHog, until you update.</p>
 <p>Events do not include prompts, responses, file contents, authentication tokens, conversation IDs,
 raw provider events, or child-agent output. Child-agent token use is excluded from the totals.</p>
-<p>GOAT also sends relay connection traces to Axiom to diagnose GOAT Connect connectivity.</p>
-<p>To disable product events and relay tracing, set <code>GOAT_TELEMETRY_ENABLED=false</code> in the server’s
-environment before starting it. Relay tracing also stops when <code>GOAT_OTEL_SDK_DISABLED</code> or
-<code>OTEL_SDK_DISABLED</code> turns OpenTelemetry export off. The web app in a browser, including one the
-<code>goat</code> CLI opens, does not read these variables.</p>
-<p>The desktop app reads <code>GOAT_TELEMETRY_ENABLED</code> from your shell profile (for example <code>~/.zshrc</code>) on macOS and
-Linux, so export it there and restart the app. On Windows, set it as a user environment variable.</p>
+<p>To disable product events, set <code>GOAT_TELEMETRY_ENABLED=false</code> in the server’s
+environment before starting it. This setting does not disable OpenTelemetry exports to your own
+receiver. The desktop app reads the variable from your shell profile (for example <code>~/.zshrc</code>) on
+macOS and Linux, so export it there and restart the app. On Windows, set it as a user environment
+variable. A browser or mobile client does not read the server’s environment variables.</p>
+<h2 id="mobile-diagnostics">Mobile diagnostics</h2>
+<p>In the mobile app, <strong>Settings &gt; Diagnostics</strong> lets you copy a startup crash report or a thread
+stream report. The reports stay on the device until you share them. A crash report can include an
+error message and component stack; the message can quote a value the app was handling. Review it
+before sharing.</p>
 <h2 id="export-diagnostics-to-your-own-receiver">Export diagnostics to your own receiver</h2>
 <p>To send traces, metrics, or logs to an OpenTelemetry receiver, open
 <strong>Settings &gt; General &gt; Diagnostics</strong>, select an environment, and enter each signal’s OTLP HTTP
 endpoint under <strong>OpenTelemetry export</strong> (for example <code>http://localhost:4318/v1/traces</code>). Save, then
 restart that environment’s server. The receiver must be reachable from the server’s machine.
+These exports are separate from product usage events and can include diagnostic information about the server and connected web or desktop
+client. Error messages may contain values being handled by the app. Set <code>GOAT_OTEL_SDK_DISABLED=true</code>
+(or <code>OTEL_SDK_DISABLED=true</code> when <code>GOAT_OTEL_SDK_DISABLED</code> is unset) in the server environment to
+disable OpenTelemetry exports, including endpoints configured here; restart the server after changing
+environment variables.
 <strong>Test</strong> sends an empty export from the server to check an endpoint before or after you save it;
 saved endpoints are checked when the section opens. Checks send authentication headers only to
 the signal’s currently running endpoint and do not follow redirects. To check a new endpoint
@@ -38,4 +46,4 @@ settings. An overridden signal shows <strong>Set by environment</strong> and nam
 receivers that need authentication and <code>GOAT_OTLP_PROTOCOL=http/protobuf</code> for receivers that do
 not accept JSON. An endpoint set with <code>OTEL_EXPORTER_OTLP_*</code> takes its headers and protocol from
 <code>OTEL_EXPORTER_OTLP_HEADERS</code> and <code>OTEL_EXPORTER_OTLP_PROTOCOL</code> instead.</p>
-</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#export-diagnostics-to-your-own-receiver">Export diagnostics to your own receiver</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#mobile-diagnostics">Mobile diagnostics</a></li><li><a href="#export-diagnostics-to-your-own-receiver">Export diagnostics to your own receiver</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
