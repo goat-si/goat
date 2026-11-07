@@ -168,7 +168,7 @@ function MobileNoteRow(props: {
         <Text className="text-foreground-muted">Replaces: “{note.replaces}”</Text>
       ) : null}
       {wording === null ? (
-        <View className="flex-row gap-4">
+        <View className="flex-row flex-wrap gap-x-4">
           <Pressable
             accessibilityRole="button"
             disabled={!canAsk}
@@ -199,7 +199,7 @@ function MobileNoteRow(props: {
             multiline
             className="min-h-[44px] rounded-md border border-border px-3 py-2 text-foreground"
           />
-          <View className="flex-row gap-4">
+          <View className="flex-row flex-wrap gap-x-4">
             <Pressable
               accessibilityRole="button"
               disabled={draft === null || !canAsk}
