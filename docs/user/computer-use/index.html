@@ -285,20 +285,46 @@ server has no running work, and a GOAT app connected straight to the
 background server stays on it. Threads already on the background server keep
 running there without computer use.</p>
 <h2 id="windows-and-linux">Windows and Linux</h2>
-<p>Windows and Linux need someone signed in to the desktop. On Windows, someone at
+<p>Windows needs someone signed in to the desktop, and Linux needs a desktop
+session or a virtual display. On Windows, someone at
 that computer may need to respond to a security prompt the first time. GOAT
 started over SSH or as a service runs where Windows has no desktop, so computer
 use cannot turn on there; start GOAT from the signed-in desktop instead.</p>
-<p>On Linux, computer use works best in an X11 session. In a Wayland session it
-works with fewer apps, and your desktop may ask you to approve screen capture.
-A headless server with Xvfb also works. Without AT-SPI (the <code>at-spi2-core</code>
-package) and a D-Bus session, agents can take screenshots and use the mouse and
-keyboard but cannot read app controls.
-Window screenshots on Linux need a desktop that composites its windows (a bare
-Xvfb needs a compositor such as xcompmgr). In a Wayland session without
-XWayland, other than Hyprland, agents read app controls but get no window
-screenshots. A screenshot shows the window as the desktop draws it; a part an
-app never painted can still show what was behind the window when it opened.</p>
+<p>On Linux, what agents can do depends on the session:</p>
+<ul>
+<li>
+<p><strong>X11, or Wayland with XWayland:</strong> agents read app controls, take window
+screenshots and act in windows. Window screenshots need a desktop that
+composites its windows. GNOME and KDE do; with a bare window manager, start a
+compositor such as picom or xcompmgr.</p>
+</li>
+<li>
+<p><strong>Wayland without XWayland:</strong> agents read app controls but get no window
+screenshots, except on Hyprland, and act only on the window in front. Your
+desktop may ask you to approve screen capture.</p>
+</li>
+<li>
+<p><strong>No screen</strong>, such as a server nobody is signed in to: start a virtual
+display, and GOAT finds it the next time it checks.</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#E1E4E8">[ </span><span style="color:#F97583">-e</span><span style="color:#E1E4E8"> /tmp/.X11-unix/X99 ] </span><span style="color:#F97583">||</span><span style="color:#B392F0"> setsid</span><span style="color:#9ECBFF"> xvfb-run</span><span style="color:#79B8FF"> -n</span><span style="color:#79B8FF"> 99</span><span style="color:#79B8FF"> -f</span><span style="color:#9ECBFF"> "</span><span style="color:#E1E4E8">$HOME</span><span style="color:#9ECBFF">/.goat-display.xauth"</span><span style="color:#79B8FF"> -s</span><span style="color:#9ECBFF"> "-screen 0 1920x1080x24"</span><span style="color:#9ECBFF"> xcompmgr</span><span style="color:#F97583"> &gt;</span><span style="color:#9ECBFF">/dev/null</span><span style="color:#F97583"> 2&gt;&amp;1</span><span style="color:#E1E4E8"> &amp;</span></span></code></pre>
+<p>This needs Xvfb with <code>xvfb-run</code>, <code>xauth</code> and <code>xcompmgr</code> (on Debian and
+Ubuntu, <code>sudo apt install xvfb xauth xcompmgr</code>). GOAT looks for it only when
+its own environment names no display or Wayland session, as when it was
+started over SSH. Agents open apps there themselves; to start one yourself,
+put <code>DISPLAY=:99 XAUTHORITY=$HOME/.goat-display.xauth</code> in front of its
+command. The command does nothing while display 99 is running; if another
+program holds that number, use another number in all three places.</p>
+</li>
+</ul>
+<p>App controls need AT-SPI (the <code>at-spi2-core</code> package) and one D-Bus session
+bus that GOAT and the apps share; without them agents can still take
+screenshots and use the mouse and keyboard. GOAT turns accessibility on when
+computer use starts, but Chrome and Electron apps such as VS Code read that
+setting only when they open, so quit and reopen apps that were already open.
+<strong>Settings → Integrations → Computer → Advanced</strong> shows what is missing on that
+computer, with the install command for its distribution.</p>
+<p>A screenshot shows the window as the desktop draws it; a part an app never
+painted can still show what was behind the window when it opened.</p>
 <h2 id="other-computers">Other computers</h2>
 <p>Each connected computer has its own switch. Before you turn it on, Settings
 checks that computer’s screen: the switch and <strong>Settings → Connections →
