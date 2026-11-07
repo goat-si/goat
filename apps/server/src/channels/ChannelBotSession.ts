@@ -16,7 +16,6 @@ import {
   type ChatAttachment,
   CommandId,
   isChannelChildWorkActive,
-  type MemoryTaskGrantCeiling,
   type MessageId,
   type OrchestrationV2Run,
   ProjectId,
@@ -53,6 +52,7 @@ import { requesterForDispatch, sessionMemoryCeiling } from "./channelDispatchAut
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
+import { ChannelLaunchWakes, owesLaunched } from "./channelLaunchedResults.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
@@ -82,12 +82,12 @@ import { refuseForward } from "./channelForwardRefusal.ts";
 import { turnInstruction } from "./channelWorkerBrief.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 import {
-  holdsMoreMemory,
   isSessionTask,
   isTerminalRun,
   type SessionRow,
   sessionStore,
   sessionTaskRuns,
+  steersInto,
 } from "./channelBotSessionRuns.ts";
 
 const LIVE_SUBAGENT = new Set(["idle", "pending", "running", "waiting"]);
@@ -134,6 +134,7 @@ const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
   const childWork = yield* ChannelChildWork.ChannelChildWork;
   const childWorkStore = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+  const launched = { threads, sql, watch: (yield* ChannelLaunchWakes).watch };
   const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -207,17 +208,19 @@ const make = Effect.gen(function* () {
       const stored = yield* ledger.getTask(task_id);
       if (stored === undefined) continue;
       // An unreadable record counts as active: a replacement must never orphan child work.
-      const records = yield* childWorkStore
+      const launches = yield* childWorkStore
         .listForTask(task_id)
         .pipe(Effect.orElseSucceed(() => undefined));
       if (
-        records === undefined ||
-        records.some(
+        launches === undefined ||
+        launches.some(
           (record) =>
             record.generation === stored.task.generation && isChannelChildWorkActive(record.state),
         )
       )
         return true;
+      // A coding thread that finished owes its result until its wake has run on this session.
+      if (yield* owesLaunched(launched, threadId, stored.task, launches)) return true;
     }
     return false;
   });
@@ -323,7 +326,7 @@ const make = Effect.gen(function* () {
     row: SessionRow,
     owner: string,
     requester: ChannelRequester,
-    memoryGrantCeiling: MemoryTaskGrantCeiling,
+    memoryGrantCeiling: ReturnType<typeof sessionMemoryCeiling>,
     attachments: ReadonlyArray<ChatAttachment>,
   ) {
     const task = stored.task;
@@ -676,12 +679,9 @@ const make = Effect.gen(function* () {
         ),
       );
     let which = ids.first;
-    let sent =
-      current !== undefined &&
-      !holdsMoreMemory(current, memoryGrantCeiling) &&
-      (firstIntent.length > 0 || (!isTerminalRun(current) && current.status !== "queued"))
-        ? yield* attempt("steer", ids.first)
-        : undefined;
+    let sent = steersInto(current, firstIntent.length > 0, memoryGrantCeiling)
+      ? yield* attempt("steer", ids.first)
+      : undefined;
     if (
       sent === undefined ||
       (sent._tag === "Failure" &&
