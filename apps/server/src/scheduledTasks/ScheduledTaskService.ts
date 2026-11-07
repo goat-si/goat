@@ -74,10 +74,15 @@ import {
   redactHeaders,
   redactQuery,
   renderWebhookPrompt,
-  type WebhookRequest,
 } from "./webhookTemplate.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
 import { webhookEndpoint } from "./webhookEndpoint.ts";
+import {
+  BOT_ROUTINE_NEEDS_OWNER,
+  makeScheduledBotRoutines,
+  ROUTINE_MESSAGE_PREFIX,
+  type RoutineOwner,
+} from "./scheduledBotRoutines.ts";
 import { WebhookAutomationHeldError, rejectWebhookWhileHeld } from "./webhookAutomationHold.ts";
 
 export { WEBHOOK_ROUTE_PREFIX } from "./webhookEndpoint.ts";
@@ -139,42 +144,12 @@ interface RateWindow {
   readonly rejectedLogged: boolean;
 }
 
-export interface WebhookTriggerRequest extends WebhookRequest {
-  readonly hookId: string;
-  readonly token: string;
-  readonly body: Uint8Array;
-  readonly relayDeliveryId?: string;
-  readonly receivedAt?: string;
-}
-
-export type WebhookDeliveryOutcome =
-  | "accepted"
-  | "duplicate"
-  | "coalesced"
-  | "prompt_too_long"
-  | "queue_full"
-  | "rate_limited"
-  | "disabled"
-  | "rejected_signature"
-  | "expired"
-  | "filtered"
-  | "not_found"
-  | "error";
-
-export type WebhookTriggerResult =
-  | {
-      readonly _tag: "accepted";
-      readonly deliveryId: ScheduledTaskWebhookDeliveryId;
-      readonly outcome: "accepted" | "duplicate" | "coalesced" | "prompt_too_long" | "filtered";
-    }
-  | { readonly _tag: "not_found" }
-  | { readonly _tag: "rejected_signature" }
-  | { readonly _tag: "disabled" }
-  | {
-      readonly _tag: "rate_limited";
-      readonly outcome: "rate_limited" | "queue_full";
-    }
-  | { readonly _tag: "expired" };
+import type {
+  WebhookDeliveryOutcome,
+  WebhookTriggerRequest,
+  WebhookTriggerResult,
+} from "./webhookTriggerTypes.ts";
+export type { WebhookDeliveryOutcome, WebhookTriggerRequest, WebhookTriggerResult };
 
 const webhookFilters = (filters: ReadonlyArray<ScheduledTaskWebhookFilter> | undefined) =>
   filters?.length ? { filters } : {};
@@ -200,6 +175,8 @@ const encodeMissingFieldsJson = Schema.encodeSync(MissingFieldsJson);
 /** Server-captured authority; never decoded from a public task mutation. */
 export interface CapturedTaskMemoryGrant {
   readonly memoryGrantCeiling: MemoryTaskGrantCeiling;
+  /** The authenticated person, for routines bound to a GOAT Bot conversation. */
+  readonly owner?: RoutineOwner;
 }
 
 interface WebhookDeliveryRow {
@@ -420,6 +397,7 @@ export const layer = Layer.effect(
     const secretRequests = yield* SecretRequests.SecretRequests;
     const scheduler = yield* Scheduler.Scheduler;
     const readWebhookOrigin = yield* ScheduledTaskWebhookOrigin;
+    const botRoutines = yield* makeScheduledBotRoutines();
     const memoryPolicy = yield* Effect.serviceOption(ServerSettings.MemoryProviderCommittedPolicy);
     const readMemoryPolicy = Option.isSome(memoryPolicy)
       ? memoryPolicy.value.read
@@ -777,7 +755,11 @@ export const layer = Layer.effect(
               ? `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`
               : `${active.id}:webhook:${webhook.deliveryId}`;
           const commandId = CommandId.make(`scheduled-task:${fireKey}`);
-          const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
+          // A routine in a GOAT Bot conversation becomes channel input, never a direct send.
+          const routine = yield* botRoutines.kind(active);
+          const messageId = MessageId.make(
+            `${routine.type === "linkable" ? ROUTINE_MESSAGE_PREFIX : "scheduled-task-message:"}${fireKey}`,
+          );
           const admission = Effect.gen(function* () {
             const claim = yield* scheduledRuns.begin({
               task: active,
@@ -789,11 +771,18 @@ export const layer = Layer.effect(
             });
             if (webhook !== undefined && claim.dispatch)
               yield* sql`UPDATE scheduled_task_webhook_pending SET state='running' WHERE delivery_id=${webhook.deliveryId}`;
+            if (routine.type === "linkable" && claim.dispatch)
+              yield* botRoutines.link({ task: active, owner: routine.owner, firingId: commandId, at: startedAtIso });
             return claim;
           });
-          const claim = yield* webhook === undefined ? admission : sql.withTransaction(admission);
+          const claim =
+            yield* webhook === undefined && routine.type !== "linkable"
+              ? admission
+              : sql.withTransaction(admission);
           if (webhook !== undefined) yield* Ref.set(webhook.admitted, true);
           yield* notifyChanged;
+          if (routine.type === "linkable")
+            return { task: active, threadId: active.threadId, firing: yield* scheduledRuns.readFiring(commandId) };
           if (!claim.dispatch) {
             const firing = yield* scheduledRuns.finishDispatch({
               firingId: commandId,
@@ -846,6 +835,7 @@ export const layer = Layer.effect(
               );
           // Finalization rechecks durable acceptance even when the dispatch call fails.
           const dispatch = Effect.gen(function* () {
+            if (routine.type === "unowned") return yield* taskError(BOT_ROUTINE_NEEDS_OWNER);
             const prompt = yield* prepareScheduledTaskNotificationPrompt(active, webhook?.prompt);
             return yield* active.threadId === null
               ? threadLaunch
@@ -1193,6 +1183,10 @@ export const layer = Layer.effect(
         input.notificationPolicy ?? existingTask?.notificationPolicy ?? "all_runs";
       if (notificationPolicy === "important_updates" && (input.threadId ?? null) === null)
         return yield* taskError("Important updates requires an existing thread.", { taskId: id });
+      const owner = yield* botRoutines.checkUpsert(
+        { taskId: id, threadId: input.threadId ?? null, schedule },
+        captured?.owner,
+      );
       const task: ScheduledTask = {
         id,
         notificationPolicy,
@@ -1220,6 +1214,7 @@ export const layer = Layer.effect(
         runCount: existingTask?.runCount ?? 0,
       };
       yield* saveTask(task, input.requireExisting === true, webhook);
+      yield* botRoutines.saveOwner(id, owner);
       yield* notifyChanged;
       return { task: (yield* findTask(id)) ?? task };
     });

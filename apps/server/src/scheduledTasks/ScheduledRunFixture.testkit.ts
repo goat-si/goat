@@ -6,6 +6,7 @@ import { SecretRequestError, type ScheduledTaskWebhookUrlUnavailableReason } fro
 import * as Crypto from "effect/Crypto";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -221,6 +222,8 @@ export const withWebhookService = <A, E>(
     readonly relayHookBaseUrl?: string;
     readonly sql?: SqlClient.SqlClient;
     readonly workers?: Map<string, Effect.Effect<void>>;
+    /** Threads the fixture reports as GOAT Bot conversations. */
+    readonly botThreads?: ReadonlySet<string>;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -263,6 +266,11 @@ export const withWebhookService = <A, E>(
         isScratchProject: () => Effect.succeed(false),
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      options.botThreads === undefined
+        ? Layer.empty
+        : Layer.succeed(ChannelBotDirectory.ChannelBotDirectory, {
+            isBotThread: (threadId) => Effect.succeed(options.botThreads?.has(threadId) === true),
+          }),
       Layer.mock(SecretRequests.SecretRequests)({
         consume: ({ ref }) => {
           const value = secretsByRef.get(ref);
