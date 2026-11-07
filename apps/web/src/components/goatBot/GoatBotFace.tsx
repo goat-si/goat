@@ -15,6 +15,7 @@ import { useState } from "react";
 import { cn } from "~/lib/utils";
 
 /** The face spans 20 grid units, so one unit is 5% of the eyes layer's width. */
+// Both layers fill the face box; ! beats icon-size rules such as the rail's [&_svg]:size-5.
 const PERCENT_PER_UNIT = 5;
 
 /**
@@ -63,7 +64,7 @@ export function GoatBotFace({
         viewBox={GOAT_MARK_VIEWBOX}
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
-        className="absolute inset-0 size-full"
+        className="absolute inset-0 size-full!"
       >
         <path
           d={GOAT_MARK_HORNS_PATH}
@@ -89,7 +90,7 @@ export function GoatBotFace({
           viewBox={GOAT_MARK_VIEWBOX}
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
-          className="size-full"
+          className="size-full!"
         >
           {art.stroked ? (
             <path

@@ -17,6 +17,7 @@ import type { ScopedThreadRef } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
+import { useStableCallback } from "~/hooks/useStableCallback";
 import {
   resolveThreadDetailRef,
   useThreadShell,
@@ -128,7 +129,8 @@ export function useGoatBotFaceMotion(
 } {
   const [label] = useState(nextFaceLabel);
   const [onScreen, setOnScreen] = useState(false);
-  const watch = (element: HTMLElement | null) => {
+  // One identity for the life of the face, so re-renders never re-attach the observer.
+  const watch = useStableCallback((element: HTMLElement | null) => {
     if (element === null || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver((entries) => {
       const entry = entries.at(-1);
@@ -139,7 +141,7 @@ export function useGoatBotFaceMotion(
       observer.disconnect();
       setOnScreen(false);
     };
-  };
+  });
   const pageVisible = useSyncExternalStore(subscribePageVisibility, readPageVisible);
   const reducedMotion = useSyncExternalStore(subscribeReducedMotion, readReducedMotion);
   const eligible =

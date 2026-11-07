@@ -77,3 +77,15 @@ it("holds still when the person turns on reduced motion", async () => {
   query.dispatchEvent(new Event("change"));
   await vi.waitFor(() => expect(movingEyes("header")).toBe(0));
 });
+
+it("keeps one running animation, never restarted, while the page re-renders around a moving face", async () => {
+  // No routes: the faces read nothing from the router.
+  await using screen = await render(<Faces header="working" list="idle" />, { router: false });
+  await vi.waitFor(() => expect(movingEyes("header")).toBe(1));
+  const eyes = document.querySelector("[data-face-place='header'] [data-face-eyes]");
+  const first = eyes?.getAnimations()[0];
+  for (let pass = 0; pass < 5; pass++)
+    await screen.rerender(<Faces header="working" list="idle" />);
+  expect(eyes?.getAnimations()).toEqual([first]);
+  expect(first?.playState).toBe("running");
+});
