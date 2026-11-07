@@ -6,6 +6,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
@@ -47,6 +48,9 @@ const agentFixture = Effect.fn("agentFixture")(function* (
   options: {
     readonly onReady?: (origin: string) => Effect.Effect<void>;
     readonly net?: NetService.NetService["Service"];
+    readonly runs?: Array<ReadonlyArray<string>>;
+    readonly cleanStop?: ProcessRunner.ProcessRunOutput;
+    readonly plainStop?: ProcessRunner.ProcessRunOutput;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -96,10 +100,15 @@ const agentFixture = Effect.fn("agentFixture")(function* (
         ),
     ),
     Effect.provideService(ProcessRunner.ProcessRunner, {
-      run: (input) =>
-        input.args.includes("devices")
-          ? startup(stateDir)
-          : Effect.succeed(input.args.includes("-list-avds") ? avdOutput : processOutput(0)),
+      run: (input) => {
+        options.runs?.push(input.args);
+        if (input.args.includes("devices")) return startup(stateDir);
+        if (input.args.includes("--clean") && options.cleanStop)
+          return Effect.succeed(options.cleanStop);
+        if (input.args.includes("daemon") && !input.args.includes("--clean") && options.plainStop)
+          return Effect.succeed(options.plainStop);
+        return Effect.succeed(input.args.includes("-list-avds") ? avdOutput : processOutput(0));
+      },
     }),
     Effect.provideService(
       HttpClient.HttpClient,
@@ -718,3 +727,76 @@ it.effect(
       expect(yield* fs.exists(`${baseDir}/tools`)).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+describe("AgentDevice stop", () => {
+  const daemonStops = (runs: ReadonlyArray<ReadonlyArray<string>>) =>
+    runs.filter((args) => args.includes("daemon")).map((args) => args.slice(1).join(" "));
+  const startDaemon = (fs: FileSystem.FileSystem) => (stateDir: string) =>
+    fs
+      .writeFileString(
+        `${stateDir}/daemon.json`,
+        JSON.stringify({ httpPort: 12345, token: "token" }),
+      )
+      .pipe(Effect.orDie, Effect.as(processOutput(0)));
+
+  it.effect("stopping device support or agent access also ends the daemon's retained runners", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const runs: Array<ReadonlyArray<string>> = [];
+      const { host, stateDir } = yield* agentFixture(startDaemon(fs), undefined, undefined, {
+        runs,
+      });
+      yield* host.ensureAgentReady(() => Effect.void);
+      yield* host.stopAgent;
+      yield* host.ensureAgentReady(() => Effect.void);
+      yield* host.stop;
+      expect(daemonStops(runs)).toEqual([
+        `daemon stop --clean --state-dir ${stateDir}`,
+        `daemon stop --clean --state-dir ${stateDir}`,
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("still stops the daemon when agent-device refuses retained-runner cleanup", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const runs: Array<ReadonlyArray<string>> = [];
+      const refused = processOutput(
+        1,
+        JSON.stringify({
+          success: false,
+          error: { details: { reason: "daemon-clean-not-detached" } },
+        }),
+      );
+      const { host, stateDir } = yield* agentFixture(startDaemon(fs), undefined, undefined, {
+        runs,
+        cleanStop: refused,
+      });
+      yield* host.ensureAgentReady(() => Effect.void);
+      yield* host.stop;
+      expect(daemonStops(runs)).toEqual([
+        `daemon stop --clean --state-dir ${stateDir}`,
+        `daemon stop --state-dir ${stateDir}`,
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("warns that the daemon may still run when both stops fail", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const logs: Array<unknown> = [];
+      const { host } = yield* agentFixture(startDaemon(fs), undefined, undefined, {
+        cleanStop: processOutput(1),
+        plainStop: processOutput(1),
+      });
+      yield* host.ensureAgentReady(() => Effect.void);
+      yield* host.stop.pipe(
+        Effect.provide(Logger.layer([Logger.make(({ message }) => logs.push(message))])),
+      );
+      expect(logs).toContainEqual([
+        "agent-device did not stop; its daemon and runners may still be running",
+        { cleanup: "exit 1: ", stop: "exit 1: " },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});

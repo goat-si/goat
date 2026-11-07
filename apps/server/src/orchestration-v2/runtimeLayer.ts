@@ -211,7 +211,7 @@ const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pip
   ),
 );
 
-const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
+const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layerWithSkills.pipe(
   Layer.provide(
     Layer.mergeAll(
       ProjectionStore.layer,

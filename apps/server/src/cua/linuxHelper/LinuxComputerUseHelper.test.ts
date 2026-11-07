@@ -6,6 +6,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
+import type { SecureFocus } from "./atspiFocus.ts";
 import {
   connect,
   decodeHello,
@@ -182,6 +183,59 @@ describe("Linux readiness grants (#1392)", () => {
     expect(unread.reasons.join(" ")).toMatch(/No window is open to read app controls/);
     expect(linuxReadiness(facts({})).grants.accessibility).toBe("granted");
     expect(linuxReadiness(facts({ tree: "empty" })).grants.accessibility).toBe("granted");
+  });
+
+  // Measured on Xvfb: the driver turns org.a11y.Status IsEnabled on, but a Chromium opened
+  // before that never joins the AT-SPI registry until it restarts.
+  const readinessOf = (focusByPid: Record<number, SecureFocus>) =>
+    readLinuxReadiness(
+      {
+        session,
+        uinputWritable: async () => false,
+        secureFocus: async (pid) => focusByPid[pid] ?? NOT_SECURE,
+        capture: { route: "driver" },
+        call: async (tool) => {
+          const ok = (
+            structured: unknown,
+            images: Array<{ mimeType: string; data: string }> = [],
+          ) => ({
+            isError: false,
+            text: "",
+            structured,
+            images,
+          });
+          if (tool === "check_permissions") return ok({ x11: true, wayland: false, atspi: true });
+          if (tool === "list_windows")
+            return ok({
+              windows: Object.keys(focusByPid).map((pid) => ({
+                pid: Number(pid),
+                window_id: Number(pid),
+              })),
+            });
+          if (tool === "get_window_state")
+            return ok({}, [{ mimeType: "image/png", data: png(8, 4, true).toString("base64") }]);
+          return "unexpected";
+        },
+      },
+      15_000,
+    );
+  const unregistered = async (): Promise<SecureFocus> => ({
+    known: false,
+    secure: false,
+    windows: 0,
+    unregistered: true,
+  });
+
+  it("an app missing from an AT-SPI registry that answered asks for a restart, never for AT-SPI to be turned on", async () => {
+    const missing = await readinessOf({ 30: await unregistered() });
+    expect(missing.tree).toBe("empty");
+    expect(missing.grants.accessibility).toBe("granted");
+    expect(computerUseReady(missing)).toBe(false);
+    expect(missing.reasons.join(" ")).toMatch(/quit and reopen/);
+    expect(missing.reasons.join(" ")).not.toMatch(/AT-SPI does not answer/);
+    // Another app that does show its windows proves app controls.
+    const mixed = await readinessOf({ 30: await unregistered(), 31: NOT_SECURE });
+    expect(mixed.tree).toBe("ready");
   });
 });
 

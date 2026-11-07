@@ -192,4 +192,29 @@ describe("linuxComputerUseSetup", () => {
     const input = setup.steps.find((entry) => entry.id === "input");
     expect(input?.detail).not.toMatch(/AT-SPI/);
   });
+
+  it("an app that shows AT-SPI nothing is to be reopened, since apps read the accessibility switch at start", () => {
+    const empty: ComputerUseReadiness = { ...READY, tree: "empty" };
+    const step = linuxComputerUseSetup(empty, "lidge-ai").steps.find(
+      (entry) => entry.id === "accessibility",
+    );
+    expect(step?.status).toBe("action");
+    expect(step?.detail).toContain("quit and reopen");
+    expect(JSON.stringify(step)).not.toContain("gsettings");
+  });
+
+  it("an X11 capture that failed says how a compositing manager helps, without promising it is the cause", () => {
+    const unredirected: ComputerUseReadiness = { ...READY, capture: "unavailable" };
+    const step = linuxComputerUseSetup(unredirected, "lidge-ai").steps.find(
+      (entry) => entry.id === "capture",
+    );
+    const words = (step?.guidance ?? []).map((line) => line.text).join(" ");
+    expect(words).toMatch(/^If GOAT reports that no compositing manager/);
+    expect(words).toContain("xcompmgr");
+    const wayland = linuxComputerUseSetup(
+      { ...unredirected, platform: { linux: { displayServer: "wayland" } } },
+      "lidge-ai",
+    ).steps.find((entry) => entry.id === "capture");
+    expect(JSON.stringify(wayland)).not.toContain("xcompmgr");
+  });
 });

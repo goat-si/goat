@@ -7,7 +7,8 @@ import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
-import { useBotRoster } from "./useBotRoster";
+import { goatBotSearch, memberThreadsKey, useGoatBotMember } from "./goatBotMemberContext";
+import { useBotThreads } from "./useBotRoster";
 
 const tabs = ["Tasks", "Routines", "Library", "Computer"] as const;
 type Tab = (typeof tabs)[number];
@@ -20,7 +21,8 @@ export function GoatBotWorkPanel({
   threadId: ThreadId;
 }) {
   const [tab, setTab] = useState<Tab>("Tasks");
-  const { rows } = useBotRoster();
+  const member = useGoatBotMember();
+  const { rows } = useBotThreads(environmentId, memberThreadsKey(member));
   const routines = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
@@ -88,11 +90,12 @@ function TaskWorkRow({
   environmentId: EnvironmentId;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const member = useGoatBotMember();
   return (
     <div className="py-1">
       <Link
         to="/bot"
-        search={{ task: row.task.taskId }}
+        search={{ task: row.task.taskId, ...goatBotSearch(member) }}
         className="block rounded-md p-2 hover:bg-accent"
       >
         {row.task.title}

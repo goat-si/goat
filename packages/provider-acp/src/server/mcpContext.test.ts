@@ -89,3 +89,44 @@ it.each([undefined, false, true])(
     expect(prompt.includes("## GOAT browser")).toBe(browserToolsAvailable === true);
   },
 );
+
+it("adds stdio GOAT servers to both ACP lists and drops HTTP", () => {
+  const context = acpMcpContext(
+    {
+      environmentId: EnvironmentId.make("fixture"),
+      threadId: ThreadId.make("fixture"),
+      providerSessionId: "fixture",
+      providerInstanceId: ProviderInstanceId.make("acp"),
+      endpoint: "http://localhost/mcp",
+      authorizationHeader: "fixture",
+      browserToolsAvailable: false,
+      goatMcpServers: [
+        {
+          providerName: "local_goat",
+          transport: "stdio",
+          command: "tool",
+          args: ["run"],
+          env: { KEY: "value" },
+        },
+        {
+          providerName: "remote_goat",
+          transport: "http",
+          url: "https://example.test",
+          headers: {},
+        },
+      ],
+    },
+    { command: "/goat/node", entrypoint: undefined },
+  );
+  const expected = {
+    name: "local_goat",
+    command: "tool",
+    args: ["run"],
+    env: [{ name: "KEY", value: "value" }],
+  };
+  expect(context.servers).toContainEqual(expected);
+  expect(context.acpServers).toContainEqual(expected);
+  expect(
+    [...context.servers, ...context.acpServers].some((server) => server.name === "remote_goat"),
+  ).toBe(false);
+});

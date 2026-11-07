@@ -1,3 +1,4 @@
+import { GlobalSkillsRpcs } from "./globalSkillsRpc.ts";
 import * as AuthAccessRpc from "./authAccessRpc.ts";
 import { WsComputerUseHistoryRpc, WsComputerUseStatusChangesRpc } from "./computerUseHistoryRpc.ts";
 import * as StorageCleanupRpcs from "./storageCleanupRpcs.ts";
@@ -400,7 +401,13 @@ import {
   ServerGetHostStatusInput,
 } from "./hostStatus.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcpFailure.ts";
-import { OpenCodexSyncReport, OpenCodexUpdateStatus } from "./opencodex.ts";
+import {
+  OPENCODEX_WS_METHODS,
+  WsServerCheckOpenCodexUpdateRpc,
+  WsServerPlanOpenCodexSyncRpc,
+  WsServerSubscribeOpenCodexSyncRpc,
+  WsServerSyncOpenCodexRpc,
+} from "./opencodexRpc.ts";
 import {
   HUB_DEVICE_WS_METHODS,
   WsHubDeviceChildOptInRpc,
@@ -672,10 +679,7 @@ export const WS_METHODS = {
   serverGetHostResources: "server.getHostResources",
   serverGetHostStatus: "server.getHostStatus",
   ...HUB_DEVICE_WS_METHODS,
-  serverCheckOpenCodexUpdate: "server.checkOpenCodexUpdate",
-  serverPlanOpenCodexSync: "server.planOpenCodexSync",
-  serverSyncOpenCodex: "server.syncOpenCodex",
-  serverSubscribeOpenCodexSync: "server.subscribeOpenCodexSync",
+  ...OPENCODEX_WS_METHODS,
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
@@ -1215,38 +1219,6 @@ const WsServerGetHostStatusRpc = Rpc.make(WS_METHODS.serverGetHostStatus, {
   payload: ServerGetHostStatusInput,
   success: GoatHostStatusResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
-});
-
-/**
- * Runs the managed OpenCodex update check now, Home first and then each Child. Null when this
- * machine coordinates no managed update (hub or goatclaw off).
- */
-const WsServerCheckOpenCodexUpdateRpc = Rpc.make(WS_METHODS.serverCheckOpenCodexUpdate, {
-  payload: Schema.Struct({}),
-  success: Schema.NullOr(OpenCodexUpdateStatus),
-  error: EnvironmentAuthorizationError,
-});
-
-/** What `ocx sync` would do on this machine and, on a Home, each linked Child. Reads only. */
-const WsServerPlanOpenCodexSyncRpc = Rpc.make(WS_METHODS.serverPlanOpenCodexSync, {
-  payload: Schema.Struct({}),
-  success: OpenCodexSyncReport,
-  error: EnvironmentAuthorizationError,
-});
-
-/** Runs `ocx sync` on this machine, then each Child; progress streams on the subscription. */
-const WsServerSyncOpenCodexRpc = Rpc.make(WS_METHODS.serverSyncOpenCodex, {
-  payload: Schema.Struct({}),
-  success: OpenCodexSyncReport,
-  error: EnvironmentAuthorizationError,
-});
-
-/** The latest sync report, then every change while a sync runs. Null before the first one. */
-const WsServerSubscribeOpenCodexSyncRpc = Rpc.make(WS_METHODS.serverSubscribeOpenCodexSync, {
-  payload: Schema.Struct({}),
-  success: Schema.NullOr(OpenCodexSyncReport),
-  error: EnvironmentAuthorizationError,
-  stream: true,
 });
 
 const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProcessResourceHistory, {
@@ -2772,10 +2744,12 @@ export const WsNotesRpcGroup = NotesRpcs.middleware(RpcScopeAuthorization);
 
 export const WsDecisionRpcGroup = DecisionRpcs.middleware(RpcScopeAuthorization);
 export const WsBrowserClaimsRpcGroup = BrowserClaimsRpcs.middleware(RpcScopeAuthorization);
+export const WsGlobalSkillsRpcGroup = GlobalSkillsRpcs.middleware(RpcScopeAuthorization);
 export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
   .merge(WsNotesRpcGroup)
   .merge(WsDecisionRpcGroup)
-  .merge(WsBrowserClaimsRpcGroup);
+  .merge(WsBrowserClaimsRpcGroup)
+  .merge(WsGlobalSkillsRpcGroup);
 
 export {
   WsMemoryProjectBindingGetRpc,

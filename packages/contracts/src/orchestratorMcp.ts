@@ -372,7 +372,6 @@ export const OrchestratorMcpCreatedThreadStatus = Schema.Union([
   OrchestratorMcpDelegatedTaskStatus,
   Schema.Literal("rolled_back"),
 ]);
-export type OrchestratorMcpCreatedThreadStatus = typeof OrchestratorMcpCreatedThreadStatus.Type;
 
 export const OrchestratorMcpCreatedThread = Schema.Struct({
   threadId: ThreadId,
@@ -645,6 +644,7 @@ export const OrchestratorMcpThreadSearchMatch = Schema.Struct({
   projectId: ProjectId,
   projectTitle: Schema.String,
   title: Schema.String,
+  link: Schema.optional(Schema.String),
   status: OrchestratorMcpThreadStatus,
   updatedAt: IsoDateTime,
   archived: Schema.Boolean,

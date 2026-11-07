@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("./useGoatBotSession", () => ({
   useGoatBotEnabled: () => ({ environment: { environmentId: "env-1" } }),
+  syncGoatBotMemberThreads: () => undefined,
 }));
 vi.mock("~/globalAgentStore", () => ({
   useGlobalAgentStore: (select: (state: unknown) => unknown) =>

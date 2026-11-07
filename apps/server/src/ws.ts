@@ -1,3 +1,4 @@
+import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
 import { channelBotWorkRpcHandlers } from "./channels/channelBotWorkRpc.ts";
@@ -33,7 +34,7 @@ import * as MemorySyncService from "./memory/MemorySyncService.ts";
 import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
 import * as NoteWorkService from "./notes/NoteWorkService.ts";
 import * as NotesService from "./notes/NotesService.ts";
-import { makeNoteRpcHandlers, ServerWsNotesRpcGroup } from "./notes/NotesRpcHandlers.ts";
+import { makeNoteRpcHandlersForSurface, ServerWsNotesRpcGroup } from "./notes/NotesRpcHandlers.ts";
 import { ServerWsBrowserClaimsRpcGroup } from "./preview/BrowserClaimsRpcHandlers.ts";
 import { makeBrowserClaimsHandlersLive } from "./preview/BrowserClaimWindowsLive.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -1943,9 +1944,7 @@ export const layerWsRpc = (
       const mutateProject = Effect.fn("ws.projects.mutate")(function* (mutation: ProjectMutation) {
         return yield* mutateProjectWithClone(projectService, projectCloneTracker, mutation);
       });
-      const noteHandlers = makeNoteRpcHandlers(
-        yield* NotesService.NotesService,
-        yield* NoteWorkService.NoteWorkService,
+      const noteHandlers = yield* makeNoteRpcHandlersForSurface(
         clientOrigin.surface === "mobile" ? "mobile" : "web",
       );
       const channelHandlers = ServerWsChannelRpcGroup.of({
@@ -3586,6 +3585,7 @@ export const layerWsRpc = (
         >(handlers),
         ServerWsChannelRpcGroup.toLayer(channelHandlers),
         ServerWsNotesRpcGroup.toLayer(noteHandlers),
+        makeGlobalSkillsRpcLayer(config.globalSkillsDir, serverSettings, providerRegistry),
         ServerWsBrowserClaimsRpcGroup.toLayer(browserClaimsHandlers),
       );
     }),

@@ -1,12 +1,16 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
-import type { BotThreadRow, ChannelUpdateTaskViewInput } from "@goat/contracts";
+import type { BotProfile, BotThreadRow, ChannelUpdateTaskViewInput } from "@goat/contracts";
 import { Alert, Text, View } from "react-native";
 import { useNavigationThreadShells } from "../../state/entities";
 import { resolveThreadListV2Status, threadHasUnseenCompletion } from "../threads/threadListV2";
+import { MobileBotProfileSheet } from "./MobileBotProfileSheet";
+import { MobileNewBotModel } from "./MobileNewBotModel";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
+import { useMobileBotManage } from "./useMobileBotManage";
+import { uuidv4 } from "../../lib/uuid";
 
 export function MobileBotRoster(props: {
   header?: ReactNode;
@@ -17,6 +21,10 @@ export function MobileBotRoster(props: {
   const roster = useMobileBotRoster(props.selectedKey);
   const preview = useMobileBotPreview();
   const shells = useNavigationThreadShells();
+  const manage = useMobileBotManage(roster.environmentId);
+  const [sheet, setSheet] = useState<
+    { readonly mode: "create" } | { readonly mode: "edit"; readonly bot: BotProfile } | null
+  >(null);
   const codingStatuses = useMemo(
     () =>
       new Map(
@@ -38,6 +46,34 @@ export function MobileBotRoster(props: {
       );
     });
   };
+  const askAbout = (entry: BotRosterEntry) => {
+    const bot = entry.profile;
+    if (bot === null) return;
+    const edit = { text: "Edit", onPress: () => setSheet({ mode: "edit", bot }) };
+    const cancel = { text: "Cancel", style: "cancel" as const };
+    if (entry.kind === "main") {
+      if (manage.canEdit) Alert.alert(bot.name, undefined, [edit, cancel]);
+      return;
+    }
+    if (!manage.canManage) return;
+    Alert.alert(bot.name, undefined, [
+      ...(manage.canEdit ? [edit] : []),
+      {
+        text: bot.hidden === true ? "Show" : "Hide",
+        onPress: () => void manage.hide(bot, bot.hidden !== true),
+      },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () =>
+          Alert.alert(`Delete ${bot.name}?`, "Its conversation is archived; you can restore it.", [
+            cancel,
+            { text: "Delete", style: "destructive", onPress: () => void manage.remove(bot) },
+          ]),
+      },
+      cancel,
+    ]);
+  };
   return (
     <View className="flex-1">
       <MobileBotRosterView
@@ -54,6 +90,22 @@ export function MobileBotRoster(props: {
         expanded={roster.expanded}
         hiddenCount={roster.hiddenCount}
         bots={roster.bots}
+        members={
+          roster.supportsMembers
+            ? {
+                hidden: roster.groups.hidden,
+                deleted: roster.groups.deleted,
+                canCreate: manage.canCreate,
+                onNewBot: () => setSheet({ mode: "create" }),
+                onLongPressBot: askAbout,
+                onPressDeleted: (bot) =>
+                  Alert.alert(`Restore ${bot.name}?`, "Its conversation comes back.", [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Restore", onPress: () => void manage.restore(bot) },
+                  ]),
+              }
+            : undefined
+        }
         rows={roster.children.rows}
         hasMore={roster.children.hasMore}
         slackEnabled={roster.slackEnabled}
@@ -86,6 +138,53 @@ export function MobileBotRoster(props: {
           ])
         }
       />
+      {sheet !== null && roster.environmentId !== null ? (
+        <BotSheet
+          sheet={sheet}
+          environmentId={roster.environmentId}
+          manage={manage}
+          onCreated={(bot) => props.onOpenBot({ kind: "member", profile: bot })}
+          onClose={() => setSheet(null)}
+        />
+      ) : null}
     </View>
+  );
+}
+
+function BotSheet(props: {
+  readonly sheet: { readonly mode: "create" } | { readonly mode: "edit"; readonly bot: BotProfile };
+  readonly environmentId: NonNullable<ReturnType<typeof useMobileBotRoster>["environmentId"]>;
+  readonly manage: ReturnType<typeof useMobileBotManage>;
+  readonly onCreated: (bot: BotProfile) => void;
+  readonly onClose: () => void;
+}) {
+  const [model, setModel] = useState<BotProfile["defaultModelSelection"]>(null);
+  const [clientRequestId] = useState(uuidv4);
+  const { sheet, manage } = props;
+  if (sheet.mode === "edit")
+    return (
+      <MobileBotProfileSheet
+        mode="edit"
+        initial={sheet.bot}
+        canSubmit={manage.canEdit}
+        onClose={props.onClose}
+        onSubmit={(changes) => manage.update(sheet.bot, changes)}
+      />
+    );
+  return (
+    <MobileBotProfileSheet
+      mode="create"
+      initial={{ name: "", avatar: null, purpose: "" }}
+      canSubmit={manage.canCreate}
+      onClose={props.onClose}
+      onSubmit={async (changes) => {
+        const result = await manage.create(changes, model, clientRequestId);
+        if (typeof result === "string") return result;
+        props.onCreated(result);
+        return null;
+      }}
+    >
+      <MobileNewBotModel environmentId={props.environmentId} model={model} onChange={setModel} />
+    </MobileBotProfileSheet>
   );
 }

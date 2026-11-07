@@ -287,3 +287,28 @@ it("sends a message's files on every attempt and names them while it is pending"
   await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("accepted"));
   expect(sent).toEqual([["photo.png"], ["photo.png"]]);
 });
+
+it("fails only the messages for a bot that cannot take them; others still send (member bots)", async () => {
+  const member = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("member") };
+  const sent: string[] = [];
+  let key = 0;
+  const queue = createGoatBotSendQueue({
+    send: ({ text }) => {
+      sent.push(text);
+      return Promise.resolve({ requestKey: `input-${text}` });
+    },
+    canDispatch: (target) => target.threadId !== member.threadId,
+    onChange: () => undefined,
+    makeKey: () => `key-${++key}`,
+  });
+  queue.submit("to deleted member", member);
+  queue.submit("to main", bot);
+  await vi.waitFor(() => expect(queue.pendingInputs()[1]?.state).toBe("accepted"));
+  expect(sent).toEqual(["to main"]);
+  expect(queue.pendingInputs().map(({ text, state, threadId }) => [text, state, threadId])).toEqual(
+    [
+      ["to deleted member", "failed", "member"],
+      ["to main", "accepted", "bot"],
+    ],
+  );
+});

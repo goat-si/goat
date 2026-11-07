@@ -20,7 +20,10 @@ import { Button } from "../ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { GoatBotAvatar, GoatBotMainAvatar } from "./GoatBotAvatar";
+import { GoatBotAvatar, GoatBotMainAvatar, GoatBotSessionAvatar } from "./GoatBotAvatar";
+import { useGoatBotMember } from "./goatBotMemberContext";
+import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
 import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
@@ -69,6 +72,8 @@ export interface GoatBotChatViewProps {
   readonly onCheckAgain?: (() => void) | undefined;
   /** Brings an archived bot chat back. */
   readonly onUnarchive?: (() => void) | undefined;
+  /** Brings a deleted member bot back, with its conversation. */
+  readonly onRestore?: (() => void) | undefined;
   /** Only offer navigation when this connection confirmed a different bot chat. */
   readonly canOpenCurrentBot?: boolean | undefined;
   /** The environment whose bot history is shown, which can differ from a new home during a move. */
@@ -94,9 +99,13 @@ export function GoatBotChatView({
   canOpenCurrentBot = false,
   environmentId = null,
   onUnarchive,
+  onRestore,
   onCheckAgain,
 }: GoatBotChatViewProps) {
   const [panelOpen, setPanelOpen] = useState(false);
+  const member = useGoatBotMember();
+  const memberWaiting = useGoatBotMemberWaitingCount(member);
+  const title = member?.name ?? GOAT_BOT_TITLE;
   const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const bot = availability.kind === "ready" ? availability.bot : null;
   const removed = removal !== null;
@@ -138,14 +147,24 @@ export function GoatBotChatView({
           {/* Equal sides center the title until the controls, which never shrink, need its space. */}
           <div aria-hidden className="flex-1 basis-0" />
           <div className="flex max-w-[60%] min-w-0 items-center gap-2">
-            <GoatBotMainAvatar
-              size="md"
-              chatOpen
-              activity={reading ? { state: "reading" } : removed ? null : working}
-            />
+            {member ? (
+              <GoatBotSessionAvatar
+                size="md"
+                chatOpen
+                waitingCount={memberWaiting}
+                threadRef={scopeThreadRef(member.environmentId, member.sessionThreadId)}
+                activity={reading ? { state: "reading" } : removed ? null : working}
+              />
+            ) : (
+              <GoatBotMainAvatar
+                size="md"
+                chatOpen
+                activity={reading ? { state: "reading" } : removed ? null : working}
+              />
+            )}
             <div className="flex min-w-0 items-center gap-2">
               <h1 className="goat-name-capsule truncate text-foreground">
-                {GOAT_BOT_TITLE} <ChevronRightIcon aria-hidden className="size-3" />
+                {title} <ChevronRightIcon aria-hidden className="size-3" />
               </h1>
               {headerStatus ? (
                 <p className="truncate text-2xs text-muted-foreground">{headerStatus}</p>
@@ -153,12 +172,18 @@ export function GoatBotChatView({
             </div>
           </div>
           <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
-            <GoatBotModelPicker />
+            {member ? (
+              <span className="text-xs text-muted-foreground">
+                {member.defaultModelSelection?.model ?? "GOAT Bot's model"}
+              </span>
+            ) : (
+              <GoatBotModelPicker />
+            )}
             {bot && (
               <Button
                 variant="ghost"
                 size="sm"
-                aria-label="Toggle GOAT Bot work panel"
+                aria-label={`Toggle ${title} work panel`}
                 aria-expanded={panelOpen}
                 onClick={() => setPanelOpen((open) => !open)}
               >
@@ -235,6 +260,8 @@ export function GoatBotChatView({
               onRetryAvailability={onRetryAvailability}
               canOpenCurrentBot={canOpenCurrentBot}
               onUnarchive={onUnarchive}
+              onRestore={member ? onRestore : undefined}
+              memberName={member?.name ?? null}
               onCheckAgain={onCheckAgain}
             />
           ) : (
@@ -260,7 +287,7 @@ export function GoatBotChatView({
             key={seed?.nonce ?? 0}
             initialText={seed?.text ?? ""}
             disabled={!canSend}
-            placeholder={canSend ? "Message GOAT Bot" : "GOAT Bot isn't available"}
+            placeholder={canSend ? `Message ${title}` : `${title} isn't available`}
             attachmentSupport={attachmentSupport}
             onSend={onSend}
           />
@@ -289,6 +316,8 @@ function GoatBotRemovedNotice({
   onRetryAvailability,
   canOpenCurrentBot,
   onUnarchive,
+  onRestore,
+  memberName,
   onCheckAgain,
 }: {
   readonly removal: Exclude<GoatBotRemoval, null>;
@@ -296,8 +325,32 @@ function GoatBotRemovedNotice({
   readonly onRetryAvailability: (() => void) | undefined;
   readonly canOpenCurrentBot: boolean;
   readonly onUnarchive: (() => void) | undefined;
+  readonly onRestore: (() => void) | undefined;
+  readonly memberName: string | null;
   readonly onCheckAgain: (() => void) | undefined;
 }) {
+  if (memberName !== null) {
+    return (
+      <Empty className="min-h-0 flex-1">
+        <EmptyHeader className="max-w-md">
+          <GoatBotAvatar size="lg" className="mx-auto mb-4" />
+          <EmptyTitle>{memberName} was deleted</EmptyTitle>
+          <EmptyDescription>
+            Its conversation is archived. Restore it to keep chatting here.
+          </EmptyDescription>
+        </EmptyHeader>
+        {onRestore !== undefined ? (
+          <EmptyContent>
+            <div className="flex justify-center">
+              <Button size="sm" variant="outline" onClick={onRestore}>
+                Restore
+              </Button>
+            </div>
+          </EmptyContent>
+        ) : null}
+      </Empty>
+    );
+  }
   if (removal === "unchecked") {
     return (
       <Empty className="min-h-0 flex-1">
@@ -400,7 +453,17 @@ function GoatBotNotice({
   readonly homeMove?: GoatBotChatViewProps["homeMove"];
   readonly onSelectExample?: ((text: string) => void) | undefined;
 }) {
-  const { title, description, retryLabel } = noticeCopy(availability);
+  const member = useGoatBotMember();
+  const copy = noticeCopy(availability);
+  // A member introduces itself by its own name and purpose.
+  const { title, description, retryLabel } =
+    member !== null && availability.kind === "ready"
+      ? {
+          ...copy,
+          title: member.name,
+          description: member.purpose || "It answers here and does the work in its own threads.",
+        }
+      : copy;
   const actions: ReactNode[] = [];
   if (availability.kind === "home_offline" && homeMove)
     actions.push(

@@ -4,15 +4,18 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  OrchestratorMcpThreadSearchMatch,
+  OrchestratorMcpThreadSearchResult,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   type OrchestratorMcpThreadSearchInput,
-  type OrchestratorMcpThreadSearchMatch,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -159,6 +162,14 @@ const runSearch = (
 const ids = (matches: ReadonlyArray<OrchestratorMcpThreadSearchMatch>) =>
   matches.map((match) => `${match.host ?? "here"}:${match.threadId}`);
 
+/** What a GOAT from before search matches carried link decodes a reply with. */
+const decodeOlderResult = Schema.decodeUnknownSync(
+  OrchestratorMcpThreadSearchResult.mapFields((fields) => ({
+    ...fields,
+    matches: Schema.Array(OrchestratorMcpThreadSearchMatch.mapFields(Struct.omit(["link"]))),
+  })),
+);
+
 describe("ThreadSearchMcpService", () => {
   it.effect.each(["allHosts", "hosts"] as const)(
     "returns fast hosts at the %s fan-out deadline without interrupting a slow launch",
@@ -281,6 +292,47 @@ describe("ThreadSearchMcpService", () => {
       expect(result._tag === "Success" && ids(result.success.matches)).toEqual(["here:quiet"]);
     }),
   );
+
+  // regression: #2333 decoding a host's reply dropped the link that host returned
+  it.effect(
+    "keeps the link a host returned, alone and across hosts, and none from an older host",
+    () =>
+      Effect.gen(function* () {
+        const linked = {
+          ...remoteMatch("r1", 40),
+          link: "[Remote r1](https://box.example.ts.net/box-environment/r1)",
+        };
+        const options = {
+          local: [localThread("l1", 30)],
+          hosts: ["box", "old"],
+          // "old" predates links in search results and sends none.
+          hostCall: (call: SshRemoteDispatch.SshHostToolCall) =>
+            pagingHost(call.host === "box" ? [linked] : [remoteMatch("r2", 20)])(call),
+        };
+
+        const alone = yield* runSearch(options, { query: "modelflare", host: "box" });
+        expect(alone.result._tag === "Success" && alone.result.success.matches).toEqual([
+          { ...linked, host: "box" },
+        ]);
+
+        const across = yield* runSearch(options, { query: "modelflare", allHosts: true });
+        if (across.result._tag !== "Success") throw new Error("fan-out failed");
+        const [box, here, old] = across.result.success.matches;
+        expect(ids(across.result.success.matches)).toEqual(["box:r1", "here:l1", "old:r2"]);
+        expect(box?.link).toBe(linked.link);
+        expect(here).not.toHaveProperty("link");
+        expect(old).not.toHaveProperty("link");
+      }),
+  );
+
+  it("lets an older GOAT, whose matches have no link, decode a reply that carries one", () => {
+    const decoded = decodeOlderResult({
+      matches: [{ ...remoteMatch("r1", 40), link: "[Remote r1](goat-thread://v1/r1)" }],
+      nextCursor: null,
+      truncated: false,
+    });
+    expect(decoded.matches).toEqual([remoteMatch("r1", 40)]);
+  });
 
   it.effect("names an outdated host instead of the argument it refused", () =>
     Effect.gen(function* () {
