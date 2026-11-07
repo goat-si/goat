@@ -10,6 +10,7 @@ import type { ComposerEditorProps } from "./GoatComposerEditor.types";
 export function ComposerEditor({
   ref,
   skills: _skills,
+  appChipIconUris: _appChipIconUris,
   selection,
   onPasteImages,
   onPasteText: _onPasteText,

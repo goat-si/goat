@@ -246,7 +246,7 @@ import {
   pickWorkspaceBasenameMatch,
   WORKSPACE_BASENAME_LOOKUP_LIMIT,
 } from "@goat/client-runtime/workspace-basename-lookup";
-import { useLiveThreadLinkLabels, useThreadChipIcons } from "../../state/entities";
+import { useLiveThreadLinkLabels, useContextChipIcons } from "../../state/entities";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -856,7 +856,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
 }) {
   const iconSubtleColor = useUniwindTheme()["--color-icon-subtle"];
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
-  const threadIcons = useThreadChipIcons(props.environmentId, liveMarkdown);
+  const threadIcons = useContextChipIcons(props.environmentId, liveMarkdown);
   const linkHandlers: MarkdownLinkHandlers = {
     ...props.linkHandlers,
     linkCustomization: (href) =>
@@ -1833,7 +1833,7 @@ function UserMessageContent(props: UserMessageContentProps) {
   const openLinkedThread = useOpenLinkedThread();
   const { selectedThread } = useThreadSelection();
   const liveText = useLiveThreadLinkLabels(props.text, props.environmentId);
-  const threadIcons = useThreadChipIcons(props.environmentId, liveText, props.context?.records);
+  const threadIcons = useContextChipIcons(props.environmentId, liveText, props.context?.records);
   const text = replaceComposerContextReferences(liveText, (ref) => {
     const available = props.context?.records.some((record) => record.contextId === ref.contextId);
     return `[${ref.label}${available ? "" : " (unavailable)"}](${GOAT_CONTEXT_LINK_PROTOCOL}://v1/${ref.kind}/${ref.contextId})`;
