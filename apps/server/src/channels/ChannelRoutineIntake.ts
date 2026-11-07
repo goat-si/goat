@@ -15,6 +15,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -157,12 +158,21 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  // Each pass resumes after the last row the previous one read, wrapping at the end, so rows that
+  // keep failing cannot hold back the ones behind them however many there are.
+  const pendingAfter = yield* Ref.make("");
+  const settleAfter = yield* Ref.make("");
+  const advance = (cursor: Ref.Ref<string>, rows: ReadonlyArray<{ readonly firing_id: string }>) =>
+    Ref.set(cursor, rows.length === BATCH ? (rows.at(-1)?.firing_id ?? "") : "");
+
   const ingestPending = Effect.gen(function* () {
+    const after = yield* Ref.get(pendingAfter);
     const rows = yield* sql<PendingRow>`
       SELECT firing_id, task_id, payload_json FROM scheduled_task_channel_inputs
-      WHERE state = 'pending' ORDER BY created_at, firing_id LIMIT ${BATCH}`.pipe(
+      WHERE state = 'pending' AND firing_id > ${after} ORDER BY firing_id LIMIT ${BATCH}`.pipe(
       Effect.mapError(persistence("list pending routine inputs")),
     );
+    yield* advance(pendingAfter, rows);
     const at = DateTime.formatIso(yield* DateTime.now);
     let moved = 0;
     for (const row of rows)
@@ -173,13 +183,15 @@ const make = Effect.gen(function* () {
   const settle = Effect.gen(function* () {
     const clock = yield* DateTime.now;
     const at = DateTime.formatIso(clock);
+    const after = yield* Ref.get(settleAfter);
     const rows = yield* sql<FinishedRow>`
       SELECT l.firing_id, i.state AS inbox_state, i.failure_json
       FROM scheduled_task_channel_inputs l JOIN channel_inbox i ON i.input_id = l.input_id
-      WHERE l.state = 'ingested' AND i.state NOT IN ('accepted', 'processing')
-      ORDER BY l.created_at, l.firing_id LIMIT ${BATCH}`.pipe(
+      WHERE l.state = 'ingested' AND i.state NOT IN ('accepted', 'processing') AND l.firing_id > ${after}
+      ORDER BY l.firing_id LIMIT ${BATCH}`.pipe(
       Effect.mapError(persistence("list finished routine inputs")),
     );
+    yield* advance(settleAfter, rows);
     let settled = 0;
     for (const row of rows) {
       const failure =

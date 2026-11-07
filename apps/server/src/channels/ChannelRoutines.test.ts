@@ -365,28 +365,41 @@ describe("GOAT Bot routines", () => {
   );
 });
 describe("GOAT Bot routine resilience", () => {
-  it.effect("a routine that keeps failing does not hold back the routines after it", () => {
-    const harness = makeHarness();
-    harness.script.current = routineScript([]);
-    return Effect.gen(function* () {
-      yield* setupBot;
-      const sql = yield* SqlClient.SqlClient;
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const stuck = yield* admit("Look over my tasks", "a-stuck");
-      // Another link already holds the input id this firing derives, so storing it fails each pass.
-      const taken = inputIdFor({
-        ownerId,
-        kind: "goat",
-        connectionId: ChannelGateway.GOAT_CONNECTION_ID,
-        idempotencyKey: ROUTINE_KEY_PREFIX + stuck.firingId,
-      });
-      yield* sql`INSERT INTO scheduled_task_channel_inputs
-        (firing_id, task_id, input_id, payload_json, state, created_at)
-        VALUES ('stray', 'stray', ${taken}, '{}', 'settled', ${AT})`;
-      const later = yield* admit("Look over my tasks", "b-later");
-      yield* runtime.drain;
-      assert.strictEqual((yield* firing(later.firingId))?.status, "completed");
-      assert.deepInclude(yield* linkOf(stuck.firingId), { state: "pending" });
-    }).pipe(Effect.provide(harness.layer));
-  });
+  it.effect(
+    "routines that keep failing do not hold back the routines after them, however many",
+    () => {
+      const harness = makeHarness();
+      harness.script.current = routineScript([]);
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const sql = yield* SqlClient.SqlClient;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const later = yield* admit("Look over my tasks", "b-later");
+        const [link] = yield* sql<{ readonly payload_json: string }>`
+        SELECT payload_json FROM scheduled_task_channel_inputs WHERE firing_id = ${later.firingId}`;
+        const payload = link!.payload_json;
+        // A full batch of older firings whose input id another link already holds: storing each
+        // fails on every pass.
+        const stuck = Array.from({ length: 50 }, (_, index) =>
+          CommandId.make("scheduled-task:a-stuck-" + String(index).padStart(2, "0")),
+        );
+        for (const firingId of stuck) {
+          const taken = inputIdFor({
+            ownerId,
+            kind: "goat",
+            connectionId: ChannelGateway.GOAT_CONNECTION_ID,
+            idempotencyKey: ROUTINE_KEY_PREFIX + firingId,
+          });
+          yield* sql`INSERT INTO scheduled_task_channel_inputs
+          (firing_id, task_id, input_id, payload_json, state, created_at) VALUES
+          (${firingId}, 'stuck', NULL, ${payload}, 'pending', ${AT}),
+          (${"stray:" + firingId}, 'stray', ${taken}, '{}', 'settled', ${AT})`;
+        }
+        yield* runtime.drain;
+        yield* runtime.drain;
+        assert.strictEqual((yield* firing(later.firingId))?.status, "completed");
+        assert.deepInclude(yield* linkOf(stuck[0]!), { state: "pending" });
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });

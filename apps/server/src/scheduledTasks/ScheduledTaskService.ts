@@ -1217,8 +1217,8 @@ export const layer = Layer.effect(
         lastRunError: existingTask?.lastRunError ?? null,
         runCount: existingTask?.runCount ?? 0,
       };
-      yield* saveTask(task, input.requireExisting === true, webhook);
-      yield* botRoutines.saveOwner(id, owner);
+      const save = saveTask(task, input.requireExisting === true, webhook);
+      yield* botRoutines.saveWithOwner(save, id, owner);
       yield* notifyChanged;
       return { task: (yield* findTask(id)) ?? task };
     });

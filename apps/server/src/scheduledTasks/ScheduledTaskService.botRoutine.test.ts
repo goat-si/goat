@@ -214,3 +214,18 @@ it.effect("a routine keeps its GOAT Bot binding after the bot's thread is replac
     { botThreads },
   );
 });
+it.effect("a routine and its owner are saved together or not at all", () =>
+  withWebhookService(
+    ({ service, sql }) =>
+      Effect.gen(function* () {
+        // The owner write fails, as a crash between the two writes would leave it.
+        yield* sql`CREATE TRIGGER refuse_owner BEFORE UPDATE OF owner_json ON scheduled_tasks
+          BEGIN SELECT RAISE(ABORT, 'owner write failed'); END`;
+        yield* Effect.flip(
+          service.upsert(yield* routineInput(), { memoryGrantCeiling: "none", owner }),
+        );
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_tasks`, 0);
+      }),
+    { botThreads: new Set([botThread]) },
+  ),
+);

@@ -4,6 +4,7 @@ import {
   ThreadId,
   type CommandId,
   type ScheduledTask,
+  type ScheduledTaskError,
   type ScheduledTaskId,
   type ScheduledTaskUpsertSchedule,
 } from "@goat/contracts";
@@ -90,6 +91,19 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
       ),
     );
 
+  /** The task row and its owner commit together, so a crash never leaves a bot routine unowned. */
+  const saveWithOwner = <A>(
+    save: Effect.Effect<A, ScheduledTaskError>,
+    taskId: ScheduledTaskId,
+    owner: RoutineOwner | null,
+  ) =>
+    sql.withTransaction(save.pipe(Effect.andThen(saveOwner(taskId, owner)))).pipe(
+      Effect.catchTags({
+        SqlError: (cause) =>
+          Effect.fail(taskError("Could not save the routine.", { taskId, cause })),
+      }),
+    );
+
   /**
    * none: an ordinary task; unowned: a bot routine that cannot run; linkable: the channel path.
    * A stored owner marks the binding for good: a bot thread replaced since stays answer-only, and
@@ -123,5 +137,5 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
       })}, 'pending', ${input.at})
       ON CONFLICT (firing_id) DO NOTHING`.pipe(Effect.asVoid);
 
-  return { checkUpsert, saveOwner, kind, link };
+  return { checkUpsert, saveWithOwner, kind, link };
 });
