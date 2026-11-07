@@ -542,10 +542,8 @@ const leaseWorker = (
         Layer.mergeAll(
           harness.layer,
           Layer.succeed(ResourceCleanup.ResourceCleanupService, {
-            cleanupScheduledTasks: () => Effect.void,
+            ...ResourceCleanup.ResourceCleanupService.defaultValue(),
             cleanupTerminals,
-            cleanupPreviews: () => Effect.void,
-            cleanupAttachments: () => Effect.void,
           }),
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ detach }),
           Layer.mock(CheckpointRollback.CheckpointRollbackServiceV2)({}),
