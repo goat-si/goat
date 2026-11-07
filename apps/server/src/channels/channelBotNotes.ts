@@ -21,7 +21,7 @@ const NOTE_MAX_CHARS = 500;
 const SKILLS_LIMIT = 20;
 const SKILL_SUMMARY_CHARS = 200;
 
-const NOTES_HEADER =
+export const NOTES_HEADER =
   "# GOAT Bot notes\n\nStanding notes people asked GOAT Bot to keep, newest last. Edit or delete lines freely.\n\n";
 
 export interface ChannelBotFiles {
