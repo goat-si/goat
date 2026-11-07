@@ -14,6 +14,9 @@ export class ComposerThreadHosts extends Map<EnvironmentId, string> {
   allows(id: EnvironmentId, host: string) {
     return this.aliases.get(host) === id;
   }
+  resolve(host: string) {
+    return this.aliases.get(host);
+  }
 }
 
 export function composerThreadHosts(input: {

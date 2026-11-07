@@ -197,6 +197,14 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
     });
   }
 
+  const launcher = yield* runExecutable(executable, ["__service-launcher"], contentDir);
+  if (launcher.exitCode !== 1 || !launcher.stderr.includes("GOAT_HOME is required")) {
+    return yield* new CliArchiveSmokeError({
+      step: "running __service-launcher",
+      detail: `exit ${String(launcher.exitCode)}\n${launcher.stdout}${launcher.stderr}`,
+    });
+  }
+
   const runtime = yield* runExecutable(
     executable,
     ["__ssh-helper", "runtime-manifest"],

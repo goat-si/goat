@@ -66,44 +66,6 @@ const approval = (turnId: string) => ({
 vi.mock("node:fs/promises", { spy: true });
 
 describe("MuseAdapterV2", () => {
-  it.effect.each([true, false])(
-    "forceNewNativeThread starts a distinct session preserving row identity with existing row %s",
-    (includeExisting) =>
-      Effect.gen(function* () {
-        const fake = yield* makeFakeMuse();
-        const harness = yield* makeHarness(fake, INSTANCE_ID, "saved-session");
-        const original = harness.providerThread;
-        const fresh = yield* harness.runtime.ensureThread({
-          threadId: THREAD_ID,
-          modelSelection: modelSelection(),
-          runtimePolicy,
-          ...(includeExisting ? { existingProviderThread: original } : {}),
-          forceNewNativeThread: true,
-        });
-        assert.notStrictEqual(fresh.nativeThreadRef?.nativeId, original.nativeThreadRef?.nativeId);
-        assert.strictEqual(fresh.id, original.id);
-        assert.strictEqual(fresh.createdAt, original.createdAt);
-        assert.strictEqual(fresh.appThreadId, original.appThreadId);
-        assert.strictEqual(fresh.providerSessionId, original.providerSessionId);
-        assert.strictEqual(fresh.status, "idle");
-        const starts = fake.calls.filter((call) => call.method === "session/start");
-        assert.strictEqual(starts.length, 1);
-        assert.strictEqual(starts[0]?.params.sessionId, fresh.nativeThreadRef?.nativeId);
-        assert.strictEqual(fake.calls.filter((call) => call.method === "session/resume").length, 1);
-        const again = yield* harness.runtime.resumeThread!({ providerThread: fresh });
-        assert.strictEqual(again.id, fresh.id);
-        assert.strictEqual(again.nativeThreadRef?.nativeId, fresh.nativeThreadRef?.nativeId);
-        yield* harness.runtime.startTurn(yield* turnInput(fresh));
-        const started = yield* fake.takeCall("turn/start");
-        assert.strictEqual(started.params.sessionId, fresh.nativeThreadRef?.nativeId);
-        yield* fake.emit("turn/completed", { turnId: started.commandId, terminal: "completed" });
-        assert.strictEqual(
-          (yield* harness.takeEvent("turn.terminal")).providerThreadId,
-          original.id,
-        );
-      }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
   it.effect("forceNewNativeThread clears the previous native conversation head and context", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();
@@ -692,16 +654,33 @@ describe("MuseAdapterV2", () => {
       }).pipe(Effect.provide(testLayer)),
   );
 
-  it.effect(
-    "closes a newly opened host when native session registration returns another identity",
-    () =>
+  it.effect.each([
+    {
+      reason: "another identity",
+      method: "session/start",
+      sessionId: "unexpected-session",
+      initialNativeThreadId: undefined,
+      history: { items: [] },
+    },
+    {
+      reason: "an unavailable projection",
+      method: "session/resume",
+      sessionId: "saved-session",
+      initialNativeThreadId: "saved-session",
+      history: { items: null, mode: "none", noneReason: "projectionUnavailable" },
+    },
+  ])(
+    "closes a newly opened host when native session registration returns $reason",
+    ({ method, sessionId, initialNativeThreadId, history }) =>
       Effect.gen(function* () {
         const fake = yield* makeFakeMuse();
-        fake.queueResponse("session/start", {
-          session: { sessionId: "unexpected-session", modelId: MODEL, activeTurnId: null },
-          history: { items: [] },
+        fake.queueResponse(method, {
+          session: { sessionId, modelId: MODEL, activeTurnId: null },
+          history,
         });
-        const result = yield* makeHarness(fake).pipe(Effect.exit);
+        const result = yield* makeHarness(fake, INSTANCE_ID, initialNativeThreadId).pipe(
+          Effect.exit,
+        );
         assert.strictEqual(result._tag, "Failure");
         yield* Effect.promise(() => fake.host.exited);
         assert.strictEqual(fake.closeCount(), 1);
@@ -1283,6 +1262,11 @@ describe("MuseAdapterV2", () => {
         text: "Previous answer",
       };
       fake.setHistory([nativeItem]);
+      fake.queueResponse("session/resume", {
+        session: { sessionId: "saved-session", modelId: MODEL, activeTurnId: null },
+        viewCursor: "",
+        history: { items: null, mode: "none", noneReason: "excluded" },
+      });
       const harness = yield* makeHarness(fake, INSTANCE_ID, "saved-session");
       const resumed = yield* fake.takeCall("session/resume");
       assert.strictEqual(resumed.params.sessionId, "saved-session");

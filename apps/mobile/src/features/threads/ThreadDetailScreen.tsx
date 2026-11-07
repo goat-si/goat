@@ -1,3 +1,4 @@
+import { USER_INPUT_TOGGLE_TIMING } from "./threadDetailMotion";
 import { ChildThreadApprovals } from "./ChildThreadApprovals";
 import type { CloudRunCard, CloudTaskState } from "@goat/client-runtime/state/cloud-task";
 import { CloudTaskStatus } from "./CloudTaskStatus";
@@ -10,7 +11,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import { AsyncResult, Atom } from "effect/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
@@ -41,6 +42,7 @@ import { HeaderHeightContext } from "@react-navigation/elements";
 import { NativeLayoutObserver } from "../../native/NativeLayoutObserver";
 import { deriveBottomControlInsets, type NativeLayoutMetrics } from "../../lib/reserved-regions";
 import type {
+  OrchestrationV2ProviderSession,
   EnvironmentId,
   MessageId,
   ModelSelection,
@@ -69,7 +71,6 @@ import {
   isBackgroundWorkStopPending,
   limitRecoveryHoldsSnooze,
   presentPendingBackgroundWork,
-  presentProviderGoal,
 } from "@goat/client-runtime/state/thread-execution";
 import { resolveSubagentPillSegment } from "@goat/client-runtime/state/thread-subagents";
 import {
@@ -163,7 +164,6 @@ import { threadStreamHaptics } from "./threadStreamHaptics";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useDelayedStatus } from "../../lib/useDelayedStatus";
-import type { RunStopPresentation } from "@goat/client-runtime/state/thread-execution";
 import type {
   PendingApproval,
   PendingUserInput,
@@ -183,7 +183,14 @@ import {
   FLOATING_WORKING_CONTROL_COVERAGE,
   FloatingWorkingControl,
 } from "./floating-working-control";
-import { connectionFloatingStatus, type FloatingWorkingStatus } from "./floating-working-status";
+import {
+  connectionFloatingStatus,
+  goalFloatingStatus,
+  NO_RUN_STOP_ATOM,
+  piExtensionStatus,
+  piExtensionForControl,
+  type FloatingWorkingStatus,
+} from "./floating-working-status";
 import { workingFloatingStatus } from "./turn-settle";
 import {
   derivePendingUserInputMaxHeight,
@@ -245,6 +252,7 @@ export interface ThreadDetailScreenProps {
   readonly activeWorkStartedAt: string | null;
   readonly runlessWorkActive?: boolean;
   readonly providerSubagentStatus?: ProviderSubagentStatus | null;
+  readonly extensionStatuses?: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>;
   readonly isCompacting: boolean;
   readonly creationState:
     | {
@@ -323,13 +331,6 @@ export interface ThreadDetailScreenProps {
 }
 const USAGE_LIMITS_PANEL_GAP = 12;
 const USAGE_LIMITS_PANEL_MIN_HEIGHT = 44;
-const USER_INPUT_TOGGLE_TIMING = {
-  duration: USER_INPUT_TOGGLE_DURATION_MS,
-  easing: Easing.out(Easing.cubic),
-};
-const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
-  Atom.withLabel("mobile-thread-run-stop:empty"),
-);
 // Connection failures survive retries and app suspension.
 const RECONNECT_ERROR_DELAY_MS = 5_000;
 // Anchors, the submitted message, follow state and pending scrolls belong to
@@ -688,6 +689,7 @@ function ThreadDetailBody(
   const pendingBackgroundWork = presentPendingBackgroundWork(
     props.selectedThread.pendingBackgroundTasks,
   );
+  const extensionStatus = piExtensionStatus(props.extensionStatuses);
   const floatingStatus = ((): FloatingWorkingStatus | null => {
     const connectionStatus = connectionFloatingStatus({
       connectionError: connectionRetrying ? retryConnectionError : props.connectionError,
@@ -809,12 +811,10 @@ function ThreadDetailBody(
       };
     }
     if (props.selectedThread.goal !== null && contentPresentationKind === "ready") {
-      const goal = presentProviderGoal(props.selectedThread.goal, false);
-      return {
-        kind: "goal",
-        label: goal.title,
-        accessibilityLabel: `${goal.title}: ${goal.objective}`,
-      };
+      return goalFloatingStatus(props.selectedThread.goal);
+    }
+    if (extensionStatus !== null && contentPresentationKind === "ready") {
+      return { kind: "extension", ...extensionStatus };
     }
     return null;
   })();
@@ -1534,6 +1534,7 @@ function ThreadDetailBody(
                 <FloatingWorkingControl
                   colorScheme={isDarkMode ? "dark" : "light"}
                   status={floatingStatus}
+                  extensionStatus={piExtensionForControl(floatingStatus, extensionStatus)}
                   lift={floatingControlLift}
                   devicePreview={
                     devicePreviews.length > 0

@@ -1,3 +1,10 @@
+import {
+  RemoteLineageRow,
+  finishedLineageStatus,
+  type LineageRow,
+  type RemoteLineageAgent,
+} from "./RemoteLineageRow";
+import { useThreadContextHosts } from "../../lib/useThreadContextHosts";
 import { lineageRowExists, useThreadLineageResolution } from "../../state/threadLineageLookup";
 import { MemoryRunAccessLabel } from "../settings/MemoryRunAccessLabel";
 import { useAtomValue } from "@effect/atom-react";
@@ -23,7 +30,6 @@ import {
   orderWebThreadLineageRows,
   resolveMergeBackTargetThreadId,
   type ThreadRelationshipEdge,
-  type ThreadRelationshipWalkRow,
 } from "@goat/client-runtime/state/thread-relationships";
 import {
   canDetachThreadProviderSession,
@@ -138,16 +144,17 @@ function ThreadLineageRowList(props: {
 
 function ThreadLineageGroup(props: {
   readonly label: string | null;
-  readonly rows: ReadonlyArray<ThreadRelationshipWalkRow>;
+  readonly rows: ReadonlyArray<LineageRow>;
   readonly expanded: boolean;
-  readonly children: (rows: ReadonlyArray<ThreadRelationshipWalkRow>) => ReactNode;
+  readonly children: (rows: ReadonlyArray<LineageRow>) => ReactNode;
 }) {
   const [expanded, setExpanded] = useState(props.expanded);
   const [visibleCount, setVisibleCount] = useState(THREAD_LINEAGE_INITIAL_COUNT);
   const { visibleRows, hiddenCount } = resolveThreadLineageWindow(props.rows, visibleCount);
-  const failedCount = props.rows.filter(
-    ({ edge }) => edge.status === "failed" || edge.status === "error",
-  ).length;
+  const failedCount = props.rows.filter((row) => {
+    const status = "remote" in row ? row.remote.status : row.edge.status;
+    return status === "failed" || status === "error";
+  }).length;
   if (props.rows.length === 0) return null;
   return (
     <div>
@@ -302,6 +309,7 @@ export function ThreadRelationshipsPanel(props: {
 }) {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
   const projection = useThreadProjection(ref)?.projection ?? null;
+  const remoteHosts = useThreadContextHosts(props.environmentId);
   const providersByEnvironment = useEnvironmentProviders();
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const relationshipShells = useThreadRelationshipShells(ref);
@@ -456,16 +464,26 @@ export function ThreadRelationshipsPanel(props: {
   } = groupBy(visibleRelationships, ({ edge }) => {
     if (edge.kind !== "subagent" || isParentThreadRelationship(edge, props.threadId))
       return "related";
-    return ["completed", "failed", "error", "cancelled", "interrupted", "idle"].includes(
-      edge.status ?? "",
-    )
-      ? "previous"
-      : "active";
+    return finishedLineageStatus(edge.status) ? "previous" : "active";
   });
+  const remoteAgents = projected.filter(
+    (agent): agent is RemoteLineageAgent => agent.remote !== undefined,
+  );
+  const remoteActive = remoteAgents
+    .filter((agent) => !finishedLineageStatus(agent.status))
+    .map((remote) => ({ remote }));
+  const remotePrevious = remoteAgents
+    .filter((agent) => finishedLineageStatus(agent.status))
+    .map((remote) => ({ remote }));
   const groups = [
     { id: "related", label: null, rows: related, expanded: true },
-    { id: "active", label: null, rows: active, expanded: true },
-    { id: "previous", label: "Previous agents", rows: previous, expanded: false },
+    { id: "active", label: null, rows: [...active, ...remoteActive], expanded: true },
+    {
+      id: "previous",
+      label: "Previous agents",
+      rows: [...previous, ...remotePrevious],
+      expanded: false,
+    },
   ];
   const runningCount =
     (projection?.subagents.filter(
@@ -474,6 +492,7 @@ export function ThreadRelationshipsPanel(props: {
 
   if (
     visibleRelationships.length === 0 &&
+    remoteAgents.length === 0 &&
     runningCount === 0 &&
     launchedBy === undefined &&
     launchedRows.length === 0
@@ -578,7 +597,13 @@ export function ThreadRelationshipsPanel(props: {
       headingId="thread-details-lineage-heading"
       title={runningCount > 0 ? `Lineage · ${runningCount} running` : "Lineage"}
       // A lone "Previous agents" row names itself; the heading returns for status or actions.
-      showHeading={runningCount > 0 || canDetach || related.length > 0 || active.length > 0}
+      showHeading={
+        runningCount > 0 ||
+        canDetach ||
+        related.length > 0 ||
+        active.length > 0 ||
+        remoteActive.length > 0
+      }
       data-thread-relationships-panel
       actions={
         canDetach ? (
@@ -655,7 +680,19 @@ export function ThreadRelationshipsPanel(props: {
       {groups.map((group) => (
         <ThreadLineageGroup key={`${scopedThreadKey(ref)}:${group.id}`} {...group}>
           {(visibleRows) =>
-            visibleRows.map(({ threadId, edge }) => {
+            visibleRows.map((row) => {
+              if ("remote" in row)
+                return (
+                  <RemoteLineageRow
+                    key={row.remote.id}
+                    agent={row.remote}
+                    hosts={remoteHosts}
+                    onOpen={(environmentId, threadId) =>
+                      openScopedThread(scopeThreadRef(environmentId, threadId))
+                    }
+                  />
+                );
+              const { threadId, edge } = row;
               const node = graph.nodes.get(threadId);
               const isSubagent = edge.kind === "subagent";
               const isMergeTarget = threadId === mergeTargetThreadId;

@@ -1,3 +1,4 @@
+import { firstRouteParam } from "../terminal/terminalRouteHelpers.ts";
 import { useRememberThreadProject } from "./useRememberThreadProject";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -127,11 +128,6 @@ interface ThreadInspectorSelection {
 function InspectorPaneRoleActivation() {
   useAdaptiveWorkspacePaneRole("inspector");
   return null;
-}
-
-function firstRouteParam(value: string | string[] | undefined): string | null {
-  const first = Array.isArray(value) ? value[0] : value;
-  return first === undefined || first.trim().length === 0 ? null : first;
 }
 
 type ThreadRouteScreenRouteProps = StaticScreenProps<{
@@ -762,6 +758,7 @@ function ThreadRouteContent(
         worktreePath: preferredWorktreePath,
         env,
         initialInput: projectScriptTerminalInput(script.command),
+        stopOnSettle: script.stopOnSettle ?? false,
       },
     });
     terminalDebugLog("project-script:staged", {
@@ -1041,6 +1038,7 @@ function ThreadRouteContent(
           }
           isCompacting={composer.isCompacting}
           runlessWorkActive={composer.runlessWorkActive}
+          extensionStatuses={composer.extensionStatuses}
           providerSubagentStatus={composer.providerSubagentStatus}
           creationState={creationState}
           setupWorkingStartedAt={

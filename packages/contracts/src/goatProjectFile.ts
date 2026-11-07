@@ -46,6 +46,12 @@ export const GoatProjectFileScript = Schema.Struct({
         "When true, the script runs in the thread's worktree each time the thread settles, for example to delete build output. Threads without their own worktree skip it.",
     }),
   ),
+  stopOnSettle: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "When true, GOAT stops this action's terminal and child processes when its thread settles.",
+    }),
+  ),
   runAsCheck: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:

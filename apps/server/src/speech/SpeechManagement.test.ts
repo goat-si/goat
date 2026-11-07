@@ -58,6 +58,10 @@ it.effect("lists, downloads, configures and removes catalog models", () =>
       ),
     );
     expect(getSpeechModel(modelId)).toBeDefined();
+    const recommended = (yield* service.list).find(
+      (entry) => entry.id === "handy-computer/parakeet-unified-en-0.6b-gguf",
+    );
+    expect(recommended?.recommended).toBe(true);
     yield* service.download(modelId);
     yield* service.configure({ modelId, acceleration: "cpu" });
     expect((yield* service.list).find((entry) => entry.id === modelId)).toMatchObject({

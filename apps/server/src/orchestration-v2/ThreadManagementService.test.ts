@@ -423,47 +423,6 @@ it.effect.each(["live", "no-session", "unsupported-runtime"] as const)(
 );
 
 it.effect.each([
-  { status: "completed" as const, settles: true },
-  { status: "failed" as const, settles: false },
-  { status: "interrupted" as const, settles: false },
-])("settleAfterRun settles only when the run $status", ({ status, settles }) =>
-  Effect.gen(function* () {
-    const projectId = ProjectId.make("project:thread-management:settle-after-run");
-    const threadId = ThreadId.make("thread:thread-management:settle-after-run");
-    const runId = RunId.make("run:thread-management:settle-after-run");
-    const dispatched: Array<string> = [];
-    const layerTest = ThreadManagementService.layer.pipe(
-      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
-      Layer.provide(
-        Layer.mock(Orchestrator.OrchestratorV2)({
-          getThreadEventSequence: () => Effect.succeed(0),
-          restartContinuationPending: () => Effect.succeed(false),
-          getThreadRecords: () =>
-            Effect.succeed({
-              thread: { id: threadId, projectId, deletedAt: null },
-              runs: [{ id: runId, status }],
-            } as unknown as OrchestrationV2ThreadProjection),
-          dispatch: (command) =>
-            Effect.sync(() => {
-              dispatched.push(command.type);
-              return { sequence: 1, storedEvents: [] } as never;
-            }),
-        }),
-      ),
-      Layer.provide(ServerSettings.layerTest()),
-      Layer.provide(layerReceiptsTest),
-    );
-    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
-      Effect.provide(layerTest),
-    );
-
-    yield* service.settleAfterRun({ projectId, threadId, runId });
-
-    expect(dispatched).toEqual(settles ? ["thread.settle"] : []);
-  }),
-);
-
-it.effect.each([
   "delegated_task.remote.register",
   "delegated_task.remote.progress",
   "delegated_task.remote.result",

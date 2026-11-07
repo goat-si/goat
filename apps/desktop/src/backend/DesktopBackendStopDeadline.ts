@@ -63,8 +63,11 @@ export const closeRun = (
     );
     if (Option.isNone(settled)) yield* onSpawnPending;
     yield* waitForBackendStopIntent(run.intent);
-    yield* Scope.close(run.scope, Exit.void);
-    if (Option.isSome(settled)) yield* waitForFiber;
+    yield* Scope.close(run.scope, Exit.void).pipe(
+      Effect.withSpan("desktop.backendInstance.closeScope"),
+    );
+    if (Option.isSome(settled))
+      yield* waitForFiber.pipe(Effect.withSpan("desktop.backendInstance.awaitRun"));
   });
   const timeout = options?.timeout;
 

@@ -1,3 +1,5 @@
+import { makeCodexInheritedHistory } from "./CodexInheritedHistory.ts";
+import { transcriptIdentity, sameTranscriptIdentity } from "./AgentSessionTranscriptIdentity.ts";
 import { LEGACY_MANAGED_WORKTREE_PATH } from "@goat/contracts/legacyT3Names";
 import * as NodeOS from "node:os";
 
@@ -122,6 +124,7 @@ const TranscriptRecord = Schema.Struct({
       message: Schema.optional(Schema.String),
       model: Schema.optional(Schema.String),
       cwd: Schema.optional(Schema.String),
+      history_base: Schema.optional(Schema.Unknown),
       content: Schema.optional(Schema.Array(TranscriptContentBlock)),
       internal_chat_message_metadata_passthrough: Schema.optional(Schema.Unknown),
     }),
@@ -693,45 +696,6 @@ function extractCwd(line: string, source: AgentSessionSource): string | null | f
   return null;
 }
 
-function transcriptIdentity(filePath: string, stats: FileSystem.File.Info) {
-  return {
-    filePath,
-    size: Number(stats.size),
-    mtimeMs: Option.match(stats.mtime, { onNone: () => null, onSome: (date) => date.getTime() }),
-    device: Number(stats.dev),
-    inode: Option.match(stats.ino, { onNone: () => null, onSome: String }),
-    birthtimeMs: Option.match(stats.birthtime, {
-      onNone: () => null,
-      onSome: (date) => date.getTime(),
-    }),
-  };
-}
-
-type TranscriptIdentity = Pick<
-  AgentSessionImportSource,
-  "filePath" | "size" | "mtimeMs" | "device" | "inode" | "birthtimeMs"
->;
-
-const fileIdKey = (inode: TranscriptIdentity["inode"]) => (inode === null ? null : String(inode));
-
-function sameTranscriptIdentity(left: TranscriptIdentity, right: TranscriptIdentity): boolean {
-  // Unsafe legacy numbers may already have lost file ID precision.
-  if (
-    (typeof left.inode === "number" && !Number.isSafeInteger(left.inode)) ||
-    (typeof right.inode === "number" && !Number.isSafeInteger(right.inode))
-  ) {
-    return false;
-  }
-  return (
-    left.filePath === right.filePath &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.device === right.device &&
-    fileIdKey(left.inode) === fileIdKey(right.inode) &&
-    left.birthtimeMs === right.birthtimeMs
-  );
-}
-
 /** @public */
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -1002,8 +966,10 @@ export const make = Effect.gen(function* () {
     filePath: string,
     expected: ReturnType<typeof transcriptIdentity>,
     source: AgentSessionSource,
+    prefix?: { readonly endByteOffset: number; readonly historyBytes: number },
   ) {
-    if (expected.size > MAX_IMPORTED_TRANSCRIPT_BYTES) return null;
+    const readBytes = prefix?.endByteOffset ?? expected.size;
+    if (readBytes > expected.size || readBytes > MAX_IMPORTED_TRANSCRIPT_BYTES) return null;
 
     return yield* Effect.scoped(
       fileSystem.open(filePath, { flag: "r" }).pipe(
@@ -1015,7 +981,7 @@ export const make = Effect.gen(function* () {
             const records: Array<DecodedTranscriptRecord> = [];
             let cwd = Option.none<string>();
             let claudeFields = emptyClaudeFields;
-            let historyBytes = 0;
+            let historyBytes = prefix?.historyBytes ?? 0;
             let recordBytes = 0;
             let recordCount = 0;
             let bytesRead = 0;
@@ -1067,9 +1033,9 @@ export const make = Effect.gen(function* () {
               return true;
             };
 
-            while (bytesRead < expected.size) {
+            while (bytesRead < readBytes) {
               const next = yield* file.readAlloc(
-                Math.min(TRANSCRIPT_PREFIX_BYTES, expected.size - bytesRead),
+                Math.min(TRANSCRIPT_PREFIX_BYTES, readBytes - bytesRead),
               );
               if (Option.isNone(next)) {
                 return null;
@@ -1094,7 +1060,7 @@ export const make = Effect.gen(function* () {
 
             if (recordStarted && !(yield* Effect.try(finishRecord))) return null;
             return sameTranscriptIdentity(expected, transcriptIdentity(filePath, yield* file.stat))
-              ? { records, cwd, claudeFields }
+              ? { records, cwd, claudeFields, historyBytes }
               : null;
           }),
         ),
@@ -1672,6 +1638,23 @@ export const make = Effect.gen(function* () {
     const codexThreadNamesByHome = new Map<string, ReadonlyMap<string, string>>();
     let bytesRemaining = MAX_IMPORT_BYTES;
     let transcriptsRemaining = MAX_IMPORT_TRANSCRIPTS;
+    const readCodexHistoryBase = makeCodexInheritedHistory({
+      candidates,
+      read: Effect.fn("AgentSessionScanner.readInheritedTranscript")(
+        function* (filePath, endByteOffset, historyBytes) {
+          const stats = yield* statOption(filePath);
+          if (Option.isNone(stats) || stats.value.type !== "File" || endByteOffset > bytesRemaining)
+            return null;
+          bytesRemaining -= endByteOffset;
+          return yield* readTranscript(
+            filePath,
+            transcriptIdentity(filePath, stats.value),
+            "codex",
+            { endByteOffset, historyBytes },
+          );
+        },
+      ),
+    });
     return Stream.fromIteratorSucceed(eligibleTranscripts.values(), 1).pipe(
       Stream.mapEffect(({ candidate, transcript }) =>
         Effect.gen(function* () {
@@ -1724,6 +1707,17 @@ export const make = Effect.gen(function* () {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
 
+          const inheritedRecords =
+            candidate.source === "codex"
+              ? yield* readCodexHistoryBase(
+                  candidate.providerInstanceId,
+                  snapshot.records,
+                  snapshot.historyBytes,
+                )
+              : [];
+          if (inheritedRecords === null) {
+            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+          }
           const parsedThread = parseAgentSessionRecords(
             {
               source: candidate.source,
@@ -1731,7 +1725,7 @@ export const make = Effect.gen(function* () {
               fallbackSessionId: path.basename(transcript.filePath, ".jsonl"),
               lastActiveAtMs: transcript.mtimeMs,
             },
-            snapshot.records,
+            [...inheritedRecords, ...snapshot.records],
             snapshot.claudeFields,
           );
           if (parsedThread === null) {

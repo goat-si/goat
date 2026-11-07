@@ -52,7 +52,7 @@ import {
   THREAD_HISTORY_PAGE_POLICY,
   THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT,
 } from "./threadHistoryPaging.ts";
-import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
+import { settledParentRecovery } from "./ProjectionRecovery.testkit.ts";
 
 const layerTest = Layer.mergeAll(
   ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
@@ -441,6 +441,62 @@ it.effect("record reads restrict provider histories to delivery identities", () 
         providerThreadIds: [],
       })).providerThreads,
       [],
+    );
+    const ownerNodeId = NodeId.make("node:delivery-identities:owner");
+    yield* store.apply({
+      id: EventId.make("event:delivery-identities:owner-node"),
+      type: "node.updated",
+      threadId,
+      runId: RunId.make("run:delivery-identities:rolled-back"),
+      nodeId: ownerNodeId,
+      driver,
+      occurredAt: now,
+      payload: {
+        id: ownerNodeId,
+        threadId,
+        runId: RunId.make("run:delivery-identities:rolled-back"),
+        rootNodeId: NodeId.make("node:delivery-identities:rolled-back"),
+        parentNodeId: NodeId.make("node:delivery-identities:rolled-back"),
+        kind: "subagent",
+        status: "completed",
+        countsForRun: false,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        runtimeRequestId: null,
+        checkpointScopeId: null,
+        startedAt: now,
+        completedAt: now,
+      },
+    });
+    yield* store.apply({
+      id: EventId.make("event:delivery-identities:owned"),
+      type: "provider-thread.updated",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: ProviderThreadId.make("provider-thread:owned"),
+        appThreadId: ThreadId.make("thread:delivery-identities:child"),
+        driver,
+        providerInstanceId,
+        providerSessionId: null,
+        ownerNodeId,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        lastRunOrdinal: null,
+        handoffIds: [],
+        forkedFrom: null,
+        status: "idle",
+        firstRunOrdinal: 2,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    assert.deepEqual(
+      (yield* store.getThreadRecords(threadId, ["providerThreads"])).providerThreads.map(
+        (row) => row.id,
+      ),
+      ["provider-thread:history", "provider-thread:selected", "provider-thread:owned"],
     );
     // Unselected history must not be decoded, even if its payload is unreadable.
     yield* sql`UPDATE orchestration_v2_projection_provider_threads SET payload_json = '{}'
@@ -2001,177 +2057,6 @@ it.effect("lists every thread in the shell snapshot past SQLite's bound variable
     assert.strictEqual(yield* store.countThreads(), threadCount);
   }).pipe(Effect.provide(layerTest)),
 );
-
-const settledParentRecovery = Effect.gen(function* () {
-  const store = yield* ProjectionStore.ProjectionStoreV2;
-  const now = yield* DateTime.now;
-  const resetAt = DateTime.formatIso(DateTime.add(now, { hours: 1 }));
-  const threadPayload = (
-    threadId: ThreadId,
-    parentThreadId: ThreadId | null,
-    settledOverride: "settled" | null,
-  ) =>
-    ({
-      createdBy: "user",
-      creationSource: "web",
-      id: threadId,
-      projectId: ProjectId.make("project:settled-parent-limit"),
-      title: "Settled parent limit recovery",
-      providerInstanceId,
-      modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: null,
-      lineage: {
-        parentThreadId,
-        relationshipToParent: parentThreadId === null ? null : "subagent",
-        rootThreadId: parentThreadId ?? threadId,
-      },
-      forkedFrom: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-      settledOverride,
-      settledAt: settledOverride === null ? null : now,
-      lastVisitedAt: null,
-      deletedAt: null,
-    }) as const;
-  const createThread = (
-    threadId: ThreadId,
-    parentThreadId: ThreadId | null,
-    settledOverride: "settled" | null,
-  ) =>
-    store.apply({
-      id: EventId.make(`event:${threadId}:created`),
-      type: "thread.created",
-      threadId,
-      occurredAt: now,
-      payload: threadPayload(threadId, parentThreadId, settledOverride),
-    });
-  const addLimitedChild = Effect.fnUntraced(function* (name: string, parentSettled: boolean) {
-    const parentId = ThreadId.make(`thread:settled-parent-limit:${name}:parent`);
-    const childId = ThreadId.make(`thread:settled-parent-limit:${name}:child`);
-    const runId = RunId.make(`run:settled-parent-limit:${name}`);
-    const rootNodeId = NodeId.make(`node:settled-parent-limit:${name}`);
-    yield* createThread(parentId, null, parentSettled ? "settled" : null);
-    yield* createThread(childId, parentId, null);
-    const run = {
-      id: runId,
-      threadId: childId,
-      ordinal: 1,
-      providerInstanceId,
-      modelSelection,
-      providerThreadId: null,
-      userMessageId: MessageId.make(`message:settled-parent-limit:${name}`),
-      rootNodeId,
-      activeAttemptId: null,
-      status: "failed" as const,
-      requestedAt: now,
-      startedAt: now,
-      completedAt: now,
-      checkpointId: null,
-      contextHandoffId: null,
-    };
-    yield* store.apply({
-      id: EventId.make(`event:settled-parent-limit:${name}:run`),
-      type: "run.created",
-      threadId: childId,
-      runId,
-      nodeId: rootNodeId,
-      driver,
-      providerInstanceId,
-      occurredAt: now,
-      payload: run,
-    });
-    yield* store.apply({
-      id: EventId.make(`event:settled-parent-limit:${name}:error`),
-      type: "turn-item.updated",
-      threadId: childId,
-      occurredAt: now,
-      payload: {
-        id: TurnItemId.make(`item:settled-parent-limit:${name}:error`),
-        threadId: childId,
-        runId,
-        nodeId: rootNodeId,
-        providerThreadId: null,
-        providerTurnId: null,
-        nativeItemRef: null,
-        parentItemId: null,
-        ordinal: 1,
-        status: "failed",
-        title: "Usage limit reached",
-        startedAt: now,
-        completedAt: now,
-        updatedAt: now,
-        type: "error",
-        failure: {
-          class: "usage_limit",
-          message: "Plan limit reached.",
-          resetAt,
-          code: "usageLimitExceeded",
-          retryable: null,
-        },
-      },
-    });
-    return childId;
-  });
-  const settledParentChild = yield* addLimitedChild("settled", true);
-  const activeParentChild = yield* addLimitedChild("active", false);
-  for (const options of [
-    { now, autoResume: true, snooze: false },
-    { now, autoResume: false, snooze: true },
-  ]) {
-    const armed = (yield* store.getLimitRecoveryCandidates(options))
-      .filter((row) => row.id === settledParentChild || row.id === activeParentChild)
-      .filter(
-        (row) =>
-          limitRecoveryCommand(row, options.autoResume, DateTime.toEpochMillis(now), options.snooze)
-            ?.type === "thread.metadata.update",
-      )
-      .map((row) => row.id);
-    assert.deepEqual(
-      armed,
-      [activeParentChild],
-      `only the child of the unsettled parent is armed (${JSON.stringify(options)})`,
-    );
-  }
-  // A recovery armed before the parent settled still resumes at its reset.
-  yield* store.apply({
-    id: EventId.make("event:settled-parent-limit:settled:armed"),
-    type: "thread.metadata-updated",
-    threadId: settledParentChild,
-    occurredAt: now,
-    payload: {
-      ...threadPayload(
-        settledParentChild,
-        ThreadId.make("thread:settled-parent-limit:settled:parent"),
-        null,
-      ),
-      limitRecovery: {
-        runId: RunId.make("run:settled-parent-limit:settled"),
-        resetAt,
-        autoResume: true,
-      },
-    },
-  });
-  const afterReset = DateTime.add(now, { hours: 2 });
-  const resumed = (yield* store.getLimitRecoveryCandidates({
-    now: afterReset,
-    autoResume: true,
-    snooze: false,
-  })).find((row) => row.id === settledParentChild);
-  assert.isDefined(resumed);
-  assert.isTrue(
-    limitRecoveryCommand(
-      resumed,
-      true,
-      DateTime.toEpochMillis(afterReset),
-      false,
-    )?.commandId.startsWith("limit-resume:"),
-  );
-});
 
 it.layer(layerTest)("ProjectionStoreV2", (it) => {
   // regression: #25157 streamed payloads are not re-parsed to read their indexed timestamps

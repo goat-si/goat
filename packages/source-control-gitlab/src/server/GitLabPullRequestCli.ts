@@ -1,3 +1,7 @@
+import { makeGitLabProjectUsers, makeReviewerCandidates } from "./gitLabProjectUsers.ts";
+import { makeReferenceSearch } from "./gitLabReferenceSearch.ts";
+export { referenceSearches } from "./gitLabReferenceSearch.ts";
+import { makeGitLabRequestChanges } from "./gitLabRequestChanges.ts";
 import type {
   GitLabDiscussionThreads,
   GitLabMergeRequestListBatch,
@@ -84,7 +88,6 @@ import {
   decodeOwnAwardIdJson,
   decodeProjectMergeCapabilitiesJson,
   decodeProjectLabelsJson,
-  decodeProjectUsersJson,
   decodeRepositoryBlobsJson,
   decodeTriggerJobChecksJson,
   gitLabAwardName,
@@ -95,7 +98,6 @@ import {
   type GitLabMergeRequestDetail,
   type GitLabMergeRequestListItem,
   type GitLabMergeRequestListState,
-  type GitLabProjectUsers,
 } from "./gitLabMergeRequestJson.ts";
 import type {
   ProviderChangeRequestSummary,
@@ -114,7 +116,8 @@ export type GitLabPullRequestCliError =
   | GitLabDiffCommitParentUnavailableError
   | GitLabDiffFileContentsUnavailableError
   | GitLabDiffRefsUnavailableError
-  | GitLabViewerUnavailableError;
+  | GitLabViewerUnavailableError
+  | import("./gitLabPullRequestErrors.ts").GitLabMutationRefusedError;
 
 /** GitLab's `per_page` limit. */
 const MAX_PAGE_SIZE = 100;
@@ -140,7 +143,6 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly cwd: string;
       readonly host?: string | undefined;
     }) => Effect.Effect<string, GitLabPullRequestCliError>;
-
     readonly listMergeRequests: (input: {
       readonly cwd: string;
       readonly host?: string | undefined;
@@ -158,7 +160,6 @@ export class GitLabPullRequestCli extends Context.Service<
        */
       readonly graphql?: boolean;
     }) => Effect.Effect<GitLabMergeRequestListBatch, GitLabPullRequestCliError>;
-
     /** Whether this host's GraphQL list takes every filter the REST list does. */
     readonly supportsGraphqlList: (input: {
       readonly cwd: string;
@@ -172,6 +173,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly number: number;
       /** `false` skips the stage and trigger job reads, as write permission checks do. */
       readonly downstreamChecks?: boolean;
+      readonly maintainerEdits?: boolean;
     }) => Effect.Effect<GitLabMergeRequestDetail, GitLabPullRequestCliError>;
 
     /** Approval and head pipeline state, read in one GraphQL request per 100 merge requests. */
@@ -269,6 +271,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
+      readonly query?: string | undefined;
     }) => Effect.Effect<PullRequestReviewerCandidateList, GitLabPullRequestCliError>;
 
     readonly listProjectLabels: (input: {
@@ -307,6 +310,8 @@ export class GitLabPullRequestCli extends Context.Service<
       GitLabPullRequestCliError
     >;
 
+    readonly searchProjectReferences: ReturnType<typeof makeReferenceSearch>;
+
     readonly setReviewerRequest: (input: {
       readonly cwd: string;
       readonly host?: string | undefined;
@@ -334,6 +339,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly number: number;
       readonly title?: string | undefined;
       readonly description?: string | undefined;
+      readonly allowCollaboration?: boolean | undefined;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
     readonly commentOnMergeRequest: (input: {
@@ -866,34 +872,7 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed((): ReadonlyArray<PullRequestCheck> => []),
     );
 
-  const projectUsers = (input: {
-    readonly cwd: string;
-    readonly host?: string | undefined;
-    readonly repository: string;
-    readonly search?: string | undefined;
-  }): Effect.Effect<GitLabProjectUsers, GitLabPullRequestCliError> =>
-    api({
-      cwd: input.cwd,
-      host: input.host,
-      path: `projects/${projectPath(input.repository)}/users?${query([
-        ["per_page", String(MAX_PAGE_SIZE)],
-        ...searchParams(input.search, 3),
-      ])}`,
-    }).pipe(
-      Effect.flatMap((result) => {
-        const decoded = decodeProjectUsersJson(result.stdout.trim());
-        return Result.isSuccess(decoded)
-          ? Effect.succeed(decoded.success)
-          : Effect.fail(
-              new GitLabMergeRequestReadError({
-                command: "glab",
-                cwd: input.cwd,
-                operation: "listReviewerCandidates",
-                cause: decoded.failure,
-              }),
-            );
-      }),
-    );
+  const projectUsers = makeGitLabProjectUsers(api);
 
   const awardSubjectPath = (input: {
     readonly repository: string;
@@ -1044,7 +1023,7 @@ export const make = Effect.gen(function* () {
 
   const { graphqlListPage, listStatesOf } = makeGitLabListReads(graphqlRead);
 
-  const { labelPermission, supportsGraphqlList, pipelineStageChecks } =
+  const { labelPermission, maintainerEditsPermission, supportsGraphqlList, pipelineStageChecks } =
     makeGitLabGraphqlSupport(graphqlRead);
 
   const mergeRequestStats = (input: {
@@ -1186,6 +1165,7 @@ export const make = Effect.gen(function* () {
         );
 
   const viewerUsername = makeGitLabViewer(api);
+  const requestChanges = makeGitLabRequestChanges(graphqlRead, viewerUsername);
 
   return GitLabPullRequestCli.of({
     getViewerUsername: viewerUsername,
@@ -1235,7 +1215,16 @@ export const make = Effect.gen(function* () {
           [mergeRequestDetail(input), labelPermission(input)],
           { concurrency: 2 },
         );
-        const detail = { ...read, viewerCanEditLabels };
+        const detail =
+          read.state === "open" &&
+          read.maintainerCanModify !== undefined &&
+          input.maintainerEdits !== false
+            ? {
+                ...read,
+                viewerCanEditLabels,
+                viewerCanEditMaintainerEdits: yield* maintainerEditsPermission(input),
+              }
+            : { ...read, viewerCanEditLabels };
         if (input.downstreamChecks === false || detail.headPipeline === undefined) return detail;
         const stages = yield* pipelineStageChecks({ ...input, url: detail.url });
         if (stages !== null) return { ...detail, checks: stages };
@@ -1534,27 +1523,9 @@ export const make = Effect.gen(function* () {
       );
     }),
 
-    listReviewerCandidates: Effect.fn("GitLabPullRequestCli.listReviewerCandidates")(
-      function (input) {
-        return Effect.all([mergeRequestDetail(input), projectUsers(input)], {
-          concurrency: 2,
-        }).pipe(
-          Effect.map(([mergeRequest, users]) => {
-            const author = mergeRequest.author?.login;
-            const requested = new Set(mergeRequest.reviewRequestLogins);
-            return {
-              // GitLab forbids requesting a review from the MR author.
-              candidates: users.candidates.flatMap((candidate) =>
-                candidate.login === author
-                  ? []
-                  : [{ ...candidate, isRequested: requested.has(candidate.login) }],
-              ),
-              truncated: users.rawCount >= MAX_PAGE_SIZE,
-            };
-          }),
-        );
-      },
-    ),
+    searchProjectReferences: makeReferenceSearch(api),
+
+    listReviewerCandidates: makeReviewerCandidates(mergeRequestDetail, projectUsers),
 
     setReviewerRequest: Effect.fn("GitLabPullRequestCli.setReviewerRequest")(function (input) {
       return mergeRequestDetail(input).pipe(
@@ -1658,6 +1629,9 @@ export const make = Effect.gen(function* () {
         stdin: JSON.stringify({
           ...(input.title === undefined ? {} : { title: input.title }),
           ...(input.description === undefined ? {} : { description: input.description }),
+          ...(input.allowCollaboration === undefined
+            ? {}
+            : { allow_collaboration: input.allowCollaboration }),
         }),
       }).pipe(Effect.asVoid);
     }),
@@ -1700,10 +1674,9 @@ export const make = Effect.gen(function* () {
     submitReview: Effect.fn("GitLabPullRequestCli.submitReview")(function* (input) {
       const project = projectPath(input.repository);
       const mergeRequest = `projects/${project}/merge_requests/${input.number}`;
-      // GitLab has no pending review to attach comments to, so a review is replayed as the
-      // requests it is made of: the line comments, then the summary, then the verdict. A
-      // failure part-way therefore leaves what was already posted in place, which is why
-      // the verdict goes last — a half-sent review is never an approval.
+      if (input.verdict === "request-changes") {
+        yield* requestChanges(input);
+      }
       if (input.comments.length > 0) {
         const refs = yield* getDiffRefs(input);
         yield* Effect.forEach(

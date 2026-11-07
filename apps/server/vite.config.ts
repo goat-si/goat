@@ -1,4 +1,6 @@
 import "vite-plus/test/config";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- tsdown reads the asset path from this config.
+import * as NodePath from "node:path";
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
 import { defineConfig, mergeConfig } from "vite-plus";
@@ -38,7 +40,10 @@ const buildCommitTime = resolveBuildCommitTime(import.meta.dirname);
 
 // tsdown SEA needs one chunk (sourcemaps count) and Node >=25.7, so package separately.
 const packMode = process.env.GOAT_PACK_EXE;
-const packExecutable = packMode === "1" || packMode === "bundle";
+const packBootstrap = packMode === "1" || packMode === "bootstrap";
+const packExecutable = packBootstrap || packMode === "bundle";
+const cliAssetDir = process.env.GOAT_CLI_ASSET_DIR ?? "";
+if (packExecutable && !cliAssetDir) throw new Error("Build the executable with build-exe.");
 const SEA_TARGETS = {
   "darwin-arm64": { platform: "darwin", arch: "arm64" },
   "darwin-x64": { platform: "darwin", arch: "x64" },
@@ -54,9 +59,7 @@ const { target: packExecutableTarget, injectLinuxArm64 } = resolveSeaBuildTarget
 if (packMode === "1" && injectLinuxArm64) {
   throw new Error("Use `node apps/server/scripts/cli.ts build-exe` for Linux ARM64 injection.");
 }
-if (packMode === "bundle" && !injectLinuxArm64) {
-  throw new Error("GOAT_PACK_EXE=bundle is only supported for native Linux ARM64 builds.");
-}
+
 const seaTarget = injectLinuxArm64 ? undefined : packExecutableTarget;
 if (seaTarget && !Object.hasOwn(SEA_TARGETS, seaTarget)) {
   throw new Error(
@@ -93,8 +96,12 @@ export default mergeConfig(
     },
     pack: {
       // SEA embeds one entry; expose the history worker as a hidden subcommand.
-      entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
-      outDir: packExecutable ? "dist-exe" : "dist",
+      entry: packBootstrap
+        ? ["src/bin.ts"]
+        : packExecutable
+          ? ["src/binMain.ts"]
+          : ["src/bin.ts", "src/claude-history-worker.ts"],
+      outDir: packBootstrap ? "dist-exe" : packExecutable ? cliAssetDir : "dist",
       sourcemap: !packExecutable,
       clean: true,
       ...(packExecutable ? { outputOptions: { codeSplitting: false } } : {}),
@@ -105,14 +112,19 @@ export default mergeConfig(
               outDir: "dist-exe",
               ...(packExecutableTargets ? { targets: packExecutableTargets } : {}),
               // Node SEA useCodeCache breaks import(), which the server needs.
-              seaConfig: { useCodeCache: false },
+              seaConfig: {
+                useCodeCache: false,
+                execArgv: ["--require-module"],
+                assets: { "binMain.mjs": NodePath.join(cliAssetDir, "binMain.mjs") },
+              },
             },
           }
         : {}),
       deps: {
         // alwaysBundle=false has no opinion; neverBundle must retain transitive native acceleration.
         alwaysBundle: shouldBundleCliDependency,
-        neverBundle: (id: string) => isExternalCliDependency(id),
+        neverBundle: (id: string) =>
+          (packBootstrap && id === "./binMain.ts") || isExternalCliDependency(id),
         onlyBundle: false,
       },
       banner: {

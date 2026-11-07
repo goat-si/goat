@@ -1266,14 +1266,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           if (part.state.status === "completed" && output !== undefined) context.result = output;
           const status = openCodeToolStatus(part);
           const completedAt = toolCompletedAt(part, now);
-          const subagentStatus: OrchestrationV2Subagent["status"] =
-            status.item === "failed"
-              ? "failed"
-              : status.item === "completed"
-                ? "completed"
-                : status.item === "pending"
-                  ? "pending"
-                  : "running";
+          const subagentStatus: OrchestrationV2Subagent["status"] = status.item;
           const subagent: OrchestrationV2Subagent = {
             id: nodeId,
             threadId: turn.threadId,
@@ -1723,15 +1716,15 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             },
           });
           yield* emitProviderEvent({
+            type: "turn_item.updated",
+            driver: OPENCODE_PROVIDER,
+            turnItem: runtimeRequestTurnItem(pending, "waiting", null, now),
+          });
+          yield* emitProviderEvent({
             type: "runtime_request.updated",
             driver: OPENCODE_PROVIDER,
             threadId: turn.threadId,
             runtimeRequest,
-          });
-          yield* emitProviderEvent({
-            type: "turn_item.updated",
-            driver: OPENCODE_PROVIDER,
-            turnItem: runtimeRequestTurnItem(pending, "waiting", null, now),
           });
           yield* updateProviderSession("waiting", null);
         });

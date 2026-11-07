@@ -40,6 +40,64 @@ beforeEach(() => {
 });
 
 describe("reopenClosedView", () => {
+  it.each([
+    { relativePath: "apps", id: "file:apps" },
+    { relativePath: "", id: "files" },
+  ])("restores the folder trail for $id", async ({ relativePath, id }) => {
+    const panels = useRightPanelStore.getState();
+    const trail = "apps/web/src";
+    panels.openFile(threadRef, trail);
+    panels.navigateFolder(threadRef, `file:${trail}`, relativePath, trail);
+    const expected = selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      threadRef,
+    ).surfaces[0];
+    expect(expected).toMatchObject({ id, folderTrail: trail });
+    panels.closeSurface(threadRef, id);
+    const entry = useClosedViewStore.getState().entries[0]!;
+    expect(await reopenClosedView(entry, { openPreview: vi.fn(), workspaceAvailable: true })).toBe(
+      true,
+    );
+    const restored = selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      threadRef,
+    );
+    expect(restored.surfaces).toEqual([expected]);
+    expect(restored.activeSurfaceId).toBe(id);
+  });
+
+  it.each(["packages/contracts/src", undefined])(
+    "preserves an existing hidden root with trail %s",
+    async (existingTrail) => {
+      const panels = useRightPanelStore.getState();
+      panels.openFile(threadRef, "apps/web/src");
+      panels.navigateFolder(threadRef, "file:apps/web/src", "", "apps/web/src");
+      panels.closeSurface(threadRef, "files");
+      const entry = useClosedViewStore.getState().entries[0]!;
+      if (existingTrail === undefined) panels.open(threadRef, "files");
+      else {
+        panels.openFile(threadRef, existingTrail);
+        panels.navigateFolder(threadRef, `file:${existingTrail}`, "", existingTrail);
+      }
+      panels.close(threadRef);
+      const before = selectThreadRightPanelState(
+        useRightPanelStore.getState().byThreadKey,
+        threadRef,
+      );
+      expect(before.isOpen).toBe(false);
+      expect(
+        await reopenClosedView(entry, { openPreview: vi.fn(), workspaceAvailable: true }),
+      ).toBe(true);
+      const restored = selectThreadRightPanelState(
+        useRightPanelStore.getState().byThreadKey,
+        threadRef,
+      );
+      expect(restored.isOpen).toBe(true);
+      expect(restored.activeSurfaceId).toBe("files");
+      expect(restored.surfaces).toEqual(before.surfaces);
+    },
+  );
+
   it("restores a file tab at its line without creating a browser session", async () => {
     const openPreview = vi.fn();
     const reopened = await reopenClosedView(
@@ -70,12 +128,21 @@ describe("reopenClosedView", () => {
     };
     for (const surface of [
       { kind: "files", id: "files" },
+      { kind: "files", id: "files", folderTrail: "apps/web/src" },
       {
         kind: "file",
         id: "file:src/app.ts",
         relativePath: "src/app.ts",
         revealLine: null,
         revealRequestId: 0,
+      },
+      {
+        kind: "file",
+        id: "file:apps",
+        relativePath: "apps",
+        revealLine: null,
+        revealRequestId: 1,
+        folderTrail: "apps/web/src",
       },
     ] as const) {
       expect(await reopenClosedView({ kind: "panel-tab", threadRef, surface }, options)).toBe(

@@ -257,7 +257,15 @@ export const materializePiGoatMcpExtension = Effect.fn("materializePiGoatMcpExte
   const dest = piGoatMcpExtensionDestPath(cacheDir);
   const existing = yield* fs.readFileString(dest).pipe(Effect.orElseSucceed(() => ""));
   if (existing !== PI_GOAT_MCP_EXTENSION_SOURCE) {
-    yield* fs.writeFileString(dest, PI_GOAT_MCP_EXTENSION_SOURCE);
+    // Concurrent launches must never read a partially written extension.
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const stagingDir = yield* fs.makeTempDirectoryScoped({ directory: cacheDir });
+        const staging = piGoatMcpExtensionDestPath(stagingDir);
+        yield* fs.writeFileString(staging, PI_GOAT_MCP_EXTENSION_SOURCE);
+        yield* fs.rename(staging, dest);
+      }),
+    );
   }
   return dest;
 });

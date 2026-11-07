@@ -6,6 +6,7 @@ import {
   ProjectId,
   TerminalNotRunningError,
   type TerminalEvent,
+  type TerminalOpenInput,
   type TerminalSessionSnapshot,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -42,16 +43,22 @@ const makeHarness = Effect.fn(function* (options: {
   readonly history?: string;
   readonly opening?: Deferred.Deferred<void>;
   readonly shell?: string | null;
+  readonly stopOnSettle?: boolean;
 }) {
   const listeners = new Set<(event: TerminalEvent) => Effect.Effect<void>>();
   const writes = yield* Queue.unbounded<string>();
+  const opens = yield* Queue.unbounded<TerminalOpenInput>();
   const outputLines = yield* Queue.unbounded<string>();
   const terminals = Layer.mock(TerminalManager.TerminalManager)({
-    open: () =>
-      (options.opening
-        ? Deferred.succeed(options.opening, undefined).pipe(Effect.andThen(Effect.never))
-        : Effect.void
-      ).pipe(Effect.as(openSnapshot(options.history ?? ""))),
+    open: (input) =>
+      Queue.offer(opens, input).pipe(
+        Effect.andThen(
+          options.opening
+            ? Deferred.succeed(options.opening, undefined).pipe(Effect.andThen(Effect.never))
+            : Effect.void,
+        ),
+        Effect.as(openSnapshot(options.history ?? "")),
+      ),
     getShell: () =>
       options.shell === null
         ? Effect.fail(new TerminalNotRunningError({ threadId, terminalId }))
@@ -63,6 +70,7 @@ const makeHarness = Effect.fn(function* (options: {
       }),
     write: (input) => Queue.offer(writes, input.data).pipe(Effect.asVoid),
     closeIdle: () => Effect.void,
+    closeOnSettle: () => Effect.void,
   });
   const runner = yield* ProjectSetupScriptRunner.make.pipe(
     Effect.provide(
@@ -90,6 +98,7 @@ const makeHarness = Effect.fn(function* (options: {
             command: "vp i",
             icon: "configure",
             runOnWorktreeCreate: true,
+            stopOnSettle: options.stopOnSettle ?? false,
           },
         ],
       },
@@ -97,13 +106,14 @@ const makeHarness = Effect.fn(function* (options: {
     .pipe(Effect.provide(NodeServices.layer));
   const emit = (terminalEvent: TerminalEvent) =>
     Effect.forEach([...listeners], (listener) => listener(terminalEvent), { discard: true });
-  return { start, listeners, writes, outputLines, emit };
+  return { start, listeners, writes, opens, outputLines, emit };
 });
 
 const setup = Effect.fn(function* (
   options: {
     readonly history?: string;
     readonly shell?: string | null;
+    readonly stopOnSettle?: boolean;
   } = {},
 ) {
   const harness = yield* makeHarness(options);
@@ -114,6 +124,12 @@ const setup = Effect.fn(function* (
 });
 
 describe("ProjectSetupScriptRunner", () => {
+  it.effect("passes the action's settlement opt-in to its terminal", () =>
+    Effect.gen(function* () {
+      const { opens } = yield* setup({ stopOnSettle: true });
+      expect((yield* Queue.take(opens)).stopOnSettle).toBe(true);
+    }),
+  );
   it.effect("writes immediately when the spawned fallback is PowerShell", () =>
     Effect.gen(function* () {
       const { writes } = yield* setup({

@@ -57,7 +57,7 @@ export function SettingsThreadsRouteScreen() {
   );
 }
 
-const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
+const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 7;
 
 function AutoSettleSettingsRows() {
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();

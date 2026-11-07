@@ -17,6 +17,17 @@ export interface PendingTerminalLaunch {
   readonly worktreePath: string | null;
   readonly env?: Record<string, string>;
   readonly initialInput?: string;
+  readonly stopOnSettle?: boolean;
+}
+
+export function terminalLaunchAttachOptions(launch: PendingTerminalLaunch | null) {
+  return launch
+    ? {
+        ...(launch.env ? { env: launch.env } : {}),
+        stopOnSettle: launch.stopOnSettle ?? false,
+        restartIfNotRunning: true,
+      }
+    : {};
 }
 
 const pendingTerminalLaunches = new Map<string, PendingTerminalLaunch>();
@@ -34,6 +45,7 @@ export function stagePendingTerminalLaunch(input: {
     worktreePath: input.launch.worktreePath,
     env: input.launch.env ? { ...input.launch.env } : undefined,
     initialInput: input.launch.initialInput,
+    ...(input.launch.stopOnSettle !== undefined ? { stopOnSettle: input.launch.stopOnSettle } : {}),
   });
 }
 

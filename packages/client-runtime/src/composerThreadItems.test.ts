@@ -60,6 +60,34 @@ it("admits only mounted online linked routes with unambiguous identity", () => {
   const routes = composerThreadHosts({ nodes, mounted: new Set([remote, other]), sshHosts: ssh });
   expect(routes.allows(remote, "same")).toBe(true);
   expect(routes.allows(remote, "build")).toBe(true);
+  expect(routes.resolve("build")).toBe(remote);
+  expect(routes.resolve("collision")).toBeUndefined();
+  expect(routes.resolve("unknown")).toBeUndefined();
+  const linked = node(remote, "build");
+  const withSsh = {
+    ...linked,
+    routes: [
+      ...linked.routes,
+      {
+        ...linked.routes[0],
+        routeId: "ssh:secondary",
+        target: { kind: "ssh", alias: "secondary" },
+      },
+    ],
+  } as HubNode;
+  const secondaryHosts = composerThreadHosts({
+    nodes: [withSsh],
+    mounted: new Set([remote]),
+    sshHosts: new Map(),
+  });
+  expect([...secondaryHosts]).toEqual([[remote, "build"]]);
+  expect(secondaryHosts.resolve("secondary")).toBe(remote);
+  const ambiguous = composerThreadHosts({
+    nodes: [withSsh, node(other, "secondary")],
+    mounted: new Set([remote, other]),
+    sshHosts: new Map(),
+  });
+  expect(ambiguous.resolve("secondary")).toBeUndefined();
   expect(routes.allows(remote, "collision")).toBe(false);
   expect(routes.allows(remote, "unknown")).toBe(false);
   expect(routes.allows(other, "offline")).toBe(false);

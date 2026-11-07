@@ -27,7 +27,10 @@ export function acpMcpContext(
     return {
       servers: [],
       acpServers: [],
-      processEnvironment: McpProviderSession.withThreadMcpEnvironment({}, undefined),
+      processEnvironment: McpProviderSession.withThreadMcpEnvironment(
+        { GOAT_THREAD_ID: undefined, T3CODE_THREAD_ID: undefined }, // goat-rename: legacy
+        undefined,
+      ),
     };
   }
   // Agents that advertise optional http support still routinely fail to wire
@@ -70,6 +73,8 @@ export function acpMcpContext(
     // Agent instructions and terminal fallbacks written for older builds read the legacy names.
     processEnvironment: McpProviderSession.withThreadOverlayEnvironment(
       {
+        GOAT_THREAD_ID: session.threadId,
+        T3CODE_THREAD_ID: session.threadId, // goat-rename: legacy
         GOAT_ACP_MCP_NODE: self.command,
         ...(self.entrypoint === undefined ? {} : { GOAT_ACP_MCP_ENTRYPOINT: self.entrypoint }),
       },

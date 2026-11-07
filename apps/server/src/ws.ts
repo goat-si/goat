@@ -260,6 +260,7 @@ import { withLiveWireTransforms } from "./orchestration-v2/ThreadLiveTextAppend.
 import {
   projectDomainEventForWire,
   projectThreadProjectionForWire,
+  threadStreamEventItem,
 } from "./orchestration-v2/WireProjection.ts";
 import {
   buildBoundedThreadProjection,
@@ -846,11 +847,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           afterSequence,
         })
         .pipe(
-          Stream.map((stored) => ({
-            kind: "event" as const,
-            sequence: stored.sequence,
-            event: stored.event,
-          })),
+          Stream.map(threadStreamEventItem),
           coalesceThreadLiveStream,
           Stream.mapError(
             (cause) =>
@@ -1865,7 +1862,6 @@ export const layerWsRpc = (
           automationHold: currentAutomationHold,
         };
       });
-
       const refreshGitStatus = (cwd: string) =>
         vcsStatusBroadcaster
           .refreshStatus(cwd)
@@ -3044,9 +3040,10 @@ export const layerWsRpc = (
           projectCloneTracker.retry(input.projectId).pipe(Effect.map((applied) => ({ applied }))),
         [WS_METHODS.subscribeProjectClones]: () => projectCloneTracker.stream,
         [WS_METHODS.sourceControlPublishRepository]: (input) =>
-          sourceControlRepositories.publishRepository(input).pipe(
-            Effect.tap(() => repositoryIdentityResolver.resolve(input.cwd, { refresh: true })),
-            Effect.tap(() => refreshGitStatus(input.cwd)),
+          SourceControlRepositoryService.publishWithRefresh(
+            sourceControlRepositories.publishRepository(input),
+            repositoryIdentityResolver.resolve(input.cwd, { refresh: true }),
+            refreshGitStatus(input.cwd),
           ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           workspaceEntries.search(input).pipe(

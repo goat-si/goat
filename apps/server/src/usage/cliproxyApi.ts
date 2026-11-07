@@ -178,11 +178,11 @@ export const makeCliproxyApi = Effect.gen(function* () {
     body?: unknown,
   ) {
     const url = yield* Effect.try({
-      try: () =>
-        new URL(
-          `v0/management/${path}`,
-          config.url.endsWith("/") ? config.url : `${config.url}/`,
-        ).toString(),
+      try: () => {
+        const base = new URL(config.url);
+        base.pathname = base.pathname.replace(/(\/management\.html)?\/?$/i, "/");
+        return new URL(`v0/management/${path}`, base).toString();
+      },
       catch: () => new UsageLimitSourceError({ detail: "The hub URL is not valid." }),
     });
     const request = (

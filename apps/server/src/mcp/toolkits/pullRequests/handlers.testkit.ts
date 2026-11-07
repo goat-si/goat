@@ -217,7 +217,7 @@ export const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function*
     }),
     Layer.mock(Orchestrator.OrchestratorV2)({
       getThreadShell: (id) =>
-        Effect.succeed(id === THREAD_ID && thread ? v2PullRequestThread(thread) : null),
+        Effect.succeed(id === thread?.id ? v2PullRequestThread(thread) : null),
       dispatch,
     }),
     Layer.succeed(Crypto.Crypto, testCrypto),

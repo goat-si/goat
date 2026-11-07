@@ -379,7 +379,7 @@ describe("OpenCodeAdapterV2", () => {
       const events = yield* Fiber.join(received);
       const item = events.find((event) => event.type === "turn_item.updated");
       const request = events.find((event) => event.type === "runtime_request.updated");
-      assert.equal(item?.type, "turn_item.updated");
+      assert.equal(events.map((e) => e.type).join(), "turn_item.updated,runtime_request.updated");
       if (
         item?.type !== "turn_item.updated" ||
         item.turnItem.type !== "user_input_request" ||

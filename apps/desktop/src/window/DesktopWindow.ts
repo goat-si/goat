@@ -46,8 +46,8 @@ import * as DesktopWindowMaterial from "./material/DesktopWindowMaterial.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
 
-const MIN_MAIN_WINDOW_WIDTH = 840;
-const MIN_MAIN_WINDOW_HEIGHT = 620;
+const MIN_MAIN_WINDOW_WIDTH = DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.width;
+const MIN_MAIN_WINDOW_HEIGHT = DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.height;
 
 function syncMacosWindowButtons(window: Electron.BrowserWindow): void {
   if (window.isDestroyed() || window.isFullScreen()) return;

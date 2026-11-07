@@ -1,3 +1,9 @@
+import {
+  requiredChecksPullRequest,
+  requiredChecksStatuses,
+  requiredChecksInput,
+  requiredChecksLayer,
+} from "./forgejoTestFixtures.ts";
 import { SourceControlProviderKind } from "@goat/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -98,65 +104,6 @@ it.effect("reads clone URLs on the given host rather than the checkout's", () =>
     ),
   );
 });
-
-const requiredChecksPullRequest = {
-  number: 7,
-  title: "Required checks",
-  body: "",
-  html_url: "https://forgejo.test/acme/web/pulls/7",
-  user: { login: "maria" },
-  state: "open",
-  merged: false,
-  head: { ref: "feature", sha: "head", repo: null },
-  base: { ref: "release/1.x", sha: "base", repo: null },
-  created_at: "2026-10-12T00:00:00Z",
-  updated_at: "2026-10-12T00:00:00Z",
-  closed_at: null,
-  merged_at: null,
-  labels: [],
-};
-const requiredChecksStatuses = [
-  ["ci/required-build", "success"],
-  ["ci/optional-lint", "failure"],
-].map(([context, status]) => ({
-  context,
-  status,
-  description: null,
-  target_url: null,
-  updated_at: "2026-10-12T00:00:00Z",
-}));
-
-const requiredChecksInput = {
-  cwd: "/repo",
-  repository: "acme/web",
-  host: "forgejo.test",
-  number: 7,
-};
-const requiredChecksLayer = (
-  branch: Effect.Effect<unknown, ForgejoCli.ForgejoCliError>,
-  statuses = requiredChecksStatuses,
-) =>
-  Layer.mock(ForgejoCli.ForgejoCli)({
-    api: (input) => {
-      const [path, query] = input.path.split("?");
-      const respond = (response: unknown) =>
-        encodeJsonEffect(response).pipe(Effect.orDie, Effect.map(processOutput));
-      switch (path) {
-        case "repos/acme/web/pulls/7":
-          return respond(requiredChecksPullRequest);
-        case "repos/acme/web/statuses/head":
-          return respond(new URLSearchParams(query).get("page") === "1" ? statuses : []);
-        case "repos/acme/web/branches/release/1.x":
-          return Effect.flatMap(branch, respond);
-        case "repos/acme/web":
-          return respond({ full_name: "acme/web", permissions: { push: true, admin: false } });
-        case "user":
-          return respond({ login: "maria" });
-        default:
-          return Effect.die(`Unexpected Forgejo request: ${input.path}`);
-      }
-    },
-  });
 
 it.effect.each([
   ["ci/required-deploy", true],
@@ -680,6 +627,43 @@ it.effect("lists nothing for an author Forgejo has no account for", () =>
     ),
   ),
 );
+
+it.effect.each([
+  { query: undefined, count: 3 },
+  { query: "", count: 3 },
+  { query: " \t ", count: 3 },
+  { query: "", count: 101 },
+])("reads all $count assignees once for author query '$query'", ({ query, count }) => {
+  const paths: string[] = [];
+  const users = Array.from({ length: count }, (_, index) => ({ login: `dev-${index}` }));
+  return Effect.gen(function* () {
+    const provider = yield* ForgejoPullRequestProvider.make;
+    const search = provider.searchRepositoryAuthors;
+    if (search === undefined) return yield* Effect.die("author search missing");
+    const found = yield* search({
+      cwd: "/repo",
+      repository: "maria/project",
+      host: "forgejo.test",
+      ...(query === undefined ? {} : { query }),
+    });
+    assert.strictEqual(paths.length, 1);
+    assert.deepStrictEqual(found, {
+      items: users.map(({ login }) => ({ login, name: null, avatarUrl: null })),
+      truncated: false,
+    });
+  }).pipe(
+    Effect.provide(
+      Layer.mock(ForgejoCli.ForgejoCli)({
+        api: (input) => {
+          paths.push(input.path);
+          assert.strictEqual(input.path.split("?")[0], "repos/maria/project/assignees");
+          // Forgejo ignores paging here: every page is the full list, with no Link header.
+          return encodeJsonEffect(users).pipe(Effect.orDie, Effect.map(processOutput));
+        },
+      }),
+    ),
+  );
+});
 
 it.effect("says an author search was cut short by a server that pages below its limit", () =>
   Effect.gen(function* () {

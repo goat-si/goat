@@ -61,13 +61,20 @@ export function useThreadContextDrag(
 ) {
   const subjectRef = useRef<ThreadContextDragSubject | null>(null);
   const contextDragRef = useRef(false);
+  const scrollRef = useRef<{ viewport: Element; top: number } | null>(null);
   const onContextDragChangeRef = useRef(options.onContextDragChange);
   useLayoutEffect(() => {
     onContextDragChangeRef.current = options.onContextDragChange;
   }, [options.onContextDragChange]);
   const begin = (subject: ThreadContextDragSubject) => {
     subjectRef.current = subject;
+    const viewport = subject.list?.closest('[data-slot="scroll-area-viewport"]');
+    scrollRef.current = viewport ? { viewport, top: viewport.scrollTop } : null;
     contextDragRef.current = false;
+  };
+  const restoreScroll = () => {
+    const scroll = scrollRef.current;
+    if (scroll && scroll.viewport.scrollTop !== scroll.top) scroll.viewport.scrollTop = scroll.top;
   };
   const move = (point: { x: number; y: number }) => {
     const subject = subjectRef.current;
@@ -81,6 +88,7 @@ export function useThreadContextDrag(
       endThreadContextDrag();
       return false;
     }
+    restoreScroll();
     moveThreadContextDrag(point, {
       title: subject.title.trim() || "Thread",
       count: (subject.refs ?? threadContextDragRefs(subject.key)).length,
@@ -91,12 +99,14 @@ export function useThreadContextDrag(
     const subject = subjectRef.current;
     if (subject === null || (!subject.unrestricted && !isOutsideList(subject.list, point)))
       return false;
+    restoreScroll();
     dropThreadContext(point, subject.refs ?? threadContextDragRefs(subject.key));
     // Releasing outside the list never sorts, whether or not a composer took the drop.
     return true;
   };
   const end = () => {
     subjectRef.current = null;
+    scrollRef.current = null;
     contextDragRef.current = false;
     endThreadContextDrag();
   };

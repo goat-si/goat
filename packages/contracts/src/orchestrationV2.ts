@@ -1,3 +1,5 @@
+export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
+import { PiExtensionStatuses } from "./piExtensionStatus.ts";
 import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
@@ -951,12 +953,6 @@ export const OrchestrationV2Subagent = Schema.Struct({
 });
 export type OrchestrationV2Subagent = typeof OrchestrationV2Subagent.Type;
 
-export function isOrchestrationV2WorkActive(
-  status: OrchestrationV2ExecutionNode["status"],
-): boolean {
-  return status === "pending" || status === "running" || status === "waiting";
-}
-
 export const OrchestrationV2CheckpointScope = Schema.Struct({
   id: CheckpointScopeId,
   threadId: ThreadId,
@@ -980,6 +976,7 @@ export const OrchestrationV2ProviderSession = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   model: Schema.NullOr(TrimmedNonEmptyString),
   capabilities: OrchestrationV2ProviderCapabilities,
+  extensionStatuses: PiExtensionStatuses,
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   lastError: Schema.NullOr(Schema.String),
@@ -3027,6 +3024,7 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+    expectedLatestRunId: Schema.optional(RunId),
     settledAt: Schema.optional(Schema.DateTimeUtc),
   }),
   /** Rejects changes since snapshotAt or any explicit settled override to preserve user actions. */

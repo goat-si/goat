@@ -26,6 +26,22 @@ import * as PersistenceOwner from "./PersistenceRecoveryOwner.ts";
 
 import * as SqlitePersistence from "./Sqlite.ts";
 
+it.effect("retains up to 128 MiB of WAL between checkpoints", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-sqlite-wal-"));
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const result = yield* sql`PRAGMA journal_size_limit`;
+    assert.equal(result[0]?.journal_size_limit, 128 * 1024 * 1024);
+  }).pipe(
+    Effect.provide(
+      SqlitePersistence.layerFromPath(NodePath.join(tempDir, "state.sqlite")).pipe(
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});
+
 it.effect("drops planner statistics a database already has", () => {
   const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-sqlite-stats-"));
   const dbPath = NodePath.join(tempDir, "state.sqlite");
