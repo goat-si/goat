@@ -35,3 +35,16 @@ export function settledRunAnchorId(
   );
   return reply?.id ?? null;
 }
+
+/** A refreshed summary of the same settled run keeps the anchor; a new or active run drops it. */
+export function nextSettleAnchorId(
+  current: string | null,
+  previous: ThreadFeedLatestRun | null,
+  latest: ThreadFeedLatestRun | null,
+  rows: ReadonlyArray<ThreadFeedRow>,
+): string | null {
+  const settled = settledRunAnchorId(previous, latest, rows);
+  if (settled !== null) return settled;
+  if (latest === null || previous?.runId !== latest.runId) return null;
+  return threadFeedRunIsUnsettled(latest) ? null : current;
+}

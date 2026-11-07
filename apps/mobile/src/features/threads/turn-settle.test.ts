@@ -2,7 +2,12 @@ import { MessageId, RunId } from "@goat/contracts";
 import { expect, it } from "vite-plus/test";
 import type { ThreadFeedLatestRun } from "../../lib/threadActivity";
 import type { ThreadFeedRow } from "./pending-thread-feed";
-import { settledRunAnchorId, turnCanStop, workingFloatingStatus } from "./turn-settle";
+import {
+  nextSettleAnchorId,
+  settledRunAnchorId,
+  turnCanStop,
+  workingFloatingStatus,
+} from "./turn-settle";
 
 const running: ThreadFeedLatestRun = {
   runId: RunId.make("run-1"),
@@ -55,4 +60,10 @@ it("a settling run keeps its final reply in place; other updates anchor nothing"
   expect(
     settledRunAnchorId({ ...running, runId: RunId.make("run-0") }, completed, rows),
   ).toBeNull();
+
+  // A projection update mid-measurement re-creates the summary of the same settled run.
+  expect(nextSettleAnchorId("reply-1", completed, { ...completed }, rows)).toBe("reply-1");
+  const next: ThreadFeedLatestRun = { ...running, runId: RunId.make("run-2") };
+  expect(nextSettleAnchorId("reply-1", completed, next, rows)).toBeNull();
+  expect(nextSettleAnchorId("reply-1", completed, null, rows)).toBeNull();
 });

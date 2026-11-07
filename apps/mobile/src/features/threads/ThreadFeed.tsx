@@ -234,7 +234,7 @@ import {
 } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
-import { settledRunAnchorId } from "./turn-settle";
+import { nextSettleAnchorId } from "./turn-settle";
 import { htmlRenderFrameHeight } from "@goat/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
@@ -2873,7 +2873,9 @@ export const ThreadFeed = memo(function ThreadFeed({
   const [settleAnchorId, setSettleAnchorId] = useState<string | null>(null);
   if (previousLatestRun !== props.latestRun) {
     setPreviousLatestRun(props.latestRun);
-    setSettleAnchorId(settledRunAnchorId(previousLatestRun, props.latestRun, presentedFeed));
+    setSettleAnchorId((anchor) =>
+      nextSettleAnchorId(anchor, previousLatestRun, props.latestRun, presentedFeed),
+    );
     const latest = props.latestRun;
     const previous = previousLatestRun;
     if (latest && previous) {
@@ -3000,9 +3002,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   };
 
   const handleItemSizeChanged = () => {
-    if (disclosureAnchorKeyRef.current !== null) {
-      settleDisclosureAfterLayout();
-    }
+    if (disclosureAnchorKeyRef.current !== null) settleDisclosureAfterLayout();
     if (settleAnchorId !== null) releaseSettleAnchorAfterLayout();
   };
   const settleAnchorIndex =
