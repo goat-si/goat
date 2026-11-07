@@ -1258,7 +1258,12 @@ const make = Effect.gen(function* () {
       const noteNotice =
         decision.remember !== undefined && rememberRefusal === undefined
           ? yield* botNotes.save(decision.remember, readAt, inputId, decision.replacesNote)
-          : droppedNoteNotice(rememberRefusal);
+          : droppedNoteNotice(
+              rememberRefusal,
+              !mayChangeNotes &&
+                "notesChangeRequested" in decision.action &&
+                decision.action.notesChangeRequested !== undefined,
+            );
 
       let replyText = decision.replyText;
       let finalDecision = decision;
