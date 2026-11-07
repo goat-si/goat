@@ -18,13 +18,12 @@ function readSafeLabel(value: unknown): string | undefined {
 function sanitizeStackUrl(value: string): string {
   try {
     const url = new URL(value);
-    // A frame's trailing :line:column parses as part of the query or fragment when one is present.
-    const position = /(?::\d+){1,2}$/.exec(url.hash || url.search)?.[0] ?? "";
+    // A position after a query or fragment is indistinguishable from URL data.
     url.username = "";
     url.password = "";
     url.search = "";
     url.hash = "";
-    return url.toString() + position;
+    return url.toString();
   } catch {
     return value;
   }
