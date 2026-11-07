@@ -369,7 +369,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
                   row.answerTaskId === undefined ? undefined : ChannelTaskId.make(row.answerTaskId),
                 )
               }
-              className="min-h-11 justify-center rounded-full border px-3 py-2"
+              // 44pt touch target; min-h-11 is only 38.5pt at the app's 14pt rem.
+              className="min-h-[44px] justify-center rounded-full border px-3 py-2"
               style={{ borderColor: outgoingColor }}
             >
               <Text className="text-sm" style={{ color: outgoingColor }}>
