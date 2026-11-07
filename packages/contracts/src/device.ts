@@ -209,6 +209,17 @@ const deviceServiceStateFields = {
   bootingDevices: Schema.optional(
     Schema.Array(Schema.Struct({ ...DeviceSummary.fields, threadId: ThreadId })),
   ),
+  /** Which thread started each device GOAT booted that is still running; display only. */
+  bootedBy: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        hostId: DeviceHostId,
+        deviceId: DeviceId,
+        deviceName: Schema.String,
+        threadId: ThreadId,
+      }),
+    ),
+  ),
   onboardingCompleted: Schema.Boolean,
   agentAccessEnabled: Schema.Boolean,
   hubBasePath: Schema.String,

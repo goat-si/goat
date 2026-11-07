@@ -16,6 +16,7 @@ export const EFFECT_LANES = {
   "scheduled-tasks.cleanup": "cleanup",
   "terminal.cleanup": "cleanup",
   "preview.cleanup": "cleanup",
+  "device.release": "cleanup",
   "attachment.cleanup": "cleanup",
   "thread-title.generate": "general",
   "delegated-tasks.stop": "control",

@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as DeviceService from "../device/DeviceService.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -15,7 +16,7 @@ import * as TerminalManager from "../terminal/Manager.ts";
 export class ResourceCleanupError extends Schema.TaggedError<ResourceCleanupError>()(
   "ResourceCleanupError",
   {
-    operation: Schema.Literals(["terminal", "preview", "attachment", "scheduled-tasks"]),
+    operation: Schema.Literals(["terminal", "preview", "attachment", "scheduled-tasks", "device"]),
     threadId: Schema.optional(Schema.String),
     attachmentId: Schema.optional(Schema.String),
     cause: Schema.Defect(),
@@ -26,6 +27,7 @@ export class ResourceCleanupService extends Context.Reference<{
   readonly cleanupScheduledTasks: (threadId: ThreadId) => Effect.Effect<void, ResourceCleanupError>;
   readonly cleanupTerminals: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
   readonly cleanupPreviews: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
+  readonly cleanupDevices: (threadId: ThreadId) => Effect.Effect<void, ResourceCleanupError>;
   readonly cleanupAttachments: (
     attachmentIds: ReadonlyArray<string>,
   ) => Effect.Effect<void, ResourceCleanupError>;
@@ -34,6 +36,7 @@ export class ResourceCleanupService extends Context.Reference<{
     cleanupScheduledTasks: () => Effect.void,
     cleanupTerminals: () => Effect.void,
     cleanupPreviews: () => Effect.void,
+    cleanupDevices: () => Effect.void,
     cleanupAttachments: () => Effect.void,
   }),
 }) {}
@@ -46,6 +49,7 @@ export const layer = Layer.effect(
     const fileSystem = yield* FileSystem.FileSystem;
     const config = yield* ServerConfig.ServerConfig;
     const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
+    const devices = yield* DeviceService.DeviceService;
     return {
       cleanupScheduledTasks: Effect.fn("ResourceCleanupService.cleanupScheduledTasks")(function (
         threadId: ThreadId,
@@ -78,6 +82,17 @@ export const layer = Layer.effect(
           .pipe(
             Effect.mapError(
               (cause) => new ResourceCleanupError({ operation: "preview", threadId, cause }),
+            ),
+          );
+      }),
+      cleanupDevices: Effect.fn("ResourceCleanupService.cleanupDevices")(function (
+        threadId: ThreadId,
+      ) {
+        return devices
+          .releaseThread(threadId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new ResourceCleanupError({ operation: "device", threadId, cause }),
             ),
           );
       }),

@@ -96,3 +96,23 @@ it("names the bot's state on the header title text VoiceOver reads", async () =>
     await act(async () => root.unmount());
   }
 });
+
+it("replaces the header title text when its state changes, since iOS caches a text's VoiceOver label by its text", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const labelled = () => [...container.querySelectorAll("[aria-label]")];
+  try {
+    header.state = "reading";
+    await act(async () => root.render(<GoatBotHeaderFace activity={null} title="GOAT Bot" />));
+    const [reading] = labelled();
+    header.state = "finished";
+    await act(async () => root.render(<GoatBotHeaderFace activity={null} title="GOAT Bot" />));
+    const after = labelled();
+    expect(after.map((node) => node.getAttribute("aria-label"))).toEqual(["GOAT Bot, Finished"]);
+    expect(after[0]).not.toBe(reading);
+  } finally {
+    header.state = "idle";
+    await act(async () => root.unmount());
+  }
+});

@@ -169,15 +169,19 @@ function GoatBotHeaderTitle(props: {
   readonly title: string;
 }) {
   const label = goatBotFaceLabel(props.state);
+  const accessibilityLabel = label ? `${props.title}, ${label}` : props.title;
   return (
-    <View className="flex-row items-center gap-2">
+    // Unflattened so the text swap below stays in this row and leaves the native title view alone.
+    <View collapsable={false} className="flex-row items-center gap-2">
       <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
         <GoatBotFaceAvatar state={props.state} size={28} motion={props.motion} />
       </View>
-      {/* In a native header title VoiceOver reads the text element, not a grouping view. */}
+      {/* VoiceOver reads the text element here, and iOS keeps a text's first label until its text
+          changes; a new key gives each state a fresh element instead of a stale second one. */}
       <Text
+        key={accessibilityLabel}
         accessibilityRole="header"
-        accessibilityLabel={label ? `${props.title}, ${label}` : props.title}
+        accessibilityLabel={accessibilityLabel}
         className="text-base font-semibold text-foreground"
       >
         {props.title}
