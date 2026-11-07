@@ -124,7 +124,7 @@ export function cuaHostRequirements(
     case "darwin":
       return `${hostLabel} needs Accessibility and Screen Recording. Someone at that Mac grants them in System Settings → Privacy & Security, to the app or process running GOAT there.`;
     case "linux":
-      return `${hostLabel} needs a signed-in graphical session.`;
+      return `${hostLabel} needs a signed-in desktop session or a virtual display such as Xvfb.`;
     case "win32":
       return `${hostLabel} needs a signed-in desktop session. If Windows asks about Cua Driver, someone at that computer must respond.`;
     default:
