@@ -319,7 +319,8 @@ and prevents automatic settlement until new activity resumes the usual rules.
 Manually settling an idle thread dismisses unanswered async questions without
 sending an answer or restarting the agent. Settling also closes the thread's
 terminals that wait at an idle prompt, and keeps their output. A terminal that
-runs a command, such as a dev server, stays open.
+runs a command, such as a dev server, stays open. To stop a project's action when
+its thread settles, enable **Stop this action when the thread settles** in that action's settings.
 Settling or archiving also ends the thread's device sessions; see [Devices](devices.md).
 
 To reclaim disk space from settled work, turn on **Run in the thread's worktree when the

@@ -475,6 +475,7 @@ export const make = Effect.gen(function* () {
         .open({
           threadId: input.threadId,
           terminalId,
+          stopOnSettle: script.stopOnSettle ?? false,
           cwd,
           worktreePath: threadWorktreePath,
           env: { ...env, NO_COLOR: "1", FORCE_COLOR: "0" },

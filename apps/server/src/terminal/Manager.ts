@@ -1,3 +1,10 @@
+import {
+  shouldPublishTerminalMetadataEvent,
+  terminalEventToAttachEvent,
+  isDuplicateAttachSnapshotEvent,
+} from "./TerminalEvents.ts";
+import { makeCloseOnSettle } from "./TerminalSettlement.ts";
+import { normalizedRuntimeEnv } from "./TerminalLaunchEnvironment.ts";
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto digest is effectful; a sync hash keeps historyPath a plain function.
 import * as NodeCrypto from "node:crypto";
@@ -242,6 +249,10 @@ export class TerminalManager extends Context.Service<
     /** Omit terminalId to close all sessions for the thread. */
     readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
 
+    readonly closeOnSettle: (input: {
+      readonly threadId: string;
+    }) => Effect.Effect<void, TerminalError>;
+
     readonly closeIdle: (input: {
       readonly threadId: string;
       readonly terminalId?: string;
@@ -325,6 +336,7 @@ interface TerminalSessionState extends AgentTerminalSession {
   hasRunningSubprocess: boolean;
   childCommandLabel: string | null;
   runtimeEnv: Record<string, string> | null;
+  stopOnSettle: boolean;
 }
 
 interface TerminalGrid {
@@ -437,51 +449,6 @@ function summary(session: TerminalSessionState): TerminalSummary {
     label: terminalWireLabel(session),
     updatedAt: session.updatedAt,
   };
-}
-
-function shouldPublishTerminalMetadataEvent(event: TerminalEvent): boolean {
-  switch (event.type) {
-    case "started":
-    case "restarted":
-    case "exited":
-    case "closed":
-    case "error":
-    case "activity":
-      return true;
-    case "output":
-    case "cleared":
-      return false;
-  }
-}
-
-function terminalEventToAttachEvent(event: TerminalEvent): TerminalAttachStreamEvent | null {
-  switch (event.type) {
-    case "started":
-      return {
-        type: "snapshot",
-        snapshot: event.snapshot,
-      };
-    case "output":
-    case "exited":
-    case "closed":
-    case "error":
-    case "cleared":
-    case "restarted":
-    case "activity":
-      return event;
-  }
-}
-
-function isDuplicateAttachSnapshotEvent(
-  event: TerminalEvent,
-  initialSnapshot: TerminalSessionSnapshot,
-) {
-  return typeof event.sequence === "number" && typeof initialSnapshot.sequence === "number"
-    ? event.sequence <= initialSnapshot.sequence
-    : event.type === "started" &&
-        event.snapshot.threadId === initialSnapshot.threadId &&
-        event.snapshot.terminalId === initialSnapshot.terminalId &&
-        event.snapshot.updatedAt <= initialSnapshot.updatedAt;
 }
 
 function advanceEventSequence(session: TerminalSessionState): {
@@ -879,15 +846,6 @@ function joinHistoryFileName(threadPart: string, terminalPart: string | null): s
 
 function toSessionKey(threadId: string, terminalId: string): string {
   return `${threadId}\u0000${terminalId}`;
-}
-
-function normalizedRuntimeEnv(
-  env: Record<string, string> | undefined,
-): Record<string, string> | null {
-  if (!env) return null;
-  const entries = Object.entries(env);
-  if (entries.length === 0) return null;
-  return Object.fromEntries(entries.toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
 interface TerminalManagerOptions {
@@ -2418,6 +2376,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         hasRunningSubprocess: false,
         childCommandLabel: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),
+        stopOnSettle: input.stopOnSettle ?? false,
       };
 
       yield* authorize;
@@ -2449,6 +2408,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
     const liveSession = existing.value;
     yield* authorize;
+    if (input.stopOnSettle !== undefined) liveSession.stopOnSettle = input.stopOnSettle;
     resetAgentTerminal(liveSession, owner);
     const nextRuntimeEnv = normalizedRuntimeEnv(input.env);
     const currentRuntimeEnv = liveSession.runtimeEnv;
@@ -3015,6 +2975,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         hasRunningSubprocess: false,
         childCommandLabel: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),
+        stopOnSettle: false,
       };
       const createdSession = session;
       yield* modifyManagerState((state) => {
@@ -3160,6 +3121,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       ),
   );
 
+  const closeOnSettle = makeCloseOnSettle({
+    withThreadLock,
+    sessionsForThread,
+    closeSession: (threadId, terminalId, deleteHistory) =>
+      closeSession<never>(threadId, terminalId, deleteHistory),
+    closeIdle,
+  });
+
   const agentOperations = makeAgentTerminalOperations({
     withThreadLock,
     sessionsForThread,
@@ -3217,6 +3186,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     restart,
     close,
     closeIdle,
+    closeOnSettle,
     subscribe,
     subscribeMetadata,
   });
