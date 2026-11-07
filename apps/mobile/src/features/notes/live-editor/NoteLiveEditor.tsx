@@ -316,7 +316,6 @@ function NoteEditorPage({
       onError={(event) => fail(event.nativeEvent.description)}
       onHttpError={(event) => fail("HTTP " + event.nativeEvent.statusCode)}
       hideKeyboardAccessoryView
-      keyboardDisplayRequiresUserAction={false}
       scrollEnabled={false}
       bounces={false}
       automaticallyAdjustContentInsets={false}
