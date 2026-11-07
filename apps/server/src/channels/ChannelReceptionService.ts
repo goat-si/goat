@@ -16,6 +16,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
 import {
+  type BotId,
   CHANNEL_HOST_WORKSPACE_LABEL,
   type ChannelInputId,
   type ChannelConversationId,
@@ -170,7 +171,10 @@ export class ChannelReceptionService extends Context.Service<
       pending: ChannelLedger.ChannelPendingEvent,
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
-    readonly acknowledgeSession: (i: ChannelReceptionInput) => Effect.Effect<string | undefined>;
+    readonly acknowledgeSession: (
+      i: ChannelReceptionInput,
+      botId: BotId,
+    ) => Effect.Effect<string | undefined>;
     readonly isDeterministicReply: (
       stored: ChannelLedger.ChannelStoredInput,
     ) => Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
@@ -1041,7 +1045,7 @@ const make = Effect.gen(function* () {
         return;
       }
       const hosts = yield* remoteWorkers.knownHosts;
-      const bot = (yield* ledger.getBot(stored.ownerId))?.bot;
+      const bot = (yield* ledger.getBotById(stored.ownerId, stored.botId))?.bot;
       const targets = yield* allowedTargets(bot?.projectId);
       const outcome: ReceptionOutcome =
         choice?.type === "question"
@@ -1092,7 +1096,9 @@ const make = Effect.gen(function* () {
                   ),
                 );
                 const skills = yield* listChannelBotSkills(fileSystem, path, botFiles);
-                const identity = yield* Effect.option(profiles.identity(requester.ownerId));
+                const identity = yield* Effect.option(
+                  profiles.identity(requester.ownerId, stored.botId),
+                );
                 if (Option.isNone(identity)) return profileUnreadable;
                 const base: ChannelReceptionInput = {
                   mode: "input",
@@ -1619,7 +1625,7 @@ const make = Effect.gen(function* () {
       }
       const task = stored.task;
       const origin = task.originAddress;
-      const bot = (yield* ledger.getBot(stored.ownerId))?.bot;
+      const bot = (yield* ledger.getBotById(stored.ownerId, stored.botId))?.bot;
       // In GOAT Bot a task's card is its result: it already shows the outcome, the summary and
       // the checks, so a message repeating them would say everything twice. A turn is GOAT Bot's
       // own answer and stays a message.
@@ -1649,7 +1655,9 @@ const make = Effect.gen(function* () {
           ? []
           : [{ role: "user" as const, text: request.message.text, at: request.message.receivedAt }];
       // Milestones, questions and a turn's answer keep the words written for the person.
-      const identity = yield* Effect.option(profiles.identity(task.requester.ownerId));
+      const identity = yield* Effect.option(
+        profiles.identity(task.requester.ownerId, stored.botId),
+      );
       const worded =
         pending.event.type === "task.progress" ||
         base.kind === "question" ||
@@ -1713,9 +1721,10 @@ const make = Effect.gen(function* () {
 
   const acknowledgeSession = Effect.fn("ChannelReceptionService.acknowledgeSession")(function* (
     input: ChannelReceptionInput,
+    botId: BotId,
   ) {
     // Without the bot's identity the session's own reply, which follows, speaks for it.
-    const identity = yield* Effect.option(profiles.identity(input.requester.ownerId));
+    const identity = yield* Effect.option(profiles.identity(input.requester.ownerId, botId));
     if (Option.isNone(identity)) return undefined;
     const result = yield* generate({ ...input, identity: identity.value });
     return Option.getOrUndefined(result)?.replyText.trim() || undefined;

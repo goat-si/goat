@@ -1,6 +1,6 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- session bindings are content hashes.
 import * as NodeCrypto from "node:crypto";
-import type { ChannelTask, ChannelDispatchTarget, ChannelRequester } from "@goat/contracts";
+import type { BotId, ChannelTask, ChannelDispatchTarget, ChannelRequester } from "@goat/contracts";
 import { resolveGoatBotModelSelection } from "@goat/shared/serverSettings";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -43,7 +43,7 @@ export const makeSessionEligibility = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const eligible = Effect.fn("ChannelBotSession.eligible")(
-    function* (task: ChannelTask) {
+    function* (task: ChannelTask, botId: BotId) {
       const requester = yield* requesterForDispatch(task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
@@ -62,7 +62,7 @@ export const makeSessionEligibility = Effect.gen(function* () {
       }
       const bound = yield* providers.getInstance(selection.instanceId);
       if (goatBotSessionSharingFor(bound?.driverKind) !== "per_run") return false;
-      const bot = yield* ledger.getBot(requester.ownerId);
+      const bot = yield* ledger.getBotById(requester.ownerId, botId);
       if (bot === undefined) return false;
       return (yield* projects.listShells()).some((project) => project.id === bot.bot.projectId);
     },

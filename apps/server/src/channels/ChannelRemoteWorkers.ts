@@ -1701,7 +1701,7 @@ const make = Effect.gen(function* () {
       if (state === undefined) return;
       const target = task.target!;
       const readKeyHash = NodeCrypto.createHash("sha256").update(state.readKey).digest("hex");
-      const bot = yield* ledger.getBot(stored.ownerId);
+      const bot = yield* ledger.getBotById(stored.ownerId, stored.botId);
       // A moved task's worker reads where its work came from; that is part of its brief.
       const message =
         (yield* workerMessage(task)) +

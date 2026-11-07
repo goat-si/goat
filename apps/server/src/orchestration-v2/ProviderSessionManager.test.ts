@@ -197,11 +197,7 @@ function makeThreadCreatedEvent(input: {
       branch: null,
       worktreePath: null,
       activeProviderThreadId: null,
-      lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
-        rootThreadId: input.threadId,
-      },
+      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: input.threadId },
       forkedFrom: null,
       createdAt: input.now,
       updatedAt: input.now,
@@ -5483,6 +5479,7 @@ it.effect.each(turnStartMemoryCases)(
             let forwardPending = true;
             const channelTask: ChannelLedger.ChannelStoredTask = {
               ownerId: "owner",
+              botId: MemoryContracts.BotId.make("main"),
               pendingAnswerMessageId: undefined,
               completionHold: undefined,
               task: {
