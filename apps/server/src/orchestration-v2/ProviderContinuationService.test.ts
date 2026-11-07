@@ -219,6 +219,39 @@ describe("ProviderContinuationService", () => {
     });
   });
 
+  it.effect("keeps the run a command wake reports on in the message it dispatches", () => {
+    return Effect.gen(function* () {
+      const dispatched = yield* Queue.unbounded<unknown>();
+      yield* Effect.gen(function* () {
+        const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+        const notification: OrchestrationV2Notification = {
+          source: { kind: "command" },
+          outcome: "completed",
+          summary: "Command finished",
+          aboutRunId: RunId.make("run:started-the-command"),
+        };
+        yield* requests.offer({
+          threadId,
+          providerThreadId,
+          driver,
+          detail: "sleep 20 && echo DONE",
+          notification,
+          delivery: "message_text",
+        });
+        const command = (yield* Queue.take(dispatched)) as {
+          readonly notification: OrchestrationV2Notification;
+        };
+        // The run it names is how the answer finds the request that started the command.
+        assert.deepEqual(command.notification, notification);
+      }).pipe(
+        Effect.provide(
+          layerTest({ dispatched, getThreadRecords: () => Effect.succeed(projection) }),
+        ),
+        Effect.scoped,
+      );
+    });
+  });
+
   it.effect("dispatches a current delegated completion as one server-owned queued message", () => {
     return Effect.gen(function* () {
       const dispatched = yield* Queue.unbounded<unknown>();

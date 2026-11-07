@@ -60,6 +60,7 @@ import {
   readLaunchedEnds,
 } from "./channelLaunchedResults.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { deliverNoticeAnswers, noticeMessageIds, resultRunsOf } from "./channelNoticeAnswers.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
@@ -457,14 +458,17 @@ const make = Effect.gen(function* () {
         ? yield* threads.getThreadRecords(worker.threadId, ["messages", "providerTurns"]).pipe(
             Effect.flatMap(({ messages, providerTurns }) =>
               sessionTaskRuns(sql, worker.threadId, { runs: allRuns, messages }, task).pipe(
-                Effect.map((own) => ({ own, providerTurns })),
+                Effect.map((own) => ({ own, providerTurns, notices: noticeMessageIds(messages) })),
               ),
             ),
             Effect.option,
           )
-        : Option.some({ own: allRuns, providerTurns: [] });
+        : Option.some({ own: allRuns, providerTurns: [], notices: new Set<string>() });
       if (Option.isNone(scoped)) return false;
       const runs = scoped.value.own;
+      // A background command's notice run answers the request on its own (channelNoticeAnswers),
+      // so it is never the task's result; it still belongs to the task for everything else.
+      const resultRuns = resultRunsOf(runs, scoped.value.notices);
       // A request belongs to the run whose provider turn raised it; one whose turn cannot be
       // traced to this task's runs is left out rather than shown on the wrong task.
       const runtimeRequests = !session
@@ -497,7 +501,13 @@ const make = Effect.gen(function* () {
         // The newest run since the bound one is the task's current run: a follow-up or a
         // restart continuation replaces the run it follows.
         const floor = bound?.ordinal ?? 0;
-        current = runs.findLast((run) => run.ordinal >= floor);
+        // Bound to a notice (a recovered send, or a follow-up that joined one), the task's own
+        // newest run still answers it; the notice answers through channelNoticeAnswers.
+        current =
+          resultRuns.findLast((run) => run.ordinal >= floor) ??
+          (bound !== undefined && scoped.value.notices.has(bound.userMessageId)
+            ? resultRuns.at(-1)
+            : undefined);
       }
       if (current === undefined) return false;
 
@@ -809,6 +819,11 @@ const make = Effect.gen(function* () {
           yield* settle;
         }
       }
+      changed += yield* deliverNoticeAnswers({ sql, ledger, threads }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("background command answers not sent", { cause }).pipe(Effect.as(0)),
+        ),
+      );
       // Open runs whose task has ended (stopped, or settled by the worker's own report) still end
       // on their own; record how. A stalled run stays stalled until that orchestration run ends,
       // so the next pass does not tell the requester again.
@@ -855,8 +870,8 @@ const make = Effect.gen(function* () {
       ) {
         return yield* new ChannelGatewayError({ reason: "forbidden" });
       }
-      // In a GOAT Bot session only the task's newest run may report for it; an earlier run's
-      // delayed report, or another task's, is refused.
+      // In a GOAT Bot session only the task's newest result run may report for it; an earlier
+      // run's delayed report, another task's, or a background command's notice is refused.
       if (isGoatBotSessionThreadId(worker.threadId)) {
         const caller = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
         const runId = Option.isSome(caller) ? caller.value.thread?.runId : undefined;
@@ -867,7 +882,7 @@ const make = Effect.gen(function* () {
           const own = yield* sessionTaskRuns(sql, worker.threadId, records, stored.task).pipe(
             Effect.orElseSucceed((): ReadonlyArray<OrchestrationV2Run> => []),
           );
-          if (own.at(-1)?.id !== runId)
+          if (resultRunsOf(own, noticeMessageIds(records.messages)).at(-1)?.id !== runId)
             return yield* new ChannelGatewayError({ reason: "forbidden" });
         }
       }

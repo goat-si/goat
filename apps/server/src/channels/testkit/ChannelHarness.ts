@@ -70,6 +70,7 @@ import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
 import * as ChannelIdentityService from "../ChannelIdentityService.ts";
 import * as ChannelLayers from "../ChannelLayers.ts";
 import { fakeLaunchWakes } from "./launchWakesFake.ts";
+import { harnessMessages } from "./harnessMessages.ts";
 import * as ChannelLedger from "../ChannelLedger.ts";
 import * as ChannelRuntime from "../ChannelRuntime.ts";
 import * as ChannelTransport from "../ChannelTransport.ts";
@@ -436,22 +437,7 @@ export function makeHarness(
               ],
               subagents: world.subagents.get(threadId) ?? [],
               providerTurns: world.providerTurns.get(threadId) ?? [],
-              messages: runs
-                .filter((run) => messageRunIds === undefined || messageRunIds.includes(run.id))
-                .flatMap((run) => {
-                  const text = world.finalText.get(run.id);
-                  return text === undefined
-                    ? []
-                    : [
-                        {
-                          role: "assistant",
-                          text,
-                          streaming: false,
-                          runId: run.id,
-                          createdAt: DateTime.makeUnsafe("2026-10-12T00:05:00.000Z"),
-                        },
-                      ];
-                }),
+              messages: harnessMessages(world, runs, messageRunIds),
             } as never;
           });
         }) as typeof real.getThreadRecords,

@@ -19,6 +19,7 @@ import type * as SqlClient from "effect/sql/SqlClient";
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { sessionTaskRuns } from "./channelBotSessionRuns.ts";
 import { parseLaunchWake } from "./channelLaunchWake.ts";
+import { noticeMessageIds, resultRunsOf } from "./channelNoticeAnswers.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 
 const ENDED = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
@@ -152,6 +153,12 @@ export const readLaunchedEnds = (
       }),
     { concurrency: 1 },
   ).pipe(Effect.map((ends) => ends.flat()));
+
+/** A task's own runs that can carry its work: not a background command's notice. */
+export const ownResultRuns = <R extends Pick<OrchestrationV2Run, "userMessageId">>(
+  own: ReadonlyArray<R>,
+  messages: Parameters<typeof noticeMessageIds>[0],
+) => resultRunsOf(own, noticeMessageIds(messages));
 
 /** Whether any of these ends still owes its result to the task whose runs are `ownRuns`. */
 export const anyLaunchedResultOwed = (
