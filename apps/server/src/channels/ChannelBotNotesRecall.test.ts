@@ -209,6 +209,8 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
     const section = [notes.matched, notes.standing].filter((part) => part !== "").join("\n");
     assert.isAtMost(section.length, NOTES_SECTION_CHARS);
     assert.isAbove(notes.matched.length, 0);
+    // The oversized newest line is passed over; the standing notes before it stay.
+    assert.include(notes.standing.split("\n"), long.at(-1));
   });
 
   it.effect("searches only the newest 256 KiB of the file", () =>

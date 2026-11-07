@@ -116,16 +116,18 @@ export const selectChannelBotNotes = (text: string, query: string): ChannelBotNo
   ).filter((line) => line.replacedBy === undefined);
   // Lengths as joined: one newline between notes.
   const joined = live.reduce((sum, line, at) => sum + line.raw.length + (at === 0 ? 0 : 1), 0);
-  // The newest notes in force, as one unbroken run back from the end.
-  let first = live.length;
+  // The newest notes in force, back from the end. A line longer than this whole part is passed
+  // over, so one oversized hand edit cannot push every other standing note out.
+  const standing = new Set<number>();
   let used = 0;
-  while (first > 0) {
-    const cost = (live[first - 1]?.raw.length ?? 0) + (first === live.length ? 0 : 1);
-    if (used + cost > NOTES_RECENT_CHARS) break;
-    first--;
+  for (let at = live.length - 1; at >= 0; at--) {
+    const length = live[at]?.raw.length ?? 0;
+    if (joined > NOTES_SECTION_CHARS && length > NOTES_RECENT_CHARS) continue;
+    const cost = length + (standing.size === 0 ? 0 : 1);
+    if (joined > NOTES_SECTION_CHARS && used + cost > NOTES_RECENT_CHARS) break;
+    standing.add(at);
     used += cost;
   }
-  if (joined <= NOTES_SECTION_CHARS) first = 0;
   const scores = scoreLines(live, query);
   const ranked = live
     .flatMap((line, at) => ((scores[at] ?? 0) > 0 ? [{ line, at, score: scores[at] ?? 0 }] : []))
@@ -133,13 +135,13 @@ export const selectChannelBotNotes = (text: string, query: string): ChannelBotNo
   const matched: Array<{ readonly line: ChannelBotNoteLine; readonly at: number }> = [];
   let room = NOTES_MATCHED_CHARS;
   for (const entry of ranked) {
-    if (entry.at >= first || entry.line.raw.length + 1 > room) continue;
+    if (standing.has(entry.at) || entry.line.raw.length + 1 > room) continue;
     matched.push(entry);
     room -= entry.line.raw.length + 1;
   }
   return {
     standing: live
-      .slice(first)
+      .filter((_, at) => standing.has(at))
       .map((line) => line.raw)
       .join("\n"),
     matched: matched
