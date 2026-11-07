@@ -3,15 +3,15 @@ import * as Schema from "effect/Schema";
 import { useSyncExternalStore } from "react";
 import {
   readLocalStorageValue,
-  removeLocalStorageItem,
   setLocalStorageItem,
   subscribeLocalStorageKey,
 } from "../hooks/useLocalStorage";
 import { randomUUID } from "../lib/utils";
 
 const KEY = "goat:environment-voice-grant:v1";
-const Grant = Schema.NullOr(Schema.Struct({ id: Schema.String, environmentId: EnvironmentId }));
-export type EnvironmentSpeechGrant = NonNullable<typeof Grant.Type>;
+const Grant = Schema.Struct({ id: Schema.String, environmentId: EnvironmentId });
+const Choice = Schema.NullOr(Schema.Union([Grant, Schema.Literal("off")]));
+export type EnvironmentSpeechGrant = typeof Grant.Type;
 
 // A revocation applies in open tabs before storage is touched, so a failed write cannot keep it alive
 // while they run. Only a reload after a failed write can bring the stored grant back.
@@ -29,11 +29,15 @@ revocations?.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (typeof event.data === "string") revoke(event.data);
 });
 
+export function readEnvironmentSpeechChoice(): EnvironmentSpeechGrant | "off" | null {
+  if (!revocations) return "off";
+  const stored = readLocalStorageValue(KEY, null, Choice);
+  return stored && stored !== "off" && revoked.has(stored.id) ? "off" : stored;
+}
+
 export function readEnvironmentSpeechGrant(): EnvironmentSpeechGrant | null {
-  // Without a channel a revocation could not reach other tabs, so environment dictation stays off.
-  if (!revocations) return null;
-  const stored = readLocalStorageValue(KEY, null, Grant);
-  return stored && !revoked.has(stored.id) ? stored : null;
+  const choice = readEnvironmentSpeechChoice();
+  return choice === "off" ? null : choice;
 }
 
 function subscribe(onChange: () => void) {
@@ -45,17 +49,25 @@ function subscribe(onChange: () => void) {
   };
 }
 
-let snapshot: EnvironmentSpeechGrant | null = null;
-function grantSnapshot() {
-  const grant = readEnvironmentSpeechGrant();
-  if (grant?.id !== snapshot?.id || grant?.environmentId !== snapshot?.environmentId) {
-    snapshot = grant;
-  }
+let snapshot: EnvironmentSpeechGrant | "off" | null = null;
+function choiceSnapshot() {
+  const choice = readEnvironmentSpeechChoice();
+  if (choice === "off" || choice === null) snapshot = choice;
+  else if (
+    snapshot === null ||
+    snapshot === "off" ||
+    choice.id !== snapshot.id ||
+    choice.environmentId !== snapshot.environmentId
+  )
+    snapshot = choice;
   return snapshot;
 }
-
-export const useEnvironmentSpeechGrant = () =>
-  useSyncExternalStore(subscribe, grantSnapshot, () => null);
+export const useEnvironmentSpeechChoice = () =>
+  useSyncExternalStore(subscribe, choiceSnapshot, () => null);
+export const useEnvironmentSpeechGrant = () => {
+  const choice = useEnvironmentSpeechChoice();
+  return choice === "off" ? null : choice;
+};
 
 /** "unsaved" still stops open tabs from using the old grant; "unsupported" changes nothing. */
 export function chooseEnvironmentSpeech(
@@ -71,9 +83,9 @@ export function chooseEnvironmentSpeech(
   let saved = true;
   try {
     if (environmentId) {
-      setLocalStorageItem(KEY, { id: randomUUID(), environmentId }, Grant);
+      setLocalStorageItem(KEY, { id: randomUUID(), environmentId }, Choice);
     } else {
-      removeLocalStorageItem(KEY);
+      setLocalStorageItem(KEY, "off", Choice);
     }
   } catch (error) {
     console.error("[voice] Could not save the dictation choice.", error);

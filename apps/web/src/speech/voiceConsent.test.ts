@@ -101,3 +101,24 @@ it("refuses environment dictation where a revocation cannot reach other tabs", a
   const reloaded = await import("./voiceConsent");
   expect(reloaded.readEnvironmentSpeechGrant()).toBeNull();
 });
+
+it("distinguishes an explicit off choice from a first run", async () => {
+  const items = new Map<string, string>();
+  vi.stubGlobal("window", {
+    localStorage: {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => items.set(key, value),
+      removeItem: (key: string) => items.delete(key),
+    },
+  });
+  try {
+    const { readEnvironmentSpeechChoice } = await import("./voiceConsent");
+    expect(readEnvironmentSpeechChoice()).toBeNull();
+    expect(chooseEnvironmentSpeech(null)).toBe("saved");
+    expect(readEnvironmentSpeechChoice()).toBe("off");
+    expect(chooseEnvironmentSpeech(EnvironmentId.make("local"))).toBe("saved");
+    expect(readEnvironmentSpeechChoice()).toMatchObject({ environmentId: "local" });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
