@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Runs the exporter script as a subprocess with a fake Icon Composer tool.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

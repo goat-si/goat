@@ -158,6 +158,9 @@ const knipScripts: Record<string, string> = JSON.parse(
 ).scripts;
 const knipPasses = [knipScripts["knip:check:files"], knipScripts["knip:check:exports"]].map(
   (command, index, all) => {
+    if (command === undefined) {
+      throw new Error("check:changed: package.json is missing a knip:check pass");
+    }
     const [bin, ...args] = command.trim().split(/\s+/);
     if (bin !== "knip" || /["'$\\|;&<>]/.test(command)) {
       throw new Error(`check:changed cannot split knip:check: ${command}`);
