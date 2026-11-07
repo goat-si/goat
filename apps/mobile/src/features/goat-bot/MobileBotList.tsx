@@ -17,7 +17,9 @@ export function MobileBotList({ showSegments = true }: { readonly showSegments?:
     const params = route?.params as
       | { taskId?: string; environmentId?: string; threadId?: string }
       | undefined;
-    if (route?.name === "GoatBot") return params?.taskId ? `task:${params.taskId}` : "main";
+    const botId = (params as { botId?: string } | undefined)?.botId;
+    if (route?.name === "GoatBot")
+      return params?.taskId ? `task:${params.taskId}` : botId ? `bot:${botId}` : "main";
     if (route?.name === "Thread" && params?.environmentId && params.threadId)
       return `coding:${params.environmentId}:${params.threadId}`;
     return null;
@@ -27,7 +29,12 @@ export function MobileBotList({ showSegments = true }: { readonly showSegments?:
       <MobileBotRoster
         header={showSegments ? <MobileHomeModeSegments /> : null}
         selectedKey={selectedKey}
-        onOpenBot={() => selectDetail({ name: "GoatBot", params: {} })}
+        onOpenBot={(bot) =>
+          selectDetail({
+            name: "GoatBot",
+            params: bot.kind === "member" ? { botId: bot.profile.botId } : {},
+          })
+        }
         onOpenChild={(row) => {
           if (row.kind === "task")
             selectDetail({ name: "GoatBot", params: { taskId: row.task.taskId } });

@@ -1,5 +1,5 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import type { EnvironmentId, ThreadId } from "@goat/contracts";
+import type { BotProfile, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
@@ -24,6 +24,8 @@ import { GoatBotActivityContext } from "./GoatBotTimeline";
 import { resolveGoatBotRemoval, type GoatBotRemoval } from "@goat/client-runtime/goatBot";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
+import { GoatBotMemberContext } from "./goatBotMemberContext";
+import { useBotManage } from "./useBotManage";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { refreshGoatBotWaitingCount } from "./useGoatBotWaitingCount";
@@ -39,26 +41,34 @@ const NO_PENDING = [] as const;
 export function GoatBotThreadView({
   environmentId,
   threadId,
+  member = null,
 }: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  /** Set when this thread is a member bot's conversation rather than the main bot's. */
+  readonly member?: BotProfile | null;
 }) {
   const port = useContext(GoatBotChannelContext);
   return (
-    <GoatBotThreadSession
-      key={`${environmentId}:${threadId}:${port ? "port" : "none"}`}
-      environmentId={environmentId}
-      threadId={threadId}
-    />
+    <GoatBotMemberContext value={member}>
+      <GoatBotThreadSession
+        key={`${environmentId}:${threadId}:${port ? "port" : "none"}`}
+        environmentId={environmentId}
+        threadId={threadId}
+        member={member}
+      />
+    </GoatBotMemberContext>
   );
 }
 
 function GoatBotThreadSession({
   environmentId,
   threadId,
+  member,
 }: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly member: BotProfile | null;
 }) {
   const taskFocus = getTaskPaneFocus();
   // oxlint-disable-next-line goat/react-effect-budget -- Restore focus after the bot thread remounts.
@@ -71,7 +81,8 @@ function GoatBotThreadSession({
   const visibleTurnItems = useThreadVisibleTurnItems(
     resolveThreadDetailRef(threadRef, { shellExists: shell !== null, waitForShell: true }),
   );
-  const session = useGoatBotSession(visibleTurnItems, null);
+  const session = useGoatBotSession(visibleTurnItems, null, member);
+  const manage = useBotManage(environmentId);
   const homeSettings = useGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
   const chipRevision = visibleTurnItems
@@ -85,7 +96,9 @@ function GoatBotThreadSession({
     refreshGoatBotWaitingCount(environmentId, chipRevision);
   }, [environmentId, chipRevision]);
   const legacyAgentRoute = useLegacyGlobalAgentRoute();
+  // Archive, deletion and replacement checks below are the main bot's; a member's state is its profile.
   const confirmedHere =
+    member === null &&
     session.confirmedBot?.environmentId === environmentId &&
     session.confirmedBot.threadId === threadId;
   const [shellSeen, setShellSeen] = useState(shell !== null);
@@ -99,10 +112,18 @@ function GoatBotThreadSession({
     if (next === "archived") setShellSeen(true);
     setRemoval(next);
   };
-  const canOpenCurrentBot = session.confirmedBot !== null && !confirmedHere;
+  const canOpenCurrentBot = member === null && session.confirmedBot !== null && !confirmedHere;
   // Keep the resolved removal while ensure is pending or failed, when confirmedHere is false.
   const removal =
-    shell !== null ? null : bootstrapped && canOpenCurrentBot ? "deleted" : resolvedRemoval;
+    member !== null
+      ? member.state === "deleted"
+        ? "deleted"
+        : null
+      : shell !== null
+        ? null
+        : bootstrapped && canOpenCurrentBot
+          ? "deleted"
+          : resolvedRemoval;
   // The server starts a new bot when its thread was deleted, so ask once per deleted thread.
   const retryAvailability = session.onRetryAvailability;
   const replacementAskedFor = useRef<string | null>(null);
@@ -139,8 +160,11 @@ function GoatBotThreadSession({
         rows={removal === null ? session.rows : NO_PENDING}
         removal={removal}
         canOpenCurrentBot={canOpenCurrentBot}
+        onRestore={
+          member !== null && manage.canManage ? () => void manage.restore(member) : undefined
+        }
         onUnarchive={
-          removal === "archived" && session.canOperate
+          member === null && removal === "archived" && session.canOperate
             ? () =>
                 void unarchive({ environmentId, input: { threadId } }).then((result) => {
                   if (result._tag === "Failure") {

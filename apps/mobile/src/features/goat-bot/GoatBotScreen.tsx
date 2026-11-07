@@ -6,7 +6,7 @@ import {
   hasGoatBotMarkdown,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import { type BotProfile, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -375,11 +375,15 @@ function GoatBotActivityBubble({ text }: { readonly text: string }) {
 export function GoatBotScreen(props: {
   readonly visible: boolean;
   readonly taskId?: ChannelTaskId;
+  /** A member bot whose conversation this is; the main bot's when absent. */
+  readonly member?: BotProfile | null;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
   /** Floating tabs cover the bottom of the screen; the composer rests above them. */
   readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
-  const session = useMobileGoatBotSession(props.visible, props.taskId ?? null);
+  const member = props.member ?? null;
+  const session = useMobileGoatBotSession(props.visible, props.taskId ?? null, member);
+  const title = member?.name ?? "GOAT Bot";
   const taskId = session.supportsTaskThreads ? props.taskId : undefined;
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
@@ -398,8 +402,11 @@ export function GoatBotScreen(props: {
   );
   const onSelectThread = props.onSelectThread ?? selectThread;
   const onSelectTask = useCallback(
-    (taskId: ChannelTaskId) => navigation.dispatch(StackActions.push("GoatBot", { taskId })),
-    [navigation],
+    (taskId: ChannelTaskId) =>
+      navigation.dispatch(
+        StackActions.push("GoatBot", member ? { taskId, botId: member.botId } : { taskId }),
+      ),
+    [navigation, member],
   );
   const insets = useSafeAreaInsets();
   const composerPadding = goatBotComposerBottomPadding(
@@ -496,13 +503,25 @@ export function GoatBotScreen(props: {
   return (
     <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
       {Platform.OS === "ios" ? (
-        <GoatBotHeaderFace activity={session.activity ?? null} title="GOAT Bot" />
+        <GoatBotHeaderFace
+          activity={session.activity ?? null}
+          title={title}
+          {...(member
+            ? {
+                conversation: {
+                  environmentId: member.environmentId,
+                  threadId: member.sessionThreadId,
+                },
+              }
+            : {})}
+        />
       ) : null}
       <View style={{ paddingTop: topInset }}>
         <MobileBotWork
           taskId={taskId}
           visible={props.visible}
           onOpenTask={onSelectTask}
+          member={member ? { botId: member.botId, threadId: member.sessionThreadId } : null}
           taskCard={
             taskCard ? (
               <GoatBotTaskCard card={taskCard.card} onSelectThread={onSelectThread} tail={false} />
@@ -510,6 +529,13 @@ export function GoatBotScreen(props: {
           }
         />
       </View>
+      {member?.state === "deleted" ? (
+        <View accessibilityRole="alert" className="gap-2 border-b border-border px-4 py-3">
+          <Text className="text-sm text-foreground-muted">
+            {member.name} was deleted. Its conversation is archived; restore it from the bot list.
+          </Text>
+        </View>
+      ) : null}
       {hasBanner ? (
         <View
           accessibilityRole="alert"
@@ -575,7 +601,7 @@ export function GoatBotScreen(props: {
           <Text className="py-6 text-center text-foreground-muted">
             {taskId
               ? "Messages for this task will appear here."
-              : "Ask GOAT Bot for anything. It answers here and starts work in its own threads."}
+              : `Ask ${title} for anything. It answers here and starts work in its own threads.`}
           </Text>
         }
         ListFooterComponent={
@@ -620,8 +646,8 @@ export function GoatBotScreen(props: {
             />
           ) : null}
           <TextInput
-            accessibilityLabel="Message GOAT Bot"
-            placeholder="Message GOAT Bot"
+            accessibilityLabel={`Message ${title}`}
+            placeholder={`Message ${title}`}
             placeholderTextColorClassName="accent-placeholder"
             value={text}
             onChangeText={setText}

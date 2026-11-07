@@ -7,6 +7,8 @@ import { useEffect, useState } from "react";
 
 import ChatView from "./ChatView";
 import { GoatBotThreadView } from "./goatBot/GoatBotThreadView";
+import { useGoatBotMemberAt } from "./goatBot/goatBotMemberThread";
+import { GoatBotMemberUnavailable } from "./goatBot/GoatBotMemberUnavailable";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { resolveDraftPromotionNavigationTarget, threadHasStarted } from "./ChatView.logic";
 import { waitForDraftHeroTransition } from "./chat/draftHeroTransition";
@@ -53,6 +55,13 @@ export function ThreadRouteView({
       { environmentId: target.threadRef.environmentId, id: target.threadRef.threadId },
       goatBotRef,
     );
+  const goatBotMemberLookup = useGoatBotMemberAt(
+    target.kind === "server" ? target.threadRef : null,
+  );
+  const goatBotMember = goatBotMemberLookup.member;
+  // A thread that may be a member's waits for the bot list, and never falls back to a coding view.
+  const goatBotMemberPending = goatBotMemberLookup.pending || goatBotMemberLookup.unavailable;
+  const goatBotThread = goatBotTarget || goatBotMember !== null;
   const draftId = target.kind === "draft" ? target.draftId : null;
   const draftSession = useComposerDraftStore((store) =>
     draftId === null ? null : store.getDraftSession(draftId),
@@ -166,7 +175,7 @@ export function ThreadRouteView({
   }, [background, canonicalThreadRef, draftSession, navigate, target.kind]);
 
   useEffect(() => {
-    if (target.kind !== "server" || !bootstrapComplete || goatBotTarget) {
+    if (target.kind !== "server" || !bootstrapComplete || goatBotThread || goatBotMemberPending) {
       return;
     }
     if (renderState === "missing") {
@@ -180,7 +189,8 @@ export function ThreadRouteView({
     background,
     bootstrapComplete,
     environmentHasAnyThreads,
-    goatBotTarget,
+    goatBotThread,
+    goatBotMemberPending,
     navigate,
     renderState,
     target,
@@ -207,13 +217,18 @@ export function ThreadRouteView({
         />
       );
     }
-  } else if (goatBotTarget) {
+  } else if (goatBotThread) {
     view = (
       <GoatBotThreadView
         environmentId={target.threadRef.environmentId}
         threadId={target.threadRef.threadId}
+        member={goatBotMember}
       />
     );
+  } else if (goatBotMemberLookup.unavailable) {
+    view = <GoatBotMemberUnavailable onRetry={goatBotMemberLookup.retry} />;
+  } else if (goatBotMemberPending) {
+    view = null;
   } else if (renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)) {
     view = (
       <ChatView

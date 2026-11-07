@@ -4,7 +4,7 @@ import {
   goatBotFaceLabel,
   type GoatBotFaceState,
 } from "@goat/client-runtime/goatBot";
-import type { ScopedThreadRef } from "@goat/contracts";
+import type { BotProfile, ScopedThreadRef } from "@goat/contracts";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { cn } from "~/lib/utils";
@@ -15,6 +15,7 @@ import { GoatBotFace } from "./GoatBotFace";
 import { useGoatBotPreferred } from "./GoatBotModeButton";
 import { useGoatBotFaceMotion, useGoatBotSessionFace } from "./useGoatBotFace";
 import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
+import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 
 const CIRCLE = { sm: "size-5", md: "size-7", lg: "size-12" } as const;
 const MARK = { sm: "size-3.5", md: "size-5", lg: "size-8" } as const;
@@ -64,17 +65,28 @@ export function GoatBotSessionAvatar({
   threadRef,
   size,
   place = "rail",
+  waitingCount = 0,
+  activity = null,
+  chatOpen = false,
 }: {
   readonly threadRef: ScopedThreadRef;
-  readonly size?: keyof typeof CIRCLE;
+  readonly size?: keyof typeof CIRCLE | undefined;
   readonly place?: "list" | "rail";
+  /** This bot's own count of tasks waiting on a person. */
+  readonly waitingCount?: number;
+  readonly activity?: { readonly state: "reading" | "working" } | null;
+  /** The caller is this bot's chat header: its items are already loaded and it moves first. */
+  readonly chatOpen?: boolean;
 }) {
-  const face = useGoatBotSessionFace(threadRef, 0, null, false);
+  const face = useGoatBotSessionFace(threadRef, waitingCount, activity, chatOpen);
   return (
     <GoatBotAvatar
       size={size}
       state={face.state}
-      motion={{ rank: FACE_MOTION_RANK[place], since: face.since }}
+      motion={{
+        rank: chatOpen ? FACE_MOTION_RANK.header : FACE_MOTION_RANK[place],
+        since: face.since,
+      }}
     />
   );
 }
@@ -109,6 +121,27 @@ export function GoatBotMainAvatar({
         rank: chatOpen ? FACE_MOTION_RANK.header : FACE_MOTION_RANK[place],
         since: face.since,
       }}
+    />
+  );
+}
+
+/** A member bot's face outside its chat, with its own waiting count. */
+export function GoatBotMemberAvatar({
+  bot,
+  size,
+  place = "rail",
+}: {
+  readonly bot: BotProfile;
+  readonly size?: keyof typeof CIRCLE;
+  readonly place?: "list" | "rail";
+}) {
+  const waitingCount = useGoatBotMemberWaitingCount(bot);
+  return (
+    <GoatBotSessionAvatar
+      size={size}
+      place={place}
+      waitingCount={waitingCount}
+      threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
     />
   );
 }

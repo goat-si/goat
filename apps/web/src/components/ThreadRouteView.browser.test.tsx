@@ -32,6 +32,24 @@ vi.mock("./ChatView", () => ({ default: () => <div data-view="chat" /> }));
 vi.mock("./goatBot/GoatBotThreadView", () => ({
   GoatBotThreadView: () => <div data-view="goat-bot" />,
 }));
+// Which thread is a member bot's conversation, as the roster's bot list says.
+const members = vi.hoisted(() => ({
+  threadId: null as string | null,
+  pending: false,
+  unavailable: false,
+  retry: vi.fn(),
+}));
+vi.mock("./goatBot/goatBotMemberThread", () => ({
+  useGoatBotMemberAt: (target: { threadId: string } | null) => ({
+    member:
+      target !== null && target.threadId === members.threadId
+        ? { botId: "research", state: "deleted" }
+        : null,
+    pending: members.pending,
+    unavailable: members.unavailable,
+    retry: members.retry,
+  }),
+}));
 vi.mock("./ChatView.logic", () => ({
   resolveDraftPromotionNavigationTarget: () => null,
   threadHasStarted: () => false,
@@ -117,6 +135,45 @@ it("keeps a missing GOAT Bot thread on the bot view instead of redirecting", asy
   await renderThread(botThreadId);
   expect(container.querySelector("[data-view]")?.getAttribute("data-view")).toBe("goat-bot");
   expect(navigate).not.toHaveBeenCalled();
+});
+
+it("keeps a deleted member bot's archived conversation on the bot view instead of redirecting", async () => {
+  members.threadId = "gone";
+  try {
+    await renderThread(ThreadId.make("gone"));
+    expect(container.querySelector("[data-view]")?.getAttribute("data-view")).toBe("goat-bot");
+    expect(navigate).not.toHaveBeenCalled();
+  } finally {
+    members.threadId = null;
+  }
+});
+
+it("waits for the bot list before treating a possible member thread as an ordinary one", async () => {
+  members.pending = true;
+  try {
+    await renderThread(ThreadId.make("gone"));
+    expect(container.querySelector("[data-view]")).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+  } finally {
+    members.pending = false;
+  }
+});
+
+it("offers a retry instead of a coding view when the bot list cannot be read", async () => {
+  members.unavailable = true;
+  try {
+    await renderThread(ThreadId.make("worker"));
+    expect(container.querySelector('[data-view="chat"]')).toBeNull();
+    expect(container.textContent).toContain("Couldn't load this bot");
+    const retry = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Try again",
+    );
+    await act(async () => retry?.click());
+    expect(members.retry).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
+  } finally {
+    members.unavailable = false;
+  }
 });
 
 it("still sends a missing ordinary thread home", async () => {

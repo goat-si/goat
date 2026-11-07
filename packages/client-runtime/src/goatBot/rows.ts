@@ -87,6 +87,8 @@ export interface GoatBotItemReaders {
 export interface GoatBotPendingInput {
   /** Made once per submission and reused by every retry of it. */
   readonly clientKey: string;
+  /** The bot conversation it goes to; each bot's chat shows only its own. */
+  readonly threadId?: string;
   readonly taskId?: string;
   readonly text: string;
   readonly attachments?: ReadonlyArray<GoatBotAttachmentLabel>;
