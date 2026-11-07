@@ -21,7 +21,6 @@ import {
   type GoatBotAttachmentSupport,
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
-import { useGoatBotMember } from "./goatBotMemberContext";
 
 export interface GoatBotComposerHandle {
   addFiles(files: File[]): void;
@@ -36,6 +35,7 @@ export interface GoatBotComposerHandle {
 export function GoatBotComposer({
   ref,
   disabled,
+  botName,
   placeholder,
   initialText = "",
   attachmentSupport = null,
@@ -43,6 +43,8 @@ export function GoatBotComposer({
 }: {
   readonly ref?: Ref<GoatBotComposerHandle>;
   readonly disabled: boolean;
+  /** The bot this box messages, as its chat names it. */
+  readonly botName: string;
   readonly placeholder: string;
   readonly initialText?: string;
   readonly attachmentSupport?: GoatBotAttachmentSupport | null;
@@ -53,7 +55,6 @@ export function GoatBotComposer({
   ) => boolean | void;
 }) {
   const [text, setText] = useState(initialText);
-  const member = useGoatBotMember();
   const [attachments, setDraftAttachments] = useState<ReadonlyArray<GoatBotDraftAttachment>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef(attachments);
@@ -180,7 +181,7 @@ export function GoatBotComposer({
             ref={textareaRef}
             rows={1}
             data-goat-bot-composer=""
-            aria-label={`Message ${member?.name ?? "GOAT Bot"}`}
+            aria-label={`Message ${botName}`}
             placeholder={placeholder}
             value={text}
             disabled={disabled}

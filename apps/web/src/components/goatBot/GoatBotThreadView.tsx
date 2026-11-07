@@ -24,7 +24,7 @@ import { GoatBotActivityContext } from "./GoatBotTimeline";
 import { resolveGoatBotRemoval, type GoatBotRemoval } from "@goat/client-runtime/goatBot";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
-import { GoatBotMemberContext } from "./goatBotMemberContext";
+import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
 import { useGoatBotSession } from "./useGoatBotSession";
@@ -42,22 +42,27 @@ export function GoatBotThreadView({
   environmentId,
   threadId,
   member = null,
+  main = null,
 }: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   /** Set when this thread is a member bot's conversation rather than the main bot's. */
   readonly member?: BotProfile | null;
+  /** The main bot's profile, which names the main chat. */
+  readonly main?: BotProfile | null;
 }) {
   const port = useContext(GoatBotChannelContext);
   return (
-    <GoatBotMemberContext value={member}>
-      <GoatBotThreadSession
-        key={`${environmentId}:${threadId}:${port ? "port" : "none"}`}
-        environmentId={environmentId}
-        threadId={threadId}
-        member={member}
-      />
-    </GoatBotMemberContext>
+    <GoatBotMainProfileContext value={main}>
+      <GoatBotMemberContext value={member}>
+        <GoatBotThreadSession
+          key={`${environmentId}:${threadId}:${port ? "port" : "none"}`}
+          environmentId={environmentId}
+          threadId={threadId}
+          member={member}
+        />
+      </GoatBotMemberContext>
+    </GoatBotMainProfileContext>
   );
 }
 

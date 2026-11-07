@@ -20,7 +20,7 @@ import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
-import { memberThreadsKey, useGoatBotMember } from "./goatBotMemberContext";
+import { memberThreadsKey, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
@@ -50,6 +50,7 @@ export function GoatBotTaskPane({
     focusTaskHeading(taskFocus, taskId, element),
   );
   const member = useGoatBotMember();
+  const botName = useGoatBotName();
   const { rows, refresh } = useBotThreads(environmentId, memberThreadsKey(member));
   const task = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const update = useAtomCommand(channelEnvironment.updateTaskView);
@@ -172,12 +173,13 @@ export function GoatBotTaskPane({
       />
       <GoatBotComposer
         disabled={!canSend}
+        botName={botName}
         placeholder={
           canSend
-            ? `Message ${member?.name ?? "GOAT Bot"}`
+            ? `Message ${botName}`
             : memberDeleted
               ? `${member.name} was deleted`
-              : `${member?.name ?? "GOAT Bot"} isn't available`
+              : `${botName} isn't available`
         }
         attachmentSupport={session.attachmentSupport}
         onSend={(text, attachments) => session.onSendToTask(taskId, text, attachments)}

@@ -21,7 +21,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "
 import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { GoatBotAvatar, GoatBotMainAvatar, GoatBotSessionAvatar } from "./GoatBotAvatar";
-import { useGoatBotMember } from "./goatBotMemberContext";
+import { useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
@@ -35,8 +35,6 @@ import {
   type GoatBotAvailability,
   type GoatBotRemoval,
 } from "@goat/client-runtime/goatBot";
-
-const GOAT_BOT_TITLE = "GOAT Bot";
 const EXAMPLES = [
   "Fix the flaky test in my project",
   "Review the latest changes",
@@ -109,7 +107,7 @@ export function GoatBotChatView({
   const [panelOpen, setPanelOpen] = useState(false);
   const member = useGoatBotMember();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
-  const title = member?.name ?? GOAT_BOT_TITLE;
+  const title = useGoatBotName();
   const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const bot = availability.kind === "ready" ? availability.bot : null;
   const removed = removal !== null;
@@ -299,6 +297,7 @@ export function GoatBotChatView({
             key={seed?.nonce ?? 0}
             initialText={seed?.text ?? ""}
             disabled={!canSend}
+            botName={title}
             placeholder={canSend ? `Message ${title}` : `${title} isn't available`}
             attachmentSupport={attachmentSupport}
             onSend={onSend}

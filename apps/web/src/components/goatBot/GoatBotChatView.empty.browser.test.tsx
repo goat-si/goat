@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId, type BotProfile } from "@goat/contracts";
 import { type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -17,6 +17,7 @@ vi.mock("./GoatBotAvatar", () => ({
 }));
 
 import { GoatBotChatView } from "./GoatBotChatView";
+import { GoatBotMainProfileContext } from "./goatBotMemberContext";
 
 const example = "Review the latest changes";
 
@@ -72,6 +73,16 @@ it("does not offer example buttons without send permission", async () => {
   expect(
     [...container.querySelectorAll("button")].some((button) => button.textContent === example),
   ).toBe(false);
+});
+
+it("names the main chat and its message box for the renamed main bot", async () => {
+  const { view } = setup(true);
+  const main = { botId: "main", role: "main", name: "Goaty" } as BotProfile;
+  await using screen = await render(
+    <GoatBotMainProfileContext value={main}>{view}</GoatBotMainProfileContext>,
+  );
+  expect(screen.container.querySelector("h1")?.textContent).toContain("Goaty");
+  await expect.element(screen.getByRole("textbox", { name: "Message Goaty" })).toBeVisible();
 });
 
 it("centers the example buttons under the title", async () => {

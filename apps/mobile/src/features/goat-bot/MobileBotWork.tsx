@@ -61,6 +61,8 @@ export function MobileBotWork(props: {
   } | null;
   /** The bot's own turns asking a question in the chat behind this sheet. */
   readonly turnsWaiting?: ReadonlyArray<string>;
+  /** What the chat calls this bot. */
+  readonly botName?: string;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
   readonly onDraft?: ((text: string) => void) | undefined;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
@@ -303,7 +305,8 @@ export function MobileBotWork(props: {
                   className="min-h-[44px] justify-center"
                 >
                   <Text className="text-foreground">
-                    {goatBotWaitingInChatText(member?.name ?? "GOAT Bot")}. Open the chat
+                    {goatBotWaitingInChatText(props.botName ?? member?.name ?? "GOAT Bot")}. Open
+                    the chat
                   </Text>
                 </Pressable>
               ) : null}

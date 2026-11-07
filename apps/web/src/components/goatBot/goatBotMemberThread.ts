@@ -1,4 +1,4 @@
-import { findMemberBot } from "@goat/client-runtime/goatBot";
+import { botRosterGroups, findMemberBot } from "@goat/client-runtime/goatBot";
 import type { BotProfile, EnvironmentId, ThreadId } from "@goat/contracts";
 
 import { useEnvironment } from "~/state/environments";
@@ -16,8 +16,12 @@ const MEMBER_THREAD_PREFIX = "channel-member-bot:";
  */
 export function useGoatBotMemberAt(
   target: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | null,
+  /** The thread is the main bot's, so its chat needs the main profile's name. */
+  mainThread = false,
 ): {
   readonly member: BotProfile | null;
+  /** The main bot's profile from the same list, which names the main chat. */
+  readonly main: BotProfile | null;
   readonly pending: boolean;
   readonly unavailable: boolean;
   /** Reads the bot list again; null while the computer is unreachable, since GOAT reconnects itself. */
@@ -27,9 +31,18 @@ export function useGoatBotMemberAt(
   const presentation = useEnvironment(environmentId);
   const capabilities = presentation?.serverConfig?.environment.capabilities;
   const supported = environmentId !== null && capabilities?.goatBotMembers === true;
+  // The roster's own list (useBotRoster). Without members, only the main bot's thread reads it,
+  // for its name, and only while connected, as the roster does.
+  const readsMain =
+    mainThread &&
+    presentation?.connection.phase === "connected" &&
+    capabilities?.goatBotProfiles === true;
   const profiles = useEnvironmentQuery(
-    supported
-      ? channelEnvironment.listBots({ environmentId, input: { includeDeleted: true } })
+    environmentId !== null && (supported || readsMain)
+      ? channelEnvironment.listBots({
+          environmentId,
+          input: supported ? { includeDeleted: true } : {},
+        })
       : null,
   );
   const member =
@@ -49,6 +62,7 @@ export function useGoatBotMemberAt(
     candidate && (capabilities === undefined ? unreachable : failed && !profiles.isPending);
   return {
     member,
+    main: botRosterGroups(profiles.data?.bots ?? []).main,
     pending:
       candidate &&
       !unavailable &&

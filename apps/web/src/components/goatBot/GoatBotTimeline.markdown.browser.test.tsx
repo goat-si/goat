@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@goat/contracts";
+import { EnvironmentId, type BotProfile } from "@goat/contracts";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -28,6 +28,7 @@ vi.mock("../settings/MemorySettings", () => ({ MemorySettingsEntry: () => null }
 vi.mock("./GoatBotTaskChip", () => ({ GoatBotTaskChip: () => null }));
 
 import { GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotMainProfileContext } from "./goatBotMemberContext";
 
 const environmentId = EnvironmentId.make("bot-home");
 const bot = (id: string, text: string): GoatBotRow => ({
@@ -105,4 +106,18 @@ it("opens thread links in the environment whose history is shown", async () => {
   await screen.rerender(<GoatBotTimeline environmentId={null} onRetry={() => {}} rows={[row]} />);
   await expect.element(screen.getByText("CJK 렌더링")).toBeVisible();
   expect(screen.container.querySelector(".chat-markdown a")).toBeNull();
+});
+it("names the conversation and an update after the renamed main bot", async () => {
+  const main = { botId: "main", role: "main", name: "Goaty" } as BotProfile;
+  await using screen = await render(
+    <GoatBotMainProfileContext value={main}>
+      <GoatBotTimeline
+        environmentId={environmentId}
+        onRetry={() => {}}
+        rows={[bot("update", "The nightly build is green.")]}
+      />
+    </GoatBotMainProfileContext>,
+  );
+  await expect.element(screen.getByRole("list", { name: "Conversation with Goaty" })).toBeVisible();
+  await expect.element(screen.getByText("Goaty · Update")).toBeVisible();
 });

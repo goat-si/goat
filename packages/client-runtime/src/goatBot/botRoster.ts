@@ -11,6 +11,11 @@ export type BotRosterEntry =
   | { readonly kind: "member"; readonly profile: BotProfile };
 
 const isMain = (bot: BotProfile) => bot.role === "main" || bot.botId === MAIN_BOT_ID;
+
+/** What a bot's chat is called: its profile name, or GOAT Bot before a profile exists. */
+export function goatBotName(profile: Pick<BotProfile, "name"> | null): string {
+  return profile?.name ?? "GOAT Bot";
+}
 const byCreation = (a: BotProfile, b: BotProfile) =>
   a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0;
 

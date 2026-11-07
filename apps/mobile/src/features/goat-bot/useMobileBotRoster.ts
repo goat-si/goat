@@ -119,34 +119,42 @@ export function useMobileBotRoster(selectedKey: string | null) {
 }
 
 /**
- * The member bot a GoatBot screen names, deleted ones included; null for main. A named member
- * the roster does not know is reported missing only once the roster has answered, so it never
- * falls back to main.
+ * The member bot a GoatBot screen names, deleted ones included; null for main. Also the main
+ * bot's profile, which names the main chat. Reads the roster's own query. A named member the
+ * roster does not know is reported missing only once the roster has answered, so it never falls
+ * back to main.
  */
 export function useMobileGoatBotMember(botId: string | undefined) {
   const home = useMobileGoatBotHomeMode();
   const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
   const environmentId = selected?.environmentId ?? null;
   const { presentationById } = useEnvironments();
-  const supported =
-    environmentId !== null &&
-    presentationById.get(environmentId)?.serverConfig?.environment.capabilities.goatBotMembers ===
-      true;
+  const capabilities =
+    environmentId === null
+      ? undefined
+      : presentationById.get(environmentId)?.serverConfig?.environment.capabilities;
+  const supported = capabilities?.goatBotMembers === true;
+  // A named member is looked up as before; the main bot's name follows the roster's condition.
+  const readsMember = supported && botId !== undefined;
+  const readsMain = selected?.connected === true && capabilities?.goatBotProfiles === true;
   const profiles = useEnvironmentQuery(
-    supported && botId !== undefined
-      ? channelEnvironment.listBots({ environmentId, input: { includeDeleted: true } })
+    environmentId !== null && (readsMember || readsMain)
+      ? channelEnvironment.listBots({
+          environmentId,
+          input: supported ? { includeDeleted: true } : {},
+        })
       : null,
   );
   const member =
-    botId === undefined
+    botId === undefined || !supported
       ? null
       : (profiles.data?.bots.find((bot) => bot.role === "member" && bot.botId === botId) ?? null);
   return {
     member,
+    main: botRosterGroups(profiles.data?.bots ?? []).main,
     missing:
       botId !== undefined &&
       member === null &&
-      !profiles.isPending &&
-      (profiles.isSuccess || !supported),
+      (!supported || (!profiles.isPending && profiles.isSuccess)),
   };
 }

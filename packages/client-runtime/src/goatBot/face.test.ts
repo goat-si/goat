@@ -271,6 +271,18 @@ describe("goatBotFaceTasks", () => {
       at: Date.parse("2026-11-07T09:30:00.000Z"),
     });
   });
+
+  it("counts a running turn as waiting when its coding thread asks the person something", () => {
+    const items = [
+      chip("turn", 1, "running", "2026-11-07T09:00:00.000Z", {
+        observed: { needsYou: [{ kind: "question", since: "2026-11-07T09:01:00.000Z" }] },
+      }),
+      chip("asked", 1, "running", "2026-11-07T09:00:00.000Z", { openQuestionCount: 1 }),
+    ];
+    const tasks = goatBotFaceTasks(items);
+    expect(tasks).toMatchObject({ waiting: 2, active: 0 });
+    expect(goatBotFace(input({ tasks }), T0).state).toBe("waiting");
+  });
 });
 
 function chip(
@@ -278,11 +290,20 @@ function chip(
   taskVersion: number,
   status: string,
   updatedAt = "2026-11-07T09:00:00.000Z",
+  extra: Record<string, unknown> = {},
 ): GoatBotFaceTaskItem {
   return {
     item: {
       type: "notification",
-      ledgerTask: { taskId, taskVersion, status, createdAt: updatedAt, updatedAt },
+      ledgerTask: {
+        taskId,
+        taskVersion,
+        status,
+        createdAt: updatedAt,
+        updatedAt,
+        openQuestionCount: 0,
+        ...extra,
+      },
     },
   } as unknown as GoatBotFaceTaskItem;
 }
