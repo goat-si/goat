@@ -7,9 +7,7 @@ import { GOAT_BRAND_MARK_SOURCE } from "./brandAssets";
 import { BrandChannelPill } from "./BrandChannelPill";
 import { resolveMobileBrandChannel } from "../lib/mobileBranding";
 
-export function BrandMark(props: { readonly compact?: boolean }) {
-  const compact = props.compact ?? false;
-  const iconSize = compact ? 32 : 44;
+export function BrandMark() {
   const channel = resolveMobileBrandChannel(Constants.expoConfig?.extra?.appVariant);
 
   return (
@@ -18,21 +16,21 @@ export function BrandMark(props: { readonly compact?: boolean }) {
         source={GOAT_BRAND_MARK_SOURCE}
         accessibilityIgnoresInvertColors
         style={{
-          width: iconSize,
-          height: iconSize,
-          borderRadius: compact ? 10 : 14,
+          width: 32,
+          height: 32,
+          borderRadius: 10,
         }}
       />
       <View className="gap-1">
         <View className="flex-row items-center gap-2">
-          <Text className="text-lg font-goat-bold tracking-[-0.4px] text-foreground">GOAT</Text>
+          <Text
+            className="text-lg font-goat-bold text-foreground"
+            style={{ letterSpacing: 0.04 * 18 }}
+          >
+            GOAT
+          </Text>
           <BrandChannelPill channel={channel} />
         </View>
-        {!compact ? (
-          <Text className="text-xs font-medium text-foreground-muted">
-            Mobile control surface for your live coding environments
-          </Text>
-        ) : null}
       </View>
     </View>
   );

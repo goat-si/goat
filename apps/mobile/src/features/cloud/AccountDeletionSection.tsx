@@ -104,32 +104,32 @@ function AccountDeletionForSession() {
   };
   return (
     <View className="gap-3 px-5 py-6">
-      <Text className="text-base font-semibold text-clerk-primary">
+      <Text className="text-base font-semibold text-clerk-foreground">
         Delete GOAT Connect account
       </Text>
-      <Text className="text-sm text-clerk-secondary">
+      <Text className="text-sm text-clerk-foreground-muted">
         Permanently remove relay links, push registrations and held webhooks, then delete your
         sign-in account. Local projects and independent connections remain.
       </Text>
       {result ? (
-        <Text accessibilityRole="text" className="text-sm text-clerk-primary">
+        <Text accessibilityRole="text" className="text-sm text-clerk-foreground">
           {accountDeletionMessage(result)}
         </Text>
       ) : null}
       {error ? (
-        <Text accessibilityRole="alert" className="text-sm text-red-600">
+        <Text accessibilityRole="alert" className="text-sm text-clerk-danger">
           {error}
         </Text>
       ) : null}
       {!result?.identityDeleted ? (
         <>
           <Pressable accessibilityRole="button" disabled={busy} onPress={confirm}>
-            <Text className="text-sm text-red-600">
+            <Text className="text-sm text-clerk-danger">
               {busy ? "Working…" : "Delete account / continue"}
             </Text>
           </Pressable>
           <Pressable accessibilityRole="button" disabled={busy} onPress={() => void advance(false)}>
-            <Text className="text-sm text-clerk-primary">Refresh deletion status</Text>
+            <Text className="text-sm text-clerk-foreground">Refresh deletion status</Text>
           </Pressable>
         </>
       ) : null}
