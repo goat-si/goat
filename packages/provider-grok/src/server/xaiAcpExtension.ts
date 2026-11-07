@@ -10,6 +10,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 
 import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import type { AcpToolCallState } from "@goat/provider-acp/server/runtimeModel";
+import { truncateCommandTitle } from "./commandTitle.ts";
 
 const xAiStopReasonMissingMetaKey = "xAiStopReasonMissing";
 export const xAiRateLimitedErrorCode = -32003;
@@ -552,9 +553,7 @@ function resolveXAiAcpToolTitle(toolCall: AcpToolCallState): string | undefined 
   const command =
     nonEmptyString(rawInput?.command) ??
     nonEmptyString(unknownRecord(toolCall.data.rawOutput)?.command);
-  if (command !== undefined) {
-    return command.length > 80 ? `${command.slice(0, 77)}...` : command;
-  }
+  if (command !== undefined) return truncateCommandTitle(command);
   return nonEmptyString(toolCall.title);
 }
 
