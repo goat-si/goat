@@ -15,6 +15,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   diagnoseGoatBot,
   goatBotModelStatus,
+  goatBotTurnsWaiting,
   type GoatBotDiagnosticsInput,
   type GoatBotModelStatus,
 } from "./diagnostics.ts";
@@ -65,6 +66,7 @@ function healthy(patch: Partial<GoatBotDiagnosticsInput> = {}): GoatBotDiagnosti
     model,
     canChangeModel: true,
     rows: [],
+    turnsWaiting: 0,
     slack: "unavailable",
     slackLive: null,
     canConfigureSlack: true,
@@ -167,6 +169,31 @@ describe("diagnoseGoatBot", () => {
       action: { kind: "open_task", taskId: "e" },
     });
     expect(diagnoseGoatBot(input).verdict).toBe("attention");
+  });
+
+  it("counts a bot turn that waits for an answer, which the task list leaves out", () => {
+    const delegated = healthy({ rows: [], turnsWaiting: 1 });
+    expect(line(delegated, "work")).toMatchObject({
+      tone: "warn",
+      text: "1 waiting for your answer",
+      action: { kind: "open_chat", label: "Open the chat" },
+    });
+    expect(diagnoseGoatBot(delegated).verdict).toBe("attention");
+    const both = healthy({ rows: [task("q", "waiting_input")], turnsWaiting: 1 });
+    expect(line(both, "work")).toMatchObject({
+      text: "2 waiting for your answer",
+      action: { kind: "open_task", taskId: "q" },
+    });
+  });
+
+  it("still reports a waiting turn when the task list is loading, failed or unavailable", () => {
+    for (const rows of [null, "failed", "unavailable"] as const) {
+      expect(line(healthy({ rows, turnsWaiting: 1 }), "work")).toMatchObject({
+        tone: "warn",
+        text: "1 waiting for your answer",
+        action: { kind: "open_chat" },
+      });
+    }
   });
 
   it("calls the counts a lower bound only when the server returned a full page", () => {
@@ -334,5 +361,45 @@ describe("goatBotModelStatus", () => {
       available: true,
       inherited: true,
     });
+  });
+});
+
+describe("goatBotTurnsWaiting", () => {
+  const notification = (chip: Record<string, unknown>) => ({
+    item: {
+      type: "notification",
+      ledgerTask: {
+        taskVersion: 1,
+        openQuestionCount: 0,
+        createdAt: "2026-11-07T09:00:00.000Z",
+        updatedAt: "2026-11-07T09:00:00.000Z",
+        ...chip,
+      },
+    },
+  });
+
+  it("counts the bot's own turns that ask the person a question, from each task's newest chip", () => {
+    const asking = { status: "waiting_input", openQuestionCount: 1 };
+    const items = [
+      notification({ taskId: "turn-a", kind: "turn", status: "running" }),
+      notification({ taskId: "turn-a", kind: "turn", ...asking, taskVersion: 2 }),
+      notification({ taskId: "turn-b", kind: "turn", status: "waiting_input" }),
+      notification({ taskId: "turn-c", kind: "turn", ...asking }),
+      notification({ taskId: "turn-c", kind: "turn", status: "completed", taskVersion: 3 }),
+      notification({ taskId: "work-a", kind: "work", ...asking }),
+    ];
+    expect(goatBotTurnsWaiting(items as never)).toBe(1);
+  });
+
+  it("treats an older chip without a kind as a turn when the bot's session ran it", () => {
+    const items = [
+      notification({
+        taskId: "old-turn",
+        status: "waiting_input",
+        openQuestionCount: 1,
+        worker: { threadId: "goat-bot-session:abc", generation: 1 },
+      }),
+    ];
+    expect(goatBotTurnsWaiting(items as never)).toBe(1);
   });
 });

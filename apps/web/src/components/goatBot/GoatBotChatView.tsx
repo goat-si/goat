@@ -320,6 +320,7 @@ export function GoatBotChatView({
               threadId={bot.threadId}
               onDraft={onDraft}
               notesRefreshKey={notesRefreshKey}
+              onShowChat={() => setPanelOpen(false)}
             />
           </SheetPopup>
         </Sheet>

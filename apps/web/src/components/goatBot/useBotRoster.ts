@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { botRoster, botRosterGroups } from "@goat/client-runtime/goatBot";
+import { botRoster, botRosterGroups, goatBotTurnsWaiting } from "@goat/client-runtime/goatBot";
 import type { BotId, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { useThreadVisibleTurnItems } from "~/state/entities";
@@ -60,6 +60,8 @@ export function useBotThreads(
     supported,
     loaded: threads.isSuccess,
     failed: threads.error !== null,
+    /** The bot's own turns asking a question in its chat, which the rows never list. */
+    turnsWaiting: goatBotTurnsWaiting(items),
     refresh: threads.refresh,
   };
 }

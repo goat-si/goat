@@ -1,14 +1,17 @@
-import type {
-  BotThreadRow,
-  ChannelTaskId,
-  EnvironmentId,
-  ModelSelection,
-  ServerProvider,
-  ServerSettings,
-  SlackChannelSettings,
-  SlackChannelStatusEvent,
+import {
+  isGoatBotSessionThreadId,
+  type BotThreadRow,
+  type ChannelTaskChip,
+  type ChannelTaskId,
+  type EnvironmentId,
+  type ModelSelection,
+  type ServerProvider,
+  type ServerSettings,
+  type SlackChannelSettings,
+  type SlackChannelStatusEvent,
 } from "@goat/contracts";
 
+import type { GoatBotFaceTaskItem } from "./face.ts";
 import type { GoatBotHomeResolution } from "./home.ts";
 import { deriveGoatBotModelSettings } from "./model.ts";
 
@@ -22,6 +25,7 @@ export type GoatBotDiagnosticAction =
   | { readonly kind: "claim_home"; readonly environmentId: EnvironmentId; readonly label: string }
   | { readonly kind: "choose_model"; readonly environmentId: EnvironmentId; readonly label: string }
   | { readonly kind: "open_task"; readonly taskId: ChannelTaskId; readonly label: string }
+  | { readonly kind: "open_chat"; readonly label: string }
   | {
       readonly kind: "open_slack_settings";
       readonly environmentId: EnvironmentId;
@@ -91,6 +95,8 @@ export interface GoatBotDiagnosticsInput {
   readonly canChangeModel: boolean;
   /** Null until the bot's task rows have loaded; "unavailable" when its server cannot list them. */
   readonly rows: ReadonlyArray<BotThreadRow> | null | "failed" | "unavailable";
+  /** The bot's own turns asking the person something; the task list leaves turns out. */
+  readonly turnsWaiting: number;
   /** "unavailable" when the home cannot report Slack, which hides the line. */
   readonly slack:
     | ReadonlyArray<
@@ -114,7 +120,7 @@ export function diagnoseGoatBot(input: GoatBotDiagnosticsInput): GoatBotDiagnost
   const lines = [
     homeLine(input),
     modelLine(input, homeId),
-    workLine(input.rows),
+    workLine(input.rows, input.turnsWaiting),
     input.member ? null : slackLine(input, homeId),
   ].filter((line) => line !== null);
   const has = (tone: GoatBotDiagnosticTone) => lines.some((line) => line.tone === tone);
@@ -180,7 +186,48 @@ function modelLine(
   };
 }
 
-function workLine(rows: GoatBotDiagnosticsInput["rows"]): GoatBotDiagnosticLine | null {
+/**
+ * The bot's own turns that ask the person a question, from the newest chip of each task in its
+ * conversation. Turns never appear in the task list, so this is where such a question shows.
+ */
+export function goatBotTurnsWaiting(items: ReadonlyArray<GoatBotFaceTaskItem>): number {
+  const newest = new Map<string, ChannelTaskChip>();
+  for (const { item } of items) {
+    if (item.type !== "notification" || item.ledgerTask === undefined) continue;
+    const previous = newest.get(item.ledgerTask.taskId);
+    if (previous === undefined || item.ledgerTask.taskVersion > previous.taskVersion)
+      newest.set(item.ledgerTask.taskId, item.ledgerTask);
+  }
+  let waiting = 0;
+  for (const chip of newest.values()) {
+    // Older chips lack their kind, but a turn's worker is always the bot's session thread.
+    const turn =
+      chip.kind === "turn" ||
+      (chip.kind === undefined &&
+        chip.worker !== undefined &&
+        isGoatBotSessionThreadId(chip.worker.threadId));
+    if (turn && chip.status === "waiting_input" && chip.openQuestionCount > 0) waiting++;
+  }
+  return waiting;
+}
+
+/** The line that points the person back to a question the bot asked in its chat. */
+export function goatBotWaitingInChatText(botName: string): string {
+  return botName + " is waiting for your answer in the chat";
+}
+
+function workLine(
+  rows: GoatBotDiagnosticsInput["rows"],
+  turnsWaiting: number,
+): GoatBotDiagnosticLine | null {
+  // A question in the chat is known without the task list, so it shows whatever the list's state.
+  if (!Array.isArray(rows) && turnsWaiting > 0)
+    return {
+      key: "work",
+      tone: "warn",
+      text: `${turnsWaiting} waiting for your answer`,
+      action: { kind: "open_chat", label: "Open the chat" },
+    };
   if (rows === "unavailable") return null;
   if (rows === "failed")
     return { key: "work", tone: "warn", text: "Couldn't load work", action: null };
@@ -193,10 +240,11 @@ function workLine(rows: GoatBotDiagnosticsInput["rows"]): GoatBotDiagnosticLine 
   const waiting = tasks
     .filter((task) => task.status === "waiting_input")
     .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+  const waitingCount = waiting.length + turnsWaiting;
   const parts = [
     running > 0 ? `${running} running` : null,
     starting > 0 ? `${starting} starting or queued` : null,
-    waiting.length > 0 ? `${waiting.length} waiting for your answer` : null,
+    waitingCount > 0 ? `${waitingCount} waiting for your answer` : null,
   ].filter((part) => part !== null);
   // A full page can leave older open tasks out, so the counts are only a lower bound.
   const full = tasks.length >= BOT_THREADS_PAGE;
@@ -211,14 +259,16 @@ function workLine(rows: GoatBotDiagnosticsInput["rows"]): GoatBotDiagnosticLine 
       : { key: "work", tone: "ok", text: "No open work", action: null };
   const text = (full ? "At least " : "") + parts.join(" · ");
   const oldest = waiting[0];
-  return oldest === undefined
-    ? { key: "work", tone: "ok", text, action: null }
-    : {
-        key: "work",
-        tone: "warn",
-        text,
-        action: { kind: "open_task", taskId: oldest.taskId, label: "Answer" },
-      };
+  if (oldest !== undefined)
+    return {
+      key: "work",
+      tone: "warn",
+      text,
+      action: { kind: "open_task", taskId: oldest.taskId, label: "Answer" },
+    };
+  return turnsWaiting > 0
+    ? { key: "work", tone: "warn", text, action: { kind: "open_chat", label: "Open the chat" } }
+    : { key: "work", tone: "ok", text, action: null };
 }
 
 function slackLine(

@@ -50,11 +50,16 @@ export function GoatBotStatusCard({
   environmentId: callerEnvironmentId,
   member,
   rows,
+  turnsWaiting,
+  onShowChat,
   className,
 }: {
   readonly environmentId: EnvironmentId | null;
   readonly member: BotProfile | null;
   readonly rows: GoatBotDiagnosticsInput["rows"];
+  readonly turnsWaiting: number;
+  /** Called when a link leads back to the chat, so a sheet over it can close. */
+  readonly onShowChat?: (() => void) | undefined;
   readonly className?: string;
 }) {
   const home = useGoatBotHomeSettings();
@@ -113,6 +118,7 @@ export function GoatBotStatusCard({
           }),
     canChangeModel,
     rows: homeId === null || homeId === callerEnvironmentId ? rows : "unavailable",
+    turnsWaiting: homeId === null || homeId === callerEnvironmentId ? turnsWaiting : 0,
     slack: !slackSupported ? "unavailable" : slack.error ? "failed" : (slack.data ?? "loading"),
     slackLive,
     canConfigureSlack,
@@ -132,6 +138,7 @@ export function GoatBotStatusCard({
                 member={member}
                 busy={home.busy}
                 onClaim={home.changeHome}
+                onShowChat={onShowChat}
               />
             ) : null}
           </li>
@@ -147,11 +154,13 @@ function StatusAction({
   member,
   busy,
   onClaim,
+  onShowChat,
 }: {
   readonly action: GoatBotDiagnosticAction;
   readonly member: BotProfile | null;
   readonly busy: boolean;
   readonly onClaim: (environmentId: EnvironmentId) => void;
+  readonly onShowChat: (() => void) | undefined;
 }) {
   switch (action.kind) {
     case "claim_home":
@@ -171,6 +180,16 @@ function StatusAction({
           size="compact"
           variant="outline"
           render={<Link to="/bot" search={{ task: action.taskId, ...goatBotSearch(member) }} />}
+        >
+          {action.label}
+        </Button>
+      );
+    case "open_chat":
+      return (
+        <Button
+          size="compact"
+          variant="outline"
+          render={<Link to="/bot" search={goatBotSearch(member)} onClick={onShowChat} />}
         >
           {action.label}
         </Button>
