@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
@@ -11,6 +12,10 @@ import {
   quotedFromInput,
   readChannelBotNotes,
 } from "./channelBotNotes.ts";
+
+// A note line carries the day where GOAT runs; dates here are UTC unless a case sets its own zone.
+const services = Layer.merge(NodeServices.layer, DateTime.layerCurrentZoneOffset(0));
+const seoulServices = Layer.merge(NodeServices.layer, DateTime.layerCurrentZoneNamed("Asia/Seoul"));
 
 describe("quotedFromInput", () => {
   it.each([
@@ -77,7 +82,7 @@ it.effect("appends each input note once as a dated single line with its source",
     );
     const text = yield* fs.readFileString(files.notes);
     expect(text.match(/# GOAT Bot notes/gu)).toHaveLength(1);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(services)),
 );
 
 // 17:10 UTC is already the next day in Seoul, where the person and GOAT's machine are.
@@ -106,10 +111,7 @@ it.effect("dates a note and its correction by the day where GOAT runs, not UTC",
     expect(text).toContain(
       '- 2026-11-08: I deploy on Mondays. (asked in input-2) (replaces: "I deploy on Fridays.")\n',
     );
-  }).pipe(
-    Effect.provide(NodeServices.layer),
-    Effect.provide(DateTime.layerCurrentZoneNamed("Asia/Seoul")),
-  ),
+  }).pipe(Effect.provide(seoulServices)),
 );
 
 it.effect("creates no notes file for an empty note", () =>
@@ -120,7 +122,7 @@ it.effect("creates no notes file for an empty note", () =>
     const files = channelBotFilesFor(path, stateDir);
     yield* appendChannelBotNote(fs, files, " \n\t ", "2026-10-17T10:00:00.000Z", "input-empty");
     expect(yield* fs.exists(files.notes)).toBe(false);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(services)),
 );
 
 describe("corrections, newest wins", () => {
@@ -151,7 +153,7 @@ describe("corrections, newest wins", () => {
       expect(yield* readChannelBotNotes(files, "")).toBe(
         '- 2026-11-02: I deploy on Mondays. (asked in input-2) (replaces: "I deploy on Fridays.")',
       );
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(services)),
   );
 
   it.effect("corrections saved in order leave only the newest, even when both name the first", () =>
@@ -177,7 +179,7 @@ describe("corrections, newest wins", () => {
       expect(yield* readChannelBotNotes(files, "")).toBe(
         '- 2026-11-03: Tuesdays. (asked in input-3) (replaces: "Mondays.")',
       );
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(services)),
   );
 
   it.effect("a correction naming the full dated line replaces that note", () =>
@@ -194,7 +196,7 @@ describe("corrections, newest wins", () => {
       expect(outcome).toEqual({ correction: "replaced" });
       expect(yield* readChannelBotNotes(files, "")).not.toContain("Fridays. (asked in input-1)\n");
       expect((yield* readChannelBotNotes(files, "")).split("\n")).toHaveLength(1);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(services)),
   );
 
   it.effect("an unmatched correction keeps the note plainly and reports it again on a re-run", () =>
@@ -216,7 +218,7 @@ describe("corrections, newest wins", () => {
       expect(text.match(/asked in input-2/gu)).toHaveLength(1);
       expect(text).not.toContain("(replaces:");
       expect((yield* readChannelBotNotes(files, "")).split("\n")).toHaveLength(2);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(services)),
   );
 
   it.effect("deleting the replacing line by hand brings the older note back", () =>
@@ -235,7 +237,7 @@ describe("corrections, newest wins", () => {
       expect(yield* readChannelBotNotes(files, "")).toBe(
         "- 2026-11-01: I deploy on Fridays. (asked in input-1)",
       );
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(services)),
   );
 
   it.effect("only a marker at the end of a line, after its source, replaces a note", () =>
@@ -258,6 +260,6 @@ describe("corrections, newest wins", () => {
         lines[2],
         lines[5],
       ]);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(services)),
   );
 });
