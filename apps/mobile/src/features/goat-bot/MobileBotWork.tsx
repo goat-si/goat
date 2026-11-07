@@ -202,6 +202,7 @@ export function MobileBotWork(props: {
             environmentId={environmentId}
             member={member}
             rows={!enabled ? "unavailable" : threads.isSuccess ? rows : null}
+            refreshRows={threads.refresh}
             onOpenTask={(id) => {
               setOpen(false);
               props.onOpenTask(id);

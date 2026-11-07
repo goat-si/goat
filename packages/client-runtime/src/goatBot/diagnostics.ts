@@ -91,12 +91,17 @@ export interface GoatBotDiagnosticsInput {
   readonly canChangeModel: boolean;
   /** Null until the bot's task rows have loaded; "unavailable" when its server cannot list them. */
   readonly rows: ReadonlyArray<BotThreadRow> | null | "unavailable";
-  readonly slack: ReadonlyArray<
-    Pick<
-      SlackChannelSettings,
-      "connectionId" | "enabled" | "status" | "lastError" | "lastDeliveryError"
-    >
-  > | null;
+  /** "unavailable" when the home cannot report Slack, which hides the line. */
+  readonly slack:
+    | ReadonlyArray<
+        Pick<
+          SlackChannelSettings,
+          "connectionId" | "enabled" | "status" | "lastError" | "lastDeliveryError"
+        >
+      >
+    | "loading"
+    | "failed"
+    | "unavailable";
   /** The latest pushed Slack status, newer than the snapshot for the connection it names. */
   readonly slackLive: SlackChannelStatusEvent | null;
   readonly canConfigureSlack: boolean;
@@ -216,8 +221,13 @@ function slackLine(
   input: GoatBotDiagnosticsInput,
   homeId: EnvironmentId | null,
 ): GoatBotDiagnosticLine | null {
+  if (input.slack === "unavailable") return null;
+  if (input.slack === "loading")
+    return { key: "slack", tone: "pending", text: "Checking Slack…", action: null };
+  if (input.slack === "failed")
+    return { key: "slack", tone: "warn", text: "Couldn't check Slack", action: null };
   const live = input.slackLive;
-  const connections = (input.slack ?? [])
+  const connections = input.slack
     .filter((connection) => connection.enabled)
     .map((connection) =>
       live === null || live.connectionId !== connection.connectionId

@@ -5,19 +5,22 @@ import {
   type GoatBotDiagnosticsInput,
 } from "@goat/client-runtime/goatBot";
 import { useAtomValue } from "@effect/atom-react";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type {
   BotProfile,
   ChannelTaskId,
   EnvironmentId,
   SlackChannelStatusEvent,
+  ThreadId,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { useEffect } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { useNowMinuteMs } from "../../lib/clock";
 import { channelEnvironment } from "../../state/channels";
-import { useEnvironmentServerConfig } from "../../state/entities";
+import { useEnvironmentServerConfig, useThreadShell } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
@@ -39,8 +42,12 @@ const TONE_DOT: Record<GoatBotDiagnosticTone, string> = {
  */
 export function MobileBotStatusCard(props: {
   readonly environmentId: EnvironmentId | null;
-  readonly member: { readonly defaultModelSelection: BotProfile["defaultModelSelection"] } | null;
+  readonly member: {
+    readonly threadId: ThreadId;
+    readonly defaultModelSelection: BotProfile["defaultModelSelection"];
+  } | null;
   readonly rows: GoatBotDiagnosticsInput["rows"];
+  readonly refreshRows: () => void;
   readonly onOpenTask: (taskId: ChannelTaskId) => void;
 }) {
   const { environmentId, member } = props;
@@ -48,20 +55,37 @@ export function MobileBotStatusCard(props: {
   const config = useEnvironmentServerConfig(environmentId);
   const { presentationById } = useEnvironments();
   const presentation = environmentId === null ? undefined : presentationById.get(environmentId);
-  const slack = useEnvironmentQuery(
+  const slackSupported =
     member === null &&
-      environmentId !== null &&
-      presentation?.connection.phase === "connected" &&
-      presentation.serverConfig?.environment.capabilities.slackChannel === true
-      ? channelEnvironment.slackSettings({ environmentId, input: {} })
-      : null,
+    environmentId !== null &&
+    presentation?.connection.phase === "connected" &&
+    presentation.serverConfig?.environment.capabilities.slackChannel === true;
+  const slack = useEnvironmentQuery(
+    slackSupported ? channelEnvironment.slackSettings({ environmentId, input: {} }) : null,
   );
   // Pushed status changes; subscribed only while a Slack connection is on.
-  const slackLive = useAtomValue(
+  const slackStatus = useAtomValue(
     environmentId !== null && slack.data?.some((connection) => connection.enabled) === true
       ? channelEnvironment.slackStatus({ environmentId, input: {} })
       : NO_SLACK_EVENT,
   );
+  const slackLive = Option.getOrNull(AsyncResult.value(slackStatus));
+  const refreshSlack = slack.refresh;
+  // oxlint-disable-next-line goat/react-effect-budget -- The stream names one connection per change; re-read them all so none goes stale.
+  useEffect(() => {
+    if (slackLive !== null) refreshSlack();
+  }, [slackLive, refreshSlack]);
+  const memberShell = useThreadShell(
+    member === null || environmentId === null
+      ? null
+      : scopeThreadRef(environmentId, member.threadId),
+  );
+  const memberRevision = memberShell === null ? null : String(memberShell.updatedAt);
+  const { refreshRows } = props;
+  // oxlint-disable-next-line goat/react-effect-budget -- Read a member's tasks again when its conversation changes; the roster refreshes only the main bot's.
+  useEffect(() => {
+    if (memberRevision !== null) refreshRows();
+  }, [memberRevision, refreshRows]);
   const now = useNowMinuteMs();
   const homeId = home.resolution.state === "claimed" ? home.resolution.claim.environmentId : null;
   const diagnostics = diagnoseGoatBot({
@@ -82,8 +106,8 @@ export function MobileBotStatusCard(props: {
       : null,
     canChangeModel: false,
     rows: props.rows,
-    slack: slack.data ?? null,
-    slackLive: Option.getOrNull(AsyncResult.value(slackLive)),
+    slack: !slackSupported ? "unavailable" : (slack.data ?? (slack.error ? "failed" : "loading")),
+    slackLive,
     canConfigureSlack: false,
     now,
   });

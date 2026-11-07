@@ -16,6 +16,7 @@ import {
 import { Link } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { useEffect } from "react";
 
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { cn } from "~/lib/utils";
@@ -69,20 +70,26 @@ export function GoatBotStatusCard({
       : serverEnvironment.updateSettings.permissionAtom(environmentId),
   );
   const canConfigureSlack = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
-  const slack = useEnvironmentQuery(
+  const slackSupported =
     member === null &&
-      environmentId !== null &&
-      presentation?.connection.phase === "connected" &&
-      presentation.serverConfig?.environment.capabilities.slackChannel === true
-      ? channelEnvironment.slackSettings({ environmentId, input: {} })
-      : null,
+    environmentId !== null &&
+    presentation?.connection.phase === "connected" &&
+    presentation.serverConfig?.environment.capabilities.slackChannel === true;
+  const slack = useEnvironmentQuery(
+    slackSupported ? channelEnvironment.slackSettings({ environmentId, input: {} }) : null,
   );
   // Pushed status changes; subscribed only while a Slack connection is on.
-  const slackLive = useAtomValue(
+  const slackStatus = useAtomValue(
     environmentId !== null && slack.data?.some((connection) => connection.enabled) === true
       ? channelEnvironment.slackStatus({ environmentId, input: {} })
       : NO_SLACK_EVENT,
   );
+  const slackLive = Option.getOrNull(AsyncResult.value(slackStatus));
+  const refreshSlack = slack.refresh;
+  // oxlint-disable-next-line goat/react-effect-budget -- The stream names one connection per change; re-read them all so none goes stale.
+  useEffect(() => {
+    if (slackLive !== null) refreshSlack();
+  }, [slackLive, refreshSlack]);
   const now = Date.parse(`${useNowMinute()}:00Z`);
   const homeId = home.resolution.state === "claimed" ? home.resolution.claim.environmentId : null;
   const diagnostics = diagnoseGoatBot({
@@ -104,8 +111,8 @@ export function GoatBotStatusCard({
           }),
     canChangeModel,
     rows,
-    slack: slack.data ?? null,
-    slackLive: Option.getOrNull(AsyncResult.value(slackLive)),
+    slack: !slackSupported ? "unavailable" : (slack.data ?? (slack.error ? "failed" : "loading")),
+    slackLive,
     canConfigureSlack,
     now,
   });

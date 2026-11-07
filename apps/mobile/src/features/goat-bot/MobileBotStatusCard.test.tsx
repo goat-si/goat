@@ -7,6 +7,7 @@ import {
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ThreadId,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
@@ -34,6 +35,8 @@ const state = vi.hoisted(() => ({
   homeConnected: false,
   moveTarget: null as null | { environmentId: string; label: string },
   changeHome: vi.fn(),
+  memberUpdatedAt: "2026-11-07T10:00:00Z",
+  refreshRows: vi.fn(),
 }));
 
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
@@ -57,6 +60,7 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
   }),
 }));
 vi.mock("../../state/entities", () => ({
+  useThreadShell: (ref: unknown) => (ref === null ? null : { updatedAt: state.memberUpdatedAt }),
   useEnvironmentServerConfig: () => ({
     settings: {
       ...DEFAULT_SERVER_SETTINGS,
@@ -90,7 +94,9 @@ vi.mock("@effect/atom-react", async () => {
   const { AsyncResult } = await import("effect/reactivity");
   return { useAtomValue: () => AsyncResult.initial() };
 });
-vi.mock("../../state/query", () => ({ useEnvironmentQuery: () => ({ data: null }) }));
+vi.mock("../../state/query", () => ({
+  useEnvironmentQuery: () => ({ data: null, error: null, refresh: () => {} }),
+}));
 vi.mock("../../lib/clock", () => ({ useNowMinuteMs: () => Date.parse("2026-11-07T12:00:00Z") }));
 
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
@@ -121,6 +127,7 @@ async function render(props: Partial<React.ComponentProps<typeof MobileBotStatus
         environmentId={STUDIO}
         member={null}
         rows={[]}
+        refreshRows={state.refreshRows}
         onOpenTask={onOpenTask}
         {...props}
       />,
@@ -150,6 +157,7 @@ it("judges a member by its own model and opens the task that waits for an answer
   state.homeConnected = true;
   const onOpenTask = await render({
     member: {
+      threadId: ThreadId.make("member-thread"),
       defaultModelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-9" },
     },
     rows: [waiting],
@@ -160,6 +168,19 @@ it("judges a member by its own model and opens the task that waits for an answer
   expect(button("Choose another model")).toBeUndefined();
   await act(async () => button("Answer")?.click());
   expect(onOpenTask).toHaveBeenCalledWith("ask");
+});
+
+it("reads a member's tasks again when its conversation changes", async () => {
+  state.homeConnected = true;
+  state.refreshRows.mockClear();
+  const member = { threadId: ThreadId.make("member-thread"), defaultModelSelection: null };
+  await render({ member });
+  const before = state.refreshRows.mock.calls.length;
+  await render({ member });
+  expect(state.refreshRows.mock.calls.length).toBe(before);
+  state.memberUpdatedAt = "2026-11-07T11:00:00Z";
+  await render({ member });
+  expect(state.refreshRows.mock.calls.length).toBe(before + 1);
 });
 
 it("says Ready for a healthy main bot once its work has loaded", async () => {

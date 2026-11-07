@@ -65,7 +65,7 @@ function healthy(patch: Partial<GoatBotDiagnosticsInput> = {}): GoatBotDiagnosti
     model,
     canChangeModel: true,
     rows: [],
-    slack: null,
+    slack: "unavailable",
     slackLive: null,
     canConfigureSlack: true,
     now: NOW,
@@ -197,6 +197,16 @@ describe("diagnoseGoatBot", () => {
       text: "Slack connected",
       action: null,
     });
+  });
+
+  it("never says Ready while Slack is still loading or could not be read", () => {
+    const loading = healthy({ slack: "loading" });
+    expect(line(loading, "slack")).toMatchObject({ tone: "pending", text: "Checking Slack…" });
+    expect(diagnoseGoatBot(loading).verdict).toBe("checking");
+    const failed = healthy({ slack: "failed" });
+    expect(line(failed, "slack")).toMatchObject({ tone: "warn", text: "Couldn't check Slack" });
+    expect(diagnoseGoatBot(failed).verdict).toBe("attention");
+    expect(line(healthy({ slack: "loading", member: true }), "slack")).toBeUndefined();
   });
 
   it("lets a pushed Slack status replace the snapshot for the connection it names", () => {
