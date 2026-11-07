@@ -969,6 +969,7 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(toLedgerError("acceptInput")));
 
+  const bots = botLedger(sql);
   return ChannelLedger.of({
     acceptInput,
 
@@ -1008,7 +1009,7 @@ const make = Effect.gen(function* () {
       ),
 
     ...receptionLedger(sql, { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries }),
-    ...botLedger(sql),
+    ...bots,
 
     readConversationTail: (conversationId, limit) =>
       sql<{
@@ -1100,6 +1101,7 @@ const make = Effect.gen(function* () {
 
     listTasks: (input) =>
       Effect.gen(function* () {
+        yield* bots.ensureTaskBotsRepaired();
         const separator = input.cursor?.indexOf("|") ?? -1;
         const cursorAt = separator < 0 ? undefined : input.cursor?.slice(0, separator);
         const cursorId = separator < 0 ? undefined : input.cursor?.slice(separator + 1);
@@ -1264,7 +1266,9 @@ const make = Effect.gen(function* () {
       ),
 
     countWaitingTasks: (ownerId, readThrough, botId = BotId.make(MAIN_BOT_ID)) =>
-      sql<TaskRow>`
+      Effect.andThen(
+        bots.ensureTaskBotsRepaired(),
+        sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
         FROM channel_tasks
         WHERE owner_id = ${ownerId} AND bot_id = ${botId}
@@ -1275,7 +1279,8 @@ const make = Effect.gen(function* () {
               AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) > 0
             )
           )
-      `.pipe(
+      `,
+      ).pipe(
         Effect.map((rows) => {
           if (readThrough === undefined) return rows.length;
           const readMs = Date.parse(readThrough);

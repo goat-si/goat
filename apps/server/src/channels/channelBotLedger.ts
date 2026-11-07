@@ -5,6 +5,7 @@
  */
 import { BotId, ChannelBotRef, MAIN_BOT_ID, type ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 
@@ -78,6 +79,11 @@ export interface ChannelBotLedgerOps {
    * how many tasks changed; a second run changes none.
    */
   readonly repairTaskBots: () => Effect.Effect<number, ChannelLedgerError>;
+  /**
+   * Runs repairTaskBots until it has succeeded once in this process. Reads and deletes by bot
+   * wait for it, so a task an older build filed under main is never shown or counted as main's.
+   */
+  readonly ensureTaskBotsRepaired: () => Effect.Effect<number, ChannelLedgerError>;
 }
 
 const isLedgerError = Schema.is(ChannelLedgerError);
@@ -266,6 +272,20 @@ export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
       Effect.mapError(toLedgerError("repairTaskBots")),
     );
 
+  let tasksRepaired = false;
+  const ensureTaskBotsRepaired: ChannelBotLedgerOps["ensureTaskBotsRepaired"] = () =>
+    Effect.suspend(() =>
+      tasksRepaired
+        ? Effect.succeed(0)
+        : Effect.gen(function* () {
+            const changed = yield* repairTaskBots();
+            // An enclosing transaction can still roll the repair back; only a committed one counts.
+            if (Option.isNone(yield* Effect.serviceOption(sql.transactionService)))
+              tasksRepaired = true;
+            return changed;
+          }),
+    );
+
   return {
     getBot,
     getBotById,
@@ -274,5 +294,6 @@ export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
     resolveIngressBot,
     setMemberBotIfAbsent,
     repairTaskBots,
+    ensureTaskBotsRepaired,
   };
 };

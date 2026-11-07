@@ -16,6 +16,7 @@ import {
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -24,6 +25,8 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
+import * as ChannelBotThreads from "./ChannelBotThreads.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -37,6 +40,7 @@ import {
   goatInput,
   makeHarness,
   modelSelection,
+  owner,
   ownerId as harnessOwner,
   rpcContext,
   scratchProjectId,
@@ -284,18 +288,22 @@ describe("bot records", () => {
   );
 });
 
-/** A member's input whose task an older build created as main and finished. */
-const downgradedMemberTask = (ownerId: string) =>
+/** A member's input whose task an older build created as main. */
+const downgradedMemberTask = (
+  ownerId: string,
+  botId = MEMBER,
+  status: "completed" | "running" = "completed",
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const member = yield* acceptFor(MEMBER, "older-build", memberThread, ownerId);
+    const member = yield* acceptFor(botId, "older-build", memberThread, ownerId);
     const { task } = createdTaskFor(member);
     yield* sql`UPDATE channel_inbox SET state = 'replied',
       task_ids_json = ${JSON.stringify([task.taskId])} WHERE input_id = ${member.inputId}`;
     yield* sql`INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version,
       generation, task_json, created_at, updated_at)
-      VALUES (${task.taskId}, ${ownerId}, ${task.conversationId}, 'completed', 1, 1,
-      ${JSON.stringify({ ...task, status: "completed" })}, ${NOW}, ${NOW})`;
+      VALUES (${task.taskId}, ${ownerId}, ${task.conversationId}, ${status}, 1, 1,
+      ${JSON.stringify({ ...task, status })}, ${NOW}, ${NOW})`;
     return task;
   });
 
@@ -322,6 +330,79 @@ describe("channel runtime after a downgrade", () => {
       yield* runtime.drain;
       assert.strictEqual((yield* ledger.getTask(task.taskId))?.botId, MEMBER);
       assert.strictEqual((yield* ledger.getInput(waiting.inputId))?.snapshot.state, "replied");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("bot lists and deletes wait until member tasks are back with their bots", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const botThreads = yield* ChannelBotThreads.ChannelBotThreads;
+      const bot = yield* members.create(
+        {
+          clientRequestId: "downgraded",
+          name: "Helper",
+          avatar: null,
+          purpose: "Checks builds.",
+          defaultModelSelection: null,
+        },
+        owner,
+      );
+      const task = yield* downgradedMemberTask(harnessOwner, bot.botId, "running");
+      const tasksOf = (botId: BotId) =>
+        ledger
+          .listTasks({ ownerId: harnessOwner, botId, limit: 10 })
+          .pipe(Effect.map((page) => page.tasks.map((stored) => stored.taskId)));
+      yield* sql`CREATE TRIGGER hold_repair BEFORE UPDATE OF bot_id ON channel_tasks
+        BEGIN SELECT RAISE(ABORT, 'repair held'); END`;
+
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(tasksOf(MAIN))));
+      assert.isTrue(
+        Exit.isFailure(yield* Effect.exit(ledger.countWaitingTasks(harnessOwner, undefined))),
+      );
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(botThreads.list(owner))));
+      assert.isTrue(
+        Exit.isFailure(yield* Effect.exit(members.remove({ botId: bot.botId }, owner))),
+      );
+      assert.strictEqual((yield* ledger.getTask(task.taskId))?.botId, MAIN);
+
+      yield* sql`DROP TRIGGER hold_repair`;
+      assert.deepStrictEqual(yield* tasksOf(MAIN), []);
+      assert.deepStrictEqual(yield* tasksOf(bot.botId), [task.taskId]);
+      const busy = yield* Effect.flip(members.remove({ botId: bot.botId }, owner));
+      assert.strictEqual(busy.reason, "bot_busy");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("a refused delete that ran the repair first leaves the next reads repairing", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const bot = yield* members.create(
+        {
+          clientRequestId: "downgraded-delete-first",
+          name: "Helper",
+          avatar: null,
+          purpose: "Checks builds.",
+          defaultModelSelection: null,
+        },
+        owner,
+      );
+      const task = yield* downgradedMemberTask(harnessOwner, bot.botId, "running");
+
+      const busy = yield* Effect.flip(members.remove({ botId: bot.botId }, owner));
+      assert.strictEqual(busy.reason, "bot_busy");
+      const page = yield* ledger.listTasks({ ownerId: harnessOwner, botId: bot.botId, limit: 10 });
+      assert.deepStrictEqual(
+        page.tasks.map((stored) => stored.taskId),
+        [task.taskId],
+      );
+      assert.strictEqual((yield* ledger.getTask(task.taskId))?.botId, bot.botId);
     }).pipe(Effect.provide(harness.layer));
   });
 });
