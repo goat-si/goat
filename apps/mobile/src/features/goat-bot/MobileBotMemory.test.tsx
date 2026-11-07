@@ -224,3 +224,19 @@ it("asks again when opened and whenever the bot answers or a task moves on", asy
   await render({ refreshKey: "b" });
   expect(state.refresh).toHaveBeenCalledTimes(2);
 });
+it("a new list drops an open change so new wording never lands on another note", async () => {
+  setup();
+  await render({ onDraft: () => {} });
+  // The older note is index 0; once it is forgotten the newer note becomes index 0.
+  const changes = [...container.querySelectorAll("button")].filter(
+    (item) => item.textContent === "Ask to change",
+  );
+  await act(async () => changes[1]?.click());
+  expect(container.querySelector<HTMLTextAreaElement>('[aria-label="New wording"]')?.value).toBe(
+    older.text,
+  );
+  state.data = { revision: "r2", notes: [{ ...newer, index: 0 }], truncated: false };
+  await render({ onDraft: () => {} });
+  expect(container.textContent).toContain(newer.text);
+  expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
+});

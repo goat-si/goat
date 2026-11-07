@@ -69,7 +69,12 @@ export function GoatBotMemory({
           )}
           <ul className="space-y-3">
             {notes.data.notes.map((note) => (
-              <NoteRow key={note.index} note={note} onDraft={onDraft} />
+              // An index is a line's place in this read only, so a new read starts every row over.
+              <NoteRow
+                key={`${notes.data?.revision}:${note.index}`}
+                note={note}
+                onDraft={onDraft}
+              />
             ))}
           </ul>
         </>

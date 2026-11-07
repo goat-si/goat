@@ -56,7 +56,7 @@ export function MobileBotMemory(props: {
             <Pressable
               accessibilityRole="button"
               onPress={refresh}
-              className="min-h-[44px] justify-center"
+              className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
             >
               <Text className="text-foreground">Try again</Text>
             </Pressable>
@@ -74,7 +74,12 @@ export function MobileBotMemory(props: {
             <Text className="text-foreground-muted">Showing the newest notes only.</Text>
           ) : null}
           {notes.data.notes.map((note) => (
-            <MobileNoteRow key={note.index} note={note} onDraft={onDraft} />
+            // An index is a line's place in this read only, so a new read starts every row over.
+            <MobileNoteRow
+              key={`${notes.data?.revision}:${note.index}`}
+              note={note}
+              onDraft={onDraft}
+            />
           ))}
         </View>
       )}
@@ -100,7 +105,7 @@ function MobileNoteRow(props: {
             accessibilityRole="button"
             disabled={!canAsk}
             onPress={() => setWording(note.text)}
-            className="min-h-[44px] justify-center"
+            className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
           >
             <Text className={canAsk ? "text-foreground" : "text-foreground-muted"}>
               Ask to change
@@ -110,7 +115,7 @@ function MobileNoteRow(props: {
             accessibilityRole="button"
             disabled={!canAsk}
             onPress={() => onDraft?.(forgetNoteDraft(note))}
-            className="min-h-[44px] justify-center"
+            className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
           >
             <Text className={canAsk ? "text-foreground" : "text-foreground-muted"}>
               Ask to forget
@@ -135,7 +140,7 @@ function MobileNoteRow(props: {
                 onDraft?.(draft);
                 setWording(null);
               }}
-              className="min-h-[44px] justify-center"
+              className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
             >
               <Text className={draft === null ? "text-foreground-muted" : "text-foreground"}>
                 Fill message
@@ -144,7 +149,7 @@ function MobileNoteRow(props: {
             <Pressable
               accessibilityRole="button"
               onPress={() => setWording(null)}
-              className="min-h-[44px] justify-center"
+              className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
             >
               <Text className="text-foreground">Cancel</Text>
             </Pressable>

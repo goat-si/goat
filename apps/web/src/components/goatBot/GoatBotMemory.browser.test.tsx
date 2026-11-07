@@ -152,6 +152,22 @@ it("cannot ask while the chat cannot send", async () => {
     .toBeDisabled();
 });
 
+it("a new list drops an open change so new wording never lands on another note", async () => {
+  setup();
+  await using screen = await render(
+    <GoatBotMemory environmentId={environmentId} onDraft={() => {}} />,
+  );
+  // The older note is index 0; once it is forgotten the newer note becomes index 0.
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }).nth(1));
+  await expect
+    .element(screen.getByRole("textbox", { name: "New wording" }))
+    .toHaveValue(older.text);
+  state.data = { revision: "r2", notes: [{ ...newer, index: 0 }], truncated: false };
+  await screen.rerender(<GoatBotMemory environmentId={environmentId} onDraft={() => {}} />);
+  await expect.element(screen.getByText(newer.text)).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "New wording" }).query()).toBeNull();
+});
+
 it("an older server is not asked for notes", async () => {
   setup({ supported: false });
   await using screen = await render(<GoatBotMemory environmentId={environmentId} />);
