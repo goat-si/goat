@@ -2276,7 +2276,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           }
         }
         if (profile.driver === "omo") {
-          yield* lifecycleRequest({ type: "prompt", message: "/computer off" });
+          yield* request({ type: "prompt", message: "/computer off" }, PI_SESSION_TIMEOUT_MS);
         }
         const stateData = yield* request({ type: "get_state" });
         if (!modelsDiscovered) {
@@ -2993,7 +2993,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                     return yield* protocolError("A Pi extension cancelled the session fork");
                   if (profile.driver === "omo") {
                     // The fork already moved the native session; never keep the old binding on failure.
-                    yield* lifecycleRequest({ type: "prompt", message: "/computer off" }).pipe(
+                    yield* request(
+                      { type: "prompt", message: "/computer off" },
+                      PI_SESSION_TIMEOUT_MS,
+                    ).pipe(
                       Effect.onError(() =>
                         Effect.sync(() => {
                           threadState = null;
