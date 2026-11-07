@@ -158,7 +158,16 @@ import {
   resolveMessageDispatchIntent,
   shouldClearActiveOrder,
 } from "./CommandPolicy.ts";
-import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
+import {
+  canReplayCommandReceipt,
+  OrchestratorCommandIdConflictError,
+  OrchestratorCommandPreviouslyRejectedError,
+} from "./CommandReceiptErrors.ts";
+export {
+  OrchestratorCommandIdConflictError,
+  OrchestratorCommandPreviouslyRejectedError,
+} from "./CommandReceiptErrors.ts";
+import { CommandReceiptStoreV2, type CommandReceiptV2 } from "./CommandReceiptStore.ts";
 import { makeReviewLedger, OrchestratorReviewLedgerError } from "./goat/ReviewLedger.ts";
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import { notificationTurnItem } from "@goat/provider-core/server/notification";
@@ -366,43 +375,6 @@ export class OrchestratorThreadAboveModeLimitError extends Schema.TaggedError<Or
   override get message(): string {
     return `Thread ${this.threadId} now runs in ${this.runtimeMode}/${this.interactionMode} mode, above what this caller may change.`;
   }
-}
-
-export class OrchestratorCommandPreviouslyRejectedError extends Schema.TaggedError<OrchestratorCommandPreviouslyRejectedError>()(
-  "OrchestratorCommandPreviouslyRejectedError",
-  {
-    commandId: CommandId,
-    commandType: Schema.String,
-    detail: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Command ${this.commandId} was previously rejected: ${this.detail}`;
-  }
-}
-
-export class OrchestratorCommandIdConflictError extends Schema.TaggedError<OrchestratorCommandIdConflictError>()(
-  "OrchestratorCommandIdConflictError",
-  {
-    commandId: CommandId,
-    commandType: Schema.String,
-    receiptThreadId: ThreadId,
-    commandThreadId: ThreadId,
-  },
-) {
-  override get message(): string {
-    return `Command ${this.commandId} was already handled for thread ${this.receiptThreadId} and cannot be replayed for ${this.commandThreadId}.`;
-  }
-}
-
-/**
- * A command receipt only proves that this exact command already ran for the
- * thread it was recorded against. Replaying it for a command aimed at another
- * thread would report success for work that never happened there, so the
- * dispatcher rejects the reuse instead (mirrors v1's command-id conflict).
- */
-function canReplayCommandReceipt(receiptThreadId: ThreadId, commandThreadId: ThreadId): boolean {
-  return receiptThreadId === commandThreadId;
 }
 
 export const OrchestratorV2Error = Schema.Union([
@@ -13122,6 +13094,53 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     };
   });
 
+  const replayCommandReceipt = Effect.fn("orchestrationV2.dispatch.replayReceipt")(function* (
+    command: OrchestrationV2ServerCommand,
+    receipt: CommandReceiptV2,
+  ) {
+    if (receipt.status === "rejected") {
+      return yield* new OrchestratorCommandPreviouslyRejectedError({
+        commandId: command.commandId,
+        commandType: command.type,
+        detail: receipt.error ?? "Previously rejected.",
+      });
+    }
+    const dispatchThreadId = commandThreadId(command);
+    if (!canReplayCommandReceipt(receipt.threadId, dispatchThreadId)) {
+      return yield* new OrchestratorCommandIdConflictError({
+        commandId: command.commandId,
+        commandType: command.type,
+        receiptThreadId: receipt.threadId,
+        commandThreadId: dispatchThreadId,
+      });
+    }
+    const storedEvents = yield* eventSink.readByCommandId({ commandId: command.commandId }).pipe(
+      Stream.runCollect,
+      Effect.map((events): ReadonlyArray<OrchestrationV2StoredEvent> => Array.from(events)),
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause,
+          }),
+      ),
+    );
+    if (command.type === "queue.resume" || command.type === "queued-run.start") {
+      yield* mapDispatchError(command)(
+        startNextQueuedRun(
+          command.threadId,
+          command.type === "queued-run.start" ? { queuedRunId: command.runId } : undefined,
+        ),
+      );
+    }
+    return {
+      sequence: receipt.resultSequence,
+      storedEvents,
+      replayed: true,
+    } satisfies OrchestratorV2DispatchResult;
+  });
+
   const dispatchWithReceiptEffect = Effect.fn("orchestrationV2.dispatch.withReceipt")(function* (
     command: OrchestrationV2ServerCommand,
   ): Effect.fn.Return<OrchestratorV2DispatchResult, OrchestratorV2Error> {
@@ -13143,48 +13162,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
 
     if (Option.isSome(existingReceipt)) {
-      const receipt = existingReceipt.value;
-      if (receipt.status === "rejected") {
-        return yield* new OrchestratorCommandPreviouslyRejectedError({
-          commandId: command.commandId,
-          commandType: command.type,
-          detail: receipt.error ?? "Previously rejected.",
-        });
-      }
-      const dispatchThreadId = commandThreadId(command);
-      if (!canReplayCommandReceipt(receipt.threadId, dispatchThreadId)) {
-        return yield* new OrchestratorCommandIdConflictError({
-          commandId: command.commandId,
-          commandType: command.type,
-          receiptThreadId: receipt.threadId,
-          commandThreadId: dispatchThreadId,
-        });
-      }
-      const storedEvents = yield* eventSink.readByCommandId({ commandId: command.commandId }).pipe(
-        Stream.runCollect,
-        Effect.map((events): ReadonlyArray<OrchestrationV2StoredEvent> => Array.from(events)),
-        Effect.mapError(
-          (cause) =>
-            new OrchestratorDispatchError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause,
-            }),
-        ),
-      );
-      if (command.type === "queue.resume" || command.type === "queued-run.start") {
-        yield* mapDispatchError(command)(
-          startNextQueuedRun(
-            command.threadId,
-            command.type === "queued-run.start" ? { queuedRunId: command.runId } : undefined,
-          ),
-        );
-      }
-      return {
-        sequence: receipt.resultSequence,
-        storedEvents,
-        replayed: true,
-      } satisfies OrchestratorV2DispatchResult;
+      return yield* replayCommandReceipt(command, existingReceipt.value);
     }
 
     // Recheck under the lock; the user may have raised modes since sender preflight.
@@ -13283,10 +13261,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       );
+      if (!inserted) {
+        const receipt = yield* mapDispatchError(command)(
+          commandReceipts.getByCommandId(command.commandId),
+        );
+        if (Option.isNone(receipt)) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Conflicting receipt is not a thread command receipt.",
+          });
+        }
+        return yield* replayCommandReceipt(command, receipt.value);
+      }
       return {
         sequence: resultSequence,
         storedEvents: [],
-        ...(inserted ? {} : { replayed: true as const }),
       } satisfies OrchestratorV2DispatchResult;
     }
     const acceptedAt = plan.events.at(-1)?.occurredAt ?? (yield* DateTime.now);
@@ -13322,6 +13312,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         commandType: command.type,
         detail: committed.receipt.error ?? "Previously rejected.",
+      });
+    }
+    const dispatchThreadId = commandThreadId(command);
+    if (!canReplayCommandReceipt(committed.receipt.threadId, dispatchThreadId)) {
+      return yield* new OrchestratorCommandIdConflictError({
+        commandId: command.commandId,
+        commandType: command.type,
+        receiptThreadId: committed.receipt.threadId,
+        commandThreadId: dispatchThreadId,
       });
     }
     if (command.type === "queue.resume" || command.type === "queued-run.start") {
