@@ -235,7 +235,7 @@ const VoiceWaveform = memo(function VoiceWaveform(props: {
   );
 });
 
-/** Use system tabular figures; DM Sans lacks them and would jitter. */
+/** Tabular figures keep the ticking time from shifting width. */
 export function DictationElapsedTime(props: {
   readonly seconds: number;
   readonly className?: string;

@@ -6,6 +6,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotRoutines } from "./GoatBotRoutines";
+import { GoatBotStatusCard } from "./GoatBotStatusCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { goatBotSearch, memberThreadsKey, useGoatBotMember } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
@@ -22,7 +23,10 @@ export function GoatBotWorkPanel({
 }) {
   const [tab, setTab] = useState<Tab>("Tasks");
   const member = useGoatBotMember();
-  const { rows } = useBotThreads(environmentId, memberThreadsKey(member));
+  const { rows, supported, loaded, failed } = useBotThreads(
+    environmentId,
+    memberThreadsKey(member),
+  );
   const routines = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
@@ -40,6 +44,12 @@ export function GoatBotWorkPanel({
             ))}
           </TabsList>
         </div>
+        <GoatBotStatusCard
+          className="mt-4 rounded-lg border border-border p-3"
+          environmentId={environmentId}
+          member={member}
+          rows={!supported ? "unavailable" : failed ? "failed" : loaded ? rows : null}
+        />
         <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
           {tasks.length === 0 ? (
             <p>No task threads yet. Ask GOAT Bot to start work.</p>

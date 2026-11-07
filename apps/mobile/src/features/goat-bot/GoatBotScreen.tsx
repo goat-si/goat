@@ -521,7 +521,15 @@ export function GoatBotScreen(props: {
           taskId={taskId}
           visible={props.visible}
           onOpenTask={onSelectTask}
-          member={member ? { botId: member.botId, threadId: member.sessionThreadId } : null}
+          member={
+            member
+              ? {
+                  botId: member.botId,
+                  threadId: member.sessionThreadId,
+                  defaultModelSelection: member.defaultModelSelection,
+                }
+              : null
+          }
           taskCard={
             taskCard ? (
               <GoatBotTaskCard card={taskCard.card} onSelectThread={onSelectThread} tail={false} />

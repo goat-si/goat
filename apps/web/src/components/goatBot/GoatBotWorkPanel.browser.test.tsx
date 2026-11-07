@@ -22,6 +22,7 @@ vi.mock("~/state/server", () => ({
     setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
   },
 }));
+vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: { execute: typeof mocks.setEnabled }) => command.execute,
 }));

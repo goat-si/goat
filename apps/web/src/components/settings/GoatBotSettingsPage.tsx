@@ -13,6 +13,7 @@ import { useGoatBotEnabled } from "../goatBot/useGoatBotSession";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { GoatBotSettings } from "./GoatBotSettings";
+import { GoatBotStatusSettings } from "./GoatBotStatusSettings";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { SlackChannelSettings } from "./SlackChannelSettings";
@@ -89,6 +90,7 @@ export function GoatBotSettingsPanel() {
   const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
   return (
     <SettingsPageContainer>
+      <GoatBotStatusSettings />
       <GoatBotProfileSection />
       <GoatBotSettings />
       <SettingsSection title="Task threads">

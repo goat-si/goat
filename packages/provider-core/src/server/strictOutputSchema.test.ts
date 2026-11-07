@@ -3,7 +3,10 @@ import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { ChannelReceptionModelOutput } from "./channelReceptionPrompt.ts";
+import {
+  ChannelReceptionModelOutput,
+  EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT,
+} from "./channelReceptionPrompt.ts";
 import { buildMemoryConflictPrompt, buildMemorySummaryPrompt } from "./memoryGenerationPrompts.ts";
 import { strictOutputSchemaViolations } from "./strictOutputSchema.ts";
 import type { Operation } from "./textGenerationOperations.ts";
@@ -149,24 +152,7 @@ describe("structured output schemas", () => {
     expect(strictOutputSchemaViolations(toJsonSchemaObject(ChannelReceptionModelOutput))).toEqual(
       [],
     );
-    const empty = {
-      replyText: "On it.",
-      title: "",
-      instruction: "",
-      projectId: "",
-      host: "",
-      taskId: "",
-      questionId: "",
-      answer: "",
-      question: "",
-      options: [],
-      clarifyAbout: "other",
-      reads: [],
-      remember: "",
-      rememberQuote: "",
-      notesChangeRequested: "",
-      additionalTasks: [],
-    };
+    const empty = { ...EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT, replyText: "On it." };
     const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelReceptionModelOutput));
     for (const answer of [
       { ...empty, action: "read", reads: [{ kind: "memory", query: "deploy" }] },
