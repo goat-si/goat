@@ -4,9 +4,10 @@ import {
   type ChannelIngestInput,
   type ChannelTaskId,
   type ChatAttachment,
+  type EnvironmentId,
   SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
-import { AsyncResult, Atom } from "effect/reactivity";
+import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import * as Effect from "effect/Effect";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -31,6 +32,15 @@ export function createChannelEnvironmentAtoms<R, E>(
     tag: CHANNEL_GATEWAY_WS_METHODS.listBots,
     staleTimeMs: 2_000,
   });
+  // The roster lists deleted members too; settings list only the others.
+  const refreshBots = (
+    { environmentId }: { readonly environmentId: EnvironmentId },
+    registry: AtomRegistry.AtomRegistry,
+  ) =>
+    Effect.sync(() => {
+      registry.refresh(listBots({ environmentId, input: {} }));
+      registry.refresh(listBots({ environmentId, input: { includeDeleted: true } }));
+    });
   const childWorkQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:channel:list-child-work",
     tag: CHANNEL_GATEWAY_WS_METHODS.listChildWork,
@@ -55,8 +65,35 @@ export function createChannelEnvironmentAtoms<R, E>(
     updateBot: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:update-bot",
       tag: CHANNEL_GATEWAY_WS_METHODS.updateBot,
-      onSuccess: ({ environmentId }, registry) =>
-        Effect.sync(() => registry.refresh(listBots({ environmentId, input: {} }))),
+      onSuccess: refreshBots,
+    }),
+    /** A member bot with its own conversation; a retry with the same clientRequestId returns it. */
+    createBot: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:create-bot",
+      tag: CHANNEL_GATEWAY_WS_METHODS.createBot,
+      onSuccess: refreshBots,
+    }),
+    setBotHidden: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:set-bot-hidden",
+      tag: CHANNEL_GATEWAY_WS_METHODS.setBotHidden,
+      onSuccess: refreshBots,
+    }),
+    /** Refused with bot_busy while the bot has open work. */
+    deleteBot: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:delete-bot",
+      tag: CHANNEL_GATEWAY_WS_METHODS.deleteBot,
+      onSuccess: refreshBots,
+    }),
+    restoreBot: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:restore-bot",
+      tag: CHANNEL_GATEWAY_WS_METHODS.restoreBot,
+      onSuccess: refreshBots,
+    }),
+    /** One bot's waiting count; member rows read it, main keeps its own observer. */
+    botStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:bot-status",
+      tag: CHANNEL_GATEWAY_WS_METHODS.getBotStatus,
+      staleTimeMs: 2_000,
     }),
     listBotThreads: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-bot-threads",
