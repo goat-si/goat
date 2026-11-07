@@ -6,12 +6,13 @@
 // Provider lines are JSON-RPC; only press_key and hotkey arguments are rewritten.
 // @effect-diagnostics preferSchemaOverJson:off
 import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
+import { compareSemverVersions } from "@goat/shared/semver";
 
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 
 /** Whether a driver build presses keypad keys itself (goat.4 added their key codes). */
 export const driverPressesKeypad = (version: string) =>
-  Number(/-goat\.(\d+)$/u.exec(version)?.[1] ?? 0) >= 4;
+  compareSemverVersions(version, "0.38.0-goat.4") >= 0;
 
 const PINNED_KEYPAD = driverPressesKeypad(CUA_DRIVER_VERSION);
 
