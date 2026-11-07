@@ -15,6 +15,8 @@ export interface ChannelBotNoteLine {
   readonly date: string | null;
   readonly text: string;
   readonly raw: string;
+  /** The channel input named by "(asked in <id>)", for a line reception saved. */
+  readonly sourceInputId?: string;
   readonly replaces?: string;
   readonly replacedBy?: number;
 }
@@ -50,16 +52,19 @@ const parseLine = (raw: string, index: number): ChannelBotNoteLine => {
       const head = replaces === undefined ? null : SOURCED.exec(raw.slice(0, at));
       const date = head?.[1];
       const text = head?.[2];
+      const sourceInputId = head?.[3];
       if (replaces !== undefined && date !== undefined && text !== undefined) {
-        return { index, date, text, raw, replaces };
+        return { index, date, text, raw, replaces, ...(sourceInputId ? { sourceInputId } : {}) };
       }
     }
   }
-  const plain = SOURCED.exec(raw) ?? DATED.exec(raw);
+  const sourced = SOURCED.exec(raw);
+  const plain = sourced ?? DATED.exec(raw);
   const date = plain?.[1];
   const text = plain?.[2];
+  const sourceInputId = sourced?.[3];
   return date !== undefined && text !== undefined
-    ? { index, date, text, raw }
+    ? { index, date, text, raw, ...(sourceInputId ? { sourceInputId } : {}) }
     : { index, date: null, text: raw.replace(/^[-*]\s+/u, ""), raw };
 };
 

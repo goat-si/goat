@@ -10,6 +10,6 @@ export const channelBotWorkRpcHandlers = Effect.fn("channel.botWorkRpcHandlers")
 ) {
   return {
     ...ChannelBotThreads.rpcHandlers(yield* ChannelBotThreads.ChannelBotThreads, owner),
-    ...ChannelBotNotesReader.rpcHandlers(yield* ChannelBotNotesReader.ChannelBotNotesReader),
+    ...ChannelBotNotesReader.rpcHandlers(yield* ChannelBotNotesReader.ChannelBotNotesReader, owner),
   };
 });
