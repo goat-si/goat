@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   bots: [] as Array<object>,
   shellRefs: [] as Array<unknown>,
   memberArgs: [] as Array<unknown>,
+  restore: vi.fn(async () => true),
 }));
 vi.mock("../hooks/useMediaQuery", () => ({ useMediaQuery: () => state.narrow }));
 vi.mock("../hooks/useSettings", () => ({ useClientSettings: () => state.beside }));
@@ -26,10 +27,23 @@ vi.mock("../state/entities", () => ({
   useThreadVisibleTurnItems: () => [],
 }));
 vi.mock("../components/goatBot/GoatBotChatView", () => ({
-  GoatBotChatView: (props: object) => {
+  GoatBotChatView: (props: { removal?: string | null; onRestore?: () => void }) => {
     state.chatSession = props;
-    return <div>Main chat</div>;
+    return (
+      <div>
+        Main chat
+        {props.removal === "deleted" ? <span>Chat removed</span> : null}
+        {props.onRestore ? (
+          <button type="button" onClick={props.onRestore}>
+            Restore
+          </button>
+        ) : null}
+      </div>
+    );
   },
+}));
+vi.mock("../components/goatBot/useBotManage", () => ({
+  useBotManage: () => ({ canManage: true, restore: state.restore }),
 }));
 vi.mock("../components/goatBot/GoatBotTaskPane", () => ({
   GoatBotTaskPane: ({ narrow, session }: { narrow: boolean; session: object }) => {
@@ -156,4 +170,33 @@ it("says a named bot isn't available instead of opening the main bot", async () 
   await using screen = await render(<Component />);
   await expect.element(screen.getByText("This bot isn't available")).toBeVisible();
   expect(screen.getByText("Main chat").query()).toBeNull();
+});
+
+it("a deleted member's task beside its chat shows the chat as deleted and offers Restore", async () => {
+  state.narrow = false;
+  state.beside = true;
+  state.supported = true;
+  state.restore.mockClear();
+  const deleted = {
+    botId: "research",
+    role: "member",
+    name: "Research",
+    state: "deleted",
+    environmentId: "env",
+    sessionThreadId: "thread-research",
+  };
+  state.bots = [deleted];
+  using _search = vi
+    .spyOn(Route, "useSearch")
+    .mockReturnValue({ task: ChannelTaskId.make("task"), bot: BotId.make("research") });
+  const Component = Route.options.component;
+  if (!Component) throw new Error("missing route component");
+  try {
+    await using screen = await render(<Component />, { router: false }); // Search and navigation are mocked.
+    await expect.element(screen.getByText("Chat removed")).toBeVisible();
+    await screen.getByRole("button", { name: "Restore" }).click();
+    expect(state.restore).toHaveBeenCalledWith(deleted);
+  } finally {
+    state.bots = [];
+  }
 });

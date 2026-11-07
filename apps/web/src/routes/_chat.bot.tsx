@@ -23,6 +23,7 @@ import {
   useGoatBotMember,
 } from "../components/goatBot/goatBotMemberContext";
 import { useBotRoster } from "../components/goatBot/useBotRoster";
+import { useBotManage } from "../components/goatBot/useBotManage";
 import { useGoatBotHomeSettings } from "../components/goatBot/useGoatBotHome";
 import { useGoatBotSession } from "../components/goatBot/useGoatBotSession";
 import { Button } from "../components/ui/button";
@@ -149,6 +150,8 @@ export function GoatBotTaskRoute({
   const navigate = useNavigate();
   const legacyAgentRoute = useLegacyGlobalAgentRoute();
   const member = useGoatBotMember();
+  const manage = useBotManage(environmentId);
+  const memberDeleted = member?.state === "deleted";
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -157,6 +160,10 @@ export function GoatBotTaskRoute({
             {...session}
             environmentId={environmentId}
             legacyAgentRoute={legacyAgentRoute}
+            removal={memberDeleted ? "deleted" : null}
+            onRestore={
+              memberDeleted && manage.canManage ? () => void manage.restore(member) : undefined
+            }
           />
         )}
         <GoatBotTaskPane
