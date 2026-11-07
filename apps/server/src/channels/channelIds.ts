@@ -68,6 +68,10 @@ export const taskIdFor = (inputId: ChannelInputId, ordinal: number) =>
 export const taskEventIdFor = (taskId: ChannelTaskId, version: number) =>
   stableId("channel-task-event", [taskId, String(version)]) as ChannelTaskEventId;
 
+/** The one skill proposal a task generation's completion may start. */
+export const skillProposalTaskIdFor = (sourceTaskId: ChannelTaskId, generation: number) =>
+  stableId("channel-task", [sourceTaskId, String(generation), "skill-proposal"]) as ChannelTaskId;
+
 export const questionIdFor = (taskId: ChannelTaskId, version: number) =>
   stableId("channel-question", [taskId, String(version)]) as ChannelQuestionId;
 

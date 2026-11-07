@@ -60,6 +60,7 @@ import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
+import { makeChannelSkillProposals } from "./channelSkillProposals.ts";
 import {
   answerForwardIdsFor,
   questionIdFor,
@@ -144,6 +145,7 @@ const make = Effect.gen(function* () {
   const remoteReservations = yield* Ref.make<ReadonlyMap<string, ChannelRequester>>(new Map());
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+  const skillProposals = yield* makeChannelSkillProposals;
 
   /**
    * The Slack connection's default project and model, for work that came in through it. A
@@ -838,6 +840,8 @@ const make = Effect.gen(function* () {
         }
         dispatchRequester = requester;
       }
+      if (stored.task.skillProposal !== undefined)
+        return yield* skillProposals.advance(stored, owner);
       // A generation that may already run on another machine never starts anywhere else.
       if (stored.task.status === "received" || stored.task.status === "dispatching") {
         // An automatic placement in flight owns the task until it claims or gives up; its own

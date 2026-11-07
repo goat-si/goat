@@ -55,6 +55,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
+import { makeChannelSkillProposals } from "./channelSkillProposals.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   completionHoldCount,
@@ -179,6 +180,7 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const sql = yield* SqlClient.SqlClient;
   const childWorkStore = yield* Effect.serviceOption(ChannelChildWorkStore.ChannelChildWorkStore);
+  const skillProposals = yield* makeChannelSkillProposals;
 
   /**
    * Whether launched child work of this generation is still running. A bare reservation
@@ -564,21 +566,24 @@ const make = Effect.gen(function* () {
           (latest.task.proposedCompletion?.runId === current.id
             ? latest.task.proposedCompletion.summary
             : "Finished.");
-        yield* commitTransition(
-          ledger,
-          latest,
-          settleCompletedRun({
-            task: latest.task,
-            runId: current.id,
-            reported:
-              fallbackSummary === "" && reported?.outcome === "succeeded"
-                ? { outcome: "succeeded" }
-                : reported,
-            fallbackSummary,
-            now: DateTime.formatIso(yield* DateTime.now),
-          }),
-          { owner, narrate: true, completionHold: null },
-        );
+        const settled = settleCompletedRun({
+          task: latest.task,
+          runId: current.id,
+          reported:
+            fallbackSummary === "" && reported?.outcome === "succeeded"
+              ? { outcome: "succeeded" }
+              : reported,
+          fallbackSummary,
+          now: DateTime.formatIso(yield* DateTime.now),
+        });
+        // A skill the worker proposed is asked about in the same write that settles the task.
+        const offered = yield* skillProposals.offerFor(latest, current.id, settled);
+        yield* commitTransition(ledger, latest, settled, {
+          owner,
+          narrate: true,
+          completionHold: null,
+          ...offered,
+        });
         return true;
       }
       if (current.status === "cancelled") {
@@ -816,6 +821,9 @@ const make = Effect.gen(function* () {
                   generation: task.generation,
                   runId: worker.runId,
                   summary: input.summary,
+                  ...(input.skillProposal === undefined
+                    ? {}
+                    : { skillProposal: input.skillProposal }),
                 },
               },
             },

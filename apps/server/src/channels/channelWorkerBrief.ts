@@ -65,6 +65,9 @@ const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instructi
     ").",
 ];
 
+/** Only a worker on this machine can offer a skill; origin.report has no field for one. */
+const SKILL_PROPOSAL_RULE = `If the finished work followed a repeatable procedure the person will likely ask for again, you may add skillProposal to your completed ${goatCallText("channel.task_report")}: a short lowercase name, a one-line summary, and the procedure as Markdown. GOAT asks the person and saves it as a skill only if they agree. Never put secrets, tokens, or personal data in it.`;
+
 /**
  * The rules every channel worker follows. A worker on this machine reports with
  * channel_task_report; one on another machine reports to its origin with goat_origin_report. A
@@ -139,6 +142,7 @@ export const workerInstruction = (task: BriefTask, files: ChannelBotFiles) =>
         JSON.stringify(task.notesChangeRequested) +
         "). Edit the notes file only to make that change.",
     ...channelWorkerRules("local"),
+    SKILL_PROPOSAL_RULE,
   ].join("\n");
 
 /** What a GOAT Bot turn is told besides the person's request. */
@@ -165,6 +169,7 @@ export const turnInstruction = (task: BriefTask, files: ChannelBotFiles, supervi
         JSON.stringify(task.notesChangeRequested) +
         "). This is the one change you may make yourself: edit the notes file only to make that change.",
     ...channelWorkerRules("local", "turn"),
+    SKILL_PROPOSAL_RULE,
   ].join("\n");
 
 /**

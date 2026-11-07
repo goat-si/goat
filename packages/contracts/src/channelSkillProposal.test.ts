@@ -46,6 +46,12 @@ const stored = {
   requesterName: "Jun",
 };
 
+// A server from before the field: the same schemas without it.
+const { skillProposal: _report, ...oldReportFields } = ChannelTaskReportInput.fields;
+const { skillProposal: _task, ...oldTaskFields } = ChannelTask.fields;
+const decodeOldReport = Schema.decodeUnknownSync(Schema.Struct(oldReportFields));
+const decodeOldTask = Schema.decodeUnknownSync(Schema.Struct(oldTaskFields));
+
 describe("channel.task_report skill proposal", () => {
   const decode = Schema.decodeUnknownExit(ChannelTaskReportInput);
 
@@ -70,23 +76,19 @@ describe("channel.task_report skill proposal", () => {
       { ...proposal, text: "  " },
     ])
       expect(Exit.isFailure(decode({ ...report, skillProposal }))).toBe(true);
-    expect(Exit.isSuccess(decode({ ...report, skillProposal: { ...proposal, name: "a".repeat(48) } }))).toBe(true);
+    expect(
+      Exit.isSuccess(decode({ ...report, skillProposal: { ...proposal, name: "a".repeat(48) } })),
+    ).toBe(true);
   });
 
   it("is ignored by a reader that predates it", () => {
-    const { skillProposal: _report, ...oldReport } = ChannelTaskReportInput.fields;
-    const { skillProposal: _task, ...oldTask } = ChannelTask.fields;
-    expect(
-      Schema.decodeUnknownSync(Schema.Struct(oldReport))({ ...report, skillProposal: proposal }),
-    ).toEqual(report);
-    expect(
-      Schema.decodeUnknownSync(Schema.Struct(oldTask))({ ...task, skillProposal: stored }),
-    ).not.toHaveProperty("skillProposal");
+    expect(decodeOldReport({ ...report, skillProposal: proposal })).toEqual(report);
+    expect(decodeOldTask({ ...task, skillProposal: stored })).not.toHaveProperty("skillProposal");
   });
 
   it("round-trips a proposal task", () => {
     const json = Schema.toCodecJson(ChannelTask);
-    const decoded = Schema.decodeUnknownSync(json)({ ...task, skillProposal: stored });
+    const decoded = Schema.decodeSync(json)({ ...task, skillProposal: stored });
     expect(Schema.decodeSync(json)(Schema.encodeSync(json)(decoded)).skillProposal).toEqual(stored);
   });
 });

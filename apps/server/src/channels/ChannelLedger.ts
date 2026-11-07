@@ -132,7 +132,7 @@ export interface ChannelTailEntry {
   readonly receivedAt: string;
   readonly replyText: string | undefined;
 }
-type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelTaskEvent };
+export type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelTaskEvent };
 
 export class ChannelLedger extends Context.Service<
   ChannelLedger,
@@ -316,6 +316,8 @@ export class ChannelLedger extends Context.Service<
       /** Changes the task's remote worker state in the same transaction. */
       readonly remoteWorker?: RemoteWorkerStateUpdate | undefined;
       readonly completeForwardSequence?: number | undefined;
+      /** Tasks this transition starts, inserted in the same write; an id already stored is kept. */
+      readonly createdTasks?: ReadonlyArray<CreatedTask & { readonly ownerId: string }> | undefined;
     }) => Effect.Effect<number, ChannelLedgerError>;
     /** Marks why a finished run is not reported yet; the owner scan re-checks held tasks. */
     readonly setCompletionHold: (input: {
@@ -1315,6 +1317,12 @@ const make = Effect.gen(function* () {
               if (pending.length === 0) return 0;
             }
             const sequence = yield* writeTaskEvent(input.write);
+            for (const created of input.createdTasks ?? []) {
+              const existing = yield* sql<{ readonly task_id: string }>`
+                SELECT task_id FROM channel_tasks WHERE task_id = ${created.task.taskId}`;
+              if (existing.length === 0)
+                yield* insertTask(created.task, created.ownerId, created.event);
+            }
             yield* insertDeliveries(input.deliveries, input.write.event.occurredAt);
             if (input.cursor !== undefined) {
               yield* upsertCursor(input.cursor, input.write.event.occurredAt);
