@@ -31,12 +31,6 @@ export function GoatBotWorkPanel({
   const tasks = [...work.inProgress, ...work.done];
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 text-sm">
-      <GoatBotStatusCard
-        className="mb-4 rounded-lg border border-border p-3 pr-10"
-        environmentId={environmentId}
-        member={member}
-        rows={loaded ? rows : null}
-      />
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         <div className="pr-10">
           <TabsList aria-label="GOAT Bot work">
@@ -47,6 +41,12 @@ export function GoatBotWorkPanel({
             ))}
           </TabsList>
         </div>
+        <GoatBotStatusCard
+          className="mt-4 rounded-lg border border-border p-3"
+          environmentId={environmentId}
+          member={member}
+          rows={loaded ? rows : null}
+        />
         <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
           {tasks.length === 0 ? (
             <p>No task threads yet. Ask GOAT Bot to start work.</p>
