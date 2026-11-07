@@ -4,6 +4,7 @@ import type { GoatBotDelivery } from "./rows.ts";
 export function goatBotReceiptLabel(
   delivery: GoatBotDelivery,
   formatTime: (iso: string) => string,
+  botName = "GOAT Bot",
 ): { readonly text: string; readonly accessibleText: string } | null {
   switch (delivery.state) {
     case "queued":
@@ -11,12 +12,12 @@ export function goatBotReceiptLabel(
     case "sending":
       return { text: "Sending…", accessibleText: "Sending" };
     case "sent":
-      return { text: "Sent", accessibleText: "Sent to GOAT Bot" };
+      return { text: "Sent", accessibleText: `Sent to ${botName}` };
     case "delivered":
-      return { text: "Delivered", accessibleText: "Delivered to GOAT Bot" };
+      return { text: "Delivered", accessibleText: `Delivered to ${botName}` };
     case "read": {
       const time = formatTime(delivery.readAt);
-      return { text: `Read ${time}`, accessibleText: `Read by GOAT Bot at ${time}` };
+      return { text: `Read ${time}`, accessibleText: `Read by ${botName} at ${time}` };
     }
     case "failed":
       return null;

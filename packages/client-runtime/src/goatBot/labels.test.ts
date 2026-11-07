@@ -21,6 +21,20 @@ describe("goatBotReceiptLabel", () => {
     });
     expect(goatBotReceiptLabel({ state: "failed", clientKey: "x" }, time)).toBeNull();
   });
+
+  it("names a renamed bot in what a screen reader hears", () => {
+    const read = { state: "read", readAt: "2026-10-12T09:41:00Z" } as const;
+    expect(goatBotReceiptLabel({ state: "sent" }, time, "Goaty")?.accessibleText).toBe(
+      "Sent to Goaty",
+    );
+    expect(goatBotReceiptLabel({ state: "delivered" }, time, "Goaty")?.accessibleText).toBe(
+      "Delivered to Goaty",
+    );
+    expect(goatBotReceiptLabel(read, time, "Goaty")).toEqual({
+      text: "Read 09:41",
+      accessibleText: "Read by Goaty at 09:41",
+    });
+  });
 });
 
 describe("formatGoatBotStamp", () => {

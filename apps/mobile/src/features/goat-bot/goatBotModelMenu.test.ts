@@ -58,6 +58,12 @@ describe("goatBotModelMenu", () => {
     ]);
     expect(goatBotModelMenuPatch(chosen, "automatic")).toEqual({ goatBotModelSelection: null });
   });
+
+  it("names a renamed bot in the menu's accessible name", () => {
+    expect(goatBotModelMenu(state(null), "Goaty").accessibilityLabel).toBe(
+      "Goaty model: GPT-6-Luna (automatic)",
+    );
+  });
 });
 
 describe("goatBotModelMenuPatch", () => {

@@ -13,7 +13,7 @@ export interface GoatBotModelMenuItem {
 }
 
 /** The header menu: Automatic first, then every ready model, with the current one marked. */
-export function goatBotModelMenu(state: GoatBotModelSettings) {
+export function goatBotModelMenu(state: GoatBotModelSettings, botName = "GOAT Bot") {
   const current = state.choices.find(
     (choice) =>
       choice.instanceId === state.selection.instanceId && choice.model === state.selection.model,
@@ -35,7 +35,7 @@ export function goatBotModelMenu(state: GoatBotModelSettings) {
   ];
   return {
     label: modelName,
-    accessibilityLabel: `GOAT Bot model: ${modelName}${state.separate ? "" : " (automatic)"}`,
+    accessibilityLabel: `${botName} model: ${modelName}${state.separate ? "" : " (automatic)"}`,
     items,
   };
 }

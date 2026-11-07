@@ -19,6 +19,13 @@ export function useGoatBotName(): string {
   return goatBotName(member ?? main);
 }
 
+/** The open chat's bot avatar: the member's, else the main bot's; null draws the face. */
+export function useGoatBotAvatar(): string | null {
+  const member = useContext(GoatBotMemberContext);
+  const main = useContext(GoatBotMainProfileContext);
+  return (member ?? main)?.avatar ?? null;
+}
+
 /** The /bot search that keeps a task link on the bot it belongs to. */
 export function goatBotSearch(member: BotProfile | null): { bot?: BotProfile["botId"] } {
   return member === null ? {} : { bot: member.botId };

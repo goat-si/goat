@@ -1,4 +1,4 @@
-import { deriveGoatBotModelSettings } from "@goat/client-runtime/goatBot";
+import { deriveGoatBotModelSettings, goatBotName } from "@goat/client-runtime/goatBot";
 import {
   AuthSettingsWriteScope,
   type EnvironmentId,
@@ -12,6 +12,7 @@ import { serverEnvironment } from "../../state/server";
 import { readEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { goatBotModelMenu, goatBotModelMenuPatch } from "./goatBotModelMenu";
+import { useMobileGoatBotMember } from "./useMobileBotRoster";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 
 /** GOAT Bot's model on its home computer. Settings and the GOAT Bot header save it the same way. */
@@ -52,6 +53,7 @@ export function useMobileGoatBotModel(environmentId: EnvironmentId | null, canWr
 /** The GOAT Bot header's model menu, or null until GOAT Bot's home computer is connected. */
 export function useMobileGoatBotModelMenu() {
   const { resolution, writableIds } = useMobileGoatBotHomeSettings();
+  const { main } = useMobileGoatBotMember(undefined);
   const environmentId =
     resolution.state === "claimed" && resolution.homeConnected
       ? resolution.claim.environmentId
@@ -62,7 +64,7 @@ export function useMobileGoatBotModelMenu() {
   );
   if (model === null) return null;
   return {
-    ...goatBotModelMenu(model.state),
+    ...goatBotModelMenu(model.state, goatBotName(main)),
     disabled: !model.allowed,
     select: (id: string) => {
       const patch = goatBotModelMenuPatch(model.state, id);

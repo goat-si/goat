@@ -190,6 +190,7 @@ function GoatBotMemberRow({
           size="sm"
           place="list"
           waitingCount={count}
+          emoji={bot.avatar}
           threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
         />
         <span className="min-w-0 flex-1 truncate">{bot.name}</span>

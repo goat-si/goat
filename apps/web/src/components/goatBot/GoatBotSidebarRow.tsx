@@ -91,6 +91,7 @@ function GoatBotSidebarObserver({
             <GoatBotSidebarPreview
               key={`${botRef.environmentId}:${botRef.threadId}`}
               name={name}
+              avatar={main?.avatar ?? null}
               slackEnabled={slackEnabled}
               botRef={botRef}
               active={active}
@@ -101,6 +102,7 @@ function GoatBotSidebarObserver({
           ) : (
             <GoatBotConversationRow
               name={name}
+              avatar={main?.avatar ?? null}
               slackEnabled={slackEnabled}
               active={active}
               count={count}
@@ -119,6 +121,7 @@ function GoatBotSidebarObserver({
 
 function GoatBotSidebarPreview({
   name,
+  avatar,
   slackEnabled,
   botRef,
   active,
@@ -127,6 +130,7 @@ function GoatBotSidebarPreview({
   readMenu,
 }: {
   name: string;
+  avatar: string | null;
   slackEnabled: boolean;
   botRef: GoatBotRef;
   active: boolean;
@@ -155,6 +159,7 @@ function GoatBotSidebarPreview({
   return (
     <GoatBotConversationRow
       name={name}
+      avatar={avatar}
       slackEnabled={slackEnabled}
       active={active}
       count={count}
@@ -168,6 +173,7 @@ function GoatBotSidebarPreview({
 
 function GoatBotConversationRow({
   name,
+  avatar,
   slackEnabled,
   active,
   count,
@@ -177,6 +183,7 @@ function GoatBotConversationRow({
   at,
 }: {
   name: string;
+  avatar: string | null;
   slackEnabled: boolean;
   active: boolean;
   count: number | undefined;
@@ -206,7 +213,7 @@ function GoatBotConversationRow({
           />
         ) : null}
       </span>
-      <GoatBotMainAvatar size="sm" place="list" />
+      <GoatBotMainAvatar size="sm" place="list" emoji={avatar} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
         <span className="flex min-w-0 items-center gap-2">
           <span

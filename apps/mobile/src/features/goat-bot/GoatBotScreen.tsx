@@ -253,7 +253,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   }
   if (row.kind === "user") {
     const delivery = row.delivery;
-    const receipt = goatBotReceiptLabel(delivery, receiptTime);
+    const receipt = goatBotReceiptLabel(delivery, receiptTime, props.botName);
     return (
       <View className="items-end gap-1" style={{ marginTop: layout.marginTop }}>
         <GoatBotBubble side="out" tail={layout.tail}>
@@ -533,6 +533,7 @@ export function GoatBotScreen(props: {
         <GoatBotHeaderFace
           activity={session.activity ?? null}
           title={title}
+          emoji={(member ?? props.main ?? null)?.avatar}
           {...(member
             ? {
                 conversation: {
