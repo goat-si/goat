@@ -744,8 +744,9 @@ describe("Codex native subagents as their thread's background work", () => {
             "shell_environment_policy.set.T3_ACP_MCP_ENDPOINT": f.config.endpoint,
             "shell_environment_policy.set.T3_ACP_MCP_AUTHORIZATION": f.config.authorizationHeader,
           });
-          f.resume(4, otherParams, undefined, other);
-          yield* f.turnStart(5, 2, false, false, other);
+          f.read(4, "notLoaded", other);
+          f.resume(5, otherParams, undefined, other);
+          yield* f.turnStart(6, 2, false, false, other);
           f.entries.push({
             type: "emit_inbound",
             frame: {
@@ -768,7 +769,7 @@ describe("Codex native subagents as their thread's background work", () => {
           });
           f.turnCompleted(2, other);
           // The sibling, still the first root's work, starts its next turn after that Stop.
-          yield* f.turnStart(6, 3, false, false, other);
+          yield* f.turnStart(7, 3, false, false, other);
           f.entries.push(
             childTurn(sibling, "sibling-1", "completed"),
             childTurn(sibling, "sibling-2", "inProgress"),
@@ -778,7 +779,7 @@ describe("Codex native subagents as their thread's background work", () => {
           f.turnCompleted(3, other);
           // The replay answers outbound requests in order: a late interrupt of the sibling would
           // reach it before this turn's start and fail the run.
-          yield* f.turnStart(7, 4, false, false, other);
+          yield* f.turnStart(8, 4, false, false, other);
           f.turnCompleted(4, other);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
