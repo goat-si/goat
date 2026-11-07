@@ -119,3 +119,21 @@ export class GitLabUnknownLabelError extends Schema.TaggedError<GitLabUnknownLab
     return `GitLab CLI failed in setLabels: ${this.detail}`;
   }
 }
+
+export class GitLabMutationRefusedError extends Schema.TaggedError<GitLabMutationRefusedError>()(
+  "GitLabMutationRefusedError",
+  {
+    command: Schema.Literal("glab"),
+    cwd: Schema.String,
+    operation: Schema.String,
+    reasons: Schema.Array(Schema.String),
+  },
+) {
+  get detail(): string {
+    return `GitLab refused it: ${this.reasons.join("; ")}`;
+  }
+
+  override get message(): string {
+    return `GitLab CLI failed in ${this.operation}: ${this.detail}`;
+  }
+}

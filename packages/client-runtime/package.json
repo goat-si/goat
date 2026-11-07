@@ -743,6 +743,10 @@
       "types": "./src/notes/rpc/index.ts",
       "default": "./src/notes/rpc/index.ts"
     },
+    "./pull-request-reviewers": {
+      "types": "./src/pullRequestReviewers.ts",
+      "default": "./src/pullRequestReviewers.ts"
+    },
     "./model-traits": {
       "types": "./src/modelTraits.ts",
       "default": "./src/modelTraits.ts"

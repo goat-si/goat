@@ -833,59 +833,47 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("sends a review as its comments, then its summary, then the verdict", () =>
+  it.effect("requests changes as a reviewer and reports what GitLab refused", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            JSON.stringify({
-              iid: 7,
-              title: "t",
-              web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
-              source_branch: "feat",
-              target_branch: "main",
-              created_at: "2026-07-01T00:00:00Z",
-              updated_at: "2026-07-01T00:00:00Z",
-              diff_refs: { base_sha: "base", head_sha: "head", start_sha: "start" },
-            }),
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(JSON.stringify({ username: "bilal" }))))
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(JSON.stringify({ data: { mergeRequestSetReviewers: { errors: [] } } })),
           ),
-        ),
-      );
-      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              JSON.stringify({
+                data: { mergeRequestRequestChanges: { errors: ["Merge request is locked"] } },
+              }),
+            ),
+          ),
+        );
       const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
 
-      yield* cli.submitReview({
-        cwd: "/w",
-        repository: "acme/web",
-        number: 7,
-        verdict: "approve",
-        body: "Looks right.",
-        comments: [
-          {
-            path: "src/b.ts",
-            oldPath: "src/a.ts",
-            position: { kind: "deleted", oldLine: 4 },
-            body: "why remove?",
-          },
-        ],
-      });
+      const error = yield* Effect.flip(
+        cli.submitReview({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          verdict: "request-changes",
+          body: "Needs work",
+          comments: [{ path: "src/a.ts", position: { kind: "added", newLine: 4 }, body: "nit" }],
+        }),
+      );
 
-      expect(argsOfCall(0)[1]).toContain("merge_requests/7");
-      expect(argsOfCall(1)[1]).toContain("/discussions");
-      expect(JSON.parse(callAt(1).stdin ?? "")).toEqual({
-        body: "why remove?",
-        position: {
-          base_sha: "base",
-          head_sha: "head",
-          start_sha: "start",
-          position_type: "text",
-          old_path: "src/a.ts",
-          new_path: "src/b.ts",
-          old_line: 4,
-        },
-      });
-      expect(argsOfCall(2)[1]).toContain("/notes");
-      expect(argsOfCall(3)[1]).toContain("/approve");
+      expect(mockedExecute).toHaveBeenCalledTimes(3);
+      const target = { projectPath: "acme/web", iid: "7" };
+      const setReviewers = JSON.parse(callAt(1).stdin ?? "");
+      expect(setReviewers.query).toContain("operationMode: APPEND");
+      expect(setReviewers.variables).toEqual({ ...target, reviewers: ["bilal"] });
+      const requestChanges = JSON.parse(callAt(2).stdin ?? "");
+      expect(requestChanges.query).toContain("mergeRequestRequestChanges");
+      expect(requestChanges.variables).toEqual(target);
+      assert.strictEqual(error._tag, "GitLabMutationRefusedError");
+      expect(error.detail).toBe("GitLab refused it: Merge request is locked");
     }),
   );
 

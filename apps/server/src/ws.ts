@@ -1862,7 +1862,6 @@ export const layerWsRpc = (
           automationHold: currentAutomationHold,
         };
       });
-
       const refreshGitStatus = (cwd: string) =>
         vcsStatusBroadcaster
           .refreshStatus(cwd)
@@ -3041,9 +3040,10 @@ export const layerWsRpc = (
           projectCloneTracker.retry(input.projectId).pipe(Effect.map((applied) => ({ applied }))),
         [WS_METHODS.subscribeProjectClones]: () => projectCloneTracker.stream,
         [WS_METHODS.sourceControlPublishRepository]: (input) =>
-          sourceControlRepositories.publishRepository(input).pipe(
-            Effect.tap(() => repositoryIdentityResolver.resolve(input.cwd, { refresh: true })),
-            Effect.tap(() => refreshGitStatus(input.cwd)),
+          SourceControlRepositoryService.publishWithRefresh(
+            sourceControlRepositories.publishRepository(input),
+            repositoryIdentityResolver.resolve(input.cwd, { refresh: true }),
+            refreshGitStatus(input.cwd),
           ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           workspaceEntries.search(input).pipe(

@@ -1,9 +1,13 @@
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
-import { EnvironmentId, ProjectId, type PullRequestActor } from "@goat/contracts";
+import { EnvironmentId, ProjectId } from "@goat/contracts";
 import {
-  detectPullRequestMention,
-  insertPullRequestMention,
-  narrowPullRequestMentions,
+  debouncedPullRequestCompletionSearch,
+  detectPullRequestComposerTrigger,
+  insertPullRequestCompletion,
+  pullRequestCompletionKey,
+  pullRequestCompletions,
+  type PullRequestCompletion,
+  type PullRequestCompletionSupport,
 } from "@goat/shared/pullRequestComposerTrigger";
 import { useState } from "react";
 import type { TextInputSelectionChangeEvent } from "react-native";
@@ -12,10 +16,10 @@ import { composerPullRequests } from "../../state/pull-requests";
 import { useEnvironmentQuery } from "../../state/query";
 import { useDebouncedValue } from "../../state/queries";
 
-const MENTION_SUGGESTION_LIMIT = 6;
+const COMPLETION_SUGGESTION_LIMIT = 6;
 
-/** Completes `@login` in a pull request text input from the repository's users. */
-export function usePullRequestMentions(input: {
+/** Completes `@login`, `#123` and GitLab `!123` in a pull request text input. */
+export function usePullRequestCompletions(input: {
   readonly environmentId: string;
   readonly projectId: string;
   readonly repository: string;
@@ -23,8 +27,8 @@ export function usePullRequestMentions(input: {
   readonly changeRequestUrl?: string | undefined;
   readonly value: string;
   readonly onChangeValue: (value: string) => void;
-  /** The pull request's host completes mentions (`capabilities.mentions`), and the field takes them. */
-  readonly enabled: boolean;
+  /** What the pull request's host completes (its `capabilities`); null where the field takes none. */
+  readonly support: PullRequestCompletionSupport | null;
 }) {
   const [selection, setSelection] = useState<{ start: number; end: number } | null>(null);
   // Set only right after an insertion, so the native input keeps its own caret otherwise.
@@ -35,48 +39,60 @@ export function usePullRequestMentions(input: {
       ? sourceControlClients.parseChangeRequestUrl(input.changeRequestUrl)?.link.host
       : undefined);
   const trigger =
-    !input.enabled || host === undefined || selection === null || selection.start !== selection.end
+    host === undefined ||
+    input.support === null ||
+    selection === null ||
+    selection.start !== selection.end
       ? null
-      : detectPullRequestMention(input.value, selection.start);
-  const typed = trigger?.query ?? "";
-  const search = typed === "" ? undefined : typed.slice(0, 100);
-  const sent = useDebouncedValue(search, 250);
+      : detectPullRequestComposerTrigger(input.value, selection.start, input.support);
+  const key = pullRequestCompletionKey(trigger);
+  const sentKey = useDebouncedValue(key, 250);
+  const sent =
+    trigger === null ? undefined : debouncedPullRequestCompletionSearch(trigger, sentKey);
   const hosted = useEnvironmentQuery(
     trigger === null
       ? null
       : composerPullRequests.filterOptions({
           environmentId: EnvironmentId.make(input.environmentId),
-          input: {
-            kind: "authors",
-            projectId: ProjectId.make(input.projectId),
-            repository: input.repository,
-            includeUpstream: true,
-            ...(host === undefined ? {} : { host }),
-            ...(sent ? { query: sent } : {}),
-          },
+          input:
+            trigger.kind === "mention"
+              ? {
+                  kind: "authors",
+                  projectId: ProjectId.make(input.projectId),
+                  repository: input.repository,
+                  host,
+                  includeUpstream: true,
+                  ...(sent ? { query: sent } : {}),
+                }
+              : {
+                  kind: "references",
+                  projectId: ProjectId.make(input.projectId),
+                  repository: input.repository,
+                  host,
+                  includeUpstream: true,
+                  sigil: trigger.sigil,
+                  ...(sent ? { query: sent } : {}),
+                },
         }),
   );
   // Older answers stay useful while the debounced search catches up, narrowed to what is typed now.
-  const candidates = narrowPullRequestMentions(
-    hosted.data?.authors ?? [],
-    typed,
-    MENTION_SUGGESTION_LIMIT,
-  );
+  const candidates = pullRequestCompletions(trigger, hosted.data, COMPLETION_SUGGESTION_LIMIT);
 
   return {
-    open: trigger !== null,
+    kind: trigger?.kind ?? null,
     candidates,
-    isLoading: hosted.isPending || sent !== search,
+    isLoading: hosted.isPending || sentKey !== key,
     failed: hosted.error !== null,
+    incomplete: hosted.data?.truncated === true,
     selection: placed ?? undefined,
     onSelectionChange: (event: TextInputSelectionChangeEvent) => {
       setSelection(event.nativeEvent.selection);
       setPlaced(null);
     },
     onBlur: () => setSelection(null),
-    select: (actor: PullRequestActor) => {
+    select: (completion: PullRequestCompletion) => {
       if (trigger === null) return;
-      const next = insertPullRequestMention(input.value, trigger, actor.login);
+      const next = insertPullRequestCompletion(input.value, trigger, completion.token);
       input.onChangeValue(next.text);
       setSelection({ start: next.cursor, end: next.cursor });
       setPlaced({ start: next.cursor, end: next.cursor });

@@ -1,3 +1,11 @@
+import {
+  forkFields,
+  reviewerInfo,
+  type GitLabReviewerDetails,
+  toChangedFiles,
+  forkMaintainerEdits,
+  type GitLabMaintainerEdits,
+} from "./gitLabDetailFields.ts";
 export {
   LIST_ITEM_GRAPHQL_FIELDS,
   LIST_STATES_GRAPHQL_QUERY,
@@ -75,6 +83,7 @@ const RawMergeRequestDiffRefs = Schema.Struct({
 });
 
 const RawMergeRequestSchema = Schema.Struct({
+  ...forkFields.fields,
   iid: Schema.Int,
   title: Schema.String,
   web_url: Schema.String,
@@ -217,7 +226,8 @@ export interface GitLabMergeRequestListItem {
   readonly labels: ReadonlyArray<PullRequestLabel>;
 }
 
-export interface GitLabMergeRequestDetail extends GitLabMergeRequestListItem {
+export interface GitLabMergeRequestDetail
+  extends GitLabMergeRequestListItem, GitLabMaintainerEdits, GitLabReviewerDetails {
   readonly body: string;
   readonly changedFiles: number;
   readonly mergedAt: string | null;
@@ -227,7 +237,6 @@ export interface GitLabMergeRequestDetail extends GitLabMergeRequestListItem {
   readonly viewerCanMerge: boolean;
   /** Set by the detail read, which asks GraphQL; REST carries no label permission. */
   readonly viewerCanEditLabels?: boolean;
-  readonly reviewerIds: ReadonlyArray<number>;
   readonly autoMergeEnabled?: boolean;
   readonly autoMergeMethod?: PullRequestMergeMethod;
   /** Absent means not counted, not up to date. */
@@ -290,11 +299,6 @@ export function toLabels(
     const name = trimmed(label);
     return name === null ? [] : [{ name, color: null }];
   });
-}
-
-function toChangedFiles(value: string | null | undefined): number {
-  const parsed = Number.parseInt(value?.trim() ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 export function toPipelineStatus(value: string | null | undefined): PullRequestCheckStatus {
@@ -369,6 +373,7 @@ function toDetail(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): GitLab
       : raw.merge_when_pipeline_succeeds === true || raw.auto_merge_enabled === true;
   return {
     ...listItem,
+    ...forkMaintainerEdits(raw),
     body: raw.description ?? "",
     changedFiles: toChangedFiles(raw.changes_count),
     mergedAt: trimmed(raw.merged_at),
@@ -379,9 +384,7 @@ function toDetail(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): GitLab
     }),
     checks: toChecks(raw),
     viewerCanMerge: raw.user?.can_merge !== false,
-    reviewerIds: (raw.reviewers ?? []).flatMap((reviewer) =>
-      reviewer.id === undefined ? [] : [reviewer.id],
-    ),
+    ...reviewerInfo(raw.reviewers ?? [], toActor),
     ...(autoMerge === undefined ? {} : { autoMergeEnabled: autoMerge }),
     ...(autoMerge === true && raw.squash_on_merge === true
       ? { autoMergeMethod: "squash" as const }

@@ -26,8 +26,6 @@ import type {
   PullRequestReviewPosition,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
-  PullRequestReviewerCandidate,
-  PullRequestReviewerCandidateList,
   PullRequestReviewerKind,
   PullRequestLabelCandidate,
   PullRequestLabelCandidateList,
@@ -64,13 +62,14 @@ import type {
   PullRequestSubject,
   RepositoryAuthors,
   RepositoryLabels,
-  ReviewerCandidates,
   ViewerPermissions,
 } from "./pullRequestReads.graphql.ts";
 import type {
   ReactionGroup,
   ReviewDismissals,
   ReviewThreadComments,
+  ReviewThreadPage,
+  ReviewThreadPages,
   ReviewThreads,
   ThreadComment,
 } from "./pullRequestReviews.graphql.ts";
@@ -1314,11 +1313,8 @@ type ReviewThreadsPullRequest = NonNullable<
   NonNullable<ReviewThreads.Result["repository"]>["pullRequest"]
 >;
 
-export function toReviewThreadPage(result: ReviewThreads.Result): GitHubReviewThreadPage | null {
-  const pullRequest = result.repository?.pullRequest;
-  if (pullRequest == null) return null;
-  const viewer = trimmed(result.viewer.login);
-  const threads = pullRequest.reviewThreads;
+/** A page of threads and the people commenting on them, whichever query carried it. */
+function toReviewThreadEntries(threads: ReviewThreadPage, viewer: string | null) {
   const threadNodes = nodesOf(threads);
   const entries = threadNodes.flatMap((thread): ReadonlyArray<GitHubReviewThreadEntry> => {
     const path = trimmed(thread.path);
@@ -1342,27 +1338,58 @@ export function toReviewThreadPage(result: ReviewThreads.Result): GitHubReviewTh
       },
     ];
   });
+  return {
+    entries,
+    nextCursor: nextCursorOf(threads.pageInfo),
+    authors: threadNodes.flatMap((thread) =>
+      nodesOf(thread.comments).map((comment) => comment.author),
+    ),
+  };
+}
+
+function collectActors(raws: ReadonlyArray<ActorFields | null | undefined>) {
+  const avatarsByLogin = new Map<string, string>();
+  const botLogins = new Set<string>();
+  for (const raw of raws) {
+    const login = trimmed(raw?.login);
+    const avatarUrl = trimmed(raw?.avatarUrl);
+    if (login !== null && avatarUrl !== null) avatarsByLogin.set(login, avatarUrl);
+    if (login !== null && toActor(raw)?.isBot) botLogins.add(login);
+  }
+  return { avatarsByLogin, botLogins };
+}
+
+export function toLaterReviewThreadPage(
+  result: ReviewThreadPages.Result,
+): Pick<GitHubReviewThreadPage, "threads" | "nextCursor" | "avatarsByLogin" | "botLogins"> | null {
+  const threads = result.repository?.pullRequest?.reviewThreads;
+  if (threads === undefined) return null;
+  const { entries, nextCursor, authors } = toReviewThreadEntries(
+    threads,
+    trimmed(result.viewer.login),
+  );
+  return { threads: entries, nextCursor, ...collectActors(authors) };
+}
+
+export function toReviewThreadPage(result: ReviewThreads.Result): GitHubReviewThreadPage | null {
+  const pullRequest = result.repository?.pullRequest;
+  if (pullRequest == null) return null;
+  const viewer = trimmed(result.viewer.login);
+  const page = toReviewThreadEntries(pullRequest.reviewThreads, viewer);
   const requestedReviewers = nodesOf(pullRequest.reviewRequests).map(
     (node): ActorFields | null => node.requestedReviewer,
   );
   const latestReviews = nodesOf(pullRequest.latestReviews);
   const comments = nodesOf(pullRequest.comments);
   const reviews = nodesOf(pullRequest.reviews);
-  const avatarsByLogin = new Map<string, string>();
-  const botLogins = new Set<string>();
-  for (const raw of [
+  const { avatarsByLogin, botLogins } = collectActors([
     pullRequest.author,
     ...comments.map((node) => node.author),
     ...reviews.map((node) => node.author),
     ...requestedReviewers,
     ...latestReviews.map((node) => node.author),
-    ...threadNodes.flatMap((thread) => nodesOf(thread.comments).map((comment) => comment.author)),
-  ]) {
-    const login = trimmed(raw?.login);
-    const avatarUrl = trimmed(raw?.avatarUrl);
-    if (login !== null && avatarUrl !== null) avatarsByLogin.set(login, avatarUrl);
-    if (login !== null && toActor(raw)?.isBot) botLogins.add(login);
-  }
+    ...page.authors,
+  ]);
   const reviewers = new Map<string, PullRequestActor>();
   for (const raw of [...requestedReviewers, ...latestReviews.map((node) => node.author)]) {
     const actor = toActor(raw) ?? toRequestedTeam(raw);
@@ -1392,8 +1419,8 @@ export function toReviewThreadPage(result: ReviewThreads.Result): GitHubReviewTh
     if (reactions.length > 0) reactionsById.set(id, reactions);
   }
   return {
-    threads: entries,
-    nextCursor: nextCursorOf(threads.pageInfo),
+    threads: page.entries,
+    nextCursor: page.nextCursor,
     reactions: toReactions(pullRequest.reactionGroups, viewer),
     reactionsById,
     editedAtById,
@@ -1458,50 +1485,6 @@ function toCanTriage(viewerPermission: string | null | undefined): boolean {
 export interface GitHubBaseComparison {
   readonly behindBy: number | null;
   readonly viewerCanUpdate: boolean;
-}
-
-/** assignableUsers avoids push/read:org requirements. Keep requested outsiders/apps removable. */
-export function toReviewerCandidates(
-  result: ReviewerCandidates.Result,
-): PullRequestReviewerCandidateList | null {
-  const repository = result.repository;
-  if (repository == null) return null;
-  const pullRequest = repository.pullRequest;
-  const author = trimmed(pullRequest?.author?.login);
-  const candidates = new Map<string, PullRequestReviewerCandidate>();
-  for (const { requestedReviewer: raw } of nodesOf(pullRequest?.reviewRequests)) {
-    if (raw === null) continue;
-    const slug = "slug" in raw ? trimmed(raw.slug) : null;
-    const id = slug ?? ("login" in raw ? trimmed(raw.login) : null);
-    if (id === null) continue;
-    candidates.set(`${slug === null ? "user" : "team"} ${id}`, {
-      id,
-      kind: slug === null ? "user" : "team",
-      // Match reviewer rows' org/slug so requests can be withdrawn.
-      login: slug === null ? id : (trimmed("combinedSlug" in raw ? raw.combinedSlug : null) ?? id),
-      name: trimmed("teamName" in raw ? raw.teamName : "name" in raw ? raw.name : null),
-      avatarUrl: trimmed(
-        "teamAvatarUrl" in raw ? raw.teamAvatarUrl : "avatarUrl" in raw ? raw.avatarUrl : null,
-      ),
-      isRequested: true,
-    });
-  }
-  for (const node of nodesOf(repository.assignableUsers)) {
-    const login = trimmed(node.login);
-    if (login === null || login === author || candidates.has(`user ${login}`)) continue;
-    candidates.set(`user ${login}`, {
-      id: login,
-      kind: "user",
-      login,
-      name: trimmed(node.name),
-      avatarUrl: trimmed(node.avatarUrl),
-      isRequested: false,
-    });
-  }
-  return {
-    candidates: [...candidates.values()],
-    truncated: repository.assignableUsers.pageInfo.hasNextPage,
-  };
 }
 
 const ReviewerRequestSchema = Schema.Struct({
