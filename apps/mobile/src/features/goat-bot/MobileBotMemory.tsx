@@ -136,7 +136,7 @@ function MobileNoteList(props: {
                 key={`${props.revision}:${note.index}`}
                 className="gap-1 border-b border-border py-2"
               >
-                <Text className="text-foreground-muted">{noteDateLabel(note.date)}</Text>
+                <Text className="text-foreground-muted">{noteDateLabel(note)}</Text>
                 {source !== null ? <Text className="text-foreground-muted">{source}</Text> : null}
                 <Text className="text-foreground-muted">{note.text}</Text>
                 <Text className="text-foreground-muted">
@@ -161,7 +161,7 @@ function MobileNoteRow(props: {
   const canAsk = onDraft !== undefined;
   return (
     <View className="gap-1 border-b border-border py-2">
-      <Text className="text-foreground-muted">{noteDateLabel(note.date)}</Text>
+      <Text className="text-foreground-muted">{noteDateLabel(note)}</Text>
       {props.source !== null ? <Text className="text-foreground-muted">{props.source}</Text> : null}
       <Text className="text-foreground">{note.text}</Text>
       {note.replaces !== undefined ? (
