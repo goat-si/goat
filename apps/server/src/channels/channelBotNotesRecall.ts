@@ -114,16 +114,18 @@ export const selectChannelBotNotes = (text: string, query: string): ChannelBotNo
   const live = parseChannelBotNoteLines(
     normal.startsWith(NOTES_HEADER) ? normal.slice(NOTES_HEADER.length) : normal,
   ).filter((line) => line.replacedBy === undefined);
-  const size = (lines: ReadonlyArray<ChannelBotNoteLine>) =>
-    lines.reduce((sum, line) => sum + line.raw.length + 1, 0);
+  // Lengths as joined: one newline between notes.
+  const joined = live.reduce((sum, line, at) => sum + line.raw.length + (at === 0 ? 0 : 1), 0);
   // The newest notes in force, as one unbroken run back from the end.
   let first = live.length;
   let used = 0;
-  while (first > 0 && used + (live[first - 1]?.raw.length ?? 0) + 1 <= NOTES_RECENT_CHARS) {
+  while (first > 0) {
+    const cost = (live[first - 1]?.raw.length ?? 0) + (first === live.length ? 0 : 1);
+    if (used + cost > NOTES_RECENT_CHARS) break;
     first--;
-    used += (live[first]?.raw.length ?? 0) + 1;
+    used += cost;
   }
-  if (size(live) <= NOTES_SECTION_CHARS) first = 0;
+  if (joined <= NOTES_SECTION_CHARS) first = 0;
   const scores = scoreLines(live, query);
   const ranked = live
     .flatMap((line, at) => ((scores[at] ?? 0) > 0 ? [{ line, at, score: scores[at] ?? 0 }] : []))

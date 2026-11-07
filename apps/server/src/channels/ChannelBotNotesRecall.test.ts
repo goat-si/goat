@@ -181,6 +181,25 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it("notes in force of exactly 9,000 characters go in whole, and one more is cut", () => {
+    // Seventeen notes of 499 characters and one last note, joined by seventeen newlines.
+    const notes = (last: number) =>
+      Array.from({ length: 18 }, (_, at) => {
+        const size = at === 17 ? last : 499;
+        return "- 2026-03-01: " + String(at).padStart(2, "0") + "a".repeat(size - 16);
+      });
+    const exact = notes(500);
+    assert.strictEqual(exact.join("\n").length, NOTES_SECTION_CHARS);
+    assert.strictEqual(
+      selectChannelBotNotes(NOTES_HEADER + exact.join("\n"), "").standing,
+      exact.join("\n"),
+    );
+    const over = notes(501);
+    const standing = selectChannelBotNotes(NOTES_HEADER + over.join("\n"), "").standing;
+    assert.notInclude(standing.split("\n"), over[0]);
+    assert.include(standing.split("\n"), over.at(-1));
+  });
+
   it("never shows more than 9,000 characters, whatever the lines", () => {
     const long = Array.from({ length: 300 }, (_, at) =>
       line("deploy " + "y".repeat(460), "long-" + at),
