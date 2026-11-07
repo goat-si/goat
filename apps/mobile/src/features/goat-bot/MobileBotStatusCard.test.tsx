@@ -38,6 +38,8 @@ const state = vi.hoisted(() => ({
   memberUpdatedAt: "2026-11-07T10:00:00Z",
   homeConfig: null as unknown,
   refreshRows: vi.fn(),
+  presentations: new Map<string, unknown>(),
+  slackQuery: { data: null as unknown, error: null as string | null, refresh: () => {} },
 }));
 
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
@@ -89,7 +91,7 @@ const homeConfig = {
 };
 state.homeConfig = homeConfig;
 vi.mock("../../state/environments", () => ({
-  useEnvironments: () => ({ presentationById: new Map() }),
+  useEnvironments: () => ({ presentationById: state.presentations }),
 }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: { slackSettings: () => "slack", slackStatus: () => "slack-status" },
@@ -99,7 +101,8 @@ vi.mock("@effect/atom-react", async () => {
   return { useAtomValue: () => AsyncResult.initial() };
 });
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: () => ({ data: null, error: null, refresh: () => {} }),
+  useEnvironmentQuery: (key: string | null) =>
+    key === "slack" ? state.slackQuery : { data: null, error: null, refresh: () => {} },
 }));
 vi.mock("../../lib/clock", () => ({ useNowMinuteMs: () => Date.parse("2026-11-07T12:00:00Z") }));
 
@@ -194,6 +197,29 @@ it("reads the named home even when the sheet shows another machine", async () =>
   expect(container.textContent).toContain("GPT-5.4 on Codex");
   expect(container.textContent).not.toContain("waiting for your answer");
   expect(button("Answer")).toBeUndefined();
+});
+
+it("says it couldn't check Slack when a re-read fails after an earlier success", async () => {
+  state.homeConnected = true;
+  state.presentations = new Map([
+    [
+      "env-studio",
+      {
+        connection: { phase: "connected" },
+        serverConfig: { environment: { capabilities: { slackChannel: true } } },
+      },
+    ],
+  ]);
+  const connected = [{ connectionId: "slack-1", enabled: true, status: "connected" }];
+  state.slackQuery = { data: connected, error: null, refresh: () => {} };
+  await render();
+  expect(container.textContent).toContain("Slack connected");
+  state.slackQuery = { data: connected, error: "socket closed", refresh: () => {} };
+  await render();
+  expect(container.textContent).toContain("Couldn't check Slack");
+  expect(container.textContent).not.toContain("Ready");
+  state.presentations = new Map();
+  state.slackQuery = { data: null, error: null, refresh: () => {} };
 });
 
 it("says Ready for a healthy main bot once its work has loaded", async () => {

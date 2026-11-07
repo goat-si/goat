@@ -109,7 +109,7 @@ export function MobileBotStatusCard(props: {
       : null,
     canChangeModel: false,
     rows: rowsFromHome ? props.rows : "unavailable",
-    slack: !slackSupported ? "unavailable" : (slack.data ?? (slack.error ? "failed" : "loading")),
+    slack: !slackSupported ? "unavailable" : slack.error ? "failed" : (slack.data ?? "loading"),
     slackLive,
     canConfigureSlack: false,
     now,

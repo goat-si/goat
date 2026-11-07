@@ -113,7 +113,7 @@ export function GoatBotStatusCard({
           }),
     canChangeModel,
     rows: homeId === null || homeId === callerEnvironmentId ? rows : "unavailable",
-    slack: !slackSupported ? "unavailable" : (slack.data ?? (slack.error ? "failed" : "loading")),
+    slack: !slackSupported ? "unavailable" : slack.error ? "failed" : (slack.data ?? "loading"),
     slackLive,
     canConfigureSlack,
     now,

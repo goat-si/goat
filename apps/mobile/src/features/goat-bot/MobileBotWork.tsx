@@ -201,7 +201,9 @@ export function MobileBotWork(props: {
           <MobileBotStatusCard
             environmentId={environmentId}
             member={member}
-            rows={!enabled ? "unavailable" : threads.isSuccess ? rows : null}
+            rows={
+              !enabled ? "unavailable" : threads.error ? "failed" : threads.isSuccess ? rows : null
+            }
             refreshRows={threads.refresh}
             onOpenTask={(id) => {
               setOpen(false);

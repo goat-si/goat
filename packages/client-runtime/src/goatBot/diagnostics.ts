@@ -90,7 +90,7 @@ export interface GoatBotDiagnosticsInput {
   readonly model: GoatBotModelStatus | null;
   readonly canChangeModel: boolean;
   /** Null until the bot's task rows have loaded; "unavailable" when its server cannot list them. */
-  readonly rows: ReadonlyArray<BotThreadRow> | null | "unavailable";
+  readonly rows: ReadonlyArray<BotThreadRow> | null | "failed" | "unavailable";
   /** "unavailable" when the home cannot report Slack, which hides the line. */
   readonly slack:
     | ReadonlyArray<
@@ -182,6 +182,8 @@ function modelLine(
 
 function workLine(rows: GoatBotDiagnosticsInput["rows"]): GoatBotDiagnosticLine | null {
   if (rows === "unavailable") return null;
+  if (rows === "failed")
+    return { key: "work", tone: "warn", text: "Couldn't load work", action: null };
   if (rows === null) return { key: "work", tone: "pending", text: "Loading work…", action: null };
   const tasks = rows.flatMap((row) => (row.kind === "task" ? [row.task] : []));
   const running = tasks.filter((task) => task.status === "running").length;

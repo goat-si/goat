@@ -21,7 +21,15 @@ export function GoatBotStatusSettings() {
         className="px-3 py-3 sm:px-4"
         environmentId={environmentId}
         member={null}
-        rows={!listsTasks ? "unavailable" : threads.loaded ? threads.rows : null}
+        rows={
+          !listsTasks
+            ? "unavailable"
+            : threads.failed
+              ? "failed"
+              : threads.loaded
+                ? threads.rows
+                : null
+        }
       />
     </SettingsSection>
   );
