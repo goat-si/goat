@@ -89,6 +89,41 @@ describe("GOAT Bot reception and the bot's profile", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("keeps one identity for both passes of a message renamed in between", () => {
+    const harness = makeHarness();
+    const seen: Array<ChannelReceptionInput> = [];
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* receptionFirst;
+      yield* rename;
+      const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
+      const renameAgain = profiles
+        .update({ botId: BotId.make("main"), name: "Friday" }, owner)
+        .pipe(Effect.orDie);
+      harness.script.current = (input) => {
+        seen.push(input);
+        if (input.mode !== "input") return defaultScript(input);
+        // The rename lands while the first pass is still deciding.
+        return input.readsAllowed === true
+          ? Effect.as(renameAgain, {
+              replyText: "",
+              action: { type: "read" as const, reads: [{ kind: "memory" as const, query: "x" }] },
+            })
+          : Effect.succeed({ replyText: "Hi.", action: { type: "report_only" as const } });
+      };
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(goatInput("who are you?", "s1"), rpcContext);
+      yield* runtime.drain;
+      yield* gateway.ingest(goatInput("and now?", "s2"), rpcContext);
+      yield* runtime.drain;
+      assert.deepStrictEqual(
+        seen.map((input) => input.identity?.name),
+        ["Jarvis", "Jarvis", "Friday", "Friday"],
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("acknowledges a silent session request as the renamed bot", () => {
     const harness = makeHarness({ botWorkspace: true });
     const seen: Array<ChannelReceptionInput> = [];

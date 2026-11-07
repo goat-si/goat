@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
-import { BotId, type ChannelReceptionInput } from "@goat/contracts";
+import { BotId, type ChannelConversationId, type ChannelReceptionInput } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -16,7 +16,7 @@ import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
-import { taskIdFor } from "./channelIds.ts";
+import { goatBotSessionThreadIdFor, taskIdFor } from "./channelIds.ts";
 import { ask, botModel, current, sessionHarness, settle } from "./ChannelBotSession.testkit.ts";
 import {
   defaultScript,
@@ -177,6 +177,48 @@ describe("GOAT Bot sessions and the bot's profile", () => {
       const next = yield* ask("look: two", "f2");
       assert.isDefined(next.worker);
       assert.isTrue(launchedText(harness, 0).startsWith("## Identity\n"));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("resumes its own unfinished launch with the prefix it froze, then rotates", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const first = yield* ask("look: one", "o1");
+      const thread = first.worker!.threadId;
+      harness.world.setStatus(thread, 1, "completed", "Done.");
+      yield* settle;
+      const ingested = yield* gateway.ingest(goatInput("look: two", "o2"), rpcContext);
+      yield* reception.receive(ingested.inputId, runtime.ownerToken);
+      const waiting = yield* current(taskIdFor(ingested.inputId, 0));
+      // As if the process died after allocating the next generation for this task, before its
+      // launch, with the prefix frozen before the rename below.
+      const next = goatBotSessionThreadIdFor(waiting.conversationId as ChannelConversationId, 2);
+      yield* sql`UPDATE channel_bot_sessions SET state = 'retired' WHERE thread_id = ${thread}`;
+      yield* sql`
+        INSERT INTO channel_bot_sessions (conversation_id, generation, binding_key, thread_id,
+          task_id, task_generation, state, driver_kind, sharing, model_instance_id, model,
+          requester_json, context_revision, context_text, created_at)
+        SELECT conversation_id, 2, binding_key, ${next}, ${waiting.taskId}, ${waiting.generation},
+          'starting', driver_kind, sharing, model_instance_id, model, requester_json,
+          context_revision, context_text, created_at
+        FROM channel_bot_sessions WHERE thread_id = ${thread}
+      `;
+      yield* rename({ name: "Jarvis" });
+      yield* runtime.drain;
+      assert.strictEqual((yield* current(waiting.taskId)).worker?.threadId, next);
+      assert.isTrue(launchedText(harness, 1).startsWith("## Standing instructions\n"));
+      harness.world.setStatus(next, 1, "completed", "Done.");
+      yield* settle;
+      const third = yield* ask("look: three", "o3");
+      assert.notStrictEqual(third.worker?.threadId, next);
+      assert.isTrue(
+        launchedText(harness, 2).startsWith('## Identity\nThe person named you "Jarvis".'),
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 
