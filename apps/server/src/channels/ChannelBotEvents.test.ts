@@ -25,7 +25,8 @@ const fakeTimeline = (options: {
     attempts,
     recorded,
     deps: {
-      threadOf: (_ownerId: string, botId: BotId) => Effect.succeed(ThreadId.make("thread-" + botId)),
+      threadOf: (_ownerId: string, botId: BotId) =>
+        Effect.succeed(ThreadId.make("thread-" + botId)),
       record: (input: {
         readonly threadId: ThreadId;
         readonly record: { readonly recordKey: string; readonly entry: { readonly type: string } };

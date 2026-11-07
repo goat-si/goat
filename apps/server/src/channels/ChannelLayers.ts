@@ -19,6 +19,7 @@ import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
 import * as ChannelBotEvents from "./ChannelBotEvents.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
+import * as ChannelBotRoutineEvents from "./ChannelBotRoutineEvents.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelBotArtifacts from "./ChannelBotArtifacts.ts";
 import * as ChannelBotNotesReader from "./ChannelBotNotesReader.ts";
@@ -143,8 +144,12 @@ export const makeLayerServicesWithSlack = (imessageLayer = ImessageChannelRuntim
 
 const layerServicesWithSlack = makeLayerServicesWithSlack();
 
-/** Every channel service, the live Slack connection, and the background owner loop. */
-export const layer = ChannelRuntime.layerBackground.pipe(
-  Layer.provideMerge(layerServicesWithSlack),
-  Layer.provide(SlackSdk.layer),
-);
+/**
+ * Every channel service, the live Slack connection, the background owner loop, and the routine
+ * line watcher. The watcher takes ScheduledTaskService from the server's orchestration layer, the
+ * same instance every routine write publishes to.
+ */
+export const layer = Layer.mergeAll(
+  ChannelRuntime.layerBackground,
+  ChannelBotRoutineEvents.layer,
+).pipe(Layer.provideMerge(layerServicesWithSlack), Layer.provide(SlackSdk.layer));

@@ -1,12 +1,6 @@
 /**
- * ChannelBotEvents - best-effort event lines on a bot's timeline ("Renamed to Ada", "Routine
- * Check in paused"), emitted after the change they describe has committed.
- *
- * Each bot has its own ordered queue and worker, so one bot's failing timeline never delays
- * another. A line is tried five times with exponential backoff and then dropped with a warning;
- * lines still queued when the server stops are lost (stated limit: there is no durable table).
- * Every buffer here is bounded (docs/internals/server-resilience.md).
- *
+ * ChannelBotEvents - best-effort event lines ("Renamed to Ada") after the change commits. One
+ * bounded queue and worker per bot, five tries each; lines queued at shutdown are lost.
  * @module ChannelBotEvents
  */
 import * as NodeCrypto from "node:crypto";
@@ -52,7 +46,10 @@ export class ChannelBotEvents extends Context.Service<
 
 export interface BotEventsDeps {
   /** The bot's current conversation thread, or undefined when the bot is gone. */
-  readonly threadOf: (ownerId: string, botId: BotId) => Effect.Effect<ThreadId | undefined, unknown>;
+  readonly threadOf: (
+    ownerId: string,
+    botId: BotId,
+  ) => Effect.Effect<ThreadId | undefined, unknown>;
   readonly record: ChannelBotTimeline.ChannelBotTimeline["Service"]["record"];
 }
 
@@ -65,8 +62,8 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
   let total = 0;
   let idle: Array<Deferred.Deferred<void>> = [];
 
-  const deliver = (event: QueuedEvent) =>
-    Effect.gen(function* () {
+  const deliver = Effect.fn("ChannelBotEvents.deliver")(
+    function* (event: QueuedEvent) {
       const threadId = yield* deps.threadOf(event.ownerId, event.botId);
       if (threadId === undefined) {
         yield* Effect.logWarning("GOAT Bot event line dropped: the bot is gone", {
@@ -80,19 +77,13 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
         record: { recordKey: recordKeyFor(event), entry: { type: "event", text: event.text } },
         revision: "v1",
       });
-    }).pipe(
-      Effect.retry({
-        schedule: Schedule.exponential("1 second"),
-        times: BOT_EVENT_LIMITS.attempts - 1,
-      }),
-      Effect.catchCause((cause) =>
-        Effect.logWarning("GOAT Bot event line not recorded", {
-          botId: event.botId,
-          kind: event.kind,
-          cause,
-        }),
-      ),
-    );
+    },
+    Effect.retry({
+      schedule: Schedule.exponential("1 second"),
+      times: BOT_EVENT_LIMITS.attempts - 1,
+    }),
+    Effect.catchCause((cause) => Effect.logWarning("GOAT Bot event line not recorded", { cause })),
+  );
 
   /** Takes the bot's next line, or retires its queue when empty, in one step. */
   const takeNext = (key: string) =>
@@ -112,54 +103,52 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
       return undefined;
     });
 
-  const work = (key: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      while (true) {
-        const next = yield* takeNext(key);
-        if (next === undefined) return;
-        if (Array.isArray(next)) {
-          for (const waiter of next) yield* Deferred.succeed(waiter, undefined);
-          return;
-        }
-        yield* deliver(next);
+  const work = Effect.fn("ChannelBotEvents.work")(function* (key: string) {
+    while (true) {
+      const next = yield* takeNext(key);
+      if (next === undefined) return;
+      if (Array.isArray(next)) {
+        for (const waiter of next) yield* Deferred.succeed(waiter, undefined);
+        return;
       }
-    });
+      yield* deliver(next);
+    }
+  });
 
-  const emit = (event: BotEvent): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const key = event.ownerId + "\u0000" + event.botId;
-      const queued: QueuedEvent = {
-        ...event,
-        text: event.text.trim().slice(0, MAX_TEXT),
-        changeId: NodeCrypto.randomUUID(),
-      };
-      const outcome = yield* Effect.sync(() => {
-        const queue = queues.get(key);
-        if (queue === undefined) {
-          if (queues.size >= BOT_EVENT_LIMITS.bots) return "too_many_bots" as const;
-          if (total >= BOT_EVENT_LIMITS.total) return "full" as const;
-          queues.set(key, [queued]);
-          total += 1;
-          return "started" as const;
-        }
-        if (queue.length >= BOT_EVENT_LIMITS.perBot) {
-          queue.shift();
-          queue.push(queued);
-          return "dropped_oldest" as const;
-        }
+  const emit = Effect.fn("ChannelBotEvents.emit")(function* (event: BotEvent) {
+    const key = event.ownerId + "\u0000" + event.botId;
+    const queued: QueuedEvent = {
+      ...event,
+      text: event.text.trim().slice(0, MAX_TEXT),
+      changeId: NodeCrypto.randomUUID(),
+    };
+    const outcome = yield* Effect.sync(() => {
+      const queue = queues.get(key);
+      if (queue === undefined) {
+        if (queues.size >= BOT_EVENT_LIMITS.bots) return "too_many_bots" as const;
         if (total >= BOT_EVENT_LIMITS.total) return "full" as const;
-        queue.push(queued);
+        queues.set(key, [queued]);
         total += 1;
-        return "queued" as const;
-      });
-      if (outcome === "started") yield* work(key).pipe(Effect.forkIn(scope));
-      else if (outcome !== "queued")
-        yield* Effect.logWarning("GOAT Bot event line dropped: queue full", {
-          botId: event.botId,
-          kind: event.kind,
-          outcome,
-        });
+        return "started" as const;
+      }
+      if (queue.length >= BOT_EVENT_LIMITS.perBot) {
+        queue.shift();
+        queue.push(queued);
+        return "dropped_oldest" as const;
+      }
+      if (total >= BOT_EVENT_LIMITS.total) return "full" as const;
+      queue.push(queued);
+      total += 1;
+      return "queued" as const;
     });
+    if (outcome === "started") yield* work(key).pipe(Effect.forkIn(scope));
+    else if (outcome !== "queued")
+      yield* Effect.logWarning("GOAT Bot event line dropped: queue full", {
+        botId: event.botId,
+        kind: event.kind,
+        outcome,
+      });
+  });
 
   const flush = Effect.gen(function* () {
     const waiter = yield* Deferred.make<void>();
