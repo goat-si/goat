@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelTaskId } from "@goat/contracts";
+import { ChannelInputId, ChannelTaskId } from "@goat/contracts";
 
 import { NOTES_REPLACED_RULE } from "./channelBotNotes.ts";
 import { EMPTY_NOTES } from "./channelBotNotesRecall.ts";
@@ -50,7 +50,7 @@ describe("channel worker brief", () => {
 
   it("lets a turn edit only the notes file, and only when the person asked to change a note", () => {
     const plain = turnInstruction(task, files, true);
-    assert.include(plain, "Leave the notes file unchanged");
+    assert.include(plain, "Otherwise leave the notes file unchanged.");
     assert.notInclude(plain, "Exception to the read-only rule");
     const asked = turnInstruction(
       { ...task, notesChangeRequested: "forget the draft rule" },
@@ -166,5 +166,35 @@ describe("channel worker brief", () => {
 
   it("keeps asking coding workers for a short summary for their card", () => {
     assert.include(workerInstruction(task, files), "a short summary");
+  });
+
+  describe("notes changes from a GOAT Bot turn", () => {
+    const request = { ...task, originInputId: ChannelInputId.make("channel-input:origin") };
+
+    it("names the request's input so the turn can say which request a notes change is for", () => {
+      assert.include(turnInstruction(request, files, false), "Request input: channel-input:origin");
+    });
+
+    it("worker briefs carry no request input line", () => {
+      assert.notInclude(workerInstruction(request, files), "Request input:");
+      assert.notInclude(
+        remoteWorkerMessage(request, { notes: EMPTY_NOTES, skills: [] }),
+        "Request input:",
+      );
+    });
+
+    it("the notes rule covers follow-ups sent during the turn", () => {
+      const brief = turnInstruction(request, files, false);
+      assert.include(brief, 'goat_call {path:"channel.notes_change"}');
+      assert.include(brief, "or a follow-up GOAT sends you while you work on it");
+      assert.notInclude(brief, "Leave the notes file unchanged; this message did not ask");
+    });
+
+    it("a session turn is told not to copy personal data into the notes", () => {
+      assert.include(
+        turnInstruction(request, files, false),
+        "Never put data you read under the personal data rule into the notes",
+      );
+    });
   });
 });

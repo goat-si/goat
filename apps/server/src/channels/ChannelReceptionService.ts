@@ -83,7 +83,8 @@ import {
   quotedFromInput,
   readChannelBotNotes,
 } from "./channelBotNotes.ts";
-import { droppedNoteNotice, makeChannelBotNoteWriter } from "./channelBotNoteTabEdits.ts";
+import { droppedNoteNotice } from "./channelBotNoteTabEdits.ts";
+import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import {
   boundRecall,
   canSeeTask,
@@ -226,7 +227,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
-  const botNotes = yield* makeChannelBotNoteWriter(fileSystem, botFiles, ledger);
+  const botNotes = yield* ChannelBotNoteWriter;
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
@@ -1254,10 +1255,19 @@ const make = Effect.gen(function* () {
       }
       // Saved before the result commits so a restart re-runs this input and saves it then; the note
       // names its input, so a second pass for the same input does not add it twice.
+      const asked = "notesChangeRequested" in decision.action ? decision.action : undefined;
+      const editRefusal =
+        asked?.notesChangeRequested === undefined
+          ? undefined
+          : !mayChangeNotes
+            ? "not_linked"
+            : quotedFromInput(asked.notesChangeRequested, message.text)
+              ? undefined
+              : "quote_not_in_input";
       const noteNotice =
-        decision.remember !== undefined && rememberRefusal === undefined
+        (decision.remember !== undefined && rememberRefusal === undefined
           ? yield* botNotes.save(decision.remember, readAt, inputId, decision.replacesNote)
-          : droppedNoteNotice(rememberRefusal);
+          : droppedNoteNotice(rememberRefusal)) ?? droppedNoteNotice(editRefusal);
 
       let replyText = decision.replyText;
       let finalDecision = decision;

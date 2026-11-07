@@ -73,8 +73,8 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall and the bot list.
-  expect(entries).toHaveLength(295);
+  // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall, the bot list and the session notes change.
+  expect(entries).toHaveLength(296);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 75 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -435,6 +435,7 @@ const ACCESS_EXCEPTIONS: Readonly<
   "channel.task_follow_up": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "channel.task_stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "channel.task_answer": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
+  "channel.notes_change": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "channel.task_move": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.create": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },

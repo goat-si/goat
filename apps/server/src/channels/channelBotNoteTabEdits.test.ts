@@ -187,6 +187,77 @@ describe("Memory tab note edits", () => {
     }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
+  it.effect(
+    "a note reception saves waits while a task may edit the notes, unless that input saved it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
+        yield* fs.makeDirectory(files.dir, { recursive: true });
+        const text = NOTES_HEADER + line("Staging is staging-02.", "input-2") + "\n";
+        yield* fs.writeFileString(files.notes, text);
+        const busy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+          listTasksByStatus: () =>
+            Effect.succeed([
+              {
+                task: { notesChangeRequested: "tidy my notes" },
+              } as ChannelLedger.ChannelStoredTask,
+            ]),
+        };
+        const writer = yield* makeChannelBotNoteWriter(fs, files, busy);
+        assert.strictEqual(
+          yield* writer.save(fridays, "2026-11-07", "input-1"),
+          CHANNEL_COPY.noteEditBusy,
+        );
+        // A restart re-runs an input whose note was saved before the grant opened.
+        assert.isUndefined(yield* writer.save("Staging is staging-02.", "2026-11-07", "input-2"));
+        assert.strictEqual(yield* fs.readFileString(files.notes), text);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("a re-run while a task may edit the notes never writes, even after the hand edit", () =>
+    Effect.gen(function* () {
+      const real = yield* FileSystem.FileSystem;
+      const files = channelBotFilesFor(yield* Path.Path, yield* real.makeTempDirectoryScoped());
+      yield* real.makeDirectory(files.dir, { recursive: true });
+      const saved = NOTES_HEADER + line("Staging is staging-02.", "input-2") + "\n";
+      let writes = 0;
+      // The granted task's hand edit removes the line right after GOAT found it there.
+      const fs: FileSystem.FileSystem = {
+        ...real,
+        readFileString: (path, encoding) =>
+          Effect.andThen(
+            real.writeFileString(files.notes, NOTES_HEADER),
+            real.readFileString(path, encoding),
+          ),
+        writeFileString: (path, data, options) => {
+          writes += 1;
+          return real.writeFileString(path, data, options);
+        },
+      };
+      const busy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+        listTasksByStatus: () =>
+          Effect.succeed([
+            { task: { notesChangeRequested: "tidy my notes" } } as ChannelLedger.ChannelStoredTask,
+          ]),
+      };
+      const writer = yield* makeChannelBotNoteWriter(fs, files, busy);
+      yield* real.writeFileString(files.notes, saved);
+      assert.isUndefined(yield* writer.save("Staging is staging-02.", "2026-11-07", "input-2"));
+      yield* real.writeFileString(files.notes, saved);
+      assert.deepStrictEqual(
+        yield* writer.saveIf(
+          Effect.succeed("busy"),
+          "Staging is staging-02.",
+          "2026-11-07",
+          "input-2",
+        ),
+        { notice: undefined },
+      );
+      assert.strictEqual(writes, 0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("a forget leaves the file untouched when it changes before the rename, twice", () => {
     let writes = 0;
     return Effect.gen(function* () {

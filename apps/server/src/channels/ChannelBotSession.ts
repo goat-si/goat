@@ -81,7 +81,7 @@ import { commitTransition } from "./channelTaskWrites.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
 import * as SenderAuthority from "./channelSenderAuthority.ts";
 import { bindAfterSend } from "./channelSessionBind.ts";
-import { turnInstruction } from "./channelWorkerBrief.ts";
+import { sessionFollowUpText, turnInstruction } from "./channelWorkerBrief.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 import {
   isSessionTask,
@@ -739,7 +739,7 @@ const make = Effect.gen(function* () {
     const result = yield* sendForTask(
       stored,
       worker.threadId,
-      "Follow-up from " + event.payload.from + ": " + event.payload.text,
+      sessionFollowUpText(event.payload),
       ids,
       event.payload.forwardKey === undefined ? yield* inputAttachments(event.payload.inputId) : [],
       event.payload.sender,

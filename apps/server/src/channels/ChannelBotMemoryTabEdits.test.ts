@@ -519,4 +519,27 @@ describe("corrections the model reports", () => {
       assert.include(yield* replies, CHANNEL_COPY.noteNotSaved);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "a notes change the person never worded that way gets no permission and says so",
+    () => {
+      const { layer } = harnessFor(() => ({
+        replyText: "On it.",
+        action: {
+          type: "create_task",
+          title: "Forget a note",
+          instruction: "Remove the requested note.",
+          notesChangeRequested: "forget the English note",
+        },
+      }));
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* send("Please forget the Korean note", "unworded");
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const tasks = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+        assert.isTrue(tasks.every((task) => task.notesChangeRequested === undefined));
+        assert.include(yield* replies, "On it. " + CHANNEL_COPY.noteNotSaved);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });

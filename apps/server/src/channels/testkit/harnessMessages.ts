@@ -12,9 +12,15 @@ export const noticeRunsOf = (world: object) => {
   return notices;
 };
 
-/** A worker thread's messages: the notice GOAT sent to start a run, and each run's final answer. */
+/**
+ * A worker thread's messages: the notice GOAT sent to start a run, each run's final answer, and
+ * the messages steered into a run, which the orchestrator records as user messages of that run.
+ */
 export const harnessMessages = (
-  world: { readonly finalText: ReadonlyMap<string, string> },
+  world: {
+    readonly finalText: ReadonlyMap<string, string>;
+    readonly steered?: ReadonlyMap<string, RunId>;
+  },
   runs: ReadonlyArray<OrchestrationV2Run>,
   messageRunIds: ReadonlyArray<string> | undefined,
 ) =>
@@ -46,5 +52,15 @@ export const harnessMessages = (
         ...(text === undefined
           ? []
           : [{ role: "assistant", text, streaming: false, runId: run.id, createdAt }]),
+        ...[...(world.steered ?? new Map<string, RunId>())]
+          .filter(([, runId]) => runId === run.id)
+          .map(([id]) => ({
+            id,
+            role: "user",
+            text: "",
+            streaming: false,
+            runId: run.id,
+            createdAt,
+          })),
       ];
     });

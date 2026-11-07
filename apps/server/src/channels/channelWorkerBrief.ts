@@ -39,7 +39,14 @@ const REMOTE_MATCHED_NOTES_CHARS = 2_000;
 type BriefTask = Pick<
   ChannelTask,
   "taskId" | "generation" | "instruction" | "notesChangeRequested"
->;
+> &
+  Partial<Pick<ChannelTask, "originInputId">>;
+
+/**
+ * How a GOAT Bot turn changes notes for a person. GOAT checks the request and the person and
+ * tells them itself when it refuses, so the turn edits the file only after an allowed edit.
+ */
+const TURN_NOTES_RULE = `When this request, or a follow-up GOAT sends you while you work on it ("Follow-up from … (input …)"), itself asks you to remember or keep something, correct a standing note, or forget, change or tidy notes, call ${goatCallText("channel.notes_change")} with this task's id, the input id printed with that request, kind remember for one rule (note, plus replaces with the exact text of a note it corrects) or edit for anything else, and the person's exact words asking for it as quote. Edit the notes file yourself only after edit answers allowed, and only to make that change. When it refuses, GOAT has already queued a notice for the person; do not say the change was made. Otherwise leave the notes file unchanged. Never put data you read under the personal data rule into the notes unless the person's message itself contains it.`;
 
 export interface RemoteBotContext {
   /** GOAT Bot's notes on the home machine for this instruction; undefined when unreadable. */
@@ -154,6 +161,13 @@ export const workerInstruction = (task: BriefTask, files: ChannelBotFiles) =>
     SKILL_PROPOSAL_RULE,
   ].join("\n");
 
+/** A follow-up as the session reads it, naming its input so a notes change can say which request. */
+export const sessionFollowUpText = (followUp: {
+  readonly from: string;
+  readonly inputId: string;
+  readonly text: string;
+}) => "Follow-up from " + followUp.from + " (input " + followUp.inputId + "): " + followUp.text;
+
 /**
  * What a GOAT Bot turn is told besides the person's request. `matched` holds older notes that match
  * this request; the session's first message already carries the newest ones.
@@ -166,6 +180,7 @@ export const turnInstruction = (
 ) =>
   [
     ...workerHeader(task),
+    ...(task.originInputId === undefined ? [] : ["Request input: " + task.originInputId]),
     "You are GOAT Bot handling this message yourself. Your final message is your answer to the person: write it in the language of their request, not your default language, outcome first and as long as the content needs.",
     "Look things up directly: read and search files, read GOAT Bot's notes (" +
       files.notes +
@@ -184,12 +199,14 @@ export const turnInstruction = (
     GOAT_BOT_DISPATCH_RULE,
     ...(supervisor ? [GOAT_BOT_SUPERVISOR_RULE] : []),
     task.notesChangeRequested === undefined
-      ? "Leave the notes file unchanged; this message did not ask to change a note."
+      ? TURN_NOTES_RULE
       : "Exception to the read-only rule above: the person asked to change or forget a note (" +
         JSON.stringify(task.notesChangeRequested) +
         "). Edit GOAT Bot's notes file (" +
         files.notes +
-        ") yourself to make exactly that change, and change nothing else.",
+        ") yourself to make exactly that change, and change nothing else. Any other notes change a person asks for goes through " +
+        goatCallText("channel.notes_change") +
+        " and waits until this one ends.",
     ...channelWorkerRules("local", "turn"),
     SKILL_PROPOSAL_RULE,
   ].join("\n");

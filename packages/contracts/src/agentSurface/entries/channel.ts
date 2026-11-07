@@ -58,6 +58,28 @@ export const channelEntries = {
     idempotencyReason: "The ledger deduplicates the action and checks the task version.",
     annotations: { title: "Answer a task question", idempotentHint: true, openWorldHint: true },
   }),
+  "channel.notes_change": entry({
+    resource: "channel",
+    verb: "notes_change",
+    name: "goat_channel_notes_change",
+    toolkit: "channel",
+    summary: "Change GOAT Bot's notes",
+    description:
+      "From a GOAT Bot session, save a note or start a notes edit that a person's message asked for.",
+    guide:
+      "Name the request's input id that GOAT printed with it and quote the person's exact words asking for the change. remember saves one rule; edit lets this turn change the notes file for that request only. GOAT queues a notice to the person for each refusal, delivered like any reply.",
+    effect: "write",
+    capability: "none",
+    capabilityReason:
+      "The service checks the session run, the person's message and their access now.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "A note is saved once per input, and an edit is recorded once for the task holding it.",
+    annotations: { title: "Change GOAT Bot's notes", idempotentHint: true, openWorldHint: true },
+  }),
 
   "channel.ingest": entry({
     resource: "channel",

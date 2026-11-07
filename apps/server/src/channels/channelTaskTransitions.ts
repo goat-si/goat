@@ -42,6 +42,7 @@ const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskSta
   "task.retry.requested": ["completed", "failed", "cancelled"],
   "task.worker.observed": ["running", "waiting_input", "completed", "failed", "cancelled"],
   "task.moved": ["dispatching", "running", "waiting_input"],
+  "task.notes_change_requested": ["received", "dispatching", "running", "waiting_input"],
 };
 
 /** A skill proposal task only asks and settles: it is never dispatched or retried. */
@@ -72,6 +73,7 @@ const eventGeneration = (event: ChannelTaskEvent): number | undefined => {
     case "task.completed":
     case "task.failed":
     case "task.worker.observed":
+    case "task.notes_change_requested":
       return event.payload.generation;
     case "task.brief.frozen":
       return event.payload.brief.generation;
@@ -333,5 +335,17 @@ export function applyChannelTaskEvent(
         },
       };
     }
+    case "task.notes_change_requested":
+      // One notes change per task: a second request waits for this one, never widens it.
+      if (task.notesChangeRequested !== undefined)
+        return reject("The task already holds a notes change.");
+      return {
+        ok: true,
+        task: {
+          ...base,
+          notesChangeRequested: event.payload.quote,
+          notesChangeInputId: event.payload.inputId,
+        },
+      };
   }
 }

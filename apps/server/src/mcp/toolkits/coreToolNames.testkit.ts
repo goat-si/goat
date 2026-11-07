@@ -34,6 +34,7 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_browser_site_note_read",
   "goat_browser_site_note_write",
   "goat_channel_bot_list",
+  "goat_channel_notes_change",
   "goat_cloud_holders",
   "goat_cloud_launch",
   "goat_cloud_machine_create",

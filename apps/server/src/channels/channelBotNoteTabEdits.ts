@@ -180,23 +180,77 @@ export const makeChannelBotNoteWriter = (
   hooks: NoteWriterHooks = {},
 ) =>
   Effect.map(Semaphore.make(1), (gate) => {
+    const grantOpen = Effect.map(ledger.listTasksByStatus(OPEN_STATUSES), (open) =>
+      open.some((stored) => stored.task.notesChangeRequested !== undefined),
+    );
+    /**
+     * A restart re-runs an input whose note was saved before a refusal could apply. Its first
+     * answer, read from the file and never written again: a task holding a grant may be editing it.
+     */
+    const savedBefore = (inputId: string, replaces: string | undefined) =>
+      readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES).pipe(
+        Effect.map((read) => {
+          const source = noteSource(inputId);
+          if (read === null) return undefined;
+          const text = decode(read.bytes);
+          if (!text.includes(source)) return undefined;
+          const first = parseChannelBotNoteLines(text).find((line) => line.raw.includes(source));
+          const unmatched = replaces !== undefined && first?.replaces === undefined;
+          return { notice: unmatched ? CHANNEL_COPY.noteCorrectionUnmatched : undefined };
+        }),
+        Effect.orElseSucceed(() => undefined),
+      );
+    const append = (note: string, readAt: string, inputId: string, replaces?: string) =>
+      appendChannelBotNote(fs, files, note, readAt, inputId, replaces).pipe(
+        Effect.map(({ correction }) =>
+          correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
+        ),
+        Effect.catch((cause) =>
+          Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
+            Effect.as(CHANNEL_COPY.noteNotSaved),
+          ),
+        ),
+      );
+
     /**
      * Saves notes one at a time, so a correction sees the note the one before it saved. Each save
-     * answers what the reply must add: a correction that matched nothing, or a failed save.
+     * answers what the reply must add: a correction that matched nothing, a failed save, or that a
+     * task holding a notes grant may be editing the file by hand, so nothing was saved.
      */
     const save = (note: string, readAt: string, inputId: string, replaces?: string) =>
-      gate
-        .withPermits(1)(appendChannelBotNote(fs, files, note, readAt, inputId, replaces))
-        .pipe(
-          Effect.map(({ correction }) =>
-            correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
-          ),
-          Effect.catch((cause) =>
-            Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
-              Effect.as(CHANNEL_COPY.noteNotSaved),
-            ),
-          ),
-        );
+      gate.withPermits(1)(
+        Effect.gen(function* () {
+          const busy = yield* grantOpen.pipe(Effect.orElseSucceed(() => true));
+          if (busy) {
+            const prior = yield* savedBefore(inputId, replaces);
+            return prior === undefined ? CHANNEL_COPY.noteEditBusy : prior.notice;
+          }
+          return yield* append(note, readAt, inputId, replaces);
+        }),
+      );
+
+    /**
+     * A save that holds only if `guard`, checked under the lock right before writing, finds no
+     * reason to refuse, or the input's note is already saved; otherwise it answers that reason and
+     * writes nothing.
+     */
+    const saveIf = <R extends string, E>(
+      guard: Effect.Effect<R | undefined, E>,
+      note: string,
+      readAt: string,
+      inputId: string,
+      replaces?: string,
+    ) =>
+      gate.withPermits(1)(
+        Effect.gen(function* () {
+          const refused = yield* guard;
+          if (refused !== undefined) return (yield* savedBefore(inputId, replaces)) ?? { refused };
+          return { notice: yield* append(note, readAt, inputId, replaces) };
+        }),
+      );
+
+    /** Runs `effect` under the writers' lock, so a notes grant is checked and recorded as one step. */
+    const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => gate.withPermits(1)(effect);
 
     const readNotes = readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES);
 
@@ -323,11 +377,16 @@ export const makeChannelBotNoteWriter = (
       return answer;
     });
 
-    return { save, tabEdit };
+    return { save, saveIf, exclusive, tabEdit, grantOpen };
   });
 
-/** The sentence a reply gains when reception dropped a note the model asked to keep. */
+/**
+ * The sentence a reply gains when reception dropped a note the model asked to keep, or a notes
+ * change it would not grant: neither is dropped without saying so.
+ */
 export const droppedNoteNotice = (refusal: string | undefined) =>
   refusal === "missing_quote" || refusal === "quote_not_in_input"
     ? CHANNEL_COPY.noteNotSaved
-    : undefined;
+    : refusal === "not_linked" || refusal === "not_a_person"
+      ? CHANNEL_COPY.noteEditNotAllowed
+      : undefined;

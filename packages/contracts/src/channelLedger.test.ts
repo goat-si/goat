@@ -12,6 +12,9 @@ import {
 
 const decodeTaskEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
 const decodeTask = Schema.decodeUnknownSync(ChannelTask);
+// A task schema as a reader built before notesChangeInputId existed sees it.
+const { notesChangeInputId: _added, ...olderTaskFields } = ChannelTask.fields;
+const decodeOlderTask = Schema.decodeUnknownSync(Schema.Struct(olderTaskFields));
 
 const roundTrip = <S extends Schema.Codec<unknown, unknown>>(schema: S, value: unknown) => {
   const json = Schema.toCodecJson(schema);
@@ -266,6 +269,34 @@ describe("channel tasks", () => {
       });
       expect(withSender.payload).toMatchObject({ sender });
     }
+  });
+
+  it("keeps which input a notes change belongs to, and decodes tasks and events stored before it", () => {
+    // Stored before a notes change named its input: decodes unchanged.
+    expect(
+      roundTrip(ChannelTask, { ...task, notesChangeRequested: "forget the deploy note" }),
+    ).not.toHaveProperty("notesChangeInputId");
+    const granted = roundTrip(ChannelTask, {
+      ...task,
+      notesChangeRequested: "tidy my notes",
+      notesChangeInputId: "input-2",
+    });
+    expect(granted).toMatchObject({ notesChangeInputId: "input-2" });
+    const event = roundTrip(ChannelTaskEvent, {
+      eventId: "event-3",
+      sequence: 9,
+      taskId: "task-1",
+      taskVersion: 6,
+      occurredAt: "2026-10-12T00:00:08.000Z",
+      actor: "agent",
+      type: "task.notes_change_requested",
+      payload: { generation: 1, quote: "tidy my notes", inputId: "input-2" },
+    });
+    expect(event.type).toBe("task.notes_change_requested");
+    // A reader built before the field existed ignores it rather than refusing the task.
+    expect(decodeOlderTask({ ...task, notesChangeInputId: "input-2" })).not.toHaveProperty(
+      "notesChangeInputId",
+    );
   });
 });
 
