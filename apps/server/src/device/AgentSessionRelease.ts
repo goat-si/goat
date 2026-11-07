@@ -55,7 +55,12 @@ const targetKey = (target: AgentSessionTarget) =>
  * reason, waits here until its close succeeds or agent-device confirms it is gone.
  */
 export const makePendingAgentCloses = (close: AgentSessionClose) => {
-  const pending = new Map<string, AgentSessionTarget>();
+  // Each drop gets a generation, so finishing an older close never erases a newer drop.
+  const pending = new Map<string, { readonly target: AgentSessionTarget; readonly drop: number }>();
+  let drops = 0;
+  const retire = (key: string, drop: number) => {
+    if (pending.get(key)?.drop === drop) pending.delete(key);
+  };
   // Sessions reuse one agent-device name per thread and device, so a close must not overlap a reopen.
   const admissions = new Map<string, Semaphore.Semaphore>();
   const admit = (target: AgentSessionTarget) => {
@@ -64,13 +69,16 @@ export const makePendingAgentCloses = (close: AgentSessionClose) => {
     admissions.set(key, admission);
     return admission;
   };
-  const settle = (target: AgentSessionTarget, open: Effect.Effect<ReadonlyArray<DeviceSession>>) =>
+  const settle = (
+    { target, drop }: { readonly target: AgentSessionTarget; readonly drop: number },
+    open: Effect.Effect<ReadonlyArray<DeviceSession>>,
+  ) =>
     admit(target).withPermit(
       Effect.gen(function* () {
         const key = targetKey(target);
         // A reopened session owns the name again; closing it would end the live session.
-        if ((yield* open).some((session) => targetKey(session) === key)) return pending.delete(key);
-        if ((yield* close(target)) !== "pending") pending.delete(key);
+        if ((yield* open).some((session) => targetKey(session) === key)) return retire(key, drop);
+        if ((yield* close(target)) !== "pending") retire(key, drop);
       }),
     );
   return {
@@ -82,9 +90,12 @@ export const makePendingAgentCloses = (close: AgentSessionClose) => {
       for (const session of previous) {
         if (!kept.has(targetKey(session)))
           pending.set(targetKey(session), {
-            threadId: session.threadId,
-            hostId: session.hostId,
-            deviceId: session.deviceId,
+            target: {
+              threadId: session.threadId,
+              hostId: session.hostId,
+              deviceId: session.deviceId,
+            },
+            drop: ++drops,
           });
       }
     },
@@ -93,10 +104,10 @@ export const makePendingAgentCloses = (close: AgentSessionClose) => {
       threadId: ThreadId,
       open: Effect.Effect<ReadonlyArray<DeviceSession>>,
     ) {
-      const targets = [...pending.values()].filter((target) => target.threadId === threadId);
+      const entries = [...pending.values()].filter(({ target }) => target.threadId === threadId);
       const results = yield* Effect.forEach(
-        targets,
-        (target) => settle(target, open).pipe(Effect.result),
+        entries,
+        (entry) => settle(entry, open).pipe(Effect.result),
         { concurrency: 4 },
       );
       const failure = results.find((result) => result._tag === "Failure");

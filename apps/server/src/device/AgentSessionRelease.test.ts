@@ -7,7 +7,11 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as ServerSettings from "../serverSettings.ts";
-import { classifyAgentClose, type AgentSessionTarget } from "./AgentSessionRelease.ts";
+import {
+  classifyAgentClose,
+  makePendingAgentCloses,
+  type AgentSessionTarget,
+} from "./AgentSessionRelease.ts";
 import type * as DeviceHost from "./DeviceHost.ts";
 import { makeDeviceHubOperations } from "./DeviceHubOperations.ts";
 import * as DeviceService from "./DeviceService.ts";
@@ -244,4 +248,36 @@ describe("classifyAgentClose", () => {
     expect(classifyAgentClose(unavailable)).toBe("unreachable");
     expect(classifyAgentClose({ code: null, stdout: "" })).toBe("failed");
   });
+});
+
+describe("makePendingAgentCloses", () => {
+  it.effect("a drop queued while an older pending close is being checked is not erased by it", () =>
+    Effect.gen(function* () {
+      const closes: AgentSessionTarget[] = [];
+      const pending = makePendingAgentCloses((target) =>
+        Effect.sync(() => {
+          closes.push(target);
+          return "closed" as const;
+        }),
+      );
+      const session = {
+        threadId: lane,
+        hostId: LOCAL_DEVICE_HOST_ID,
+        deviceId: phone,
+        platform: "android" as const,
+        openedAt: "2026-11-07T00:00:00.000Z",
+      };
+      pending.track([session], []);
+      // The check sees the session reopened, and another close drops it again right after.
+      const reopenedThenDropped = Effect.sync(() => {
+        pending.track([session], []);
+        return [session];
+      });
+      yield* pending.flush(lane, reopenedThenDropped);
+      expect(closes).toEqual([]);
+
+      yield* pending.flush(lane, Effect.succeed([]));
+      expect(closes.map((target) => target.deviceId)).toEqual([phone]);
+    }),
+  );
 });
