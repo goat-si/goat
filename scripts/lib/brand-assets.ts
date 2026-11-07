@@ -55,6 +55,8 @@ const WEB_ICON_TARGET_FILENAMES = {
   favicon16Png: "favicon-16x16.png",
   favicon32Png: "favicon-32x32.png",
   appleTouchIconPng: "apple-touch-icon.png",
+  icon192Png: "icon-192x192.png",
+  icon512Png: "icon-512x512.png",
 } as const;
 
 const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
@@ -63,18 +65,24 @@ const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
     favicon16Png: BRAND_ASSET_PATHS.developmentWebFavicon16Png,
     favicon32Png: BRAND_ASSET_PATHS.developmentWebFavicon32Png,
     appleTouchIconPng: BRAND_ASSET_PATHS.developmentWebAppleTouchIconPng,
+    icon192Png: "assets/dev/blueprint-web-icon-192x192.png",
+    icon512Png: "assets/dev/blueprint-web-icon-512x512.png",
   },
   nightly: {
     faviconIco: BRAND_ASSET_PATHS.nightlyWebFaviconIco,
     favicon16Png: BRAND_ASSET_PATHS.nightlyWebFavicon16Png,
     favicon32Png: BRAND_ASSET_PATHS.nightlyWebFavicon32Png,
     appleTouchIconPng: BRAND_ASSET_PATHS.nightlyWebAppleTouchIconPng,
+    icon192Png: "assets/nightly/nightly-web-icon-192x192.png",
+    icon512Png: "assets/nightly/nightly-web-icon-512x512.png",
   },
   production: {
     faviconIco: BRAND_ASSET_PATHS.productionWebFaviconIco,
     favicon16Png: BRAND_ASSET_PATHS.productionWebFavicon16Png,
     favicon32Png: BRAND_ASSET_PATHS.productionWebFavicon32Png,
     appleTouchIconPng: BRAND_ASSET_PATHS.productionWebAppleTouchIconPng,
+    icon192Png: "assets/prod/goat-black-web-icon-192x192.png",
+    icon512Png: "assets/prod/goat-black-web-icon-512x512.png",
   },
 } as const satisfies Record<WebAssetBrand, Record<keyof typeof WEB_ICON_TARGET_FILENAMES, string>>;
 
@@ -84,6 +92,14 @@ export function resolveWebIconOverrides(
 ): ReadonlyArray<IconOverride> {
   const sourcePaths = WEB_ICON_SOURCE_PATHS_BY_BRAND[brand];
   return [
+    {
+      sourceRelativePath: sourcePaths.icon192Png,
+      targetRelativePath: `${targetDirectory}/${WEB_ICON_TARGET_FILENAMES.icon192Png}`,
+    },
+    {
+      sourceRelativePath: sourcePaths.icon512Png,
+      targetRelativePath: `${targetDirectory}/${WEB_ICON_TARGET_FILENAMES.icon512Png}`,
+    },
     {
       sourceRelativePath: sourcePaths.faviconIco,
       targetRelativePath: `${targetDirectory}/${WEB_ICON_TARGET_FILENAMES.faviconIco}`,
