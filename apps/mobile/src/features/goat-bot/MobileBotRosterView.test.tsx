@@ -408,3 +408,59 @@ describe("the roster's main face", () => {
     expect(motion()).toBe("moving");
   });
 });
+
+it("ignores a layout change while the roster scrolls", async () => {
+  face.items = [
+    {
+      item: {
+        type: "notification",
+        ledgerTask: {
+          taskId: "busy",
+          taskVersion: 1,
+          status: "running",
+          createdAt: at,
+          updatedAt: at,
+        },
+      },
+    },
+  ];
+  roster.scrollRect = [0, 100, 400, 600];
+  roster.rowRect = [0, 120, 400, 64];
+  roster.pending.length = 0;
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[{ kind: "main", profile: null }]}
+          rows={[]}
+          hasMore={false}
+          slackEnabled={false}
+          onOpenBot={() => {}}
+          onOpenChild={() => {}}
+          onLongPressTask={() => {}}
+          onShowMore={() => {}}
+        />,
+      ),
+    );
+    const motion = () => container.querySelector("[data-motion]")?.getAttribute("data-motion");
+    await act(async () => {
+      roster.rowLayout?.();
+      flushMeasurements();
+    });
+    expect(motion()).toBe("moving");
+    await act(async () => {
+      roster.scroll.onScrollBeginDrag?.({});
+      roster.rowLayout?.();
+      flushMeasurements();
+    });
+    expect(motion()).toBe("still");
+    await act(async () => {
+      roster.scroll.onScrollEndDrag?.({ nativeEvent: { velocity: { x: 0, y: 0 } } });
+      flushMeasurements();
+    });
+    expect(motion()).toBe("moving");
+  } finally {
+    face.items = [];
+  }
+});

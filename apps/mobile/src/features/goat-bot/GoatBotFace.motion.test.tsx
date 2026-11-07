@@ -7,9 +7,16 @@ const native = vi.hoisted(() => ({
   loops: [] as Array<{ start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }>,
   timings: [] as Array<{ useNativeDriver?: boolean }>,
 }));
+const header = vi.hoisted(() => ({ state: "idle" }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Text: ({
+    children,
+    accessibilityLabel,
+  }: {
+    children?: ReactNode;
+    accessibilityLabel?: string;
+  }) => <span aria-label={accessibilityLabel}>{children}</span>,
   StyleSheet: { absoluteFill: {} },
   Easing: { linear: (value: number) => value },
   useAnimatedValue: () => ({ setValue: () => {}, interpolate: () => 0 }),
@@ -36,13 +43,17 @@ vi.mock("react-native-reanimated", () => {
 });
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
 vi.mock("uniwind", () => ({ withUniwind: (component: unknown) => component }));
-vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
+vi.mock("../../native/StackHeader", () => ({
+  NativeStackScreenOptions: (props: { options: { headerTitle?: () => ReactNode } }) => (
+    <header>{props.options.headerTitle?.()}</header>
+  ),
+}));
 vi.mock("./useMobileGoatBotFace", () => ({
-  useMobileGoatBotFace: () => ({ state: "idle", since: null }),
+  useMobileGoatBotFace: () => ({ state: header.state, since: null }),
   useMobileGoatBotFaceMotion: () => null,
 }));
 
-import { GoatBotFace } from "./GoatBotFace";
+import { GoatBotFace, GoatBotHeaderFace } from "./GoatBotFace";
 
 it("runs one native-driver loop while the face moves and stops it when the face stills or unmounts", async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -67,4 +78,21 @@ it("starts no loop for a still face", async () => {
   await act(async () => root.render(<GoatBotFace state="idle" size={40} motion={null} />));
   expect(native.loops).toHaveLength(0);
   await act(async () => root.unmount());
+});
+
+it("names the bot's state on the header title text VoiceOver reads", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    header.state = "working";
+    await act(async () => root.render(<GoatBotHeaderFace activity={null} title="GOAT Bot" />));
+    const title = [...container.querySelectorAll("span")].find(
+      (span) => span.textContent === "GOAT Bot",
+    );
+    expect(title?.getAttribute("aria-label")).toBe("GOAT Bot, Working");
+  } finally {
+    header.state = "idle";
+    await act(async () => root.unmount());
+  }
 });

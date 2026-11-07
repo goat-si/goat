@@ -170,14 +170,18 @@ function GoatBotHeaderTitle(props: {
 }) {
   const label = goatBotFaceLabel(props.state);
   return (
-    <View
-      accessible
-      accessibilityRole="header"
-      accessibilityLabel={label ? `${props.title}, ${label}` : props.title}
-      className="flex-row items-center gap-2"
-    >
-      <GoatBotFaceAvatar state={props.state} size={28} motion={props.motion} />
-      <Text className="text-base font-semibold text-foreground">{props.title}</Text>
+    <View className="flex-row items-center gap-2">
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <GoatBotFaceAvatar state={props.state} size={28} motion={props.motion} />
+      </View>
+      {/* In a native header title VoiceOver reads the text element, not a grouping view. */}
+      <Text
+        accessibilityRole="header"
+        accessibilityLabel={label ? `${props.title}, ${label}` : props.title}
+        className="text-base font-semibold text-foreground"
+      >
+        {props.title}
+      </Text>
     </View>
   );
 }

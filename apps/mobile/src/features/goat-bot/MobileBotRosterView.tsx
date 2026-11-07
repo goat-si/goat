@@ -99,7 +99,8 @@ export function MobileBotRosterView(props: {
 }) {
   const mainFace = useMobileGoatBotFace(null);
   const mainFaceLabel = goatBotFaceLabel(mainFace.state);
-  const { scrollRef, rowRef, onScreen, measure, hold, measureUnlessCoasting } = useRowOnScreen();
+  const { scrollRef, rowRef, onScreen, measure, hold, settle, measureUnlessCoasting } =
+    useRowOnScreen();
   const mainMotion = useMobileGoatBotFaceMotion(
     mainFace.state,
     FACE_MOTION_RANK.list,
@@ -115,7 +116,7 @@ export function MobileBotRosterView(props: {
       onScrollBeginDrag={hold}
       onMomentumScrollBegin={hold}
       onScrollEndDrag={measureUnlessCoasting}
-      onMomentumScrollEnd={measure}
+      onMomentumScrollEnd={settle}
     >
       {props.header}
       {props.bots.map((bot) => (
@@ -280,25 +281,32 @@ export function MobileBotRosterView(props: {
 }
 
 /**
- * Whether the main bot's row is inside the roster's visible area. It starts false, is measured in
- * window coordinates (so headers, error text and insets count), and drops to false the moment a
- * scroll starts. Each measurement carries a generation, so one that lands after a scroll began or
- * the layout changed is ignored.
+ * Whether the main row is inside the roster's visible area, measured in window coordinates. False
+ * until measured and from a scroll's start to its end; a generation drops any measurement that
+ * lands after a scroll began, the layout changed or the roster unmounted.
  */
 function useRowOnScreen() {
-  const scrollRef = useRef<ScrollViewInstance>(null);
+  const scrollNode = useRef<ScrollViewInstance | null>(null);
   const rowRef = useRef<ViewInstance>(null);
   const generation = useRef(0);
+  const scrolling = useRef(false);
   const [onScreen, setOnScreen] = useState(false);
+  const scrollRef = (node: ScrollViewInstance | null) => {
+    scrollNode.current = node;
+    return () => {
+      scrollNode.current = null;
+      generation.current += 1;
+    };
+  };
   const measure = () => {
     generation.current += 1;
     const pass = generation.current;
-    const scroll = scrollRef.current;
+    const scroll = scrollNode.current;
     const row = rowRef.current;
-    if (scroll === null || row === null) return;
+    if (scrolling.current || scroll === null || row === null) return;
     scroll.measureInWindow((_scrollX, scrollTop, _scrollWidth, scrollHeight) => {
       row.measureInWindow((_rowX, rowTop, _rowWidth, rowHeight) => {
-        if (pass !== generation.current) return;
+        if (pass !== generation.current || scrolling.current) return;
         setOnScreen(
           rowHeight > 0 &&
             scrollHeight > 0 &&
@@ -309,15 +317,20 @@ function useRowOnScreen() {
     });
   };
   const hold = () => {
+    scrolling.current = true;
     generation.current += 1;
     setOnScreen(false);
+  };
+  const settle = () => {
+    scrolling.current = false;
+    measure();
   };
   // A drag released with speed coasts on; its momentum end measures instead.
   const measureUnlessCoasting = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const velocity = event.nativeEvent.velocity;
     if (velocity === undefined || (Math.abs(velocity.x) < 0.05 && Math.abs(velocity.y) < 0.05)) {
-      measure();
+      settle();
     }
   };
-  return { scrollRef, rowRef, onScreen, measure, hold, measureUnlessCoasting };
+  return { scrollRef, rowRef, onScreen, measure, hold, settle, measureUnlessCoasting };
 }
