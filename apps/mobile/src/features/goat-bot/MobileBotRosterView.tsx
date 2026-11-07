@@ -324,27 +324,29 @@ export function MobileBotRosterView(props: {
             Deleted bots
           </Text>
           {props.members.deleted.map((profile) => (
-            <Pressable
-              key={profile.botId}
-              accessibilityRole="button"
-              accessibilityLabel={`${profile.name}, deleted`}
-              accessibilityHint="Opens its archived conversation"
-              {...(props.members?.canRestore
-                ? {
-                    accessibilityActions: [{ name: "restore", label: "Restore" }],
-                    onAccessibilityAction: (event: { nativeEvent: { actionName: string } }) => {
-                      if (event.nativeEvent.actionName === "restore")
-                        props.members?.onRestoreDeleted(profile);
-                    },
-                    onLongPress: () => props.members?.onRestoreDeleted(profile),
-                  }
-                : {})}
-              onPress={() => props.onOpenBot({ kind: "member", profile })}
-              className="min-h-[44px] flex-row items-center justify-between px-4 py-3"
-            >
-              <Text className="text-foreground-muted">{profile.name}</Text>
-              <Text className="text-foreground-muted">Deleted</Text>
-            </Pressable>
+            <View key={profile.botId} className="flex-row items-center pr-4">
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${profile.name}, deleted`}
+                accessibilityHint="Opens its archived conversation"
+                {...(props.members?.canRestore
+                  ? { onLongPress: () => props.members?.onRestoreDeleted(profile) }
+                  : {})}
+                onPress={() => props.onOpenBot({ kind: "member", profile })}
+                className="min-h-[44px] flex-1 flex-row items-center justify-between px-4 py-3"
+              >
+                <Text className="text-foreground-muted">{profile.name}</Text>
+                <Text className="text-foreground-muted">Deleted</Text>
+              </Pressable>
+              {props.members?.canRestore ? (
+                <Button
+                  label="Restore"
+                  accessibilityLabel={`Restore ${profile.name}`}
+                  tone="text"
+                  onPress={() => props.members?.onRestoreDeleted(profile)}
+                />
+              ) : null}
+            </View>
           ))}
         </View>
       ) : null}

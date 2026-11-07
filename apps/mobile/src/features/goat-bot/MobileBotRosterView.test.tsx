@@ -124,14 +124,16 @@ vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => <span /> }))
 vi.mock("../../components/ui/Button", () => ({
   Button: ({
     label,
+    accessibilityLabel,
     disabled,
     onPress,
   }: {
     label: string;
+    accessibilityLabel?: string;
     disabled?: boolean;
     onPress?: () => void;
   }) => (
-    <button disabled={disabled} onClick={onPress}>
+    <button aria-label={accessibilityLabel} disabled={disabled} onClick={onPress}>
       {label}
     </button>
   ),
@@ -557,17 +559,17 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
   await act(async () => button("Hidden bots (1)")?.click());
   await act(async () => button("Quiet")?.click());
   expect(open).toHaveBeenCalledWith({ kind: "member", profile: quiet });
-  // A deleted bot opens its archived conversation; restoring is the row's action.
+  // A deleted bot opens its archived conversation; Restore is its own button so VoiceOver reaches it.
   const deletedRow = button("Gone");
   expect(deletedRow?.textContent).toContain("Deleted");
   expect(deletedRow?.textContent).not.toContain("Restore");
   await act(async () => deletedRow?.click());
   expect(open).toHaveBeenLastCalledWith({ kind: "member", profile: gone });
-  expect(deletedRow?.getAttribute("data-actions")).toBe("Restore");
-  await act(async () =>
-    deletedRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "restore", bubbles: true })),
-  );
+  const restore = container.querySelector<HTMLButtonElement>('button[aria-label="Restore Gone"]');
+  expect(restore?.textContent).toBe("Restore");
+  await act(async () => restore?.click());
   expect(restoreDeleted).toHaveBeenCalledWith(gone);
+  expect(open).toHaveBeenCalledTimes(2);
 });
 
 it("offers no restore on a deleted bot to someone who cannot manage bots", async () => {
@@ -612,5 +614,7 @@ it("offers no restore on a deleted bot to someone who cannot manage bots", async
   const deletedRow = [...container.querySelectorAll("button")].find((element) =>
     element.textContent?.includes("Gone"),
   );
-  expect(deletedRow?.getAttribute("data-actions")).toBeNull();
+  expect(deletedRow).toBeDefined();
+  expect(container.querySelector('button[aria-label="Restore Gone"]')).toBeNull();
+  expect(container.textContent).not.toContain("Restore");
 });
