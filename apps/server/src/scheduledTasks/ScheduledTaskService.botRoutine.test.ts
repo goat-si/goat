@@ -1,6 +1,10 @@
 import { assert, it } from "@effect/vitest";
 import { CommandId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import type * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 import { webhookTaskInput, withWebhookService } from "./ScheduledRunFixture.testkit.ts";
 
 const botThread = "goat-bot-thread";
@@ -22,10 +26,16 @@ interface LinkRow {
   readonly state: string;
 }
 
+/** The GOAT Bot as the channel ledger records it, read by the real SQL directory. */
+const registerBot = (sql: SqlClient.SqlClient) =>
+  sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+    VALUES ('bot:environment:test', ${JSON.stringify({ bot: { threadId: botThread } })}, '2026-11-07T00:00:00.000Z')`;
+
 it.effect("only a person's owner context can bind a routine to a GOAT Bot thread", () =>
   withWebhookService(
     ({ service, sql }) =>
       Effect.gen(function* () {
+        yield* registerBot(sql);
         const input = yield* routineInput();
         const agent = yield* Effect.flip(service.upsert(input, { memoryGrantCeiling: "none" }));
         assert.include(agent.message, "Only a person");
@@ -45,7 +55,7 @@ it.effect("only a person's owner context can bind a routine to a GOAT Bot thread
           [owner],
         );
       }),
-    { botThreads: new Set([botThread]) },
+    {},
   ),
 );
 
@@ -53,6 +63,7 @@ it.effect("a GOAT Bot routine firing freezes its input with the admission and se
   withWebhookService(
     ({ service, sql }) =>
       Effect.gen(function* () {
+        yield* registerBot(sql);
         const input = yield* routineInput();
         const task = (yield* service.upsert(input, { memoryGrantCeiling: "none", owner })).task;
         yield* service.runNow({ id: task.id });
@@ -79,7 +90,7 @@ it.effect("a GOAT Bot routine firing freezes its input with the admission and se
           { firing_id: links[0]?.firing_id ?? "", status: "dispatching" },
         ]);
       }),
-    { botThreads: new Set([botThread]) },
+    {},
   ),
 );
 
@@ -87,6 +98,7 @@ it.effect("a channel firing advances the next run once and reports the bot's out
   withWebhookService(
     ({ service, sql, runs }) =>
       Effect.gen(function* () {
+        yield* registerBot(sql);
         const input = yield* routineInput();
         const task = (yield* service.upsert(input, { memoryGrantCeiling: "none", owner })).task;
         yield* service.runNow({ id: task.id });
@@ -116,7 +128,7 @@ it.effect("a channel firing advances the next run once and reports the bot's out
         });
         assert.strictEqual((yield* service.list()).tasks[0]?.lastRunStatus, "succeeded");
       }),
-    { botThreads: new Set([botThread]) },
+    {},
   ),
 );
 
@@ -124,6 +136,7 @@ it.effect("a routine the bot refused before storing its input fails with the rea
   withWebhookService(
     ({ service, sql, runs }) =>
       Effect.gen(function* () {
+        yield* registerBot(sql);
         const input = yield* routineInput();
         const task = (yield* service.upsert(input, { memoryGrantCeiling: "none", owner })).task;
         yield* service.runNow({ id: task.id });
@@ -138,7 +151,7 @@ it.effect("a routine the bot refused before storing its input fails with the rea
         assert.strictEqual(failed?.lastRunError, "That bot was deleted.");
         assert.strictEqual(failed?.nextRunAt, "2026-11-09T09:00:00.000Z");
       }),
-    { botThreads: new Set([botThread]) },
+    {},
   ),
 );
 
@@ -146,6 +159,7 @@ it.effect("startup reconcile leaves channel firings to the channel side", () =>
   withWebhookService(
     ({ service, sql, runs }) =>
       Effect.gen(function* () {
+        yield* registerBot(sql);
         const task = (yield* service.upsert(yield* routineInput(), {
           memoryGrantCeiling: "none",
           owner,
@@ -155,7 +169,7 @@ it.effect("startup reconcile leaves channel firings to the channel side", () =>
         const firings = yield* sql<{ status: string }>`SELECT status FROM scheduled_task_runs`;
         assert.deepStrictEqual(firings, [{ status: "dispatching" }]);
       }),
-    { botThreads: new Set([botThread]) },
+    {},
   ),
 );
 
@@ -163,6 +177,7 @@ it.effect("a routine bound to a GOAT Bot thread before owners existed fails and 
   withWebhookService(
     ({ service, sql }) =>
       Effect.gen(function* () {
+        yield* registerBot(sql);
         const task = (yield* service.upsert(yield* routineInput(), {
           memoryGrantCeiling: "none",
           owner,
@@ -174,18 +189,18 @@ it.effect("a routine bound to a GOAT Bot thread before owners existed fails and 
         assert.include(failed?.lastRunError ?? "", "Set this routine up again");
         assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_channel_inputs`, 0);
       }),
-    { botThreads: new Set([botThread]) },
+    {},
   ),
 );
 it.effect("a routine keeps its GOAT Bot binding after the bot's thread is replaced", () => {
-  const botThreads = new Set([botThread]);
   return withWebhookService(
     ({ service, sql }) =>
       Effect.gen(function* () {
+        yield* registerBot(sql);
         const input = yield* routineInput();
         const task = (yield* service.upsert(input, { memoryGrantCeiling: "none", owner })).task;
         // The registry replaced the bot's thread: the old one is no longer a bot thread.
-        botThreads.delete(botThread);
+        yield* sql`DELETE FROM channel_runtime_state`;
         yield* service.upsert(
           { ...input, title: "Morning check-in" },
           {
@@ -211,13 +226,14 @@ it.effect("a routine keeps its GOAT Bot binding after the bot's thread is replac
           [[true, "dispatching"]],
         );
       }),
-    { botThreads },
+    {},
   );
 });
 it.effect("a routine and its owner are saved together or not at all", () =>
   withWebhookService(
     ({ service, sql }) =>
       Effect.gen(function* () {
+        yield* registerBot(sql);
         // The owner write fails, as a crash between the two writes would leave it.
         yield* sql`CREATE TRIGGER refuse_owner BEFORE UPDATE OF owner_json ON scheduled_tasks
           BEGIN SELECT RAISE(ABORT, 'owner write failed'); END`;
@@ -226,6 +242,54 @@ it.effect("a routine and its owner are saved together or not at all", () =>
         );
         assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_tasks`, 0);
       }),
-    { botThreads: new Set([botThread]) },
+    {},
   ),
+);
+it.effect(
+  "a person's check-in becomes GOAT Bot input on Run now and on schedule, as the server assembles it",
+  () => {
+    const workers = new Map<string, Effect.Effect<void>>();
+    return withWebhookService(
+      ({ service, sql, runs }) =>
+        Effect.gen(function* () {
+          yield* registerBot(sql);
+          const task = (yield* service.upsert(yield* routineInput(), {
+            memoryGrantCeiling: "none",
+            owner,
+          })).task;
+          yield* Effect.exit(service.runNow({ id: task.id }));
+          const firings = () =>
+            sql<{ message_id: string; status: string }>`
+              SELECT message_id, status FROM scheduled_task_runs ORDER BY requested_at`;
+          assert.deepStrictEqual(
+            (yield* firings()).map((firing) =>
+              firing.message_id.startsWith("scheduled-task-routine:"),
+            ),
+            [true],
+          );
+          // The channel side answers the firing; then the schedule comes due on its own.
+          const [link] = yield* sql<LinkRow>`SELECT * FROM scheduled_task_channel_inputs`;
+          const firingId = CommandId.make(link?.firing_id ?? "");
+          const at = DateTime.formatIso(yield* DateTime.now);
+          yield* runs.finishChannelFiring({
+            firingId,
+            outcome: { type: "accepted", threadId: task.threadId! },
+            at,
+          });
+          yield* runs.finishChannelFiring({ firingId, outcome: { type: "completed" }, at });
+          yield* TestClock.adjust(Duration.hours(2));
+          yield* workers.get("scheduled-tasks") ?? Effect.die("scheduler worker missing");
+          // The answered manual firing is pruned; the scheduled one is the routine's next firing.
+          assert.deepStrictEqual(
+            (yield* firings()).map((firing) => [
+              firing.message_id.startsWith("scheduled-task-routine:"),
+              firing.message_id.endsWith(":scheduled"),
+            ]),
+            [[true, true]],
+          );
+          assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_channel_inputs`, 2);
+        }),
+      { workers },
+    );
+  },
 );
