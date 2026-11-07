@@ -264,6 +264,22 @@ describe("Memory tab note edits", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("a forget removes a long correction chain and keeps the notes around it", () =>
+    Effect.gen(function* () {
+      const step = (at: number) => "Release day is number " + at + ".";
+      const chain = Array.from({ length: 4_000 }, (_, at) =>
+        line(step(at), "c" + at, at === 0 ? undefined : step(at - 1)),
+      );
+      const keep = line("Keep me.", "k") + "\n";
+      const { edit, read } = yield* setup(NOTES_HEADER + keep + chain.join("\n") + "\n");
+      assert.strictEqual(
+        yield* edit(goatBotForgetNoteMessage(step(3_999))),
+        CHANNEL_COPY.noteForgotten,
+      );
+      assert.strictEqual(yield* read, NOTES_HEADER + keep);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("a file over 1 MiB is not edited", () =>
     Effect.gen(function* () {
       const filler = line("x".repeat(400), "fill") + "\n";

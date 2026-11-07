@@ -103,18 +103,29 @@ const changeCandidates = (lines: ReadonlyArray<ChannelBotNoteLine>, message: str
  * with a removed text, and replaces markers that quote a removed text. Every other byte is kept.
  */
 const withoutNote = (fileText: string, lines: ReadonlyArray<ChannelBotNoteLine>, text: string) => {
-  const removedTexts = new Set([collapseNoteText(text)]);
+  // Indexed both ways, so a long correction chain is walked once instead of once per link.
+  const byText = new Map<string, Array<number>>();
+  const replacedLines = new Map<number, Array<number>>();
+  const add = <K>(map: Map<K, Array<number>>, key: K, index: number) => {
+    const list = map.get(key);
+    if (list === undefined) map.set(key, [index]);
+    else list.push(index);
+  };
+  for (const line of lines) {
+    add(byText, collapseNoteText(line.text), line.index);
+    if (line.replacedBy !== undefined) add(replacedLines, line.replacedBy, line.index);
+  }
+  const removedTexts = new Set<string>();
   const removed = new Set<number>();
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const line of lines) {
-      if (removed.has(line.index)) continue;
-      const replacedByRemoved = line.replacedBy !== undefined && removed.has(line.replacedBy);
-      if (!replacedByRemoved && !removedTexts.has(collapseNoteText(line.text))) continue;
-      removed.add(line.index);
-      removedTexts.add(collapseNoteText(line.text));
-      grew = true;
-    }
+  const queue = [...(byText.get(collapseNoteText(text)) ?? [])];
+  for (let index = queue.pop(); index !== undefined; index = queue.pop()) {
+    if (removed.has(index)) continue;
+    removed.add(index);
+    for (const earlier of replacedLines.get(index) ?? []) queue.push(earlier);
+    const key = collapseNoteText(lines[index]?.text ?? "");
+    if (removedTexts.has(key)) continue;
+    removedTexts.add(key);
+    for (const same of byText.get(key) ?? []) queue.push(same);
   }
   // Physical lines keep their own endings; parsed notes map onto them with the parser's skips.
   const physical = fileText.split(/(?<=\n)/u);
