@@ -12,6 +12,7 @@ import type {
   ChannelKind,
   CommandId,
   RuntimeMode,
+  ScheduledTaskId,
   ThreadId,
 } from "@goat/contracts";
 
@@ -24,7 +25,13 @@ export type ChannelIngressCaller =
     }
   | { readonly type: "transport"; readonly kind: ChannelKind; readonly connectionId: string }
   /** A legacy `message.dispatch` to the GOAT bot, redirected by thread message intake. */
-  | { readonly type: "intake"; readonly commandId: CommandId };
+  | { readonly type: "intake"; readonly commandId: CommandId }
+  /** One firing of a routine a person bound to a GOAT Bot thread (ChannelRoutineIntake). */
+  | {
+      readonly type: "schedule";
+      readonly scheduledTaskId: ScheduledTaskId;
+      readonly firingId: CommandId;
+    };
 
 /**
  * The host owner a connection acts for, with the scopes and runtime ceiling allowed to that
