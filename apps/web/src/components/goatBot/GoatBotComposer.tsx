@@ -25,6 +25,8 @@ import { useGoatBotMember } from "./goatBotMemberContext";
 
 export interface GoatBotComposerHandle {
   addFiles(files: File[]): void;
+  /** Puts a drafted message in the box, keeping staged files; the person still sends it. */
+  replaceText(text: string): void;
 }
 
 /**
@@ -108,6 +110,10 @@ export function GoatBotComposer({
   useImperativeHandle(ref, () => ({
     addFiles(files) {
       void addFiles(files).then(() => textareaRef.current?.focus());
+    },
+    replaceText(next) {
+      setText(next);
+      textareaRef.current?.focus();
     },
   }));
   const remove = (id: string) => {

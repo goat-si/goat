@@ -283,6 +283,11 @@ export const ChannelReceptionResult = Schema.Struct({
    * only when this occurs in that input from a person; otherwise it drops the note.
    */
   rememberQuote: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The text of the standing note this `remember` corrects. The server marks that note replaced
+   * when one current note has this text; otherwise it keeps both and says so in the reply.
+   */
+  replacesNote: Schema.optional(TrimmedNonEmptyString),
 });
 export type ChannelReceptionResult = typeof ChannelReceptionResult.Type;
 

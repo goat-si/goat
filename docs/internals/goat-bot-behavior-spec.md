@@ -436,9 +436,10 @@ did not show it, not that it is absent. "GOAT now" is dev at
 
 ## Gaps, in priority order
 
-1. **Memory and work-history reads** (P1). Shipped in #459. Remaining: an explicit memory write
-   for corrections with newest-wins. A remote thread read takes the newest messages among its
-   last 24 items, where a local read takes its last three runs.
+1. **Memory and work-history reads** (P1). Shipped in #459; corrections replace the note they
+   name, newest wins, through a marker on the appended line (memory.md stays append-only). A
+   remote thread read takes the newest messages among its last 24 items, where a local read
+   takes its last three runs.
 2. **Bot turns after the ack** (P2): the bot works with tools on its own model, one worker per
    workstream, results summarized by the bot; dispatch waits until the first reply's delivery is settled, delivered or failed.
    A session turn's read-only tools may run before then; its launches, cards and channel sends wait (section 2).

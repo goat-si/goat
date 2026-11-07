@@ -10,10 +10,12 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotNotesReader from "./ChannelBotNotesReader.ts";
 import { channelNotesRevision } from "./channelBriefs.ts";
-import { appendChannelBotNote, channelBotFilesFor, NOTES_HEADER } from "./channelBotNotes.ts";
+import { NOTES_HEADER } from "./channelBotNoteLines.ts";
+import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
@@ -48,7 +50,11 @@ const readerLayer = (
     ChannelBotNotesReader.make(options),
   ).pipe(
     Layer.provideMerge(
-      Layer.mergeAll(ServerConfig.layerTest(process.cwd(), { prefix: "goat-bot-notes-" }), home),
+      Layer.mergeAll(
+        ServerConfig.layerTest(process.cwd(), { prefix: "goat-bot-notes-" }),
+        home,
+        SqlitePersistence.layerMemory,
+      ),
     ),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -70,7 +76,22 @@ const writeNotes = (text: string | Uint8Array) =>
     return files;
   });
 
-const list = Effect.flatMap(ChannelBotNotesReader.ChannelBotNotesReader, (reader) => reader.list);
+// Sources are covered in ChannelBotNoteSources.test.ts; these notes name inputs no ledger holds.
+const viewer = {
+  ownerId: "environment:test",
+  principalId: "owner",
+  displayName: "Owner",
+  grantedScopes: ["memory:read" as const],
+  runtimeModeCeiling: "approval-required" as const,
+};
+const list = Effect.flatMap(ChannelBotNotesReader.ChannelBotNotesReader, (reader) =>
+  reader.list(viewer),
+).pipe(
+  Effect.map((result) => ({
+    ...result,
+    notes: result.notes.map(({ source: _source, ...note }) => note),
+  })),
+);
 
 describe("ChannelBotNotesReader", () => {
   it.effect("lists dated notes newest first without the header or their source", () =>
@@ -86,6 +107,26 @@ describe("ChannelBotNotesReader", () => {
       ]);
       assert.isFalse(result.truncated);
       assert.strictEqual(result.revision, yield* channelNotesRevision(files.notes));
+    }).pipe(Effect.provide(readerLayer())),
+  );
+
+  it.effect("lists replaced notes with the line that replaced them", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const files = yield* notesFile;
+      yield* appendChannelBotNote(fs, files, "Fridays.", "2026-11-01T10:00:00Z", "input-1");
+      yield* appendChannelBotNote(
+        fs,
+        files,
+        "Mondays.",
+        "2026-11-02T10:00:00Z",
+        "input-2",
+        "Fridays.",
+      );
+      assert.deepStrictEqual((yield* list).notes, [
+        { index: 1, date: "2026-11-02", text: "Mondays.", replaces: "Fridays." },
+        { index: 0, date: "2026-11-01", text: "Fridays.", replacedBy: 1 },
+      ]);
     }).pipe(Effect.provide(readerLayer())),
   );
 

@@ -1,6 +1,6 @@
 import { useActiveNewTask } from "../../state/active-new-task";
 import { Toolbar } from "../../components/ui/Toolbar";
-import { useFocusEffect, useIsFocused } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused, useNavigation } from "@react-navigation/native";
 import { use, useCallback, useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import { isDuoDevice } from "../../lib/device-type";
@@ -46,6 +46,7 @@ export function WorkspaceToolbar(props: {
     activeNewTask === null;
   const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
   const focused = useIsFocused();
+  const navigation = useNavigation();
   const { panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const searchRef = useRef<SearchBarCommands>(null);
   // The Settings list takes the selected tab's place, so search follows it.
@@ -84,13 +85,23 @@ export function WorkspaceToolbar(props: {
     workspace.recordScrollOffset(selectedTab, tab.searchEntryOffset);
     workspace.dispatch({ type: "cancel", tab: selectedTab });
   }, [workspace, selectedTab, tab.searchEntryOffset]);
-  const searchFocused = useCallback(
-    () =>
-      tab.searchMode === "resting"
-        ? enterSearch()
-        : workspace.dispatch({ type: "search", tab: selectedTab }),
-    [tab.searchMode, enterSearch, workspace, selectedTab],
-  );
+  const searchFocused = useCallback(() => {
+    if (tab.searchMode === "resting") return enterSearch();
+    // The integrated X can empty the field without a change event; show the query still filtering.
+    if (tab.searchMode === "expanded") searchRef.current?.setText(tab.query);
+    workspace.dispatch({ type: "search", tab: selectedTab });
+  }, [tab.searchMode, tab.query, enterSearch, workspace, selectedTab]);
+  // RNSSearchBar reports UIKit's own dismissal, such as integrated search's X, as onClose.
+  // Screens' programmatic dismissals on navigation never call it. A presented sidebar stays
+  // visible while its detail owns navigation focus.
+  const searchClosed = () => {
+    const hostVisible = navigation.isFocused() || primaryColumn?.presented === true;
+    // A retained slot's late close must not clear the query it keeps for its return.
+    if (tab.searchMode === "resting" || !hostVisible || !tabActive || !isTabActive(selectedTab))
+      return;
+    searchRef.current?.clearText();
+    cancelSearch();
+  };
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   // The sidebar remains visible while its detail owns navigation focus.
   const searchHostVisible = focused || primaryColumn?.presented === true;
@@ -177,6 +188,7 @@ export function WorkspaceToolbar(props: {
                   cancelButtonHidden: foldedSearch,
                   onFocus: searchFocused,
                   onBlur: () => workspace.dispatch({ type: "expand", tab: selectedTab }),
+                  onClose: searchClosed,
                   onSearchButtonPress: () => searchRef.current?.blur(),
                   onChangeText: ({ nativeEvent }) =>
                     workspace.dispatch({

@@ -69,9 +69,11 @@ its task and coding threads. Use a task's menu to pin it, mark it done, or mark 
 A task opens its own conversation beside the main chat on a wide screen, or in place
 of the chat on a narrow one; messages you send there stay with that task. To always
 open tasks in place, turn off **Open task threads beside the main chat** in
-**Settings → GOAT Bot**. **Work** in the GOAT Bot header lists tasks and routines.
-**Check in on me** under **Routines** sets up a routine on the days and hours you choose: the
-bot looks over its tasks and writes only when something needs you.
+**Settings → GOAT Bot**. **Work** in the GOAT Bot header lists tasks, routines, and
+notes. **Check in on me** under **Routines** sets up a routine on the days and hours you
+choose: the bot looks over its tasks and writes only when something needs you.
+**Memory** shows the notes GOAT Bot keeps; **Ask to change** or **Ask to forget** puts a
+request quoting the note in the message box for you to send.
 
 The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
 sent something since you last opened it; the number badge counts tasks awaiting your

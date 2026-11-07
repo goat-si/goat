@@ -1,6 +1,25 @@
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt } from "./baseSchemas.ts";
+import { IsoDateTime, NonNegativeInt } from "./baseSchemas.ts";
+import { BotId } from "./botProfile.ts";
+import { ChannelKind } from "./channelCommon.ts";
+
+/**
+ * Where a note was asked for. Details only for the person who asked or a caller who may read every
+ * GOAT Bot conversation; otherwise "elsewhere", which also covers a source GOAT no longer has.
+ */
+export const ChannelBotNoteSource = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("shown"),
+    inputId: Schema.String,
+    channel: ChannelKind,
+    botId: BotId,
+    from: Schema.String,
+    at: IsoDateTime,
+  }),
+  Schema.Struct({ kind: Schema.Literal("elsewhere") }),
+]);
+export type ChannelBotNoteSource = typeof ChannelBotNoteSource.Type;
 
 /** One line of GOAT Bot's notes file. `date` is null for a line a person or worker wrote by hand. */
 export const ChannelBotNote = Schema.Struct({
@@ -9,6 +28,12 @@ export const ChannelBotNote = Schema.Struct({
   /** `YYYY-MM-DD`. */
   date: Schema.NullOr(Schema.String),
   text: Schema.String,
+  /** The text of the earlier note this line replaced. */
+  replaces: Schema.optionalKey(Schema.String),
+  /** `index` of the later line that replaced this note; such a note no longer applies. */
+  replacedBy: Schema.optionalKey(NonNegativeInt),
+  /** Absent for a line written by hand. */
+  source: Schema.optionalKey(ChannelBotNoteSource),
 });
 export type ChannelBotNote = typeof ChannelBotNote.Type;
 

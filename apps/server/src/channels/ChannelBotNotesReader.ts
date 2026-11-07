@@ -20,37 +20,32 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
-import { channelBotFilesFor, NOTES_HEADER } from "./channelBotNotes.ts";
+import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
+import { parseChannelBotNoteLines, type ChannelBotNoteLine } from "./channelBotNoteLines.ts";
+import { channelBotNoteSources } from "./channelBotNoteSources.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 
 const TAIL_BYTES = 64 * 1024;
 const READ_ATTEMPTS = 3;
 const NEWLINE = 0x0a;
-// The writer removes only whitespace from the input id, so the id runs to the closing parenthesis
-// at the end of the line.
-const DATED_LINE = /^- (\d{4}-\d{2}-\d{2}): (.+?)(?: \(asked in \S+\))?$/u;
 
-/** The lines of a notes file, oldest first, without the header, blank lines or headings. */
-const parseChannelBotNotes = (text: string): ReadonlyArray<ChannelBotNote> => {
-  const normal = text.replaceAll("\r\n", "\n");
-  const body = normal.startsWith(NOTES_HEADER) ? normal.slice(NOTES_HEADER.length) : normal;
-  const notes: Array<ChannelBotNote> = [];
-  for (const raw of body.split("\n")) {
-    const line = raw.trim();
-    if (line === "" || line.startsWith("#")) continue;
-    const dated = DATED_LINE.exec(line);
-    const date = dated?.[1];
-    const noteText = dated?.[2];
-    notes.push(
-      date !== undefined && noteText !== undefined
-        ? { index: notes.length, date, text: noteText }
-        : { index: notes.length, date: null, text: line.replace(/^[-*]\s+/u, "") },
-    );
-  }
-  return notes;
-};
+/** Every line read, replaced ones included and marked, so a client can show or hide them. */
+const toNotes = (
+  lines: ReadonlyArray<ChannelBotNoteLine>,
+  sourceOf: (inputId: string) => NonNullable<ChannelBotNote["source"]>,
+): ReadonlyArray<ChannelBotNote> =>
+  lines.map(({ index, date, text, replaces, replacedBy, sourceInputId }) => ({
+    index,
+    date,
+    text,
+    ...(replaces === undefined ? {} : { replaces }),
+    ...(replacedBy === undefined ? {} : { replacedBy }),
+    ...(sourceInputId === undefined ? {} : { source: sourceOf(sourceInputId) }),
+  }));
 
 /**
  * Bytes from the start of the first whole line. `withLead` means the read began one byte before
@@ -81,7 +76,11 @@ const sameBytes = (left: Uint8Array, right: Uint8Array) =>
 
 export class ChannelBotNotesReader extends Context.Service<
   ChannelBotNotesReader,
-  { readonly list: Effect.Effect<ChannelListBotNotesResult, ChannelGatewayError> }
+  {
+    readonly list: (
+      viewer: ChannelConnectionOwner,
+    ) => Effect.Effect<ChannelListBotNotesResult, ChannelGatewayError>;
+  }
 >()("goat/channels/ChannelBotNotesReader") {}
 
 export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
@@ -89,6 +88,7 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
 ) {
   const path = yield* Path.Path;
   const home = yield* ChannelBotHome.ChannelBotHome;
+  const sql = yield* SqlClient.SqlClient;
   const files = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
   const afterStat = options.afterStat ?? Effect.void;
   const afterRead = options.afterRead ?? Effect.void;
@@ -141,7 +141,7 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
     return yield* failed();
   });
 
-  const list = Effect.fn("ChannelBotNotesReader.list")(function* () {
+  const list = Effect.fn("ChannelBotNotesReader.list")(function* (viewer: ChannelConnectionOwner) {
     yield* home.requireHome;
     const read = yield* Effect.scoped(
       Effect.acquireRelease(
@@ -168,7 +168,12 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
       ),
     );
     if (read === null) return { revision: null, notes: [], truncated: false };
-    const notes = parseChannelBotNotes(new TextDecoder().decode(read.bytes));
+    const lines = parseChannelBotNoteLines(new TextDecoder().decode(read.bytes));
+    const sourceOf = yield* channelBotNoteSources(
+      viewer,
+      lines.flatMap((line) => (line.sourceInputId === undefined ? [] : [line.sourceInputId])),
+    ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+    const notes = toNotes(lines, sourceOf);
     return {
       revision: NodeCrypto.createHash("sha256").update(read.bytes).digest("hex"),
       notes: notes.toReversed(),
@@ -176,11 +181,14 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
     };
   });
 
-  return ChannelBotNotesReader.of({ list: list() });
+  return ChannelBotNotesReader.of({ list });
 });
 
 export const layer = Layer.effect(ChannelBotNotesReader, make());
 
-export const rpcHandlers = (service: ChannelBotNotesReader["Service"]) => ({
-  [CHANNEL_GATEWAY_WS_METHODS.listBotNotes]: () => service.list,
+export const rpcHandlers = (
+  service: ChannelBotNotesReader["Service"],
+  viewer: ChannelConnectionOwner,
+) => ({
+  [CHANNEL_GATEWAY_WS_METHODS.listBotNotes]: () => service.list(viewer),
 });

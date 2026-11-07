@@ -432,7 +432,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     text: "#262626",
     placeholder: "#8e8e93"
   )
-  private var fontFamily = "DMSans-Regular"
+  private var fontFamily = "System"
   private var fontSize: CGFloat = 14
   private var lineHeight: CGFloat = 20
   private var contentInsetVertical: CGFloat = 0
@@ -973,8 +973,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   private func makeAttachmentString(_ token: ComposerTokenPayload) -> NSAttributedString {
     let color = token.accent.flatMap { UIColor(composerHex: $0) }
       ?? UIColor(composerHex: theme.text) ?? .label
-    let chipFont = UIFont(name: "DMSans-Medium", size: fontSize)
-      ?? UIFont.systemFont(ofSize: fontSize, weight: .medium)
+    let chipFont = UIFont.systemFont(ofSize: fontSize, weight: .medium)
     let icon = token.iconUri.flatMap(iconImage(for:)).map {
       token.tintsIcon == true ? Self.tinted($0, color: color) : $0
     }

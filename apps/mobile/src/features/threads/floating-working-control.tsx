@@ -33,7 +33,7 @@ import type { FloatingWorkingStatus } from "./floating-working-status";
 import { ShimmeringWorkContent } from "./thread-work-log";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
 
-const CONTROL_HEIGHT = 38.5;
+const CONTROL_HEIGHT = 44;
 const CONTROL_GAP = 8;
 const COMPOSER_CAPSULE_INSET = 6;
 const GLASS_MERGE_SPACING = 12;
@@ -169,12 +169,12 @@ export function FloatingWorkingControl(props: {
     props.status !== null ? (
       <View
         pointerEvents={statusInteractive ? "box-none" : "none"}
-        className="h-11 items-center justify-center"
+        className="h-[44px] items-center justify-center"
       >
-        <Animated.View className="h-11" style={capsuleSizerStyle} />
+        <Animated.View className="h-[44px]" style={capsuleSizerStyle} />
         <View
           pointerEvents={statusInteractive ? "box-none" : "none"}
-          className="absolute h-11 items-center justify-center"
+          className="absolute h-[44px] items-center justify-center"
           style={{ width: labelWidth }}
         >
           <FloatingStatusLabel
@@ -196,7 +196,7 @@ export function FloatingWorkingControl(props: {
       {action !== null ? (
         <View
           onLayout={(event) => setActionWidth(settleWidth(event.nativeEvent.layout.width))}
-          className="h-11 flex-row items-center"
+          className="h-[44px] flex-row items-center"
         >
           <View className="h-4 w-px bg-border" />
           <Pressable
@@ -205,7 +205,7 @@ export function FloatingWorkingControl(props: {
             accessibilityState={{ disabled: action.disabled }}
             disabled={action.disabled}
             onPress={action.onPress}
-            className={`h-11 items-center justify-center px-3 active:opacity-70 ${action.disabled ? "opacity-50" : ""}`}
+            className={`h-[44px] items-center justify-center px-3 active:opacity-70 ${action.disabled ? "opacity-50" : ""}`}
           >
             <Text className="font-goat-medium text-xs text-foreground" numberOfLines={1}>
               {action.label}
@@ -215,7 +215,7 @@ export function FloatingWorkingControl(props: {
       ) : null}
       {hasPreview ? (
         <View
-          className="h-11 flex-row items-center"
+          className="h-[44px] flex-row items-center"
           onLayout={(event) => setPreviewWidth(settleWidth(event.nativeEvent.layout.width))}
         >
           {hasStatus ? <View className="h-4 w-px bg-border" /> : null}
@@ -234,7 +234,7 @@ export function FloatingWorkingControl(props: {
           accessibilityHint="Opens this turn's subagents"
           onPress={props.onOpenAgents}
           onLayout={(event) => setAgentsWidth(settleWidth(event.nativeEvent.layout.width))}
-          className="h-11 flex-row items-center gap-1.5 px-3 active:opacity-70"
+          className="h-[44px] flex-row items-center gap-1.5 px-3 active:opacity-70"
         >
           {hasStatus || hasPreview ? <View className="absolute left-0 h-4 w-px bg-border" /> : null}
           <SymbolView name="person.2" size={13} tintColorClassName="accent-foreground-muted" />
@@ -251,7 +251,7 @@ export function FloatingWorkingControl(props: {
           onPress={props.onOpenQueue}
           onLayout={(event) => setQueueWidth(settleWidth(event.nativeEvent.layout.width))}
           style={{ maxWidth: Math.min(overlayWidth, windowWidth) * 0.45 }}
-          className="h-11 flex-row items-center gap-2 px-3 active:opacity-70"
+          className="h-[44px] flex-row items-center gap-2 px-3 active:opacity-70"
         >
           {hasStatus || hasPreview || hasAgents ? (
             <View className="absolute left-0 h-4 w-px bg-border" />
@@ -285,7 +285,7 @@ export function FloatingWorkingControl(props: {
             glassEffectStyle="regular"
             isInteractive={capsuleInteractive}
             pointerEvents={capsuleInteractive ? "box-none" : "none"}
-            className="h-11 items-center justify-center overflow-hidden rounded-full"
+            className="h-[44px] items-center justify-center overflow-hidden rounded-full"
             style={capsuleStyle}
           >
             {capsuleContent}
@@ -298,7 +298,7 @@ export function FloatingWorkingControl(props: {
             pointerEvents={props.showScrollToEnd ? "auto" : "none"}
             accessibilityElementsHidden={!props.showScrollToEnd}
             importantForAccessibility={props.showScrollToEnd ? "auto" : "no-hide-descendants"}
-            className="h-11 w-11 items-center justify-center overflow-hidden rounded-full"
+            className="h-[44px] w-[44px] items-center justify-center overflow-hidden rounded-full"
             style={arrowTransformStyle}
           >
             <Animated.View style={arrowContentStyle}>
@@ -310,7 +310,7 @@ export function FloatingWorkingControl(props: {
         <View pointerEvents="box-none" className="flex-row items-center gap-4">
           <Animated.View
             pointerEvents={capsuleInteractive ? "box-none" : "none"}
-            className="h-11 items-center justify-center overflow-hidden rounded-full border border-border bg-glass-fallback shadow-md shadow-black/10"
+            className="h-[44px] items-center justify-center overflow-hidden rounded-full border border-border bg-glass-fallback shadow-md shadow-black/10"
             style={capsuleStyle}
           >
             {capsuleContent}
@@ -325,7 +325,7 @@ export function FloatingWorkingControl(props: {
             <ControlPill
               accessibilityLabel="Scroll to end"
               activateOnPressIn
-              className="h-11 w-11 border border-border bg-glass-fallback shadow-md shadow-black/10"
+              className="h-[44px] w-[44px] border border-border bg-glass-fallback shadow-md shadow-black/10"
               disabled={!props.showScrollToEnd}
               icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
               onPress={props.onScrollToEnd}
@@ -337,7 +337,7 @@ export function FloatingWorkingControl(props: {
           colorScheme={props.colorScheme}
           glassEffectStyle="regular"
           isInteractive
-          className="h-11 w-11 items-center justify-center overflow-hidden rounded-full"
+          className="h-[44px] w-[44px] items-center justify-center overflow-hidden rounded-full"
         >
           <ScrollToEndButton onPress={props.onScrollToEnd} />
         </UniwindGlassView>
@@ -345,7 +345,7 @@ export function FloatingWorkingControl(props: {
         <ControlPill
           accessibilityLabel="Scroll to end"
           activateOnPressIn
-          className="h-11 w-11 border border-border bg-glass-fallback shadow-md shadow-black/10"
+          className="h-[44px] w-[44px] border border-border bg-glass-fallback shadow-md shadow-black/10"
           icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
           onPress={props.onScrollToEnd}
         />
@@ -552,7 +552,7 @@ function StatusLabelRow(props: {
   readonly onPress?: () => void;
 }) {
   const reducedMotion = useReducedMotion();
-  const rowClassName = `h-11 flex-row items-center px-4 ${props.className ?? ""}`;
+  const rowClassName = `h-[44px] flex-row items-center px-4 ${props.className ?? ""}`;
   return (
     <Animated.View
       className="absolute max-w-full"
@@ -626,7 +626,7 @@ function ScrollToEndButton(props: { readonly disabled?: boolean; readonly onPres
     <ControlPill
       accessibilityLabel="Scroll to end"
       activateOnPressIn
-      className="h-11 w-11 bg-transparent"
+      className="h-[44px] w-[44px] bg-transparent"
       disabled={props.disabled}
       icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
       onPress={props.onPress}
