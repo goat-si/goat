@@ -173,6 +173,7 @@ export function makeReplayServerConfig(
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
       stateDir,
+      globalSkillsDir: path.join(baseDir, "skills"),
       dbPath: path.join(stateDir, "state.sqlite"),
       keybindingsConfigPath: path.join(stateDir, "keybindings.json"),
       settingsPath: path.join(stateDir, "settings.json"),

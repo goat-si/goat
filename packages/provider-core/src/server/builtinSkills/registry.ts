@@ -74,15 +74,22 @@ const NAMED_SKILLS = new Set(
  * count: references (labels included) are dropped first, and a message in the legacy serialized
  * form names nothing, because its attachment text cannot be told apart from what was written.
  */
-export function namedBuiltInSkills(text: string): ReadonlyArray<BuiltInSkillName> {
+export function mentionedSkillNames(text: string): ReadonlyArray<string> {
+  if (text.trimStart().startsWith("/")) return [];
   const authored = replaceComposerContextReferences(text, () => " ");
   if (hasLegacyContextMarkers(authored)) return [];
-  const names = new Set<BuiltInSkillName>();
+  const names = new Set<string>();
   for (const match of authored.matchAll(SKILL_MENTION_PATTERN)) {
     const name = match[2];
-    if (isBuiltInSkillName(name) && NAMED_SKILLS.has(name)) names.add(name);
+    if (name !== undefined) names.add(name);
   }
   return [...names];
+}
+
+export function namedBuiltInSkills(text: string): ReadonlyArray<BuiltInSkillName> {
+  return mentionedSkillNames(text).filter(
+    (name): name is BuiltInSkillName => isBuiltInSkillName(name) && NAMED_SKILLS.has(name),
+  );
 }
 
 /**

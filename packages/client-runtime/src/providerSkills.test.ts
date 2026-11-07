@@ -15,6 +15,7 @@ import {
   hasCompleteProviderWorkspaceSnapshot,
   isProviderWorkspaceSnapshotScanning,
   resolveProviderSkillsForCwd,
+  resolveProviderSkillSourceKind,
   resolveProviderSlashCommandsForCwd,
   withBuiltInProviderSkills,
 } from "./providerSkills.ts";
@@ -193,6 +194,41 @@ describe.each(["codex", "fx"])("built-in skills in the skill menu (%s)", (driver
       true,
     );
     expect(withOwnBrowser.find((skill) => skill.name === "browser")?.path).toBe(ownBrowser.path);
+  });
+});
+
+describe("GOAT skills", () => {
+  const goatSkill = {
+    name: "goat:review",
+    path: "/home/me/.goat/skills/review/SKILL.md",
+    scope: "goat",
+    enabled: true,
+  };
+
+  it("shows a GOAT skill as GOAT even when its path looks like a plugin", () => {
+    expect(resolveProviderSkillSourceKind(goatSkill)).toBe("goat");
+    expect(
+      resolveProviderSkillSourceKind({
+        ...goatSkill,
+        path: "/home/me/.goat/.codex/plugins/x/skills/review/SKILL.md",
+      }),
+    ).toBe("goat");
+    expect(resolveProviderSkillSourceKind({ ...goatSkill, scope: "user" })).toBe("personal");
+  });
+
+  it("drops a provider's own skill in the goat: namespace and keeps GOAT's", () => {
+    const pluginNamed = {
+      name: "goat:review",
+      path: "/home/me/.claude/plugins/goat/skills/review/SKILL.md",
+      scope: "user",
+      enabled: true,
+    };
+    const codex = { driver: ProviderDriverKind.make("codex") };
+    const settings = { enableCua: false, disabledBuiltInSkills: [] };
+    expect(withBuiltInProviderSkills([pluginNamed], codex, settings)).not.toContainEqual(
+      pluginNamed,
+    );
+    expect(withBuiltInProviderSkills([pluginNamed, goatSkill], null, null)).toEqual([goatSkill]);
   });
 });
 
