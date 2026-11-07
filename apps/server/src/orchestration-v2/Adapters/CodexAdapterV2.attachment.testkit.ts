@@ -66,16 +66,39 @@ export const unusedRegistry = {
   currentMemoryPolicy: () => Effect.succeed(undefined),
 } satisfies McpSessionRegistry.McpSessionRegistry["Service"];
 
+/** Subagent threads Codex still holds after a restart, by id: their parent and status answers. */
+type Survivors = Readonly<
+  Record<string, { readonly parent: string; readonly statuses: Array<string> }>
+>;
+
+// The next answer of a sequence; the last one repeats.
+const nextOf = (answers: Array<string>) => (answers.length > 1 ? answers.shift() : answers[0]);
+
 /**
  * Opens one replayed Codex session and records the thread requests the adapter sends. With
  * `heldAs`, the session resumes the thread instead of starting it, as a restarted server does, and
  * Codex answers each thread/read with the next of those statuses (`notLoaded` when it holds none).
+ * Codex also lists `survivors` as loaded and answers their reads.
  */
 const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   transcript: CodexReplay.CodexAppServerReplayTranscript,
   heldAs?: ReadonlyArray<string>,
+  survivors: Survivors = {},
 ) {
   const statuses = [...(heldAs ?? [])];
+  const answerHeld = (method: string, params: unknown) => {
+    if (method === "thread/loaded/list")
+      return { data: [transcript.scenario, ...Object.keys(survivors)], nextCursor: null };
+    const threadId = (params as { threadId: string }).threadId;
+    const survivor = survivors[threadId];
+    return {
+      thread: {
+        id: threadId,
+        ...(survivor === undefined ? {} : { parentThreadId: survivor.parent }),
+        status: { type: nextOf(survivor?.statuses ?? statuses) },
+      },
+    };
+  };
   const driver = yield* CodexReplay.makeReplayDriver(transcript);
   const threadConfigs: Array<Record<string, unknown>> = [];
   const requests: Array<string> = [];
@@ -113,15 +136,9 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
                   request: (method, params) =>
                     record(method, params).pipe(
                       Effect.andThen(
-                        heldAs !== undefined && method === "thread/read"
-                          ? Effect.succeed({
-                              thread: {
-                                id: (params as { threadId: string }).threadId,
-                                status: {
-                                  type: statuses.length > 1 ? statuses.shift() : statuses[0],
-                                },
-                              },
-                            })
+                        heldAs !== undefined &&
+                          (method === "thread/read" || method === "thread/loaded/list")
+                          ? Effect.succeed(answerHeld(method, params))
                           : client.raw.request(method, params),
                       ),
                     ),
@@ -552,6 +569,10 @@ export const fixture = (scenario: string) => {
     openReplay(makeCodexReplayTranscript({ scenario, entries }), heldAs).pipe(
       Effect.provideService(McpSessionRegistry.McpSessionRegistry, unusedRegistry),
     );
+  const openSurviving = (survivors: Survivors, ...heldAs: ReadonlyArray<string>) =>
+    openReplay(makeCodexReplayTranscript({ scenario, entries }), heldAs, survivors).pipe(
+      Effect.provideService(McpSessionRegistry.McpSessionRegistry, unusedRegistry),
+    );
   return {
     config,
     nativeThreadId,
@@ -572,6 +593,7 @@ export const fixture = (scenario: string) => {
     open,
     openWith,
     openResumed,
+    openSurviving,
   };
 };
 

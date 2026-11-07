@@ -92,6 +92,37 @@ describe("Codex credential after a server restart", () => {
     ).pipe(Effect.provide(layerAdapterTest)),
   );
 
+  it.effect("a subagent still running from before the restart defers its parent's reload", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = fixture("restart-child");
+        const child = "restart-child-agent";
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.resume(2, {});
+        // The child Codex lists still works, so the first turn starts without a reload.
+        yield* f.turnStart(3, 1, false);
+        f.turnCompleted(1);
+        // Once Codex reports the child idle and no goal is active, the next turn reloads.
+        yield* f.turnStart(
+          f.reload(4, undefined, { threads: [f.nativeThreadId, child] }),
+          2,
+          noted,
+        );
+        f.turnCompleted(2);
+        const replay = yield* f.openSurviving(
+          { [child]: { parent: f.nativeThreadId, statuses: ["active", "idle"] } },
+          "idle",
+        );
+        for (const ordinal of [1, 2]) {
+          yield* replay.startTurn(ordinal);
+          yield* replay.terminal;
+        }
+        assert.deepEqual(goatHeaders(replay.threadConfigs), [f.config.authorizationHeader]);
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("a thread Codex loaded from the resume keeps the credential without a reload", () =>
     Effect.scoped(
       Effect.gen(function* () {
