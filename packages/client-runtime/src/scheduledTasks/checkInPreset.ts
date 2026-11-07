@@ -7,7 +7,7 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 
-export const CHECK_IN_TITLE = "Check in";
+const CHECK_IN_TITLE = "Check in";
 
 export const CHECK_IN_PROMPT =
   "Look over my open work: GOAT Bot tasks, threads waiting on me, failed or stuck work, and anything due today. If something needs me, tell me in one short message with links. If nothing needs me, report no update.";
