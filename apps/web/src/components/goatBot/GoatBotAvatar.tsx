@@ -1,7 +1,10 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   FACE_MOTION_RANK,
+  goatBotAvatarEmoji,
+  goatBotAvatarSignal,
   goatBotFaceLabel,
+  type GoatBotAvatarSignal,
   type GoatBotFaceState,
 } from "@goat/client-runtime/goatBot";
 import type { BotProfile, ScopedThreadRef } from "@goat/contracts";
@@ -20,40 +23,64 @@ import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 const CIRCLE = { sm: "size-5", md: "size-7", lg: "size-12" } as const;
 const MARK = { sm: "size-3.5", md: "size-5", lg: "size-8" } as const;
 const DOT = { sm: "size-1.5", md: "size-2", lg: "size-3" } as const;
+const EMOJI = { sm: "text-[0.6875rem]", md: "text-sm", lg: "text-2xl" } as const;
+const RING: Record<NonNullable<GoatBotAvatarSignal["ring"]>, string> = {
+  active: "border-primary",
+  failed: "border-destructive",
+  finished: "border-success-foreground",
+};
 
-/** GOAT Bot's face on a theme-aware neutral circle; the plain goat mark when no state is given. */
+/**
+ * A bot on a theme-aware neutral circle: its chosen emoji, else its face, else the plain goat mark
+ * when no state is given. The ring and dot carry the state either way.
+ */
 export function GoatBotAvatar({
   size = "md",
   state,
   motion,
+  emoji = null,
   className,
 }: {
   readonly size?: keyof typeof CIRCLE | undefined;
   readonly state?: GoatBotFaceState | undefined;
   /** Where this face sits and when its work started; it may then move while reading or working. */
   readonly motion?: { readonly rank: number; readonly since: number | null } | undefined;
+  /** The bot's profile avatar; an emoji replaces the drawn face. */
+  readonly emoji?: string | null | undefined;
   readonly className?: string;
 }) {
   const label = state === undefined ? null : goatBotFaceLabel(state);
-  const { watch, motion: eyeMotion } = useGoatBotFaceMotion(state, motion);
+  const picture = goatBotAvatarEmoji(emoji);
+  const signal = state === undefined ? null : goatBotAvatarSignal(state, picture !== null);
+  // An emoji has no eyes to move, so it never takes the one moving face.
+  const { watch, motion: eyeMotion } = useGoatBotFaceMotion(
+    picture === null ? state : undefined,
+    picture === null ? motion : undefined,
+  );
   return (
     <span
       ref={watch}
       {...(label === null ? { "aria-hidden": true } : { role: "img", "aria-label": label })}
       className={cn(
         "relative inline-flex shrink-0 items-center justify-center rounded-full border border-goat-avatar-border bg-goat-avatar text-goat-avatar-foreground",
-        state === "working" && "border-primary",
-        state === "failed" && "border-destructive",
+        signal?.ring && RING[signal.ring],
         CIRCLE[size],
         className,
       )}
     >
-      {state === undefined ? (
+      {picture !== null ? (
+        <span
+          aria-hidden
+          className={cn("leading-none select-none", EMOJI[size], signal?.dimmed && "opacity-50")}
+        >
+          {picture}
+        </span>
+      ) : state === undefined ? (
         <GoatWordmark className={MARK[size]} />
       ) : (
         <GoatBotFace state={state} motion={eyeMotion} className={MARK[size]} />
       )}
-      {state === "waiting" ? (
+      {signal?.waitingDot ? (
         <span className={cn("absolute top-0 right-0 rounded-full bg-warning", DOT[size])} />
       ) : null}
     </span>
@@ -68,6 +95,7 @@ export function GoatBotSessionAvatar({
   waitingCount = 0,
   activity = null,
   chatOpen = false,
+  emoji = null,
 }: {
   readonly threadRef: ScopedThreadRef;
   readonly size?: keyof typeof CIRCLE | undefined;
@@ -77,12 +105,15 @@ export function GoatBotSessionAvatar({
   readonly activity?: { readonly state: "reading" | "working" } | null;
   /** The caller is this bot's chat header: its items are already loaded and it moves first. */
   readonly chatOpen?: boolean;
+  /** The bot's profile avatar. */
+  readonly emoji?: string | null | undefined;
 }) {
   const face = useGoatBotSessionFace(threadRef, waitingCount, activity, chatOpen);
   return (
     <GoatBotAvatar
       size={size}
       state={face.state}
+      emoji={emoji}
       motion={{
         rank: chatOpen ? FACE_MOTION_RANK.header : FACE_MOTION_RANK[place],
         since: face.since,
@@ -97,6 +128,7 @@ export function GoatBotMainAvatar({
   activity = null,
   chatOpen = false,
   place = "rail",
+  emoji = null,
 }: {
   readonly size?: keyof typeof CIRCLE;
   readonly activity?: { readonly state: "reading" | "working" } | null;
@@ -104,6 +136,8 @@ export function GoatBotMainAvatar({
   readonly chatOpen?: boolean;
   /** Where the face sits outside the chat header. */
   readonly place?: "list" | "rail";
+  /** The main bot's profile avatar. */
+  readonly emoji?: string | null | undefined;
 }) {
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const waitingCount = useGoatBotWaitingCount() ?? 0;
@@ -117,6 +151,7 @@ export function GoatBotMainAvatar({
     <GoatBotAvatar
       size={size}
       state={face.state}
+      emoji={emoji}
       motion={{
         rank: chatOpen ? FACE_MOTION_RANK.header : FACE_MOTION_RANK[place],
         since: face.since,
@@ -141,6 +176,7 @@ export function GoatBotMemberAvatar({
       size={size}
       place={place}
       waitingCount={waitingCount}
+      emoji={bot.avatar}
       threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
     />
   );

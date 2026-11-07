@@ -89,3 +89,26 @@ it("keeps one running animation, never restarted, while the page re-renders arou
   expect(eyes?.getAnimations()).toEqual([first]);
   expect(first?.playState).toBe("running");
 });
+it("draws an emoji avatar in place of the face, keeps its state, and leaves the motion to a drawn face", async () => {
+  // No routes: the faces read nothing from the router.
+  await using screen = await render(
+    <>
+      <div data-face-place="header">
+        <GoatBotAvatar
+          state="working"
+          emoji="🐙"
+          motion={{ rank: FACE_MOTION_RANK.header, since: null }}
+        />
+      </div>
+      <div data-face-place="list">
+        <GoatBotAvatar state="working" motion={{ rank: FACE_MOTION_RANK.list, since: null }} />
+      </div>
+    </>,
+    { router: false },
+  );
+  const header = screen.container.querySelector("[data-face-place='header'] [role='img']");
+  expect(header?.getAttribute("aria-label")).toBe("Working");
+  expect(header?.textContent).toBe("🐙");
+  expect(header?.querySelector("[data-face]")).toBeNull();
+  await vi.waitFor(() => expect(movingEyes("list")).toBe(1));
+});

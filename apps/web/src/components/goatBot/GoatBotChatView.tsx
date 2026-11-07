@@ -21,7 +21,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "
 import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { GoatBotAvatar, GoatBotMainAvatar, GoatBotSessionAvatar } from "./GoatBotAvatar";
-import { useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
+import { useGoatBotAvatar, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
@@ -108,6 +108,7 @@ export function GoatBotChatView({
   const member = useGoatBotMember();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
+  const avatar = useGoatBotAvatar();
   const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const bot = availability.kind === "ready" ? availability.bot : null;
   const removed = removal !== null;
@@ -160,6 +161,7 @@ export function GoatBotChatView({
               <GoatBotSessionAvatar
                 size="md"
                 chatOpen
+                emoji={avatar}
                 waitingCount={memberWaiting}
                 threadRef={scopeThreadRef(member.environmentId, member.sessionThreadId)}
                 activity={reading ? { state: "reading" } : removed ? null : working}
@@ -168,6 +170,7 @@ export function GoatBotChatView({
               <GoatBotMainAvatar
                 size="md"
                 chatOpen
+                emoji={avatar}
                 activity={reading ? { state: "reading" } : removed ? null : working}
               />
             )}
@@ -351,11 +354,12 @@ function GoatBotRemovedNotice({
   readonly memberName: string | null;
   readonly onCheckAgain: (() => void) | undefined;
 }) {
+  const avatar = useGoatBotAvatar();
   if (memberName !== null) {
     return (
       <Empty className="min-h-0 flex-1">
         <EmptyHeader className="max-w-md">
-          <GoatBotAvatar size="lg" className="mx-auto mb-4" />
+          <GoatBotAvatar size="lg" emoji={avatar} className="mx-auto mb-4" />
           <EmptyTitle>{memberName} was deleted</EmptyTitle>
           <EmptyDescription>
             Its conversation is archived. Restore it to keep chatting here.
@@ -377,7 +381,7 @@ function GoatBotRemovedNotice({
     return (
       <Empty className="min-h-0 flex-1">
         <EmptyHeader className="max-w-md">
-          <GoatBotAvatar size="lg" className="mx-auto mb-4" />
+          <GoatBotAvatar size="lg" emoji={avatar} className="mx-auto mb-4" />
           <EmptyTitle>Couldn't check this chat</EmptyTitle>
           <EmptyDescription>
             It may have been archived or deleted. Check again to find out.
@@ -413,7 +417,7 @@ function GoatBotRemovedNotice({
   return (
     <Empty className="min-h-0 flex-1">
       <EmptyHeader className="max-w-md">
-        <GoatBotAvatar size="lg" className="mx-auto mb-4" />
+        <GoatBotAvatar size="lg" emoji={avatar} className="mx-auto mb-4" />
         <EmptyTitle>
           {removal === "archived" ? "This chat is archived" : "This chat was deleted"}
         </EmptyTitle>
@@ -476,6 +480,7 @@ function GoatBotNotice({
   readonly onSelectExample?: ((text: string) => void) | undefined;
 }) {
   const member = useGoatBotMember();
+  const avatar = useGoatBotAvatar();
   const copy = noticeCopy(availability);
   // A member introduces itself by its own name and purpose.
   const { title, description, retryLabel } =
@@ -533,7 +538,7 @@ function GoatBotNotice({
   return (
     <Empty size="compact" className="min-h-0 flex-1">
       <EmptyHeader className="max-w-md">
-        <GoatBotAvatar size="lg" className="mx-auto mb-4" />
+        <GoatBotAvatar size="lg" emoji={avatar} className="mx-auto mb-4" />
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>

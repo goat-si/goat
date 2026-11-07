@@ -251,7 +251,7 @@ const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
           {...botReadMenu}
           onClick={() => setMode("bot")}
         >
-          <GoatBotMainAvatar size="sm" />
+          <GoatBotMainAvatar size="sm" emoji={roster[0]?.profile?.avatar} />
           <RailCount count={botWaiting} />
         </Link>
       </RailTooltip>
