@@ -116,6 +116,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
     listBotThreads: () => "tasks",

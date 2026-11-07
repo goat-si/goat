@@ -24,6 +24,8 @@ import {
   ChannelListBotThreadsResult,
   ChannelUpdateTaskViewInput,
   ChannelTaskView,
+  ChannelRetryTaskInput,
+  ChannelRetryTaskResult,
   ChannelGatewayError,
   ChannelGetInputInput,
   ChannelGetTaskInput,
@@ -142,6 +144,12 @@ const ChannelUpdateTaskViewRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.updateTaskV
   error: ChannelRpcError,
 });
 
+const ChannelRetryTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.retryTask, {
+  payload: ChannelRetryTaskInput,
+  success: ChannelRetryTaskResult,
+  error: ChannelRpcError,
+});
+
 const ChannelIngestRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ingest, {
   payload: ChannelIngestInput,
   success: ChannelIngestResult,
@@ -221,6 +229,7 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelReadBotArtifactRpc,
   ChannelListChildWorkRpc,
   ChannelUpdateTaskViewRpc,
+  ChannelRetryTaskRpc,
   ChannelIngestRpc,
   ChannelGetTaskRpc,
   ChannelListTasksRpc,

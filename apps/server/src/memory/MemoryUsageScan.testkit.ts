@@ -220,7 +220,7 @@ export const assertUsageCounters = Effect.gen(function* () {
     UNION SELECT space FROM memory_import_receipts
     UNION SELECT space FROM memory_import_noop_results
     UNION SELECT space FROM memory_report_outbox
-    UNION SELECT space FROM memory_quota_counters WHERE space NOT IN ('_usage_environment','_hub_global')`;
+    UNION SELECT space FROM memory_quota_counters WHERE space NOT IN ('_usage_environment','_hub_global') AND space NOT GLOB '_store:*'`;
   for (const { space } of spaces) {
     // Internal unbound storage uses _local:<environment>, alongside UUID spaces.
     const id = space as M.MemorySpaceId;

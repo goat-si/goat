@@ -44,6 +44,10 @@ export interface GoatBotTaskCard {
   readonly sourceLabel: string | null;
   /** The machine whose copied work this task continued from. */
   readonly continuationLabel?: string | null;
+  /** "Attempt 2" after a person retried the task. */
+  readonly attemptLabel?: string | null;
+  /** Failed or stopped work on this machine, which a person may run again. */
+  readonly retryable?: boolean;
   readonly summary: string | null;
   /** Something waiting on a person, such as "2 questions · 1 approval". */
   readonly attentionLabel: string | null;

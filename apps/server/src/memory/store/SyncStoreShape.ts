@@ -418,7 +418,14 @@ export interface SyncStoreShape {
     expectedFloor: number;
     now: number;
     limit: number;
+    /** Over the store target, checkpoint-covered log rows go after one day instead of thirty. */
+    pressure?: boolean;
   }) => InTx<M.MemoryCompactionStatus>;
+  /** Logical bytes pressure compaction could remove now, and when the next covered row ages in. */
+  readonly pressureEligibilityTx: (
+    space: M.MemorySpaceId,
+    now: number,
+  ) => InTx<{ readonly eligibleLogicalBytes: number; readonly nextEligibleAtMs: number | null }>;
   readonly readHubRetentionTx: (space: M.MemorySpaceId) => InTx<HubRetention>;
   readonly readHubUsageTx: (space: M.MemorySpaceId) => InTx<HubUsage>;
   readonly readHubInventoryTx: (space: M.MemorySpaceId) => InTx<{

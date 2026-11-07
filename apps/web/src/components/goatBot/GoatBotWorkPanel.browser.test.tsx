@@ -28,6 +28,7 @@ vi.mock("~/state/server", () => ({
     scheduledTasksLive: () => null,
     upsertScheduledTask: { permissionAtom: () => Atom.make(false), execute: vi.fn() },
     setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
+    runScheduledTaskNow: { permissionAtom: () => Atom.make(true), execute: vi.fn() },
   },
 }));
 vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));

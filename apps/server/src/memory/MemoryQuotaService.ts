@@ -7,6 +7,9 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Store from "./MemoryStore.ts";
 import { memoryOperationDigest } from "./MemoryDecider.ts";
+import { MemoryStoreReclaim, makeStoreReclaim } from "./MemoryStoreReclaim.ts";
+
+export { MemoryStoreReclaim, withStoreReclaim } from "./MemoryStoreReclaim.ts";
 
 export class MemoryQuotaService extends Context.Service<
   MemoryQuotaService,
@@ -201,13 +204,21 @@ const make = Effect.gen(function* () {
           // It reuses the live payload dimension so older clients and hub peers can decode it.
           const storeBytes =
             payloadBytes > oldPayloadBytes
-              ? yield* store.measuredMemoryBytes(input.environmentId)
+              ? (yield* store.storeBudgetBytes(input.environmentId, yield* Clock.currentTimeMillis))
+                  .bytes
               : null;
           if (storeBytes !== null && storeBytes >= M.MEMORY_STORE_BUDGET_BYTES)
             return yield* new Store.MemoryCapacityError({
               dimension: "live_payload_bytes",
               current: storeBytes,
               limit: M.MEMORY_STORE_BUDGET_BYTES,
+              budget: "store",
+              largestTables: ((yield* readStorageGrowth(input.environmentId)).current?.tables ?? [])
+                .flatMap((t) =>
+                  t.allocatedBytes === null ? [] : [{ table: t.table, bytes: t.allocatedBytes }],
+                )
+                .toSorted((a, b) => b.bytes - a.bytes)
+                .slice(0, 3),
             });
         }
         charge("lifetime_ids", usage.lifetimeIds, Number(identityNew), M.MEMORY_MAX_LIFETIME_IDS);
@@ -669,9 +680,9 @@ const make = Effect.gen(function* () {
     sharedMetrics?: { walBytes: number | null },
     alreadyMeasured?: Effect.Success<ReturnType<Store.MemoryStore["Service"]["measureAllocation"]>>,
   ) {
-    const now = yield* Clock.currentTimeMillis;
     const logical = yield* store.logicalBytes;
     const measured = alreadyMeasured ?? (yield* store.measureAllocation());
+    const now = measured.measuredAt;
     const sample = yield* sampleDecode({
       measuredAtUtc: DateTime.formatIso(DateTime.makeUnsafe(now)),
       utcDay: DateTime.formatIsoDateUtc(DateTime.makeUnsafe(now)),
@@ -689,7 +700,10 @@ const make = Effect.gen(function* () {
       freelistBytes: measured.freelistBytes,
       tables: measured.tables,
     }).pipe(Effect.mapError(storageError));
-    const accepted = yield* store.recordSample(environmentId, sample);
+    const accepted = yield* store.recordSample(environmentId, sample, {
+      usedBytes: measured.memoryBytes === null ? null : measured.memoryUsedBytes,
+      historyBytes: measured.memoryHistoryBytes,
+    });
     const previous = yield* readStorageGrowth(environmentId);
     return accepted
       ? previous
@@ -811,6 +825,12 @@ const make = Effect.gen(function* () {
                 ...new Set([
                   ...retention.compaction.blockedReasons,
                   ...(fts.state === "braked" ? ["fts_braked" as const] : []),
+                  ...(((yield* store.storeBudgetBytes(
+                    input.environmentId,
+                    yield* Clock.currentTimeMillis,
+                  )).bytes ?? 0) >= M.MEMORY_STORE_BUDGET_BYTES
+                    ? ["capacity_exceeded" as const]
+                    : []),
                 ]),
               ],
             },
@@ -898,4 +918,14 @@ const make = Effect.gen(function* () {
     recordStorageSample,
   });
 });
-export const layer = Layer.effect(MemoryQuotaService, make);
+const quotaLayer = Layer.effect(MemoryQuotaService, make);
+/** Quota and the store reclaim it triggers travel together, so every write path has both. */
+export const layer = Layer.effect(
+  MemoryStoreReclaim,
+  Effect.gen(function* () {
+    const quota = yield* MemoryQuotaService;
+    return yield* makeStoreReclaim(yield* Store.MemoryStore, (environmentId, measured) =>
+      quota.recordStorageSample(environmentId, undefined, measured),
+    );
+  }),
+).pipe(Layer.provideMerge(quotaLayer));

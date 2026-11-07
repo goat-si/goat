@@ -1,6 +1,7 @@
 import { isWebhookDedupeTemplate } from "@goat/contracts";
 import type {
   ModelSelection,
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ServerConfig,
   ProjectId,
   RuntimeMode,
@@ -284,5 +285,50 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
         ? (task.workspaceStrategy.startFromOrigin ?? false)
         : true,
     runtimeMode: task.runtimeMode,
+  };
+}
+export type ScheduledTaskContextFields =
+  | {
+      readonly kind: "fields";
+      readonly projectId: ProjectId;
+      readonly modelSelection: ModelSelection;
+      readonly workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy;
+    }
+  | { readonly kind: "incomplete" }
+  | { readonly kind: "project_unavailable" };
+
+/**
+ * The project, model and workspace a save sends. GOAT Bot answers its routines with its own model,
+ * so a routine it owns keeps these exactly as stored and the form does not ask for them.
+ */
+export function scheduledTaskContextFields(
+  draft: ScheduledTaskDraft,
+  availableProjectIds: ReadonlyArray<ProjectId>,
+): ScheduledTaskContextFields {
+  if (draft.task?.goatBotRoutine === true) {
+    const { projectId, modelSelection, workspaceStrategy } = draft.task;
+    return { kind: "fields", projectId, modelSelection, workspaceStrategy };
+  }
+  if (
+    !draft.projectId ||
+    !draft.modelSelection ||
+    (draft.workspace === "existing_worktree" && !draft.checkoutPath.trim())
+  )
+    return { kind: "incomplete" };
+  if (!availableProjectIds.includes(draft.projectId)) return { kind: "project_unavailable" };
+  return {
+    kind: "fields",
+    projectId: draft.projectId,
+    modelSelection: draft.modelSelection,
+    workspaceStrategy:
+      draft.workspace === "root"
+        ? { type: "root" }
+        : draft.workspace === "existing_worktree"
+          ? { type: "existing_worktree", worktreePath: draft.checkoutPath.trim() }
+          : {
+              type: "worktree",
+              baseRef: draft.baseRef.trim() || "main",
+              startFromOrigin: draft.startFromOrigin,
+            },
   };
 }

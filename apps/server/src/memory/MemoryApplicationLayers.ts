@@ -225,6 +225,7 @@ export const makeMemoryApplicationLayers = (deps: {
       const configuration = yield* MemoryHub.MemoryHubConfiguration;
       const store = yield* MemoryStore.MemoryStore;
       const compactor = yield* MemoryCompactor.MemoryCompactor;
+      const storeReclaim = yield* MemoryQuota.MemoryStoreReclaim;
       const applicationScope = yield* Scope.Scope;
       // Subscribe before readiness/read to retain a concurrent first enable.
       const changes = yield* settings.subscribeChanges;
@@ -261,6 +262,12 @@ export const makeMemoryApplicationLayers = (deps: {
               Effect.onExit((exit) =>
                 Exit.isFailure(exit) ? Scope.close(startScope, exit) : Effect.void,
               ),
+            );
+            yield* storeReclaim.bindHub(
+              Option.some({
+                memorySpaceId: principal.value.memorySpaceId,
+                reclaim: compactor.reclaim(principal.value),
+              }),
             );
             return true;
           }).pipe(

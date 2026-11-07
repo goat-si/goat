@@ -39,6 +39,10 @@ const encodeOwner = Schema.encodeSync(OwnerJson);
 export const decodeRoutinePayload = Schema.decodeUnknownEffect(PayloadJson);
 const encodePayload = Schema.encodeSync(PayloadJson);
 
+/** The stored owner that binds a routine to GOAT Bot for good; none when absent or unreadable. */
+export const routineOwnerOf = (ownerJson: string | null | undefined) =>
+  Option.flatMap(Option.fromNullishOr(ownerJson), decodeOwner);
+
 export const BOT_ROUTINE_NEEDS_OWNER =
   "Set this routine up again from GOAT Bot or Settings: it has no person to run as.";
 
@@ -114,7 +118,7 @@ export const makeScheduledBotRoutines = Effect.fn("ScheduledBotRoutines.make")(f
       SELECT owner_json FROM scheduled_tasks WHERE task_id = ${task.id}`.pipe(
       Effect.mapError((cause) => taskError("Could not read the routine's owner.", { cause })),
     );
-    const owner = Option.flatMap(Option.fromNullishOr(rows[0]?.owner_json), decodeOwner);
+    const owner = routineOwnerOf(rows[0]?.owner_json);
     if (Option.isSome(owner)) return { type: "linkable", owner: owner.value } as const;
     return (yield* isBotThread(task.threadId))
       ? ({ type: "unowned" } as const)

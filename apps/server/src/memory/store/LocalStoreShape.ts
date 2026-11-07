@@ -353,6 +353,9 @@ export interface LocalStoreShape {
   readonly measureAllocation: () => Effect.Effect<
     {
       readonly memoryBytes: number | null;
+      readonly memoryUsedBytes: number | null;
+      readonly memoryHistoryBytes: number;
+      readonly measuredAt: number;
       readonly ftsBytes: number | null;
       readonly dbFileBytes: number;
       readonly freelistBytes: number;
@@ -360,10 +363,13 @@ export interface LocalStoreShape {
     },
     MemoryStorageError
   >;
-  /** Memory btree bytes from the current storage sample, or null before the first one. */
-  readonly measuredMemoryBytes: (
+  readonly storeBudgetBytes: (
     environment: M.EnvironmentId,
-  ) => Effect.Effect<number | null, MemoryStorageError>;
+    now: number,
+  ) => Effect.Effect<
+    { readonly bytes: number | null; readonly basis: "used" | "allocated" },
+    MemoryStorageError
+  >;
   /**
    * Deletes summary work rows that no scan or summary can read again, among the pageRows
    * outbox rows after afterRowId. nextRowId is null once the page reached the end.
@@ -380,6 +386,7 @@ export interface LocalStoreShape {
   readonly recordSample: (
     environment: M.EnvironmentId,
     sample: M.MemoryStorageSample,
+    budget?: { readonly usedBytes: number | null; readonly historyBytes: number },
   ) => Effect.Effect<boolean, MemoryStorageError>;
   readonly samples: (
     environment: M.EnvironmentId,

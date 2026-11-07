@@ -127,6 +127,7 @@ describe("RPC authorization scopes", () => {
         [CHANNEL_GATEWAY_WS_METHODS.listBotThreads, AuthOrchestrationReadScope],
         [CHANNEL_GATEWAY_WS_METHODS.listChildWork, AuthOrchestrationReadScope],
         [CHANNEL_GATEWAY_WS_METHODS.updateTaskView, AuthOrchestrationOperateScope],
+        [CHANNEL_GATEWAY_WS_METHODS.retryTask, AuthOrchestrationOperateScope],
       ] as const) {
         const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall([], method, {}));
         expect(denied.requiredPermission).toBe(scope);
