@@ -8,6 +8,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import type {
   BotId,
+  BotProfile,
   ChannelTaskId,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
@@ -23,6 +24,7 @@ import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
 const tabs = ["Tasks", "Routines", "Library", "Computer"] as const;
@@ -33,7 +35,11 @@ export function MobileBotWork(props: {
   readonly visible: boolean;
   readonly onOpenTask: (id: ChannelTaskId) => void;
   /** A member bot's work; the main bot's when absent. */
-  readonly member?: { readonly botId: BotId; readonly threadId: ThreadId } | null;
+  readonly member?: {
+    readonly botId: BotId;
+    readonly threadId: ThreadId;
+    readonly defaultModelSelection: BotProfile["defaultModelSelection"];
+  } | null;
 }) {
   const home = useMobileGoatBotHomeMode();
   const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
@@ -192,6 +198,15 @@ export function MobileBotWork(props: {
           >
             <Text className="text-foreground">Close</Text>
           </Pressable>
+          <MobileBotStatusCard
+            environmentId={environmentId}
+            member={member}
+            rows={!enabled ? "unavailable" : threads.isSuccess ? rows : null}
+            onOpenTask={(id) => {
+              setOpen(false);
+              props.onOpenTask(id);
+            }}
+          />
           <View className="flex-row flex-wrap gap-4 py-4">
             {tabs.map((name) => (
               <Pressable

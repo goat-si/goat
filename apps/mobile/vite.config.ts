@@ -45,6 +45,7 @@ const reactTests = [
   "src/features/goat-bot/GoatBotFace.motion.test.tsx",
   "src/features/goat-bot/useMobileGoatBotFace.motion.test.tsx",
   "src/features/goat-bot/MobileBotWork.test.tsx",
+  "src/features/goat-bot/MobileBotStatusCard.test.tsx",
   "src/features/goat-bot/MobileBotRoster.test.tsx",
   "src/features/goat-bot/MobileBotList.test.tsx",
   "src/features/goat-bot/useMobileBotRoster.test.tsx",

@@ -109,6 +109,7 @@ vi.mock("../../state/environments", () => ({
     ]),
   }),
 }));
+vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
 vi.mock("./goatBotHomeMode", () => ({
   pickMobileGoatBotEnvironment: () => ({ environmentId: "env", connected: state.connected }),
 }));
