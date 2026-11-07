@@ -28,3 +28,32 @@ export const computerUseStopEffect = (command: {
   threadId: command.threadId,
   request: { type: "computer-use.stop" },
 });
+
+export const deviceReleaseEffect = (command: {
+  readonly commandId: CommandId;
+  readonly threadId: ThreadId;
+}): PendingOrchestrationEffectV2 => ({
+  id: `effect:${command.commandId}:device.release`,
+  commandId: command.commandId,
+  threadId: command.threadId,
+  request: { type: "device.release" },
+});
+
+/** Archiving closes the thread's terminals; archiving and settling end its device sessions. */
+export const threadCloseEffects = (command: {
+  readonly type: "thread.archive" | "thread.settle";
+  readonly commandId: CommandId;
+  readonly threadId: ThreadId;
+}): ReadonlyArray<PendingOrchestrationEffectV2> => [
+  ...(command.type === "thread.archive"
+    ? [
+        {
+          id: `effect:${command.commandId}:terminal.cleanup`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: { type: "terminal.cleanup" },
+        } satisfies PendingOrchestrationEffectV2,
+      ]
+    : []),
+  deviceReleaseEffect(command),
+];

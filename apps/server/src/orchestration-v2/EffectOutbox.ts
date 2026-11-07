@@ -127,9 +127,8 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("terminal.cleanup"),
   }),
-  Schema.Struct({
-    type: Schema.Literal("preview.cleanup"),
-  }),
+  Schema.Struct({ type: Schema.Literal("preview.cleanup") }),
+  Schema.Struct({ type: Schema.Literal("device.release") }),
   Schema.Struct({
     type: Schema.Literal("attachment.cleanup"),
     attachmentIds: Schema.Array(Schema.String),

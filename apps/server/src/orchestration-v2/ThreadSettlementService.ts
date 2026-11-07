@@ -39,6 +39,10 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as SettlementAdmission from "./settlementAdmission.ts";
 import { SkipThreadArchiveRestore } from "./ThreadArchiveGate.ts";
+import {
+  isDelegatedLaneCandidate,
+  makeDelegatedLaneSettlement,
+} from "./goat/DelegatedLaneSettlement.ts";
 
 export interface SettlementPullRequest {
   readonly state: "open" | "closed" | "merged";
@@ -314,6 +318,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const shellClosedThreads = new Set<ThreadId>();
+  const delegatedLaneSettledAt = yield* makeDelegatedLaneSettlement;
   const terminals = yield* TerminalManager.TerminalManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   // Repeated thread.settled retains settledAt; run the action only once per settlement.
@@ -375,7 +380,9 @@ export const make = Effect.gen(function* () {
         autoSettleOnMerge: projectSettings.sidebarAutoSettleOnMerge,
         autoSettleKeepPullRequests: projectSettings.sidebarAutoSettleKeepPullRequests,
       });
-      if (due !== null) dueThreads.add(thread.id);
+      // A finished task lane can settle before any date is due; one on a branch waits for its lookup.
+      if (due !== null || (isDelegatedLaneCandidate(thread) && thread.branch === null))
+        dueThreads.add(thread.id);
       const key = JSON.stringify([
         thread,
         projects.get(thread.projectId)?.workspaceRoot,
@@ -412,20 +419,32 @@ export const make = Effect.gen(function* () {
 
     // Untraced: the sweep visits every candidate thread each minute and its span covers them.
     const settleThread = Effect.fnUntraced(
-      function* (thread: (typeof candidates)[number], pullRequest: SettlementPullRequest | null) {
+      function* (
+        thread: (typeof candidates)[number],
+        pullRequest: SettlementPullRequest | null,
+        branchLookedUp = false,
+      ) {
         const currentSettings = resolveProjectSettings(
           yield* settingsService.getSettings,
           thread.projectId,
         ).settings;
         const decisionNow = yield* DateTime.now;
-        const settledAt = resolveAutoSettlementAt({
-          thread,
-          pullRequest,
-          nowMs: DateTime.toEpochMillis(decisionNow),
-          autoSettleAfterDays: currentSettings.sidebarAutoSettleAfterDays,
-          autoSettleOnMerge: currentSettings.sidebarAutoSettleOnMerge,
-          autoSettleKeepPullRequests: currentSettings.sidebarAutoSettleKeepPullRequests,
-        });
+        // A project that turned automatic settlement off keeps its finished lanes too.
+        const lanesSettle =
+          (currentSettings.sidebarAutoSettleOnMerge ||
+            currentSettings.sidebarAutoSettleAfterDays !== null) &&
+          pullRequest === null &&
+          (thread.branch === null || branchLookedUp);
+        const settledAt =
+          (lanesSettle ? yield* delegatedLaneSettledAt(thread) : null) ??
+          resolveAutoSettlementAt({
+            thread,
+            pullRequest,
+            nowMs: DateTime.toEpochMillis(decisionNow),
+            autoSettleAfterDays: currentSettings.sidebarAutoSettleAfterDays,
+            autoSettleOnMerge: currentSettings.sidebarAutoSettleOnMerge,
+            autoSettleKeepPullRequests: currentSettings.sidebarAutoSettleKeepPullRequests,
+          });
         if (settledAt === null) return thread;
         const uuid = yield* crypto.randomUUIDv4();
         yield* orchestrator.dispatch({
@@ -631,7 +650,7 @@ export const make = Effect.gen(function* () {
           yield* Effect.forEach(
             group,
             (thread) =>
-              settleThread(thread, pullRequest).pipe(
+              settleThread(thread, pullRequest, true).pipe(
                 Effect.map((remaining) => {
                   if (remaining !== null)
                     rememberEvaluation(thread, lookupCache.get(key)?.expiresAt);
@@ -715,6 +734,17 @@ export const make = Effect.gen(function* () {
       if (thread.settledOverride !== "settled") return;
       const settledAtMs = toMillis(thread.settledAt);
       if (settledAtMs === null || settleActionRunAt.get(threadId) === settledAtMs) return;
+      // Archived threads count: unarchiving one resumes it in the same checkout.
+      const sharers = (yield* projections.getThreadWorktreePaths({ includeArchived: true })).filter(
+        (entry) => entry.threadId !== threadId && entry.worktreePath === worktreePath,
+      );
+      // A task lane settles on its own while others on its checkout, settled or not, can resume there.
+      if (thread.lineage.relationshipToParent === "subagent" && sharers.length > 0) return;
+      // Another unsettled thread on the checkout may still be working there.
+      for (const sharer of sharers) {
+        const other = yield* readThreadMetadata(sharer.threadId);
+        if (other.archivedAt === null && other.settledOverride !== "settled") return;
+      }
       const run = yield* projectScripts.runForThread({
         threadId,
         projectId: thread.projectId,
@@ -742,6 +772,11 @@ export const make = Effect.gen(function* () {
 
   const processEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
+      // A parent records a lane's result after the lane's own run ended.
+      case "context-transfer.created":
+        return event.payload.type === "subagent_result"
+          ? enqueueThread(event.payload.sourceThreadId)
+          : Effect.void;
       case "thread.deleted":
       case "thread.archived":
         return Effect.sync(() => {
