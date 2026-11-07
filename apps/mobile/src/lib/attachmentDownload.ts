@@ -141,6 +141,8 @@ async function createCachedAttachmentFile(attachment: AttachmentFileMetadata) {
           shared = true;
         } catch (cause) {
           if (!signal.aborted) {
+            if (typeof __DEV__ !== "undefined" && __DEV__)
+              console.warn("[attachment-downloads] share sheet failed", cause);
             throw new Error("Could not open the share sheet. Try again.", { cause });
           }
         } finally {
@@ -278,7 +280,8 @@ export async function writeGeneratedAttachmentFile(input: {
 }): Promise<AttachmentPreviewFile> {
   const cached = await createCachedAttachmentFile(input.attachment);
   try {
-    cached.file.write(input.bytes);
+    // The native write is asynchronous; the preview must not point at a file still being written.
+    await cached.file.write(input.bytes);
     return cached.preview;
   } catch (error) {
     cached.preview.dispose();
@@ -296,7 +299,8 @@ export async function shareGeneratedAttachment(input: {
   const cached = await createCachedAttachmentFile(input.attachment);
   try {
     if (input.signal.aborted) return false;
-    cached.file.write(input.bytes);
+    // Sharing a file still being written fails as "no access to the provided file".
+    await cached.file.write(input.bytes);
     await cached.preview.share(input.signal);
     return true;
   } finally {
