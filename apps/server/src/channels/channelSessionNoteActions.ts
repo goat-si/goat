@@ -252,7 +252,30 @@ const make = Effect.gen(function* () {
         if (request.kind === "remember") {
           const note = request.note?.trim() ?? "";
           if (note === "") return yield* fail("invalid_input");
-          const notice = yield* writer.save(note, now, request.inputId, request.replaces);
+          // Checked again under the writer's lock: the task may have moved on while it waited.
+          const written = yield* writer.saveIf(
+            Effect.gen(function* () {
+              const current = (yield* ledger.getTask(request.taskId)) ?? latest;
+              if (
+                current.task.generation !== stored.task.generation ||
+                !OPEN.includes(current.task.status)
+              )
+                return "task_finished" as const;
+              const held = (yield* ledger.listTasksByStatus(OPEN)).some(
+                (open) => holdsFor(open.task) !== undefined,
+              );
+              return held ? ("busy" as const) : undefined;
+            }),
+            note,
+            now,
+            request.inputId,
+            request.replaces,
+          );
+          if ("refused" in written)
+            return written.refused === "busy"
+              ? yield* refuse("busy", CHANNEL_COPY.noteEditBusy)
+              : yield* refuse("task_finished", CHANNEL_COPY.noteEditTaskDone);
+          const notice = written.notice;
           if (notice === CHANNEL_COPY.noteNotSaved)
             return yield* refuse("not_saved", CHANNEL_COPY.noteNotSaved);
           if (notice !== undefined) {

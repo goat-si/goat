@@ -238,3 +238,54 @@ it.effect(
     }).pipe(Effect.provide(harness.layer));
   },
 );
+
+it.effect("a remember waiting for the writer is not saved once its task was retried", () => {
+  const harness = sessionHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const fs = yield* FileSystem.FileSystem;
+    const notes = yield* files;
+    yield* fs.makeDirectory(notes.dir, { recursive: true });
+    yield* fs.writeFileString(notes.notes, NOTES_HEADER);
+    const asked = yield* turn(harness, "remember that staging is staging-02", "remember");
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const owner = (yield* ChannelRuntime.ChannelRuntime).ownerToken;
+    const writer = yield* ChannelBotNoteWriter;
+    // The checks before the writer pass; while the save waits for the lock the task finishes
+    // and is retried as its next generation.
+    const retried = Effect.gen(function* () {
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(asked.task.taskId))!,
+        { type: "task.completed", payload: { generation: asked.task.generation, summary: "Done" } },
+        { owner },
+      );
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(asked.task.taskId))!,
+        { type: "task.retry.requested", payload: { generation: asked.task.generation + 1 } },
+        { owner },
+      );
+    });
+    const actions = yield* actionsWith(
+      Layer.succeed(ChannelBotNoteWriter, {
+        ...writer,
+        saveIf: ((guard, ...rest) =>
+          Effect.andThen(
+            Effect.orDie(retried),
+            writer.saveIf(guard, ...rest),
+          )) as typeof writer.saveIf,
+      }) as never,
+    );
+    const result = yield* actions.change({
+      caller: asked.caller,
+      taskId: asked.task.taskId,
+      inputId: asked.inputId,
+      kind: "remember",
+      note: "Staging is staging-02.",
+      quote: "remember that staging is staging-02",
+    });
+    assert.strictEqual(result.reason, "task_finished");
+    assert.strictEqual(yield* fs.readFileString(notes.notes), NOTES_HEADER);
+  }).pipe(Effect.provide(harness.layer));
+});

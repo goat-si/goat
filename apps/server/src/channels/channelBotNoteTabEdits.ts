@@ -197,6 +197,42 @@ export const makeChannelBotNoteWriter = (
           ),
         );
 
+    /**
+     * A save that holds only if `guard`, checked under the lock right before writing, finds no
+     * reason to refuse; otherwise it answers that reason and writes nothing.
+     */
+    const saveIf = <R extends string, E>(
+      guard: Effect.Effect<R | undefined, E>,
+      note: string,
+      readAt: string,
+      inputId: string,
+      replaces?: string,
+    ) =>
+      gate.withPermits(1)(
+        Effect.gen(function* () {
+          const refused = yield* guard;
+          if (refused !== undefined) return { refused };
+          const notice = yield* appendChannelBotNote(
+            fs,
+            files,
+            note,
+            readAt,
+            inputId,
+            replaces,
+          ).pipe(
+            Effect.map(({ correction }) =>
+              correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
+            ),
+            Effect.catch((cause) =>
+              Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
+                Effect.as(CHANNEL_COPY.noteNotSaved),
+              ),
+            ),
+          );
+          return { notice };
+        }),
+      );
+
     const readNotes = readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES);
 
     const change = Effect.fn("channelBotNoteTabEdits.change")(function* (
@@ -320,7 +356,7 @@ export const makeChannelBotNoteWriter = (
       return answer;
     });
 
-    return { save, tabEdit };
+    return { save, saveIf, tabEdit };
   });
 
 /** The sentence a reply gains when reception dropped a note the model asked to keep. */
