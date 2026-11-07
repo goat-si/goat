@@ -1,3 +1,4 @@
+import { layerLaunchWatches, layerPressureAdmission } from "./fleet/pressure/LaunchWatchLayers.ts";
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 import * as VoiceRoutes from "./speech/layers.ts";
 import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
@@ -31,8 +32,6 @@ import * as HubNodeRepository from "./hubNodes/HubNodeRepository.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
 import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
-import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
-import * as ThreadReplicaService from "./mcp/ThreadReplicaService.ts";
 import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
 import * as ThreadLaunchMcpService from "./mcp/ThreadLaunchMcpService.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
@@ -333,20 +332,10 @@ const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
 // move lock. It gets the power monitor background policy uses, so suspend and resume reach it.
 const layerFleetHealth = FleetHealth.layer.pipe(Layer.provide(layerHostPowerMonitor));
 
-// Notices to orchestrating threads and launch advice; reads the monitor host status exposes.
-const layerPressureAdmission = FleetPressure.layerAdmission.pipe(
-  Layer.provide(HostPressureMonitor.layer),
-);
 const layerFleetPressure = FleetPressure.layer.pipe(
   Layer.provide(layerFleetHealth),
   Layer.provideMerge(layerPressureAdmission),
 );
-const layerThreadReplicas = ThreadReplicaService.layer.pipe(Layer.provide(layerPressureAdmission));
-const layerLaunchWatches = LaunchWatchService.layer.pipe(
-  Layer.provideMerge(layerThreadReplicas),
-  Layer.provide(layerPressureAdmission),
-);
-
 // Reuses DesktopTelemetryReceiverLayerLive: a fresh receiver layer here
 // would open a second reader on the desktop telemetry fd.
 const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
@@ -884,7 +873,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice, SiteNotes.layer)),
   Layer.provideMerge(layerPersistence),
   Layer.provideMerge(Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer)),
-  Layer.provideMerge(Layer.merge(ProviderRegistry.layer, UsageLimitSources.layer)),
+  Layer.provideMerge(
+    Layer.merge(
+      ProviderRegistry.layer.pipe(Layer.provide(layerServerSettings)),
+      UsageLimitSources.layer,
+    ),
+  ),
   (application) =>
     provideMemorySnapshot(
       application,

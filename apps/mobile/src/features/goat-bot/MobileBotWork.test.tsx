@@ -116,6 +116,7 @@ vi.mock("./goatBotHomeMode", () => ({
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
 }));
+vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (key: string | null) =>
     key === "task"

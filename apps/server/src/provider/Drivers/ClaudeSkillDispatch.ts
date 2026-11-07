@@ -1,4 +1,4 @@
-import type { ServerProviderSkill } from "@goat/contracts";
+import { isGoatSkillName, type ServerProviderSkill } from "@goat/contracts";
 
 /**
  * Claude expands one skill per message only when `/name` starts the text block.
@@ -27,7 +27,7 @@ export function planClaudeSkillDispatch(
   const mentions = [...prompt.matchAll(SKILL_MENTION_PATTERN)].flatMap((match) => {
     const name = match[2] ?? "";
     const skill = skills.get(name);
-    if (!skill) return [];
+    if (!skill || isGoatSkillName(name)) return [];
     const start = (match.index ?? 0) + (match[1]?.length ?? 0);
     return [{ name, skill, start, end: (match.index ?? 0) + match[0].length }];
   });

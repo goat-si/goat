@@ -43,6 +43,8 @@ import { hasUnsettledChannelDelivery } from "./channelDeliveryGate.ts";
 import { deliveryIdFor } from "./channelIds.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
+import * as ChannelRoutineIntake from "./ChannelRoutineIntake.ts";
+import { makeRoutineInputs } from "./channelRoutineInputs.ts";
 import * as ChannelSessionFirst from "./ChannelSessionFirst.ts";
 import { isSessionClaim } from "./channelSessionReceipt.ts";
 import { readReceiptSettlement } from "./channelReceiptSettlement.ts";
@@ -97,6 +99,8 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
   const imessage = yield* ImessageChannelRuntime.ImessageChannelRuntime;
+  const routineIntake = yield* ChannelRoutineIntake.ChannelRoutineIntake;
+  const routineInputs = yield* makeRoutineInputs;
   const owner = "channel-owner:" + NodeCrypto.randomUUID();
   const receptionSlots = yield* Semaphore.make(RECEPTION_CONCURRENCY);
   const inFlight = yield* Ref.make(new Map<ChannelInputId, Fiber.Fiber<void, unknown>>());
@@ -257,11 +261,22 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.as(0)),
       ),
     );
+    // A broken routine must not stall the conversations; its link stays pending for the next pass.
+    const routineStep = (step: Effect.Effect<number, ChannelLedger.ChannelLedgerError>) =>
+      step.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("channel routine step failed", { cause }).pipe(Effect.as(0)),
+        ),
+      );
+    started += yield* routineStep(routineIntake.ingestPending);
     // Only each conversation's oldest input is offered, so a conversation is read in order while
-    // others proceed; at most one fiber per conversation waits for a reception slot.
+    // others proceed; at most one fiber per conversation waits for a reception slot. A routine's
+    // check-in is answered by reception alone, never handed to the bot's session.
     for (const inputId of yield* ledger.listReceivableInputs(100)) {
-      if ((yield* sessionFirst.offer(inputId, owner)) || (yield* startReception(inputId)))
-        started += 1;
+      const offered =
+        !(yield* routineInputs.isRoutineInput(inputId)) &&
+        (yield* sessionFirst.offer(inputId, owner));
+      if (offered || (yield* startReception(inputId))) started += 1;
     }
     // Oldest request first, so work held back by the per-person cap starts in arrival order.
     const waiting = (yield* ledger.listTasksByStatus(["received", "dispatching"])).toSorted(
@@ -306,6 +321,7 @@ const make = Effect.gen(function* () {
     started += yield* reports.reconcile(owner);
     // Observers of workers on other machines run on their own fibers; this only starts missing ones.
     started += yield* remoteWorkers.ensure(owner);
+    started += yield* routineStep(routineIntake.settle);
     const delivered = yield* delivery.deliverDue(owner);
     if (delivered > 0) yield* wake.wake;
     return started + delivered;

@@ -106,6 +106,27 @@ export const channelEntries = {
       openWorldHint: false,
     },
   }),
+  "channel.bot_list": entry({
+    resource: "channel",
+    verb: "bot_list",
+    name: "goat_channel_bot_list",
+    toolkit: "channel",
+    summary: "List GOAT bots",
+    description:
+      "List the GOAT bots of this machine's owner: main and member bots with their name, purpose and conversation thread. Deleted bots are left out.",
+    guide:
+      "A hidden bot is only left out of the person's roster; it still answers in its conversation. Agents can read a bot's conversation thread but cannot message, create or change bots; people do that in GOAT Bot.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "List GOAT bots",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
   "channel.bot_home_claim": entry({
     resource: "channel",
     verb: "bot_home_claim",

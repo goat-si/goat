@@ -24,6 +24,7 @@
 - [Guest links](./user/guest-links.md)
 - [GOAT Connect troubleshooting](./user/goat-connect-troubleshooting.md)
 - [Outside agents (MCP)](./user/outside-agents.md)
+- [GOAT MCP servers and skills](./user/global-mcp-and-skills.md)
 - [Fleet goals](./user/fleet-goals.md)
 - [Hub](./user/hub.md)
 - [Slack](./user/slack.md)

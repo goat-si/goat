@@ -673,6 +673,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Move", "Moving", "Moved", "GOAT Bot to this machine"],
     "channel-bot-home-claim",
   ),
+  goat_channel_bot_list: tool(["List", "Listing", "Listed", "GOAT bots"], "channel-bot-list"),
 };
 
 /**

@@ -474,6 +474,7 @@ export function applyServerSettingsPatch(
     backgroundActivity,
     worktreeCleanup: worktreeCleanupPatch,
     // Merged per entry below; its `null` removals must not reach deepMerge.
+    mcpServers: mcpServersPatch,
     usageLimitSources: usageLimitSourcesPatch,
     easDeviceHosts: easDeviceHostsPatch,
     secretProviders: secretProvidersPatch,
@@ -677,6 +678,15 @@ export function applyServerSettingsPatch(
       : {}),
     ...(patch.defaultProjectScripts !== undefined
       ? { defaultProjectScripts: patch.defaultProjectScripts }
+      : {}),
+    ...(mcpServersPatch !== undefined
+      ? {
+          mcpServers: Object.fromEntries(
+            Object.entries({ ...current.mcpServers, ...mcpServersPatch }).flatMap(
+              ([name, server]) => (server === null ? [] : [[name, server] as const]),
+            ),
+          ),
+        }
       : {}),
     ...(usageLimitSourcesPatch !== undefined
       ? {

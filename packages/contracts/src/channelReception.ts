@@ -161,6 +161,8 @@ export const ChannelReceptionInput = Schema.Struct({
   skills: Schema.optional(Schema.Array(ChannelReceptionSkill)),
   /** The name and purpose people gave the bot; absent or the defaults leave the prompt as it was. */
   identity: Schema.optional(Schema.Struct({ name: Schema.String, purpose: Schema.String })),
+  /** A routine the person set up, not a live message: answer only, or no_update when nothing needs them. */
+  routine: Schema.optional(Schema.Boolean),
   requester: ChannelRequester,
 });
 export type ChannelReceptionInput = typeof ChannelReceptionInput.Type;
@@ -266,6 +268,8 @@ export const ChannelReceptionAction = Schema.Union([
     about: Schema.optional(Schema.Literal("project")),
   }),
   Schema.Struct({ type: Schema.Literal("report_only") }),
+  /** A routine found nothing that needs the person: the input settles without a reply. */
+  Schema.Struct({ type: Schema.Literal("no_update") }),
 ]);
 export type ChannelReceptionAction = typeof ChannelReceptionAction.Type;
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
+  GLOBAL_SKILLS_WS_METHODS,
+  WsGlobalSkillsRpcGroup,
   AuthDiagnosticsReadScope,
   AuthEnvironmentMaintainScope,
   AuthFilesystemReadScope,
@@ -920,4 +922,45 @@ it.effect("requires thread read scope for computer use history", () =>
       {},
     );
   }),
+);
+
+it.effect("global skills RPCs execute only with settings write", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let calls = 0;
+      const handlers = WsGlobalSkillsRpcGroup.toLayer({
+        [GLOBAL_SKILLS_WS_METHODS.globalRemove]: () =>
+          Effect.sync(() => {
+            calls++;
+            return { globalSkillsDir: "/fixture/skills", skills: [] };
+          }),
+        [GLOBAL_SKILLS_WS_METHODS.globalRescan]: () =>
+          Effect.sync(() => {
+            calls++;
+            return { globalSkillsDir: "/fixture/skills", skills: [] };
+          }),
+      });
+      const denied = yield* RpcTest.makeClient(WsGlobalSkillsRpcGroup).pipe(
+        Effect.provide(
+          Layer.mergeAll(handlers, RpcAuthorization.layer([AuthOrchestrationReadScope])),
+        ),
+      );
+      for (const request of [
+        denied[GLOBAL_SKILLS_WS_METHODS.globalRemove]({ name: "goat:x" }),
+        denied[GLOBAL_SKILLS_WS_METHODS.globalRescan]({}),
+      ]) {
+        expect(yield* Effect.flip(request)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: AuthSettingsWriteScope,
+        });
+      }
+      expect(calls).toBe(0);
+      const allowed = yield* RpcTest.makeClient(WsGlobalSkillsRpcGroup).pipe(
+        Effect.provide(Layer.mergeAll(handlers, RpcAuthorization.layer([AuthSettingsWriteScope]))),
+      );
+      yield* allowed[GLOBAL_SKILLS_WS_METHODS.globalRemove]({ name: "goat:x" });
+      yield* allowed[GLOBAL_SKILLS_WS_METHODS.globalRescan]({});
+      expect(calls).toBe(2);
+    }),
+  ),
 );

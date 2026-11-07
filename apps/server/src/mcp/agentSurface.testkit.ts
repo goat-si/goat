@@ -40,6 +40,7 @@ import * as ChannelLedger from "../channels/ChannelLedger.ts";
 import * as ChannelSessionTaskActions from "../channels/channelSessionTaskActions.ts";
 import * as ChannelTaskExport from "../channels/ChannelTaskExport.ts";
 import * as ChannelBotHome from "../channels/ChannelBotHome.ts";
+import * as ChannelBotProfiles from "../channels/ChannelBotProfiles.ts";
 import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
 import * as ChannelRuntime from "../channels/ChannelRuntime.ts";
 import * as ChannelWorkerReports from "../channels/ChannelWorkerReports.ts";
@@ -229,6 +230,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(ChannelWorkerReports.ChannelWorkerReports)({}),
   Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
   Layer.mock(ChannelBotHome.ChannelBotHome)({}),
+  Layer.mock(ChannelBotProfiles.ChannelBotProfiles)({}),
   Layer.mock(ChannelRuntime.ChannelRuntime)({ ownerToken: "test-owner" }),
   Layer.mock(ConnectionCatalogBroker.ConnectionCatalogBroker)({}),
   Layer.mock(HubNodes.HubNodes)({}),

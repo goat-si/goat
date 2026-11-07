@@ -1,13 +1,14 @@
 import { WS_METHODS, WsNotesRpcGroup } from "@goat/contracts";
 
 import { RpcInstrumentation } from "../observability/RpcInstrumentation.ts";
-import type { NoteWorkService } from "./NoteWorkService.ts";
-import type { NotesService } from "./NotesService.ts";
+import * as Effect from "effect/Effect";
+import { NoteWorkService } from "./NoteWorkService.ts";
+import { NotesService } from "./NotesService.ts";
 
 export const ServerWsNotesRpcGroup = WsNotesRpcGroup.middleware(RpcInstrumentation);
 
 /** The notes RPC transport: each method calls one service method. */
-export const makeNoteRpcHandlers = (
+const makeNoteRpcHandlers = (
   notes: NotesService["Service"],
   noteWork: NoteWorkService["Service"],
   surface: "mobile" | "web",
@@ -25,3 +26,9 @@ export const makeNoteRpcHandlers = (
     [WS_METHODS.notesWorkTargetProjects]: (input) => noteWork.workTargetProjects(input),
     [WS_METHODS.notesAttach]: (input) => notes.attach(input),
   });
+
+export const makeNoteRpcHandlersForSurface = Effect.fn("Notes.handlers")(function* (
+  surface: "mobile" | "web",
+) {
+  return makeNoteRpcHandlers(yield* NotesService, yield* NoteWorkService, surface);
+});

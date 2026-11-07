@@ -1,5 +1,6 @@
 import {
   CHANNEL_GATEWAY_WS_METHODS,
+  GLOBAL_SKILLS_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   SLACK_CHANNEL_WS_METHODS,
   WS_METHODS,
@@ -19,6 +20,8 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup | typeof WsHubNodesRpcGroup>[
 
 // Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
+  [GLOBAL_SKILLS_WS_METHODS.globalRemove]: "skills",
+  [GLOBAL_SKILLS_WS_METHODS.globalRescan]: "skills",
   [WS_METHODS.browserClaimsWindows]: "browserClaims",
   [WS_METHODS.browserClaimsClaim]: "browserClaims",
   [WS_METHODS.browserClaimsAnswer]: "browserClaims",

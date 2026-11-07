@@ -2,6 +2,20 @@ import type { SettingsSearchItem } from "./settingsSearch";
 
 export const AGENT_SETTINGS_SEARCH_ITEMS = [
   {
+    id: "mcp-servers",
+    title: "MCP servers",
+    to: "/settings/integrations",
+    scope: "environment-defaults",
+    searchTerms: ["global mcp servers tools command stdio http headers environment"],
+  },
+  {
+    id: "goat-skills",
+    title: "GOAT skills",
+    to: "/settings/integrations",
+    scope: "environment-defaults",
+    searchTerms: ["global skills goat skill folder SKILL.md rescan remove disable"],
+  },
+  {
     id: "agent-workspace-access",
     title: "Agent workspace access",
     to: "/settings/integrations",
