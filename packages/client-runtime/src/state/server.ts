@@ -886,7 +886,6 @@ export function createServerEnvironmentAtoms<R, E>(
               fromVersion,
               targetVersion,
             });
-
             const supportsProgress =
               currentConfig?.environment.capabilities.serverSelfUpdateProgress === true;
             const updateResult: ServerSelfUpdateResult = supportsProgress
@@ -1237,7 +1236,6 @@ export function createServerEnvironmentAtoms<R, E>(
       },
       onSuccess: refreshCloudMachines,
     });
-
   return {
     cloudMachines,
     ...createOpenCodexSyncAtoms(runtime),
@@ -1481,6 +1479,8 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:resource-telemetry-history",
       tag: WS_METHODS.serverGetResourceTelemetryHistory,
       staleTimeMs: 5_000,
+      refreshIntervalMs: 5_000,
+      idleTtlMs: 0,
     }),
     searchAcpRegistry: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:acp-registry:search",
