@@ -54,7 +54,7 @@ const make = Effect.gen(function* () {
       botsOnThread(threadId).pipe(
         Effect.flatMap(([row]) =>
           row === undefined
-            ? Effect.succeed(undefined)
+            ? Effect.undefined
             : row.key.startsWith("bot: ")
               ? Effect.try({
                   try: () => decodeMemberOwner(row.value_json),

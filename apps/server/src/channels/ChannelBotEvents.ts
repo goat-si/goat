@@ -3,13 +3,13 @@
  * bounded queue and worker per bot, five tries each; lines queued at shutdown are lost.
  * @module ChannelBotEvents
  */
-import * as NodeCrypto from "node:crypto";
-
 import type { BotId, ChannelGatewayError, ThreadId } from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Random from "effect/Random";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 
@@ -49,7 +49,7 @@ export interface BotEventsDeps {
   readonly threadOf: (
     ownerId: string,
     botId: BotId,
-  ) => Effect.Effect<ThreadId | undefined, unknown>;
+  ) => Effect.Effect<ThreadId | undefined, ChannelLedger.ChannelLedgerError>;
   readonly record: ChannelBotTimeline.ChannelBotTimeline["Service"]["record"];
 }
 
@@ -60,6 +60,7 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
   const scope: Scope.Scope = yield* Effect.scope;
   const queues = new Map<string, Array<QueuedEvent>>();
   let total = 0;
+  let emitted = 0;
   let idle: Array<Deferred.Deferred<void>> = [];
 
   const deliver = Effect.fn("ChannelBotEvents.deliver")(
@@ -117,10 +118,14 @@ export const makeWith = Effect.fn("ChannelBotEvents.make")(function* (deps: BotE
 
   const emit = Effect.fn("ChannelBotEvents.emit")(function* (event: BotEvent) {
     const key = event.ownerId + "\u0000" + event.botId;
+    // Unique per change across restarts (time, then a counter and a random part), stable on retry.
+    const changeId = [yield* Clock.currentTimeMillis, (emitted += 1), yield* Random.nextInt]
+      .map((part) => part.toString(36))
+      .join("-");
     const queued: QueuedEvent = {
       ...event,
       text: event.text.trim().slice(0, MAX_TEXT),
-      changeId: NodeCrypto.randomUUID(),
+      changeId,
     };
     const register = Effect.sync(() => {
       const queue = queues.get(key);

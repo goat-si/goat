@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   BotId,
   ProjectId,
+  ScheduledTaskError,
   ScheduledTaskId,
   ThreadId,
   type ScheduledTask,
@@ -27,6 +28,12 @@ const routine = (id: string, overrides: Partial<ScheduledTask> = {}): ScheduledT
     ...overrides,
   });
 const list = (...tasks: ReadonlyArray<ScheduledTask>): ScheduledTaskListResult => ({ tasks });
+/** An ordinary task on the same thread, without the GOAT Bot routine marker. */
+const plain = (id: string): ScheduledTask =>
+  scheduledTaskFixture(ProjectId.make("project"), {
+    id: ScheduledTaskId.make(id),
+    threadId: botThread,
+  });
 
 /** A watcher over feeds the test pushes snapshots into, one feed per subscription. */
 const start = (options: { readonly failFirst?: boolean } = {}) =>
@@ -40,7 +47,7 @@ const start = (options: { readonly failFirst?: boolean } = {}) =>
           Effect.gen(function* () {
             if (options.failFirst === true && feeds.length === 0) {
               feeds.push(yield* Queue.unbounded<ScheduledTaskListResult>());
-              return Stream.fail("feed down");
+              return Stream.fail(new ScheduledTaskError({ message: "feed down" }));
             }
             const feed = yield* Queue.unbounded<ScheduledTaskListResult>();
             feeds.push(feed);
@@ -64,10 +71,7 @@ describe("ChannelBotRoutineEvents", () => {
       Effect.gen(function* () {
         const { lines, subscriptions } = yield* start();
         const feed = yield* Queue.take(subscriptions);
-        yield* Queue.offer(
-          feed,
-          list(routine("old"), routine("plain", { goatBotRoutine: undefined })),
-        );
+        yield* Queue.offer(feed, list(routine("old"), plain("plain")));
         yield* Queue.offer(feed, list(routine("old"), routine("new", { title: "Standup" })));
         const setUp = yield* Queue.take(lines);
         assert.deepStrictEqual(
@@ -92,10 +96,7 @@ describe("ChannelBotRoutineEvents", () => {
       yield* Queue.offer(feed, list());
       yield* Queue.offer(
         feed,
-        list(
-          routine("plain", { goatBotRoutine: undefined }),
-          routine("replaced", { threadId: ThreadId.make("thread:old-bot") }),
-        ),
+        list(plain("plain"), routine("replaced", { threadId: ThreadId.make("thread:old-bot") })),
       );
       yield* Queue.offer(feed, list(routine("marker")));
       assert.strictEqual((yield* Queue.take(lines)).id, "marker");

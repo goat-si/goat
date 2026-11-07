@@ -3,7 +3,13 @@
  * Each subscription's first snapshot is a silent baseline; the feed keeps only the latest list.
  * @module ChannelBotRoutineEvents
  */
-import type { BotId, ScheduledTask, ScheduledTaskListResult, ThreadId } from "@goat/contracts";
+import type {
+  BotId,
+  ScheduledTask,
+  ScheduledTaskError,
+  ScheduledTaskListResult,
+  ThreadId,
+} from "@goat/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -20,10 +26,13 @@ export const MAX_TRACKED_ROUTINES = 500;
 type RoutineChange = "set up" | "paused" | "resumed";
 
 export interface RoutineWatchDeps {
-  readonly subscribe: () => Stream.Stream<ScheduledTaskListResult, unknown>;
+  readonly subscribe: () => Stream.Stream<ScheduledTaskListResult, ScheduledTaskError>;
   readonly botForThread: (
     threadId: ThreadId,
-  ) => Effect.Effect<{ readonly ownerId: string; readonly botId: BotId } | undefined, unknown>;
+  ) => Effect.Effect<
+    { readonly ownerId: string; readonly botId: BotId } | undefined,
+    ChannelBotDirectory.ChannelBotDirectoryError
+  >;
   readonly emit: ChannelBotEvents.ChannelBotEvents["Service"]["emit"];
 }
 

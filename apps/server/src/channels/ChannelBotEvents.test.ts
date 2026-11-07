@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { BotId, ChannelGatewayError, ThreadId } from "@goat/contracts";
+import { BotId, ChannelGatewayError, type ChannelTimelineRecord, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -27,14 +27,12 @@ const fakeTimeline = (options: {
     deps: {
       threadOf: (_ownerId: string, botId: BotId) =>
         Effect.succeed(ThreadId.make("thread-" + botId)),
-      record: (input: {
-        readonly threadId: ThreadId;
-        readonly record: { readonly recordKey: string; readonly entry: { readonly type: string } };
-      }) =>
+      record: (input: { readonly threadId: ThreadId; readonly record: ChannelTimelineRecord }) =>
         Effect.gen(function* () {
           const botId = input.threadId.slice("thread-".length);
-          const entry = input.record.entry as { readonly text: string };
-          const attempt = { botId, recordKey: input.record.recordKey, text: entry.text };
+          const entry = input.record.entry;
+          const text = entry.type === "event" ? entry.text : "";
+          const attempt = { botId, recordKey: input.record.recordKey, text };
           attempts.push(attempt);
           yield* options.onAttempt?.(attempts) ?? Effect.void;
           if (options.gate !== undefined) yield* Deferred.await(options.gate);
