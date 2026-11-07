@@ -92,6 +92,10 @@ const tabRequest = (text: string): TabRequest | undefined => {
     : undefined;
 };
 
+/** Whether a message is one of the Memory tab's sentences, which reception answers itself. */
+export const isMemoryTabEdit = (message: { readonly intent: string; readonly text?: string }) =>
+  message.intent === "message" && tabRequest(message.text ?? "") !== undefined;
+
 /** What a tab edit answers; shaped like an approval answer so reception completes it the same way. */
 interface TabEditAnswer {
   readonly text: string;
