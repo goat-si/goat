@@ -11,7 +11,7 @@ export function referenceSearchQuery(repository: string, query: string | undefin
 }
 
 /** Quote user text so GitHub cannot interpret it as qualifiers that widen the listing. */
-export function searchPhrase(query: string): string {
+function searchPhrase(query: string): string {
   return `"${query.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 

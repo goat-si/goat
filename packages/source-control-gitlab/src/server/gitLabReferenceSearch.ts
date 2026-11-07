@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 import type { PullRequestReferenceCandidate, PullRequestReferenceSigil } from "@goat/contracts";
 import { searchParams } from "./gitLabQuery.ts";
 
-export const REFERENCE_PAGE_SIZE = 20;
+const REFERENCE_PAGE_SIZE = 20;
 
 /**
  * Recently updated issues and merge requests, by title for text. Issue and MR search cannot match
@@ -46,7 +46,7 @@ export function referenceSearches(
   ];
 }
 
-export function mergeReferencePages(
+function mergeReferencePages(
   pages: ReadonlyArray<{
     readonly items: ReadonlyArray<PullRequestReferenceCandidate>;
     readonly rawCount: number;
