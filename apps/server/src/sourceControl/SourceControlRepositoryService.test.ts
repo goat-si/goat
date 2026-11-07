@@ -1,3 +1,5 @@
+import { publishWithRefresh } from "./publishRefresh.ts";
+import * as Result from "effect/Result";
 import { SourceControlProviderKind } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -781,3 +783,19 @@ it.effect("publish succeeds with status remote_added when the local repo has no 
     ),
   );
 });
+
+it.effect("refreshes repository identity and status when publishing fails", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const failure = new Error("push failed after adding origin");
+    const result = yield* Effect.result(
+      publishWithRefresh(
+        Effect.fail(failure),
+        Effect.sync(() => calls.push("identity")),
+        Effect.sync(() => calls.push("status")),
+      ),
+    );
+    assert.deepStrictEqual(calls, ["identity", "status"]);
+    assert.deepStrictEqual(result, Result.fail(failure));
+  }),
+);
