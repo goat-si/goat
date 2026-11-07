@@ -34,7 +34,14 @@ vi.mock("./GoatBotTimeline", async (original) => ({
 vi.mock("~/hooks/useMediaQuery", () => ({ useMediaQuery: () => state.narrow }));
 vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
 vi.mock("./useBotRoster", () => ({
-  useBotThreads: () => ({ rows: [], loaded: true, refresh: () => {} }),
+  useBotThreads: () => ({
+    rows: [],
+    supported: true,
+    loaded: true,
+    failed: false,
+    turnsWaiting: [],
+    refresh: () => {},
+  }),
 }));
 vi.mock("~/state/server", async (original) => {
   const real = await original<typeof import("~/state/server")>();
