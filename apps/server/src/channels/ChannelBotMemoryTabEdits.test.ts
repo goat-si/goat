@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -433,6 +434,10 @@ describe("Memory tab requests with the default session routing", () => {
           (yield* repliesTo(inputId)).map((message) => message.text),
           ["I'll send that to the task."],
         );
+        const forwarded = yield* (yield* SqlClient.SqlClient)<{
+          readonly count: number;
+        }>`SELECT COUNT(*) AS count FROM channel_task_events WHERE task_id = ${work.task.taskId} AND type = 'task.followup.received'`;
+        assert.strictEqual(forwarded[0]?.count, 1);
         assert.strictEqual(yield* taskCount, tasks);
         assert.lengthOf(harness.world.launches, launches);
       }).pipe(Effect.provide(layer));
