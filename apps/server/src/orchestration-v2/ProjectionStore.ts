@@ -1,3 +1,4 @@
+import { parentClosed } from "./goat/LimitRecoveryParent.ts";
 import {
   pendingRuntimeRequestSummary,
   secretRequestAsPendingInput,
@@ -4490,7 +4491,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       SELECT 1 FROM orchestration_v2_projection_threads parent
                       WHERE json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
                         AND parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
-                        AND json_extract(parent.payload_json, '$.settledOverride') = 'settled'
+                        AND (json_extract(parent.payload_json, '$.settledOverride') = 'settled' OR json_extract(parent.payload_json, '$.archivedAt') IS NOT NULL OR parent.deleted_at IS NOT NULL)
                     )
                   )
                 )
@@ -8078,8 +8079,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 const parentSettled =
                   source?.lineage.relationshipToParent === "subagent" &&
                   source.lineage.parentThreadId !== null &&
-                  state.projections.get(source.lineage.parentThreadId)?.thread.settledOverride ===
-                    "settled";
+                  parentClosed(state.projections.get(source.lineage.parentThreadId)?.thread);
                 if (
                   !Number.isFinite(resetMs) ||
                   resetMs <= DateTime.toEpochMillis(thread.latestRunCompletedAt ?? thread.updatedAt)
