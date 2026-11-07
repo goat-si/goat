@@ -13,6 +13,7 @@ import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -51,6 +52,7 @@ const Started = Schema.Struct({
   daemonPort: Schema.optionalKey(Schema.Int),
   token: Schema.optionalKey(Schema.String),
   entryPath: Schema.optionalKey(Schema.String),
+  cleanupWarning: Schema.optionalKey(Schema.String),
   helpers: Schema.Struct({
     serveSimAxSettings: Schema.NullOr(Schema.String),
     serveSimCli: Schema.NullOr(Schema.String),
@@ -58,6 +60,19 @@ const Started = Schema.Struct({
 });
 const decodeProbe = Schema.decodeUnknownEffect(Schema.fromJsonString(Probe));
 const decodeStarted = Schema.decodeUnknownEffect(Schema.fromJsonString(Started));
+const decodeStopped = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ cleanupWarning: Schema.String })),
+);
+const logCleanupWarning = (hostId: string, cleanupWarning: string | undefined) =>
+  cleanupWarning === undefined
+    ? Effect.void
+    : Effect.logWarning(
+        "agent-device runner cleanup did not finish; its daemon stopped without it",
+        {
+          hostId,
+          cleanupWarning,
+        },
+      );
 const targetFor = (config: SshDeviceHostConfig) => ({
   alias: config.target,
   hostname: config.target,
@@ -86,6 +101,16 @@ const bootstrap = (
   }).pipe(
     Effect.mapError(
       (cause) => new DeviceHost.DeviceHostError({ hostId: config.id, step: mode, cause }),
+    ),
+  );
+
+const stopRemote = (config: SshDeviceHostConfig, owner: string, mode: "stop-agent" | "stop") =>
+  bootstrap(config, owner, mode).pipe(
+    Effect.tap(({ stdout }) =>
+      logCleanupWarning(
+        config.id,
+        Option.getOrUndefined(decodeStopped(stdout.trim()))?.cleanupWarning,
+      ),
     ),
   );
 
@@ -281,6 +306,7 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
           }),
       ),
     );
+    yield* logCleanupWarning(config.id, remote.cleanupWarning);
     summary = {
       ...summary,
       platforms: remote.platforms,
@@ -505,7 +531,7 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
       ready = null;
       if (connectionScope) yield* Scope.close(connectionScope, Exit.void);
       connectionScope = null;
-      if (activated) yield* provide(bootstrap(config, owner, "stop")).pipe(Effect.ignore);
+      if (activated) yield* provide(stopRemote(config, owner, "stop")).pipe(Effect.ignore);
       activated = false;
       wantsAgent = false;
     }),
@@ -520,7 +546,7 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
         const previousScope = connectionScope;
         connectionScope = null;
         if (previousScope) yield* Scope.close(previousScope, Exit.void);
-        if (!enabled) yield* provide(bootstrap(config, owner, "stop-agent"));
+        if (!enabled) yield* provide(stopRemote(config, owner, "stop-agent"));
         return yield* connect().pipe(
           Effect.onError(() =>
             Effect.gen(function* () {
@@ -528,7 +554,7 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
               connectionScope = null;
               if (failedScope) yield* Scope.close(failedScope, Exit.void);
               if (enabled)
-                yield* provide(bootstrap(config, owner, "stop-agent")).pipe(Effect.ignore);
+                yield* provide(stopRemote(config, owner, "stop-agent")).pipe(Effect.ignore);
             }),
           ),
         );

@@ -72,14 +72,21 @@ process.exit(process.argv.includes("--clean") ? 1 : 0);
           );
           const child = NodeChildProcess.spawn(process.execPath, ["-"], {
             env: { HOME: home, PATH: process.env.PATH ?? "" },
-            stdio: ["pipe", "ignore", "ignore"],
+            stdio: ["pipe", "pipe", "pipe"],
           });
+          let stdout = "";
+          let stderr = "";
+          child.stdout.on("data", (chunk) => (stdout += chunk));
+          child.stderr.on("data", (chunk) => (stderr += chunk));
           child.stdin.end(remoteDeviceScript("owner-1", "stop-agent"));
-          await new Promise((resolve) => child.once("exit", resolve));
+          const exitCode = await new Promise((resolve) => child.once("close", resolve));
+          expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
           expect((await NodeFSP.readFile(calls, "utf8")).trim().split("\n")).toEqual([
             `daemon stop --clean --state-dir ${state}`,
             `daemon stop --state-dir ${state}`,
           ]);
+          // SshDeviceHost logs this line, since a plain stop cannot finish the runner cleanup.
+          expect(JSON.parse(stdout)).toEqual({ cleanupWarning: "exit 1: " });
         } finally {
           await NodeFSP.rm(home, { recursive: true, force: true });
         }
