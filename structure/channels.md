@@ -117,3 +117,16 @@ always resolve to main. `ChannelBotMembers` (`apps/server/src/channels/ChannelBo
 hides, deletes (archive, refused while work is open) and restores members, and reconciles steps a
 crash left half done. An older build ignores `bot_id` and files new tasks for member input as main;
 the ledger repairs them from the inbox row before any channel work or bot read on upgrade.
+
+### Work panel reads
+
+The Work panel reads the GOAT Bot computer through home-only RPCs that answer `not_home` with the
+home environment elsewhere. `ChannelBotNotesReader` (`apps/server/src/channels/ChannelBotNotesReader.ts`)
+serves `channel.listBotNotes` from the newest 64 KiB of `memory.md`, with each note's source
+(`apps/server/src/channels/channelBotNoteSources.ts`) and the replacements a correction recorded;
+bot turns read notes separately, newest plus older matches (`channelBotNotesRecall.ts`).
+`apps/server/src/channels/ChannelBotArtifacts.ts` lists the bot's `artifacts` folder and serves
+files in versioned 512 KiB chunks up to 20 MiB (`packages/contracts/src/channelBotArtifacts.ts`).
+`channel.retryTask` (`apps/server/src/channels/channelTaskRetry.ts`) starts a failed or stopped
+task's next generation only on the evidence a stop accepts, and never for work that ran on another
+machine.

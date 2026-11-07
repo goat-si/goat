@@ -101,7 +101,9 @@ escaped, so text inside a section cannot pass for the notes. A notes read that f
 session and serves that request without new notes; the next good read decides. Each request is
 still a ledger task, which keeps exactly-once narration,
 restarts that read state, and the requester's ceiling. Its chip carries `kind: "turn"`: clients
-follow it for the activity line but draw no card, since the bot's reply already answers it. Running a provider on the bot
+follow it for the activity line but draw no card, since the bot's reply already answers it. The
+task list leaves turns out, so a turn waiting on a question is counted from these chips: the status
+card and the Work panel's Tasks tab point to the chat for it. Running a provider on the bot
 thread itself would put each new message behind the running turn.
 
 - **Binding.** `channel_bot_sessions` has a row per session generation. The binding key is the
@@ -426,4 +428,4 @@ changed: the worker files `goat_origin_report` there, and
 - **Refused answers.** If the remote refuses an answer because the worker thread now runs above
   the requester's ceiling, the question is asked again with the answer quoted, as on this machine.
 
-Task views are scoped to the owner and kept separately from task lifecycle. `channel.listBotThreads` excludes session turn tasks; tasks stored before kinds existed count as work.
+Task views are scoped to the owner and kept separately from task lifecycle. `channel.listBotThreads` excludes session turn tasks unless the turn still has child work launched, bound or unknown for its current generation; such a turn lists with its coding threads until that work ends, since the person may need to open or answer it. Tasks stored before kinds existed count as work.
