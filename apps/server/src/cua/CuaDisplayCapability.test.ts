@@ -89,7 +89,7 @@ const facts = (overrides: Partial<LinuxDisplayFacts> = {}): LinuxDisplayFacts =>
 });
 
 const HEADLESS_START =
-  'setsid xvfb-run -n 99 -f "$HOME/.goat-display.xauth" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
+  '[ -e /tmp/.X11-unix/X99 ] || setsid xvfb-run -n 99 -f "$HOME/.goat-display.xauth" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
 
 describe("Linux remedies name what to install and run", () => {
   it("reads the package manager from os-release, through ID_LIKE for derivatives", () => {

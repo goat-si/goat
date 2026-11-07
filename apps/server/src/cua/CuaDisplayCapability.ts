@@ -206,10 +206,11 @@ const LINUX_DRIVER_LIBRARIES = [
 /**
  * A virtual display a server started without DISPLAY finds on its own, by socket and the -auth
  * file on Xvfb's command line. A file of its own, so a failed start never drops a cookie from
- * ~/.Xauthority; xcompmgr lets one window be captured.
+ * ~/.Xauthority; it does nothing while :99 runs, since a second xvfb-run would replace and then
+ * remove the running display's cookie. xcompmgr lets one window be captured.
  */
 const LINUX_VIRTUAL_DISPLAY =
-  'setsid xvfb-run -n 99 -f "$HOME/.goat-display.xauth" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
+  '[ -e /tmp/.X11-unix/X99 ] || setsid xvfb-run -n 99 -f "$HOME/.goat-display.xauth" -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
 
 export interface LinuxDisplayFacts {
   readonly user: string;
