@@ -68,18 +68,19 @@ const parseLine = (raw: string, index: number): ChannelBotNoteLine => {
     : { index, date: null, text: raw.replace(/^[-*]\s+/u, ""), raw };
 };
 
+// Earlier notes still in force, by text and newest last, so each correction finds its note in one step.
 const markReplaced = (lines: ReadonlyArray<ChannelBotNoteLine>) => {
   const replacedBy = new Map<number, number>();
+  const inForce = new Map<string, Array<number>>();
   for (const line of lines) {
-    if (line.replaces === undefined) continue;
-    const wanted = collapseNoteText(line.replaces);
-    for (let earlier = line.index - 1; earlier >= 0; earlier--) {
-      const candidate = lines[earlier];
-      if (candidate === undefined || replacedBy.has(earlier)) continue;
-      if (collapseNoteText(candidate.text) !== wanted) continue;
-      replacedBy.set(earlier, line.index);
-      break;
+    if (line.replaces !== undefined) {
+      const earlier = inForce.get(collapseNoteText(line.replaces))?.pop();
+      if (earlier !== undefined) replacedBy.set(earlier, line.index);
     }
+    const text = collapseNoteText(line.text);
+    const same = inForce.get(text);
+    if (same === undefined) inForce.set(text, [line.index]);
+    else same.push(line.index);
   }
   return lines.map((line) => {
     const by = replacedBy.get(line.index);

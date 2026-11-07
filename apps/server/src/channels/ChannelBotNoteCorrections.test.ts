@@ -202,7 +202,7 @@ describe("GOAT Bot note corrections through reception", () => {
       yield* gateway.ingest(slackInput("Actually I deploy on Tuesdays", "slack-fix"), slackContext);
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
       assert.strictEqual(deciding, 2);
-      const current = (yield* readChannelBotNotes(fs, files)).split("\n");
+      const current = (yield* readChannelBotNotes(files, "")).split("\n");
       assert.lengthOf(current, 1);
       assert.match(
         current[0] ?? "",
