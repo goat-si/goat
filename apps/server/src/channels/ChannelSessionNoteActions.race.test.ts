@@ -6,6 +6,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -361,5 +362,87 @@ it.effect("a remember whose check passed is saved when the turn finishes before 
       yield* fs.readFileString(notes.notes),
       "Staging is staging-02. (asked in " + asked.inputId + ")",
     );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("two edits for different tasks never both hold a notes grant", () => {
+  const harness = sessionHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const tidy = yield* turn(harness, "tidy my notes", "tidy");
+    const forget = yield* turn(harness, "forget the deploy note", "forget");
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const writer = yield* ChannelBotNoteWriter;
+    // Completed once the second edit has made its own check, or is waiting to make it.
+    const checked = yield* Deferred.make<void>();
+    const second = yield* actionsWith(
+      Layer.mergeAll(
+        Layer.succeed(ChannelLedger.ChannelLedger, {
+          ...ledger,
+          listTasksByStatus: (statuses) =>
+            Effect.tap(ledger.listTasksByStatus(statuses), () =>
+              Deferred.succeed(checked, undefined),
+            ),
+        }),
+        Layer.succeed(ChannelBotNoteWriter, {
+          ...writer,
+          exclusive: ((effect) =>
+            Effect.andThen(
+              Deferred.succeed(checked, undefined),
+              writer.exclusive(effect),
+            )) as typeof writer.exclusive,
+        }),
+      ) as never,
+    );
+    let other:
+      | Fiber.Fiber<
+          ChannelSessionNoteActions.NotesChangeResult,
+          ChannelGatewayError | ChannelLedger.ChannelLedgerError
+        >
+      | undefined;
+    const first = yield* actionsWith(
+      Layer.succeed(ChannelLedger.ChannelLedger, {
+        ...ledger,
+        // While the first grant is being recorded, its run ends, the second turn's run starts and
+        // the second edit runs; the first task stays open.
+        applyTaskEvent: (input) =>
+          Effect.gen(function* () {
+            if (other === undefined) {
+              harness.world.setStatus(tidy.caller.threadId, 1, "completed");
+              other = yield* Effect.forkDetach(
+                second.change({
+                  caller: forget.caller,
+                  taskId: forget.task.taskId,
+                  inputId: forget.inputId,
+                  kind: "edit",
+                  quote: "forget the deploy note",
+                }),
+              );
+              yield* Effect.race(Deferred.await(checked), Effect.asVoid(Fiber.await(other)));
+            }
+            return yield* ledger.applyTaskEvent(input);
+          }),
+      }) as never,
+    );
+    const granted = yield* first.change({
+      caller: tidy.caller,
+      taskId: tidy.task.taskId,
+      inputId: tidy.inputId,
+      kind: "edit",
+      quote: "tidy my notes",
+    });
+    const refused = yield* Fiber.join(other!);
+    const holders = (yield* ledger.listTasksByStatus([
+      "received",
+      "dispatching",
+      "running",
+      "waiting_input",
+    ])).filter((open) => open.task.notesChangeRequested !== undefined);
+    assert.deepStrictEqual(
+      holders.map((open) => open.task.taskId),
+      [tidy.task.taskId],
+    );
+    assert.strictEqual(granted.outcome, "granted");
+    assert.strictEqual(refused.reason, "busy");
   }).pipe(Effect.provide(harness.layer));
 });
