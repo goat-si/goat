@@ -81,12 +81,7 @@ import { makePullRequestSetup } from "./pullRequestSetup.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import { detachStackFrame } from "./detachStackFrame.ts";
-import {
-  makePrLookupCacheKey,
-  makePrLookupGitState,
-  prLookupLaneKeys,
-} from "./prLookupGitState.ts";
-import { gitWorkLane } from "../vcs/BackgroundGitWork.ts";
+import { makePrLookupGitState } from "./prLookupGitState.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@goat/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -1150,7 +1145,25 @@ export const make = Effect.gen(function* () {
     normalizeCwd: normalizeStatusCacheKey,
     capacity: PR_LOOKUP_CACHE_CAPACITY,
   });
-  const prLookupCacheKey = makePrLookupCacheKey(prLookupEpoch);
+  const prLookupCacheKey = (
+    cwd: string,
+    details: {
+      branch: string;
+      upstreamRef: string | null;
+      defaultBranch: string | null;
+      localBranchExists?: boolean;
+      remoteName?: string | null;
+    },
+  ) =>
+    [
+      cwd,
+      details.branch,
+      details.upstreamRef ?? "",
+      details.defaultBranch ?? "",
+      details.localBranchExists === false ? "0" : "1",
+      details.remoteName ?? "",
+      String(prLookupEpoch(cwd)),
+    ].join("\u0000");
   const prLookupFailureStreakByKey = new Map<string, number>();
   const nextPrLookupFailureTtl = (key: string) => {
     if (
@@ -1236,20 +1249,7 @@ export const make = Effect.gen(function* () {
       },
     },
   );
-  const invalidatePrLookup = (key: string) =>
-    Effect.forEach(
-      prLookupLaneKeys(key),
-      (candidate) => Cache.invalidate(prLookupCache, candidate),
-      { discard: true },
-    );
-  // The enclosing lookup records the span; cache hits are frequent.
-  const getPrLookup = Effect.fnUntraced(function* (key: string) {
-    for (const candidate of prLookupLaneKeys(key)) {
-      const cached = yield* Cache.getSuccess(prLookupCache, candidate);
-      if (Option.isSome(cached)) return cached.value;
-    }
-    return yield* detachStackFrame(Cache.get(prLookupCache, key));
-  });
+  const getPrLookup = (key: string) => detachStackFrame(Cache.get(prLookupCache, key));
   interface LastKnownPr {
     readonly pr: ReturnType<typeof toStatusPr> | null;
     readonly headSha: string | null;
@@ -1283,13 +1283,13 @@ export const make = Effect.gen(function* () {
   ) {
     // Upstream changes must not orphan the same branch's fallback value.
     const branchKey = `${cwd}\u0000${details.branch}`;
-    const cacheKey = prLookupCacheKey(cwd, details, yield* gitWorkLane());
+    const cacheKey = prLookupCacheKey(cwd, details);
     if (refreshMissingPullRequest) {
       const cached = yield* Cache.getOption(prLookupCache, cacheKey).pipe(
         Effect.orElseSucceed(() => Option.none()),
       );
       if (Option.isSome(cached) && cached.value.latest === null) {
-        yield* invalidatePrLookup(cacheKey);
+        yield* Cache.invalidate(prLookupCache, cacheKey);
       }
     }
     return yield* getPrLookup(cacheKey).pipe(
@@ -2505,18 +2505,19 @@ export const make = Effect.gen(function* () {
       `defaultBranch\u0000${defaultRemoteName}`,
       gitCore.resolveDefaultBranchName(cacheCwd, defaultRemoteName),
     ).pipe(Effect.orElseSucceed(() => null));
-    const cacheKey = prLookupCacheKey(
-      cacheCwd,
-      {
-        branch,
-        upstreamRef,
-        defaultBranch,
-        localBranchExists,
-        ...(localBranchExists ? {} : { remoteName }),
-      },
-      yield* gitWorkLane(),
-    );
-    if (options.refresh) yield* invalidatePrLookup(cacheKey);
+    const cacheKey = prLookupCacheKey(cacheCwd, {
+      branch,
+      upstreamRef,
+      defaultBranch,
+      localBranchExists,
+      ...(localBranchExists ? {} : { remoteName }),
+    });
+    if (options.refresh) {
+      const cached = yield* Cache.getOption(prLookupCache, cacheKey).pipe(
+        Effect.orElseSucceed(() => Option.none()),
+      );
+      if (Option.isSome(cached)) yield* Cache.invalidate(prLookupCache, cacheKey);
+    }
     let cached = yield* getPrLookup(cacheKey);
     // Lookup may use a fork instead of the saved upstream; verify the remote actually queried.
     const identityRemoteName = (headContext: BranchHeadContext) =>
@@ -2543,7 +2544,7 @@ export const make = Effect.gen(function* () {
       });
     }
     if (!hasSameIdentity(cached.headContext, currentIdentity)) {
-      yield* invalidatePrLookup(cacheKey);
+      yield* Cache.invalidate(prLookupCache, cacheKey);
       cached = yield* getPrLookup(cacheKey);
       const refreshedIdentity = yield* resolvePrLookupRepositoryIdentity(
         cacheCwd,

@@ -2,7 +2,6 @@ import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { BackgroundGitWork, TargetedSettlementGitWork } from "../vcs/BackgroundGitWork.ts";
 import * as TestClock from "effect/testing/TestClock";
 import { countingTracer } from "../observability/countingTracer.testkit.ts";
 import { layerTest, makeTmpDir, git, initRepoWithCommit } from "../vcs/testing/gitFixture.ts";
@@ -221,40 +220,5 @@ it.effect("a merged answer confirmed while its fingerprint was forgotten is chec
     yield* state.validate(cwd, "main", false);
     yield* state.verifyTerminal(cwd, "main", merged, recheck);
     assert.equal(rechecks, 2);
-  }).pipe(Effect.scoped, Effect.provide(layerTest)),
-);
-
-it.effect("a targeted read does not wait for an in-flight background read of the same key", () =>
-  Effect.gen(function* () {
-    const state = yield* makePrLookupGitState({ normalizeCwd: Effect.succeed, capacity: 16 });
-    const started = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
-    const completed = yield* Deferred.make<void>();
-    let reads = 0;
-    const read = Effect.gen(function* () {
-      reads++;
-      if (reads === 1) {
-        yield* Deferred.succeed(started, undefined);
-        yield* Deferred.await(release);
-        return "background";
-      }
-      return "targeted";
-    });
-    const background = yield* state
-      .remember("/repo", "remotes", false, read)
-      .pipe(Effect.provideService(BackgroundGitWork, true), Effect.forkChild);
-    yield* Deferred.await(started);
-    const targeted = yield* state.remember("/repo", "remotes", false, read).pipe(
-      Effect.provideService(TargetedSettlementGitWork, true),
-      Effect.tap(() => Deferred.succeed(completed, undefined)),
-      Effect.forkChild({ startImmediately: true }),
-    );
-    const completedBeforeRelease = yield* Deferred.isDone(completed);
-    yield* Deferred.succeed(release, undefined);
-    assert.isTrue(completedBeforeRelease);
-    assert.equal(yield* Fiber.join(targeted), "targeted");
-    assert.equal(yield* Fiber.join(background), "background");
-    assert.equal(reads, 2);
-    assert.equal(yield* state.remember("/repo", "remotes", false, read), "targeted");
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );

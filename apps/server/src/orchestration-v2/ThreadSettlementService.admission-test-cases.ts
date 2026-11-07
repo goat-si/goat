@@ -5,9 +5,6 @@ import { BackgroundGitWork } from "../vcs/BackgroundGitWork.ts";
 import { makeGitVcsDriverCore } from "../vcs/GitVcsDriverCore.ts";
 import { makeSuccessfulHandle } from "../vcs/testing/configLockRegression.ts";
 import { layerServerConfig } from "../vcs/testing/gitFixture.ts";
-import { makeManager, layerGitManagerTest } from "../git/GitManagerTestHarness.ts";
-import { makeTempDir } from "../git/testkit/fileFixtures.ts";
-import { initRepo, runGit } from "../git/testkit/gitRepository.ts";
 import {
   backgroundReads,
   failFastReaderAdmission,
@@ -131,111 +128,6 @@ export function settlementAdmissionTests({
   startHarness,
 }: Pick<typeof Harness, "makeHarness" | "makeThread" | "makeSnapshot" | "startHarness">) {
   admissionWorkerTests();
-  for (const sharedBranch of [false, true])
-    it.effect(
-      `settles a stopped thread sharing a checkout with a blocked full-sweep ${sharedBranch ? "PR lookup" : "remotes read"}`,
-      () =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            yield* TestClock.setTime(Date.parse(NOW));
-            const cwd = yield* makeTempDir("settlement-shared-git-");
-            yield* initRepo(cwd);
-            yield* runGit(cwd, [
-              "remote",
-              "add",
-              "origin",
-              "https://github.com/example/project.git",
-            ]);
-            yield* runGit(cwd, ["branch", "full"]);
-            yield* runGit(cwd, ["branch", "target"]);
-            const reached = yield* Deferred.make<void>();
-            const release = yield* Deferred.make<void>();
-            const settled = yield* Deferred.make<void>();
-            const otherStarted = yield* Deferred.make<void>();
-            const blockedDriver = yield* makeGitVcsDriverCore().pipe(
-              Effect.provideService(
-                ChildProcessSpawner.ChildProcessSpawner,
-                ChildProcessSpawner.make(() =>
-                  Deferred.succeed(otherStarted, undefined).pipe(
-                    Effect.as(
-                      ChildProcessSpawner.makeHandle({
-                        ...makeSuccessfulHandle(""),
-                        exitCode: Deferred.await(release).pipe(
-                          Effect.as(ChildProcessSpawner.ExitCode(0)),
-                        ),
-                      }),
-                    ),
-                  ),
-                ),
-              ),
-              Effect.provide(layerServerConfig),
-            );
-            yield* blockedDriver
-              .execute({ operation: "test.backgroundGit", cwd, args: ["blocked"] })
-              .pipe(Effect.provideService(BackgroundGitWork, true), Effect.forkScoped);
-            yield* Deferred.await(otherStarted);
-            let remoteCalls = 0;
-            const { manager } = yield* makeManager({
-              providerScenario: {
-                prListByHeadSelector: {
-                  target: [
-                    {
-                      number: 42,
-                      title: "Merged",
-                      url: "https://github.com/example/project/pull/42",
-                      baseRefName: "main",
-                      headRefName: "target",
-                      state: "merged",
-                      mergedAt: NOW,
-                    },
-                  ],
-                },
-              },
-              gitSpawnGate: {
-                matches: (args) =>
-                  (sharedBranch
-                    ? args[0] === "for-each-ref" && args[1] === "--count=1"
-                    : args[0] === "remote") && ++remoteCalls === 1,
-                reached,
-                release,
-              },
-            });
-            const full = makeThread("shared-full", { branch: sharedBranch ? "target" : "full" });
-            const target = makeThread("shared-target", { branch: "target" });
-            const snapshot = (threads: readonly (typeof full)[]) => {
-              const value = makeSnapshot(threads);
-              return {
-                ...value,
-                projects: value.projects.map((project) => ({ ...project, workspaceRoot: cwd })),
-              };
-            };
-            const fixture = yield* makeHarness({
-              snapshot: snapshot([full]),
-              settings: {
-                ...DEFAULT_SERVER_SETTINGS,
-                sidebarAutoSettleAfterDays: null,
-                sidebarAutoSettleOnMerge: true,
-              },
-              branchPullRequest: (input, options) => manager.branchPullRequest(input, options),
-              onDispatch: (command) =>
-                command.threadId === target.id
-                  ? Deferred.succeed(settled, undefined).pipe(Effect.asVoid)
-                  : Effect.void,
-            });
-            yield* Effect.gen(function* () {
-              const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
-              yield* service.start();
-              yield* Deferred.succeed(fixture.activation, undefined);
-              yield* Deferred.await(reached);
-              yield* Ref.set(fixture.snapshots, snapshot([full, target]));
-              yield* fixture.publishEvent(terminalEvent(target.id));
-              yield* Deferred.await(settled);
-              yield* Deferred.succeed(release, undefined);
-              yield* service.drain;
-            }).pipe(Effect.provide(fixture.layer));
-          }).pipe(Effect.provide(layerGitManagerTest)),
-        ),
-    );
   it.effect("settles a stopped thread while full-sweep lookups and Git are saturated", () =>
     Effect.scoped(
       Effect.gen(function* () {
