@@ -50,6 +50,7 @@ describe("optional activity reads", () => {
         checks: [],
         viewerCanMerge: true,
         reviewerIds: [],
+        reviewerUsers: [],
         diffRefs: currentRefs,
       }),
     listNotes: () => Effect.succeed({ comments: [comment], truncated: false }),

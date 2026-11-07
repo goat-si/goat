@@ -1,4 +1,4 @@
-import { makeGitLabProjectUsers } from "./gitLabProjectUsers.ts";
+import { makeGitLabProjectUsers, makeReviewerCandidates } from "./gitLabProjectUsers.ts";
 import { makeReferenceSearch } from "./gitLabReferenceSearch.ts";
 export { referenceSearches } from "./gitLabReferenceSearch.ts";
 import { makeGitLabRequestChanges } from "./gitLabRequestChanges.ts";
@@ -271,6 +271,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
+      readonly query?: string | undefined;
     }) => Effect.Effect<PullRequestReviewerCandidateList, GitLabPullRequestCliError>;
 
     readonly listProjectLabels: (input: {
@@ -1524,27 +1525,7 @@ export const make = Effect.gen(function* () {
 
     searchProjectReferences: makeReferenceSearch(api),
 
-    listReviewerCandidates: Effect.fn("GitLabPullRequestCli.listReviewerCandidates")(
-      function (input) {
-        return Effect.all([mergeRequestDetail(input), projectUsers(input)], {
-          concurrency: 2,
-        }).pipe(
-          Effect.map(([mergeRequest, users]) => {
-            const author = mergeRequest.author?.login;
-            const requested = new Set(mergeRequest.reviewRequestLogins);
-            return {
-              // GitLab forbids requesting a review from the MR author.
-              candidates: users.candidates.flatMap((candidate) =>
-                candidate.login === author
-                  ? []
-                  : [{ ...candidate, isRequested: requested.has(candidate.login) }],
-              ),
-              truncated: users.rawCount >= MAX_PAGE_SIZE,
-            };
-          }),
-        );
-      },
-    ),
+    listReviewerCandidates: makeReviewerCandidates(mergeRequestDetail, projectUsers),
 
     setReviewerRequest: Effect.fn("GitLabPullRequestCli.setReviewerRequest")(function (input) {
       return mergeRequestDetail(input).pipe(

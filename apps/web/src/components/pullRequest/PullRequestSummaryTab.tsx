@@ -764,6 +764,7 @@ export function PullRequestSummaryTab({
               {detail.capabilities.reviewers.request &&
               detail.capabilities.reviewers.listCandidates ? (
                 <PullRequestReviewerPicker
+                  searchable={detail.capabilities.reviewers.searchCandidates === true}
                   environmentId={environmentId}
                   reference={reference}
                   allowed={detail.viewerPermissions.requestReviewers}

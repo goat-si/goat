@@ -1,5 +1,7 @@
 import {
   forkFields,
+  reviewerInfo,
+  type GitLabReviewerDetails,
   toChangedFiles,
   forkMaintainerEdits,
   type GitLabMaintainerEdits,
@@ -225,7 +227,7 @@ export interface GitLabMergeRequestListItem {
 }
 
 export interface GitLabMergeRequestDetail
-  extends GitLabMergeRequestListItem, GitLabMaintainerEdits {
+  extends GitLabMergeRequestListItem, GitLabMaintainerEdits, GitLabReviewerDetails {
   readonly body: string;
   readonly changedFiles: number;
   readonly mergedAt: string | null;
@@ -235,7 +237,6 @@ export interface GitLabMergeRequestDetail
   readonly viewerCanMerge: boolean;
   /** Set by the detail read, which asks GraphQL; REST carries no label permission. */
   readonly viewerCanEditLabels?: boolean;
-  readonly reviewerIds: ReadonlyArray<number>;
   readonly autoMergeEnabled?: boolean;
   readonly autoMergeMethod?: PullRequestMergeMethod;
   /** Absent means not counted, not up to date. */
@@ -383,9 +384,7 @@ function toDetail(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): GitLab
     }),
     checks: toChecks(raw),
     viewerCanMerge: raw.user?.can_merge !== false,
-    reviewerIds: (raw.reviewers ?? []).flatMap((reviewer) =>
-      reviewer.id === undefined ? [] : [reviewer.id],
-    ),
+    ...reviewerInfo(raw.reviewers ?? [], toActor),
     ...(autoMerge === undefined ? {} : { autoMergeEnabled: autoMerge }),
     ...(autoMerge === true && raw.squash_on_merge === true
       ? { autoMergeMethod: "squash" as const }

@@ -26,8 +26,6 @@ import type {
   PullRequestReviewPosition,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
-  PullRequestReviewerCandidate,
-  PullRequestReviewerCandidateList,
   PullRequestReviewerKind,
   PullRequestLabelCandidate,
   PullRequestLabelCandidateList,
@@ -64,7 +62,6 @@ import type {
   PullRequestSubject,
   RepositoryAuthors,
   RepositoryLabels,
-  ReviewerCandidates,
   ViewerPermissions,
 } from "./pullRequestReads.graphql.ts";
 import type {
@@ -1458,50 +1455,6 @@ function toCanTriage(viewerPermission: string | null | undefined): boolean {
 export interface GitHubBaseComparison {
   readonly behindBy: number | null;
   readonly viewerCanUpdate: boolean;
-}
-
-/** assignableUsers avoids push/read:org requirements. Keep requested outsiders/apps removable. */
-export function toReviewerCandidates(
-  result: ReviewerCandidates.Result,
-): PullRequestReviewerCandidateList | null {
-  const repository = result.repository;
-  if (repository == null) return null;
-  const pullRequest = repository.pullRequest;
-  const author = trimmed(pullRequest?.author?.login);
-  const candidates = new Map<string, PullRequestReviewerCandidate>();
-  for (const { requestedReviewer: raw } of nodesOf(pullRequest?.reviewRequests)) {
-    if (raw === null) continue;
-    const slug = "slug" in raw ? trimmed(raw.slug) : null;
-    const id = slug ?? ("login" in raw ? trimmed(raw.login) : null);
-    if (id === null) continue;
-    candidates.set(`${slug === null ? "user" : "team"} ${id}`, {
-      id,
-      kind: slug === null ? "user" : "team",
-      // Match reviewer rows' org/slug so requests can be withdrawn.
-      login: slug === null ? id : (trimmed("combinedSlug" in raw ? raw.combinedSlug : null) ?? id),
-      name: trimmed("teamName" in raw ? raw.teamName : "name" in raw ? raw.name : null),
-      avatarUrl: trimmed(
-        "teamAvatarUrl" in raw ? raw.teamAvatarUrl : "avatarUrl" in raw ? raw.avatarUrl : null,
-      ),
-      isRequested: true,
-    });
-  }
-  for (const node of nodesOf(repository.assignableUsers)) {
-    const login = trimmed(node.login);
-    if (login === null || login === author || candidates.has(`user ${login}`)) continue;
-    candidates.set(`user ${login}`, {
-      id: login,
-      kind: "user",
-      login,
-      name: trimmed(node.name),
-      avatarUrl: trimmed(node.avatarUrl),
-      isRequested: false,
-    });
-  }
-  return {
-    candidates: [...candidates.values()],
-    truncated: repository.assignableUsers.pageInfo.hasNextPage,
-  };
 }
 
 const ReviewerRequestSchema = Schema.Struct({

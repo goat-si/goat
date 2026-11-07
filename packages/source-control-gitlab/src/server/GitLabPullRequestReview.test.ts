@@ -6,6 +6,7 @@ import * as GitLabCli from "./GitLabCli.ts";
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 
 const author = { id: 1, username: "bilal" };
+const reviewer = { id: 5, username: "octocat" };
 const labelPermission = output(
   JSON.stringify({
     data: { project: { mergeRequest: { userPermissions: { updateMergeRequest: true } } } },
@@ -20,6 +21,7 @@ function mergeRequestJson(overrides: Record<string, unknown>) {
     target_branch: "main",
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-02T00:00:00Z",
+    author,
     ...overrides,
   });
 }
@@ -239,6 +241,103 @@ layer("GitLabPullRequestCli review", (it) => {
 
       expect(argsOfCall(0)).toContain("PUT");
       expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({ allow_collaboration: false });
+    }),
+  );
+
+  it.effect(
+    "lists the requested reviewers first, even when the users page does not reach them",
+    () =>
+      Effect.gen(function* () {
+        mockedExecute
+          .mockReturnValueOnce(
+            Effect.succeed(output(mergeRequestJson({ reviewers: [{ id: 42, username: "late" }] }))),
+          )
+          .mockReturnValueOnce(Effect.succeed(output(JSON.stringify([author, reviewer]))));
+        const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+        const list = yield* cli.listReviewerCandidates({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+        });
+
+        expect(
+          list.candidates.map((candidate) => [
+            candidate.login,
+            candidate.id,
+            candidate.isRequested,
+          ]),
+        ).toEqual([
+          ["late", "42", true],
+          [reviewer.username, "5", false],
+        ]);
+      }),
+  );
+
+  it.effect("marks a reviewer GitLab sent without a username as requested on the users page", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(output(mergeRequestJson({ reviewers: [{ id: 5, username: "" }] }))),
+        )
+        .mockReturnValueOnce(Effect.succeed(output(JSON.stringify([author, reviewer]))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const list = yield* cli.listReviewerCandidates({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      expect(list.candidates.map((candidate) => [candidate.id, candidate.isRequested])).toEqual([
+        ["5", true],
+      ]);
+    }),
+  );
+
+  it.effect("asks GitLab to search the project's users when the menu has a query", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(mergeRequestJson({ reviewers: [reviewer, { id: 42, username: "unrelated" }] })),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output(JSON.stringify([reviewer]))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const list = yield* cli.listReviewerCandidates({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        query: "octo cat",
+      });
+
+      expect(list.candidates.map((candidate) => [candidate.login, candidate.isRequested])).toEqual([
+        [reviewer.username, true],
+      ]);
+      expect(argsOfCall(1)[1]).toBe("projects/acme%2Fweb/users?per_page=100&search=octo%20cat");
+    }),
+  );
+
+  it.effect("keeps a reviewer it cannot show when writing the set back", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(output(mergeRequestJson({ reviewers: [{ id: 3, username: "" }] }))),
+        )
+        .mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.setReviewerRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        reviewers: [{ id: "9" }],
+        requested: true,
+      });
+
+      expect(JSON.parse(callAt(1).stdin ?? "")).toEqual({ reviewer_ids: [3, 9] });
     }),
   );
 

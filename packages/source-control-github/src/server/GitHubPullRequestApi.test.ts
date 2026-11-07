@@ -1,4 +1,4 @@
-import { coreResponse } from "./gitHubPullRequestTestFixtures.ts";
+import { coreResponse, rowDefaults, lastPage, rows } from "./gitHubPullRequestTestFixtures.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
@@ -156,62 +156,6 @@ function graphqlQuota(remaining: number, resetAt = "2099-08-13T14:00:00Z") {
     "x-ratelimit-remaining": String(remaining),
     "x-ratelimit-reset": String(Date.parse(resetAt) / 1000),
   };
-}
-
-const rowDefaults = {
-  author: null,
-  state: "OPEN",
-  isDraft: false,
-  mergeable: "UNKNOWN",
-  reviewDecision: null,
-  latestReviews: { nodes: [] },
-  mergedAt: null,
-  reviewRequests: { nodes: [] },
-  labels: { nodes: [] },
-  commits: { nodes: [] },
-};
-
-const lastPage = { hasNextPage: false, endCursor: null };
-
-function rows(
-  count: number,
-  firstNumber: number,
-  overrides: (number: number) => Readonly<Record<string, unknown>> = () => ({}),
-): ReadonlyArray<Record<string, unknown>> {
-  return Array.from({ length: count }, (_, index) => {
-    const number = firstNumber + index;
-    const { reviewRequests, checks, ...rest } = overrides(number) as {
-      reviewRequests?: ReadonlyArray<Record<string, string>>;
-      checks?: string;
-    } & Record<string, unknown>;
-    return {
-      ...rowDefaults,
-      number,
-      title: `Pull request ${number}`,
-      url: `https://github.com/acme/web/pull/${number}`,
-      headRefName: "feat/page",
-      baseRefName: "main",
-      createdAt: "2026-07-01T00:00:00Z",
-      updatedAt: "2026-07-02T00:00:00Z",
-      repository: { nameWithOwner: "acme/web" },
-      ...(reviewRequests === undefined
-        ? {}
-        : {
-            reviewRequests: {
-              nodes: reviewRequests.map((requestedReviewer) => ({
-                requestedReviewer: {
-                  __typename: "slug" in requestedReviewer ? "Team" : "User",
-                  ...requestedReviewer,
-                },
-              })),
-            },
-          }),
-      ...(checks === undefined
-        ? {}
-        : { commits: { nodes: [{ commit: { statusCheckRollup: { state: checks } } }] } }),
-      ...rest,
-    };
-  });
 }
 
 function pullRequests(
@@ -3681,6 +3625,54 @@ layer("GitHubPullRequestApi.layer", (it) => {
       expect(list.candidates.map((candidate) => [candidate.login, candidate.isRequested])).toEqual([
         ["octocat", true],
         ["hubot", false],
+      ]);
+    }),
+  );
+
+  it.effect("asks GitHub to search everyone assignable when the reviewer menu has a query", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(
+        Effect.succeed(
+          output(
+            encodeJson({
+              data: {
+                repository: {
+                  assignableUsers: {
+                    pageInfo: { hasNextPage: false },
+                    nodes: [{ login: "octocat", name: null, avatarUrl: "https://avatars/octocat" }],
+                  },
+                  pullRequest: {
+                    author: { __typename: "User", login: "bilal" },
+                    reviewRequests: {
+                      nodes: ["octocat", "unrelated"].map((login) => ({
+                        requestedReviewer: {
+                          __typename: "User",
+                          login,
+                          name: null,
+                          avatarUrl: "https://avatars/user",
+                        },
+                      })),
+                    },
+                  },
+                },
+              },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+
+      const list = yield* cli.listReviewerCandidates({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        query: "octo",
+      });
+
+      expect(varsAt(0)).toMatchObject({ owner: "acme", name: "web", number: 7, query: "octo" });
+      expect(list.candidates.map((candidate) => [candidate.login, candidate.isRequested])).toEqual([
+        ["octocat", true],
       ]);
     }),
   );

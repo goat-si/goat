@@ -45,3 +45,59 @@ export const coreResponse = (pullRequest: Readonly<Record<string, unknown>> = {}
     },
   },
 });
+
+export const rowDefaults = {
+  author: null,
+  state: "OPEN",
+  isDraft: false,
+  mergeable: "UNKNOWN",
+  reviewDecision: null,
+  latestReviews: { nodes: [] },
+  mergedAt: null,
+  reviewRequests: { nodes: [] },
+  labels: { nodes: [] },
+  commits: { nodes: [] },
+};
+
+export const lastPage = { hasNextPage: false, endCursor: null };
+
+export function rows(
+  count: number,
+  firstNumber: number,
+  overrides: (number: number) => Readonly<Record<string, unknown>> = () => ({}),
+): ReadonlyArray<Record<string, unknown>> {
+  return Array.from({ length: count }, (_, index) => {
+    const number = firstNumber + index;
+    const { reviewRequests, checks, ...rest } = overrides(number) as {
+      reviewRequests?: ReadonlyArray<Record<string, string>>;
+      checks?: string;
+    } & Record<string, unknown>;
+    return {
+      ...rowDefaults,
+      number,
+      title: `Pull request ${number}`,
+      url: `https://github.com/acme/web/pull/${number}`,
+      headRefName: "feat/page",
+      baseRefName: "main",
+      createdAt: "2026-07-01T00:00:00Z",
+      updatedAt: "2026-07-02T00:00:00Z",
+      repository: { nameWithOwner: "acme/web" },
+      ...(reviewRequests === undefined
+        ? {}
+        : {
+            reviewRequests: {
+              nodes: reviewRequests.map((requestedReviewer) => ({
+                requestedReviewer: {
+                  __typename: "slug" in requestedReviewer ? "Team" : "User",
+                  ...requestedReviewer,
+                },
+              })),
+            },
+          }),
+      ...(checks === undefined
+        ? {}
+        : { commits: { nodes: [{ commit: { statusCheckRollup: { state: checks } } }] } }),
+      ...rest,
+    };
+  });
+}

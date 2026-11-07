@@ -1,3 +1,4 @@
+import { toReviewerCandidates } from "./gitHubReviewerCandidates.ts";
 import { through, user, row, listPage } from "./gitHubPullRequestJsonTestFixtures.ts";
 import { toRepositoryReferences, referenceSearchQuery } from "./gitHubReferenceSearch.ts";
 import * as Result from "effect/Result";
@@ -19,7 +20,6 @@ import {
   toPullRequestCore,
   toPullRequestFilesViewedPage,
   toPullRequestRows,
-  toReviewerCandidates,
   toReviewThreadCommentsPage,
   toCanWrite,
   toReviewThreadPage,
