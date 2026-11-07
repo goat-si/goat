@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+import { readPngDimensions } from "./lib/icon-export.ts";
 import {
   applyIconOutputs,
   exportGoatIcons,
@@ -19,6 +20,25 @@ describe("GOAT brand icon check", () => {
       const outputs = yield* Effect.promise(() =>
         renderGoatIconOutputs(pathApi.resolve(import.meta.dirname, "..")),
       );
+      for (const [directory, prefix] of [
+        ["dev", "blueprint"],
+        ["nightly", "nightly"],
+        ["prod", "goat-black"],
+      ] as const) {
+        for (const size of [192, 512]) {
+          const contents = outputs.get(
+            `assets/${directory}/${prefix}-web-icon-${size}x${size}.png`,
+          );
+          assert.isDefined(contents);
+          if (!contents) throw new Error("Missing web icon");
+          assert.deepEqual(readPngDimensions(contents), { width: size, height: size });
+        }
+      }
+      for (const size of [192, 512])
+        assert.deepEqual(
+          outputs.get(`apps/web/public/icon-${size}x${size}.png`),
+          outputs.get(`assets/dev/blueprint-web-icon-${size}x${size}.png`),
+        );
       assert.equal(
         yield* Effect.promise(() => applyIconOutputs(outputs, root, false, () => {})),
         0,

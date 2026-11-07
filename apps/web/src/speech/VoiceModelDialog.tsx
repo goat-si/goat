@@ -25,6 +25,8 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 
+import { filterSpeechModels } from "./speechModelBrowser";
+
 type Model = (typeof SpeechModelList.Type.models)[number];
 export function VoiceModelDialog(props: {
   open: boolean;
@@ -34,6 +36,9 @@ export function VoiceModelDialog(props: {
   canManage: boolean;
   resolveContext: (id: EnvironmentId) => Promise<EnvironmentVoiceRequestContext | null>;
 }) {
+  const [search, setSearch] = useState("");
+  const [installedOnly, setInstalledOnly] = useState(false);
+  const [sort, setSort] = useState<"recommended" | "size" | "name">("recommended");
   const [models, setModels] = useState<readonly Model[]>([]);
   const [config, setConfig] = useState<SpeechConfiguration | null>(null);
   const [busy, setBusy] = useState(false);
@@ -119,7 +124,33 @@ export function VoiceModelDialog(props: {
         <DialogPanel>
           {error ? <p role="alert">{error}</p> : null}
           {busy ? <p role="status">Updating voice model…</p> : null}
-          {models.map((model) => (
+          <label>
+            Search models{" "}
+            <input value={search} onChange={(event) => setSearch(event.target.value)} />
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={installedOnly}
+              onChange={(event) => setInstalledOnly(event.target.checked)}
+            />{" "}
+            Downloaded only
+          </label>
+          <label>
+            Sort models{" "}
+            <select
+              value={sort}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value === "recommended" || value === "size" || value === "name") setSort(value);
+              }}
+            >
+              <option value="recommended">Recommended</option>
+              <option value="size">Size</option>
+              <option value="name">Name</option>
+            </select>
+          </label>
+          {filterSpeechModels(models, search, installedOnly, sort).map((model) => (
             <div key={model.id} className="flex items-center justify-between gap-3 py-2">
               <div>
                 <p>
