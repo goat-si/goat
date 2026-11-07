@@ -36,6 +36,7 @@ import {
   ChannelListTasksRpcInput,
   ChannelListTasksResult,
 } from "./channelGateway.ts";
+import { ChannelListBotNotesInput, ChannelListBotNotesResult } from "./channelBotNotes.ts";
 import { ChannelTask } from "./channelLedger.ts";
 import {
   SLACK_CHANNEL_WS_METHODS,
@@ -102,6 +103,12 @@ const ChannelRestoreBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.restoreBot, {
 const ChannelListBotThreadsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotThreads, {
   payload: ChannelListBotThreadsInput,
   success: ChannelListBotThreadsResult,
+  error: ChannelRpcError,
+});
+
+const ChannelListBotNotesRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotNotes, {
+  payload: ChannelListBotNotesInput,
+  success: ChannelListBotNotesResult,
   error: ChannelRpcError,
 });
 
@@ -191,6 +198,7 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelDeleteBotRpc,
   ChannelRestoreBotRpc,
   ChannelListBotThreadsRpc,
+  ChannelListBotNotesRpc,
   ChannelListChildWorkRpc,
   ChannelUpdateTaskViewRpc,
   ChannelIngestRpc,
