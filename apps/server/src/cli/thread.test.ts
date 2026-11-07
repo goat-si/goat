@@ -1,8 +1,12 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import { assert, it } from "@effect/vitest";
 import { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
-import { readLatestMessages, type ThreadTools, titleFromMessage, waitForRun } from "./thread.ts";
+import { resolveProject, readLatestMessages, type ThreadTools, titleFromMessage, waitForRun } from "./thread.ts";
 
 const threadId = ThreadId.make("thread-1");
 const runId = RunId.make("run-1");
@@ -166,3 +170,23 @@ it("titles from a long first line without splitting an emoji", () => {
     `${"a".repeat(78)}…`,
   );
 });
+
+
+it.effect("resolves home-relative project paths and preserves exact IDs", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-thread-home-" });
+    const workspaceRoot = path.join(home, "My Project");
+    yield* fs.makeDirectory(workspaceRoot);
+    const projects = [
+      { id: "project-1", title: "Project", workspaceRoot },
+      { id: "~/literal-id", title: "ID", workspaceRoot: home },
+    ];
+    const tools = { call: () => Effect.succeed({ projects, nextCursor: null }) } as unknown as ThreadTools;
+    for (const [identifier, expected] of [["~/My Project", "project-1"], ["~/literal-id", "~/literal-id"]] as const) {
+      const project = yield* resolveProject(tools, identifier).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+      assert.equal(project.id, expected);
+    }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
