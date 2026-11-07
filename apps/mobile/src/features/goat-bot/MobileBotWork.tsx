@@ -320,17 +320,39 @@ export function MobileBotWork(props: {
                   <View key={label} className="gap-2 py-2">
                     <Text className="font-semibold text-foreground">{label}</Text>
                     {tasks.map(({ row }) => (
-                      <Pressable
-                        key={row.task.taskId}
-                        accessibilityRole="button"
-                        className="min-h-[44px] justify-center"
-                        onPress={() => {
-                          setOpen(false);
-                          props.onOpenTask(row.task.taskId);
-                        }}
-                      >
-                        <Text className="text-foreground">{row.task.title}</Text>
-                      </Pressable>
+                      <View key={row.task.taskId}>
+                        <Pressable
+                          accessibilityRole="button"
+                          className="min-h-[44px] justify-center"
+                          onPress={() => {
+                            setOpen(false);
+                            props.onOpenTask(row.task.taskId);
+                          }}
+                        >
+                          <Text className="text-foreground">{row.task.title}</Text>
+                        </Pressable>
+                        {rows.map((coding) =>
+                          coding.kind === "coding" && coding.taskId === row.task.taskId ? (
+                            <Pressable
+                              key={coding.environmentId + ":" + coding.threadId}
+                              accessibilityRole="button"
+                              accessibilityLabel={"GOAT thread: " + (coding.title || "GOAT thread")}
+                              className="ml-4 min-h-[44px] justify-center"
+                              onPress={() => {
+                                setOpen(false);
+                                props.onOpenThread({
+                                  environmentId: coding.environmentId,
+                                  id: coding.threadId,
+                                });
+                              }}
+                            >
+                              <Text numberOfLines={1} className="text-foreground-muted">
+                                {coding.title || "GOAT thread"}
+                              </Text>
+                            </Pressable>
+                          ) : null,
+                        )}
+                      </View>
                     ))}
                   </View>
                 ))
