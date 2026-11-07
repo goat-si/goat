@@ -36,8 +36,10 @@ export function useBotThreads(
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const watchedThreadId =
     bot?.threadId ?? (botRef?.environmentId === environmentId ? botRef?.threadId : undefined);
+  // The conversation is read whether or not the server lists task threads: a question the bot
+  // asked in its own turn shows only there.
   const items = useThreadVisibleTurnItems(
-    supported && watchedThreadId && environmentId !== null
+    watchedThreadId && environmentId !== null
       ? scopeThreadRef(environmentId, watchedThreadId)
       : null,
   );
