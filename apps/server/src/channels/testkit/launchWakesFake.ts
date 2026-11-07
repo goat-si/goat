@@ -18,6 +18,8 @@ export const fakeLaunchWakes = (world: object) =>
   Layer.succeed(
     ChannelLaunchWakes,
     ChannelLaunchWakes.of({
-      watch: (_launcher, threadId) => Effect.succeed(launchWatchesOf(world).get(threadId) ?? null),
+      watch: Effect.fn("ChannelLaunchWakes.watch")(function* (_launcher, threadId) {
+        return launchWatchesOf(world).get(threadId) ?? null;
+      }),
     }),
   );

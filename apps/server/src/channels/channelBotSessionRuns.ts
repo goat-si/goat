@@ -49,24 +49,25 @@ const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId:
  * the thread's child-work record. Undefined for any other message, another launcher, or a thread
  * on another machine, which reports through its remote dispatch instead.
  */
-export const launchWakeParentRun = (
+export const launchWakeParentRun = Effect.fn("ChannelBotSession.launchWakeParentRun")(function* (
   sql: SqlClient.SqlClient,
   threadId: string,
   messageId: string,
-) => {
+) {
   const wake = parseLaunchWake(messageId);
   const childThreadId = wake?.thread;
   if (wake === undefined || wake.launcher !== threadId || wake.host !== "" || !childThreadId)
-    return Effect.succeed(undefined);
+    return undefined;
   // Two launches recorded for one thread cannot say which run the wake continues: none is picked.
-  return sql<{ readonly run_id: RunId | null }>`
+  const rows = yield* sql<{ readonly run_id: RunId | null }>`
     SELECT DISTINCT json_extract(value_json, '$.callerRunId') AS run_id FROM channel_runtime_state
     WHERE key >= 'child-work:' AND key < 'child-work;'
       AND json_extract(value_json, '$.surface') = 'thread_launch'
       AND json_extract(value_json, '$.callerThreadId') = ${threadId}
       AND json_extract(value_json, '$.destination.threadId') = ${childThreadId}
-  `.pipe(Effect.map((rows) => (rows.length === 1 ? (rows[0]?.run_id ?? undefined) : undefined)));
-};
+  `;
+  return rows.length === 1 ? (rows[0]?.run_id ?? undefined) : undefined;
+});
 
 /**
  * The task a session run serves: the intent its own message was sent under, or for a delegated

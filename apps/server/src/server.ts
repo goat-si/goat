@@ -803,11 +803,11 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // reference the MCP tools use, so both share one tunnel manager and session cache.
   Layer.provideMerge(
     ChannelLayers.layer.pipe(
+      // The same layerLaunchWatches reference as below, so the build keeps one launch watch.
+      Layer.provide(ChannelLaunchWakesLive.layer.pipe(Layer.provide(layerLaunchWatches))),
       Layer.provide(RuntimeLayer.layerEventSink),
       Layer.provide(SshRemoteDispatchLive.layer),
       Layer.provide(Layer.merge(layerMemoryService, layerMemorySync)),
-      // The same layerLaunchWatches reference as below, so the build keeps one launch watch.
-      Layer.provide(ChannelLaunchWakesLive.layer.pipe(Layer.provide(layerLaunchWatches))),
     ),
   ),
   Layer.provideMerge(layerHubProxy),

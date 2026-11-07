@@ -10,19 +10,18 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const watches = yield* LaunchWatchService.LaunchWatchService;
     return ChannelLaunchWakes.of({
-      watch: (launcherThreadId, threadId) =>
-        watches.find({ launcherThreadId, host: null, threadId }).pipe(
-          Effect.map((watch) =>
-            watch === null
-              ? null
-              : {
-                  detached: watch.detached === true,
-                  skippedRuns: watch.skippedRuns,
-                  reportedEnds: watch.reportedEnds,
-                },
-          ),
-          Effect.orElseSucceed(() => "unreadable" as const),
-        ),
+      watch: Effect.fn("ChannelLaunchWakes.watch")(function* (launcherThreadId, threadId) {
+        const watch = yield* watches
+          .find({ launcherThreadId, host: null, threadId })
+          .pipe(Effect.orElseSucceed(() => "unreadable" as const));
+        return watch === null || watch === "unreadable"
+          ? watch
+          : {
+              detached: watch.detached === true,
+              skippedRuns: watch.skippedRuns,
+              reportedEnds: watch.reportedEnds,
+            };
+      }),
     });
   }),
 );

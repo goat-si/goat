@@ -53,7 +53,7 @@ export class ChannelLaunchWakes extends Context.Service<
       threadId: ThreadId,
     ) => Effect.Effect<LaunchWakeWatch>;
   }
->()("goat/channels/ChannelLaunchWakes") {}
+>()("goat/channels/channelLaunchedResults/ChannelLaunchWakes") {}
 
 const wakesFor = (end: LaunchedEnd, runs: ReadonlyArray<OrchestrationV2Run>) =>
   runs.flatMap((run) => {
