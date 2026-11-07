@@ -191,7 +191,7 @@ export const commitTransition = Effect.fn("channel.commitTransition")(function* 
   spec: ChannelTaskEventSpec,
   options: TransitionOptions = {},
 ) {
-  const bot = yield* ledger.getBot(stored.ownerId);
+  const bot = yield* ledger.getBotById(stored.ownerId, stored.botId);
   const occurredAt = DateTime.formatIso(yield* DateTime.now);
   const prepared = prepareTransition(stored, spec, occurredAt, bot?.bot, options);
   if (!prepared.ok) {

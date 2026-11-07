@@ -52,7 +52,7 @@ describe("ChannelBotProfiles", () => {
       assert.strictEqual(listed.createdAt, before.createdAt);
       // The main row keeps not storing its thread; list joins it from the bot record.
       assert.notInclude((yield* storedMain) ?? "", botThreadId);
-      assert.deepStrictEqual(yield* profiles.identity(ownerId), {
+      assert.deepStrictEqual(yield* profiles.identity(ownerId, main), {
         name: "Jarvis",
         purpose: "Watch the deploys.",
       });
@@ -88,7 +88,7 @@ describe("ChannelBotProfiles", () => {
       );
       assert.strictEqual(refused.reason, "not_found");
       assert.strictEqual((yield* profiles.list(owner))[0]?.name, "Jarvis");
-      assert.deepStrictEqual(yield* profiles.identity(stranger.ownerId), {
+      assert.deepStrictEqual(yield* profiles.identity(stranger.ownerId, main), {
         name: "GOAT Bot",
         purpose: "",
       });
@@ -115,9 +115,9 @@ describe("ChannelBotProfiles", () => {
     return Effect.gen(function* () {
       const profiles = yield* Profiles.ChannelBotProfiles;
       const fallback = { name: "GOAT Bot", purpose: "" };
-      assert.deepStrictEqual(yield* profiles.identity(ownerId), fallback);
+      assert.deepStrictEqual(yield* profiles.identity(ownerId, main), fallback);
       yield* setupBot;
-      assert.deepStrictEqual(yield* profiles.identity(ownerId), fallback);
+      assert.deepStrictEqual(yield* profiles.identity(ownerId, main), fallback);
       yield* profiles.update({ botId: main, name: "Jarvis" }, owner);
       // A replaced bot thread keeps the profile; the identity does not depend on the bot record.
       const ledger = yield* Ledger.ChannelLedger;
@@ -127,11 +127,14 @@ describe("ChannelBotProfiles", () => {
         bot: { environmentId, projectId: scratchProjectId, threadId: ThreadId.make("next-bot") },
         now: "2026-10-12T00:00:01.000Z",
       });
-      assert.deepStrictEqual(yield* profiles.identity(ownerId), { name: "Jarvis", purpose: "" });
+      assert.deepStrictEqual(yield* profiles.identity(ownerId, main), {
+        name: "Jarvis",
+        purpose: "",
+      });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`UPDATE channel_runtime_state SET value_json = ${"bad json"} WHERE key = ${mainKey}`;
       assert.strictEqual(
-        (yield* Effect.flip(profiles.identity(ownerId))).reason,
+        (yield* Effect.flip(profiles.identity(ownerId, main))).reason,
         "persistence_failed",
       );
     }).pipe(Effect.provide(harness.layer));

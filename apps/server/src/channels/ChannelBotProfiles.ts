@@ -54,8 +54,11 @@ export class ChannelBotProfiles extends Context.Service<
       input: ChannelUpdateBotInput,
       owner: ProfileOwner,
     ) => Effect.Effect<BotProfile, ChannelGatewayError>;
-    /** The main bot's identity; an absent row was never edited, so it is the default. */
-    readonly identity: (ownerId: string) => Effect.Effect<BotIdentity, ChannelGatewayError>;
+    /** A bot's identity; an absent main row was never edited, so it is the default. */
+    readonly identity: (
+      ownerId: string,
+      botId: BotId,
+    ) => Effect.Effect<BotIdentity, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotProfiles") {}
 
@@ -184,15 +187,21 @@ const make = Effect.gen(function* () {
       );
   });
 
-  const identity = Effect.fn("ChannelBotProfiles.identity")(function* (ownerId: string) {
+  const identity = Effect.fn("ChannelBotProfiles.identity")(function* (
+    ownerId: string,
+    botId: BotId,
+  ) {
     const prefix = keyPrefix(ownerId);
-    const mainKey = prefix + encodeURIComponent(MAIN_BOT_ID);
+    const key = prefix + encodeURIComponent(botId);
     return yield* sql<{ readonly value_json: string }>`
-      SELECT value_json FROM channel_runtime_state WHERE key = ${mainKey}`.pipe(
+      SELECT value_json FROM channel_runtime_state WHERE key = ${key}`.pipe(
       Effect.flatMap((rows) =>
         Effect.try(() => {
-          if (rows[0] === undefined) return DEFAULT_BOT_IDENTITY;
-          const profile = checkedProfile(prefix, mainKey, rows[0].value_json);
+          if (rows[0] === undefined) {
+            if (botId === MAIN_BOT_ID) return DEFAULT_BOT_IDENTITY;
+            throw new Error("A member bot without a profile");
+          }
+          const profile = checkedProfile(prefix, key, rows[0].value_json);
           return { name: profile.name, purpose: profile.purpose };
         }),
       ),

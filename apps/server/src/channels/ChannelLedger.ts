@@ -5,6 +5,7 @@ import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate
 import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
+import { botLedger, type ChannelBotLedgerOps } from "./channelBotLedger.ts";
 /**
  * ChannelLedger - durable state for channel input, tasks, and deliveries.
  *
@@ -21,8 +22,8 @@ import { receptionLedger } from "./channelReceptionLedger.ts";
  */
 import {
   AuthEnvironmentScopes,
+  BotId,
   type ChannelAnswerProjectChoice,
-  ChannelBotRef,
   type ChannelConversationId,
   type ChannelDeliveryId,
   ChannelInboundMessage,
@@ -44,6 +45,7 @@ import {
   type ChannelTaskId,
   type ChannelTaskStatus,
   RuntimeMode,
+  MAIN_BOT_ID,
   type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -68,6 +70,8 @@ export interface ChannelOutboxInsert {
 
 export interface ChannelStoredInput {
   readonly ownerId: string;
+  /** The bot this input was sent to; fixed when it is stored. */
+  readonly botId: BotId;
   readonly snapshot: ChannelInputSnapshot;
   readonly message: ChannelInboundMessage;
   readonly requester: ChannelRequester | undefined;
@@ -76,6 +80,8 @@ export interface ChannelStoredInput {
 
 export interface ChannelStoredTask {
   readonly ownerId: string;
+  /** The bot of the input that created this task, for the task's whole life. */
+  readonly botId: BotId;
   readonly task: ChannelTask;
   readonly pendingAnswerMessageId: string | undefined;
   readonly completionHold: string | undefined;
@@ -130,7 +136,7 @@ type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelTaskEven
 
 export class ChannelLedger extends Context.Service<
   ChannelLedger,
-  {
+  ChannelBotLedgerOps & {
     /** Stores an input, or returns the stored one for the same idempotency key. */
     readonly acceptInput: (input: {
       readonly ownerId: string;
@@ -142,6 +148,8 @@ export class ChannelLedger extends Context.Service<
       /** Undefined stores the input as rejected. */
       readonly requester: ChannelRequester | undefined;
       readonly acceptedAt: string;
+      /** The bot the input is for; main when absent. */
+      readonly botId?: BotId | undefined;
       /** Committed with a rejected input, such as a link notice for an unlinked account. */
       readonly rejectNotice?: ChannelOutboxInsert | undefined;
     }) => Effect.Effect<ChannelIngestResult, ChannelLedgerError>;
@@ -515,29 +523,6 @@ export class ChannelLedger extends Context.Service<
       readonly cursor: number;
       readonly now: string;
     }) => Effect.Effect<void, ChannelLedgerError>;
-    readonly getBot: (
-      ownerId: string,
-    ) => Effect.Effect<
-      { readonly bot: ChannelBotRef; readonly legacyThreadId: ThreadId | undefined } | undefined,
-      ChannelLedgerError
-    >;
-    /** Records the canonical bot unless one exists; returns whichever is stored. */
-    readonly setBotIfAbsent: (input: {
-      readonly ownerId: string;
-      readonly bot: ChannelBotRef;
-      readonly legacyThreadId?: ThreadId | undefined;
-      readonly now: string;
-    }) => Effect.Effect<ChannelBotRef, ChannelLedgerError>;
-    /**
-     * Replaces the canonical bot if it is still `previousThreadId`, keeping any legacy thread;
-     * returns whichever bot is stored afterwards.
-     */
-    readonly replaceBot: (input: {
-      readonly ownerId: string;
-      readonly previousThreadId: ThreadId;
-      readonly bot: ChannelBotRef;
-      readonly now: string;
-    }) => Effect.Effect<ChannelBotRef, ChannelLedgerError>;
     readonly findIdentity: (input: {
       readonly connectionId: string;
       readonly externalActorId: string;
@@ -569,10 +554,6 @@ export class ChannelLedger extends Context.Service<
   }
 >()("goat/channels/ChannelLedger") {}
 
-const BotState = Schema.Struct({
-  bot: ChannelBotRef,
-  legacyThreadId: Schema.optional(Schema.String),
-});
 const ReplyState = Schema.Struct({ text: Schema.String, sentAt: Schema.optional(Schema.String) });
 const FailureState = Schema.Struct({ reason: Schema.String, message: Schema.String });
 
@@ -588,8 +569,6 @@ const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(ChannelTaskEvent));
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
 const encodeOutbound = Schema.encodeSync(Schema.fromJsonString(ChannelOutboundMessage));
-const encodeBot = Schema.encodeSync(Schema.fromJsonString(BotState));
-const decodeBot = Schema.decodeUnknownSync(Schema.fromJsonString(BotState));
 const encodeScopes = Schema.encodeSync(Schema.fromJsonString(AuthEnvironmentScopes));
 const decodeScopes = Schema.decodeUnknownSync(Schema.fromJsonString(AuthEnvironmentScopes));
 const ApprovalCodeCount = Schema.fromJsonString(Schema.Struct({ n: Schema.Number }));
@@ -634,7 +613,6 @@ const encodeAddress = Schema.encodeSync(Schema.fromJsonString(ChannelReplyAddres
 const WORKER_KEY = "worker";
 const CURSOR_KEY = "worker-cursor";
 const imessageCursorKey = (connectionId: string) => "imessage-cursor:" + connectionId;
-const botKey = (ownerId: string) => "bot:" + ownerId;
 /** Remote worker rows never carry an owner token, so the ownership fence cannot match them. */
 const remoteWorkerKey = (taskId: ChannelTaskId) => "remote-worker:" + taskId;
 
@@ -664,6 +642,7 @@ interface InboxRow {
   readonly failure_json: string | null;
   readonly task_ids_json: string;
   readonly timeline_sequence: number | null;
+  readonly bot_id: string;
 }
 
 interface TaskRow {
@@ -671,6 +650,7 @@ interface TaskRow {
   readonly task_json: string;
   readonly pending_answer_message_id: string | null;
   readonly completion_hold: string | null;
+  readonly bot_id: string;
 }
 
 interface IdentityRow {
@@ -720,6 +700,7 @@ const inboxSnapshot = (row: InboxRow): ChannelStoredInput => {
   } as ChannelInputSnapshot;
   return {
     ownerId: row.owner_id,
+    botId: BotId.make(row.bot_id),
     snapshot,
     message: decodeInbound(row.message_json),
     requester: row.requester_json === null ? undefined : decodeRequester(row.requester_json),
@@ -729,6 +710,7 @@ const inboxSnapshot = (row: InboxRow): ChannelStoredInput => {
 
 const storedTask = (row: TaskRow): ChannelStoredTask => ({
   ownerId: row.owner_id,
+  botId: BotId.make(row.bot_id),
   task: decodeTask(row.task_json),
   pendingAnswerMessageId: row.pending_answer_message_id ?? undefined,
   completionHold: row.completion_hold ?? undefined,
@@ -851,17 +833,25 @@ const make = Effect.gen(function* () {
       return inserted[0]?.sequence ?? 0;
     });
 
+  // A task belongs to the bot of the input that created it; no input of this owner, no task.
   const insertTask = (task: ChannelTask, ownerId: string, event: ChannelTaskEvent) =>
     Effect.gen(function* () {
-      yield* sql`
+      const inserted = yield* sql<{ readonly task_id: string }>`
         INSERT INTO channel_tasks (
           task_id, owner_id, conversation_id, status, version, generation, task_json,
-          created_at, updated_at
-        ) VALUES (
+          created_at, updated_at, bot_id
+        ) SELECT
           ${task.taskId}, ${ownerId}, ${task.conversationId}, ${task.status}, ${task.version},
-          ${task.generation}, ${encodeTask(task)}, ${task.createdAt}, ${task.updatedAt}
-        )
+          ${task.generation}, ${encodeTask(task)}, ${task.createdAt}, ${task.updatedAt}, bot_id
+        FROM channel_inbox WHERE input_id = ${task.originInputId} AND owner_id = ${ownerId}
+        RETURNING task_id
       `;
+      if (inserted.length === 0) {
+        return yield* new ChannelLedgerError({
+          reason: "persistence",
+          detail: "Task " + task.taskId + " has no stored input of its owner.",
+        });
+      }
       yield* sql`
         INSERT INTO channel_task_events (
           event_id, task_id, task_version, type, event_json, occurred_at, narration_state
@@ -942,13 +932,14 @@ const make = Effect.gen(function* () {
           yield* sql`
             INSERT INTO channel_inbox (
               input_id, owner_id, kind, connection_id, idempotency_key, content_hash,
-              conversation_id, binding_id, message_json, requester_json, state, accepted_at
+              conversation_id, binding_id, message_json, requester_json, state, accepted_at, bot_id
             ) VALUES (
               ${input.inputId}, ${input.ownerId}, ${input.message.kind},
               ${input.message.connectionId}, ${input.message.idempotencyKey}, ${input.contentHash},
               ${input.conversationId}, ${input.bindingId}, ${encodeInbound(input.message)},
               ${input.requester === undefined ? null : encodeRequester(input.requester)},
-              ${input.requester === undefined ? "rejected" : "accepted"}, ${input.acceptedAt}
+              ${input.requester === undefined ? "rejected" : "accepted"}, ${input.acceptedAt},
+              ${input.botId ?? MAIN_BOT_ID}
             )
           `;
           if (input.rejectNotice !== undefined) {
@@ -1005,6 +996,7 @@ const make = Effect.gen(function* () {
       ),
 
     ...receptionLedger(sql, { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries }),
+    ...botLedger(sql),
 
     readConversationTail: (conversationId, limit) =>
       sql<{
@@ -1063,7 +1055,8 @@ const make = Effect.gen(function* () {
 
     listConversationTasks: (conversationId) =>
       sql<TaskRow>`
-        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
+        FROM channel_tasks
         WHERE conversation_id = ${conversationId} ORDER BY created_at DESC LIMIT 20
       `.pipe(
         Effect.map((rows) => rows.map((row) => storedTask(row).task)),
@@ -1072,7 +1065,8 @@ const make = Effect.gen(function* () {
 
     listConversationNeedsYou: (conversationId) =>
       sql<TaskRow>`
-        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
+        FROM channel_tasks
         WHERE conversation_id = ${conversationId}
           AND status IN ('running', 'waiting_input')
           AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) > 0
@@ -1084,7 +1078,8 @@ const make = Effect.gen(function* () {
 
     getTask: (taskId) =>
       sql<TaskRow>`
-        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
+        FROM channel_tasks
         WHERE task_id = ${taskId}
       `.pipe(
         Effect.map((rows) => (rows[0] === undefined ? undefined : storedTask(rows[0]))),
@@ -1108,7 +1103,7 @@ const make = Effect.gen(function* () {
           TaskRow & { readonly task_id: string; readonly updated_at: string }
         >`
           SELECT task_id, updated_at, owner_id, task_json, pending_answer_message_id,
-            completion_hold
+            completion_hold, bot_id
           FROM channel_tasks
           WHERE owner_id = ${input.ownerId} ${statusFilter} ${cursorFilter}
           ORDER BY updated_at DESC, task_id DESC
@@ -1217,7 +1212,8 @@ const make = Effect.gen(function* () {
 
     listTasksByStatus: (statuses) =>
       sql<TaskRow>`
-        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
+        FROM channel_tasks
         WHERE status IN ${sql.in(statuses)} ORDER BY updated_at
       `.pipe(
         Effect.map((rows) => rows.map(storedTask)),
@@ -1226,7 +1222,7 @@ const make = Effect.gen(function* () {
 
     listLocalCheckUpdates: () =>
       sql<TaskRow>`
-        SELECT t.owner_id, t.task_json, t.pending_answer_message_id, t.completion_hold
+        SELECT t.owner_id, t.task_json, t.pending_answer_message_id, t.completion_hold, t.bot_id
         FROM channel_tasks t JOIN thread_run_observed_checks c
           ON c.thread_id = json_extract(t.task_json, '$.worker.threadId')
           AND c.run_id = json_extract(t.task_json, '$.worker.runId')
@@ -1242,7 +1238,8 @@ const make = Effect.gen(function* () {
 
     listRemoteCheckUpdates: () =>
       sql<TaskRow>`
-        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
+        FROM channel_tasks
         WHERE status IN ('completed', 'failed', 'cancelled')
           AND json_extract(task_json, '$.worker.host') IS NOT NULL
           AND (json_extract(task_json, '$.observed.result.observedCheckPending') = 1
@@ -1255,7 +1252,8 @@ const make = Effect.gen(function* () {
 
     countWaitingTasks: (ownerId, readThrough) =>
       sql<TaskRow>`
-        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
+        FROM channel_tasks
         WHERE owner_id = ${ownerId}
           AND (
             status = 'waiting_input'
@@ -1277,7 +1275,8 @@ const make = Effect.gen(function* () {
 
     findTaskByWorkerThread: (threadId) =>
       sql<TaskRow>`
-        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
+        FROM channel_tasks
         WHERE worker_thread_id = ${threadId} ORDER BY updated_at DESC LIMIT 1
       `.pipe(
         Effect.map((rows) => (rows[0] === undefined ? undefined : storedTask(rows[0]))),
@@ -1407,7 +1406,8 @@ const make = Effect.gen(function* () {
 
     listUndeliveredOutcomes: (ownerId) =>
       sql<TaskRow>`
-        SELECT task.owner_id, task.task_json, task.pending_answer_message_id, task.completion_hold
+        SELECT task.owner_id, task.task_json, task.pending_answer_message_id,
+          task.completion_hold, task.bot_id
         FROM channel_tasks AS task
         JOIN channel_task_events AS outcome ON outcome.task_id = task.task_id
         LEFT JOIN channel_outbox AS delivery
@@ -1432,7 +1432,8 @@ const make = Effect.gen(function* () {
 
     listUnsettledRunHistory: (input) =>
       sql<TaskRow>`
-        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
+        FROM channel_tasks
         WHERE status IN ('completed', 'failed', 'cancelled') AND updated_at >= ${input.since}
           AND json_extract(task_json, '$.target') IS NOT NULL
           AND json_extract(task_json, '$.target.remote') IS NULL
@@ -1808,71 +1809,6 @@ const make = Effect.gen(function* () {
           fence(input.owner).pipe(Effect.andThen(upsertCursor(input.cursor, input.now))),
         )
         .pipe(Effect.asVoid, Effect.mapError(toLedgerError("setWorkerCursor"))),
-
-    getBot: (ownerId) =>
-      sql<{ readonly value_json: string }>`
-        SELECT value_json FROM channel_runtime_state WHERE key = ${botKey(ownerId)}
-      `.pipe(
-        Effect.map((rows) => {
-          if (rows[0] === undefined) return undefined;
-          const stored = decodeBot(rows[0].value_json);
-          return {
-            bot: stored.bot,
-            legacyThreadId: stored.legacyThreadId as ThreadId | undefined,
-          };
-        }),
-        Effect.mapError(toLedgerError("getBot")),
-      ),
-
-    setBotIfAbsent: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const value = encodeBot({
-              bot: input.bot,
-              ...(input.legacyThreadId === undefined
-                ? {}
-                : { legacyThreadId: input.legacyThreadId }),
-            });
-            yield* sql`
-              INSERT INTO channel_runtime_state (key, value_json, updated_at)
-              VALUES (${botKey(input.ownerId)}, ${value}, ${input.now})
-              ON CONFLICT (key) DO NOTHING
-            `;
-            const rows = yield* sql<{ readonly value_json: string }>`
-              SELECT value_json FROM channel_runtime_state WHERE key = ${botKey(input.ownerId)}
-            `;
-            const stored = rows[0];
-            return stored === undefined ? input.bot : decodeBot(stored.value_json).bot;
-          }),
-        )
-        .pipe(Effect.mapError(toLedgerError("setBotIfAbsent"))),
-
-    replaceBot: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const key = botKey(input.ownerId);
-            const rows = yield* sql<{ readonly value_json: string }>`
-              SELECT value_json FROM channel_runtime_state WHERE key = ${key}
-            `;
-            const current = rows[0] === undefined ? undefined : decodeBot(rows[0].value_json);
-            if (current === undefined || current.bot.threadId !== input.previousThreadId) {
-              return current?.bot ?? input.bot;
-            }
-            yield* sql`
-              UPDATE channel_runtime_state SET value_json = ${encodeBot({
-                bot: input.bot,
-                ...(current.legacyThreadId === undefined
-                  ? {}
-                  : { legacyThreadId: current.legacyThreadId }),
-              })}, updated_at = ${input.now}
-              WHERE key = ${key}
-            `;
-            return input.bot;
-          }),
-        )
-        .pipe(Effect.mapError(toLedgerError("replaceBot"))),
 
     findIdentity: (input) =>
       sql<IdentityRow>`

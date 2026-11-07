@@ -213,7 +213,7 @@ const make = Effect.gen(function* () {
           threadTask.task.worker.host === undefined;
         const bot =
           validWorker && threadTask !== undefined
-            ? yield* ledger.getBot(threadTask.ownerId)
+            ? yield* ledger.getBotById(threadTask.ownerId, threadTask.botId)
             : undefined;
         const prepared =
           validWorker && threadTask !== undefined
@@ -319,7 +319,8 @@ const make = Effect.gen(function* () {
       requester,
       now,
     });
-    if (createdTask === undefined || !(yield* sessions.eligible(createdTask.task))) return false;
+    if (createdTask === undefined || !(yield* sessions.eligible(createdTask.task, stored.botId)))
+      return false;
     const claimed = yield* ledger.claimForSession({
       owner,
       inputId,
@@ -401,20 +402,23 @@ const make = Effect.gen(function* () {
     if (task === undefined) return;
     ackStarted.add(inputId);
     const fiber = yield* reception
-      .acknowledgeSession({
-        mode: "task_event",
-        conversationId: stored.snapshot.conversationId,
-        originKind: stored.requester.originKind,
-        requester: stored.requester,
-        taskEvent: {
-          taskId: task.task.taskId,
-          type: "task.started",
-          summary: "Work on the request has begun: " + task.task.instruction.slice(0, 500),
+      .acknowledgeSession(
+        {
+          mode: "task_event",
+          conversationId: stored.snapshot.conversationId,
+          originKind: stored.requester.originKind,
+          requester: stored.requester,
+          taskEvent: {
+            taskId: task.task.taskId,
+            type: "task.started",
+            summary: "Work on the request has begun: " + task.task.instruction.slice(0, 500),
+          },
+          tail: [{ role: "user", text: stored.message.text, at: stored.message.receivedAt }],
+          tasks: [],
+          allowedTargets: [],
         },
-        tail: [{ role: "user", text: stored.message.text, at: stored.message.receivedAt }],
-        tasks: [],
-        allowedTargets: [],
-      })
+        stored.botId,
+      )
       .pipe(
         Effect.flatMap((text) =>
           text === undefined ? Effect.void : commit(stored, owner, "fallback", text),

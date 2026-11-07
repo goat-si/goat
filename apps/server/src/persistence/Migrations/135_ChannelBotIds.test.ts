@@ -21,7 +21,9 @@ it.effect("upgrades stored channel inputs and tasks as the main bot's", () =>
       generation, task_json, created_at, updated_at)
       VALUES ('t1', 'o1', 'c1', 'running', 1, 1, '{}', 'now', 'now')`;
 
-    assert.deepStrictEqual(yield* runMigrations(), [[135, "ChannelBotIds"]]);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 135 }), [
+      [135, "ChannelBotIds"],
+    ]);
     const inbox = yield* sql<{ bot_id: string }>`SELECT bot_id FROM channel_inbox`;
     const tasks = yield* sql<{ bot_id: string }>`SELECT bot_id FROM channel_tasks`;
     assert.deepStrictEqual([...inbox, ...tasks], [{ bot_id: "main" }, { bot_id: "main" }]);

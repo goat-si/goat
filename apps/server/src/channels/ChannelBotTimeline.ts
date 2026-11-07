@@ -85,20 +85,22 @@ export const layerGoatTransport = Layer.effectDiscard(
     const timeline = yield* ChannelBotTimeline;
     const ledger = yield* ChannelLedger.ChannelLedger;
 
-    /** The conversation and owner a delivery belongs to, from the task or input it answers. */
+    /** The conversation, owner and bot a delivery belongs to, from the task or input it answers. */
     const sourceOf = (message: ChannelOutboundMessage) =>
       Effect.gen(function* () {
         const taskId = message.chip?.taskId ?? message.taskId;
         if (message.inReplyToInputId !== undefined) {
           const input = yield* ledger.getInput(message.inReplyToInputId);
           if (input !== undefined) {
-            return { conversationId: input.snapshot.conversationId, ownerId: input.ownerId };
+            const { ownerId, botId } = input;
+            return { conversationId: input.snapshot.conversationId, ownerId, botId };
           }
         }
         if (taskId !== undefined) {
           const task = yield* ledger.getTask(taskId);
           if (task !== undefined) {
-            return { conversationId: task.task.conversationId, ownerId: task.ownerId };
+            const { ownerId, botId } = task;
+            return { conversationId: task.task.conversationId, ownerId, botId };
           }
         }
         return undefined;
@@ -111,13 +113,13 @@ export const layerGoatTransport = Layer.effectDiscard(
           return yield* new ChannelGatewayError({ reason: "invalid_input" });
         }
         const source = yield* sourceOf(message);
-        // An owner has one bot. A delivery addressed to a bot that was deleted and replaced since
-        // goes to the current one, so outstanding work still reports back.
+        // A delivery goes to the current thread of the bot its input or task belongs to, so work
+        // outstanding when that bot's thread was replaced still reports back.
         const current =
           source === undefined
             ? undefined
             : yield* ledger
-                .getBot(source.ownerId)
+                .getBotById(source.ownerId, source.botId)
                 .pipe(
                   Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
                 );

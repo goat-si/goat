@@ -352,7 +352,7 @@ const make = Effect.gen(function* () {
   const resolveTarget = (stored: ChannelLedger.ChannelStoredTask, allowRemote = false) =>
     Effect.gen(function* () {
       const task = stored.task;
-      const bot = yield* ledger.getBot(stored.ownerId);
+      const bot = yield* ledger.getBotById(stored.ownerId, stored.botId);
       const shells = yield* projects.listShells().pipe(Effect.orElseSucceed(() => []));
       if (task.kind === "turn") return yield* turnTarget(task, bot?.bot.projectId, shells);
       const real = shells.filter((shell) => shell.id !== bot?.bot.projectId);
@@ -634,7 +634,7 @@ const make = Effect.gen(function* () {
           : yield* identities.value.resolve(named.workspaceRoot);
       const all = yield* serverSettings.getSettings.pipe(Effect.orDie);
       const settings = resolveProjectSettings(all, named?.id ?? null).settings;
-      const bot = yield* ledger.getBot(stored.ownerId);
+      const bot = yield* ledger.getBotById(stored.ownerId, stored.botId);
       return {
         ...(defaultProjectGone ? { requireNamedProject: true } : {}),
         memoryGrantCeiling: yield* requesterMemoryCeiling(task),
