@@ -102,8 +102,9 @@ session and serves that request without new notes; the next good read decides. E
 still a ledger task, which keeps exactly-once narration,
 restarts that read state, and the requester's ceiling. Its chip carries `kind: "turn"`: clients
 follow it for the activity line but draw no card, since the bot's reply already answers it. The
-task list leaves turns out, so a turn waiting on a question is counted from these chips: the status
-card and the Work panel's Tasks tab point to the chat for it. Running a provider on the bot
+task list leaves turns out unless their child work is still open (see the end of this page), so a
+turn waiting on a question is counted from these chips: the status card and the Work panel's
+Tasks tab point to the chat for it. Running a provider on the bot
 thread itself would put each new message behind the running turn.
 
 - **Binding.** `channel_bot_sessions` has a row per session generation. The binding key is the
