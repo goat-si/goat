@@ -10,6 +10,8 @@ import {
   ChannelTaskView,
   type ChannelListChildWorkInput,
   type ChannelListChildWorkResult,
+  type ChannelRetryTaskInput,
+  type ChannelRetryTaskResult,
   type ChannelUpdateTaskViewInput,
   MAIN_BOT_ID,
 } from "@goat/contracts";
@@ -24,6 +26,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
 import * as TaskViews from "./channelTaskViews.ts";
+import { makeTaskRetry } from "./channelTaskRetry.ts";
 
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 const decodeView = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskView));
@@ -46,6 +49,11 @@ export class ChannelBotThreads extends Context.Service<
       input: ChannelListChildWorkInput,
       owner: ChannelConnectionOwner,
     ) => Effect.Effect<ChannelListChildWorkResult, ChannelGatewayError>;
+    /** A person runs a failed or stopped task again as its next attempt. */
+    readonly retry: (
+      input: ChannelRetryTaskInput,
+      owner: ChannelConnectionOwner,
+    ) => Effect.Effect<ChannelRetryTaskResult, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotThreads") {}
 
@@ -54,6 +62,7 @@ const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const views = yield* TaskViews.ChannelTaskViews;
   const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+  const retry = yield* makeTaskRetry;
   const list = Effect.fn("ChannelBotThreads.list")(function* (
     owner: ChannelConnectionOwner,
     botId: BotId = BotId.make(MAIN_BOT_ID),
@@ -157,6 +166,7 @@ const make = Effect.gen(function* () {
           status: task.status,
           updatedAt: task.updatedAt,
           ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
+          ...(task.generation > 1 ? { generation: task.generation } : {}),
         },
         view,
         lastActivityAt: task.updatedAt,
@@ -199,6 +209,7 @@ const make = Effect.gen(function* () {
     list,
     update: views.update,
     listChildWork: listChildWorkFor,
+    retry,
   });
 });
 export const layer = Layer.effect(ChannelBotThreads, make);
@@ -213,4 +224,6 @@ export const rpcHandlers = (
     service.update(input, owner),
   [CHANNEL_GATEWAY_WS_METHODS.listChildWork]: (input: ChannelListChildWorkInput) =>
     service.listChildWork(input, owner),
+  [CHANNEL_GATEWAY_WS_METHODS.retryTask]: (input: ChannelRetryTaskInput) =>
+    service.retry(input, owner),
 });

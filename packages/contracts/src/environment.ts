@@ -245,6 +245,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotTaskThreads: Schema.optionalKey(Schema.Boolean),
   /** `channel.getBotStatus` leaves out tasks that were waiting when the bot thread was last visited. */
   goatBotWaitingRead: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.retryTask`: a person runs a failed or stopped task again. */
+  goatBotTaskRetry: Schema.optionalKey(Schema.Boolean),
   /** Server runs a live Slack channel connection. False while only the settings contract exists. */
   slackChannel: Schema.optionalKey(Schema.Boolean),
   /** Slack settings take channelScope, userAccess and unlinkedRuntimeModeCeiling. Older servers
