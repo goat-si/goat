@@ -66,11 +66,16 @@ const { WorkspaceToolbar } = await import("./WorkspaceToolbar.ios");
 const { TestWorkspace } = (await import("./WorkspaceTabsContext")) as unknown as {
   TestWorkspace: import("react").Context<unknown>;
 };
+const { NativePrimaryColumnContext } =
+  (await import("../../native/v5-workspace-context")) as unknown as {
+    NativePrimaryColumnContext: import("react").Context<unknown>;
+  };
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 function Harness(props: {
   readonly tab: WorkspaceSearchTab;
   readonly query: string;
+  readonly sidebar: boolean;
   readonly stateRef: Ref<WorkspaceTabsState>;
 }) {
   const [state, dispatch] = useReducer(workspaceTabsReducer, null, () => {
@@ -94,16 +99,18 @@ function Harness(props: {
         bottomClearance: 0,
       }}
     >
-      <WorkspaceToolbar onNewTask={() => {}} />
+      <NativePrimaryColumnContext value={props.sidebar ? { presented: true } : null}>
+        <WorkspaceToolbar onNewTask={() => {}} sidebar={props.sidebar} />
+      </NativePrimaryColumnContext>
     </TestWorkspace>
   );
 }
 
-function renderSearch(tab: WorkspaceSearchTab, query: string) {
+function renderSearch(tab: WorkspaceSearchTab, query: string, sidebar = false) {
   mocks.screenFocused = true;
   const root = createRoot(document.createElement("div"));
   const stateRef = createRef<WorkspaceTabsState>();
-  act(() => root.render(<Harness tab={tab} query={query} stateRef={stateRef} />));
+  act(() => root.render(<Harness tab={tab} query={query} sidebar={sidebar} stateRef={stateRef} />));
   const state = () => stateRef.current!;
   const native = {
     setText: vi.fn(),
@@ -157,6 +164,16 @@ it("keeps the Settings query when the Search key ends editing or a pushed page c
   act(() => pushed.search().onClose?.());
   expect(pushed.state().tabs.settings).toMatchObject({ query: "theme", searchMode: "expanded" });
   act(() => pushed.root.unmount());
+});
+
+it("closing a split view sidebar's search clears it while the detail column owns navigation focus", () => {
+  using _frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+  const { root, native, search, state } = renderSearch("threads", "diff", true);
+  mocks.screenFocused = false;
+  act(() => search().onClose?.());
+  expect(state().tabs.threads).toMatchObject({ query: "", searchMode: "resting" });
+  expect(native.clearText).toHaveBeenCalled();
+  act(() => root.unmount());
 });
 
 it("reopening a list search after a blur shows the query that still filters the list", () => {

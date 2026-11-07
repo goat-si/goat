@@ -91,11 +91,12 @@ export function WorkspaceToolbar(props: {
     if (tab.searchMode === "expanded") searchRef.current?.setText(tab.query);
     workspace.dispatch({ type: "search", tab: selectedTab });
   }, [tab.searchMode, tab.query, enterSearch, workspace, selectedTab]);
-  // The patched RNSSearchBar reports UIKit's own dismissal, such as integrated search's X, as
-  // onClose. Screens' programmatic dismissals on navigation never call it.
+  // RNSSearchBar reports UIKit's own dismissal, such as integrated search's X, as onClose.
+  // Screens' programmatic dismissals on navigation never call it. A presented sidebar stays
+  // visible while its detail owns navigation focus.
   const searchClosed = () => {
-    if (tab.searchMode === "resting" || !navigation.isFocused() || !isTabActive(selectedTab))
-      return;
+    const hostVisible = navigation.isFocused() || primaryColumn?.presented === true;
+    if (tab.searchMode === "resting" || !hostVisible || !isTabActive(selectedTab)) return;
     searchRef.current?.clearText();
     cancelSearch();
   };
