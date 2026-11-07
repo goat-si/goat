@@ -79,42 +79,62 @@ const reason = <A, R>(effect: Effect.Effect<A, ChannelGatewayError, R>) =>
   Effect.map(Effect.flip(effect), (error) => error.reason);
 
 describe("ChannelBotArtifacts list", () => {
-  it.effect("lists saved files newest first and leaves out hidden files, links and odd names", () =>
-    Effect.gen(function* () {
-      const { root, outside, at } = yield* folders;
-      NodeFS.mkdirSync(at("reports", "2026"), { recursive: true });
-      write(at("old.txt"), "old", 1_700_000_000);
-      write(at("reports", "2026", "new.md"), "new", 1_700_000_200);
-      write(at("chart.png"), "png", 1_700_000_100);
-      write(at(".hidden"), "x", 1_700_000_300);
-      NodeFS.mkdirSync(at(".cache"));
-      write(at(".cache", "inside.txt"), "x", 1_700_000_300);
-      write(at("odd:name.txt"), "x", 1_700_000_300);
-      NodeFS.symlinkSync(outside + "/secret.txt", at("link.txt"));
-      NodeFS.symlinkSync(outside, at("linked-folder"));
-      const result = yield* list;
-      assert.isFalse(result.truncated);
-      assert.deepStrictEqual(
-        result.artifacts.map((artifact) => [artifact.relativePath, artifact.size]),
-        [
-          ["reports/2026/new.md", 3],
-          ["chart.png", 3],
-          ["old.txt", 3],
-        ],
-      );
-      assert.strictEqual(result.artifacts[0]?.modifiedAt, "2023-11-14T22:16:40.000Z");
-      assert.isTrue(NodeFS.existsSync(root));
-    }).pipe(Effect.provide(artifactsLayer())),
+  // Windows refuses colons and trailing spaces in names and needs elevated rights for symlinks.
+  it.effect.skipIf(windowsHost)(
+    "lists saved files newest first, leaves out hidden files, links and odd names, and opens each",
+    () =>
+      Effect.gen(function* () {
+        const { root, outside, at } = yield* folders;
+        NodeFS.mkdirSync(at("reports", "2026"), { recursive: true });
+        write(at("old.txt"), "old", 1_700_000_000);
+        write(at("reports", "2026", "new.md"), "new", 1_700_000_200);
+        write(at("chart.png"), "png", 1_700_000_100);
+        write(at(".hidden"), "x", 1_700_000_300);
+        NodeFS.mkdirSync(at(".cache"));
+        write(at(".cache", "inside.txt"), "x", 1_700_000_300);
+        write(at("odd:name.txt"), "x", 1_700_000_300);
+        write(at("trailing.txt "), "x", 1_700_000_300);
+        NodeFS.symlinkSync(outside + "/secret.txt", at("link.txt"));
+        NodeFS.symlinkSync(outside, at("linked-folder"));
+        const result = yield* list;
+        assert.isFalse(result.truncated);
+        assert.deepStrictEqual(
+          result.artifacts.map((artifact) => [artifact.relativePath, artifact.size]),
+          [
+            ["reports/2026/new.md", 3],
+            ["chart.png", 3],
+            ["old.txt", 3],
+          ],
+        );
+        assert.strictEqual(result.artifacts[0]?.modifiedAt, "2023-11-14T22:16:40.000Z");
+        assert.isTrue(NodeFS.existsSync(root));
+        for (const artifact of result.artifacts) {
+          assert.strictEqual((yield* read(artifact.relativePath)).status, "chunk");
+        }
+      }).pipe(Effect.provide(artifactsLayer())),
   );
 
-  it.effect("returns nothing for a missing folder or a folder that is itself a link", () =>
+  it.effect.skipIf(windowsHost)(
+    "returns nothing for a missing folder or a folder that is itself a link",
+    () =>
+      Effect.gen(function* () {
+        const { root, outside } = yield* folders;
+        NodeFS.rmSync(root, { recursive: true });
+        assert.deepStrictEqual(yield* list, { artifacts: [], truncated: false });
+        NodeFS.symlinkSync(outside, root);
+        assert.deepStrictEqual(yield* list, { artifacts: [], truncated: false });
+        assert.strictEqual(yield* reason(read("secret.txt")), "not_found");
+      }).pipe(Effect.provide(artifactsLayer())),
+  );
+
+  it.effect.skipIf(windowsHost)("reports a folder it may not read as a failure", () =>
     Effect.gen(function* () {
-      const { root, outside } = yield* folders;
-      NodeFS.rmSync(root, { recursive: true });
-      assert.deepStrictEqual(yield* list, { artifacts: [], truncated: false });
-      NodeFS.symlinkSync(outside, root);
-      assert.deepStrictEqual(yield* list, { artifacts: [], truncated: false });
-      assert.strictEqual(yield* reason(read("secret.txt")), "not_found");
+      const { at } = yield* folders;
+      NodeFS.mkdirSync(at("locked"));
+      NodeFS.chmodSync(at("locked"), 0o000);
+      const error = yield* reason(list);
+      NodeFS.chmodSync(at("locked"), 0o700);
+      assert.strictEqual(error, "persistence_failed");
     }).pipe(Effect.provide(artifactsLayer())),
   );
 
@@ -186,7 +206,7 @@ describe("ChannelBotArtifacts read", () => {
     }).pipe(Effect.provide(artifactsLayer())),
   );
 
-  it.effect("refuses a linked file and a file under a linked folder", () =>
+  it.effect.skipIf(windowsHost)("refuses a linked file and a file under a linked folder", () =>
     Effect.gen(function* () {
       const { outside, at } = yield* folders;
       NodeFS.symlinkSync(outside + "/secret.txt", at("link.txt"));
@@ -196,7 +216,7 @@ describe("ChannelBotArtifacts read", () => {
     }).pipe(Effect.provide(artifactsLayer())),
   );
 
-  it.effect("refuses a file swapped for a link after it was checked", () => {
+  it.effect.skipIf(windowsHost)("refuses a file swapped for a link after it was checked", () => {
     const swap = { run: () => {} };
     return Effect.gen(function* () {
       const { outside, at } = yield* folders;
@@ -209,7 +229,7 @@ describe("ChannelBotArtifacts read", () => {
     }).pipe(Effect.provide(artifactsLayer({ beforeOpen: Effect.sync(() => swap.run()) })));
   });
 
-  it.effect(
+  it.effect.skipIf(windowsHost)(
     "refuses a file whose folder was moved out and linked back after it was checked",
     () => {
       const swap = { run: () => {} };
