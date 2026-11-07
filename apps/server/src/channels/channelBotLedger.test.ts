@@ -9,15 +9,20 @@ import {
   ChannelInboundMessage,
   ChannelReceptionId,
   ChannelRequester,
+  CommandId,
   EnvironmentId,
   ProjectId,
   ThreadId,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -25,7 +30,18 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { mainBotKey, memberBotKey } from "./channelBotLedger.ts";
 import { bindingIdFor, contentHashFor, conversationIdFor, inputIdFor } from "./channelIds.ts";
 import { makeCreatedTasks } from "./channelTaskWrites.ts";
-import { goatInput, makeHarness, rpcContext, setupBot } from "./testkit/ChannelHarness.ts";
+import {
+  botThreadId,
+  defaultScript,
+  environmentId as harnessEnvironment,
+  goatInput,
+  makeHarness,
+  modelSelection,
+  ownerId as harnessOwner,
+  rpcContext,
+  scratchProjectId,
+  setupBot,
+} from "./testkit/ChannelHarness.ts";
 
 const NOW = "2026-11-07T00:00:00.000Z";
 const MEMBER = BotId.make("m1abcdefghij");
@@ -49,7 +65,7 @@ const requester = Schema.decodeSync(ChannelRequester)({
 });
 
 const decodeMessage = Schema.decodeSync(ChannelInboundMessage);
-const goatMessage = (key: string, threadId: ThreadId) =>
+const goatMessage = (key: string, threadId: ThreadId, text = "check the build") =>
   decodeMessage({
     kind: "goat",
     connectionId: "goat",
@@ -58,17 +74,23 @@ const goatMessage = (key: string, threadId: ThreadId) =>
     idempotencyKey: key,
     actor: {},
     replyAddress: { kind: "goat", environmentId, threadId },
-    text: "check the build",
+    text,
     attachments: [],
     receivedAt: NOW,
     intent: "message",
   });
 
 /** Stores a GOAT message for a bot, as the gateway does once it has resolved the bot. */
-const acceptFor = (botId: BotId, key: string, threadId: ThreadId, ownerId = "owner") =>
+const acceptFor = (
+  botId: BotId,
+  key: string,
+  threadId: ThreadId,
+  ownerId = "owner",
+  text?: string,
+) =>
   Effect.gen(function* () {
     const ledger = yield* ChannelLedger.ChannelLedger;
-    const message = goatMessage(key, threadId);
+    const message = goatMessage(key, threadId, text);
     const conversationId = conversationIdFor({ ownerId, ...message });
     return yield* ledger.acceptInput({
       ownerId,
@@ -254,6 +276,21 @@ describe("bot records", () => {
   );
 });
 
+/** A member's input whose task an older build created as main and finished. */
+const downgradedMemberTask = (ownerId: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const member = yield* acceptFor(MEMBER, "older-build", memberThread, ownerId);
+    const { task } = createdTaskFor(member);
+    yield* sql`UPDATE channel_inbox SET state = 'replied',
+      task_ids_json = ${JSON.stringify([task.taskId])} WHERE input_id = ${member.inputId}`;
+    yield* sql`INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version,
+      generation, task_json, created_at, updated_at)
+      VALUES (${task.taskId}, ${ownerId}, ${task.conversationId}, 'completed', 1, 1,
+      ${JSON.stringify({ ...task, status: "completed" })}, ${NOW}, ${NOW})`;
+    return task;
+  });
+
 describe("channel runtime after a downgrade", () => {
   it.effect("does no work until member tasks are back with their bots", () => {
     const harness = makeHarness();
@@ -263,15 +300,7 @@ describe("channel runtime after a downgrade", () => {
       const ledger = yield* ChannelLedger.ChannelLedger;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const member = yield* acceptFor(MEMBER, "older-build", memberThread, rpcContext.ownerId);
-      const { task } = createdTaskFor(member);
-      yield* sql`UPDATE channel_inbox SET state = 'replied', task_ids_json = ${JSON.stringify([
-        task.taskId,
-      ])} WHERE input_id = ${member.inputId}`;
-      yield* sql`INSERT INTO channel_tasks (task_id, owner_id, conversation_id, status, version,
-        generation, task_json, created_at, updated_at)
-        VALUES (${task.taskId}, ${rpcContext.ownerId}, ${task.conversationId}, 'completed', 1, 1,
-        ${JSON.stringify({ ...task, status: "completed" })}, ${NOW}, ${NOW})`;
+      const task = yield* downgradedMemberTask(rpcContext.ownerId);
       yield* sql`CREATE TRIGGER hold_repair BEFORE UPDATE OF bot_id ON channel_tasks
         BEGIN SELECT RAISE(ABORT, 'repair held'); END`;
       const waiting = yield* gateway.ingest(goatInput("hello", "after-upgrade"), rpcContext);
@@ -283,6 +312,120 @@ describe("channel runtime after a downgrade", () => {
 
       yield* sql`DROP TRIGGER hold_repair`;
       yield* runtime.drain;
+      assert.strictEqual((yield* ledger.getTask(task.taskId))?.botId, MEMBER);
+      assert.strictEqual((yield* ledger.getInput(waiting.inputId))?.snapshot.state, "replied");
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("member bot deliveries before members can be created", () => {
+  /** A member bot as 040b will store it: its own session thread, ref and profile. */
+  const seedMember = Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const sql = yield* SqlClient.SqlClient;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-member-bot"),
+      threadId: memberThread,
+      projectId: scratchProjectId,
+      title: "Helper",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "system",
+      creationSource: "server",
+    });
+    const bot = {
+      environmentId: harnessEnvironment,
+      projectId: scratchProjectId,
+      threadId: memberThread,
+    };
+    yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (
+      ${memberBotKey(harnessOwner, MEMBER)}, ${JSON.stringify({ bot, ownerId: harnessOwner, botId: MEMBER })},
+      ${NOW})`;
+    const profile = {
+      botId: MEMBER,
+      role: "member",
+      name: "Helper",
+      avatar: null,
+      purpose: "Checks builds.",
+      defaultModelSelection: null,
+      defaultProjectId: null,
+      environmentId: harnessEnvironment,
+      sessionThreadId: memberThread,
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (
+      ${"bot-profile:" + encodeURIComponent(harnessOwner) + ":" + MEMBER}, ${JSON.stringify(profile)},
+      ${NOW})`;
+  });
+
+  const threadText = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const records = yield* threads.getThreadRecords(threadId, ["messages", "turnItems"]);
+      return {
+        texts: records.messages.map((message) => message.text),
+        cards: records.turnItems.flatMap((item) =>
+          item.type === "notification" && item.ledgerTask ? [item.ledgerTask.taskId] : [],
+        ),
+      };
+    });
+
+  it.effect("a reply and a task card for a member's input land in the member's thread", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* seedMember;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* acceptFor(MEMBER, "member-hello", memberThread, harnessOwner, "hello");
+      yield* acceptFor(MEMBER, "member-task", memberThread, harnessOwner, "do: check the build");
+      yield* runtime.drain;
+
+      const page = yield* ledger.listTasks({ ownerId: harnessOwner, limit: 10 });
+      assert.lengthOf(page.tasks, 1);
+      const taskId = page.tasks[0]!.taskId;
+      assert.strictEqual((yield* ledger.getTask(taskId))?.botId, MEMBER);
+      const member = yield* threadText(memberThread);
+      const main = yield* threadText(botThreadId);
+      assert.include(member.texts, "Okay.");
+      assert.include(member.cards, taskId);
+      assert.notInclude(main.texts, "Okay.");
+      assert.notInclude(main.cards, taskId);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("background channel runtime after a downgrade", () => {
+  it.effect("starts no reception until a heartbeat finds member tasks repaired", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const task = yield* downgradedMemberTask(harnessOwner);
+      yield* sql`CREATE TRIGGER hold_repair BEFORE UPDATE OF bot_id ON channel_tasks
+        BEGIN SELECT RAISE(ABORT, 'repair held'); END`;
+      const receiving = yield* Deferred.make<void>();
+      harness.script.current = (input) =>
+        Deferred.succeed(receiving, undefined).pipe(Effect.andThen(defaultScript(input)));
+      const waiting = yield* gateway.ingest(goatInput("hello", "background"), rpcContext);
+
+      yield* Layer.build(ChannelRuntime.layerBackground);
+      yield* TestClock.adjust("15 seconds");
+      assert.isFalse(yield* Deferred.isDone(receiving));
+      assert.strictEqual((yield* ledger.getInput(waiting.inputId))?.snapshot.state, "accepted");
+
+      yield* sql`DROP TRIGGER hold_repair`;
+      yield* TestClock.adjust("10 seconds");
+      yield* Deferred.await(receiving);
+      yield* runtime.settle([waiting.inputId]);
       assert.strictEqual((yield* ledger.getTask(task.taskId))?.botId, MEMBER);
       assert.strictEqual((yield* ledger.getInput(waiting.inputId))?.snapshot.state, "replied");
     }).pipe(Effect.provide(harness.layer));
