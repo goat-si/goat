@@ -287,7 +287,10 @@ Acceptance:
 - "Did the login PR merge?" is answered in its first reply with the PR's state, and no worker is
   launched before that reply.
 - A revoked link sees nothing outside its own conversation, even if revoked mid-answer.
-- A thread on another machine is answered from the reports already received.
+- A thread on another machine is answered with its newest messages, read over the connection GOAT
+  already holds to that host within a few seconds, and only when the host is shown to be the GOAT
+  that ran the work. When the host refuses, cannot be reached or does not answer in time, the
+  answer uses the reports already received and says why.
 
 ## 10. Routines and "tell me when"
 
@@ -434,8 +437,9 @@ did not show it, not that it is absent. "GOAT now" is dev at
 ## Gaps, in priority order
 
 1. **Memory and work-history reads** (P1). Shipped in #459; corrections replace the note they
-   name, newest wins, through a marker on the appended line (memory.md stays append-only).
-   Remaining: the remote thread's latest messages (today only its reports).
+   name, newest wins, through a marker on the appended line (memory.md stays append-only). A
+   remote thread read takes the newest messages among its last 24 items, where a local read
+   takes its last three runs.
 2. **Bot turns after the ack** (P2): the bot works with tools on its own model, one worker per
    workstream, results summarized by the bot; dispatch waits until the first reply's delivery is settled, delivered or failed.
    A session turn's read-only tools may run before then; its launches, cards and channel sends wait (section 2).
