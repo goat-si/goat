@@ -55,7 +55,9 @@ const isDelegateSurface = (surface: ChannelChildWork["surface"]) =>
 export type ChannelChildWorkAdmitResult =
   | { readonly _tag: "admitted" }
   | { readonly _tag: "at_capacity" }
-  | { readonly _tag: "existing"; readonly record: ChannelChildWork };
+  | { readonly _tag: "existing"; readonly record: ChannelChildWork }
+  /** The owning task finished or a retry moved it to another generation. */
+  | { readonly _tag: "owner_settled" };
 
 export class ChannelChildWorkStore extends Context.Service<
   ChannelChildWorkStore,
@@ -179,6 +181,15 @@ const make = Effect.gen(function* () {
               _tag: "existing",
               record: decode(existing[0].value_json),
             } as const satisfies ChannelChildWorkAdmitResult;
+          }
+          // Checked in this write so a retry and an admission are ordered: either the retry sees
+          // this record, or this admission sees the task at its next generation.
+          const owners = yield* sql<{ readonly generation: number }>`
+            SELECT generation FROM channel_tasks WHERE task_id = ${record.taskId}
+              AND status NOT IN ('completed', 'failed', 'cancelled')
+          `;
+          if (owners[0]?.generation !== record.generation) {
+            return { _tag: "owner_settled" } as const satisfies ChannelChildWorkAdmitResult;
           }
           const siblings = yield* sql<{ readonly value_json: string }>`
             SELECT value_json FROM channel_runtime_state

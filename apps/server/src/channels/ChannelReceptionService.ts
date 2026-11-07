@@ -78,10 +78,10 @@ import * as tt from "./channelTaskThreadRefusal.ts";
 import {
   channelBotFilesFor,
   listChannelBotSkills,
-  makeChannelBotNoteSaver,
   quotedFromInput,
   readChannelBotNotes,
 } from "./channelBotNotes.ts";
+import { droppedNoteNotice, makeChannelBotNoteWriter } from "./channelBotNoteTabEdits.ts";
 import {
   boundRecall,
   canSeeTask,
@@ -97,6 +97,7 @@ import {
   threadDigest,
 } from "./channelBotRecall.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
+import { makeRemoteThreadRecall } from "./channelRemoteRecall.ts";
 import {
   approvalCard,
   type ApprovalReply,
@@ -105,7 +106,7 @@ import {
   parseApprovalReply,
   whichApproval,
 } from "./channelApprovalCards.ts";
-import { replyDelivery } from "./channelReplyDelivery.ts";
+import { replyDelivery, turnAnswerReplyTo } from "./channelReplyDelivery.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
 import { makeRoutineInputs, ROUTINE_COPY, routineDecision } from "./channelRoutineInputs.ts";
 import { openQuestionTask } from "./channelQuestionAnswers.ts";
@@ -223,12 +224,13 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
-  const saveNote = yield* makeChannelBotNoteSaver(fileSystem, botFiles);
+  const botNotes = yield* makeChannelBotNoteWriter(fileSystem, botFiles, ledger);
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
   const memoryService = yield* Effect.serviceOption(MemoryService.MemoryService);
   const memorySync = yield* Effect.serviceOption(MemorySyncService.MemorySyncService);
+  const remoteThreadRecall = yield* makeRemoteThreadRecall;
 
   // Facts that do not change while the server runs.
   const linuxName =
@@ -509,7 +511,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (read.kind) {
         case "memory": {
-          const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+          const notes = yield* readChannelBotNotes(botFiles, read.query);
           // The whole visible journal is searched; only the prompt's copy is cut to size.
           const journal = journalFor(
             yield* visibleTasks(viewer, conversationId),
@@ -542,13 +544,7 @@ const make = Effect.gen(function* () {
             return taskDigest(task) + "\nIts coding thread has not started.";
           }
           if (worker.host !== undefined) {
-            // Remote threads are read through their reports, which the ledger already holds.
-            return (
-              taskDigest(task) +
-              "\nIts thread runs on " +
-              worker.host +
-              "; only its reports reach this machine."
-            );
+            return yield* remoteThreadRecall(task, { ...worker, host: worker.host }, viewer);
           }
           // Only the newest runs' messages are loaded; a long thread is never read whole.
           const { runs } = yield* threads.getThreadRecords(worker.threadId, ["runs"]);
@@ -1010,7 +1006,7 @@ const make = Effect.gen(function* () {
             : undefined;
       const answer =
         approvalReply === undefined
-          ? undefined
+          ? yield* botNotes.tabEdit(message, inputId, readAt, routine ? undefined : judgedNow)
           : yield* decideApprovalReply(
               approvalReply,
               conversationId,
@@ -1087,7 +1083,7 @@ const make = Effect.gen(function* () {
                 );
                 const shells = yield* listThreads;
                 const facts = yield* hostFacts(shells);
-                const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+                const notes = yield* readChannelBotNotes(botFiles, message.text);
                 // Everything this pass sees about other work is judged with the link as it is now.
                 const viewer = yield* viewerNow(requester, message.connectionId);
                 // Titles of the owner's threads are other work, so only someone who may read it sees them.
@@ -1282,8 +1278,8 @@ const make = Effect.gen(function* () {
       // names its input, so a second pass for the same input does not add it twice.
       const noteNotice =
         decision.remember !== undefined && rememberRefusal === undefined
-          ? yield* saveNote(decision.remember, readAt, inputId, decision.replacesNote)
-          : undefined;
+          ? yield* botNotes.save(decision.remember, readAt, inputId, decision.replacesNote)
+          : droppedNoteNotice(rememberRefusal);
 
       let replyText = decision.replyText;
       let finalDecision = decision;
@@ -1704,12 +1700,14 @@ const make = Effect.gen(function* () {
         origin.kind !== "goat" && (base.kind === "result" || base.kind === "failure")
           ? channelEvidenceSentence(task.observed?.result)
           : null;
+      const replyTo = turnAnswerReplyTo(task, base.kind);
       const deliveries = [
         replyDelivery({
           causeKey: "narration:" + pending.event.eventId + ":origin",
           destination: origin,
           kind: base.kind,
           text: evidence === null ? worded : worded + "\n\n" + evidence,
+          replyTo,
           task,
           mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
           options: "options" in base ? base.options : undefined,
@@ -1729,6 +1727,7 @@ const make = Effect.gen(function* () {
             destination: botAddress(bot),
             kind: base.kind,
             text: worded,
+            replyTo,
             task,
           }),
         );

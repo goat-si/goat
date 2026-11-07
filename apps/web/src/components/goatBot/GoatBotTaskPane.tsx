@@ -1,5 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
-import { canSendToGoatBot, presentTaskStatus } from "@goat/client-runtime/goatBot";
+import {
+  canSendToGoatBot,
+  isRetryableTaskStatus,
+  presentTaskStatus,
+  taskAttemptLabel,
+} from "@goat/client-runtime/goatBot";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useEffect, type CSSProperties } from "react";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
@@ -14,6 +19,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
 import { memberThreadsKey, useGoatBotMember } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
@@ -109,11 +115,17 @@ export function GoatBotTaskPane({
           {task?.kind === "task" && (
             <p className="shrink-0 text-xs text-muted-foreground">
               {presentTaskStatus(task.task.status, task.view.doneAt).label}
+              {taskAttemptLabel(task.task.generation)
+                ? ` · ${taskAttemptLabel(task.task.generation)}`
+                : ""}
             </p>
           )}
         </div>
         {task?.kind === "task" && (
           <>
+            {session.supportsTaskRetry && isRetryableTaskStatus(task.task.status) ? (
+              <GoatBotTaskRetry environmentId={environmentId} taskId={taskId} onStarted={refresh} />
+            ) : null}
             <Button
               variant="ghost"
               size="sm"

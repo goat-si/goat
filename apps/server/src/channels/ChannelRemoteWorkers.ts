@@ -71,7 +71,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
-import { channelBotFilesFor, readChannelBotNotes } from "./channelBotNotes.ts";
+import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
 import {
   answerForwardIdsFor,
   questionIdFor,
@@ -1354,7 +1354,7 @@ const make = Effect.gen(function* () {
    */
   const workerMessage = (task: ChannelLedger.ChannelStoredTask["task"]) =>
     Effect.gen(function* () {
-      const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+      const notes = yield* readChannelBotNotesSnapshot(botFiles, task.instruction);
       const skills = yield* readNamedSkills(fileSystem, path, botFiles, task.instruction);
       return remoteWorkerMessage(task, { notes, skills });
     });

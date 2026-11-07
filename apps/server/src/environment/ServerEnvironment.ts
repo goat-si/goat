@@ -344,6 +344,8 @@ export const make = Effect.gen(function* () {
       goatBotTaskThreads: true,
       goatBotWaitingRead: true,
       goatBotNotes: true,
+      goatBotLibrary: true,
+      goatBotTaskRetry: true,
       // ChannelLayers assembles the live Slack runtime behind the slackChannel.* RPCs.
       slackChannel: true,
       slackChannelAccess: true,

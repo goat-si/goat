@@ -7,7 +7,7 @@ import { userEvent } from "vite-plus/test/browser";
 import "~/index.css";
 import { render } from "../../../test/render";
 
-const mocks = vi.hoisted(() => ({ upsert: vi.fn(), setEnabled: vi.fn() }));
+const mocks = vi.hoisted(() => ({ upsert: vi.fn(), setEnabled: vi.fn(), runNow: vi.fn() }));
 vi.mock("~/state/entities", () => ({
   useThreadShell: () => ({
     id: "bot",
@@ -19,6 +19,7 @@ vi.mock("~/state/server", () => ({
   serverEnvironment: {
     upsertScheduledTask: { permissionAtom: () => Atom.make(true), execute: mocks.upsert },
     setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
+    runScheduledTaskNow: { permissionAtom: () => Atom.make(true), execute: mocks.runNow },
   },
 }));
 vi.mock("~/state/use-atom-command", () => ({
@@ -32,6 +33,7 @@ const threadId = ThreadId.make("bot");
 function setup() {
   mocks.upsert.mockReset();
   mocks.setEnabled.mockReset();
+  mocks.runNow.mockReset();
 }
 
 const savedCheckIn: BotRoutineSource = {
@@ -95,4 +97,59 @@ it("a refused save keeps the check-in form open and shows why", async () => {
     .element(screen.getByRole("alert"))
     .toHaveTextContent("Couldn't save the check-in: Denied");
   await expect.element(screen.getByRole("form", { name: "Check in on me" })).toBeVisible();
+});
+
+const failedRoutine: BotRoutineSource = {
+  ...savedCheckIn,
+  id: ScheduledTaskId.make("routine:failed"),
+  title: "Morning digest",
+  lastRunAt: "2026-11-07T08:00:00.000Z",
+  lastRunStatus: "failed",
+  lastRunError: "Provider exited with code 1",
+};
+const fineRoutine: BotRoutineSource = {
+  ...savedCheckIn,
+  id: ScheduledTaskId.make("routine:fine"),
+  title: "Evening digest",
+  lastRunAt: "2026-11-07T08:00:00.000Z",
+  lastRunStatus: "succeeded",
+};
+
+it("offers Run now only for a routine whose last run failed, one run per tap", async () => {
+  setup();
+  mocks.runNow.mockResolvedValue(AsyncResult.success({ task: failedRoutine }));
+  await using screen = await render(
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={[failedRoutine, fineRoutine]}
+      error={null}
+    />,
+  );
+  const runNow = screen.getByRole("button", { name: "Run now" });
+  await expect.element(runNow).toBeVisible();
+  expect(screen.getByRole("button", { name: "Run now" }).elements()).toHaveLength(1);
+  await userEvent.click(runNow);
+  await vi.waitFor(() => expect(mocks.runNow).toHaveBeenCalledOnce());
+  expect(mocks.runNow).toHaveBeenCalledWith({
+    environmentId,
+    input: { id: "routine:failed" },
+  });
+});
+
+it("a refused Run now says why", async () => {
+  setup();
+  mocks.runNow.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("Busy"))));
+  await using screen = await render(
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={[failedRoutine]}
+      error={null}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Run now" }));
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("Couldn't run this routine: Busy");
 });

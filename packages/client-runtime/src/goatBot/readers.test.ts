@@ -48,6 +48,8 @@ describe("presentTaskChip", () => {
       tone: "active",
       sourceLabel: null,
       continuationLabel: null,
+      attemptLabel: null,
+      retryable: false,
       updatedAt: "2026-10-12T12:01:00.000Z",
       summary: null,
       attentionLabel: null,
@@ -55,6 +57,31 @@ describe("presentTaskChip", () => {
       pullRequests: [],
       target: { kind: "thread", environmentId: "env", threadId: "worker" },
     });
+  });
+
+  it("offers a retry for failed or stopped work here, and names the attempt", () => {
+    expect(presentTaskChip(chip({ status: "failed" }))).toMatchObject({
+      retryable: true,
+      attemptLabel: null,
+    });
+    expect(presentTaskChip(chip({ status: "cancelled", generation: 2 }))).toMatchObject({
+      retryable: true,
+      attemptLabel: "Attempt 2",
+    });
+    expect(presentTaskChip(chip({ status: "running", generation: 3 }))).toMatchObject({
+      retryable: false,
+      attemptLabel: "Attempt 3",
+    });
+    expect(presentTaskChip(chip({ status: "completed" })).retryable).toBe(false);
+    const remote = chip({
+      status: "failed",
+      worker: {
+        environmentId: EnvironmentId.make("env"),
+        threadId: ThreadId.make("worker"),
+        host: "mac-studio",
+      },
+    });
+    expect(presentTaskChip(remote).retryable).toBe(false);
   });
 
   it("explains a missing worker by how far the task got", () => {

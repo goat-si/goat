@@ -207,6 +207,39 @@ const make = Effect.gen(function* () {
           Effect.orElseSucceed(() => "unknown" as const),
         );
 
+  /**
+   * Pending requests in the coding threads this generation launched that still run: a question
+   * there waits on the person like the worker's own. Remote child work is not read here. A failed
+   * read returns "unknown" so the pass keeps what it observed before; a deleted thread asks nothing.
+   */
+  const childWorkRequests = (taskId: ChannelTask["taskId"], generation: number) =>
+    Option.isNone(childWorkStore)
+      ? Effect.succeed([] as const)
+      : childWorkStore.value.listForTask(taskId).pipe(
+          Effect.flatMap((records) =>
+            Effect.forEach(
+              records.flatMap((record) =>
+                record.generation === generation &&
+                record.surface === "thread_launch" &&
+                CHILD_WORK_HOLD_STATES.has(record.state) &&
+                record.destination?.threadId !== undefined
+                  ? [record.destination.threadId]
+                  : [],
+              ),
+              (threadId) =>
+                threads.getThreadRecords(threadId, ["runtimeRequests"]).pipe(
+                  Effect.map((records) =>
+                    records.runtimeRequests.map((request) => ({ ...request, threadId })),
+                  ),
+                  Effect.catchIf(isThreadMissing, () => Effect.succeed([])),
+                ),
+              { concurrency: 1 },
+            ),
+          ),
+          Effect.map((perThread) => perThread.flat()),
+          Effect.orElseSucceed(() => "unknown" as const),
+        );
+
   /** Needs-you already stored for a remote subagent's dispatch. Reconcile does not open SSH. */
   const storedRemoteNeeds = (correlationId: string) =>
     sql<{ readonly observation: string | null }>`
@@ -433,9 +466,19 @@ const make = Effect.gen(function* () {
           : undefined;
       if (limitRead === "unknown") return latest !== stored;
       const limit = limitRead;
+      const launchedRequests = yield* childWorkRequests(task.taskId, latest.task.generation);
+      if (launchedRequests === "unknown") return latest !== stored;
       const children = yield* scanSubagents(subagents, (threadId) =>
         threads.getThreadRecords(threadId, ["runtimeRequests", "subagents"]),
       );
+      // A coding thread can be both a subagent and launched child work; each request counts once.
+      const childRequests = [
+        ...new Map(
+          [...children.requests, ...launchedRequests].map(
+            (request) => [request.threadId + "\u0000" + request.id, request] as const,
+          ),
+        ).values(),
+      ];
       const remoteNeeds = yield* Effect.forEach(
         children.remote,
         (child) =>
@@ -456,7 +499,7 @@ const make = Effect.gen(function* () {
         needsYou: [
           ...needsYouFromRuntimeRequests(runtimeRequests, () => worker.threadId),
           // A subagent waiting on an approval or answer blocks the work as much as the worker.
-          ...needsYouFromRuntimeRequests(children.requests, (request) => request.threadId),
+          ...needsYouFromRuntimeRequests(childRequests, (request) => request.threadId),
           // A subagent on another GOAT machine: the needs-you list that machine last reported.
           ...remoteNeeds.flat(),
           ...(limit?.needsYou === undefined ? [] : [limit.needsYou]),

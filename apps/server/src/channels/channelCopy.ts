@@ -50,6 +50,18 @@ export const CHANNEL_COPY = {
   noteCorrectionUnmatched:
     "I saved that, but couldn't find the earlier note it changes. If an older note says otherwise, ask me to forget it.",
   noteNotSaved: "I couldn't save that note, so it won't apply yet. Please ask me again.",
+  noteChanged: "Changed that note.",
+  noteForgotten: "Forgot that note.",
+  noteNotFound: "I couldn't find that note in my notes, so nothing changed.",
+  noteEditBusy:
+    "Another change to my notes is still in progress, so nothing changed. Try again when it finishes.",
+  noteEditFailed: "I couldn't change my notes just now, so nothing changed. Please try again.",
+  noteFileTooLarge: "My notes file is too large to edit here, so nothing changed.",
+  noteEditNotAllowed: "Only someone linked to GOAT Bot can change its notes.",
+  noteCameBack:
+    "I removed that note, but it came back because something else wrote my notes at the same time. Please check the Memory tab.",
+  noteUnverified:
+    "I removed that note, but couldn't check my notes file afterwards. Please check the Memory tab.",
 } as const;
 
 /** What a model reads for a person's message: its text, then the names of the files sent with it. */

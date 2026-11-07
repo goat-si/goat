@@ -201,12 +201,17 @@ Acceptance:
 - "Stop", "cancel all" or the same intent MUST stop every running worker run of that requester
   and tell them what was stopped. "Stop the X one" stops only that workstream.
 - Stopping a worker MUST also stop the subagents it started.
+- A person MAY retry a failed or stopped item; it runs again as the item's next attempt only once
+  the previous attempt can no longer run, judged by the same evidence a stop needs to complete.
+  Work that ran on another machine MUST NOT be retried from here, and nothing retries by itself.
 
 Acceptance:
 
 - Five work requests in a row leave four running and one queued with a reply that says it is queued.
 - "Cancel all" cancels every running and queued item of the requester and lists them.
 - A follow-up for workstream A while B also runs reaches only A.
+- Retrying a failed item while its old worker or child work is still alive is refused; once they
+  end, one retry starts one new attempt, and the same tap sent again starts nothing more.
 
 ## 6. Interrupts while working
 
@@ -287,7 +292,10 @@ Acceptance:
 - "Did the login PR merge?" is answered in its first reply with the PR's state, and no worker is
   launched before that reply.
 - A revoked link sees nothing outside its own conversation, even if revoked mid-answer.
-- A thread on another machine is answered from the reports already received.
+- A thread on another machine is answered with its newest messages, read over the connection GOAT
+  already holds to that host within a few seconds, and only when the host is shown to be the GOAT
+  that ran the work. When the host refuses, cannot be reached or does not answer in time, the
+  answer uses the reports already received and says why.
 
 ## 10. Routines and "tell me when"
 
@@ -431,11 +439,21 @@ did not show it, not that it is absent. "GOAT now" is dev at
 | Model per bot                        | Text generation model only                                                                         | Per bot engine                  | `/model` per channel             | Per bot                       | Per agent                                      | **Match**: picker like a main thread                                                                                                          |
 | Audit of trigger                     | Requester recorded per task                                                                        | Inspector                       | Logs                             | Audit row with trigger        | Logs                                           | **Match**: person / routine / delegation on every action                                                                                      |
 
+A second study on 2026-11-07 read [threebot](https://github.com/RokaSwK/threebot),
+[Pero](https://github.com/perokit/pero), [Boop Agent](https://github.com/raroque/boop-agent),
+[Codync](https://github.com/leepokai/Codync), [Angelia](https://github.com/korengast/angelia),
+[OpenFolk](https://github.com/OpenFolk/OpenFolk), and OpenClaw's and Hermes's current docs. GOAT took
+bot faces, editable profiles, member bots, the Work panel's routine, memory and status views, and
+check-in routines from it. It kept requester-scoped sessions and per-requester approvals where those
+bots share one main session, approve for a whole chat, or approve unattended work, and it kept faces
+still except for short moves while a bot reads or works.
+
 ## Gaps, in priority order
 
 1. **Memory and work-history reads** (P1). Shipped in #459; corrections replace the note they
-   name, newest wins, through a marker on the appended line (memory.md stays append-only).
-   Remaining: the remote thread's latest messages (today only its reports).
+   name, newest wins, through a marker on the appended line (memory.md stays append-only). A
+   remote thread read takes the newest messages among its last 24 items, where a local read
+   takes its last three runs.
 2. **Bot turns after the ack** (P2): the bot works with tools on its own model, one worker per
    workstream, results summarized by the bot; dispatch waits until the first reply's delivery is settled, delivered or failed.
    A session turn's read-only tools may run before then; its launches, cards and channel sends wait (section 2).
@@ -446,8 +464,13 @@ did not show it, not that it is absent. "GOAT now" is dev at
 5. **Stop all** (P5) for a requester, including subagents.
 6. **Concurrency cap** of about four runs per requester with a visible queue.
 7. **Subagent approvals** surfaced to the requester as cards.
-8. **Model picker** per bot in web, desktop and mobile settings.
-9. **Routines and tell-me-when** from chat, with unattended deny.
+8. **Model picker** per bot in web, desktop and mobile settings. A member bot gets its model
+   when it is created (#2589) and runs on it, else on GOAT Bot's model. Remaining: changing a
+   member's model after creation.
+9. **Routines and tell-me-when** from chat, with unattended deny. Routines bound to a bot show in
+   its Work panel with schedule, last run and a pause switch (#2575), and a check-in preset
+   answers only when something needs the person and never approves (#2596). Remaining: one-shot
+   watches created from chat that stop after firing.
 10. **Slack buttons and iMessage numbered replies** for decision cards.
 11. **Attachments** out, and in from Slack and iMessage.
 12. **Trigger audit** on every action.

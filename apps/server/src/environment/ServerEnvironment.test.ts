@@ -112,6 +112,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
             ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION),
           );
           expect(descriptor.capabilities.drainRestart).toBe(true);
+          expect(descriptor.capabilities.goatBotLibrary).toBe(true);
           expect(descriptor.capabilities.memoryHubProtocolVersion).toBeUndefined();
           return identity.instanceId;
         }).pipe(Effect.provide(Layer.fresh(layerServerEnvironment(baseDir))));

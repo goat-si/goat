@@ -39,8 +39,12 @@ export interface SessionPrefixParts {
   readonly message: string;
 }
 
+// A body line that looks like a heading is escaped, so every heading line in a prefix is GOAT's own.
 const section = (heading: string, body: string) =>
-  "## " + heading + "\n" + (body.trim() === "" ? "(none)" : body.trim());
+  "## " +
+  heading +
+  "\n" +
+  (body.trim() === "" ? "(none)" : body.trim().replace(/^## /gmu, "\\## "));
 
 /** The session's first message, in the fixed order of SESSION_PREFIX_HEADINGS. */
 export const frozenSessionPrefix = (parts: SessionPrefixParts) =>
@@ -65,6 +69,28 @@ export const frozenSessionPrefix = (parts: SessionPrefixParts) =>
 
 export const sessionContextRevision = (text: string) =>
   NodeCrypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
+
+/**
+ * Whether a frozen prefix shows exactly `notes`: its notes heading and the journal heading each
+ * appear once as whole lines, in that order, and the text between them is `notes` as
+ * frozenSessionPrefix writes it. A prefix frozen before the notes changed, or one whose text
+ * imitates a heading, is not current.
+ */
+export const notesAreCurrent = (prefix: string, notes: string) => {
+  const lines = prefix.split("\n");
+  const linesOf = (heading: string) =>
+    lines.flatMap((line, index) => (line === "## " + heading ? [index] : []));
+  const [start, ...moreNotes] = linesOf(SESSION_PREFIX_HEADINGS[1]);
+  const [end, ...moreJournals] = linesOf(SESSION_PREFIX_HEADINGS[2]);
+  return (
+    start !== undefined &&
+    end !== undefined &&
+    moreNotes.length === 0 &&
+    moreJournals.length === 0 &&
+    start < end &&
+    lines.slice(start, end).join("\n") === section(SESSION_PREFIX_HEADINGS[1], notes) + "\n"
+  );
+};
 
 /** Room left for the next request's own tokens before the session counts as full. */
 export const SESSION_CONTEXT_RESERVE_TOKENS = 8_192;

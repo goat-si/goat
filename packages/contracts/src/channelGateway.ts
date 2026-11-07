@@ -367,6 +367,8 @@ export const BotThreadRow = Schema.Union([
       status: ChannelTaskStatus,
       updatedAt: IsoDateTime,
       completedAt: Schema.optional(IsoDateTime),
+      /** The attempt this row shows; absent means the first. */
+      generation: Schema.optional(PositiveInt),
     }),
     view: ChannelTaskView,
     lastActivityAt: IsoDateTime,
@@ -452,6 +454,38 @@ export const ChannelTaskMoveResult = Schema.Struct({
 });
 export type ChannelTaskMoveResult = typeof ChannelTaskMoveResult.Type;
 
+export const ChannelRetryTaskInput = Schema.Struct({
+  taskId: ChannelTaskId,
+  /** One per tap; resending it after a lost reply returns the first result. */
+  clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+});
+export type ChannelRetryTaskInput = typeof ChannelRetryTaskInput.Type;
+
+/** Why a person's retry did not start. Clients turn each into their own copy. */
+export const ChannelTaskRetryRefusal = Schema.Literals([
+  "not_finished",
+  "completed",
+  "elsewhere",
+  "still_running",
+  "not_retryable",
+  "bot_inactive",
+]);
+export type ChannelTaskRetryRefusal = typeof ChannelTaskRetryRefusal.Type;
+
+export const ChannelRetryTaskResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("started"),
+    taskId: ChannelTaskId,
+    generation: PositiveInt,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("refused"),
+    taskId: ChannelTaskId,
+    reason: ChannelTaskRetryRefusal,
+  }),
+]);
+export type ChannelRetryTaskResult = typeof ChannelRetryTaskResult.Type;
+
 export const ChannelGetInputInput = Schema.Struct({ inputId: ChannelInputId });
 export type ChannelGetInputInput = typeof ChannelGetInputInput.Type;
 
@@ -485,8 +519,11 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   restoreBot: "channel.restoreBot",
   listBotThreads: "channel.listBotThreads",
   listBotNotes: "channel.listBotNotes",
+  listBotArtifacts: "channel.listBotArtifacts",
+  readBotArtifact: "channel.readBotArtifact",
   listChildWork: "channel.listChildWork",
   updateTaskView: "channel.updateTaskView",
+  retryTask: "channel.retryTask",
   ingest: "channel.ingest",
   getTask: "channel.getTask",
   listTasks: "channel.listTasks",

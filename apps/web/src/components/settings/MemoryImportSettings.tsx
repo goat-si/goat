@@ -13,6 +13,7 @@ import {
   memoryImportFormatLabels,
   memoryImportFormats,
   memoryImportIssueReason,
+  memoryImportResultLines,
 } from "@goat/client-runtime/memory-import-workflow";
 import { useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { readEnvironmentScope, readPreparedConnection } from "../../state/session";
@@ -89,7 +90,7 @@ export function MemoryImportSettings({
     } catch (error) {
       if (mounted.current && token === generation.current)
         setError(
-          memoryImportRequestFailureMessage(error) ??
+          memoryImportRequestFailureMessage(error, format ?? undefined) ??
             "Import request failed. Check the result before previewing again.",
         );
     }
@@ -260,7 +261,9 @@ export function MemoryImportSettings({
           </div>
           {progress?.phase === "discovered" && sources.length === 0 ? (
             <p className="text-xs leading-normal text-muted-foreground/80">
-              No supported profiles found on this device.
+              {format
+                ? memoryImportIssueReason("source_missing", "request", format)
+                : "No supported profiles found on this device."}
             </p>
           ) : null}
           {items.length > 0 ? (
@@ -392,7 +395,7 @@ export function MemoryImportSettings({
       {!canSafelyImport() ? (
         <SettingsRow
           title="Import unavailable"
-          description={<span role="alert">{unsafeImportBrowserMessage}</span>}
+          description={<span role="alert">{unsafeImportBrowserMessage()}</span>}
         />
       ) : null}
       {!workflow ? (
@@ -434,10 +437,10 @@ export function MemoryImportSettings({
               {progress.receipt.state === "partial"
                 ? "Partial import; some memories may have been applied."
                 : "Import results received across all chunks."}{" "}
-              {progress.totals.outcomes.created ?? 0} created,{" "}
-              {progress.totals.outcomes.revised ?? 0} updated,{" "}
-              {progress.totals.outcomes.rejected ?? 0} rejected. Acceptance does not mean content is
-              available on every device.
+              {memoryImportResultLines(progress.totals)
+                .map((line) => `${line}. `)
+                .join("")}
+              Acceptance does not mean content is available on every device.
             </>
           }
         />

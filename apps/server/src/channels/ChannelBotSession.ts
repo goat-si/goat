@@ -55,7 +55,7 @@ import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
-import { channelBotFilesFor, readChannelBotNotes } from "./channelBotNotes.ts";
+import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
 import { canSeeTask, journalFor, RECALL_TASK_SCAN } from "./channelBotRecall.ts";
 import {
   frozenSessionPrefix,
@@ -255,11 +255,11 @@ const make = Effect.gen(function* () {
     task: ChannelTask,
     requester: ChannelRequester,
     message: string,
+    notes: string,
   ) {
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
     const standing = resolveProjectSettings(settings, (yield* requireTarget(task)).projectId)
       .settings.standingInstructions;
-    const notes = yield* readChannelBotNotes(fileSystem, botFiles);
     const visible = yield* ledger
       .listTasks({ ownerId: task.requester.ownerId, limit: RECALL_TASK_SCAN })
       .pipe(
@@ -546,8 +546,9 @@ const make = Effect.gen(function* () {
       initial.task,
       requester,
     );
+    const notes = yield* readChannelBotNotesSnapshot(botFiles, initial.task.instruction);
     const message =
-      turnInstruction(initial.task, botFiles, settings.goatclaw.enabled) +
+      turnInstruction(initial.task, botFiles, settings.goatclaw.enabled, notes?.matched) +
       "\n\n" +
       formatOpenWork(openWork);
     const attachments = yield* inputAttachments(initial.task.originInputId);
@@ -564,13 +565,10 @@ const make = Effect.gen(function* () {
         skillsPath: botFiles.skills,
       });
     if (row?.state === "active") {
-      const usage = Option.isNone(records)
-        ? undefined
-        : records.value.providerTurns
-            .flatMap((turn) => (turn.tokenUsage === undefined ? [] : [turn.tokenUsage]))
-            .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+      const usage = Rotation.latestTurnUsage(records);
       const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-      const due = Rotation.sessionRotationReason(usage, nowMs, row.context_text, identity.value);
+      const current = { identity: identity.value, notes: notes?.standing };
+      const due = Rotation.sessionRotationReason(usage, nowMs, row.context_text, current);
       if (due === undefined) {
         const { stored } = yield* freeze(message);
         return yield* queueInto(stored, row.thread_id, message, owner, requester, attachments);
@@ -587,7 +585,7 @@ const make = Effect.gen(function* () {
       row = undefined;
     }
     if (row === undefined) {
-      const frozen = yield* freezePrefix(initial.task, requester, message);
+      const frozen = yield* freezePrefix(initial.task, requester, message, notes?.standing ?? "");
       const prefix = Rotation.withIdentity(identity.value, frozen);
       row = yield* allocate(initial.task, requester, key, sharing, driver, prefix);
       if (row === undefined) return "deferred" as const;

@@ -1,4 +1,10 @@
-import { BotProfile, BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import {
+  BotProfile,
+  BotThreadRow,
+  ChannelTaskId,
+  type ChannelTaskStatus,
+  EnvironmentId,
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -6,7 +12,20 @@ import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   send: vi.fn(() => true),
-  update: vi.fn(async () => ({ _tag: "Success" })),
+  // One command function serves both commands; a retry is told apart by its clientRequestId.
+  update: vi.fn(async (call?: { readonly input?: { readonly clientRequestId?: string } }) =>
+    call?.input?.clientRequestId === undefined ? { _tag: "Success" } : state.retryResult,
+  ),
+  retryResult: {
+    _tag: "Success",
+    value: { status: "started", taskId: "task-1", generation: 3 },
+  } as { _tag: string; value: Record<string, unknown> },
+  row: { status: "waiting_input", generation: undefined, unread: true } as {
+    status: ChannelTaskStatus;
+    generation: number | undefined;
+    unread: boolean;
+  },
+  supportsRetry: true,
   refresh: vi.fn(),
   session: vi.fn(),
   lists: [] as Array<string | null>,
@@ -16,7 +35,10 @@ vi.mock("@effect/atom-react", async (original) => ({
   useAtomValue: () => true,
 }));
 vi.mock("~/state/channels", () => ({
-  channelEnvironment: { updateTaskView: { permissionAtom: () => null } },
+  channelEnvironment: {
+    updateTaskView: { permissionAtom: () => null },
+    retryTask: { permissionAtom: () => null },
+  },
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.update }));
 vi.mock("~/state/entities", () => ({
@@ -42,12 +64,13 @@ vi.mock("./useBotRoster", () => ({
           task: {
             taskId: "task-1",
             title: bot === null ? "Review work" : "Find sources",
-            status: "waiting_input",
+            status: state.row.status,
             updatedAt: "2026-11-04T10:00:00.000Z",
+            ...(state.row.generation === undefined ? {} : { generation: state.row.generation }),
           },
           view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
           lastActivityAt: "2026-11-04T10:00:00.000Z",
-          unread: true,
+          unread: state.row.unread,
           mainMessagesSinceQuiet: 0,
         }),
       ],
@@ -61,6 +84,7 @@ vi.mock("./useGoatBotSession", () => ({
     return {
       availability: { kind: "ready" },
       canOperate: true,
+      supportsTaskRetry: state.supportsRetry,
       rowsForTask: (id: string) => {
         state.session(id);
         return [];
@@ -169,4 +193,55 @@ it("a deleted member's task link says it was deleted and sends nothing", async (
   const composer = screen.getByPlaceholder("Research was deleted");
   await expect.element(composer).toBeDisabled();
   expect(state.send).not.toHaveBeenCalled();
+});
+
+function resetRetry(status: ChannelTaskStatus, generation?: number) {
+  state.update.mockClear();
+  state.retryResult = {
+    _tag: "Success",
+    value: { status: "started", taskId: "task-1", generation: 3 },
+  };
+  state.refresh.mockClear();
+  // Already read, so opening the pane refreshes nothing on its own.
+  state.row = { status, generation, unread: false };
+  state.supportsRetry = true;
+}
+
+it("retries a failed task from its pane, names the attempt and refreshes the list", async () => {
+  resetRetry("failed", 2);
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Failed · Attempt 2")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(state.update).toHaveBeenCalledOnce();
+  expect(state.update).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { taskId: "task-1", clientRequestId: expect.any(String) },
+  });
+  await vi.waitFor(() => expect(state.refresh).toHaveBeenCalledOnce());
+});
+
+it("shows why the server refused a retry", async () => {
+  resetRetry("cancelled");
+  state.retryResult = {
+    _tag: "Success",
+    value: { status: "refused", taskId: "task-1", reason: "still_running" },
+  };
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("The last attempt is still stopping. Try again in a moment.");
+  expect(state.refresh).not.toHaveBeenCalled();
+});
+
+it("offers no retry for work still going or on a server without it", async () => {
+  resetRetry("waiting_input");
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Review work")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  state.row = { status: "failed", generation: undefined, unread: false };
+  state.supportsRetry = false;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Failed")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Retry" })).not.toBeInTheDocument();
 });

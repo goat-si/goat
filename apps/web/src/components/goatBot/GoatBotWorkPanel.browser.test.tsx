@@ -6,34 +6,59 @@ import { userEvent } from "vite-plus/test/browser";
 import "~/index.css";
 import { render } from "../../../test/render";
 
-const mocks = vi.hoisted(() => ({ tasks: [] as unknown[], setEnabled: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  tasks: [] as unknown[],
+  setEnabled: vi.fn(),
+  turnsWaiting: [] as string[],
+}));
 vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({ rows: [] }),
-  useBotThreads: () => ({ rows: [], loaded: true, refresh: () => {} }),
+  useBotThreads: () => ({
+    rows: [],
+    supported: true,
+    loaded: true,
+    failed: false,
+    turnsWaiting: mocks.turnsWaiting,
+    refresh: () => {},
+  }),
 }));
 vi.mock("~/state/entities", () => ({
   useThreadShell: () => null,
   useServerConfigs: () => new Map(),
 }));
 vi.mock("~/state/query", () => ({
-  useEnvironmentQuery: () => ({ data: { tasks: mocks.tasks }, error: null }),
+  useEnvironmentQuery: () => ({
+    data: { tasks: mocks.tasks },
+    error: null,
+    failure: null,
+    refresh: () => {},
+  }),
 }));
 vi.mock("~/state/server", () => ({
   serverEnvironment: {
     scheduledTasksLive: () => null,
     upsertScheduledTask: { permissionAtom: () => Atom.make(false), execute: vi.fn() },
     setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
+    runScheduledTaskNow: { permissionAtom: () => Atom.make(true), execute: vi.fn() },
   },
 }));
 vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: { execute: typeof mocks.setEnabled }) => command.execute,
 }));
-vi.mock("~/state/channels", () => ({ channelEnvironment: { listBotNotes: () => null } }));
+vi.mock("~/state/channels", () => ({
+  channelEnvironment: {
+    listBotNotes: () => null,
+    listBotArtifacts: () => null,
+    readBotArtifact: { execute: vi.fn() },
+    listTasks: () => null,
+  },
+}));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
-function setup(tasks: unknown[]) {
+function setup(tasks: unknown[], turnsWaiting: string[] = []) {
   mocks.tasks = tasks;
+  mocks.turnsWaiting = turnsWaiting;
   mocks.setEnabled.mockReset();
 }
 
@@ -50,11 +75,9 @@ it("shows the empty state for each work tab", async () => {
   await userEvent.click(screen.getByRole("tab", { name: "Memory" }));
   await expect.element(screen.getByText("Notes need a newer GOAT server.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
-  await expect.element(screen.getByText("Files GOAT Bot saves will appear here.")).toBeVisible();
+  await expect.element(screen.getByText("Files need a newer GOAT server.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Computer" }));
-  await expect
-    .element(screen.getByText("Machines GOAT Bot works on will appear here."))
-    .toBeVisible();
+  await expect.element(screen.getByText("No work is running right now.")).toBeVisible();
 });
 
 it("a refused pause keeps the routine's stored state and shows why", async () => {
@@ -89,4 +112,24 @@ it("a refused pause keeps the routine's stored state and shows why", async () =>
     .element(screen.getByRole("alert"))
     .toHaveTextContent("Couldn't pause this routine: Denied");
   await expect.element(toggle).toHaveAttribute("aria-checked", "true");
+});
+
+it("points to the chat when the bot asked a question there that no task thread shows", async () => {
+  setup([], ["turn-1"]);
+  const onShowChat = vi.fn();
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      onShowChat={onShowChat}
+    />,
+    { router: "/bot?task=old" },
+  );
+  await expect
+    .element(screen.getByText("GOAT Bot is waiting for your answer in the chat", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("link", { name: "Open the chat" }));
+  expect(onShowChat).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/bot"));
+  expect(screen.router?.state.location.search).toEqual({});
 });

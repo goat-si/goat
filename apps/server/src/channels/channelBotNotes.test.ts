@@ -20,10 +20,32 @@ describe("quotedFromInput", () => {
     ["  \n\t", "remember that", false],
     ["remember that", "", false],
     ["remember that", "What machine is this?", false],
-    ["remember that", "Remember that", false],
+    ["remember that", "Remember that", true],
     ["reply in Korean", "reply in English", false],
+    ["Actually I deploy on Mondays.", "Actually I deploy on Mondays", true],
+    ["\u201CReply in Korean\u201D", 'Please "reply in Korean"', true],
+    ["Use the read\u2011only mode", "use the read-only mode", true],
+    ["C++", "I write C", false],
+    ["$5", "it costs 5 dollars", false],
+    ["deploy", "the deployment is fine", false],
+    ["...", "remember that...", false],
+    [
+      "\uD55C\uAD6D\uC5B4\uB85C \uB2F5\uD574",
+      "\uC55E\uC73C\uB85C \uD55C\uAD6D\uC5B4\uB85C \uB2F5\uD574\uC918",
+      true,
+    ],
+    [
+      "\uC601\uC5B4\uB85C \uB2F5\uD574",
+      "\uC55E\uC73C\uB85C \uD55C\uAD6D\uC5B4\uB85C \uB2F5\uD574\uC918",
+      false,
+    ],
   ])("matches %j against %j: %s", (quote, input, matches) => {
     expect(quotedFromInput(quote, input)).toBe(matches);
+  });
+
+  it("checks a word against a long run of letters without matching inside it", () => {
+    expect(quotedFromInput("a", "a".repeat(32_000))).toBe(false);
+    expect(quotedFromInput("a", "a".repeat(32_000) + " a")).toBe(true);
   });
 });
 
@@ -49,7 +71,7 @@ it.effect("appends each input note once as a dated single line with its source",
       "input-1",
     );
     yield* appendChannelBotNote(fs, files, "Use pnpm.", "2026-10-18T10:00:00.000Z", "input-2");
-    expect(yield* readChannelBotNotes(fs, files)).toBe(
+    expect(yield* readChannelBotNotes(files, "")).toBe(
       "- 2026-10-17: Reply in Korean. (asked in input-1)\n- 2026-10-18: Use pnpm. (asked in input-2)",
     );
     const text = yield* fs.readFileString(files.notes);
@@ -93,7 +115,7 @@ describe("corrections, newest wins", () => {
       expect((yield* fs.readFileString(files.notes)).trimEnd().split("\n").at(-1)).toBe(
         '- 2026-11-02: I deploy on Mondays. (asked in input-2) (replaces: "I deploy on Fridays.")',
       );
-      expect(yield* readChannelBotNotes(fs, files)).toBe(
+      expect(yield* readChannelBotNotes(files, "")).toBe(
         '- 2026-11-02: I deploy on Mondays. (asked in input-2) (replaces: "I deploy on Fridays.")',
       );
     }).pipe(Effect.provide(NodeServices.layer)),
@@ -119,7 +141,7 @@ describe("corrections, newest wins", () => {
         fridays,
       );
       expect(second).toEqual({ correction: "replaced" });
-      expect(yield* readChannelBotNotes(fs, files)).toBe(
+      expect(yield* readChannelBotNotes(files, "")).toBe(
         '- 2026-11-03: Tuesdays. (asked in input-3) (replaces: "Mondays.")',
       );
     }).pipe(Effect.provide(NodeServices.layer)),
@@ -137,8 +159,8 @@ describe("corrections, newest wins", () => {
         "- 2026-11-01:  I deploy on   Fridays. (asked in input-1)",
       );
       expect(outcome).toEqual({ correction: "replaced" });
-      expect(yield* readChannelBotNotes(fs, files)).not.toContain("Fridays. (asked in input-1)\n");
-      expect((yield* readChannelBotNotes(fs, files)).split("\n")).toHaveLength(1);
+      expect(yield* readChannelBotNotes(files, "")).not.toContain("Fridays. (asked in input-1)\n");
+      expect((yield* readChannelBotNotes(files, "")).split("\n")).toHaveLength(1);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -160,7 +182,7 @@ describe("corrections, newest wins", () => {
       const text = yield* fs.readFileString(files.notes);
       expect(text.match(/asked in input-2/gu)).toHaveLength(1);
       expect(text).not.toContain("(replaces:");
-      expect((yield* readChannelBotNotes(fs, files)).split("\n")).toHaveLength(2);
+      expect((yield* readChannelBotNotes(files, "")).split("\n")).toHaveLength(2);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -177,7 +199,7 @@ describe("corrections, newest wins", () => {
       );
       const text = yield* fs.readFileString(files.notes);
       yield* fs.writeFileString(files.notes, text.replace(/^.*Mondays.*\n/mu, ""));
-      expect(yield* readChannelBotNotes(fs, files)).toBe(
+      expect(yield* readChannelBotNotes(files, "")).toBe(
         "- 2026-11-01: I deploy on Fridays. (asked in input-1)",
       );
     }).pipe(Effect.provide(NodeServices.layer)),
@@ -198,7 +220,7 @@ describe("corrections, newest wins", () => {
         '- 2026-01-06: quoted (asked in d) (replaces: "say \\")\\" and \\\\")',
       ];
       yield* fs.writeFileString(files.notes, lines.join("\n") + "\n");
-      expect((yield* readChannelBotNotes(fs, files)).split("\n")).toEqual([
+      expect((yield* readChannelBotNotes(files, "")).split("\n")).toEqual([
         lines[1],
         lines[2],
         lines[5],

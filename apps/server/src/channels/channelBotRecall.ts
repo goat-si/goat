@@ -20,10 +20,10 @@ const RECALL_TASK_LIMIT = 5;
 /** How many of the owner's newest tasks a work read searches. */
 export const RECALL_TASK_SCAN = 200;
 /** How many of a thread's newest messages a thread read returns. */
-const RECALL_THREAD_MESSAGES = 6;
+export const RECALL_THREAD_MESSAGES = 6;
 /** How many of a thread's newest runs a thread read loads messages from. */
 export const RECALL_THREAD_RUNS = 3;
-const RECALL_MESSAGE_CHARS = 700;
+export const RECALL_MESSAGE_CHARS = 700;
 const RECALL_FIELD_CHARS = 600;
 /** At most this many memory lines or items answer one memory read. */
 export const RECALL_MEMORY_LINES = 12;

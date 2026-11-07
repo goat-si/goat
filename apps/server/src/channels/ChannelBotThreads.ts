@@ -10,6 +10,8 @@ import {
   ChannelTaskView,
   type ChannelListChildWorkInput,
   type ChannelListChildWorkResult,
+  type ChannelRetryTaskInput,
+  type ChannelRetryTaskResult,
   type ChannelUpdateTaskViewInput,
   MAIN_BOT_ID,
 } from "@goat/contracts";
@@ -24,6 +26,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
 import * as TaskViews from "./channelTaskViews.ts";
+import { makeTaskRetry } from "./channelTaskRetry.ts";
 
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 const decodeView = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskView));
@@ -46,6 +49,11 @@ export class ChannelBotThreads extends Context.Service<
       input: ChannelListChildWorkInput,
       owner: ChannelConnectionOwner,
     ) => Effect.Effect<ChannelListChildWorkResult, ChannelGatewayError>;
+    /** A person runs a failed or stopped task again as its next attempt. */
+    readonly retry: (
+      input: ChannelRetryTaskInput,
+      owner: ChannelConnectionOwner,
+    ) => Effect.Effect<ChannelRetryTaskResult, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotThreads") {}
 
@@ -54,6 +62,7 @@ const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const views = yield* TaskViews.ChannelTaskViews;
   const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+  const retry = yield* makeTaskRetry;
   const list = Effect.fn("ChannelBotThreads.list")(function* (
     owner: ChannelConnectionOwner,
     botId: BotId = BotId.make(MAIN_BOT_ID),
@@ -101,10 +110,16 @@ const make = Effect.gen(function* () {
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId} AND c.owner_id = ${owner.ownerId}
         AND c.kind = 'goat'
-        AND COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'
-        AND (t.status NOT IN ('completed', 'failed', 'cancelled')
-          OR COALESCE(json_extract(t.task_json, '$.completedAt'), t.updated_at) >= ${cutoffIso}
-          OR t.task_id IN (SELECT value FROM json_each(${pinned})))
+        AND ((COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'
+          AND (t.status NOT IN ('completed', 'failed', 'cancelled')
+            OR COALESCE(json_extract(t.task_json, '$.completedAt'), t.updated_at) >= ${cutoffIso}
+            OR t.task_id IN (SELECT value FROM json_each(${pinned}))))
+          -- The bot's own turn shows only while work it launched still runs; its reply is in the chat.
+          OR (json_extract(t.task_json, '$.kind') = 'turn' AND EXISTS (
+            SELECT 1 FROM channel_runtime_state s
+            WHERE s.key >= ('child-work:' || t.task_id || ':') AND s.key < ('child-work:' || t.task_id || ';')
+              AND json_extract(s.value_json, '$.generation') = t.generation
+              AND json_extract(s.value_json, '$.state') IN ('launched', 'bound', 'unknown'))))
       ORDER BY t.updated_at DESC, t.task_id DESC LIMIT 100`.pipe(Effect.mapError(failed));
     const tasks = yield* Effect.try(() => source.map((item) => decodeTask(item.task_json))).pipe(
       Effect.mapError(failed),
@@ -157,6 +172,7 @@ const make = Effect.gen(function* () {
           status: task.status,
           updatedAt: task.updatedAt,
           ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
+          ...(task.generation > 1 ? { generation: task.generation } : {}),
         },
         view,
         lastActivityAt: task.updatedAt,
@@ -199,6 +215,7 @@ const make = Effect.gen(function* () {
     list,
     update: views.update,
     listChildWork: listChildWorkFor,
+    retry,
   });
 });
 export const layer = Layer.effect(ChannelBotThreads, make);
@@ -213,4 +230,6 @@ export const rpcHandlers = (
     service.update(input, owner),
   [CHANNEL_GATEWAY_WS_METHODS.listChildWork]: (input: ChannelListChildWorkInput) =>
     service.listChildWork(input, owner),
+  [CHANNEL_GATEWAY_WS_METHODS.retryTask]: (input: ChannelRetryTaskInput) =>
+    service.retry(input, owner),
 });

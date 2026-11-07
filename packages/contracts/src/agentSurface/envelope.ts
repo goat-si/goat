@@ -128,6 +128,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   host_pressure: before("resource_exhausted"),
   // A channel workstream's descendant budget is full; admission refused before any launch.
   capacity_exceeded: before("resource_exhausted"),
+  // Automatic memory cleanup already ran; repeating fails until a person frees space.
+  memory_store_full: before("failed_precondition"),
   invalid_request: before("invalid_request"),
   target_required: before("invalid_request"),
   orchestration_error: c("internal"),
@@ -402,7 +404,7 @@ export const declaredFailureLiteral = (
   if (tag === undefined) return undefined;
   // A wrapper keeps a legacy code and names the wrapped literal in reason; the declared reason
   // wins, as fromFailure documents.
-  const literal = (["reason", "code", "failureCode"] as const)
+  const literal = (["classification", "reason", "code", "failureCode"] as const)
     .map((key) => stringField(error, key))
     .find((value) => value !== undefined && FAILURE_CLASSES[value] !== undefined);
   if (literal !== undefined) return { _tag: tag, code: literal };
@@ -428,6 +430,7 @@ const parseJson = (text: string): unknown => {
 const REASON_KEYS = ["code", "reason", "failureCode"] as const;
 const OMITTED_DETAILS: ReadonlySet<string> = new Set([
   "_tag",
+  "classification",
   ...REASON_KEYS,
   "message",
   "kind",
@@ -442,9 +445,11 @@ const OMITTED_DETAILS: ReadonlySet<string> = new Set([
  */
 export const fromFailure = (fields: Fields, context: CallContext): AgentSurfaceResult => {
   const tag = stringOf(fields, "_tag");
-  const declared = stringOf(fields, "reason");
+  const declared = [stringOf(fields, "classification"), stringOf(fields, "reason")].find(
+    (value) => value !== undefined && FAILURE_CLASSES[value] !== undefined,
+  );
   const reason =
-    (declared !== undefined && FAILURE_CLASSES[declared] !== undefined ? declared : undefined) ??
+    declared ??
     REASON_KEYS.map((key) => stringOf(fields, key)).find((value) => value !== undefined) ??
     tag ??
     "unknown";

@@ -14,9 +14,7 @@ import type { ChannelReceptionSkill } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as Semaphore from "effect/Semaphore";
 
-import { CHANNEL_COPY } from "./channelCopy.ts";
 import {
   collapseNoteText,
   NOTES_HEADER,
@@ -25,9 +23,15 @@ import {
   parseChannelBotNoteLines,
   replacesMarker,
 } from "./channelBotNoteLines.ts";
+import {
+  channelBotNotesSection,
+  EMPTY_NOTES,
+  NOTES_SCAN_BYTES,
+  selectChannelBotNotes,
+  type ChannelBotNotesSnapshot,
+} from "./channelBotNotesRecall.ts";
+import { readChannelBotNotesTail } from "./channelBotNotesTail.ts";
 
-/** The newest part of the notes reception reads, in characters. */
-const NOTES_READ_CHARS = 6_000;
 /** How far back a correction looks for the note it replaces, in characters. */
 const CORRECTION_READ_CHARS = 64 * 1024;
 const NOTE_MAX_CHARS = 500;
@@ -58,24 +62,63 @@ export const channelBotFilesFor = (path: Path.Path, stateDir: string): ChannelBo
 };
 
 /**
- * The newest notes still in force, one line each, or an empty string when there are none or they
- * cannot be read. A replaced note is left out; its replacement is always later, so the newest part
- * of the file decides that alone.
+ * The notes to show the bot for `query` (the message, request or instruction at hand), read from
+ * the newest part of the file; undefined when the file cannot be read, so a caller can tell a
+ * failed read from a file with no notes.
  */
-export const readChannelBotNotes = (fs: FileSystem.FileSystem, files: ChannelBotFiles) =>
-  Effect.gen(function* () {
-    const text = yield* fs.readFileString(files.notes);
-    const body = text.startsWith(NOTES_HEADER) ? text.slice(NOTES_HEADER.length) : text;
-    return parseChannelBotNoteLines(notesTail(body, NOTES_READ_CHARS))
-      .filter((line) => line.replacedBy === undefined)
-      .map((line) => line.raw)
-      .join("\n");
-  }).pipe(Effect.orElseSucceed(() => ""));
+export const readChannelBotNotesSnapshot = Effect.fn("channelBotNotes.readSnapshot")(
+  function* (files: ChannelBotFiles, query: string) {
+    const tail = yield* readChannelBotNotesTail(files.notes, NOTES_SCAN_BYTES);
+    if (tail === null) return EMPTY_NOTES;
+    return selectChannelBotNotes(new TextDecoder().decode(tail.bytes), query);
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("GOAT Bot notes could not be read", { cause }).pipe(
+          Effect.as<ChannelBotNotesSnapshot | undefined>(undefined),
+        ),
+      ),
+    ),
+);
+
+/** The notes section for `query`, or an empty string when there are none or they cannot be read. */
+export const readChannelBotNotes = (files: ChannelBotFiles, query: string) =>
+  Effect.map(readChannelBotNotesSnapshot(files, query), (notes) =>
+    notes === undefined ? "" : channelBotNotesSection(notes),
+  );
 
 export interface ChannelBotNoteSaved {
   /** Set when the note was a correction: whether it replaced the note it named. */
   readonly correction?: "replaced" | "unmatched";
 }
+
+/** How a note line names the input that asked for it; ids keep no whitespace, so the name ends at ")". */
+export const noteSource = (sourceInputId: string) =>
+  " (asked in " + sourceInputId.replace(/\s+/gu, "") + ")";
+
+/** One dated note line as reception writes it, or undefined for an empty note. */
+export const channelBotNoteLine = (
+  note: string,
+  date: string,
+  sourceInputId: string,
+  replaces?: string,
+) => {
+  const text = collapseNoteText(note).slice(0, NOTE_MAX_CHARS);
+  if (text === "") return undefined;
+  return (
+    "- " +
+    date.slice(0, 10) +
+    ": " +
+    text +
+    noteSource(sourceInputId) +
+    (replaces === undefined ? "" : replacesMarker(replaces))
+  );
+};
+
+/** What appending to `text` must start with, so a hand edit without a final newline keeps its line. */
+export const appendPrefix = (exists: boolean, text: string) =>
+  !exists ? NOTES_HEADER : text === "" || text.endsWith("\n") ? "" : "\n";
 
 /**
  * Appends one note as a single dated line, naming the channel input that asked for it. A note
@@ -93,9 +136,8 @@ export const appendChannelBotNote = (
 ) =>
   Effect.gen(function* () {
     const nothing: ChannelBotNoteSaved = {};
-    const line = collapseNoteText(note).slice(0, NOTE_MAX_CHARS);
-    if (line === "") return nothing;
-    const source = " (asked in " + sourceInputId.replace(/\s+/gu, "") + ")";
+    if (channelBotNoteLine(note, date, sourceInputId) === undefined) return nothing;
+    const source = noteSource(sourceInputId);
     const saved = (replaced: boolean): ChannelBotNoteSaved =>
       replaces === undefined ? {} : { correction: replaced ? "replaced" : "unmatched" };
     yield* fs.makeDirectory(files.dir, { recursive: true });
@@ -111,49 +153,70 @@ export const appendChannelBotNote = (
         : noteNamedBy(parseChannelBotNoteLines(notesTail(text, CORRECTION_READ_CHARS)), replaces);
     yield* fs.writeFileString(
       files.notes,
-      (exists ? "" : NOTES_HEADER) +
-        "- " +
-        date.slice(0, 10) +
-        ": " +
-        line +
-        source +
-        (target === undefined ? "" : replacesMarker(target.text)) +
+      appendPrefix(exists, text) +
+        channelBotNoteLine(note, date, sourceInputId, target?.text) +
         "\n",
       { flag: "a" },
     );
     return saved(target !== undefined);
   });
 
-/**
- * Saves notes one at a time, so a correction sees the note the one before it saved. Each save
- * answers what the reply must add: a correction that matched nothing, or a failed save.
- */
-export const makeChannelBotNoteSaver = (fs: FileSystem.FileSystem, files: ChannelBotFiles) =>
-  Effect.map(
-    Semaphore.make(1),
-    (gate) => (note: string, readAt: string, inputId: string, replaces?: string) =>
-      gate
-        .withPermits(1)(appendChannelBotNote(fs, files, note, readAt, inputId, replaces))
-        .pipe(
-          Effect.map(({ correction }) =>
-            correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
-          ),
-          Effect.catch((cause) =>
-            Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
-              Effect.as(CHANNEL_COPY.noteNotSaved),
-            ),
-          ),
-        ),
-  );
+// Typography a model may change when it copies words: case, curly quotes, dashes, spacing.
+const comparable = (text: string) =>
+  text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u201A\u201B\u2032]/gu, "'")
+    .replace(/[\u201C\u201D\u201E\u201F\u2033]/gu, '"')
+    .replace(/[\u2010-\u2015\u2212]/gu, "-")
+    .replace(/\s+/gu, " ")
+    .trim();
+const TRAILING_PUNCTUATION = /[\s.!?\u2026"')\]]+$/u;
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+// Scripts that separate words with spaces; Korean and Japanese attach particles and endings, so a
+// quote there may stop inside a written word.
+const SPACED_WORD_CHAR = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{N}]/u;
+
+/** The code point that ends just before `at`, reading a surrogate pair whole. */
+const codePointBefore = (text: string, at: number) => {
+  if (at <= 0) return undefined;
+  const low = text.charCodeAt(at - 1);
+  const high = at >= 2 ? text.charCodeAt(at - 2) : 0;
+  const pair = low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff;
+  return text.slice(pair ? at - 2 : at - 1, at);
+};
+
+const codePointFrom = (text: string, at: number) => {
+  const point = text.codePointAt(at);
+  return point === undefined ? undefined : String.fromCodePoint(point);
+};
+
+const atWordBoundaries = (haystack: string, needle: string) => {
+  const first = codePointFrom(needle, 0) ?? "";
+  const last = codePointBefore(needle, needle.length) ?? "";
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+    const before = codePointBefore(haystack, at);
+    const after = codePointFrom(haystack, at + needle.length);
+    const cutsBefore =
+      SPACED_WORD_CHAR.test(first) && before !== undefined && SPACED_WORD_CHAR.test(before);
+    const cutsAfter =
+      SPACED_WORD_CHAR.test(last) && after !== undefined && SPACED_WORD_CHAR.test(after);
+    if (!cutsBefore && !cutsAfter) return true;
+  }
+  return false;
+};
 
 /**
- * Whether `quote` occurs in the person's message, ignoring differences in whitespace. Used to
- * check that a note request the model reports came from the current input.
+ * Whether `quote` occurs in the person's message as whole words, ignoring case, curly quotes,
+ * dashes, spacing and sentence punctuation the quote adds at its end. Used to check that a note
+ * request the model reports came from the current input; every other character must match.
  */
 export const quotedFromInput = (quote: string, input: string): boolean => {
-  const collapse = (text: string) => text.replace(/\s+/gu, " ").trim();
-  const needle = collapse(quote);
-  return needle !== "" && collapse(input).includes(needle);
+  const haystack = comparable(input);
+  const whole = comparable(quote);
+  return [whole, whole.replace(TRAILING_PUNCTUATION, "")].some(
+    (needle) => WORD_CHAR.test(needle) && atWordBoundaries(haystack, needle),
+  );
 };
 
 /** Skills by file name and first line, alphabetically. A missing folder means none. */

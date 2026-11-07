@@ -103,3 +103,30 @@ holds the cluster home claim. Web screens live in `apps/web/src/components/goatB
 `useGoatBotSession` sends with `kind: "goat"`. Mobile renders `GoatBotScreen` in
 `apps/mobile/src/features/goat-bot/GoatBotScreen.tsx` and keeps a remembered thread-or-bot mode on
 Home. Worker coding stays in the worker threads. The bot transcript is the messenger view.
+
+### Member bots
+
+An owner has the main bot and up to 50 member bots. Profiles live in `channel_runtime_state` under
+`bot-profile:<owner>:<botId>` (`apps/server/src/channels/ChannelBotProfiles.ts`); bot refs sit at
+`bot:<owner>` for main and `bot: <owner>:<botId>` for members
+(`apps/server/src/channels/channelBotLedger.ts`), so the `bot:%` scan in `ChannelBotDirectory`
+recognises member threads too. Migration `135_ChannelBotIds` adds `bot_id` (default `main`) to
+`channel_inbox` and `channel_tasks`; ingest decides the bot from the reply thread and stores it,
+tasks keep their input's bot, and deliveries go to that bot's current thread. Slack, iMessage and MCP
+always resolve to main. `ChannelBotMembers` (`apps/server/src/channels/ChannelBotMembers.ts`) creates,
+hides, deletes (archive, refused while work is open) and restores members, and reconciles steps a
+crash left half done. An older build ignores `bot_id` and files new tasks for member input as main;
+the ledger repairs them from the inbox row before any channel work or bot read on upgrade.
+
+### Work panel reads
+
+The Work panel reads the GOAT Bot computer through home-only RPCs that answer `not_home` with the
+home environment elsewhere. `ChannelBotNotesReader` (`apps/server/src/channels/ChannelBotNotesReader.ts`)
+serves `channel.listBotNotes` from the newest 64 KiB of `memory.md`, with each note's source
+(`apps/server/src/channels/channelBotNoteSources.ts`) and the replacements a correction recorded;
+bot turns read notes separately, newest plus older matches (`channelBotNotesRecall.ts`).
+`apps/server/src/channels/ChannelBotArtifacts.ts` lists the bot's `artifacts` folder and serves
+files in versioned 512 KiB chunks up to 20 MiB (`packages/contracts/src/channelBotArtifacts.ts`).
+`channel.retryTask` (`apps/server/src/channels/channelTaskRetry.ts`) starts a failed or stopped
+task's next generation only on the evidence a stop accepts, and never for work that ran on another
+machine.

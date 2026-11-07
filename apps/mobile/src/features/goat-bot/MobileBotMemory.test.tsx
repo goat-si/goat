@@ -16,12 +16,14 @@ vi.mock("react-native", () => ({
     children,
     onPress,
     disabled,
+    accessibilityState,
   }: {
     children?: ReactNode;
     onPress?: () => void;
     disabled?: boolean;
+    accessibilityState?: { expanded?: boolean };
   }) => (
-    <button onClick={onPress} disabled={disabled}>
+    <button onClick={onPress} disabled={disabled} aria-expanded={accessibilityState?.expanded}>
       {children}
     </button>
   ),
@@ -125,7 +127,7 @@ it("lists notes newest first with their date and says how GOAT Bot uses them", a
 });
 
 it("says when there are no notes yet, and a member's tab says they are shared", async () => {
-  setup({ data: { revision: null, notes: [], truncated: true } });
+  setup({ data: { revision: null, notes: [], truncated: false } });
   await render({ member: true });
   expect(container.textContent).toContain(
     "No notes yet. Ask GOAT Bot to remember a standing rule.",
@@ -239,4 +241,114 @@ it("a new list drops an open change so new wording never lands on another note",
   await render({ onDraft: () => {} });
   expect(container.textContent).toContain(newer.text);
   expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
+});
+const sourced = (index: number, text: string, extra: Record<string, unknown> = {}) => ({
+  index,
+  date: "2026-11-07",
+  text,
+  ...extra,
+});
+const PARTIAL =
+  "memory.md is larger than 64 KB, so this list shows only complete notes from its newest 64 KB. The rest of the file is unchanged.";
+
+it("says where each note was asked for", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        sourced(2, "Reply in Korean", {
+          source: {
+            kind: "shown",
+            inputId: "i",
+            channel: "slack",
+            botId: "main",
+            from: "Juni",
+            at: "2026-11-07T10:00:00.000Z",
+          },
+        }),
+        sourced(1, "Keep it short", { source: { kind: "elsewhere" } }),
+        { index: 0, date: null, text: "Written by hand" },
+      ],
+      truncated: false,
+    },
+  });
+  await render();
+  const text = container.textContent ?? "";
+  expect(text).toMatch(/Slack, Juni, Nov [78]/);
+  expect(text).toContain("Asked in another conversation");
+  expect(text.match(/Asked in another conversation/g)).toHaveLength(1);
+});
+
+it("keeps replaced notes behind a toggle that says whether it is open", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        sourced(1, "Reply in English", { replaces: "Reply in Korean" }),
+        sourced(0, "Reply in Korean", { replacedBy: 1 }),
+      ],
+      truncated: false,
+    },
+  });
+  await render({ onDraft: () => {} });
+  expect(container.textContent).toContain("Replaces: “Reply in Korean”");
+  expect(container.textContent).not.toContain("Replaced by:");
+  expect(button("Show replaced notes (1)")?.getAttribute("aria-expanded")).toBe("false");
+  await press("Show replaced notes (1)");
+  expect(container.textContent).toContain("Replaced by: “Reply in English”");
+  expect(button("Hide replaced notes")?.getAttribute("aria-expanded")).toBe("true");
+  expect(
+    [...container.querySelectorAll("button")].filter(
+      (item) => item.textContent === "Ask to forget",
+    ),
+  ).toHaveLength(1);
+  await press("Hide replaced notes");
+  expect(container.textContent).not.toContain("Replaced by:");
+});
+
+it("a correction that arrives while a change is open drops the change and hides the old note", async () => {
+  setup({ data: { revision: "r1", notes: [sourced(0, "Reply in Korean")], truncated: false } });
+  await render({ onDraft: () => {}, refreshKey: "a" });
+  await press("Ask to change");
+  expect(container.querySelector('[aria-label="New wording"]')).not.toBeNull();
+  state.data = {
+    revision: "r2",
+    notes: [
+      sourced(1, "Reply in English", { replaces: "Reply in Korean" }),
+      sourced(0, "Reply in Korean", { replacedBy: 1 }),
+    ],
+    truncated: false,
+  };
+  await render({ onDraft: () => {}, refreshKey: "b" });
+  expect(container.querySelector('[aria-label="New wording"]')).toBeNull();
+  expect(
+    [...container.querySelectorAll("button")].filter(
+      (item) => item.textContent === "Ask to forget",
+    ),
+  ).toHaveLength(1);
+});
+
+it.each([
+  { name: "with notes", notes: [sourced(0, "Reply in Korean")], body: "Reply in Korean" },
+  {
+    name: "with no complete note",
+    notes: [],
+    body: "No complete note fits in the newest 64 KB of memory.md.",
+  },
+])("explains a partial list $name", async ({ notes, body }) => {
+  setup({ data: { revision: "r1", notes, truncated: true } });
+  await render();
+  expect(container.textContent).toContain(PARTIAL);
+  expect(container.textContent).toContain(body);
+  expect(container.textContent).not.toContain("No notes yet.");
+});
+
+it("says when every note has been replaced", async () => {
+  setup({
+    data: { revision: "r1", notes: [sourced(0, "Old rule", { replacedBy: 5 })], truncated: false },
+  });
+  await render();
+  expect(container.textContent).toContain("No current notes.");
+  await press("Show replaced notes (1)");
+  expect(container.textContent).toContain("Replaced by a later note");
 });

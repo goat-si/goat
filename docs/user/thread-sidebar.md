@@ -5,8 +5,9 @@ need a separate branch and working directory.
 
 ## Start a thread
 
-On web and desktop, **New thread** lets you choose a project when multiple projects
-are open. Shift-click to start in the current project. A new thread carries your model
+On web and desktop, **New thread** opens a draft in the project you last worked in.
+Change the project from the draft's project name, or the machine from the composer
+toolbar. Shift-click to start in the current project. A new thread carries your model
 and mode selections, unless the destination project has its own model default.
 Its workspace starts from the project's configured default, which falls back to
 **Local**. Starting a new thread also resets an empty draft's workspace selection.
@@ -69,11 +70,8 @@ its task and coding threads. Use a task's menu to pin it, mark it done, or mark 
 A task opens its own conversation beside the main chat on a wide screen, or in place
 of the chat on a narrow one; messages you send there stay with that task. To always
 open tasks in place, turn off **Open task threads beside the main chat** in
-**Settings → GOAT Bot**. **Work** in the GOAT Bot header lists tasks, routines, and
-notes. **Check in on me** under **Routines** sets up a routine on the days and hours you
-choose: the bot looks over its tasks and writes only when something needs you.
-**Memory** shows the notes GOAT Bot keeps; **Ask to change** or **Ask to forget** puts a
-request quoting the note in the message box for you to send.
+**Settings → GOAT Bot**. For more bots, the face, and the **Work** panel's status,
+routines and memory, see [GOAT Bot](./goat-bot.md).
 
 The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
 sent something since you last opened it; the number badge counts tasks awaiting your

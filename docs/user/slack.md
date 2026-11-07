@@ -4,7 +4,8 @@ Mention the GOAT bot in a Slack channel or send it a direct message, and GOAT
 answers in that Slack thread, starts the work in its own coding thread, and
 posts the result back to the same thread. The conversation stays in Slack; the
 GOAT Bot shows the work and its final report. On web and desktop, choose **Bots**
-in the sidebar to find the main bot and its task threads.
+in the sidebar to find the main bot and its task threads. Slack and iMessage reach
+the main bot only; see [GOAT Bot](./goat-bot.md) for the bots you add in GOAT.
 
 ## Set up
 
@@ -115,7 +116,9 @@ in the sidebar to find the main bot and its task threads.
   Notes live in
   `goat-bot/memory.md` in GOAT's data folder on that machine; edit the file
   to change them, or open **Work → Memory** in GOAT to see them and ask GOAT
-  Bot to change or forget one. Put written procedures in `goat-bot/skills/` as Markdown
+  Bot to change or forget one. With many notes, GOAT Bot uses the newest ones
+  and older ones that share words with your message, so name the topic when
+  you rely on an old note. Put written procedures in `goat-bot/skills/` as Markdown
   files, and the bot points its coding agents to the one that fits. Work sent
   to another machine gets the notes, and any procedure the request names, in
   its first message.

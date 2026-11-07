@@ -98,7 +98,8 @@ export function MobileBotRoster(props: {
                 canCreate: manage.canCreate,
                 onNewBot: () => setSheet({ mode: "create" }),
                 onLongPressBot: askAbout,
-                onPressDeleted: (bot) =>
+                canRestore: manage.canManage,
+                onRestoreDeleted: (bot) =>
                   Alert.alert(`Restore ${bot.name}?`, "Its conversation comes back.", [
                     { text: "Cancel", style: "cancel" },
                     { text: "Restore", onPress: () => void manage.restore(bot) },

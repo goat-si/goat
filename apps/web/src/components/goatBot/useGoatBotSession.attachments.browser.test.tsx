@@ -45,7 +45,14 @@ vi.mock("~/state/use-atom-command", () => ({
 }));
 vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({ rows: [], refresh: () => {} }),
-  useBotThreads: () => ({ rows: [], loaded: true, refresh: () => {} }),
+  useBotThreads: () => ({
+    rows: [],
+    supported: true,
+    loaded: true,
+    failed: false,
+    turnsWaiting: [],
+    refresh: () => {},
+  }),
 }));
 vi.mock("./GoatBotWorkDetails", () => ({ GoatBotWorkDetails: () => null }));
 vi.mock("~/hooks/useResizableWidth", () => ({

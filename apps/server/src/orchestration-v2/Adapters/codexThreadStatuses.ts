@@ -6,6 +6,10 @@ import type * as CodexErrors from "effect-codex-app-server/errors";
 export const CUA_DEFERRED_NOTE =
   "This conversation's computer use driver configuration changed, and the change applies only once this conversation and its subagents are idle and none of their goals is active. Until then computer use keeps its previous connection, which may refuse calls. If it does, tell the person why: ending this turn and pausing an active goal let their next message apply the change. When their subagent limit changed too, it also waits until none of them keeps a background terminal running, such as a dev server; they need to finish or stop that work first, or start a new thread.";
 
+/** Added to the turn that reloaded a conversation Codex held across a GOAT server restart. */
+export const RESTART_RELOAD_NOTE =
+  "GOAT restarted while Codex kept this conversation loaded, so this turn reloaded the conversation to give GOAT tools a working credential. Any background terminal it kept running, such as a dev server, has stopped; start it again if this work still needs it.";
+
 /**
  * What Codex last reported for each native thread, from thread/status/changed and thread/start.
  * Only a thread reported idle, notLoaded or systemError is quiet; an unreported one is not. Codex answers
@@ -114,6 +118,8 @@ export function makeCodexThreadStatuses() {
       client: CodexClient.CodexAppServerClient["Service"],
       threadIds: ReadonlyArray<string>,
       terminals: boolean,
+      /** Any further check, run inside the same window, so activity during it counts too. */
+      also: Effect.Effect<boolean> = Effect.succeed(false),
     ) => {
       // Codex resumes a thread cold only from idle: a root left in systemError keeps its old
       // configuration through unsubscribe and resume, so it waits for its next turn (#1569).
@@ -128,6 +134,7 @@ export function makeCodexThreadStatuses() {
             Effect.flatMap((active) =>
               active || !terminals ? Effect.succeed(active) : terminalsRunning(client, loaded),
             ),
+            Effect.flatMap((busy) => (busy ? Effect.succeed(true) : also)),
             Effect.map((busy) => busy || !settled() || worked()),
           )
         : Effect.succeed(true);

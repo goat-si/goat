@@ -189,6 +189,9 @@ After GOAT reconnects, progress from a surviving turn appears when the turn
 finishes. GOAT tools are unavailable for the rest of that turn. You can stop the
 turn, but Steer is refused while GOAT is waiting for it. Goal threads do not
 survive a restart; once blocked work has stopped, you can continue the thread.
+The next turn GOAT starts in that thread reloads the conversation so GOAT tools
+work again, which also stops background terminals from before the restart, such
+as a dev server.
 
 ## Give each thread its own Codex app-server
 

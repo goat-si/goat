@@ -482,3 +482,13 @@ it("rejects repeated malformed generation at admission even when preview read th
   expect(invalidated).toHaveBeenCalledOnce();
   expect(a.workflow.getSnapshot().phase).toBe("idle");
 });
+
+it("tells a browser on a plain-http address that imports need a secure connection", async () => {
+  using _setup = setup();
+  // Browsers expose Web Locks only in secure contexts.
+  using _locks = stubGlobal("navigator", {});
+  using _insecure = stubGlobal("isSecureContext", false);
+  await expect(
+    memoryImportRecoveryStorage(localStorage).save(destination, M.MemoryOperationId.make(uuid(7))),
+  ).rejects.toThrow("Imports need a secure connection. Open GOAT over HTTPS");
+});

@@ -81,15 +81,23 @@ const state = vi.hoisted(() => ({
     refresh: vi.fn(),
   },
   setEnabled: vi.fn(),
+  runNow: vi.fn(),
+  retry: vi.fn(),
+  openThread: vi.fn(),
 }));
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
     listBotThreads: () => "task",
     listChildWork: () => "child",
+    listBotArtifacts: () => "artifacts",
+    readBotArtifact: {},
+    listTasks: () => "computer",
     updateTaskView: {},
+    retryTask: { label: "retry", permissionAtom: () => "permission", run: state.retry },
   },
 }));
 vi.mock("../../state/server", () => ({
@@ -100,12 +108,24 @@ vi.mock("../../state/server", () => ({
       permissionAtom: () => "permission",
       run: state.setEnabled,
     },
+    runScheduledTaskNow: {
+      label: "run now",
+      permissionAtom: () => "permission",
+      run: state.runNow,
+    },
   },
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([
-      ["env", { serverConfig: { environment: { capabilities: { goatBotTaskThreads: true } } } }],
+      [
+        "env",
+        {
+          serverConfig: {
+            environment: { capabilities: { goatBotTaskThreads: true, goatBotTaskRetry: true } },
+          },
+        },
+      ],
     ]),
   }),
 }));
@@ -123,7 +143,14 @@ vi.mock("../../state/query", () => ({
       ? state.task
       : key === "routines"
         ? state.routines
-        : { data: null, error: null, isPending: false, isSuccess: false, refresh: vi.fn() },
+        : {
+            data: null,
+            cause: null,
+            error: null,
+            isPending: false,
+            isSuccess: false,
+            refresh: vi.fn(),
+          },
 }));
 import { MobileBotWork } from "./MobileBotWork";
 const container = document.createElement("div");
@@ -141,12 +168,25 @@ function reset() {
   state.task.refresh.mockClear();
   state.routines.refresh.mockClear();
   state.setEnabled.mockReset();
+  state.runNow.mockReset();
+  state.retry.mockReset();
 }
-async function render(taskId?: ChannelTaskId, taskCard?: ReactNode) {
+async function render(
+  taskId?: ChannelTaskId,
+  taskCard?: ReactNode,
+  turnsWaiting: readonly string[] = [],
+) {
   if (!root) root = createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotWork visible taskId={taskId} taskCard={taskCard} onOpenTask={() => {}} />,
+      <MobileBotWork
+        visible
+        taskId={taskId}
+        taskCard={taskCard}
+        turnsWaiting={turnsWaiting}
+        onOpenTask={() => {}}
+        onOpenThread={state.openThread}
+      />,
     ),
   );
 }
@@ -286,4 +326,132 @@ it("shows Done and offers reopening for a task marked done", async () => {
   await render(ChannelTaskId.make("task"));
   expect(container.textContent).toContain("Done");
   expect(container.textContent).toContain("Reopen");
+});
+
+const routine = (id: string, lastRunStatus: string) => ({
+  id,
+  title: id === "failed" ? "Morning digest" : "Evening digest",
+  prompt: "Summarize the inbox",
+  enabled: true,
+  schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [] },
+  threadId: "bot",
+  nextRunAt: null,
+  lastRunAt: "2026-11-07T08:00:00.000Z",
+  lastRunStatus,
+  lastRunError: lastRunStatus === "failed" ? "Provider exited with code 1" : null,
+});
+
+it("offers Run now only for a routine whose last run failed, one run per tap", async () => {
+  reset();
+  Object.assign(state.routines, {
+    isPending: false,
+    isSuccess: true,
+    data: { tasks: [routine("failed", "failed"), routine("fine", "succeeded")] },
+  });
+  state.runNow.mockResolvedValue(AsyncResult.success({ task: routine("failed", "failed") }));
+  await render();
+  await press("Work");
+  await press("Routines");
+  const runButtons = [...container.querySelectorAll("button")].filter(
+    (button) => button.textContent === "Run now",
+  );
+  expect(runButtons).toHaveLength(1);
+  await act(async () => runButtons[0]?.click());
+  expect(state.runNow).toHaveBeenCalledOnce();
+  expect(state.runNow).toHaveBeenCalledWith(expect.anything(), {
+    environmentId: "env",
+    input: { id: "failed" },
+  });
+});
+
+it("retries a failed task from its screen, names the attempt, and shows a refusal", async () => {
+  reset();
+  const at = "2026-11-04T10:00:00.000Z";
+  const row = decodeRow({
+    kind: "task",
+    task: { taskId: "task", title: "Review", status: "failed", updatedAt: at, generation: 2 },
+    view: { taskId: "task", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [row] } });
+  state.retry.mockResolvedValueOnce(
+    AsyncResult.success({ status: "started", taskId: "task", generation: 3 }),
+  );
+  await render(ChannelTaskId.make("task"));
+  expect(container.textContent).toContain("Failed · Attempt 2");
+  await press("Retry");
+  expect(state.retry).toHaveBeenCalledWith(expect.anything(), {
+    environmentId: "env",
+    input: { taskId: "task", clientRequestId: expect.any(String) },
+  });
+  expect(state.task.refresh).toHaveBeenCalledOnce();
+  state.retry.mockResolvedValueOnce(
+    AsyncResult.success({ status: "refused", taskId: "task", reason: "elsewhere" }),
+  );
+  await press("Retry");
+  expect(container.textContent).toContain(
+    "This ran on another computer. Check it there, then ask again in chat.",
+  );
+  expect(state.task.refresh).toHaveBeenCalledOnce();
+});
+
+it("Library and Computer show their own views", async () => {
+  reset();
+  await render();
+  await press("Work");
+  await press("Library");
+  expect(container.textContent).toContain("Files need a newer GOAT server.");
+  await press("Computer");
+  expect(container.textContent).toContain("Loading machines…");
+});
+
+it("opens the coding thread a task launched, such as a bot turn's", async () => {
+  reset();
+  state.openThread.mockClear();
+  const at = "2026-11-07T10:00:00.000Z";
+  const rows = [
+    decodeRow({
+      kind: "task",
+      task: { taskId: "turn", title: "Start one task", status: "running", updatedAt: at },
+      view: { taskId: "turn", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    }),
+    decodeRow({
+      kind: "coding",
+      taskId: "turn",
+      environmentId: "env",
+      threadId: "thread:child",
+      state: "bound",
+      lastActivityAt: at,
+    }),
+  ];
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows } });
+  await render(ChannelTaskId.make("turn"));
+  await press("Open work thread");
+  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread:child" });
+});
+
+it("points to the chat from Tasks when the bot asked a question there", async () => {
+  reset();
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  await render(undefined, undefined, ["turn-1"]);
+  await press("Work");
+  expect(container.textContent).toContain("GOAT Bot is waiting for your answer in the chat");
+  expect(container.textContent).toContain("No tasks yet");
+  await press("Open the chat");
+  expect(container.textContent).not.toContain("waiting for your answer in the chat");
+});
+
+it("offers the Work sheet, and with it Open the chat, only on the chat screen", async () => {
+  reset();
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  await render(ChannelTaskId.make("task-1"), undefined, ["turn-1"]);
+  expect(
+    [...container.querySelectorAll("button")].some((button) => button.textContent === "Work"),
+  ).toBe(false);
+  expect(container.textContent).not.toContain("waiting for your answer in the chat");
 });

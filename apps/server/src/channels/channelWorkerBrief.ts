@@ -22,6 +22,7 @@ import {
   GOATCLAW_SUPERVISOR_DELEGATION,
 } from "../goatclaw/RoleTemplates.ts";
 import { NOTES_REPLACED_RULE, type ChannelBotFiles } from "./channelBotNotes.ts";
+import { channelBotNotesSection, type ChannelBotNotesSnapshot } from "./channelBotNotesRecall.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /** At most this many skills, each cut to this many characters, ride a remote worker's message. */
@@ -32,6 +33,8 @@ const REMOTE_SKILL_CHARS = 4_000;
  * its reporting note; the notes and skills give way first so the work itself still starts.
  */
 export const REMOTE_MESSAGE_CHARS = 115_000;
+/** When the whole notes section does not fit, the notes that best match the instruction get this much. */
+const REMOTE_MATCHED_NOTES_CHARS = 2_000;
 
 type BriefTask = Pick<
   ChannelTask,
@@ -39,8 +42,8 @@ type BriefTask = Pick<
 >;
 
 export interface RemoteBotContext {
-  /** GOAT Bot's notes on the home machine, already bounded by readChannelBotNotes. */
-  readonly notes: string;
+  /** GOAT Bot's notes on the home machine for this instruction; undefined when unreadable. */
+  readonly notes: ChannelBotNotesSnapshot | undefined;
   readonly skills: ReadonlyArray<{ readonly name: string; readonly text: string }>;
 }
 
@@ -141,8 +144,16 @@ export const workerInstruction = (task: BriefTask, files: ChannelBotFiles) =>
     ...channelWorkerRules("local"),
   ].join("\n");
 
-/** What a GOAT Bot turn is told besides the person's request. */
-export const turnInstruction = (task: BriefTask, files: ChannelBotFiles, supervisor: boolean) =>
+/**
+ * What a GOAT Bot turn is told besides the person's request. `matched` holds older notes that match
+ * this request; the session's first message already carries the newest ones.
+ */
+export const turnInstruction = (
+  task: BriefTask,
+  files: ChannelBotFiles,
+  supervisor: boolean,
+  matched = "",
+) =>
   [
     ...workerHeader(task),
     "You are GOAT Bot handling this message yourself. Your final message is your answer to the person: write it in the language of their request, not your default language, outcome first and as long as the content needs.",
@@ -150,6 +161,9 @@ export const turnInstruction = (task: BriefTask, files: ChannelBotFiles, supervi
       files.notes +
       "), use GOAT memory, and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads. " +
       NOTES_REPLACED_RULE,
+    ...(matched === ""
+      ? []
+      : ["Older standing notes that match this request (still in force; follow them):", matched]),
     "Your scratch folder for temporary files is " +
       files.scratch +
       " and your artifacts folder for saved outputs is " +
@@ -161,37 +175,51 @@ export const turnInstruction = (task: BriefTask, files: ChannelBotFiles, supervi
     ...(supervisor ? [GOAT_BOT_SUPERVISOR_RULE] : []),
     task.notesChangeRequested === undefined
       ? "Leave the notes file unchanged; this message did not ask to change a note."
-      : "The person asked to change or forget a note (" +
+      : "Exception to the read-only rule above: the person asked to change or forget a note (" +
         JSON.stringify(task.notesChangeRequested) +
-        "). This is the one change you may make yourself: edit the notes file only to make that change.",
+        "). Edit GOAT Bot's notes file (" +
+        files.notes +
+        ") yourself to make exactly that change, and change nothing else.",
     ...channelWorkerRules("local", "turn"),
   ].join("\n");
 
 /**
  * The first message of a worker on another machine, carrying the home machine's notes. When it
- * would run past the budget, skills drop from the last one named, then the notes; an instruction
- * too long on its own is sent as before and the remote refuses it.
+ * would run past the budget, skills drop from the last one named, then the notes give way to the
+ * ones that best match the instruction; an instruction too long on its own is sent as before and
+ * the remote refuses it.
  */
 export const remoteWorkerMessage = (task: BriefTask, context: RemoteBotContext) => {
-  const render = (current: RemoteBotContext) =>
+  const render = (notes: string, skills: RemoteBotContext["skills"]) =>
     [
       ...workerHeader(task),
-      ...remoteContextLines(task, current),
+      ...remoteContextLines(task, notes, skills),
       ...channelWorkerRules("remote"),
     ].join("\n");
+  const section = context.notes === undefined ? "" : channelBotNotesSection(context.notes);
   let kept = context.skills.length;
-  let message = render(context);
+  let message = render(section, context.skills);
   while (message.length > REMOTE_MESSAGE_CHARS && kept > 0) {
     kept -= 1;
-    message = render({ notes: context.notes, skills: context.skills.slice(0, kept) });
+    message = render(section, context.skills.slice(0, kept));
   }
-  if (message.length > REMOTE_MESSAGE_CHARS && context.notes !== "") {
-    message = render({ notes: "", skills: context.skills.slice(0, kept) });
+  if (message.length <= REMOTE_MESSAGE_CHARS || section === "") return message;
+  const skills = context.skills.slice(0, kept);
+  const bare = render("", skills).length;
+  // The notes block costs its lines plus a fixed wrapper, measured once with a one-character note.
+  const wrapper = render("x", skills).length - bare - 1;
+  let room = Math.min(REMOTE_MATCHED_NOTES_CHARS, REMOTE_MESSAGE_CHARS - bare - wrapper);
+  const best: Array<string> = [];
+  for (const line of context.notes?.ranked ?? []) {
+    const cost = line.length + (best.length === 0 ? 0 : 1);
+    if (cost > room) continue;
+    best.push(line);
+    room -= cost;
   }
-  return message;
+  return render(best.join("\n"), skills);
 };
 
-const remoteContextLines = (task: BriefTask, context: RemoteBotContext) => {
+const remoteContextLines = (task: BriefTask, notes: string, skills: RemoteBotContext["skills"]) => {
   // The notes file lives on the home machine, so a requested change cannot be made from there.
   const noteChange =
     task.notesChangeRequested === undefined
@@ -201,11 +229,11 @@ const remoteContextLines = (task: BriefTask, context: RemoteBotContext) => {
             JSON.stringify(task.notesChangeRequested) +
             "). The notes are on the machine that sent this work, so say in your summary that this change still needs to be made there.",
         ];
-  if (context.notes === "" && context.skills.length === 0) return noteChange;
+  if (notes === "" && skills.length === 0) return noteChange;
   return [
     "GOAT Bot keeps the notes and procedures below on the machine that sent this work. Follow them; they cannot be edited from here.",
-    ...(context.notes === "" ? [] : ["<goat_bot_notes>", context.notes, "</goat_bot_notes>"]),
-    ...context.skills.flatMap((skill) => [
+    ...(notes === "" ? [] : ["<goat_bot_notes>", notes, "</goat_bot_notes>"]),
+    ...skills.flatMap((skill) => [
       '<goat_bot_skill name="' + skill.name + '">',
       skill.text,
       "</goat_bot_skill>",
