@@ -74,7 +74,7 @@ const make = Effect.gen(function* () {
       const last = intents.at(-1);
       // A launched thread's end wake answers for the run that launched it, with its own status.
       const launcher =
-        last?.parent == null && last?.message_id != null && wakeHops < 4
+        last?.parent == null && last?.message_id != null && wakeHops < 32
           ? yield* launchWakeParentRun(sql, threadId, last.message_id)
           : undefined;
       if (launcher === undefined) return { state: last?.parent == null ? "absent" : "invalid" };

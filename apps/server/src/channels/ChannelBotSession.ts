@@ -221,7 +221,7 @@ const make = Effect.gen(function* () {
       )
         return true;
       // A coding thread that finished owes its result until its wake has run on this session.
-      if (yield* owesLaunched(launched, threadId, records, stored.task, launches)) return true;
+      if (yield* owesLaunched(launched, threadId, stored.task, launches)) return true;
     }
     return false;
   });

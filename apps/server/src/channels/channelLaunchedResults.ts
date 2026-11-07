@@ -160,15 +160,22 @@ export const anyLaunchedResultOwed = (
   allRuns: ReadonlyArray<OrchestrationV2Run>,
 ) => ends.some((end) => end === "unreadable" || launchedResultOwed(end, ownRuns, allRuns));
 
-/** Whether a task on this GOAT Bot session still owes a launched thread's result there. */
+/**
+ * Whether a task on this GOAT Bot session still owes a launched thread's result there. The
+ * session's runs are read after the ends, so a wake sent before its watch went is among them.
+ */
 export const owesLaunched = Effect.fn("ChannelBotSession.owesLaunched")(function* (
   deps: Parameters<typeof readLaunchedEnds>[0] & { readonly sql: SqlClient.SqlClient },
   sessionThreadId: ThreadId,
-  records: Parameters<typeof sessionTaskRuns>[2],
   task: Pick<ChannelTask, "taskId" | "generation">,
   childWork: ReadonlyArray<ChannelChildWork>,
 ) {
   const ends = yield* readLaunchedEnds(deps, childWork, task.generation, sessionThreadId);
-  const own = yield* sessionTaskRuns(deps.sql, sessionThreadId, records, task);
-  return anyLaunchedResultOwed(ends, own, records.runs);
+  if (ends.length === 0) return false;
+  const records = yield* deps.threads
+    .getThreadRecords(sessionThreadId, ["runs", "messages"])
+    .pipe(Effect.option);
+  if (records._tag === "None") return true;
+  const own = yield* sessionTaskRuns(deps.sql, sessionThreadId, records.value, task);
+  return anyLaunchedResultOwed(ends, own, records.value.runs);
 });
