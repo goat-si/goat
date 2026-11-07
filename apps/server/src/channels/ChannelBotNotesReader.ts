@@ -23,34 +23,22 @@ import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
-import { channelBotFilesFor, NOTES_HEADER } from "./channelBotNotes.ts";
+import { parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 
 const TAIL_BYTES = 64 * 1024;
 const READ_ATTEMPTS = 3;
 const NEWLINE = 0x0a;
-// The writer removes only whitespace from the input id, so the id runs to the closing parenthesis
-// at the end of the line.
-const DATED_LINE = /^- (\d{4}-\d{2}-\d{2}): (.+?)(?: \(asked in \S+\))?$/u;
 
-/** The lines of a notes file, oldest first, without the header, blank lines or headings. */
-const parseChannelBotNotes = (text: string): ReadonlyArray<ChannelBotNote> => {
-  const normal = text.replaceAll("\r\n", "\n");
-  const body = normal.startsWith(NOTES_HEADER) ? normal.slice(NOTES_HEADER.length) : normal;
-  const notes: Array<ChannelBotNote> = [];
-  for (const raw of body.split("\n")) {
-    const line = raw.trim();
-    if (line === "" || line.startsWith("#")) continue;
-    const dated = DATED_LINE.exec(line);
-    const date = dated?.[1];
-    const noteText = dated?.[2];
-    notes.push(
-      date !== undefined && noteText !== undefined
-        ? { index: notes.length, date, text: noteText }
-        : { index: notes.length, date: null, text: line.replace(/^[-*]\s+/u, "") },
-    );
-  }
-  return notes;
-};
+/** Every line read, replaced ones included and marked, so a client can show or hide them. */
+const toNotes = (text: string): ReadonlyArray<ChannelBotNote> =>
+  parseChannelBotNoteLines(text).map(({ index, date, text: noteText, replaces, replacedBy }) => ({
+    index,
+    date,
+    text: noteText,
+    ...(replaces === undefined ? {} : { replaces }),
+    ...(replacedBy === undefined ? {} : { replacedBy }),
+  }));
 
 /**
  * Bytes from the start of the first whole line. `withLead` means the read began one byte before
@@ -168,7 +156,7 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
       ),
     );
     if (read === null) return { revision: null, notes: [], truncated: false };
-    const notes = parseChannelBotNotes(new TextDecoder().decode(read.bytes));
+    const notes = toNotes(new TextDecoder().decode(read.bytes));
     return {
       revision: NodeCrypto.createHash("sha256").update(read.bytes).digest("hex"),
       notes: notes.toReversed(),

@@ -7,6 +7,10 @@
       "types": "./src/server/cloudTask.ts",
       "import": "./src/server/cloudTask.ts"
     },
+    "./server/channelReceptionPrompt": {
+      "types": "./src/server/channelReceptionPrompt.ts",
+      "import": "./src/server/channelReceptionPrompt.ts"
+    },
     "./server/memoryGenerationPrompts": {
       "types": "./src/server/memoryGenerationPrompts.ts",
       "import": "./src/server/memoryGenerationPrompts.ts"
