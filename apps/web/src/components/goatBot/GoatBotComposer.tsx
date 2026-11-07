@@ -21,6 +21,7 @@ import {
   type GoatBotAttachmentSupport,
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
+import { useGoatBotMember } from "./goatBotMemberContext";
 
 export interface GoatBotComposerHandle {
   addFiles(files: File[]): void;
@@ -50,6 +51,7 @@ export function GoatBotComposer({
   ) => boolean | void;
 }) {
   const [text, setText] = useState(initialText);
+  const member = useGoatBotMember();
   const [attachments, setDraftAttachments] = useState<ReadonlyArray<GoatBotDraftAttachment>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef(attachments);
@@ -172,7 +174,7 @@ export function GoatBotComposer({
             ref={textareaRef}
             rows={1}
             data-goat-bot-composer=""
-            aria-label="Message GOAT Bot"
+            aria-label={`Message ${member?.name ?? "GOAT Bot"}`}
             placeholder={placeholder}
             value={text}
             disabled={disabled}

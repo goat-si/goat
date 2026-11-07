@@ -282,7 +282,7 @@ export function GoatBotTimeline({
                       {row.proactive && row.firstInGroup ? (
                         <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                           <BellIcon className="size-3.5" aria-hidden />
-                          GOAT Bot · Update
+                          {member?.name ?? "GOAT Bot"} · Update
                         </div>
                       ) : null}
                       {row.replyTo ? (
