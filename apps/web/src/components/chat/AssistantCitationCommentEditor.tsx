@@ -103,17 +103,7 @@ export function AssistantCitationCommentEditor({
         </p>
       ) : null}
       <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
-        {speech ? (
-          <div
-            className={
-              speech.voice.isVoiceActive
-                ? "flex basis-full flex-wrap items-center gap-2"
-                : "contents"
-            }
-          >
-            <CommentSpeechControls speech={speech} />
-          </div>
-        ) : null}
+        {speech ? <CommentSpeechControls speech={speech} /> : null}
         <Button
           variant="outline"
           size="xs"
