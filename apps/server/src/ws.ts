@@ -2308,7 +2308,7 @@ export const layerWsRpc = (
         [WS_METHODS.scheduledTasksUpsert]: (input) =>
           captureTaskMemoryCeiling.pipe(
             Effect.flatMap((memoryGrantCeiling) =>
-              scheduledTasks.upsert(input, { memoryGrantCeiling }),
+              scheduledTasks.upsert(input, { memoryGrantCeiling, owner: channelOwner }),
             ),
           ),
         [WS_METHODS.scheduledTasksSetEnabled]: (input) =>

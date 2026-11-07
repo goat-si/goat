@@ -11,19 +11,23 @@ vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({ rows: [] }),
   useBotThreads: () => ({ rows: [], loaded: true, refresh: () => {} }),
 }));
+vi.mock("~/state/entities", () => ({
+  useThreadShell: () => null,
+  useServerConfigs: () => new Map(),
+}));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({ data: { tasks: mocks.tasks }, error: null }),
 }));
 vi.mock("~/state/server", () => ({
   serverEnvironment: {
     scheduledTasksLive: () => null,
+    upsertScheduledTask: { permissionAtom: () => Atom.make(false), execute: vi.fn() },
     setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
   },
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: { execute: typeof mocks.setEnabled }) => command.execute,
 }));
-vi.mock("~/state/entities", () => ({ useServerConfigs: () => new Map() }));
 vi.mock("~/state/channels", () => ({ channelEnvironment: { listBotNotes: () => null } }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 

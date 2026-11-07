@@ -33,6 +33,7 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
+import * as ChannelRoutineIntake from "./ChannelRoutineIntake.ts";
 import * as ChannelTaskExport from "./ChannelTaskExport.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelSessionTaskActions from "./channelSessionTaskActions.ts";
@@ -104,6 +105,8 @@ export const makeLayerServices = <E, R>(
     ChannelWorkerReports.layer,
     ChannelSessionTaskActions.layer,
     ChannelDeliveryWorker.layer,
+    // Routine firings bound to a bot thread become its input; needs the gateway below.
+    ChannelRoutineIntake.layer,
   ).pipe(
     // Workers on other machines; needs SshRemoteDispatch from the server.
     Layer.provideMerge(ChannelRemoteWorkers.layer),
