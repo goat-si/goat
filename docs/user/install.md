@@ -326,6 +326,7 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 ## Next steps
 
 - [Working with threads](./thread-sidebar.md): start tasks and organize parallel work.
+- [GOAT Bot](./goat-bot.md): message your agents, add bots, and follow their work.
 - [Permission modes](./permission-modes.md): choose when agents ask before acting.
 - [Remote access](./remote-access.md): connect from another device.
 - [Running in the background](./background-service.md): keep a Linux or macOS host available.

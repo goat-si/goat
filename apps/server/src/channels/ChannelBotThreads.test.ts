@@ -148,6 +148,95 @@ describe("ChannelBotThreads", () => {
       );
     },
   );
+  it.effect(
+    "lists a bot turn while its launched child work lives, and drops it when the child ends",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO channel_conversations (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at) VALUES ('conv:bot', ${ownerId}, 'goat', 'goat', ${botThreadId}, ${time})`;
+        // One turn per child state, plus a live child of an older generation and another owner's.
+        const cases = [
+          ["turn:launched", "launched", 1, ownerId],
+          ["turn:bound", "bound", 1, ownerId],
+          ["turn:unknown", "unknown", 1, ownerId],
+          ["turn:reserved", "reserved", 1, ownerId],
+          ["turn:completed", "completed", 1, ownerId],
+          ["turn:cancelled", "cancelled", 1, ownerId],
+          ["turn:old-generation", "bound", 2, ownerId],
+          ["turn:foreign", "bound", 1, "foreign"],
+        ] as const;
+        const children = yield* ChildStore.ChannelChildWorkStore;
+        for (const [taskId, state, taskGeneration, taskOwner] of cases) {
+          yield* insertTask(taskId, taskOwner, "running", time);
+          yield* sql`UPDATE channel_tasks SET generation = ${taskGeneration}, task_json = json_set(task_json, '$.kind', 'turn', '$.generation', ${taskGeneration}) WHERE task_id = ${taskId}`;
+          yield* children.admitReserved(
+            {
+              ownerId: taskOwner,
+              taskId: ChannelTaskId.make(taskId),
+              childWorkId: ChannelChildWorkId.make("child"),
+              generation: 1,
+              callerThreadId: botThreadId,
+              requestKey: taskId,
+              promptDigest: "digest",
+              surface: "thread_launch",
+              destination: { threadId: ThreadId.make("thread:" + taskId) },
+              state,
+              createdAt: time,
+              updatedAt: time,
+            },
+            100,
+          );
+        }
+        // An earlier, finished launch of the same turn stays in its history.
+        yield* children.admitReserved(
+          {
+            ownerId,
+            taskId: ChannelTaskId.make("turn:bound"),
+            childWorkId: ChannelChildWorkId.make("earlier"),
+            generation: 1,
+            callerThreadId: botThreadId,
+            requestKey: "earlier",
+            promptDigest: "digest",
+            surface: "thread_launch",
+            destination: { threadId: ThreadId.make("thread:earlier") },
+            state: "completed",
+            createdAt: old,
+            updatedAt: old,
+          },
+          100,
+        );
+        const service = yield* BotThreads.ChannelBotThreads;
+        const listed = (yield* service.list(owner)).rows;
+        assert.deepStrictEqual(
+          listed.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])).sort(),
+          ["turn:bound", "turn:launched", "turn:unknown"],
+        );
+        assert.deepStrictEqual(
+          listed
+            .flatMap((row) =>
+              row.kind === "coding" && row.taskId === "turn:bound" ? [row.threadId] : [],
+            )
+            .sort(),
+          ["thread:earlier", "thread:turn:bound"],
+        );
+
+        for (const [taskId] of cases) {
+          yield* sql`UPDATE channel_runtime_state SET value_json = json_set(value_json, '$.state', 'completed') WHERE key = ${"child-work:" + taskId + ":child"}`;
+        }
+        assert.deepStrictEqual((yield* service.list(owner)).rows, []);
+      }).pipe(
+        Effect.provide(
+          BotThreads.layer.pipe(
+            Layer.provideMerge(TaskViews.layer),
+            Layer.provideMerge(harness.layer),
+          ),
+        ),
+      );
+    },
+  );
+
   it.effect("limits the task list to 100", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

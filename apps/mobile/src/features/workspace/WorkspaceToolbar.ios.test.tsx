@@ -10,13 +10,17 @@ import {
 
 const mocks = vi.hoisted(() => ({
   screenFocused: true,
+  topRoute: "Home",
   options: null as null | { headerSearchBarOptions?: Record<string, never> },
 }));
 vi.mock("react-native", () => ({ Platform: { OS: "ios" } }));
 vi.mock("@react-navigation/native", () => ({
   useFocusEffect: () => {},
   useIsFocused: () => true,
-  useNavigation: () => ({ isFocused: () => mocks.screenFocused }),
+  useNavigation: () => ({
+    isFocused: () => mocks.screenFocused,
+    getState: () => ({ routes: [{ name: "Home" }, { name: mocks.topRoute }] }),
+  }),
 }));
 vi.mock("../../state/active-new-task", () => ({ useActiveNewTask: () => null }));
 vi.mock("../../components/ui/Toolbar", () => ({
@@ -112,6 +116,7 @@ function Harness(props: {
 
 function renderSearch(tab: WorkspaceSearchTab, query: string, sidebar = false, slotActive = true) {
   mocks.screenFocused = true;
+  mocks.topRoute = "Home";
   const root = createRoot(document.createElement("div"));
   const stateRef = createRef<WorkspaceTabsState>();
   act(() =>
@@ -188,6 +193,25 @@ it("closing a split view sidebar's search clears it while the detail column owns
   expect(state().tabs.threads).toMatchObject({ query: "", searchMode: "resting" });
   expect(native.clearText).toHaveBeenCalled();
   act(() => root.unmount());
+});
+
+it("closing Settings search with its X clears it while the Settings route sits above Home", () => {
+  using _frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+  const { root, native, search, state } = renderSearch("settings", "zzz");
+  // Settings opens as a route above the workspace's Home route, which then reports unfocused.
+  mocks.screenFocused = false;
+  mocks.topRoute = "Settings";
+  act(() => search().onClose?.());
+  expect(state().tabs.settings).toMatchObject({ query: "", searchMode: "resting" });
+  expect(native.clearText).toHaveBeenCalled();
+  act(() => root.unmount());
+
+  const page = renderSearch("settings", "theme");
+  mocks.screenFocused = false;
+  mocks.topRoute = "SettingsEnvironments";
+  act(() => page.search().onClose?.());
+  expect(page.state().tabs.settings).toMatchObject({ query: "theme" });
+  act(() => page.root.unmount());
 });
 
 it("a late close from a retained list slot keeps the query after Settings takes the native tab", () => {

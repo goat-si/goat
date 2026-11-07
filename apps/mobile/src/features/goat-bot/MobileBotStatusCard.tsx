@@ -49,7 +49,7 @@ export function MobileBotStatusCard(props: {
   } | null;
   readonly rows: GoatBotDiagnosticsInput["rows"];
   readonly refreshRows: () => void;
-  readonly turnsWaiting: number;
+  readonly turnsWaiting: ReadonlyArray<string>;
   readonly onOpenChat: () => void;
   readonly onOpenTask: (taskId: ChannelTaskId) => void;
 }) {
@@ -112,7 +112,7 @@ export function MobileBotStatusCard(props: {
       : null,
     canChangeModel: false,
     rows: rowsFromHome ? props.rows : "unavailable",
-    turnsWaiting: rowsFromHome ? props.turnsWaiting : 0,
+    turnsWaiting: rowsFromHome ? props.turnsWaiting : [],
     slack: !slackSupported ? "unavailable" : slack.error ? "failed" : (slack.data ?? "loading"),
     slackLive,
     canConfigureSlack: false,

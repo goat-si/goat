@@ -79,7 +79,7 @@ it("refreshes the task roster when a new task chip appears", async () => {
 
 function TurnsProbe() {
   const { turnsWaiting } = useBotThreads("env-1" as never, null);
-  return <span>{turnsWaiting} questions in the chat</span>;
+  return <span>{turnsWaiting.length} questions in the chat</span>;
 }
 
 it("sees a question the bot asked in its chat even when the server cannot list task threads", async () => {
