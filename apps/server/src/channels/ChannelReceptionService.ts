@@ -51,7 +51,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Semaphore from "effect/Semaphore";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
@@ -77,9 +76,9 @@ import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as tt from "./channelTaskThreadRefusal.ts";
 import {
-  appendChannelBotNote,
   channelBotFilesFor,
   listChannelBotSkills,
+  makeChannelBotNoteSaver,
   quotedFromInput,
   readChannelBotNotes,
 } from "./channelBotNotes.ts";
@@ -222,21 +221,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
-  // One note decision at a time; the result is what the reply must add, if anything.
-  const notesGate = yield* Semaphore.make(1);
-  const saveNote = (note: string, readAt: string, inputId: string, replaces?: string) =>
-    notesGate
-      .withPermits(1)(appendChannelBotNote(fileSystem, botFiles, note, readAt, inputId, replaces))
-      .pipe(
-        Effect.map(({ correction }) =>
-          correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
-        ),
-        Effect.catch((cause) =>
-          Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
-            Effect.as(CHANNEL_COPY.noteNotSaved),
-          ),
-        ),
-      );
+  const saveNote = yield* makeChannelBotNoteSaver(fileSystem, botFiles);
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
