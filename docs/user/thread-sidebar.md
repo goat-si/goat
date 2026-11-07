@@ -72,10 +72,6 @@ open tasks in place, turn off **Open task threads beside the main chat** in
 **Settings → GOAT Bot**. **Work** in the GOAT Bot header lists tasks and routines.
 **Check in on me** under **Routines** sets up a routine on the days and hours you choose: the
 bot looks over its tasks and writes only when something needs you.
-A routine whose last run failed shows **Run now**. A task that failed or that you stopped shows
-**Retry** on its card and in its task view, and runs again as **Attempt 2**. Retry waits until
-the stopped work has fully ended. Work that ran on another computer is not retried from here:
-check it on that computer, then ask GOAT Bot again.
 
 The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
 sent something since you last opened it; the number badge counts tasks awaiting your

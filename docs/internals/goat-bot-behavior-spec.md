@@ -201,17 +201,12 @@ Acceptance:
 - "Stop", "cancel all" or the same intent MUST stop every running worker run of that requester
   and tell them what was stopped. "Stop the X one" stops only that workstream.
 - Stopping a worker MUST also stop the subagents it started.
-- A person MAY retry a failed or stopped item; it runs again as the item's next attempt only once
-  the previous attempt can no longer run, judged by the same evidence a stop needs to complete.
-  Work that ran on another machine MUST NOT be retried from here, and nothing retries by itself.
 
 Acceptance:
 
 - Five work requests in a row leave four running and one queued with a reply that says it is queued.
 - "Cancel all" cancels every running and queued item of the requester and lists them.
 - A follow-up for workstream A while B also runs reaches only A.
-- Retrying a failed item while its old worker or child work is still alive is refused; once they
-  end, one retry starts one new attempt, and the same tap sent again starts nothing more.
 
 ## 6. Interrupts while working
 
