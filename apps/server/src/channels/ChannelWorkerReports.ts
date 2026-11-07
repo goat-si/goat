@@ -55,7 +55,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
-import { makeChannelSkillProposals } from "./channelSkillProposals.ts";
+import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   completionHoldCount,
@@ -180,7 +180,7 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const sql = yield* SqlClient.SqlClient;
   const childWorkStore = yield* Effect.serviceOption(ChannelChildWorkStore.ChannelChildWorkStore);
-  const skillProposals = yield* makeChannelSkillProposals;
+  const skillProposals = yield* makeSkillProposalOffers;
 
   /**
    * Whether launched child work of this generation is still running. A bare reservation

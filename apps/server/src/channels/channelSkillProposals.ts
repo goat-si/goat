@@ -17,7 +17,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
-import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -41,16 +40,17 @@ type Answer = Extract<ChannelTaskEvent, { readonly type: "task.question.answered
 const sameBytes = (left: Uint8Array, right: Uint8Array) =>
   left.length === right.length && left.every((byte, index) => byte === right[index]);
 
-export const makeChannelSkillProposals = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
+const skillFiles = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const sql = yield* SqlClient.SqlClient;
-  const ledger = yield* ChannelLedger.ChannelLedger;
   const files = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+  return { path, files, skillPath: (name: string) => path.join(files.skills, name + ".md") };
+});
+
+/** Offers a completed task's proposal; used where runs settle. */
+export const makeSkillProposalOffers = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const { skillPath } = yield* skillFiles;
   const routines = yield* makeRoutineInputs;
-  // With the owner token, unique per save attempt across processes; a temp file is never reopened.
-  const attempts = yield* Ref.make(0);
-  const skillPath = (name: string) => path.join(files.skills, name + ".md");
 
   /**
    * The proposal task a successful completion starts, as createdTasks for its transition, or
@@ -117,37 +117,16 @@ export const makeChannelSkillProposals = Effect.gen(function* () {
     return { createdTasks: [{ ownerId: stored.ownerId, task, event }] };
   });
 
-  /** Runs `body` holding SQLite's write lock, after checking this process still owns the workers. */
-  const underWriteLock = (
-    owner: string,
-    body: Effect.Effect<void, ChannelLedger.ChannelLedgerError>,
-  ) =>
-    sql
-      .withTransaction(
-        Effect.gen(function* () {
-          // A write first, so the lock is taken before anything is read or linked.
-          const owned = yield* sql`UPDATE channel_runtime_state SET updated_at = updated_at
-          WHERE key = 'worker' AND owner_token = ${owner} RETURNING key`;
-          if (owned.length === 0)
-            return yield* new ChannelLedger.ChannelLedgerError({
-              reason: "ownership_lost",
-              detail: "Another process owns the channel workers.",
-            });
-          return yield* body;
-        }),
-      )
-      .pipe(
-        Effect.catchTags({
-          SqlError: (cause) =>
-            Effect.fail(
-              new ChannelLedger.ChannelLedgerError({
-                reason: "persistence",
-                detail: "save a skill proposal",
-                cause,
-              }),
-            ),
-        }),
-      );
+  return { offerFor };
+});
+
+/** Asks about a proposal and settles its answer; used by the dispatcher. */
+export const makeSkillProposalAnswers = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  const { path, files, skillPath } = yield* skillFiles;
+  // With the owner token, unique per save attempt across processes; a temp file is never reopened.
+  const attempts = yield* Ref.make(0);
 
   /** Links the prepared file into place: saved, taken by a different file, or failed. */
   const place = (tmp: string, target: string, bytes: Uint8Array) =>
@@ -212,34 +191,40 @@ export const makeChannelSkillProposals = Effect.gen(function* () {
           Effect.orElseSucceed(() => false),
         )
       : false;
-    yield* underWriteLock(
-      owner,
-      Effect.gen(function* () {
-        const current = yield* ledger.getTask(stored.task.taskId);
-        if (
-          current === undefined ||
-          current.task.status !== "received" ||
-          current.task.version !== stored.task.version ||
-          current.task.openQuestions.length > 0
-        )
-          return;
-        const outcome = !save ? "declined" : prepared ? yield* place(tmp, target, bytes) : "failed";
-        const summary =
-          outcome === "saved"
-            ? "Saved the skill " + proposal.name + "."
-            : outcome === "taken"
-              ? "A skill named " + proposal.name + " already exists, so nothing was saved."
-              : outcome === "failed"
-                ? "Couldn't save the skill " + proposal.name + "; nothing was written."
-                : "Not saved.";
-        yield* commitTransition(
-          ledger,
-          current,
-          { type: "task.completed", payload: { generation: current.task.generation, summary } },
-          { owner, narrate: true },
-        );
-      }),
-    ).pipe(Effect.ensuring(save ? fs.remove(tmp).pipe(Effect.ignore) : Effect.void));
+    yield* ledger
+      .underWorkerLock(
+        owner,
+        Effect.gen(function* () {
+          const current = yield* ledger.getTask(stored.task.taskId);
+          if (
+            current === undefined ||
+            current.task.status !== "received" ||
+            current.task.version !== stored.task.version ||
+            current.task.openQuestions.length > 0
+          )
+            return;
+          const outcome = !save
+            ? "declined"
+            : prepared
+              ? yield* place(tmp, target, bytes)
+              : "failed";
+          const summary =
+            outcome === "saved"
+              ? "Saved the skill " + proposal.name + "."
+              : outcome === "taken"
+                ? "A skill named " + proposal.name + " already exists, so nothing was saved."
+                : outcome === "failed"
+                  ? "Couldn't save the skill " + proposal.name + "; nothing was written."
+                  : "Not saved.";
+          yield* commitTransition(
+            ledger,
+            current,
+            { type: "task.completed", payload: { generation: current.task.generation, summary } },
+            { owner, narrate: true },
+          );
+        }),
+      )
+      .pipe(Effect.ensuring(save ? fs.remove(tmp).pipe(Effect.ignore) : Effect.void));
     if (save) yield* sweep;
   });
 
@@ -281,5 +266,5 @@ export const makeChannelSkillProposals = Effect.gen(function* () {
     );
   });
 
-  return { offerFor, advance };
+  return { advance };
 });

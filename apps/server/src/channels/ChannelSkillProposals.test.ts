@@ -16,7 +16,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
-import { makeChannelSkillProposals } from "./channelSkillProposals.ts";
+import { makeSkillProposalAnswers } from "./channelSkillProposals.ts";
 import { mayAnswerTask, skillFileText } from "./channelSkillProposalText.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
@@ -291,7 +291,7 @@ describe("GOAT Bot skill proposals", () => {
         // The snapshot an earlier attempt held: answered, still received.
         const stale = (yield* ledger.getTask(asked.taskId))!;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
-        const proposals = yield* makeChannelSkillProposals;
+        const proposals = yield* makeSkillProposalAnswers;
         yield* proposals.advance(
           {
             ...stale,
@@ -319,7 +319,7 @@ describe("GOAT Bot skill proposals", () => {
         const asked = (yield* proposalTask)!;
         const ledger = yield* ChannelLedger.ChannelLedger;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
-        const proposals = yield* makeChannelSkillProposals;
+        const proposals = yield* makeSkillProposalAnswers;
         // The recorded Save, committed directly so no runtime pass settles it first.
         const stored = (yield* commitTransition(
           ledger,

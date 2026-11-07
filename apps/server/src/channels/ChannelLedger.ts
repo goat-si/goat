@@ -325,6 +325,11 @@ export class ChannelLedger extends Context.Service<
       readonly taskId: ChannelTaskId;
       readonly hold: string | null;
     }) => Effect.Effect<void, ChannelLedgerError>;
+    /** Runs `body` holding SQLite's write lock, once this process is confirmed as the workers' owner. */
+    readonly underWorkerLock: (
+      owner: string,
+      body: Effect.Effect<void, ChannelLedgerError>,
+    ) => Effect.Effect<void, ChannelLedgerError>;
     readonly hasTaskEvent: (eventId: string) => Effect.Effect<boolean, ChannelLedgerError>;
     readonly listPendingNarrations: (
       limit: number,
@@ -1334,6 +1339,23 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(Effect.mapError(toLedgerError("applyTaskEvent"))),
+
+    underWorkerLock: (owner, body) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            // A write first, so the lock is held before anything is read.
+            const owned = yield* sql`UPDATE channel_runtime_state SET updated_at = updated_at
+              WHERE key = ${WORKER_KEY} AND owner_token = ${owner} RETURNING key`;
+            if (owned.length === 0)
+              return yield* new ChannelLedgerError({
+                reason: "ownership_lost",
+                detail: "Another process owns the channel workers.",
+              });
+            yield* body;
+          }),
+        )
+        .pipe(Effect.mapError(toLedgerError("underWorkerLock"))),
 
     setCompletionHold: (input) =>
       sql
