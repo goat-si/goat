@@ -488,6 +488,8 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   restoreBot: "channel.restoreBot",
   listBotThreads: "channel.listBotThreads",
   listBotNotes: "channel.listBotNotes",
+  listBotArtifacts: "channel.listBotArtifacts",
+  readBotArtifact: "channel.readBotArtifact",
   listChildWork: "channel.listChildWork",
   updateTaskView: "channel.updateTaskView",
   ingest: "channel.ingest",
