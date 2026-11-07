@@ -1601,6 +1601,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const credentialsByThread = new Map<string, string>();
         /** Threads Codex held before this session resumed them, such as across a server restart. */
         const foreignConfigThreads = new Set<string>();
+        /** Threads whose restart reload has not yet reached the agent in a started turn. */
+        const restartNotices = new Set<string>();
         /**
          * The subagent limits each live native thread's Codex session was built with. Codex ignores
          * resume overrides on a thread a client still holds, so a change needs a cold reload.
@@ -6945,13 +6947,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // (#1569), but one that comes with a new subagent limit does (#1572). A credential from
             // an earlier server is dead, so only running work and goals defer its replacement.
             const driverChanged = mcpSession ? cuaChanged : managedCuaByThread.has(threadId);
-            const busy =
-              stale &&
-              (yield* threadStatuses.busy(
-                client,
-                conversation,
-                !foreign && (!driverChanged || limitChanged),
-              ));
+            const terminals = !foreign && (!driverChanged || limitChanged);
+            const busy = stale && (yield* threadStatuses.busy(client, conversation, terminals));
             const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
             if (isGoatBotSessionThreadId(turnInput.threadId) && credentialStale && busy)
               return yield* toProtocolError(
@@ -6976,6 +6973,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ? {}
                   : { config: { ...runtime.params.config, mcp_servers: detached } }),
               });
+              if (foreign) restartNotices.add(threadId);
               recordLoaded(threadId, runtime, mcpSession);
             }
             const memoryContext = turnInput.refreshMemoryContext
@@ -7001,7 +6999,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               ...codexTurnSkills(mcpSession, runtime.cuaDriver),
               computerUseDeferred,
-              reloadedAfterRestart: foreign && !busy,
+              reloadedAfterRestart: restartNotices.has(threadId),
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });
@@ -7029,7 +7027,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ).pipe(turnTerminalizationPermit.withPermits(1)),
             });
-            if (dispatched.type === "adopted") return;
+            if (dispatched.type === "adopted") return void restartNotices.delete(threadId);
             const start = dispatched.reservation;
             // Claimed only after admission: a turn Codex starts while this one prepares is not its own.
             yield* Ref.update(pendingRootTurns, (current) =>
@@ -7065,6 +7063,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               )
               .pipe(Effect.tapError(() => Effect.sync(start.failed)));
             start.answered(started.turn.id);
+            restartNotices.delete(threadId);
             // A turn from another attempt routes events there, so it cannot be adopted here.
             const owner =
               previousTurns.get(started.turn.id) ??
@@ -7387,10 +7386,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 runtimePolicy: threadInput.runtimePolicy,
                 nativeThreadId,
               });
-              // excludeTurns is not in the generated request schema yet.
+              // excludeTurns is not in the generated request schema yet. Without overrides Codex
+              // only rejoins a thread it holds; the next quiet turn reloads it under GOAT's checks.
               const resume = resumeNativeThread(nativeThreadId, {
                 excludeTurns: true,
-                ...resumedRuntime.params,
+                ...(heldElsewhere ? {} : resumedRuntime.params),
               });
               const response = yield* resume.pipe(Effect.flatMap(decodeCodexResumeMetadata));
               // As after thread/start: an unreported thread could never reload until its next turn.
@@ -7637,6 +7637,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // Only now has Codex let the thread go; until then it is held with its old config.
               credentialsByThread.delete(nativeThreadId);
               foreignConfigThreads.delete(nativeThreadId);
+              restartNotices.delete(nativeThreadId);
               threadStatuses.forget(nativeThreadId);
               stoppedQueuedTurns.unloadThread(nativeThreadId);
               managedCuaByThread.delete(nativeThreadId);

@@ -487,7 +487,7 @@ export const fixture = (scenario: string) => {
         browserToolsAvailable: false,
         computerUse,
         computerUseDeferred: deferred,
-        reloadedAfterRestart,
+        reloadedAfterRestart: reloadedAfterRestart === true,
         screenCode,
       });
       entries.push({ type: "expect_outbound", frame: { id, method: "turn/start", params } });
