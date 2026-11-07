@@ -66,9 +66,10 @@ const { WorkspaceToolbar } = await import("./WorkspaceToolbar.ios");
 const { TestWorkspace } = (await import("./WorkspaceTabsContext")) as unknown as {
   TestWorkspace: import("react").Context<unknown>;
 };
-const { NativePrimaryColumnContext } =
+const { NativePrimaryColumnContext, NativeWorkspaceTabActivityContext } =
   (await import("../../native/v5-workspace-context")) as unknown as {
     NativePrimaryColumnContext: import("react").Context<unknown>;
+    NativeWorkspaceTabActivityContext: import("react").Context<unknown>;
   };
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -76,6 +77,7 @@ function Harness(props: {
   readonly tab: WorkspaceSearchTab;
   readonly query: string;
   readonly sidebar: boolean;
+  readonly slotActive: boolean;
   readonly stateRef: Ref<WorkspaceTabsState>;
 }) {
   const [state, dispatch] = useReducer(workspaceTabsReducer, null, () => {
@@ -99,18 +101,30 @@ function Harness(props: {
         bottomClearance: 0,
       }}
     >
-      <NativePrimaryColumnContext value={props.sidebar ? { presented: true } : null}>
-        <WorkspaceToolbar onNewTask={() => {}} sidebar={props.sidebar} />
-      </NativePrimaryColumnContext>
+      <NativeWorkspaceTabActivityContext value={{ active: props.slotActive }}>
+        <NativePrimaryColumnContext value={props.sidebar ? { presented: true } : null}>
+          <WorkspaceToolbar onNewTask={() => {}} sidebar={props.sidebar} />
+        </NativePrimaryColumnContext>
+      </NativeWorkspaceTabActivityContext>
     </TestWorkspace>
   );
 }
 
-function renderSearch(tab: WorkspaceSearchTab, query: string, sidebar = false) {
+function renderSearch(tab: WorkspaceSearchTab, query: string, sidebar = false, slotActive = true) {
   mocks.screenFocused = true;
   const root = createRoot(document.createElement("div"));
   const stateRef = createRef<WorkspaceTabsState>();
-  act(() => root.render(<Harness tab={tab} query={query} sidebar={sidebar} stateRef={stateRef} />));
+  act(() =>
+    root.render(
+      <Harness
+        tab={tab}
+        query={query}
+        sidebar={sidebar}
+        slotActive={slotActive}
+        stateRef={stateRef}
+      />,
+    ),
+  );
   const state = () => stateRef.current!;
   const native = {
     setText: vi.fn(),
@@ -173,6 +187,15 @@ it("closing a split view sidebar's search clears it while the detail column owns
   act(() => search().onClose?.());
   expect(state().tabs.threads).toMatchObject({ query: "", searchMode: "resting" });
   expect(native.clearText).toHaveBeenCalled();
+  act(() => root.unmount());
+});
+
+it("a late close from a retained list slot keeps the query after Settings takes the native tab", () => {
+  using _frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+  const { root, native, search, state } = renderSearch("threads", "diff", true, false);
+  act(() => search().onClose?.());
+  expect(state().tabs.threads).toMatchObject({ query: "diff", searchMode: "active" });
+  expect(native.clearText).not.toHaveBeenCalled();
   act(() => root.unmount());
 });
 

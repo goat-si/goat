@@ -96,7 +96,9 @@ export function WorkspaceToolbar(props: {
   // visible while its detail owns navigation focus.
   const searchClosed = () => {
     const hostVisible = navigation.isFocused() || primaryColumn?.presented === true;
-    if (tab.searchMode === "resting" || !hostVisible || !isTabActive(selectedTab)) return;
+    // A retained slot's late close must not clear the query it keeps for its return.
+    if (tab.searchMode === "resting" || !hostVisible || !tabActive || !isTabActive(selectedTab))
+      return;
     searchRef.current?.clearText();
     cancelSearch();
   };
