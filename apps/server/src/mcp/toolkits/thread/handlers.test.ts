@@ -127,7 +127,32 @@ const layerThreadTools = McpHttpServer.layerThreadToolkit.pipe(
     }),
   ),
   Layer.provide(
-    Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({ connectedHosts: Effect.succeed([]) }),
+    Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+      connectedHosts: Effect.succeed([]),
+      // The studio host answers a search with a link on its own web origin.
+      callHostTool: (_call, authorize) =>
+        authorize.pipe(
+          Effect.as({
+            matches: [
+              {
+                threadId: "studio-thread",
+                projectId: "project-studio",
+                projectTitle: "Studio",
+                title: "Fix flaky test on studio",
+                status: "completed",
+                updatedAt: "2026-10-15T00:00:00.000Z",
+                archived: false,
+                source: "title",
+                snippet: "Fix flaky test on studio",
+                messageCreatedAt: null,
+                link: "[Fix flaky test on studio](https://studio.example.ts.net/studio-environment/studio-thread)",
+              },
+            ],
+            nextCursor: null,
+            truncated: false,
+          }),
+        ),
+    }),
   ),
   Layer.provide(
     Layer.mock(ScheduledTaskService.ScheduledTaskService)({
@@ -199,6 +224,28 @@ it.effect("goat_thread_search links this host's matches on the origin the client
         {
           threadId: "searched-thread",
           link: "[Fix flaky test](https://box.example.ts.net/mcp-thread-environment/searched-thread)",
+        },
+      ],
+    });
+  }).pipe(Effect.provide(layerThreadTools)),
+);
+
+// regression: #2333 a host's match lost the link that host returned
+it.effect("goat_thread_search keeps the link another host returned for its match", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const found = yield* server
+      .callTool({ name: "goat_thread_search", arguments: { query: "flaky", host: "studio" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(found.structuredContent).toMatchObject({
+      matches: [
+        {
+          host: "studio",
+          threadId: "studio-thread",
+          link: "[Fix flaky test on studio](https://studio.example.ts.net/studio-environment/studio-thread)",
         },
       ],
     });
