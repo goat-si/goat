@@ -4,11 +4,15 @@ import {
   forgetNoteDraft,
   GOAT_BOT_NOTES_COPY,
   GOAT_BOT_NOTES_SHARED_COPY,
+  GOAT_BOT_NOTES_TRUNCATED_COPY,
+  goatBotNoteSourceLabel,
+  goatBotNotesView,
   noteDateLabel,
 } from "@goat/client-runtime/goatBot";
 import type { ChannelBotNote, EnvironmentId } from "@goat/contracts";
 import { useEffect, useId, useState } from "react";
 import { channelEnvironment } from "~/state/channels";
+import { useNowMinute } from "~/hooks/useNowMinute";
 import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { Button } from "../ui/button";
@@ -60,34 +64,104 @@ export function GoatBotMemory({
         </div>
       ) : notes.data === null ? (
         <p className="text-muted-foreground">Loading notes…</p>
-      ) : notes.data.notes.length === 0 ? (
-        <p>No notes yet. Ask GOAT Bot to remember a standing rule.</p>
       ) : (
-        <>
-          {notes.data.truncated && (
-            <p className="text-xs text-muted-foreground">Showing the newest notes only.</p>
-          )}
-          <ul className="space-y-3">
-            {notes.data.notes.map((note) => (
-              // An index is a line's place in this read only, so a new read starts every row over.
-              <NoteRow
-                key={`${notes.data?.revision}:${note.index}`}
-                note={note}
-                onDraft={onDraft}
-              />
-            ))}
-          </ul>
-        </>
+        <NoteList
+          revision={notes.data.revision}
+          notes={notes.data.notes}
+          truncated={notes.data.truncated}
+          onDraft={onDraft}
+        />
       )}
     </div>
   );
 }
 
+function NoteList({
+  revision,
+  notes,
+  truncated,
+  onDraft,
+}: {
+  revision: string | null;
+  notes: ReadonlyArray<ChannelBotNote>;
+  truncated: boolean;
+  onDraft: ((text: string) => void) | undefined;
+}) {
+  const view = goatBotNotesView({ notes, truncated });
+  const [showReplaced, setShowReplaced] = useState(false);
+  const replacedId = useId();
+  const now = Date.parse(useNowMinute());
+  return (
+    <>
+      {truncated && (
+        <p className="text-xs text-muted-foreground">{GOAT_BOT_NOTES_TRUNCATED_COPY}</p>
+      )}
+      {view.empty === "none" ? (
+        <p>No notes yet. Ask GOAT Bot to remember a standing rule.</p>
+      ) : view.empty === "none_in_window" ? (
+        <p>No complete note fits in the newest 64 KB of memory.md.</p>
+      ) : view.empty === "no_current" ? (
+        <p>No current notes.</p>
+      ) : (
+        <ul className="space-y-3">
+          {view.current.map((note) => (
+            // An index is a line's place in this read only, so a new read starts every row over.
+            <NoteRow
+              key={`${revision}:${note.index}`}
+              note={note}
+              source={goatBotNoteSourceLabel(note.source, { now })}
+              onDraft={onDraft}
+            />
+          ))}
+        </ul>
+      )}
+      {view.replaced.length > 0 && (
+        <>
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-expanded={showReplaced}
+            aria-controls={replacedId}
+            onClick={() => setShowReplaced((value) => !value)}
+          >
+            {showReplaced ? "Hide replaced notes" : `Show replaced notes (${view.replaced.length})`}
+          </Button>
+          {showReplaced && (
+            <ul id={replacedId} className="space-y-3 text-muted-foreground">
+              {view.replaced.map((note) => {
+                const replacing = view.replacingText(note);
+                const source = goatBotNoteSourceLabel(note.source, { now });
+                return (
+                  <li
+                    key={`${revision}:${note.index}`}
+                    className="space-y-1 border-b border-border pb-3"
+                  >
+                    <p className="text-xs">{noteDateLabel(note.date)}</p>
+                    {source !== null && <p className="text-xs">{source}</p>}
+                    <p className="whitespace-pre-wrap">{note.text}</p>
+                    <p className="text-xs">
+                      {replacing === null
+                        ? "Replaced by a later note"
+                        : `Replaced by: “${replacing}”`}
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 function NoteRow({
   note,
+  source,
   onDraft,
 }: {
   note: ChannelBotNote;
+  source: string | null;
   onDraft: ((text: string) => void) | undefined;
 }) {
   const [wording, setWording] = useState<string | null>(null);
@@ -96,9 +170,13 @@ function NoteRow({
   return (
     <li className="space-y-1 border-b border-border pb-3" aria-describedby={textId}>
       <p className="text-xs text-muted-foreground">{noteDateLabel(note.date)}</p>
+      {source !== null && <p className="text-xs text-muted-foreground">{source}</p>}
       <p id={textId} className="whitespace-pre-wrap">
         {note.text}
       </p>
+      {note.replaces !== undefined && (
+        <p className="text-xs text-muted-foreground">Replaces: “{note.replaces}”</p>
+      )}
       {wording === null ? (
         <div className="flex gap-1">
           <Button

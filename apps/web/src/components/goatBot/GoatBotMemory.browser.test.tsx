@@ -110,7 +110,7 @@ it("a member's tab says the notes are shared and a long file says only the newes
   await expect
     .element(screen.getByText("Every bot on this computer shares these notes with GOAT Bot."))
     .toBeVisible();
-  await expect.element(screen.getByText("Showing the newest notes only.")).toBeVisible();
+  await expect.element(screen.getByText(/^memory.md is larger than 64 KB/)).toBeVisible();
 });
 
 it("Ask to forget drafts the quoted note and nothing else", async () => {
@@ -216,4 +216,123 @@ it("asks again when opened and whenever the bot answers or a task moves on", asy
   expect(state.refresh).toHaveBeenCalledTimes(1);
   await screen.rerender(<GoatBotMemory environmentId={environmentId} refreshKey="b" />);
   expect(state.refresh).toHaveBeenCalledTimes(2);
+});
+const sourced = (index: number, text: string, extra: Record<string, unknown> = {}) => ({
+  index,
+  date: "2026-11-07",
+  text,
+  ...extra,
+});
+
+it("says where each note was asked for", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        sourced(2, "Reply in Korean", {
+          source: {
+            kind: "shown",
+            inputId: "i",
+            channel: "slack",
+            botId: "main",
+            from: "Juni",
+            at: "2026-11-07T10:00:00.000Z",
+          },
+        }),
+        sourced(1, "Keep it short", { source: { kind: "elsewhere" } }),
+        { index: 0, date: null, text: "Written by hand" },
+      ],
+      truncated: false,
+    },
+  });
+  await using screen = await render(<GoatBotMemory environmentId={environmentId} />);
+  const rows = [...screen.container.querySelectorAll("li")].map((row) => row.textContent ?? "");
+  expect(rows[0]).toMatch(/Slack, Juni, Nov [78]/);
+  expect(rows[1]).toContain("Asked in another conversation");
+  expect(rows[2]).not.toContain("Asked in");
+});
+
+it("keeps replaced notes behind a toggle that works from the keyboard", async () => {
+  setup({
+    data: {
+      revision: "r1",
+      notes: [
+        sourced(1, "Reply in English", { replaces: "Reply in Korean" }),
+        sourced(0, "Reply in Korean", { replacedBy: 1 }),
+      ],
+      truncated: false,
+    },
+  });
+  await using screen = await render(
+    <GoatBotMemory environmentId={environmentId} onDraft={() => {}} />,
+  );
+  await expect.element(screen.getByText("Replaces: “Reply in Korean”")).toBeVisible();
+  expect(screen.getByText("Replaced by: “Reply in English”").query()).toBeNull();
+  const toggle = screen.getByRole("button", { name: "Show replaced notes (1)" });
+  await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
+  toggle.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(screen.getByText("Replaced by: “Reply in English”")).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Hide replaced notes" }))
+    .toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("button", { name: "Ask to forget" }).all()).toHaveLength(1);
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByText("Replaced by: “Reply in English”").query()).toBeNull();
+});
+
+it("a correction that arrives while a change is open drops the change and hides the old note", async () => {
+  setup({ data: { revision: "r1", notes: [sourced(0, "Reply in Korean")], truncated: false } });
+  await using screen = await render(
+    <GoatBotMemory environmentId={environmentId} onDraft={() => {}} refreshKey="a" />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }));
+  await expect.element(screen.getByRole("textbox", { name: "New wording" })).toBeVisible();
+  state.data = {
+    revision: "r2",
+    notes: [
+      sourced(1, "Reply in English", { replaces: "Reply in Korean" }),
+      sourced(0, "Reply in Korean", { replacedBy: 1 }),
+    ],
+    truncated: false,
+  };
+  await screen.rerender(
+    <GoatBotMemory environmentId={environmentId} onDraft={() => {}} refreshKey="b" />,
+  );
+  expect(screen.getByRole("textbox", { name: "New wording" }).query()).toBeNull();
+  expect(screen.getByText("Reply in Korean", { exact: true }).query()).toBeNull();
+  expect(screen.getByRole("button", { name: "Ask to forget" }).all()).toHaveLength(1);
+});
+
+it.each([
+  { name: "with notes", notes: [sourced(0, "Reply in Korean")], body: "Reply in Korean" },
+  {
+    name: "with no complete note",
+    notes: [],
+    body: "No complete note fits in the newest 64 KB of memory.md.",
+  },
+])("explains a partial list $name", async ({ notes, body }) => {
+  setup({ data: { revision: "r1", notes, truncated: true } });
+  await using screen = await render(<GoatBotMemory environmentId={environmentId} />);
+  await expect
+    .element(
+      screen.getByText(
+        "memory.md is larger than 64 KB, so this list shows only complete notes from its newest 64 KB. The rest of the file is unchanged.",
+      ),
+    )
+    .toBeVisible();
+  await expect.element(screen.getByText(body)).toBeVisible();
+  expect(
+    screen.getByText("No notes yet. Ask GOAT Bot to remember a standing rule.").query(),
+  ).toBeNull();
+});
+
+it("says when every note has been replaced", async () => {
+  setup({
+    data: { revision: "r1", notes: [sourced(0, "Old rule", { replacedBy: 5 })], truncated: false },
+  });
+  await using screen = await render(<GoatBotMemory environmentId={environmentId} />);
+  await expect.element(screen.getByText("No current notes.")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Show replaced notes (1)" }));
+  await expect.element(screen.getByText("Replaced by a later note")).toBeVisible();
 });
