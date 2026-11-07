@@ -59,6 +59,7 @@ import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useServerConfigs, useThreadShell } from "../../state/entities";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { useReplying } from "./useReplying";
+import { markMobileGoatBotMember, mobileGoatBotMemberActive } from "./mobileGoatBotMembers";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import {
@@ -79,8 +80,6 @@ interface Session {
   readonly pending: ReadonlyArray<GoatBotPendingInput>;
   readonly retain: (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => void;
   readonly dispose: () => void;
-  /** Conversation threads of member bots a screen here confirmed active; their messages may send. */
-  readonly members: ReadonlySet<string>;
 }
 
 /** The confirmed main bot when a message may go to this thread: main's own or an active member's. */
@@ -90,7 +89,10 @@ function sendTarget(
 ) {
   const main = current?.bot;
   if (!main || main.environmentId !== bot.environmentId) return null;
-  return main.threadId === bot.threadId || current.members.has(bot.threadId) ? main : null;
+  return main.threadId === bot.threadId ||
+    mobileGoatBotMemberActive(bot.environmentId, bot.threadId)
+    ? main
+    : null;
 }
 
 const sessions = new Map<EnvironmentId, Session>();
@@ -322,7 +324,6 @@ function newSession(environmentId: EnvironmentId): Session {
     canOperate: false,
     queue,
     pending: EMPTY_PENDING,
-    members: new Set(),
     retain: (key, attachments) => {
       retained.set(
         key,
@@ -610,17 +611,15 @@ export function useMobileGoatBotSession(
     }
   }, [visible, confirmedBot, shell, shellReadiness.status]);
   // The shell watch above stays on the main bot; a member's state comes from its profile.
-  const memberActive = member !== null && member.state !== "deleted";
+  // A member answers only through its own environment's session.
+  const memberActive =
+    member !== null && member.state !== "deleted" && member.environmentId === environmentId;
   const memberThreadId = member?.sessionThreadId ?? null;
   // oxlint-disable-next-line goat/react-effect-budget -- Publish the member's state to the environment's send queue, which outlives this screen.
   useEffect(() => {
-    if (environmentId === null || memberThreadId === null || !session) return;
-    if (session.members.has(memberThreadId) === memberActive) return;
-    const members = new Set(session.members);
-    if (memberActive) members.add(memberThreadId);
-    else members.delete(memberThreadId);
-    update(environmentId, { ...session, members });
-  }, [environmentId, memberThreadId, memberActive, session]);
+    if (environmentId !== null && memberThreadId !== null)
+      markMobileGoatBotMember(environmentId, memberThreadId, memberActive);
+  }, [environmentId, memberThreadId, memberActive]);
   const target = member === null ? bot : memberBotTarget(member, bot);
   const visibleTurnItems = useThreadVisibleTurnItems({
     environmentId: visible ? (target?.environmentId ?? null) : null,
@@ -774,7 +773,12 @@ export function useMobileGoatBotSession(
     availability,
     homeKnown: resolved.kind === "home_offline" ? resolved.known : false,
     homeLabel: resolved.kind === "home_offline" ? resolved.label : null,
-    error: ensure.state === "failed" ? ensure.message : null,
+    error:
+      ensure.state === "failed"
+        ? ensure.message
+        : member !== null && environmentId !== null && member.environmentId !== environmentId
+          ? member.name + " runs on another computer."
+          : null,
     onSend,
     onRetryInput,
     onDiscardInput: (key: string) => queue?.discard(key),

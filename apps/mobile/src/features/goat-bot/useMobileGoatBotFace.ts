@@ -32,6 +32,8 @@ import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 export function useMobileGoatBotFace(
   activity: GoatBotFaceInput["activity"],
   conversation?: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | null,
+  /** For a roster row: the bot's own waiting count, and the shell alone, without its detail. */
+  row?: { readonly waitingCount: number },
 ): {
   readonly state: GoatBotFaceState;
   readonly since: number | null;
@@ -42,8 +44,8 @@ export function useMobileGoatBotFace(
     botRef ? scopeThreadRef(botRef.environmentId, botRef.threadId) : null,
   );
   const items = useThreadVisibleTurnItems({
-    environmentId: botRef?.environmentId ?? null,
-    threadId: botRef?.threadId ?? null,
+    environmentId: row === undefined ? (botRef?.environmentId ?? null) : null,
+    threadId: row === undefined ? (botRef?.threadId ?? null) : null,
   });
   // The bot's own reply turns carry no chip, so reading comes from the unanswered message.
   const replyingSince = goatBotReplyingSince({
@@ -57,7 +59,7 @@ export function useMobileGoatBotFace(
   const tasks = goatBotFaceTasks(items);
   const input: GoatBotFaceInput = {
     activity: activity ?? (reading ? READING : null),
-    waitingCount: 0,
+    waitingCount: row?.waitingCount ?? 0,
     shell: shell?.source ?? null,
     tasks,
   };

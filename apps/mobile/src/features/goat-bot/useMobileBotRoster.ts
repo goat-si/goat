@@ -10,6 +10,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import { mobileBotRoster } from "./mobileBotRoster";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
+import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
 
 export function useMobileBotRoster(selectedKey: string | null) {
   const home = useMobileGoatBotHomeMode();
@@ -57,6 +58,12 @@ export function useMobileBotRoster(selectedKey: string | null) {
   useEffect(() => {
     if (shouldRefresh && botThreadId && revision !== undefined) refreshThreads();
   }, [shouldRefresh, botThreadId, revision, refreshThreads]);
+  const bots = profiles.data?.bots;
+  // oxlint-disable-next-line goat/react-effect-budget -- Keep the environment's send queue to the members the roster lists as active.
+  useEffect(() => {
+    if (environmentId !== null && supportsMembers && bots !== undefined)
+      syncMobileGoatBotMembers(environmentId, bots);
+  }, [environmentId, supportsMembers, bots]);
   const slack = useEnvironmentQuery(
     environmentId !== null && connected && capabilities?.slackChannel === true
       ? channelEnvironment.slackSettings({ environmentId, input: {} })

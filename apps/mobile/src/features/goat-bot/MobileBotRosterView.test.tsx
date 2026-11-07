@@ -40,7 +40,13 @@ vi.mock("react-native", () => ({
   Modal: ({ children, visible }: { children?: ReactNode; visible: boolean }) =>
     visible ? <div>{children}</div> : null,
   Alert: { alert: vi.fn() },
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Text: ({
+    children,
+    accessibilityLabel,
+  }: {
+    children?: ReactNode;
+    accessibilityLabel?: string;
+  }) => <span aria-label={accessibilityLabel}>{children}</span>,
   Pressable: ({
     children,
     ref,
@@ -92,6 +98,10 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: "env", threadId: "bot" } }),
 }));
 vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
+// Each member's own waiting count, as channel.getBotStatus answers it for that bot.
+vi.mock("./useMobileMemberStatus", () => ({
+  useMobileMemberWaitingCount: (bot: { botId: string }) => (bot.botId === "research" ? 2 : 0),
+}));
 vi.mock("../../state/use-thread-detail", () => ({
   useThreadVisibleTurnItems: () => face.items,
 }));
@@ -530,6 +540,7 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
       element.textContent?.includes(label),
     );
   expect(button("Research")?.getAttribute("aria-pressed")).toBe("true");
+  expect(button("Research")?.querySelector('[aria-label="2 waiting for you"]')).not.toBeNull();
   expect(container.textContent).not.toContain("Coming soon");
   await act(async () => button("New bot")?.click());
   expect(newBot).toHaveBeenCalledOnce();

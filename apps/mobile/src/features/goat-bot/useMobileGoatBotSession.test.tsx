@@ -126,6 +126,7 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
 }));
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 import * as botSessions from "./useMobileGoatBotSession";
+import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
 import * as fileOwnership from "../../lib/composerAttachmentFiles";
 
 const permissionAtom = Atom.make(true);
@@ -944,6 +945,16 @@ it("sends a member's message to the member's own conversation, and stops once it
     replyAddress: { kind: "goat", environmentId: env, threadId: "thread-research" },
     text: "find sources",
   });
+  // The roster no longer lists the member (deleted on another device): nothing more is sent,
+  // even from a screen still holding the old profile.
+  harness.run.mockClear();
+  syncMobileGoatBotMembers(env, []);
+  await act(async () => {
+    session.onSend("after delete");
+  });
+  expect(harness.run.mock.calls.filter(([, , args]) => args.input?.intent === "message")).toEqual(
+    [],
+  );
   member = profile("deleted");
   await render();
   expect(session.canSend).toBe(false);

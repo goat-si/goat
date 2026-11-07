@@ -23,6 +23,7 @@ import { Button } from "../../components/ui/Button";
 import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
+import { useMobileMemberWaitingCount } from "./useMobileMemberStatus";
 
 /** Servers without member bots keep New bot disabled. */
 const ignorePress = () => undefined;
@@ -350,13 +351,30 @@ export function MobileBotRosterView(props: {
   );
 }
 
-/** A member's face from its own conversation; still, since only the main row and headers move. */
+/**
+ * A member's face from its own conversation shell and waiting count, with the count beside it;
+ * still, since only the main row and headers move.
+ */
 function MemberFace({ bot }: { readonly bot: BotProfile }) {
-  const face = useMobileGoatBotFace(null, {
-    environmentId: bot.environmentId,
-    threadId: bot.sessionThreadId,
-  });
-  return <GoatBotFaceAvatar state={face.state} size={40} motion={null} />;
+  const waitingCount = useMobileMemberWaitingCount(bot);
+  const face = useMobileGoatBotFace(
+    null,
+    { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
+    { waitingCount },
+  );
+  return (
+    <View className="flex-row items-center gap-1">
+      <GoatBotFaceAvatar state={face.state} size={40} motion={null} />
+      {waitingCount > 0 ? (
+        <Text
+          accessibilityLabel={`${waitingCount} waiting for you`}
+          className="text-xs font-semibold text-foreground"
+        >
+          {waitingCount}
+        </Text>
+      ) : null}
+    </View>
+  );
 }
 
 /**
