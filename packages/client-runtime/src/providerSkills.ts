@@ -5,6 +5,8 @@ import {
   COMPUTER_USE_PROVIDER_DRIVERS,
   environmentDeliversBuiltInSkill,
   type EnvironmentId,
+  GOAT_SKILL_SCOPE,
+  isGoatSkillName,
   type ProjectId,
   resolveProjectBuiltInSkillEnabled,
   isProviderWorkspaceSnapshotCurrent,
@@ -22,6 +24,7 @@ import { type AtomCommand, runAtomCommand } from "./state/runtime.ts";
 
 export type ProviderSkillSourceKind =
   | "builtin"
+  | "goat"
   | "app"
   | "repo"
   | "project"
@@ -77,6 +80,8 @@ export function getProviderSlashCommandsForSlashMenu(
 export function resolveProviderSkillSourceKind(
   skill: Pick<ServerProviderSkill, "path" | "scope">,
 ): ProviderSkillSourceKind {
+  // GOAT's own skills live under the GOAT home, which a plugin path heuristic must not claim.
+  if (skill.scope?.trim().toLowerCase() === GOAT_SKILL_SCOPE) return "goat";
   const normalizedPath = normalizePathSeparators(skill.path);
   if (normalizedPath.includes("/.codex/plugins/") || normalizedPath.includes("/.agents/plugins/")) {
     return "app";
@@ -164,7 +169,11 @@ export function withBuiltInProviderSkills(
   settings: BuiltInSkillSettings | null | undefined,
   target?: BuiltInSkillTarget,
 ): ReadonlyArray<ServerProviderSkill> {
-  if (!provider || !settings) return skills;
+  // The goat: namespace belongs to GOAT; an older server may still pass a provider's own.
+  const owned = skills.filter(
+    (skill) => !isGoatSkillName(skill.name) || skill.scope === GOAT_SKILL_SCOPE,
+  );
+  if (!provider || !settings) return owned;
   const offered = BUILTIN_SKILLS.filter((skill) =>
     skill.anyOf?.includes("browser")
       ? COMPUTER_USE_PROVIDER_DRIVERS.has(provider.driver)
@@ -173,10 +182,10 @@ export function withBuiltInProviderSkills(
         : BUILTIN_SKILL_PROVIDER_DRIVERS.has(provider.driver) &&
           environmentDeliversBuiltInSkill(target, skill.name),
   );
-  if (offered.length === 0) return skills;
+  if (offered.length === 0) return owned;
   const resolved = { projectSettingsOverrides: {}, ...settings };
   return [
-    ...skills,
+    ...owned,
     ...offered.map((skill) => ({
       name: skill.name,
       displayName: skill.displayName,

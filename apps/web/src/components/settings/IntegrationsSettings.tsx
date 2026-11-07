@@ -8,6 +8,7 @@ import { DeviceHostsSettings } from "./DeviceHostsSettings";
 import { ComputerUseSettings } from "./ComputerUseSettings";
 import { GoatBotSettingsPointer } from "./GoatBotSettingsPointer";
 import { McpServersSettings } from "./McpServersSettings";
+import { GlobalSkillsSettings } from "./GlobalSkillsSettings";
 /**
  * Integrations settings - preferences for surfaces GOAT embeds rather than
  * owns. Browser is the first section: the defaults a preview tab opens at,
@@ -1546,6 +1547,7 @@ export function IntegrationsSettingsPanel() {
       <ComputerUseSettings />
       <AgentToolsSettings />
       <McpServersSettings />
+      <GlobalSkillsSettings />
       <GoatBotSettingsPointer />
     </SettingsPageContainer>
   );

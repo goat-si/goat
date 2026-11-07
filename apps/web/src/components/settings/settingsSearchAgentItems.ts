@@ -9,6 +9,13 @@ export const AGENT_SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["global mcp servers tools command stdio http headers environment"],
   },
   {
+    id: "goat-skills",
+    title: "GOAT skills",
+    to: "/settings/integrations",
+    scope: "environment-defaults",
+    searchTerms: ["global skills goat skill folder SKILL.md rescan remove disable"],
+  },
+  {
     id: "agent-workspace-access",
     title: "Agent workspace access",
     to: "/settings/integrations",

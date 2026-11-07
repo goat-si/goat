@@ -320,14 +320,3 @@ that thread's own access instead, and `goat login`, `goat pair`, and the
 Approved agents appear under **Settings → Connections** like other clients.
 Revoke one there to cut off its access immediately. A sign-in lasts 30 days;
 after that the agent asks you to approve it again.
-
-## Add MCP servers for GOAT agents
-
-In **Settings → Integrations → MCP servers**, add servers for the selected environment.
-They apply to new agent sessions and appear to agents as `<name>_goat`. Codex, Claude,
-and Cursor support both stdio and HTTP servers; ACP agents support stdio. If a provider
-already has a server with the exact same name, Codex keeps its own and skips GOAT's,
-Claude uses GOAT's, and Cursor and ACP agents decide their own precedence. Names ending
-in `_goat` are used by GOAT.
-
-Don't put secrets in URLs; add them as headers instead.

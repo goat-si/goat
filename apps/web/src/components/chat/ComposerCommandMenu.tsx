@@ -26,6 +26,7 @@ import {
   PackageIcon,
   SettingsIcon,
   SparklesIcon,
+  StarIcon,
   UserRoundIcon,
   type IconComponent,
 } from "~/components/solar";
@@ -302,6 +303,7 @@ const LISTBOX_LABEL_BY_TRIGGER: Record<ComposerTriggerKind, string> = {
 
 const SKILL_SOURCE_ICON_BY_KIND: Record<ProviderSkillSourceKind, IconComponent> = {
   builtin: SparklesIcon,
+  goat: StarIcon,
   app: BlocksIcon,
   repo: FolderIcon,
   project: FolderIcon,
@@ -312,6 +314,7 @@ const SKILL_SOURCE_ICON_BY_KIND: Record<ProviderSkillSourceKind, IconComponent> 
 
 const SKILL_SOURCE_LABEL_BY_KIND: Record<ProviderSkillSourceKind, string> = {
   builtin: "Built in",
+  goat: "GOAT",
   app: "App",
   repo: "Repo",
   project: "Project",
