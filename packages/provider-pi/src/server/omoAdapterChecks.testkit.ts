@@ -32,6 +32,41 @@ export function registerOmoAdapterChecks({
   runtimePolicy: typeof Fixture.runtimePolicy;
   layerTest: typeof Fixture.layerTest;
 }) {
+  it.effect("keeps an OmO extension status published before computer control is disabled", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        undefined,
+        undefined,
+        OMO_PROFILE,
+      );
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "setStatus",
+        statusKey: "watch",
+        statusText: "Ready",
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_session.updated" &&
+          event.providerSession.extensionStatuses?.some((status) => status.key === "watch") ===
+            true,
+      );
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      assert.deepEqual(runtime.providerSession.extensionStatuses, [
+        { key: "watch", text: "Ready" },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("rejects an invalid OmO history page during resume", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

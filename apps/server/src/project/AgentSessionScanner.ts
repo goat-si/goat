@@ -1714,7 +1714,10 @@ export const make = Effect.gen(function* () {
                   snapshot.records,
                   snapshot.historyBytes,
                 )
-              : null;
+              : [];
+          if (inheritedRecords === null) {
+            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+          }
           const parsedThread = parseAgentSessionRecords(
             {
               source: candidate.source,
@@ -1722,9 +1725,7 @@ export const make = Effect.gen(function* () {
               fallbackSessionId: path.basename(transcript.filePath, ".jsonl"),
               lastActiveAtMs: transcript.mtimeMs,
             },
-            inheritedRecords === null
-              ? snapshot.records
-              : [...inheritedRecords, ...snapshot.records],
+            [...inheritedRecords, ...snapshot.records],
             snapshot.claudeFields,
           );
           if (parsedThread === null) {
