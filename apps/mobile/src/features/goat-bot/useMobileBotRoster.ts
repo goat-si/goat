@@ -152,7 +152,6 @@ export function useMobileGoatBotMember(botId: string | undefined) {
     missing:
       botId !== undefined &&
       member === null &&
-      !profiles.isPending &&
-      (profiles.isSuccess || !supported),
+      (!supported || (!profiles.isPending && profiles.isSuccess)),
   };
 }
