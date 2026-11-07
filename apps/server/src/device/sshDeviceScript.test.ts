@@ -7,7 +7,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
-import { quoteRemoteArg, remoteDeviceEnvironment } from "./sshDeviceScript.ts";
+import { quoteRemoteArg, remoteDeviceEnvironment, remoteDeviceScript } from "./sshDeviceScript.ts";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 
@@ -44,4 +44,45 @@ it.effect("preserves shell metacharacters and newlines in remote arguments", () 
       expect(result.stdout).toBe(value);
     });
   }),
+);
+
+it.effect(
+  "stopping remote agent tools ends retained runners, and still stops when cleanup is refused",
+  () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return;
+      yield* Effect.promise(async () => {
+        const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-ssh-agent-stop-"));
+        try {
+          const state = NodePath.join(home, ".t3/device/hosts/owner-1");
+          await NodeFSP.mkdir(state, { recursive: true });
+          const calls = NodePath.join(home, "calls.log");
+          // A fake agent-device that records each call and refuses runner cleanup.
+          const entry = NodePath.join(home, "agent-device.mjs");
+          await NodeFSP.writeFile(
+            entry,
+            `import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
+process.exit(process.argv.includes("--clean") ? 1 : 0);
+`,
+          );
+          await NodeFSP.writeFile(
+            NodePath.join(state, "agent.json"),
+            JSON.stringify({ entryPath: entry }),
+          );
+          const child = NodeChildProcess.spawn(process.execPath, ["-"], {
+            env: { HOME: home, PATH: process.env.PATH ?? "" },
+            stdio: ["pipe", "ignore", "ignore"],
+          });
+          child.stdin.end(remoteDeviceScript("owner-1", "stop-agent"));
+          await new Promise((resolve) => child.once("exit", resolve));
+          expect((await NodeFSP.readFile(calls, "utf8")).trim().split("\n")).toEqual([
+            `daemon stop --clean --state-dir ${state}`,
+            `daemon stop --state-dir ${state}`,
+          ]);
+        } finally {
+          await NodeFSP.rm(home, { recursive: true, force: true });
+        }
+      });
+    }),
 );

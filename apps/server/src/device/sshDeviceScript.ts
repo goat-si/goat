@@ -39,6 +39,13 @@ const root = path.join(os.homedir(), '.t3', 'device');
 const state = path.join(root, 'hosts', owner);
 const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', timeout: 30000, ...options });
 const read = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+// A plain stop leaves XCTest runners alive for reuse; --clean ends them. Both fit SshDeviceHost's 45 s limit.
+const stopDaemon = (entry) => {
+  const clean = run(process.execPath, [entry, 'daemon', 'stop', '--clean', '--state-dir', state], { timeout: 25000 });
+  if (clean.status === 0) return clean;
+  console.error('agent-device runner cleanup did not finish; stopping the daemon without it: ' + (clean.error?.message || (clean.stdout || '').slice(0, 400)));
+  return run(process.execPath, [entry, 'daemon', 'stop', '--state-dir', state], { timeout: 15000 });
+};
 const write = (file, value) => { const tmp = file + '.' + process.pid; fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 }); fs.renameSync(tmp, file); };
 const toolVersions = (name, requiredVersion, entry, record) => {
   const directory = path.join(root, 'tools');
@@ -158,7 +165,7 @@ async function install(name, version, entry) {
       fs.rmSync(hubFile, { force: true });
     }
     const entry = read(agentFile)?.entryPath || path.join(root, 'tools', 'agent-device@' + agentVersion, 'node_modules', 'agent-device', 'bin', 'agent-device.mjs');
-    if (fs.existsSync(entry)) run(process.execPath, [entry, 'daemon', 'stop', '--state-dir', state]);
+    if (fs.existsSync(entry)) stopDaemon(entry);
     return;
   }
   if (!ios && !android) throw Error(platforms.map(p => p.reason).join(' '));
@@ -207,7 +214,7 @@ async function install(name, version, entry) {
   const previousAgent = read(agentFile)?.entryPath;
   let daemon = read(daemonFile);
   if (daemon && (previousAgent !== agentEntry || !await healthy(daemon.httpPort, '/health'))) {
-    const stopped = run(process.execPath, [previousAgent || agentEntry, 'daemon', 'stop', '--state-dir', state]);
+    const stopped = stopDaemon(previousAgent || agentEntry);
     if (stopped.status !== 0) throw Error('Could not stop the previous agent-device version.');
     fs.rmSync(daemonFile, { force: true });
     daemon = null;
