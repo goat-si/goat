@@ -159,6 +159,8 @@ export const ChannelReceptionInput = Schema.Struct({
   readResults: Schema.optional(Schema.Array(ChannelReceptionReadResult)),
   /** Written procedures workers can follow. */
   skills: Schema.optional(Schema.Array(ChannelReceptionSkill)),
+  /** The name and purpose people gave the bot; absent or the defaults leave the prompt as it was. */
+  identity: Schema.optional(Schema.Struct({ name: Schema.String, purpose: Schema.String })),
   requester: ChannelRequester,
 });
 export type ChannelReceptionInput = typeof ChannelReceptionInput.Type;

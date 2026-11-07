@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { BotProfile } from "./botProfile.ts";
+import { BotId, BotProfile } from "./botProfile.ts";
 import { AuthEnvironmentScopes } from "./auth.ts";
 import {
   EnvironmentId,
@@ -296,6 +296,17 @@ export const ChannelListBotsResult = Schema.Struct({ bots: Schema.Array(BotProfi
 export type ChannelListBotsInput = typeof ChannelListBotsInput.Type;
 export type ChannelListBotsResult = typeof ChannelListBotsResult.Type;
 
+/** Changes only the keys sent. A null avatar returns the bot to its default face. */
+export const ChannelUpdateBotInput = Schema.Struct({
+  botId: BotId,
+  name: Schema.optionalKey(BotProfile.fields.name),
+  avatar: Schema.optionalKey(BotProfile.fields.avatar),
+  purpose: Schema.optionalKey(BotProfile.fields.purpose),
+});
+export const ChannelUpdateBotResult = Schema.Struct({ bot: BotProfile });
+export type ChannelUpdateBotInput = typeof ChannelUpdateBotInput.Type;
+export type ChannelUpdateBotResult = typeof ChannelUpdateBotResult.Type;
+
 export const ChannelTaskView = Schema.Struct({
   taskId: ChannelTaskId,
   pinnedAt: Schema.NullOr(IsoDateTime),
@@ -426,6 +437,7 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
   getBotStatus: "channel.getBotStatus",
   listBots: "channel.listBots",
+  updateBot: "channel.updateBot",
   listBotThreads: "channel.listBotThreads",
   listChildWork: "channel.listChildWork",
   updateTaskView: "channel.updateTaskView",

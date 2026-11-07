@@ -236,6 +236,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotStatus: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBots`. */
   goatBotProfiles: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.updateBot`, and the main bot's sessions carry its name and purpose. */
+  goatBotProfileEdit: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listChildWork`. */
   goatBotChildWork: Schema.optionalKey(Schema.Boolean),
   goatBotTaskThreads: Schema.optionalKey(Schema.Boolean),

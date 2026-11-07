@@ -63,6 +63,17 @@ describe("RPC authorization scopes", () => {
       yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationReadScope], method, {});
     }),
   );
+  it.effect("refuses a bot profile edit to a read-only session", () =>
+    Effect.gen(function* () {
+      const method = CHANNEL_GATEWAY_WS_METHODS.updateBot;
+      const input = { botId: "main", name: "Jarvis" };
+      for (const scopes of [[], [AuthOrchestrationReadScope]]) {
+        const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall(scopes, method, input));
+        expect(denied.requiredPermission).toBe(AuthOrchestrationOperateScope);
+      }
+      yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationOperateScope], method, input);
+    }),
+  );
   it.effect("protects bot task thread reads and view changes", () =>
     Effect.gen(function* () {
       for (const [method, scope] of [

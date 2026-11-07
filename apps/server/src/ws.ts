@@ -1951,8 +1951,7 @@ export const layerWsRpc = (
       const channelHandlers = ServerWsChannelRpcGroup.of({
         [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
         [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: () => channelBots.status(channelOwner),
-        [CHANNEL_GATEWAY_WS_METHODS.listBots]: () =>
-          channelBotProfiles.list(channelOwner).pipe(Effect.map((bots) => ({ bots }))),
+        ...ChannelBotProfiles.rpcHandlers(channelBotProfiles, channelOwner),
         ...ChannelBotThreads.rpcHandlers(yield* ChannelBotThreads.ChannelBotThreads, channelOwner),
         // Waits only for durable storage; the reply arrives later on the bot thread.
         [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
