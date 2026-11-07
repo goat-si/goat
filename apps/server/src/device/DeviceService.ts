@@ -193,7 +193,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   installTool?: (tool: "hub" | "agent") => Effect.Effect<unknown, DeviceError>,
   closeAgentSession: AgentSessionClose = () => Effect.succeed("absent"),
 ) {
-  const agentCloses = makePendingAgentCloses(closeAgentSession);
+  const agentCloses = yield* makePendingAgentCloses(closeAgentSession);
   const settings = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
   const lifecycleLock = yield* Semaphore.make(1);
@@ -232,6 +232,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     },
   });
 
+  const sessions = SynchronizedRef.get(stateRef).pipe(Effect.map(({ state }) => state.sessions));
   const publish = (update: (state: DeviceServiceState) => DeviceServiceState) =>
     SynchronizedRef.updateAndGetEffect(stateRef, ({ state }) => {
       const next = { ...update(state), revision: state.revision + 1 };
@@ -652,29 +653,31 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         platform: device.platform,
         openedAt,
       };
-      yield* lifecycleLock.withPermit(
-        Effect.gen(function* () {
-          if (!(yield* readDeviceSettings).enabled)
-            return yield* new DeviceHostUnavailableError({
-              hostId: host.id,
-              hostLabel: host.label,
-              reason: "Device support was turned off while the device was opening.",
-            });
-          yield* publish((current) => ({
-            ...current,
-            sessions: [
-              ...current.sessions.filter(
-                (existing) =>
-                  !(
-                    existing.threadId === session.threadId &&
-                    existing.hostId === session.hostId &&
-                    existing.deviceId === session.deviceId
-                  ),
-              ),
-              session,
-            ],
-          }));
-        }),
+      yield* agentCloses.exclusive(
+        lifecycleLock.withPermit(
+          Effect.gen(function* () {
+            if (!(yield* readDeviceSettings).enabled)
+              return yield* new DeviceHostUnavailableError({
+                hostId: host.id,
+                hostLabel: host.label,
+                reason: "Device support was turned off while the device was opening.",
+              });
+            yield* publish((current) => ({
+              ...current,
+              sessions: [
+                ...current.sessions.filter(
+                  (existing) =>
+                    !(
+                      existing.threadId === session.threadId &&
+                      existing.hostId === session.hostId &&
+                      existing.deviceId === session.deviceId
+                    ),
+                ),
+                session,
+              ],
+            }));
+          }),
+        ),
       );
       return session;
     },
@@ -725,7 +728,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         ...current,
         sessions: current.sessions.filter((session) => !closing.includes(session)),
       }));
-    yield* agentCloses.flush(input.threadId);
+    yield* agentCloses.flush(input.threadId, sessions);
   }, closeLock.withPermit);
 
   const shutdown: DeviceService["Service"]["shutdown"] = Effect.fn("DeviceService.shutdown")(

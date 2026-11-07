@@ -12,12 +12,24 @@ import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { isProcessAlive } from "../serverRuntimeState.ts";
 import { agentDeviceConfigPath, agentDeviceSession } from "./AgentDeviceTarget.ts";
-import { ensureAgentDevice, isAgentDeviceInstalled } from "./DeviceToolchain.ts";
+import {
+  agentDeviceStateDir,
+  ensureAgentDevice,
+  isAgentDeviceInstalled,
+} from "./DeviceToolchain.ts";
+
+const decodeDaemonPid = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ pid: Schema.Number })),
+);
 
 /** One agent-device session GOAT named for a thread's device (AgentDeviceTarget.agentDeviceSession). */
 export interface AgentSessionTarget {
@@ -39,9 +51,24 @@ const targetKey = (target: AgentSessionTarget) =>
  * keeps that session's XCTest runner until it is closed. Every session GOAT drops, for whatever
  * reason, waits here until its close succeeds or agent-device confirms it is gone.
  */
-export const makePendingAgentCloses = (close: AgentSessionClose) => {
+export const makePendingAgentCloses = Effect.fn("AgentSessionRelease.make")(function* (
+  close: AgentSessionClose,
+) {
   const pending = new Map<string, AgentSessionTarget>();
+  // Sessions reuse one agent-device name per thread and device, so a close must not overlap a reopen.
+  const admission = yield* Semaphore.make(1);
+  const settle = (target: AgentSessionTarget, open: Effect.Effect<ReadonlyArray<DeviceSession>>) =>
+    admission.withPermit(
+      Effect.gen(function* () {
+        const key = targetKey(target);
+        // A reopened session owns the name again; closing it would end the live session.
+        if ((yield* open).some((session) => targetKey(session) === key)) return pending.delete(key);
+        yield* close(target);
+        pending.delete(key);
+      }),
+    );
   return {
+    exclusive: admission.withPermit,
     track: (previous: ReadonlyArray<DeviceSession>, next: ReadonlyArray<DeviceSession>) => {
       if (previous === next) return;
       const kept = new Set(next.map(targetKey));
@@ -54,28 +81,30 @@ export const makePendingAgentCloses = (close: AgentSessionClose) => {
           });
       }
     },
-    flush: Effect.fn("AgentSessionRelease.flush")(function* (threadId: ThreadId) {
-      const targets = [...pending.values()].filter((target) => target.threadId === threadId);
-      const results = yield* Effect.forEach(
-        targets,
-        (target) =>
-          close(target).pipe(
-            Effect.tap(() => Effect.sync(() => pending.delete(targetKey(target)))),
-            Effect.result,
-          ),
-        { concurrency: 4 },
+    /** Retries every pending close; only this thread's failures fail the call. */
+    flush: Effect.fn("AgentSessionRelease.flush")(function* (
+      threadId: ThreadId,
+      open: Effect.Effect<ReadonlyArray<DeviceSession>>,
+    ) {
+      const results = yield* Effect.forEach([...pending.values()], (target) =>
+        settle(target, open).pipe(
+          Effect.result,
+          Effect.map((result) => ({ target, result })),
+        ),
       );
-      const failure = results.find((result) => result._tag === "Failure");
-      if (failure !== undefined) return yield* failure.failure;
+      const failure = results.find(
+        ({ target, result }) => result._tag === "Failure" && target.threadId === threadId,
+      )?.result;
+      if (failure?._tag === "Failure") return yield* failure.failure;
     }),
   };
-};
+});
 
-/** Reads `agent-device close --json`. Only a confirmed missing session or local daemon retires it. */
-export function classifyAgentClose(
-  result: { readonly code: number | null; readonly stdout: string },
-  options: { readonly local: boolean },
-): "closed" | "absent" | "failed" {
+/** Reads `agent-device close --json`; an unreachable daemon is not yet proof the session is gone. */
+export function classifyAgentClose(result: {
+  readonly code: number | null;
+  readonly stdout: string;
+}): "closed" | "absent" | "unreachable" | "failed" {
   let parsed: { success?: unknown; error?: { code?: unknown; message?: unknown } } | null = null;
   try {
     parsed = JSON.parse(result.stdout);
@@ -85,9 +114,8 @@ export function classifyAgentClose(
   if (parsed === null || typeof parsed !== "object") return "failed";
   if (parsed.success === true && result.code === 0) return "closed";
   if (parsed.error?.code === "SESSION_NOT_FOUND") return "absent";
-  // A restarted local daemon starts without its predecessor's sessions; a remote one may just be unreachable.
   const message = typeof parsed.error?.message === "string" ? parsed.error.message : "";
-  return options.local && /daemon is unavailable/iu.test(message) ? "absent" : "failed";
+  return /daemon is unavailable/iu.test(message) ? "unreachable" : "failed";
 }
 
 export const makeAgentSessionClose = Effect.gen(function* () {
@@ -132,12 +160,18 @@ export const makeAgentSessionClose = Effect.gen(function* () {
           timeoutBehavior: "timedOutResult",
         })
         .pipe(Effect.mapError(failed));
-      const outcome = classifyAgentClose(result, { local: target.hostId === LOCAL_DEVICE_HOST_ID });
-      if (outcome === "failed")
-        return yield* failed(
-          new Error(`agent-device close exited ${result.code}: ${result.stdout.slice(0, 400)}`),
-        );
-      return outcome;
+      const outcome = classifyAgentClose(result);
+      if (outcome === "closed" || outcome === "absent") return outcome;
+      // A local daemon that no longer runs took its sessions and runners with it.
+      if (outcome === "unreachable" && target.hostId === LOCAL_DEVICE_HOST_ID) {
+        const daemonFile = path.join(agentDeviceStateDir(path, config.stateDir), "daemon.json");
+        const recorded = yield* fs.readFileString(daemonFile).pipe(Effect.option);
+        const daemon = Option.flatMap(recorded, decodeDaemonPid);
+        if (Option.isNone(daemon) || !isProcessAlive(daemon.value.pid)) return "absent" as const;
+      }
+      return yield* failed(
+        new Error(`agent-device close exited ${result.code}: ${result.stdout.slice(0, 400)}`),
+      );
     },
     Effect.provideService(FileSystem.FileSystem, fs),
     Effect.provideService(Path.Path, path),

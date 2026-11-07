@@ -158,28 +158,53 @@ describe("DeviceService.releaseThread", () => {
         Effect.scoped,
       ),
   );
+
+  it.effect(
+    "a close that failed earlier is retried by any later release, even another thread's",
+    () =>
+      Effect.gen(function* () {
+        const { service, closes } = yield* makeService(1);
+        yield* open(service, lane, phone);
+        expect(Exit.isFailure(yield* Effect.exit(service.close({ threadId: lane })))).toBe(true);
+
+        yield* service.releaseThread(other);
+        expect(closes.map((target) => [target.threadId, target.deviceId])).toEqual([[lane, phone]]);
+      }).pipe(
+        Effect.provide(ServerSettings.layerTest({ enableDeviceSupport: true })),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect("a pending close is dropped, not run, once its session is reopened", () =>
+    Effect.gen(function* () {
+      const { service, closes } = yield* makeService(1);
+      yield* open(service, lane, phone);
+      expect(Exit.isFailure(yield* Effect.exit(service.close({ threadId: lane })))).toBe(true);
+      const reopened = yield* open(service, lane, phone);
+      yield* open(service, lane, tablet);
+
+      yield* service.close({ threadId: lane, deviceId: tablet });
+      expect(closes.map((target) => target.deviceId)).toEqual([tablet]);
+      expect((yield* service.state).sessions).toEqual([reopened]);
+    }).pipe(Effect.provide(ServerSettings.layerTest({ enableDeviceSupport: true })), Effect.scoped),
+  );
 });
 
 describe("classifyAgentClose", () => {
   const json = (value: unknown) => ({ code: 1, stdout: JSON.stringify(value) });
   it("treats a closed session as closed and a missing one as already gone", () => {
-    expect(classifyAgentClose({ code: 0, stdout: '{"success":true}' }, { local: false })).toBe(
-      "closed",
+    expect(classifyAgentClose({ code: 0, stdout: '{"success":true}' })).toBe("closed");
+    expect(classifyAgentClose(json({ success: false, error: { code: "SESSION_NOT_FOUND" } }))).toBe(
+      "absent",
     );
-    expect(
-      classifyAgentClose(json({ success: false, error: { code: "SESSION_NOT_FOUND" } }), {
-        local: false,
-      }),
-    ).toBe("absent");
   });
 
-  it("retires a session only when the local daemon is gone, never when a remote one is unreachable", () => {
+  it("reports an unreachable daemon apart from a failed close, never as a closed session", () => {
     const unavailable = json({
       success: false,
       error: { code: "COMMAND_FAILED", message: "Remote daemon is unavailable" },
     });
-    expect(classifyAgentClose(unavailable, { local: true })).toBe("absent");
-    expect(classifyAgentClose(unavailable, { local: false })).toBe("failed");
-    expect(classifyAgentClose({ code: null, stdout: "" }, { local: true })).toBe("failed");
+    expect(classifyAgentClose(unavailable)).toBe("unreachable");
+    expect(classifyAgentClose({ code: null, stdout: "" })).toBe("failed");
   });
 });
