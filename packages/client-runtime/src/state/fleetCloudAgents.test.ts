@@ -18,30 +18,37 @@ const run = (overrides: Partial<CloudRunSummary>): CloudRunSummary => ({
 
 describe("groupCloudAgentRuns", () => {
   it("groups runs per provider with their holder and launcher, running first", () => {
-    const groups = groupCloudAgentRuns([
-      {
-        environmentId: EnvironmentId.make("macmini"),
-        label: "macmini",
-        runs: [
-          run({
-            threadId: ThreadId.make("thread:done"),
-            status: "succeeded",
-            updatedAt: "2026-10-20T02:00:00.000Z",
-          }),
-          run({ threadId: ThreadId.make("thread:live"), launchedBy: "Grok Bot", registered: true }),
-          run({
-            threadId: ThreadId.make("thread:link"),
-            tracking: "link-only",
-            provider: "devinCloud",
-          }),
-        ],
-      },
-      {
-        environmentId: EnvironmentId.make("studio"),
-        label: "mac-studio",
-        runs: [run({ threadId: ThreadId.make("thread:claude"), provider: "claudeCloud" })],
-      },
-    ]);
+    const groups = groupCloudAgentRuns(
+      [
+        {
+          environmentId: EnvironmentId.make("macmini"),
+          label: "macmini",
+          runs: [
+            run({
+              threadId: ThreadId.make("thread:done"),
+              status: "succeeded",
+              updatedAt: "2026-10-20T02:00:00.000Z",
+            }),
+            run({
+              threadId: ThreadId.make("thread:live"),
+              launchedBy: "Grok Bot",
+              registered: true,
+            }),
+            run({
+              threadId: ThreadId.make("thread:link"),
+              tracking: "link-only",
+              provider: "devinCloud",
+            }),
+          ],
+        },
+        {
+          environmentId: EnvironmentId.make("studio"),
+          label: "mac-studio",
+          runs: [run({ threadId: ThreadId.make("thread:claude"), provider: "claudeCloud" })],
+        },
+      ],
+      Date.parse("2026-10-20T00:10:00.000Z"),
+    );
     expect(groups.map((group) => [group.kind, group.label, group.running])).toEqual([
       ["cloud-agent", "Claude Cloud", 1],
       ["cloud-agent", "Cursor Cloud", 1],
@@ -64,7 +71,7 @@ describe("groupCloudAgentRuns", () => {
 
   it("draws nothing without cloud runs", () => {
     expect(
-      groupCloudAgentRuns([{ environmentId: EnvironmentId.make("x"), label: "x", runs: [] }]),
+      groupCloudAgentRuns([{ environmentId: EnvironmentId.make("x"), label: "x", runs: [] }], 0),
     ).toEqual([]);
   });
 });

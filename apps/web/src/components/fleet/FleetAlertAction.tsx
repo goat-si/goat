@@ -30,6 +30,7 @@ const LABEL: Record<FleetAlertActionKind, string> = {
   clean_up: "Clean up",
   memory_settings: "Memory settings",
   storage: "Free up space",
+  cloud_machines: "Cloud machines",
 };
 
 const failureText = (failure: unknown) =>
@@ -61,6 +62,18 @@ export function FleetAlertAction(props: {
         render={<Link to="/settings/memory" search={validateMemorySettingsSearch({})} />}
       >
         {LABEL.memory_settings}
+      </Button>
+    );
+  }
+  if (props.kind === "cloud_machines") {
+    return (
+      <Button
+        size="micro"
+        variant="ghost-muted"
+        aria-label={"Cloud machines, to stop " + props.label}
+        render={<Link to="/settings/connections" />}
+      >
+        {LABEL.cloud_machines}
       </Button>
     );
   }

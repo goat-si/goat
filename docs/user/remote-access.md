@@ -679,6 +679,8 @@ give an agent. Boat bills the machine while it runs:
 Each use you start pushes the auto-stop time out again, but work that keeps running on
 its own does not, so choose an auto-stop time that covers it. Boat gives a resumed
 machine a new address and host key; GOAT refreshes and pins both before it connects.
+Fleet shows a cloud machine only while it is in use or billing; this list keeps every
+machine, stopped ones included.
 Removing the key keeps the machines listed, so you can still find ones that may be
 billing. Machines belong to the GOAT server that created them; open them from that
 server.

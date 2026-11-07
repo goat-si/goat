@@ -112,7 +112,7 @@ describe("FleetGraph Boat machines", () => {
   it("marks Boat machines with Boat's logo and state, and a stopped one apart from an away host", async () => {
     const node = await renderDemo();
     const running = node("boat-agent");
-    const stopped = node("nightly-ci");
+    const stopped = node("weekly-eval");
 
     for (const boat of [running, stopped]) {
       expect(boat.querySelector("svg[data-fleet-boat-logo]")).not.toBeNull();
@@ -124,15 +124,15 @@ describe("FleetGraph Boat machines", () => {
     expect(running.getAttribute("aria-label")).toContain("Connected");
     expect(stopped.textContent).toContain("Boat · Stopped");
     expect(stopped.getAttribute("aria-label")).toContain("Stopped: Resume it in Settings");
-    // A stop square, where an unreachable host gets the dashed ring.
+    // A stop square, where an unreachable host gets the dashed ring (its reported badge is dashed too).
     expect(stopped.querySelector("rect")).not.toBeNull();
-    expect(stopped.querySelector("circle[stroke-dasharray]")).toBeNull();
+    expect(stopped.querySelector('circle[r="3.4"][stroke-dasharray]')).toBeNull();
   });
 
   it("draws the mark in Boat's ocean blue on light surfaces and its wash on dark ones", async () => {
     const node = await renderDemo();
     const mark = () =>
-      node("nightly-ci").querySelector<SVGSVGElement>("svg[data-fleet-boat-logo]")!;
+      node("weekly-eval").querySelector<SVGSVGElement>("svg[data-fleet-boat-logo]")!;
     expect(getComputedStyle(mark()).fill).toBe("rgb(38, 63, 169)");
     document.documentElement.classList.add("dark");
     expect(getComputedStyle(mark()).fill).toBe("rgb(254, 254, 254)");

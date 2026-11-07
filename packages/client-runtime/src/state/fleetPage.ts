@@ -23,6 +23,7 @@ import {
 } from "./fleet.ts";
 import {
   groupCloudAgentRuns,
+  nextCloudRunExpiry,
   type FleetCloudAgentGroup,
   type FleetCloudRunSource,
 } from "./fleetCloudAgents.ts";
@@ -103,6 +104,9 @@ function snapshotKey(
         agent.reported,
       ]),
     ]),
+    snapshot.hiddenCloudAliases,
+    snapshot.hiddenRoutes,
+    snapshot.idleCloudMachines,
     snapshot.threads.map((thread) => [
       thread.key,
       thread.title,
@@ -256,7 +260,15 @@ export function createFleetPageAtoms(input: {
       const runs = Option.getOrNull(AsyncResult.value(result))?.runs ?? EMPTY;
       if (runs.length > 0) sources.push({ environmentId, label, runs });
     }
-    const next = groupCloudAgentRuns(sources);
+    const now = input.now();
+    const next = groupCloudAgentRuns(sources, now);
+    // Read again when the next finished run ages out; a deadline passed meanwhile still fires.
+    const expiry = nextCloudRunExpiry(next);
+    if (expiry !== null) {
+      // @effect-diagnostics-next-line globalTimers:off - Atoms run outside an Effect runtime; a passed deadline must still fire.
+      const timer = setTimeout(() => get.refreshSelf(), expiry - now);
+      get.addFinalizer(() => clearTimeout(timer));
+    }
     const previous = Option.getOrNull(get.self<ReadonlyArray<FleetCloudAgentGroup>>());
     return previous !== null && JSON.stringify(previous) === JSON.stringify(next) ? previous : next;
   }).pipe(Atom.withLabel(`${input.labelPrefix}fleet-cloud-agents`));

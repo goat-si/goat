@@ -491,6 +491,7 @@ function FleetConsoleExpanded(props: {
           : [],
       ),
     ),
+    hidden: { routes: snapshot.hiddenRoutes, cloudAliases: snapshot.hiddenCloudAliases },
   });
   const unreadable = status.failed.map((environmentId) => ({
     key: environmentId,
@@ -519,6 +520,12 @@ function FleetConsoleExpanded(props: {
     pendingSince: status.pendingSince,
     stalls,
     childSetups: fleetChildSetups(rows, snapshot.machines, status.reports),
+    idleBilling: new Map(
+      snapshot.idleCloudMachines.map(({ machineId, owner, ownerLabel }) => [
+        machineId,
+        { owner, ownerLabel, ownedHere: owner === primaryEnvironmentId },
+      ]),
+    ),
   });
   // A host that is not answering takes its alert's color on the row, so both say the same.
   const answeringLate = new Map(
