@@ -501,7 +501,13 @@ it.effect("logs a device host's failed runner cleanup with the host", () =>
         const forwarding = command.args.includes("-L");
         let output = "";
         const stdin = command.options.stdin;
-        if (!forwarding && stdin && typeof stdin === "object" && "stream" in stdin) {
+        if (
+          !forwarding &&
+          stdin &&
+          typeof stdin === "object" &&
+          "stream" in stdin &&
+          Stream.isStream(stdin.stream)
+        ) {
           const script = yield* stdin.stream.pipe(
             Stream.decodeText(),
             Stream.runFold(
