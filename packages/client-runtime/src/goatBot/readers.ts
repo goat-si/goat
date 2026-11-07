@@ -19,6 +19,7 @@ import type {
   GoatBotPullRequestLink,
   GoatBotTaskCard,
 } from "./rows.ts";
+import { isRetryableTaskStatus, taskAttemptLabel } from "./retry.ts";
 
 const MESSAGE_TONE = {
   inbound: "reply",
@@ -150,6 +151,10 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     sourceLabel: sourceLabel === "" ? null : sourceLabel,
     continuationLabel:
       chip.movedFrom === undefined ? null : `Continued from ${chip.movedFrom.host}`,
+    attemptLabel: taskAttemptLabel(chip.generation),
+    // Work that ran on another machine is checked there; the server refuses to rerun it here.
+    retryable:
+      isRetryableTaskStatus(chip.status) && host === undefined && chip.movedFrom === undefined,
     summary: summary.length > 0 ? summary : null,
     attentionLabel: attentionLabel(chip),
     evidenceLabels: verificationLabels(chip, report.notRun),

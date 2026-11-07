@@ -45,6 +45,8 @@ const EXAMPLES = [
 export interface GoatBotChatViewProps {
   /** The bot's server supports task threads, so task chips render as task-thread pills. */
   readonly supportsTaskThreads?: boolean | undefined;
+  /** The bot's server runs failed or stopped work again when a person asks. */
+  readonly supportsTaskRetry?: boolean | undefined;
   readonly homeMove?:
     | { readonly label: string; readonly busy: boolean; readonly onMove: () => void }
     | undefined;
@@ -83,6 +85,7 @@ export interface GoatBotChatViewProps {
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
 export function GoatBotChatView({
   supportsTaskThreads = false,
+  supportsTaskRetry = false,
   availability,
   homeMove,
   homeMoveError,
@@ -248,6 +251,7 @@ export function GoatBotChatView({
               rows={rows}
               environmentId={environmentId}
               taskThreads={supportsTaskThreads}
+              retryEnvironmentId={supportsTaskRetry ? environmentId : null}
               replyingSince={removed ? null : replyingSince}
               onRetry={onRetryInput}
               onDiscard={onDiscardInput}

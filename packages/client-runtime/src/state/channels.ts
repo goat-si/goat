@@ -106,6 +106,11 @@ export function createChannelEnvironmentAtoms<R, E>(
       label: "environment-data:channel:update-task-view",
       tag: CHANNEL_GATEWAY_WS_METHODS.updateTaskView,
     }),
+    /** A person runs failed or stopped work again; a resent clientRequestId returns the first result. */
+    retryTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:retry-task",
+      tag: CHANNEL_GATEWAY_WS_METHODS.retryTask,
+    }),
     ingest: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:ingest",
       tag: CHANNEL_GATEWAY_WS_METHODS.ingest,
