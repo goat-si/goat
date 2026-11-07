@@ -34,6 +34,7 @@ import { resolveNodeExecutable, nodeRuntimeUnavailableMessage } from "@goat/shar
 import * as Path from "effect/Path";
 import { ensureAgentDevice, ensureDeviceHub } from "./DeviceToolchain.ts";
 import { ensureAndroidVideoEncoder } from "./androidVideoEncoder.ts";
+import { withBootRecords } from "./DeviceBootRecords.ts";
 import {
   type AgentSessionClose,
   makeAgentSessionClose,
@@ -235,7 +236,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const sessions = SynchronizedRef.get(stateRef).pipe(Effect.map(({ state }) => state.sessions));
   const publish = (update: (state: DeviceServiceState) => DeviceServiceState) =>
     SynchronizedRef.updateAndGetEffect(stateRef, ({ state }) => {
-      const next = { ...update(state), revision: state.revision + 1 };
+      const next = withBootRecords(state, { ...update(state), revision: state.revision + 1 });
       agentCloses.track(state.sessions, next.sessions);
       return PubSub.publish(statePubSub, next).pipe(Effect.as({ state: next }));
     }).pipe(Effect.map(({ state }) => state));
