@@ -39,7 +39,6 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
-import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
 import {
   type DispatchModeRefusal,
   DispatchModeLimit,
@@ -49,7 +48,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { requesterForDispatch } from "./channelDispatchAuthority.ts";
+import { requesterForDispatch, sessionMemoryCeiling } from "./channelDispatchAuthority.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
@@ -88,10 +87,10 @@ import {
   type SessionRow,
   sessionStore,
   sessionTaskRuns,
+  steersInto,
 } from "./channelBotSessionRuns.ts";
 
 const LIVE_SUBAGENT = new Set(["idle", "pending", "running", "waiting"]);
-const MEMORY_RANK = { none: 0, read: 1, read_write: 2 } as const;
 const STOP_REASON = "Stopped from GOAT Bot.";
 const encodeRequester = Schema.encodeSync(Schema.fromJsonString(ChannelRequester));
 const isLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
@@ -327,7 +326,7 @@ const make = Effect.gen(function* () {
     row: SessionRow,
     owner: string,
     requester: ChannelRequester,
-    memoryGrantCeiling: keyof typeof MEMORY_RANK,
+    memoryGrantCeiling: ReturnType<typeof sessionMemoryCeiling>,
     attachments: ReadonlyArray<ChatAttachment>,
   ) {
     const task = stored.task;
@@ -414,6 +413,7 @@ const make = Effect.gen(function* () {
     const task = stored.task;
     const ids = sessionSendIdsFor(task.taskId, task.generation);
     const projectId = ProjectId.make((yield* requireTarget(task)).projectId);
+    const memoryGrantCeiling = sessionMemoryCeiling(requester, task.target);
     yield* writeIntent(threadId, ids.messageId, task, "task");
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const sent = yield* threads
@@ -425,6 +425,7 @@ const make = Effect.gen(function* () {
         text,
         attachments,
         mode: "queue",
+        ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
         createdBy: "user",
         creationSource: "server",
       })
@@ -516,9 +517,7 @@ const make = Effect.gen(function* () {
     const identity = yield* Effect.option(profiles.identity(initial.ownerId, initial.botId));
     if (Option.isNone(identity)) return yield* fail(initial, owner, Rotation.PROFILE_UNREADABLE);
     // The memory the session may use, lowered to what the requester's scopes allow now.
-    const allowed = captureMemoryGrantCeiling(requester.grantedScopes, false);
-    const recorded = target.memoryGrantCeiling ?? "none";
-    const memoryGrantCeiling = MEMORY_RANK[allowed] < MEMORY_RANK[recorded] ? allowed : recorded;
+    const memoryGrantCeiling = sessionMemoryCeiling(requester, target);
     const ceiling = { ...target, memoryGrantCeiling };
     const key = bindingKeyFor(initial.task, ceiling, sharing, requester, initial.botId);
     let row = yield* currentRow(key);
@@ -657,6 +656,7 @@ const make = Effect.gen(function* () {
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
     );
     if (requester === undefined) return { _tag: "permission_changed" } as const;
+    const memoryGrantCeiling = sessionMemoryCeiling(requester, task.target);
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const attempt = (mode: "steer" | "queue", which: ReturnType<typeof turnSteerIdsFor>) =>
       writeIntent(threadId, which.messageId, task, "followup").pipe(
@@ -671,6 +671,7 @@ const make = Effect.gen(function* () {
               attachments,
               mode,
               ...(mode === "steer" && current !== undefined ? { targetRunId: current.id } : {}),
+              ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
               createdBy: "user",
               creationSource: "server",
             })
@@ -678,11 +679,9 @@ const make = Effect.gen(function* () {
         ),
       );
     let which = ids.first;
-    let sent =
-      current !== undefined &&
-      (firstIntent.length > 0 || (!isTerminalRun(current) && current.status !== "queued"))
-        ? yield* attempt("steer", ids.first)
-        : undefined;
+    let sent = steersInto(current, firstIntent.length > 0, memoryGrantCeiling)
+      ? yield* attempt("steer", ids.first)
+      : undefined;
     if (
       sent === undefined ||
       (sent._tag === "Failure" &&

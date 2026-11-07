@@ -14,6 +14,8 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { mayAnswerFor } from "./ChannelGateway.ts";
+import { requesterForDispatch } from "./channelDispatchAuthority.ts";
+import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import {
   answerForwardIdsFor,
   taskEventIdFor,
@@ -47,6 +49,7 @@ const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEv
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const dbError = (cause: unknown) =>
     new ChannelLedger.ChannelLedgerError({
       reason: "persistence",
@@ -82,15 +85,21 @@ const make = Effect.gen(function* () {
     const source = yield* ledger.getTask(run.task_id);
     if (source === undefined || source.task.conversationId !== session.conversation_id)
       return yield* fail("forbidden");
+    // The run acts for its requester as they stand now, not as their task recorded them.
+    const requester = yield* requesterForDispatch(source.task).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+    );
+    if (requester === undefined) return yield* fail("forbidden");
     const target = yield* ledger.getTask(input.taskId);
     if (
       target === undefined ||
-      target.ownerId !== source.task.requester.ownerId ||
+      target.ownerId !== requester.ownerId ||
       target.task.conversationId !== session.conversation_id ||
-      !mayAnswerFor(source.task.requester, target.task.requester)
+      !mayAnswerFor(requester, target.task.requester)
     )
       return yield* fail("not_found");
-    return { target, requester: source.task.requester };
+    return { target, requester };
   });
   const findEvent = Effect.fn("ChannelSessionTaskActions.findEvent")(function* (
     taskId: ChannelTaskId,

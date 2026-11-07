@@ -7,6 +7,7 @@ import {
   type ChannelTaskId,
   type MessageId,
   isGoatBotSessionThreadId,
+  type MemoryTaskGrantCeiling,
   type OrchestrationV2Run,
   type RunId,
   type ThreadId,
@@ -14,11 +15,25 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
+import { MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 import { parseLaunchWake } from "./channelLaunchWake.ts";
 
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 export const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
   TERMINAL_RUN.has(run.status);
+
+/**
+ * Whether a message steers its task's run: one still live (or a recorded steer replaying). A steer
+ * keeps its run's memory, so a run holding more than the requester has now takes none.
+ */
+export const steersInto = (
+  run: OrchestrationV2Run | undefined,
+  replaying: boolean,
+  ceiling: MemoryTaskGrantCeiling,
+): run is OrchestrationV2Run =>
+  run !== undefined &&
+  MEMORY_GRANT_RANK[run.memoryGrantCeiling ?? "none"] <= MEMORY_GRANT_RANK[ceiling] &&
+  (replaying || (!isTerminalRun(run) && run.status !== "queued"));
 
 export interface SessionIntent {
   readonly thread_id: ThreadId;

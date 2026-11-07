@@ -1,9 +1,19 @@
-import type { ChannelTask } from "@goat/contracts";
+import type { ChannelRequester, ChannelTask, MemoryTaskGrantCeiling } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
+import { captureMemoryGrantCeiling, MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
+
+/** A run's memory for this task: its recorded ceiling, lowered to the requester's scopes now. */
+export const sessionMemoryCeiling = (
+  requester: ChannelRequester,
+  target: ChannelTask["target"],
+): MemoryTaskGrantCeiling => {
+  const allowed = captureMemoryGrantCeiling(requester.grantedScopes, false);
+  const recorded = target?.memoryGrantCeiling ?? "none";
+  return MEMORY_GRANT_RANK[allowed] < MEMORY_GRANT_RANK[recorded] ? allowed : recorded;
+};
 
 /** Intake is a snapshot; a queued task cannot keep a revoked or reassigned external grant. */
 export const requesterForDispatch = Effect.fn("channel.requesterForDispatch")(function* (

@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import type { AuthEnvironmentScope } from "@goat/contracts";
 import {
   ChannelDispatchTarget,
   ChannelGatewayError,
@@ -327,6 +328,36 @@ describe("linked account permissions", () => {
         runtimeModeCeiling: "approval-required",
       }),
     );
+  });
+
+  it("lets someone else direct a person's work only with at least that person's memory", () => {
+    const asker = {
+      ...task().requester,
+      grantedScopes: ["orchestration:operate", "memory:read"] as Array<AuthEnvironmentScope>,
+    };
+    const colleague = (grantedScopes: Array<AuthEnvironmentScope>) => ({
+      ...asker,
+      principalId: "colleague",
+      grantedScopes,
+    });
+    assert.isFalse(mayAnswerFor(colleague(["orchestration:operate"]), asker));
+    assert.isTrue(mayAnswerFor(colleague(["orchestration:operate", "memory:read"]), asker));
+    assert.isTrue(
+      mayAnswerFor(colleague(["orchestration:operate", "memory:read", "memory:write"]), asker),
+    );
+    const writer = { ...asker, grantedScopes: [...asker.grantedScopes, "memory:write" as const] };
+    assert.isFalse(mayAnswerFor(colleague(["orchestration:operate", "memory:read"]), writer));
+    // The owner holds every scope, so they cover anyone's work.
+    const environmentOwner = colleague([
+      "orchestration:read",
+      "orchestration:operate",
+      "settings:write",
+      "memory:read",
+      "memory:write",
+    ]);
+    assert.isTrue(mayAnswerFor({ ...environmentOwner, principalId: "owner" }, writer));
+    // The person who asked keeps directing their own work after losing memory; their runs follow.
+    assert.isTrue(mayAnswerFor({ ...asker, grantedScopes: ["orchestration:operate"] }, writer));
   });
 });
 
