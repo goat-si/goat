@@ -295,6 +295,31 @@ layer("GitLabPullRequestCli review", (it) => {
     }),
   );
 
+  it.effect.each(["o", "oc"])("filters an unsearched reviewer page for short query %s", (query) =>
+    Effect.gen(function* () {
+      const users = [
+        reviewer,
+        ...Array.from({ length: 99 }, (_, index) => ({
+          id: index + 10,
+          username: `user-${index}`,
+        })),
+      ];
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(mergeRequestJson({ reviewers: [reviewer] }))))
+        .mockReturnValueOnce(Effect.succeed(output(JSON.stringify(users))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      const list = yield* cli.listReviewerCandidates({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        query,
+      });
+      expect(argsOfCall(1)[1]).toBe("projects/acme%2Fweb/users?per_page=100");
+      expect(list.candidates.map((candidate) => candidate.login)).toEqual(["octocat"]);
+      expect(list.truncated).toBe(true);
+    }),
+  );
+
   it.effect("asks GitLab to search the project's users when the menu has a query", () =>
     Effect.gen(function* () {
       mockedExecute

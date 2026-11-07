@@ -75,6 +75,8 @@ export function makeReviewerCandidates(
     ).pipe(
       Effect.map(([mergeRequest, users]) => {
         const author = mergeRequest.author?.login;
+        const needle = input.query?.trim().toLowerCase() ?? "";
+        const locallyFiltered = needle.length > 0 && needle.length < 3;
         const requested = (input.query?.trim() ? [] : mergeRequest.reviewerUsers).map(
           ({ id, ...actor }) => ({
             ...actor,
@@ -97,6 +99,12 @@ export function makeReviewerCandidates(
             ...requested,
             ...users.candidates
               .filter((candidate) => candidate.login !== author && !listed.has(candidate.id))
+              .filter(
+                (candidate) =>
+                  !locallyFiltered ||
+                  candidate.login.toLowerCase().includes(needle) ||
+                  (candidate.name?.toLowerCase().includes(needle) ?? false),
+              )
               .map((candidate) =>
                 requestedIds.has(candidate.id) ? { ...candidate, isRequested: true } : candidate,
               ),

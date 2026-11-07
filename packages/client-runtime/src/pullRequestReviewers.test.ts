@@ -60,6 +60,27 @@ describe("reviewerCandidateView", () => {
   const idle = { data: null, isPending: false, error: null };
 
   it.each([
+    ["a", ["ada", "grace", "adalbert"]],
+    ["ad", ["ada", "adalbert"]],
+  ] as const)(
+    "keeps short-query results and reports an incomplete host page for %s",
+    (query, expected) => {
+      const input = { loaded: firstPage, searchable: true, query, debouncedQuery: query };
+      const view = reviewerCandidateView({
+        ...input,
+        search: {
+          data: { candidates: [reviewer("adalbert")], truncated: true },
+          isPending: false,
+          error: null,
+        },
+      });
+      expect(hostReviewerQuery(input)).toBe(query);
+      expect(view.candidates.map((entry) => entry.login)).toEqual(expected);
+      expect(view.truncation).toBe("search-truncated");
+    },
+  );
+
+  it.each([
     {
       name: "a host without search, as from an older server, narrows the loaded page itself",
       searchable: false,
