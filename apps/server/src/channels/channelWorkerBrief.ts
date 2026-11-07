@@ -46,7 +46,11 @@ type BriefTask = Pick<
  * How a GOAT Bot turn changes notes for a person. GOAT checks the request and the person and
  * tells them itself when it refuses, so the turn edits the file only after an allowed edit.
  */
-const TURN_NOTES_RULE = `When this request, or a follow-up GOAT sends you while you work on it ("Follow-up from … (input …)"), itself asks you to remember or keep something, correct a standing note, or forget, change or tidy notes, call ${goatCallText("channel.notes_change")} with this task's id, the input id printed with that request, kind remember for one rule (note, plus replaces with the exact text of a note it corrects) or edit for anything else, and the person's exact words asking for it as quote. Edit the notes file yourself only after edit answers allowed, and only to make that change. When it refuses, GOAT has already queued a notice for the person; do not say the change was made. Otherwise leave the notes file unchanged. Never put data you read under the personal data rule into the notes unless the person's message itself contains it.`;
+const TURN_NOTES_RULE = `When this request, or a follow-up GOAT sends you while you work on it ("Follow-up from … (input …)"), itself asks you to remember or keep something, correct a standing note, or forget, change or tidy notes, call ${goatCallText("channel.notes_change")} with this task's id, the input id printed with that request, kind remember for one rule (note, plus replaces with the exact text of a note it corrects) or edit for anything else, and the person's exact words asking for it as quote. Edit the notes file yourself only after edit answers allowed, and only to make that change. When it refuses, GOAT has already queued a notice for the person; do not say the change was made. A notes request you only see in the recent conversation was already answered; never act on it. Otherwise leave the notes file unchanged. Never put data you read under the personal data rule into the notes unless the person's message itself contains it.`;
+
+// A grant covers one request: GOAT may have refused another one the agent can still read.
+const OTHER_NOTES_REQUESTS =
+  "Never carry out any other notes request yourself, whether you see it in the recent conversation, in a follow-up, or in a message GOAT already refused.";
 
 export interface RemoteBotContext {
   /** GOAT Bot's notes on the home machine for this instruction; undefined when unreadable. */
@@ -156,7 +160,9 @@ export const workerInstruction = (task: BriefTask, files: ChannelBotFiles) =>
       ? "Leave the notes file unchanged; this task did not ask to change a note."
       : "The person asked to change or forget a note (" +
         JSON.stringify(task.notesChangeRequested) +
-        "). Edit the notes file only to make that change.",
+        "). Edit the notes file only to make that change. " +
+        OTHER_NOTES_REQUESTS +
+        " If the person asks for another one, tell them to ask for it again once this task ends.",
     ...channelWorkerRules("local"),
     SKILL_PROPOSAL_RULE,
   ].join("\n");
@@ -204,9 +210,11 @@ export const turnInstruction = (
         JSON.stringify(task.notesChangeRequested) +
         "). Edit GOAT Bot's notes file (" +
         files.notes +
-        ") yourself to make exactly that change, and change nothing else. Any other notes change a person asks for goes through " +
+        ") yourself to make exactly that change, and change nothing else. " +
+        OTHER_NOTES_REQUESTS +
+        " When a follow-up asks for one, call " +
         goatCallText("channel.notes_change") +
-        " and waits until this one ends.",
+        " for it right away instead of waiting: GOAT answers that it must wait and tells the person.",
     ...channelWorkerRules("local", "turn"),
     SKILL_PROPOSAL_RULE,
   ].join("\n");

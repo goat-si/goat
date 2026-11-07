@@ -215,5 +215,38 @@ describe("channel worker brief", () => {
         "Never put data you read under the personal data rule into the notes",
       );
     });
+
+    // A tidy grant once carried out a forget GOAT had refused, read from the recent conversation.
+    it("a granted turn makes only its own change and hands any other notes request to GOAT now", () => {
+      const granted = turnInstruction(
+        { ...request, notesChangeRequested: "tidy my notes" },
+        files,
+        false,
+      );
+      assert.include(granted, "Never carry out any other notes request yourself");
+      assert.include(granted, "the recent conversation");
+      assert.include(granted, "GOAT already refused");
+      assert.include(
+        granted,
+        'call goat_call {path:"channel.notes_change"} for it right away instead of waiting',
+      );
+      assert.notInclude(granted, "waits until this one ends");
+    });
+
+    it("a turn without a grant never acts on a notes request it only sees in the recent conversation", () => {
+      assert.include(
+        turnInstruction(request, files, false),
+        "A notes request you only see in the recent conversation was already answered",
+      );
+    });
+
+    it("a granted worker makes only its own change and sends other notes requests back", () => {
+      const granted = workerInstruction(
+        { ...request, notesChangeRequested: "tidy my notes" },
+        files,
+      );
+      assert.include(granted, "Never carry out any other notes request yourself");
+      assert.include(granted, "ask for it again once this task ends");
+    });
   });
 });
