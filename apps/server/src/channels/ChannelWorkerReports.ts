@@ -60,6 +60,7 @@ import {
   readLaunchedEnds,
 } from "./channelLaunchedResults.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { deliverNoticeAnswers, noticeMessageIds, resultRunsOf } from "./channelNoticeAnswers.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
@@ -455,14 +456,17 @@ const make = Effect.gen(function* () {
         ? yield* threads.getThreadRecords(worker.threadId, ["messages", "providerTurns"]).pipe(
             Effect.flatMap(({ messages, providerTurns }) =>
               sessionTaskRuns(sql, worker.threadId, { runs: allRuns, messages }, task).pipe(
-                Effect.map((own) => ({ own, providerTurns })),
+                Effect.map((own) => ({ own, providerTurns, notices: noticeMessageIds(messages) })),
               ),
             ),
             Effect.option,
           )
-        : Option.some({ own: allRuns, providerTurns: [] });
+        : Option.some({ own: allRuns, providerTurns: [], notices: new Set<string>() });
       if (Option.isNone(scoped)) return false;
       const runs = scoped.value.own;
+      // A background command's notice run answers the request on its own (channelNoticeAnswers),
+      // so it is never the task's result; it still belongs to the task for everything else.
+      const resultRuns = resultRunsOf(runs, scoped.value.notices);
       // A request belongs to the run whose provider turn raised it; one whose turn cannot be
       // traced to this task's runs is left out rather than shown on the wrong task.
       const runtimeRequests = !session
@@ -495,7 +499,7 @@ const make = Effect.gen(function* () {
         // The newest run since the bound one is the task's current run: a follow-up or a
         // restart continuation replaces the run it follows.
         const floor = bound?.ordinal ?? 0;
-        current = runs.findLast((run) => run.ordinal >= floor);
+        current = resultRuns.findLast((run) => run.ordinal >= floor);
       }
       if (current === undefined) return false;
 
@@ -804,6 +808,11 @@ const make = Effect.gen(function* () {
           yield* settle;
         }
       }
+      changed += yield* deliverNoticeAnswers({ sql, ledger, threads }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("background command answers not sent", { cause }).pipe(Effect.as(0)),
+        ),
+      );
       // Open runs whose task has ended (stopped, or settled by the worker's own report) still end
       // on their own; record how. A stalled run stays stalled until that orchestration run ends,
       // so the next pass does not tell the requester again.
