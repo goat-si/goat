@@ -671,3 +671,36 @@ describe("a member's model", () => {
     },
   );
 });
+
+describe("member limits", () => {
+  it.effect("refuses a bot past the limit, and a restore that would pass it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const create = (key: string) =>
+        members.create(
+          {
+            clientRequestId: key,
+            name: "Bot " + key,
+            avatar: null,
+            purpose: "",
+            defaultModelSelection: null,
+          },
+          owner,
+        );
+      const first = yield* create("limit-0");
+      for (let index = 1; index < ChannelBotMembers.MEMBER_LIMIT; index++) {
+        yield* create("limit-" + index);
+      }
+      assert.strictEqual(yield* refusal(create("limit-over")), "bot_limit");
+      yield* members.remove({ botId: first.botId }, owner);
+      yield* create("limit-after-delete");
+      assert.strictEqual(
+        yield* refusal(members.restore({ botId: first.botId }, owner)),
+        "bot_limit",
+      );
+      assert.lengthOf(yield* members.list({}, owner), ChannelBotMembers.MEMBER_LIMIT + 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});

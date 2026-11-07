@@ -79,6 +79,11 @@ const BOT_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 const newBotId = () =>
   BotId.make(Array.from(NodeCrypto.randomBytes(12), (byte) => BOT_ID_ALPHABET[byte % 32]).join(""));
 const PROFILE_PREFIX = "bot-profile:";
+/** At most this many active members per owner, and member records of any state. */
+export const MEMBER_LIMIT = 50;
+export const MEMBER_RECORD_LIMIT = 500;
+/** Unfinished members one reconcile pass takes; the next list or ownership takes the rest. */
+const RECONCILE_BATCH = 100;
 const createKey = (ownerId: string, clientRequestId: string) =>
   "bot-create:" + encodeURIComponent(ownerId) + ":" + encodeURIComponent(clientRequestId);
 const CreateRecord = Schema.fromJsonString(Schema.Struct({ botId: BotId }));
@@ -191,20 +196,23 @@ const make = Effect.gen(function* () {
   ) {
     const prefix =
       ownerId === undefined ? PROFILE_PREFIX : PROFILE_PREFIX + encodeURIComponent(ownerId) + ":";
+    // A member's ref key is its profile key with "bot: " in place of the profile prefix.
     const rows = yield* sql<{ readonly key: string }>`
-        SELECT key FROM channel_runtime_state
-        WHERE key >= ${prefix} AND key < ${prefix.slice(0, -1) + ";"}
-          AND json_extract(value_json, '$.role') = 'member'`;
+        SELECT p.key FROM channel_runtime_state p
+        WHERE p.key >= ${prefix} AND p.key < ${prefix.slice(0, -1) + ";"}
+          AND json_extract(p.value_json, '$.role') = 'member'
+          AND (json_extract(p.value_json, '$.lifecycle.pending') IS NOT NULL
+            OR (COALESCE(json_extract(p.value_json, '$.state'), 'active') = 'active'
+              AND NOT EXISTS (SELECT 1 FROM channel_runtime_state r
+                WHERE r.key = 'bot: ' || substr(p.key, ${PROFILE_PREFIX.length + 1}))))
+        LIMIT ${RECONCILE_BATCH}`;
     const found: Array<{ readonly ownerId: string; readonly record: MemberRecord }> = [];
     for (const row of rows) {
       const [owner, bot] = row.key.slice(PROFILE_PREFIX.length).split(":");
       if (owner === undefined || bot === undefined) continue;
       const memberOwner = decodeURIComponent(owner);
       const record = yield* readMember(memberOwner, decodeURIComponent(bot));
-      if (record === undefined) continue;
-      const launched = (yield* ledger.getBotById(memberOwner, record.botId)) !== undefined;
-      if (record.lifecycle !== undefined || (record.state !== "deleted" && !launched))
-        found.push({ ownerId: memberOwner, record });
+      if (record !== undefined) found.push({ ownerId: memberOwner, record });
     }
     return found;
   });
@@ -240,6 +248,9 @@ const make = Effect.gen(function* () {
               if (existing === undefined) return yield* fail("persistence_failed");
               return existing;
             }
+            const counts = yield* memberCounts(owner.ownerId);
+            if (counts.active >= MEMBER_LIMIT || counts.total >= MEMBER_RECORD_LIMIT)
+              return yield* fail("bot_limit");
             const botId = newBotId();
             const created: MemberRecord = {
               botId,
@@ -295,6 +306,18 @@ const make = Effect.gen(function* () {
     at: at + "/" + NodeCrypto.randomBytes(4).toString("hex"),
   });
 
+  const memberCounts = (ownerId: string) => {
+    const prefix = PROFILE_PREFIX + encodeURIComponent(ownerId) + ":";
+    return sql<{ readonly total: number; readonly active: number }>`
+      SELECT COUNT(*) AS total, COALESCE(SUM(
+        COALESCE(json_extract(value_json, '$.state'), 'active') = 'active'), 0) AS active
+      FROM channel_runtime_state
+      WHERE key >= ${prefix} AND key < ${prefix.slice(0, -1) + ";"}
+        AND json_extract(value_json, '$.role') = 'member'`.pipe(
+      Effect.map((rows) => rows[0] ?? { total: 0, active: 0 }),
+    );
+  };
+
   const hasOpenWork = (ownerId: string, botId: string) =>
     sql<{ readonly found: number }>`
       SELECT 1 AS found FROM channel_tasks WHERE owner_id = ${ownerId} AND bot_id = ${botId}
@@ -321,16 +344,17 @@ const make = Effect.gen(function* () {
 
   const restore: ChannelBotMembers["Service"]["restore"] = (input, owner) =>
     change(owner, input.botId, (record, at) =>
-      Effect.succeed(
-        record.state !== "deleted"
-          ? record
-          : {
-              ...record,
-              state: "active" as const,
-              lifecycle: marker("unarchive", at),
-              updatedAt: at,
-            },
-      ),
+      Effect.gen(function* () {
+        if (record.state !== "deleted") return record;
+        const counts = yield* memberCounts(owner.ownerId).pipe(Effect.mapError(failed));
+        if (counts.active >= MEMBER_LIMIT) return yield* fail("bot_limit");
+        return {
+          ...record,
+          state: "active" as const,
+          lifecycle: marker("unarchive", at),
+          updatedAt: at,
+        };
+      }),
     );
 
   const setHidden: ChannelBotMembers["Service"]["setHidden"] = (input, owner) =>

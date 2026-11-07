@@ -163,12 +163,13 @@ const make = Effect.gen(function* () {
       .filter((profile) => profile.role === "member")
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     // A member is listed once its ref exists; until then its create is still finishing.
+    const refPrefix = memberBotKey(ownerId, "");
     const refRows =
       members.length === 0
         ? []
         : yield* sql<{ readonly key: string }>`
             SELECT key FROM channel_runtime_state
-            WHERE key IN ${sql.in(members.map((member) => memberBotKey(ownerId, member.botId)))}`;
+            WHERE key >= ${refPrefix} AND key < ${refPrefix.slice(0, -1) + ";"}`;
     const launched = new Set(refRows.map((row) => row.key));
     const listedMembers = members
       .filter((member) => launched.has(memberBotKey(ownerId, member.botId)))
