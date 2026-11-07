@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
@@ -308,6 +309,45 @@ describe("what people without a link may not reach", () => {
       const later = seen.find((input) => input.inputText === "what machine is this?");
       assert.isDefined(later);
       assert.notInclude(later?.notes ?? "", "Reply in Korean.");
+      assert.isTrue(
+        harness.slackSent.some((send) =>
+          send.message.text.includes(CHANNEL_COPY.noteEditNotAllowed),
+        ),
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("asking to change the notes gets no permission and is told so", () => {
+    const { harness } = scenario();
+    harness.script.current = (input) =>
+      input.mode === "input" && input.inputText === "Please forget the Korean note"
+        ? Effect.succeed({
+            replyText: "On it.",
+            action: {
+              type: "create_task" as const,
+              title: "Forget a note",
+              instruction: "Remove the requested note.",
+              notesChangeRequested: "forget the Korean note",
+            },
+          })
+        : defaultScript(input);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        slackInput("Please forget the Korean note", "guest-forget", undefined, "U9"),
+        workspaceContext,
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const tasks = yield* (yield* ChannelLedger.ChannelLedger).listTasks({
+        ownerId: owner.ownerId,
+        limit: 10,
+      });
+      assert.isTrue(tasks.tasks.every((task) => task.notesChangeRequested === undefined));
+      assert.isTrue(
+        harness.slackSent.some((send) =>
+          send.message.text.includes(CHANNEL_COPY.noteEditNotAllowed),
+        ),
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 });
