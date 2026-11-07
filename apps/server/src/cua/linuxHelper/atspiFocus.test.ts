@@ -79,7 +79,8 @@ describe("makeSecureFocusProbe", () => {
   });
 
   it("reports focus as unknown, never as not secure, when the process or the bus does not answer", async () => {
-    expect(await probe(bus(40))(11)).toEqual(UNKNOWN);
+    // A process the registry does not list is still unknown focus, so private.
+    expect(await probe(bus(40))(11)).toMatchObject(UNKNOWN);
     const silent: AtspiCall = async (call) => {
       throw new Error("The accessibility bus did not answer " + call.member + ".");
     };
@@ -88,6 +89,27 @@ describe("makeSecureFocusProbe", () => {
       throw new Error("gdbus: timed out");
     };
     expect(await makeSecureFocusProbe(noAddress)(10)).toEqual(UNKNOWN);
+  });
+
+  it("says an app is unregistered only when the registry answered in full without it", async () => {
+    // Chromium and Electron apps opened before accessibility was on never join the registry.
+    expect(await probe(bus(40))(11)).toEqual({ ...UNKNOWN, unregistered: true });
+    const empty: AtspiCall = async (call) => {
+      if (method(call) === "org.a11y.atspi.Accessible.GetChildren") return refs();
+      throw new Error("unexpected " + method(call));
+    };
+    expect(await probe(empty)(11)).toEqual({ ...UNKNOWN, unregistered: true });
+    // A pid that cannot be read, or an entry that is not a unique name, proves nothing.
+    const unreadPid: AtspiCall = async (call) =>
+      method(call) === "org.freedesktop.DBus.GetConnectionUnixProcessID"
+        ? { signature: "s", body: ["10"] }
+        : bus(40)(call, new AbortController().signal);
+    expect(await probe(unreadPid)(11)).toEqual(UNKNOWN);
+    const wellKnown: AtspiCall = async (call) =>
+      method(call) === "org.a11y.atspi.Accessible.GetChildren" && call.destination === REGISTRY
+        ? refs([":1.7", ROOT], ["org.example.App", ROOT])
+        : bus(40)(call, new AbortController().signal);
+    expect(await probe(wellKnown)(11)).toEqual(UNKNOWN);
   });
 
   it("finds every app and match in a reply, the password field among them (#1606)", async () => {
@@ -447,7 +469,8 @@ describe("makeSecureFocusProbe", () => {
     expect(await focus(10)).toEqual({ known: true, secure: false, windows: 1 });
     connection = 2;
     expect(await focus(10)).toEqual(UNKNOWN);
-    expect(await focus(10)).toEqual(UNKNOWN);
+    // Read again in full on connection 2, the registry lists no pid 10 at all.
+    expect(await focus(10)).toEqual({ ...UNKNOWN, unregistered: true });
     expect(await focus(99)).toEqual({ known: true, secure: false, windows: 1 });
     // One probe whose reads start on one connection and end on another.
     connection = 1;
