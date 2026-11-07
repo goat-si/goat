@@ -2,24 +2,17 @@ import { expect, it, vi } from "vite-plus/test";
 import type { AnyRouter } from "@tanstack/react-router";
 import { EnvironmentId, ProjectId } from "@goat/contracts";
 import * as palette from "../commandPaletteBus";
-import * as grouping from "../sidebarProjectGrouping";
 import * as entities from "../state/entities";
 import * as context from "./useHandleNewThread";
 import { createStartChatNew } from "./useStartChatNew";
 
-it("offers the picker for multiple projects even when last work exists", async () => {
-  using _groups = vi
-    .spyOn(grouping, "buildSidebarProjectSnapshots")
-    .mockReturnValue([{ archived: false }, { archived: false }] as ReturnType<
-      typeof grouping.buildSidebarProjectSnapshots
-    >);
+it("opens a draft in the last worked project without the picker when several projects are open", async () => {
   const environmentId = EnvironmentId.make("local");
   const projectId = ProjectId.make("one");
-  using _projects = vi
-    .spyOn(entities, "readProjects")
-    .mockReturnValue([{ environmentId, id: projectId, archivedAt: null }] as unknown as ReturnType<
-      typeof entities.readProjects
-    >);
+  using _projects = vi.spyOn(entities, "readProjects").mockReturnValue([
+    { environmentId, id: ProjectId.make("other"), archivedAt: null },
+    { environmentId, id: projectId, archivedAt: null },
+  ] as unknown as ReturnType<typeof entities.readProjects>);
   using _threads = vi.spyOn(entities, "readThreadShells").mockReturnValue([
     {
       environmentId,
@@ -39,6 +32,9 @@ it("offers the picker for multiple projects even when last work exists", async (
   } as ReturnType<typeof context.readNewThreadContext>);
   using picker = vi.spyOn(palette, "openCommandPalette").mockImplementation(() => {});
   await createStartChatNew({} as AnyRouter)();
-  expect(picker).toHaveBeenCalledWith({ open: "new-thread-in" });
-  expect(handleNewThread).not.toHaveBeenCalled();
+  expect(picker).not.toHaveBeenCalled();
+  expect(handleNewThread).toHaveBeenCalledWith(
+    { environmentId, projectId },
+    { lastWorkEnvMode: "local" },
+  );
 });
