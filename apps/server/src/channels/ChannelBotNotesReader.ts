@@ -112,7 +112,8 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
       if (before.type !== "File") return yield* failed();
       yield* afterStat;
       const size = Number(before.size);
-      const start = Math.max(0, size - TAIL_BYTES - 1);
+      const truncated = size > TAIL_BYTES;
+      const start = truncated ? size - TAIL_BYTES - 1 : 0;
       const first = yield* readRange(file, start, size - start);
       yield* afterRead;
       const second = yield* readRange(file, start, size - start);
@@ -123,16 +124,21 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
         after.size === before.size &&
         Option.getOrUndefined(after.mtime)?.getTime() ===
           Option.getOrUndefined(before.mtime)?.getTime();
-      if (unchanged) return { bytes: wholeLines(first, start > 0), truncated: start > 0 };
+      if (unchanged) return { bytes: wholeLines(first, truncated), truncated };
     }
     return yield* failed();
   });
 
   const list = Effect.fn("ChannelBotNotesReader.list")(function* () {
     yield* home.requireHome;
-    const read = yield* Effect.scoped(
-      fs.open(files.notes, { flag: "r" }).pipe(Effect.flatMap(readTail)),
-    ).pipe(
+    // Opening a FIFO for reading waits for a writer and holds a pool thread, so only a regular
+    // file is opened; the handle's own stat still refuses one swapped in meanwhile.
+    const read = yield* fs.stat(files.notes).pipe(
+      Effect.flatMap((info) =>
+        info.type === "File"
+          ? Effect.scoped(fs.open(files.notes, { flag: "r" }).pipe(Effect.flatMap(readTail)))
+          : Effect.fail(failed()),
+      ),
       Effect.catchTags({
         PlatformError: (cause) =>
           cause.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(failed()),

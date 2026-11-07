@@ -1,6 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- mkfifo has no Effect API.
+import * as NodeChildProcess from "node:child_process";
 import { assert, describe, it } from "@effect/vitest";
 import { ChannelGatewayError, EnvironmentId } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -11,6 +14,8 @@ import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotNotesReader from "./ChannelBotNotesReader.ts";
 import { channelNotesRevision } from "./channelBriefs.ts";
 import { appendChannelBotNote, channelBotFilesFor, NOTES_HEADER } from "./channelBotNotes.ts";
+
+const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
 const homeHere = Layer.succeed(
   ChannelBotHome.ChannelBotHome,
@@ -163,6 +168,28 @@ describe("ChannelBotNotesReader", () => {
     };
     return { hook, afterStat, arm };
   };
+
+  it.effect("marks a file one byte over the limit as truncated", () =>
+    Effect.gen(function* () {
+      const line = "- 2026-10-17: " + "a".repeat(1_024 - 28) + " (asked in i)\n";
+      yield* writeNotes("x" + line.repeat(64));
+      const result = yield* list;
+      assert.isTrue(result.truncated);
+      assert.lengthOf(result.notes, 63);
+    }).pipe(Effect.provide(readerLayer())),
+  );
+
+  // Windows has no FIFO.
+  it.effect.skipIf(windowsHost)(
+    "refuses a FIFO at the notes path without waiting for a writer",
+    () =>
+      Effect.gen(function* () {
+        const files = yield* notesFile;
+        NodeChildProcess.execFileSync("mkfifo", [files.notes]);
+        const error = yield* Effect.flip(list);
+        assert.strictEqual(error.reason, "persistence_failed");
+      }).pipe(Effect.provide(readerLayer())),
+  );
 
   it.effect("reads again when the file changes during a read", () => {
     const { hook, afterStat, arm } = appending(1);
