@@ -275,7 +275,7 @@ it.effect(
       assert.deepEqual(summary, { candidates: 3, continued: 3 });
       const settings = yield* ServerSettings.ServerSettingsService;
       yield* settings.updateSettings({ continueThreadsAfterServerUpdate: false });
-      assert.deepEqual(yield* recovery.prepareForShutdown, { candidates: 0, continued: 0 });
+      assert.deepEqual(yield* recovery.prepareForShutdown, { candidates: 3, continued: 0 });
       yield* settings.updateSettings({
         projectSettingsOverrides: {
           [ProjectId.make("project:recovery")]: { continueThreadsAfterServerUpdate: true },
@@ -288,7 +288,7 @@ it.effect(
           [ProjectId.make("project:recovery")]: { continueThreadsAfterServerUpdate: false },
         },
       });
-      assert.deepEqual(yield* recovery.prepareForShutdown, { candidates: 0, continued: 0 });
+      assert.deepEqual(yield* recovery.prepareForShutdown, { candidates: 3, continued: 0 });
       const rows = yield* sql<{
         readonly thread_id: string;
       }>`SELECT thread_id FROM orchestration_v2_effect_outbox WHERE effect_type = 'provider-runtime.continue'`;

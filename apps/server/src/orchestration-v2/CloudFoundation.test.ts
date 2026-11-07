@@ -48,6 +48,7 @@ import * as Ingestor from "./ProviderEventIngestor.ts";
 import * as Execution from "./RunExecutionService.ts";
 import * as Finalization from "./RunFinalizationService.ts";
 import * as Policy from "./CommandPolicy.ts";
+import { mockEventSink } from "./RunExecutionService.testkit.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import {
   makeFakeCloudAdapter,
@@ -227,7 +228,7 @@ it.effect.each([
             Layer.mock(Ingestor.ProviderEventIngestorV2)({
               ingestNormalized: () => Effect.succeed([]),
             }),
-            Layer.mock(EventSink.EventSinkV2)({
+            mockEventSink({
               writeIfRunCurrent: (input) =>
                 Effect.gen(function* () {
                   events.push(...input.events);

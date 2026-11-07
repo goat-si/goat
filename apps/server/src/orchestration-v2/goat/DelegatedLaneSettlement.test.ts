@@ -170,7 +170,7 @@ const sweep = Effect.fn("sweep")(function* (
               Effect.as({ sequence: 1, storedEvents: [] }),
             ),
         }),
-        Layer.mock(TerminalManager.TerminalManager)({ closeIdle: () => Effect.void }),
+        Layer.mock(TerminalManager.TerminalManager)({ closeOnSettle: () => Effect.void }),
         Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
           runForThread: (input) =>
             Queue.offer(scripts, ThreadId.make(input.threadId)).pipe(
