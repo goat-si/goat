@@ -147,7 +147,7 @@ export const ThreadLaunchParameters = Schema.Struct({
   workspaceStrategy: Schema.optional(
     OrchestrationV2ThreadLaunchWorkspaceStrategy.annotate({
       description:
-        "Choose where this thread runs before starting its agent: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath, which must be one of the project's git worktrees; root uses the project checkout. Omitted means root, not the caller's worktree. For a PR stack use the parent branch as baseRef and startFromOrigin:false. Uncommitted changes are not copied.",
+        "Choose where this thread runs before starting its agent: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath, which must be one of the project's git worktrees; root uses the project checkout. Omitted means root, not the caller's worktree. Honor a requested base; otherwise independent work starts from the default remote branch with startFromOrigin:true, or the local default branch when no remote exists. For dependent work use its local base and startFromOrigin:false. Uncommitted changes are not copied.",
     }),
   ),
   message: Schema.optional(
