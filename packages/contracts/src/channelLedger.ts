@@ -23,6 +23,7 @@ import {
   ChannelTaskId,
 } from "./channelCommon.ts";
 import { ChannelTaskBrief, ChannelTaskMemoryDelivered } from "./channelBrief.ts";
+import { ChannelSkillProposal, ChannelTaskSkillProposal } from "./channelSkillProposal.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { MemoryTaskGrantCeiling } from "./memory.ts";
@@ -169,6 +170,7 @@ export const ChannelProposedCompletion = Schema.Struct({
   generation: PositiveInt,
   runId: RunId,
   summary: TrimmedNonEmptyString,
+  skillProposal: Schema.optional(ChannelSkillProposal),
 });
 export type ChannelProposedCompletion = typeof ChannelProposedCompletion.Type;
 
@@ -254,6 +256,7 @@ export const ChannelTask = Schema.Struct({
   /** The person's request, quoted from the origin input, to change or forget a GOAT Bot note. */
   notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
   proposedCompletion: Schema.optional(ChannelProposedCompletion),
+  skillProposal: Schema.optional(ChannelTaskSkillProposal),
   openQuestions: Schema.Array(ChannelOpenQuestion),
   /** The worker thread's pull requests, pending native requests and usage-limit wait. */
   observed: Schema.optional(ChannelWorkerObservation),
