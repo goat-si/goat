@@ -207,7 +207,7 @@ const LINUX_DRIVER_LIBRARIES = [
  * A virtual display a server started without DISPLAY finds on its own: xvfb-run passes Xvfb an
  * -auth file the probe reads from its command line, and xcompmgr lets one window be captured.
  */
-export const LINUX_VIRTUAL_DISPLAY =
+const LINUX_VIRTUAL_DISPLAY =
   'setsid xvfb-run -a -s "-screen 0 1920x1080x24" xcompmgr >/dev/null 2>&1 &';
 
 export interface LinuxDisplayFacts {
