@@ -67,7 +67,21 @@ interface Scenario {
   readonly appOwned?: boolean;
   readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly threads?: ReadonlyArray<OrchestrationV2AppThread>;
+  readonly branchLookup?: "open" | "none" | "fails";
 }
+
+const openBranchPullRequest = {
+  number: 42,
+  title: "Pull request",
+  url: "https://example.test/o/r/pull/42",
+  baseRef: "main",
+  headRef: "lane/child",
+  state: "open",
+  repositoryKey: "example.test/o/r",
+  updatedAt: NOW,
+  closedAt: null,
+  mergedAt: null,
+} satisfies GitManager.GitBranchPullRequest;
 
 // The real settlement sweep over one candidate; stores answer only what the child rule reads.
 const sweep = Effect.fn("sweep")(function* (
@@ -118,7 +132,20 @@ const sweep = Effect.fn("sweep")(function* (
   const layer = ThreadSettlementService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
-        Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed([]) }),
+        Layer.mock(ProjectStore.ProjectStoreV2)({
+          listShells: () =>
+            Effect.succeed([
+              {
+                id: ProjectId.make("project"),
+                title: "Project",
+                workspaceRoot: "/workspace/project",
+                defaultModelSelection: null,
+                scripts: [],
+                createdAt: NOW,
+                updatedAt: NOW,
+              },
+            ]),
+        }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getSettlementCandidates: () => Effect.succeed([scenario.lane]),
           getThreadRecords: (threadId) =>
@@ -150,7 +177,14 @@ const sweep = Effect.fn("sweep")(function* (
               Effect.as({ status: "no-script" } as const),
             ),
         }),
-        Layer.mock(GitManager.GitManager)({}),
+        Layer.mock(GitManager.GitManager)({
+          branchPullRequest: () =>
+            scenario.branchLookup === "open"
+              ? Effect.succeed(openBranchPullRequest)
+              : scenario.branchLookup === "none"
+                ? Effect.succeed(null)
+                : Effect.die(new Error("branch lookup failed")),
+        }),
         Layer.mock(PullRequestService.PullRequestService)({
           subscribeMerges: PubSub.subscribe(merges).pipe(Effect.map(Stream.fromSubscription)),
         }),
@@ -281,6 +315,22 @@ it.effect("a lane keeps its project's opt-out and its pull request rules", () =>
         },
       });
       assert.deepEqual(settled(yield* sweep({ lane: withPullRequest })), []);
+    }),
+  ),
+);
+
+it.effect("a lane on a branch settles only once its branch shows no pull request", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const onBranch = child({ branch: "lane/child" });
+      assert.deepEqual(settled(yield* sweep({ lane: onBranch, branchLookup: "open" })), []);
+      assert.deepEqual(settled(yield* sweep({ lane: onBranch, branchLookup: "fails" })), []);
+      assert.deepEqual(
+        settled(yield* sweep({ lane: onBranch, branchLookup: "none" })).map(
+          (command) => command.threadId,
+        ),
+        [childId],
+      );
     }),
   ),
 );

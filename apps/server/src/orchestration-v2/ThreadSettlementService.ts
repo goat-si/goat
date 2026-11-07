@@ -380,8 +380,9 @@ export const make = Effect.gen(function* () {
         autoSettleOnMerge: projectSettings.sidebarAutoSettleOnMerge,
         autoSettleKeepPullRequests: projectSettings.sidebarAutoSettleKeepPullRequests,
       });
-      // A finished task lane can settle before any date is due.
-      if (due !== null || isDelegatedLaneCandidate(thread)) dueThreads.add(thread.id);
+      // A finished task lane can settle before any date is due; one on a branch waits for its lookup.
+      if (due !== null || (isDelegatedLaneCandidate(thread) && thread.branch === null))
+        dueThreads.add(thread.id);
       const key = JSON.stringify([
         thread,
         projects.get(thread.projectId)?.workspaceRoot,
@@ -418,7 +419,11 @@ export const make = Effect.gen(function* () {
 
     // Untraced: the sweep visits every candidate thread each minute and its span covers them.
     const settleThread = Effect.fnUntraced(
-      function* (thread: (typeof candidates)[number], pullRequest: SettlementPullRequest | null) {
+      function* (
+        thread: (typeof candidates)[number],
+        pullRequest: SettlementPullRequest | null,
+        branchLookedUp = false,
+      ) {
         const currentSettings = resolveProjectSettings(
           yield* settingsService.getSettings,
           thread.projectId,
@@ -426,8 +431,10 @@ export const make = Effect.gen(function* () {
         const decisionNow = yield* DateTime.now;
         // A project that turned automatic settlement off keeps its finished lanes too.
         const lanesSettle =
-          currentSettings.sidebarAutoSettleOnMerge ||
-          currentSettings.sidebarAutoSettleAfterDays !== null;
+          (currentSettings.sidebarAutoSettleOnMerge ||
+            currentSettings.sidebarAutoSettleAfterDays !== null) &&
+          pullRequest === null &&
+          (thread.branch === null || branchLookedUp);
         const settledAt =
           (lanesSettle ? yield* delegatedLaneSettledAt(thread) : null) ??
           resolveAutoSettlementAt({
@@ -643,7 +650,7 @@ export const make = Effect.gen(function* () {
           yield* Effect.forEach(
             group,
             (thread) =>
-              settleThread(thread, pullRequest).pipe(
+              settleThread(thread, pullRequest, true).pipe(
                 Effect.map((remaining) => {
                   if (remaining !== null)
                     rememberEvaluation(thread, lookupCache.get(key)?.expiresAt);
