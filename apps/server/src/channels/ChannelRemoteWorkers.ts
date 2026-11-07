@@ -2515,7 +2515,7 @@ const make = Effect.gen(function* () {
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
         Effect.mapError(() => new Superseded()),
-        Effect.flatMap((authority) =>
+        Effect.flatMap((authority): Effect.Effect<void, Superseded | SenderRefused> =>
           authority._tag === "allowed"
             ? Effect.void
             : authority._tag === "sender_changed"
