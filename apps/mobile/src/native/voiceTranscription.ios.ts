@@ -43,7 +43,10 @@ function getNativeErrorCode(error: unknown): string | undefined {
 export function getLocalVoiceTranscriber(): VoiceTranscriber | null {
   const locales = getPreferredLocales();
   if (!AppleTranscription.isAvailable(locales[0] ?? "")) return null;
-  return { prepare: (options) => prepareVoiceTranscription(locales, options) };
+  return {
+    prepareWhileRecording: true,
+    prepare: (options) => prepareVoiceTranscription(locales, options),
+  };
 }
 
 export function getVoiceTranscriber(
@@ -53,6 +56,7 @@ export function getVoiceTranscriber(
   if (!local) return remoteTranscriber ?? null;
   if (!remoteTranscriber) return local;
   return {
+    prepareWhileRecording: true,
     prepare: async (options) => {
       try {
         return await local.prepare(options);

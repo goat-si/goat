@@ -13,6 +13,7 @@ export type PreparedVoiceTranscription = {
 };
 
 export type VoiceTranscriber = {
+  readonly prepareWhileRecording?: boolean;
   readonly prepare: (options: VoiceTranscriptionOptions) => Promise<PreparedVoiceTranscription>;
 };
 

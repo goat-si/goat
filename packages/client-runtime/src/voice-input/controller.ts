@@ -191,6 +191,9 @@ export class VoiceInputController {
   private operationToken = 0;
   private sessionToken: VoiceInputSession | null = null;
   private transcription: PreparedVoiceTranscription | null = null;
+  private preparation: Promise<
+    { transcription: PreparedVoiceTranscription } | { error: unknown }
+  > | null = null;
   private transcriptionAbortController: AbortController | null = null;
   private capturedDraft: VoiceDraftSnapshot | null = null;
   private recordingUri: string | null = null;
@@ -214,6 +217,7 @@ export class VoiceInputController {
       return;
     }
     let sessionToken: VoiceInputSession | null = null;
+    let recordingStarted = false;
     const operationToken = ++this.operationToken;
     this.setState({ phase: "preparing", error: null, errorAction: null });
 
@@ -251,15 +255,22 @@ export class VoiceInputController {
         return;
       }
 
-      try {
-        this.transcription = await runTranscriptionOperation(() =>
-          transcriber.prepare({ signal: abortController.signal }),
-        );
-      } catch (error) {
-        if (this.isCurrent(operationToken)) this.setError(preparationErrorMessage(error), "retry");
-        return;
+      const preparation = runTranscriptionOperation(() =>
+        transcriber.prepare({ signal: abortController.signal }),
+      ).then(
+        (transcription) => ({ transcription }),
+        (error: unknown) => ({ error }),
+      );
+      this.preparation = preparation;
+      if (!transcriber.prepareWhileRecording) {
+        const result = await preparation;
+        if (!this.isCurrent(operationToken)) return;
+        if ("error" in result) {
+          this.setError(preparationErrorMessage(result.error), "retry");
+          return;
+        }
+        this.transcription = result.transcription;
       }
-      if (!this.isCurrent(operationToken)) return;
 
       await this.dependencies.configureRecording();
       this.recordingConfigured = true;
@@ -276,12 +287,30 @@ export class VoiceInputController {
       }
       this.capturedDraft = capturedDraft;
       this.dependencies.recorder.record({ forDuration: VOICE_RECORDING_LIMIT_SECONDS });
+      recordingStarted = true;
       this.setState({ phase: "recording", error: null, errorAction: null, ...this.location() });
+      if (transcriber.prepareWhileRecording) {
+        const result = await preparation;
+        if (!this.isCurrent(operationToken)) return;
+        if ("error" in result) {
+          if (this.currentState.phase === "recording")
+            await this.discardRecording(preparationErrorMessage(result.error));
+          return;
+        }
+        this.transcription = result.transcription;
+        if (this.currentState.phase === "recording" || this.currentState.phase === "transcribing") {
+          this.setState({ ...this.currentState, ...this.location() });
+        }
+      }
     } catch {
       if (this.isCurrent(operationToken))
         this.setError("Could not start voice recording.", "retry");
     } finally {
-      if (sessionToken && this.sessionToken === sessionToken) {
+      if (!recordingStarted && sessionToken && this.sessionToken === sessionToken) {
+        if (this.state.phase === "error" || !this.isCurrent(operationToken)) {
+          this.transcriptionAbortController?.abort();
+          await this.preparation;
+        }
         if (this.isCurrent(operationToken) && this.state.phase === "error") {
           await this.releaseResources();
         } else if (!this.isCurrent(operationToken) && !this.finishing) {
@@ -383,6 +412,16 @@ export class VoiceInputController {
       this.recordingUri = completedUri ?? this.dependencies.recorder.uri ?? this.recordingUri;
       this.rememberRecordingUri(this.recordingUri);
       if (!this.isCurrent(operationToken)) return;
+      if (this.preparation) {
+        const result = await this.preparation;
+        if (!this.isCurrent(operationToken)) return;
+        if ("error" in result) {
+          this.setError(preparationErrorMessage(result.error), "retry");
+          return;
+        }
+        this.transcription = result.transcription;
+        this.setState({ ...this.state, ...this.location() });
+      }
       if (
         !this.recordingUri ||
         !this.transcription ||
@@ -435,6 +474,8 @@ export class VoiceInputController {
         this.setError("Could not finish voice recording.", "retry");
       }
     } finally {
+      if (!this.transcription) this.transcriptionAbortController?.abort();
+      await this.preparation;
       this.finishing = false;
       await this.releaseResources();
     }
@@ -451,6 +492,7 @@ export class VoiceInputController {
       await this.dependencies.recorder.stop();
     } catch {
     } finally {
+      await this.preparation;
       await this.releaseResources();
     }
   }
@@ -472,6 +514,7 @@ export class VoiceInputController {
     this.sessionToken = null;
     this.capturedDraft = null;
     this.transcription = null;
+    this.preparation = null;
     this.transcriptionAbortController = null;
   }
 
