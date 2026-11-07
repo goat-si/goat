@@ -35,7 +35,11 @@ export function installAnnotationVoice(input: {
   const status = document.createElement("span");
   status.setAttribute("role", "status");
   status.className = "text-xs text-muted-foreground";
-  input.row.append(button, cancel, status);
+  const controls = document.createElement("div");
+  controls.style.cssText = "display:flex;min-width:0;align-items:center;gap:4px";
+  status.style.cssText = "min-width:0;flex:1;overflow-wrap:anywhere";
+  controls.append(button, cancel, status);
+  input.row.append(controls);
   const busy = () => phase === "preparing" || phase === "recording" || phase === "transcribing";
   const send = (action: AnnotationVoiceEvent["action"]) => {
     if (!active) return;
@@ -79,7 +83,19 @@ export function installAnnotationVoice(input: {
     if (!active || !state || state.sessionId !== input.config.sessionId) return;
     const { applyState, applyDraft } = order(state);
     if (applyState) {
+      const wasBusy = busy();
       phase = state.phase;
+      const isBusy = busy();
+      if (isBusy !== wasBusy) {
+        if (isBusy) {
+          controls.style.width = "100%";
+          input.row.after(controls);
+        } else {
+          controls.style.width = "";
+          input.row.append(controls);
+        }
+        input.resize();
+      }
       available = state.available;
       button.hidden = !available;
       button.disabled = phase === "preparing" || phase === "transcribing";
@@ -133,9 +149,7 @@ export function installAnnotationVoice(input: {
       ipcRenderer.off(ANNOTATION_VOICE_STATE_CHANNEL, onState);
       input.comment.removeEventListener("input", sync);
       input.comment.removeEventListener("select", sync);
-      button.remove();
-      cancel.remove();
-      status.remove();
+      controls.remove();
     },
   };
 }
