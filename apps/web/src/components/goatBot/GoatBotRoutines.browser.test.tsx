@@ -1,4 +1,5 @@
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import type { BotRoutineSource } from "@goat/client-runtime/scheduledTasks";
+import { EnvironmentId, ScheduledTaskId, ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
@@ -33,18 +34,18 @@ function setup() {
   mocks.setEnabled.mockReset();
 }
 
-const savedCheckIn = {
-  id: "check-in",
+const savedCheckIn: BotRoutineSource = {
+  id: ScheduledTaskId.make("check-in"),
   title: "Check in",
   prompt: "Look over my open work",
   enabled: true,
   schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [1, 2, 3, 4, 5] },
-  threadId: "bot",
+  threadId,
   nextRunAt: null,
   lastRunAt: null,
   lastRunStatus: "never",
   lastRunError: null,
-} as const;
+};
 
 it("Check in on me saves a weekday-morning routine in the bot's chat, then stops offering", async () => {
   setup();
