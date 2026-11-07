@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   type AuthMcpClientAccess,
+  BotId,
   EnvironmentAuthorizationError,
   EnvironmentId,
   ProviderInstanceId,
@@ -11,17 +12,26 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
+import * as ChannelBotMembers from "../../../channels/ChannelBotMembers.ts";
+import { encodeProfile } from "../../../channels/ChannelBotProfiles.ts";
+import { botProfileKey } from "../../../channels/channelBotLedger.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelReceptionService from "../../../channels/ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "../../../channels/ChannelRemoteWorkers.ts";
 import * as ChannelRuntime from "../../../channels/ChannelRuntime.ts";
+import { channelOwnerIdFor } from "../../../channels/channelOwner.ts";
 import { commitTransition } from "../../../channels/channelTaskWrites.ts";
 import {
+  botThreadId,
   environmentId,
   makeHarness,
+  modelSelection,
+  owner,
+  ownerId,
   setupBot,
   goatInput,
   rpcContext,
@@ -401,3 +411,81 @@ it.effect(
     }).pipe(Effect.provide(Layer.merge(homeScope(access, reauthorize), harness.layer)));
   },
 );
+
+const listBotsAs = (caller: EnvironmentId) =>
+  Effect.gen(function* () {
+    const toolkit = yield* ChannelToolkit.pipe(
+      Effect.provide(McpToolAccess.HandlersLayer.layer(ChannelHandlers.layer)),
+    );
+    const result = yield* toolkit
+      .handle("goat_channel_bot_list", {})
+      .pipe(Stream.unwrap, Stream.runCollect);
+    const listed = result.at(-1)!.result;
+    if (!("bots" in listed)) return assert.fail(JSON.stringify(listed));
+    return listed.bots.toSorted((a, b) => a.name.localeCompare(b.name));
+  }).pipe(
+    Effect.provide(
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId: caller,
+        capabilities: new Set(["orchestration"] as const),
+        issuedAt: 0,
+        requestNamespace: "bot-list",
+        thread: undefined,
+        client: { sessionId: "bot-list", label: "Agent", access: "read-only" },
+      }),
+    ),
+  );
+
+it.effect("agents list only their owner's active bots and only who each bot is", () => {
+  const harness = makeHarness();
+  const other = EnvironmentId.make("environment:other-owner");
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const members = yield* ChannelBotMembers.ChannelBotMembers;
+    const create = (name: string, who = owner) =>
+      members.create(
+        {
+          clientRequestId: name,
+          name,
+          avatar: "🤖",
+          purpose: name + " checks builds.",
+          defaultModelSelection: modelSelection,
+        },
+        who,
+      );
+    const helper = yield* create("Helper");
+    const quiet = yield* create("Quiet");
+    yield* members.setHidden({ botId: quiet.botId, hidden: true }, owner);
+    const gone = yield* create("Gone");
+    yield* members.remove({ botId: gone.botId }, owner);
+    // A create that has not launched yet: the profile row exists, its bot ref does not.
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES
+      (${botProfileKey(ownerId, "unlaunched")},
+       ${encodeProfile({ ...helper, botId: BotId.make("unlaunched"), name: "Unlaunched" })},
+       ${helper.createdAt})`;
+    const theirs = yield* create("Theirs", { ...owner, ownerId: channelOwnerIdFor(other) });
+
+    const summary = (bot: typeof helper, hidden: boolean) => ({
+      botId: bot.botId,
+      role: "member",
+      name: bot.name,
+      purpose: bot.purpose,
+      hidden,
+      sessionThreadId: bot.sessionThreadId,
+    });
+    assert.deepStrictEqual(yield* listBotsAs(environmentId), [
+      {
+        botId: "main",
+        role: "main",
+        name: "GOAT Bot",
+        purpose: "",
+        hidden: false,
+        sessionThreadId: botThreadId,
+      },
+      summary(helper, false),
+      summary(quiet, true),
+    ]);
+    assert.deepStrictEqual(yield* listBotsAs(other), [summary(theirs, false)]);
+  }).pipe(Effect.provide(harness.layer));
+});

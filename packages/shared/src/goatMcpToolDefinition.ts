@@ -97,7 +97,8 @@ export type GoatMcpToolSummaryAction =
   | "channel-task-report"
   | "channel-task-move"
   | "channel-bot-home-read"
-  | "channel-bot-home-claim";
+  | "channel-bot-home-claim"
+  | "channel-bot-list";
 
 export interface GoatMcpToolDefinition {
   readonly displayName: string;

@@ -594,6 +594,9 @@ export function summarizeGoatToolCalls(
         ? "Moved GOAT Bot to this machine"
         : "Tried to move GOAT Bot to this machine";
       break;
+    case "channel-bot-list":
+      label = phrase("Listed", "list", `GOAT bots ${times}`);
+      break;
   }
   return { label, failedCount };
 }

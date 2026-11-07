@@ -8,6 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import * as ChannelBotHome from "../../../channels/ChannelBotHome.ts";
+import * as ChannelBotProfiles from "../../../channels/ChannelBotProfiles.ts";
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelTaskExport from "../../../channels/ChannelTaskExport.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
@@ -242,6 +243,24 @@ export const layer = McpToolAccess.toLayer(
         Effect.gen(function* () {
           const home = yield* ChannelBotHome.ChannelBotHome;
           return yield* home.read.pipe(Effect.mapError(failureFor));
+        }),
+      ),
+      goat_channel_bot_list: McpToolAccess.reads(() =>
+        Effect.gen(function* () {
+          const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
+          const bots = yield* profiles
+            .list({ ownerId: yield* ownerIdOf })
+            .pipe(Effect.mapError(failureFor));
+          return {
+            bots: bots.map((bot) => ({
+              botId: bot.botId,
+              role: bot.role,
+              name: bot.name,
+              purpose: bot.purpose,
+              hidden: bot.hidden === true,
+              sessionThreadId: bot.sessionThreadId,
+            })),
+          };
         }),
       ),
       // Agents never hold settings:write, so the environment-write gate decides, as for
