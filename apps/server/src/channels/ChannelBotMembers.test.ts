@@ -765,6 +765,15 @@ describe("a member's model", () => {
       assert.lengthOf(replies("Looking now."), 1);
       assert.lengthOf(replies("The build is green."), 1);
       assert.notInclude((yield* threadView(botThreadId)).texts, "The build is green.");
+      // The member's session gets the same personal data and read-only rules as the main bot.
+      const launched = harness.world.launches.find(
+        (launch) => launch.threadId === task!.worker!.threadId,
+      )?.initialMessage?.text;
+      assert.include(launched, "only through a connector already connected for that account");
+      assert.include(
+        launched,
+        "no updating, installing, or signing in to apps, CLIs, browsers, or extensions",
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 });
