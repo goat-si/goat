@@ -46,6 +46,12 @@ export function SettingsGoatBotRouteScreen() {
           </Text>
         ) : (
           <>
+            {resolution.state === "claimed" && resolution.homeConnected ? (
+              <GoatBotProfileSection
+                key={"profile:" + resolution.claim.environmentId}
+                environmentId={resolution.claim.environmentId}
+              />
+            ) : null}
             <Text className="text-foreground-muted">
               The computer where GOAT Bot answers and receives work.
             </Text>
@@ -84,12 +90,6 @@ export function SettingsGoatBotRouteScreen() {
                   />
                 ))}
             </SettingsSection>
-            {resolution.state === "claimed" && resolution.homeConnected ? (
-              <GoatBotProfileSection
-                key={"profile:" + resolution.claim.environmentId}
-                environmentId={resolution.claim.environmentId}
-              />
-            ) : null}
             {resolution.state === "claimed" && resolution.homeConnected ? (
               <GoatBotModelSection
                 key={resolution.claim.environmentId}
