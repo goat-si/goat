@@ -323,3 +323,13 @@ it("points to the chat from Tasks when the bot asked a question there", async ()
   await press("Open the chat");
   expect(container.textContent).not.toContain("waiting for your answer in the chat");
 });
+
+it("offers the Work sheet, and with it Open the chat, only on the chat screen", async () => {
+  reset();
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  await render(ChannelTaskId.make("task-1"), undefined, 1);
+  expect(
+    [...container.querySelectorAll("button")].some((button) => button.textContent === "Work"),
+  ).toBe(false);
+  expect(container.textContent).not.toContain("waiting for your answer in the chat");
+});
