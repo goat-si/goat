@@ -26,12 +26,16 @@ Turn off **Simulators and emulators** in **Settings → Integrations → Devices
 to stop the device hub and its helper processes; simulators and emulators keep
 running until you power them off.
 
-Settling, archiving, or deleting a thread ends its device sessions, including
-the agent's device control session, so the test runner behind it stops. The
-simulator or emulator keeps running. The device list names the thread that
-started a running device, marks it finished once that thread is settled or
-archived, and lists other threads that have it open, so you can power off what
-finished work left behind.
+Settling, archiving, or deleting a thread ends its device sessions and closes
+the agent's device control session, which stops the test runner behind it. If
+that close fails, for example while a device host is unreachable, GOAT tries it
+again the next time that thread closes a device or is settled, archived, or
+deleted; restarting the environment server forgets it, and the runner can keep
+running. The simulator or emulator keeps running either way. Until the
+environment server restarts, the device list names the thread that started a
+running device, marks it finished once that thread is settled or archived, and
+lists other threads that have it open, so you can power off what finished work
+left behind.
 
 Simulators run on the machine that hosts the environment server. iOS needs
 macOS with Xcode. Android needs the SDK Platform-Tools, Android Emulator,

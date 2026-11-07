@@ -77,7 +77,7 @@ export const deviceEntries = {
     description:
       "Remove matching devices from this thread’s Device panel; optionally shut them down too. Closing without shutdown leaves the simulator or emulator running.",
     guide:
-      "An omitted target closes all matching sessions in the thread. Shutdown also removes sessions for that device in other threads. Closing also ends this thread's agent-device session, as settling or archiving the thread does. Shut a device down only when the user asked, or to stop EAS billing; report a simulator you started that is still running.",
+      "An omitted target closes all matching sessions in the thread. Shutdown also removes sessions for that device in other threads. Closing also closes this thread's agent-device session, as settling or archiving the thread does; a close that fails is retried on the thread's next close or release. Shut a device down only when the user asked, or to stop EAS billing; report a simulator you started that is still running.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Closes the calling thread's own simulator.",
