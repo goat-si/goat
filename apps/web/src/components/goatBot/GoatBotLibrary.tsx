@@ -9,6 +9,7 @@ import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type {
   ChannelBotArtifact,
   ChannelReadBotArtifactInput,
+  ChannelReadBotArtifactResult,
   EnvironmentId,
 } from "@goat/contracts";
 import { useEffect, useRef, useState } from "react";
@@ -21,9 +22,37 @@ import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../
 
 const TEXT_TYPES = new Set(["application/json", "text/markdown", "text/csv"]);
 
+const withoutKey = (record: Readonly<Record<string, string>>, key: string) =>
+  Object.fromEntries(Object.entries(record).filter(([entry]) => entry !== key));
+
 type Preview =
   | { readonly kind: "image"; readonly name: string; readonly url: string }
   | { readonly kind: "text"; readonly name: string; readonly text: string };
+
+type ReadResult =
+  | { readonly kind: "file"; readonly bytes: Uint8Array<ArrayBuffer>; readonly mimeType: string }
+  | { readonly kind: "message"; readonly message: string }
+  | { readonly kind: "aborted" };
+
+/** Reads a whole Library file. Never throws, so the caller needs no try/finally. */
+async function readBotLibraryFile(
+  relativePath: string,
+  readChunk: (input: ChannelReadBotArtifactInput) => Promise<ChannelReadBotArtifactResult>,
+  signal: AbortSignal,
+): Promise<ReadResult> {
+  try {
+    const result = await readWholeBotArtifact(relativePath, readChunk, signal);
+    if (signal.aborted) return { kind: "aborted" };
+    if (result.status !== "ok") {
+      const message = botArtifactOpenMessage(botArtifactName(relativePath), result);
+      return { kind: "message", message };
+    }
+    return { kind: "file", bytes: result.bytes, mimeType: result.mimeType };
+  } catch (error) {
+    if (signal.aborted) return { kind: "aborted" };
+    return { kind: "message", message: botArtifactsFailure(error).message };
+  }
+}
 
 /** Files GOAT Bot's workers saved; opening one reads it chunk by chunk from the home server. */
 export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId }) {
@@ -68,42 +97,30 @@ export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId
     if (signal === undefined || signal.aborted) return;
     const name = botArtifactName(file.relativePath);
     setOpening(file.relativePath);
-    setMessages(({ [file.relativePath]: _old, ...rest }) => rest);
-    try {
-      const result = await readWholeBotArtifact(file.relativePath, readChunk, signal);
-      if (signal.aborted) return;
-      if (result.status !== "ok") {
-        setMessages((current) => ({
-          ...current,
-          [file.relativePath]: botArtifactOpenMessage(name, result),
-        }));
-        return;
-      }
-      const type = result.mimeType.split(";", 1)[0]?.trim() ?? "";
-      if (type.startsWith("text/") || TEXT_TYPES.has(type)) {
-        setPreview({ kind: "text", name, text: new TextDecoder().decode(result.bytes) });
-        return;
-      }
-      const url = URL.createObjectURL(new Blob([result.bytes], { type: result.mimeType }));
-      if (type.startsWith("image/")) {
-        previewUrl.current = url;
-        setPreview({ kind: "image", name, url });
-        return;
-      }
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = name;
-      anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    } catch (error) {
-      if (signal.aborted) return;
-      setMessages((current) => ({
-        ...current,
-        [file.relativePath]: botArtifactsFailure(error).message,
-      }));
-    } finally {
-      if (!signal.aborted) setOpening(null);
+    setMessages((current) => withoutKey(current, file.relativePath));
+    const result = await readBotLibraryFile(file.relativePath, readChunk, signal);
+    if (result.kind === "aborted" || signal.aborted) return;
+    setOpening(null);
+    if (result.kind === "message") {
+      setMessages((current) => ({ ...current, [file.relativePath]: result.message }));
+      return;
     }
+    const type = result.mimeType.split(";", 1)[0]?.trim() ?? "";
+    if (type.startsWith("text/") || TEXT_TYPES.has(type)) {
+      setPreview({ kind: "text", name, text: new TextDecoder().decode(result.bytes) });
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([result.bytes], { type: result.mimeType }));
+    if (type.startsWith("image/")) {
+      previewUrl.current = url;
+      setPreview({ kind: "image", name, url });
+      return;
+    }
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = name;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   };
   if (!supported) return <p>Files need a newer GOAT server.</p>;
   const failure = files.failure === null ? null : botArtifactsFailure(files.failure);

@@ -1,27 +1,17 @@
 import {
   botArtifactName,
-  botArtifactOpenMessage,
   botArtifactSizeLabel,
   botArtifactsFailure,
-  readWholeBotArtifact,
 } from "@goat/client-runtime/goatBot";
-import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type {
-  ChannelBotArtifact,
-  ChannelReadBotArtifactInput,
-  EnvironmentId,
-} from "@goat/contracts";
+import type { ChannelBotArtifact, EnvironmentId } from "@goat/contracts";
 import { useEffect, useRef, useState } from "react";
 import { Image, Modal, Pressable, Text, View } from "react-native";
-import type { AttachmentPreviewFile } from "../../lib/attachmentDownload";
-import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentQuery } from "../../state/query";
+import { type ImagePreview, openBotLibraryFile } from "./openBotLibraryFile";
 
-interface ImagePreview {
-  readonly name: string;
-  readonly file: AttachmentPreviewFile;
-}
+const withoutKey = (record: Readonly<Record<string, string>>, key: string) =>
+  Object.fromEntries(Object.entries(record).filter(([entry]) => entry !== key));
 
 /**
  * Files GOAT Bot's workers saved. An image opens here; other files go to the share sheet. A copy
@@ -72,57 +62,16 @@ export function MobileBotLibrary(props: {
   const open = async (file: ChannelBotArtifact) => {
     const signal = lifetime.current?.signal;
     if (environmentId === null || signal === undefined || signal.aborted) return;
-    const name = botArtifactName(file.relativePath);
     setOpening(file.relativePath);
-    setMessages(({ [file.relativePath]: _old, ...rest }) => rest);
-    try {
-      const result = await readWholeBotArtifact(
-        file.relativePath,
-        async (input: ChannelReadBotArtifactInput) => {
-          const answer = await runAtomCommand(
-            appAtomRegistry,
-            channelEnvironment.readBotArtifact,
-            { environmentId, input },
-            { label: "GOAT Bot Library file", reportFailure: false },
-          );
-          if (answer._tag === "Failure") throw squashAtomCommandFailure(answer);
-          return answer.value;
-        },
-        signal,
-      );
-      if (signal.aborted) return;
-      if (result.status !== "ok") {
-        say(file.relativePath, botArtifactOpenMessage(name, result));
-        return;
-      }
-      const attachment = { name, mimeType: result.mimeType };
-      // Loaded on open: its file and crypto modules are native and the tab may never open a file.
-      const { shareGeneratedAttachment, writeGeneratedAttachmentFile } =
-        await import("../../lib/attachmentDownload");
-      if (signal.aborted) return;
-      if (result.mimeType.startsWith("image/")) {
-        const cached = await writeGeneratedAttachmentFile({ bytes: result.bytes, attachment });
-        if (signal.aborted) {
-          cached.dispose();
-          return;
-        }
-        show({ name, file: cached });
-        return;
-      }
-      const shared = await shareGeneratedAttachment({ bytes: result.bytes, attachment, signal });
-      if (!shared && !signal.aborted)
-        say(file.relativePath, "Sharing isn't available on this device.");
-    } catch (error) {
-      if (signal.aborted) return;
-      say(
-        file.relativePath,
-        error instanceof Error && error.message === "Could not open the share sheet. Try again."
-          ? error.message
-          : botArtifactsFailure(error).message,
-      );
-    } finally {
-      if (!signal.aborted) setOpening(null);
+    setMessages((current) => withoutKey(current, file.relativePath));
+    const result = await openBotLibraryFile(environmentId, file.relativePath, signal);
+    if (signal.aborted) {
+      if (result.kind === "image") result.preview.file.dispose();
+      return;
     }
+    setOpening(null);
+    if (result.kind === "image") show(result.preview);
+    else if (result.kind === "message") say(file.relativePath, result.message);
   };
   if (!connected)
     return (
