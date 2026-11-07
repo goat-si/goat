@@ -196,9 +196,10 @@ it("exposes work tabs as buttons and updates their selected state", async () => 
   await render();
   await press("Work");
   const buttons = [...container.querySelectorAll("button")];
-  const tabs = ["Tasks", "Routines", "Library", "Computer"].map((name) =>
+  const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"].map((name) =>
     buttons.find((button) => button.textContent === name),
   );
+  expect(tabs.every((tab) => tab !== undefined)).toBe(true);
   expect(tabs[0]?.getAttribute("aria-pressed")).toBe("true");
   await act(async () => tabs[1]?.click());
   expect(tabs[0]?.getAttribute("aria-pressed")).toBe("false");
