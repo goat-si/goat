@@ -1,3 +1,6 @@
+import { makeGitLabProjectUsers } from "./gitLabProjectUsers.ts";
+import { makeReferenceSearch } from "./gitLabReferenceSearch.ts";
+export { referenceSearches } from "./gitLabReferenceSearch.ts";
 import { makeGitLabRequestChanges } from "./gitLabRequestChanges.ts";
 import type {
   GitLabDiscussionThreads,
@@ -85,7 +88,6 @@ import {
   decodeOwnAwardIdJson,
   decodeProjectMergeCapabilitiesJson,
   decodeProjectLabelsJson,
-  decodeProjectUsersJson,
   decodeRepositoryBlobsJson,
   decodeTriggerJobChecksJson,
   gitLabAwardName,
@@ -96,7 +98,6 @@ import {
   type GitLabMergeRequestDetail,
   type GitLabMergeRequestListItem,
   type GitLabMergeRequestListState,
-  type GitLabProjectUsers,
 } from "./gitLabMergeRequestJson.ts";
 import type {
   ProviderChangeRequestSummary,
@@ -306,6 +307,8 @@ export class GitLabPullRequestCli extends Context.Service<
       { readonly items: ReadonlyArray<PullRequestActor>; readonly truncated: boolean },
       GitLabPullRequestCliError
     >;
+
+    readonly searchProjectReferences: ReturnType<typeof makeReferenceSearch>;
 
     readonly setReviewerRequest: (input: {
       readonly cwd: string;
@@ -866,34 +869,7 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed((): ReadonlyArray<PullRequestCheck> => []),
     );
 
-  const projectUsers = (input: {
-    readonly cwd: string;
-    readonly host?: string | undefined;
-    readonly repository: string;
-    readonly search?: string | undefined;
-  }): Effect.Effect<GitLabProjectUsers, GitLabPullRequestCliError> =>
-    api({
-      cwd: input.cwd,
-      host: input.host,
-      path: `projects/${projectPath(input.repository)}/users?${query([
-        ["per_page", String(MAX_PAGE_SIZE)],
-        ...searchParams(input.search, 3),
-      ])}`,
-    }).pipe(
-      Effect.flatMap((result) => {
-        const decoded = decodeProjectUsersJson(result.stdout.trim());
-        return Result.isSuccess(decoded)
-          ? Effect.succeed(decoded.success)
-          : Effect.fail(
-              new GitLabMergeRequestReadError({
-                command: "glab",
-                cwd: input.cwd,
-                operation: "listReviewerCandidates",
-                cause: decoded.failure,
-              }),
-            );
-      }),
-    );
+  const projectUsers = makeGitLabProjectUsers(api);
 
   const awardSubjectPath = (input: {
     readonly repository: string;
@@ -1534,6 +1510,8 @@ export const make = Effect.gen(function* () {
         })),
       );
     }),
+
+    searchProjectReferences: makeReferenceSearch(api),
 
     listReviewerCandidates: Effect.fn("GitLabPullRequestCli.listReviewerCandidates")(
       function (input) {

@@ -1,3 +1,16 @@
+import {
+  parseRepositorySelector,
+  diffCursorPage,
+  isCommitSha,
+  decodeRevisionRefs,
+  decodeMergeBase,
+  GRAPHQL_MERGE_METHODS,
+} from "./gitHubPullRequestInput.ts";
+import {
+  toRepositoryReferences,
+  referenceSearchQuery,
+  type SearchRepositoryReferences,
+} from "./gitHubReferenceSearch.ts";
 import { matchesUnsortedListing, searchQuery } from "./gitHubPullRequestSearch.ts";
 import { toPullRequestActionSummary } from "./gitHubActionSummary.ts";
 import {
@@ -642,6 +655,8 @@ export class GitHubPullRequestApi extends Context.Service<
       GitHubPullRequestApiError
     >;
 
+    readonly searchRepositoryReferences: SearchRepositoryReferences;
+
     readonly setLabels: (input: {
       readonly cwd: string;
       readonly repository: string;
@@ -730,47 +745,6 @@ export class GitHubPullRequestApi extends Context.Service<
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
   }
 >()("@goat/source-control-github/server/GitHubPullRequestApi") {}
-
-function parseRepositorySelector(value: string): {
-  readonly owner: string;
-  readonly name: string;
-} {
-  const parts = value.trim().split("/").filter(Boolean);
-  return { name: parts.at(-1) ?? "", owner: parts.at(-2) ?? "" };
-}
-
-/** Bound decimal length to prevent exponential notation in request paths. */
-function diffCursorPage(cursor: string): number | null {
-  return /^[1-9][0-9]{0,6}$/.test(cursor) ? Number(cursor) : null;
-}
-
-function isCommitSha(value: string): boolean {
-  return /^[0-9a-f]{7,64}$/i.test(value);
-}
-
-const decodeRevisionRefs = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({
-      sha: Schema.optional(Schema.String),
-      parents: Schema.optional(Schema.Array(Schema.Struct({ sha: Schema.String }))),
-      base: Schema.optional(Schema.Struct({ sha: Schema.String })),
-      head: Schema.optional(Schema.Struct({ sha: Schema.String })),
-    }),
-  ),
-);
-
-/** Where a pull request's head forked off its base, the commit its patch is computed from. */
-const decodeMergeBase = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({ merge_base_commit: Schema.Struct({ sha: Schema.String }) }),
-  ),
-);
-
-const GRAPHQL_MERGE_METHODS = {
-  merge: "MERGE",
-  squash: "SQUASH",
-  rebase: "REBASE",
-} as const satisfies Record<PullRequestMergeMethod, string>;
 
 const PullRequestGraphQLGroup = GraphQLGroup.merge(
   PullRequestBatchesGraphQLGroup,
@@ -2237,6 +2211,32 @@ export const make = Effect.gen(function* () {
             Effect.map(toRepositoryAuthors),
             Effect.flatMap(found({ ...input, operation })),
           );
+      },
+    ),
+
+    searchRepositoryReferences: Effect.fn("GitHubPullRequestApi.searchRepositoryReferences")(
+      function (input) {
+        const { owner, name } = parseRepositorySelector(input.repository);
+        const parsed = /^\d+$/.test(input.query ?? "") ? Number(input.query) : 0;
+        // GraphQL validates `$number: Int!` even when `@include` skips the lookup.
+        const exact = parsed > 0 && parsed <= 2_147_483_647;
+        const search = (lookup: boolean) =>
+          client.RepositoryReferences({
+            owner,
+            name,
+            q: referenceSearchQuery(input.repository, input.query),
+            number: lookup ? parsed : 0,
+            exact: lookup,
+          });
+        return search(exact).pipe(
+          // A missing number fails the whole query, which would discard the search results.
+          Effect.catchIf(
+            (error) => exact && isNotFoundOnly(error),
+            () => search(false),
+          ),
+          graphql({ ...input, operation: "searchRepositoryReferences", allowReserve: true }),
+          Effect.map(toRepositoryReferences),
+        );
       },
     ),
 

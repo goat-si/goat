@@ -13,7 +13,7 @@ import {
   usePendingReviewComments,
   usePullRequestReviewStore,
 } from "./pullRequestReviewStore";
-import { pullRequestMentionScope } from "./PullRequestMarkdownTextarea";
+import { pullRequestCompletionScope } from "./PullRequestMarkdownTextarea";
 
 export function PullRequestComposer({
   environmentId,
@@ -151,7 +151,7 @@ export function PullRequestComposer({
             <PullRequestReviewForm
               environmentId={environmentId}
               reference={reference}
-              mentionScope={pullRequestMentionScope(detail, environmentId, reference)}
+              completionScope={pullRequestCompletionScope(detail, environmentId, reference)}
               term={term}
               verdicts={verdicts}
               requestChangesSummaryRequired={sourceControlClients

@@ -5,10 +5,12 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   PullRequestDetail,
   PullRequestListResult,
+  PullRequestFilterOptions,
   resolvePullRequestAuthorFilter,
 } from "./pullRequest.ts";
 
 const decodeDetail = Schema.decodeUnknownSync(Schema.toCodecJson(PullRequestDetail));
+const decodeFilterOptions = Schema.decodeUnknownSync(Schema.toCodecJson(PullRequestFilterOptions));
 
 const LIST_RESULT: PullRequestListResult = {
   viewers: { "github.com": "bilal", "gitlab.com": "bilal.hassan" },
@@ -146,4 +148,13 @@ describe("resolvePullRequestAuthorFilter", () => {
     expect(resolvePullRequestAuthorFilter(" ana ", "bilal")).toBe("ana");
     expect(resolvePullRequestAuthorFilter("meredith", "bilal")).toBe("meredith");
   });
+});
+
+it("decodes filter options from a server without reference completion", () => {
+  const result = decodeFilterOptions({
+    labels: [],
+    authors: [],
+    truncated: false,
+  });
+  expect(result.references).toEqual([]);
 });

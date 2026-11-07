@@ -1,3 +1,4 @@
+import { rankFilterOptions } from "./pullRequestFilterRanking.ts";
 import { toPullRequestSummary, matchesFilterRepository } from "./pullRequestSummary.ts";
 import { ACTION_ACCESS_REFUSALS, pinnedAutoMergeRefusal } from "./pullRequestActionPolicy.ts";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
@@ -49,6 +50,7 @@ import {
   type PullRequestFilterOptions,
   type PullRequestFilterOptionsInput,
   type PullRequestActor,
+  type PullRequestReferenceCandidate,
   type PullRequestLabel,
   type PullRequestListStatsResult,
   type PullRequestProviderSummary,
@@ -636,6 +638,14 @@ function withRateLimitBackoff(
             api.searchRepositoryAuthors,
           ),
         }),
+    ...(api.searchRepositoryReferences === undefined
+      ? {}
+      : {
+          searchRepositoryReferences: interactive(
+            "searchRepositoryReferences",
+            api.searchRepositoryReferences,
+          ),
+        }),
     replyToThread: interactive("replyToThread", api.replyToThread),
     setReaction: interactive("setReaction", api.setReaction),
     setThreadResolution: interactive("setThreadResolution", api.setThreadResolution),
@@ -643,52 +653,6 @@ function withRateLimitBackoff(
   // Optional provider methods must be forwarded too; returning the interface alone permits omissions.
   return wrapped satisfies PullRequestProviderApi &
     Record<Exclude<keyof PullRequestProviderApi, keyof typeof wrapped>, never>;
-}
-
-const FILTER_OPTIONS_LIMIT = 100;
-
-/**
- * Exact matches first, then names that begin with the query, then the rest, so a short query
- * still puts the obvious answer at the top of a long list.
- */
-function rankFilterOptions<A>(
-  pages: ReadonlyArray<ProviderFilterOptionPage<A>>,
-  input: {
-    readonly query: string | undefined;
-    readonly keyOf: (item: A) => string;
-    readonly textsOf: (item: A) => ReadonlyArray<string | null>;
-  },
-): { readonly items: ReadonlyArray<A>; readonly truncated: boolean } {
-  const query = input.query?.trim().toLowerCase() ?? "";
-  const unique = new Map<string, A>();
-  for (const page of pages) {
-    for (const item of page.items) {
-      const key = input.keyOf(item).toLowerCase();
-      if (!unique.has(key)) unique.set(key, item);
-    }
-  }
-  const rank = (item: A) => {
-    const texts = input.textsOf(item).flatMap((text) => (text ? [text.toLowerCase()] : []));
-    if (query.length === 0) return 0;
-    if (texts.includes(query)) return 0;
-    if (texts.some((text) => text.startsWith(query))) return 1;
-    if (texts.some((text) => text.includes(query))) return 2;
-    return null;
-  };
-  const ranked = [...unique.values()]
-    .flatMap((item) => {
-      const score = rank(item);
-      return score === null ? [] : [{ item, score, key: input.keyOf(item) }];
-    })
-    .toSorted(
-      (left, right) =>
-        left.score - right.score ||
-        left.key.localeCompare(right.key, undefined, { sensitivity: "base" }),
-    );
-  return {
-    items: ranked.slice(0, FILTER_OPTIONS_LIMIT).map(({ item }) => item),
-    truncated: ranked.length > FILTER_OPTIONS_LIMIT || pages.some((page) => page.truncated),
-  };
 }
 
 // Capture before the provider read so a slow response keeps its original freshness through caches.
@@ -2576,7 +2540,19 @@ export const make = Effect.gen(function* () {
         keyOf: (label) => label.name,
         textsOf: (label) => [label.name],
       });
-      return { labels: items, authors: [], truncated };
+      return { labels: items, authors: [], references: [], truncated };
+    }
+    if (input.kind === "references") {
+      const pages = yield* gather<PullRequestReferenceCandidate>((project) =>
+        project.api.searchRepositoryReferences?.({ ...refOf(project), sigil: input.sigil }),
+      );
+      const { items, truncated } = rankFilterOptions(pages, {
+        query: input.query,
+        keyOf: (candidate) => candidate.reference,
+        textsOf: (candidate) => [String(candidate.number), candidate.title],
+        hostOrder: true,
+      });
+      return { labels: [], authors: [], references: items, truncated };
     }
     const pages = yield* gather<PullRequestActor>((project) =>
       project.api.searchRepositoryAuthors?.(refOf(project)),
@@ -2586,7 +2562,7 @@ export const make = Effect.gen(function* () {
       keyOf: (author) => author.login,
       textsOf: (author) => [author.login, author.name],
     });
-    return { labels: [], authors: items, truncated };
+    return { labels: [], authors: items, references: [], truncated };
   });
 
   const labelCandidates: PullRequestService["Service"]["labelCandidates"] = (input) =>

@@ -1,3 +1,4 @@
+import { coreResponse } from "./gitHubPullRequestTestFixtures.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
@@ -36,54 +37,6 @@ type PullRequestRead = (
 ) => Effect.Effect<unknown, GitHubPullRequestApi.GitHubPullRequestApiError>;
 const refusedReviewerResponse = () =>
   Effect.succeed(output(encodeJson({ ...coreResponse(), errors: [refusedReviewer] })));
-
-const coreResponse = (pullRequest: Readonly<Record<string, unknown>> = {}) => ({
-  data: {
-    repository: {
-      mergeCommitAllowed: true,
-      squashMergeAllowed: false,
-      rebaseMergeAllowed: true,
-      autoMergeAllowed: true,
-      viewerPermission: "WRITE",
-      pullRequest: {
-        number: 7,
-        title: "Pull request 7",
-        url: "https://github.com/acme/web/pull/7",
-        body: "",
-        isDraft: false,
-        mergeable: "MERGEABLE",
-        mergeStateStatus: "BLOCKED",
-        reviewDecision: null,
-        additions: 0,
-        deletions: 0,
-        changedFiles: 0,
-        mergedAt: null,
-        closedAt: null,
-        isCrossRepository: false,
-        maintainerCanModify: true,
-        headRepositoryOwner: null,
-        headRepository: null,
-        headRef: null,
-        author: null,
-        autoMergeRequest: null,
-        headRefName: "feature",
-        baseRefName: "main",
-        headRefOid: "abc123",
-        state: "OPEN",
-        createdAt: "2026-07-01T00:00:00Z",
-        updatedAt: "2026-07-02T00:00:00Z",
-        viewerCanUpdate: true,
-        viewerDidAuthor: false,
-        viewerCanUpdateBranch: true,
-        baseRef: { compare: { behindBy: 2 } },
-        reviewRequests: { nodes: [] },
-        labels: { nodes: [] },
-        commits: { nodes: [] },
-        ...pullRequest,
-      },
-    },
-  },
-});
 
 type ApiCall =
   | {
@@ -696,6 +649,43 @@ it.effect(
 );
 
 layer("GitHubPullRequestApi.layer", (it) => {
+  it.effect("keeps recent references when the typed number does not exist", () =>
+    Effect.gen(function* () {
+      const search = {
+        pageInfo: { hasNextPage: false },
+        nodes: [{ __typename: "Issue", number: 7, title: "Seven", issueState: "OPEN" }],
+      };
+      mockedExecute.mockImplementation((call) =>
+        Effect.succeed(
+          output(
+            encodeJson(
+              call.kind === "graphql" && call.variables?.["exact"] === true
+                ? {
+                    data: { search, repository: { issueOrPullRequest: null } },
+                    errors: [
+                      {
+                        type: "NOT_FOUND",
+                        path: ["repository", "issueOrPullRequest"],
+                        message: "Could not resolve to an issue or pull request.",
+                      },
+                    ],
+                  }
+                : { data: { search } },
+            ),
+          ),
+        ),
+      );
+      const api = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const result = yield* api.searchRepositoryReferences({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        query: "99",
+      });
+      expect(result.items.map((item) => item.reference)).toEqual(["#7"]);
+    }),
+  );
+
   it.effect("turns maintainer edits off without rewriting the pull request's text", () =>
     Effect.gen(function* () {
       mockedExecute.mockImplementation((call) =>
