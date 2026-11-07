@@ -1,5 +1,6 @@
 import {
   MEMORY_REPORT_MAX_AUTOMATIC_ATTEMPTS,
+  MEMORY_STORE_FULL_LABEL,
   type EnvironmentId,
   type MemoryIndexCoverage,
   type MemoryProcessingStatus,
@@ -380,16 +381,20 @@ const STORAGE_REASON_LABELS = {
   fts_braked: "Search indexing paused",
   cleanup_failed: "Memory cleanup needs attention",
   report_backlog: "Reports waiting to be delivered",
-  capacity_exceeded: "Memory storage limit reached",
+  capacity_exceeded: MEMORY_STORE_FULL_LABEL,
 } as const;
 
 export function presentMemoryStorage(storage: MemoryStorageStatus) {
   const levels = ["normal", "warning", "critical", "full"] as const;
-  const level = levels.reduce(
-    (current, candidate) =>
-      storage.quotas.some((quota) => quota.warning === candidate) ? candidate : current,
-    "normal",
-  );
+  // The server warns capacity_exceeded when the whole-store budget refuses writes.
+  const level =
+    storage.measuredAtUtc !== null && storage.warnings.includes("capacity_exceeded")
+      ? "full"
+      : levels.reduce(
+          (current, candidate) =>
+            storage.quotas.some((quota) => quota.warning === candidate) ? candidate : current,
+          "normal",
+        );
   const reasons = [
     ...new Set([
       ...storage.warnings,
@@ -400,7 +405,7 @@ export function presentMemoryStorage(storage: MemoryStorageStatus) {
   return {
     label:
       level === "full"
-        ? "Memory storage limit reached"
+        ? MEMORY_STORE_FULL_LABEL
         : level === "critical"
           ? "Memory storage nearly full"
           : level === "warning"

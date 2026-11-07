@@ -10,6 +10,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import { schemaIssueSummary } from "../../../memory/memoryDiagnostics.ts";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import { MemoryToolkit } from "./tools.ts";
+import { MemoryCapacityError } from "../../../memory/store/StoreModel.ts";
 
 const isMemoryError = Schema.is(M.MemoryRpcError);
 const isCapacityDimension = Schema.is(M.MemoryCapacityDimension);
@@ -97,6 +98,30 @@ export const invocationPermit = (requirement: MemoryAccess.MemoryAccessRequireme
 const isRefusal = Schema.is(M.OrchestratorMcpFailure);
 
 /**
+ * The store budget refused after its automatic reclaim finished and nothing more is eligible now:
+ * repeating the call cannot succeed until a person frees space, so the agent is told so.
+ */
+const isStoreCapacity = Schema.is(MemoryCapacityError);
+const storeFullFailure = (error: unknown) =>
+  isStoreCapacity(error) &&
+  error.budget === "store" &&
+  (error.reclaim === "completed" || error.reclaim === "unsupported") &&
+  error.reclaimable === 0 &&
+  error.current !== undefined
+    ? new M.OrchestratorMcpFailure({
+        code: "capacity_exceeded",
+        classification: "memory_store_full",
+        message: M.memoryStoreFullMessage({
+          current: error.current,
+          limit: error.limit,
+          reclaim: error.reclaim,
+          nextEligibleAtMs: error.nextEligibleAtMs ?? null,
+          largestTables: error.largestTables ?? [],
+        }),
+      })
+    : undefined;
+
+/**
  * A malformed call is the caller's to fix, so it is refused as invalid_request before anything
  * runs. The message names fields, never their values: arguments can carry personal memory text.
  */
@@ -140,6 +165,8 @@ export const memoryFailure =
   (tool: string) =>
   (error: unknown): Effect.Effect<never, M.MemoryRpcError | M.OrchestratorMcpFailure> => {
     if (isRefusal(error)) return Effect.fail(error);
+    const full = storeFullFailure(error);
+    if (full) return Effect.fail(full);
     const mapped = memoryError(error);
     return mapped.code === "invalid_output" || mapped.code === "storage_failed"
       ? Effect.logWarning("memory tool failed", {

@@ -1264,7 +1264,7 @@ const make = Effect.fnUntraced(function* (
         return yield* apply(op, Store.localIntent, permit);
       }),
     );
-  });
+  }, Quota.withStoreReclaim(environmentId));
   const remember = makeRemember({
     sql,
     environmentId,
