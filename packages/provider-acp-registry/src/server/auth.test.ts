@@ -59,6 +59,7 @@ const makeHarness = (
   failVerification = false,
   settings = decodeSettings({ agentId: "test-agent" }),
   providerInstanceId = instanceId,
+  authenticateError?: AcpRequestError,
 ) =>
   Effect.gen(function* () {
     const verify = yield* Deferred.make<void>();
@@ -109,6 +110,7 @@ const makeHarness = (
             authenticate: (methodId) =>
               Effect.gen(function* () {
                 authenticated.push(methodId);
+                if (authenticateError !== undefined) return yield* authenticateError;
                 if (elicitation)
                   yield* elicitation(
                     {
@@ -343,5 +345,29 @@ it.effect("does not report authentication when post-login verification fails", (
     yield* h.phase("failed");
     assert.deepEqual(h.changed, []);
     assert.isTrue(h.killed());
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("surfaces the agent error message when authenticate fails with AcpRequestError", () =>
+  Effect.gen(function* () {
+    const error = new AcpRequestError({
+      method: "authenticate",
+      code: -32000,
+      errorMessage: "Connect to the VPN, then sign in again.",
+    });
+    const h = yield* makeHarness(
+      browserMethod,
+      false,
+      decodeSettings({ agentId: "test-agent" }),
+      instanceId,
+      error,
+    );
+    yield* h.controller.start("owner", Effect.void, "browser");
+    const failed = yield* h.phase("failed");
+    assert.strictEqual(
+      failed.message,
+      "The ACP agent could not complete sign-in. Connect to the VPN, then sign in again.",
+    );
+    assert.deepEqual(h.changed, []);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
