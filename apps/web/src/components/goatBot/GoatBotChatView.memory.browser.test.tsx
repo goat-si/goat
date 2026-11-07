@@ -32,6 +32,7 @@ vi.mock("./GoatBotTimeline", async (original) => ({
   GoatBotTimeline: () => null,
 }));
 vi.mock("~/hooks/useMediaQuery", () => ({ useMediaQuery: () => state.narrow }));
+vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
 vi.mock("./useBotRoster", () => ({
   useBotThreads: () => ({ rows: [], loaded: true, refresh: () => {} }),
 }));

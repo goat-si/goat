@@ -522,7 +522,15 @@ export function GoatBotScreen(props: {
           taskId={taskId}
           visible={props.visible}
           onOpenTask={onSelectTask}
-          member={member ? { botId: member.botId, threadId: member.sessionThreadId } : null}
+          member={
+            member
+              ? {
+                  botId: member.botId,
+                  threadId: member.sessionThreadId,
+                  defaultModelSelection: member.defaultModelSelection,
+                }
+              : null
+          }
           onDraft={session.canSend ? setText : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
           taskCard={

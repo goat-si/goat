@@ -55,7 +55,13 @@ export function useBotThreads(
   useEffect(() => {
     if (supported && watchedThreadId && revision !== undefined) refreshThreads();
   }, [supported, watchedThreadId, revision, refreshThreads]);
-  return { rows: threads.data?.rows ?? [], loaded: threads.isSuccess, refresh: threads.refresh };
+  return {
+    rows: threads.data?.rows ?? [],
+    supported,
+    loaded: threads.isSuccess,
+    failed: threads.error !== null,
+    refresh: threads.refresh,
+  };
 }
 
 export function useBotRoster() {

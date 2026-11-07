@@ -152,6 +152,7 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
 }));
 vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
+vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (atom: string | null) =>
     atom === "notes"
