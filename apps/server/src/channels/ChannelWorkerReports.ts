@@ -231,9 +231,7 @@ const make = Effect.gen(function* () {
                   Effect.map((records) =>
                     records.runtimeRequests.map((request) => ({ ...request, threadId })),
                   ),
-                  Effect.catch((error) =>
-                    isThreadMissing(error) ? Effect.succeed([]) : Effect.fail(error),
-                  ),
+                  Effect.catchIf(isThreadMissing, () => Effect.succeed([])),
                 ),
               { concurrency: 1 },
             ),
