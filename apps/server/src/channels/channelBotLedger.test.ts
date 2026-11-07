@@ -376,6 +376,35 @@ describe("channel runtime after a downgrade", () => {
       assert.strictEqual(busy.reason, "bot_busy");
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect("a refused delete that ran the repair first leaves the next reads repairing", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const members = yield* ChannelBotMembers.ChannelBotMembers;
+      const bot = yield* members.create(
+        {
+          clientRequestId: "downgraded-delete-first",
+          name: "Helper",
+          avatar: null,
+          purpose: "Checks builds.",
+          defaultModelSelection: null,
+        },
+        owner,
+      );
+      const task = yield* downgradedMemberTask(harnessOwner, bot.botId, "running");
+
+      const busy = yield* Effect.flip(members.remove({ botId: bot.botId }, owner));
+      assert.strictEqual(busy.reason, "bot_busy");
+      const page = yield* ledger.listTasks({ ownerId: harnessOwner, botId: bot.botId, limit: 10 });
+      assert.deepStrictEqual(
+        page.tasks.map((stored) => stored.taskId),
+        [task.taskId],
+      );
+      assert.strictEqual((yield* ledger.getTask(task.taskId))?.botId, bot.botId);
+    }).pipe(Effect.provide(harness.layer));
+  });
 });
 
 describe("member bot deliveries before members can be created", () => {

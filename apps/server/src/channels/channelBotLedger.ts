@@ -5,6 +5,7 @@
  */
 import { BotId, ChannelBotRef, MAIN_BOT_ID, type ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 
@@ -276,13 +277,13 @@ export const botLedger = (sql: SqlClient.SqlClient): ChannelBotLedgerOps => {
     Effect.suspend(() =>
       tasksRepaired
         ? Effect.succeed(0)
-        : repairTaskBots().pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                tasksRepaired = true;
-              }),
-            ),
-          ),
+        : Effect.gen(function* () {
+            const changed = yield* repairTaskBots();
+            // An enclosing transaction can still roll the repair back; only a committed one counts.
+            if (Option.isNone(yield* Effect.serviceOption(sql.transactionService)))
+              tasksRepaired = true;
+            return changed;
+          }),
     );
 
   return {
