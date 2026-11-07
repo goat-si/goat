@@ -198,8 +198,8 @@ describe("ChannelBotNotesReader", () => {
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const files = yield* writeNotes("- 2026-10-17: Old A. (asked in input-1)\n");
-      // Whole seconds survive utimes exactly, so both versions carry the same mtime.
-      const mtime = new Date(1_700_000_000_000);
+      // A whole number of seconds survives utimes exactly, so both versions carry the same mtime.
+      const mtime = 1_700_000_000;
       yield* fs.utimes(files.notes, mtime, mtime);
       hook.current = fs
         .writeFileString(files.notes, "- 2026-10-17: New B. (asked in input-1)\n")
