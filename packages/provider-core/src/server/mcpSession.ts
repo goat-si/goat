@@ -1,3 +1,4 @@
+export { goatSdkServers, goatCodexServers, goatAcpServers } from "./goatMcpServers.ts";
 import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 import type {
   AuthEnvironmentScope,

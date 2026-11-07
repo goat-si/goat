@@ -1,3 +1,4 @@
+import { blockedClaudeCuaServers } from "./goatClaudeMcpServers.ts";
 import { createClaudeReportedContext } from "../../provider/ClaudeReportedContext.ts";
 import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
 import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
@@ -1657,19 +1658,7 @@ export function claudeMcpQueryOverrides(input: {
   const cuaServers = input.readOnlySandbox ? {} : McpProviderSession.cuaStdioMcpServers(session);
   const cuaAllowedTools =
     Object.keys(cuaServers).length === 0 ? [] : [CLAUDE_CUA_MCP_TOOL_WILDCARD];
-  // Claude merges its settings' MCP servers with these by name; an unattended turn without a
-  // lease takes the name so a user's own `cua-driver` cannot start, and nothing is preapproved.
-  const blockedServers =
-    session.cuaDriverBlocked === true && Object.keys(cuaServers).length === 0
-      ? {
-          [McpProviderSession.CUA_MCP_SERVER_NAME]: {
-            type: "stdio" as const,
-            command: McpProviderSession.BLOCKED_CUA_STDIO_SERVER.command,
-            args: [...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.args],
-            env: { ...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.env },
-          },
-        }
-      : {};
+  const blockedServers = blockedClaudeCuaServers(session, cuaServers);
   return {
     allowedTools: Array.from(
       new Set([
@@ -1698,6 +1687,7 @@ export function claudeMcpQueryOverrides(input: {
       },
       ...cuaServers,
       ...blockedServers,
+      ...McpProviderSession.goatSdkServers(session.goatMcpServers),
     },
     mcpEnvironment: claudeMcpProxyBypassEnvironment(session.endpoint, input.environment),
   };
