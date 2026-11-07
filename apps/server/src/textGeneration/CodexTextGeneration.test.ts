@@ -200,6 +200,8 @@ function withFakeCodexEnv<A, E, R>(
     launchArgs?: string;
     environment?: NodeJS.ProcessEnv;
     models?: ReadonlyArray<string>;
+    defaultModel?: string;
+    customModels?: ReadonlyArray<string>;
     managedRuntime?: boolean | ProviderSetupError;
     memoryRunnerContext?: import("@goat/provider-core/server/memoryGenerationRunner").MemoryGenerationRunnerContext;
   },
@@ -209,7 +211,11 @@ function withFakeCodexEnv<A, E, R>(
     const fs = yield* FileSystem.FileSystem;
     const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-text-" });
     const codexPath = yield* makeFakeCodexBinary(tempDir, input);
-    const config = decodeCodexSettings({ binaryPath: codexPath, launchArgs: input.launchArgs });
+    const config = decodeCodexSettings({
+      binaryPath: codexPath,
+      launchArgs: input.launchArgs,
+      customModels: input.customModels,
+    });
     const textGeneration = yield* makeCodexTextGeneration(
       config,
       input.memoryRunnerContext
@@ -222,6 +228,7 @@ function withFakeCodexEnv<A, E, R>(
           slug,
           name: slug,
           isCustom: false,
+          ...(slug === input.defaultModel ? { isDefault: true } : {}),
           capabilities: null,
         })),
       ),
@@ -558,6 +565,49 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             expect(result.title).toBe("Bedrock title");
           }),
       ),
+  );
+
+  it.effect("drops the requested model's options when falling back to another model", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "Live title" }),
+        models: ["gpt-6-astra"],
+        requireArg: '--model gpt-6-astra --config model_reasoning_effort="low"',
+        forbidArg: 'service_tier="priority"',
+      },
+      (textGeneration) =>
+        textGeneration.generateThreadTitle({
+          cwd: process.cwd(),
+          message: "Describe this change",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6-luna", [
+            { id: "reasoningEffort", value: "none" },
+            { id: "serviceTier", value: "priority" },
+          ]),
+        }),
+    ),
+  );
+
+  it.effect("sends a configured custom model the managed snapshot leaves out", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "Live title" }),
+        models: ["gpt-6-astra", "gpt-5.6-luna"],
+        defaultModel: "gpt-6-astra",
+        customModels: ["gpt-5.6-luna-preview"],
+        managedRuntime: true,
+        requireArg: '--model gpt-5.6-luna-preview --config model_reasoning_effort="high"',
+      },
+      (textGeneration) =>
+        textGeneration.generateThreadTitle({
+          cwd: process.cwd(),
+          message: "Describe this change",
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("codex"),
+            "gpt-5.6-luna-preview",
+            [{ id: "reasoningEffort", value: "high" }],
+          ),
+        }),
+    ),
   );
 
   it.effect("omits a persisted service tier for managed ChatGPT text generation", () =>
