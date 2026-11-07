@@ -6,6 +6,8 @@
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the revision matches channelNotesRevision's sha-256.
 import * as NodeCrypto from "node:crypto";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's FileSystem cannot open with O_NONBLOCK.
+import * as NodeFS from "node:fs";
 
 import {
   CHANNEL_GATEWAY_WS_METHODS,
@@ -15,7 +17,6 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -62,6 +63,11 @@ const wholeLines = (bytes: Uint8Array, withLead: boolean) => {
 };
 
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
+// Opening a FIFO for reading would wait for a writer and hold a pool thread; O_NONBLOCK returns at
+// once, and the handle's own stat then refuses anything but a regular file. Windows has no FIFOs.
+const OPEN_FLAGS = NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NONBLOCK ?? 0);
+const isMissing = (cause: unknown) =>
+  typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT";
 
 export interface ReaderOptions {
   /** Runs between the first stat and the read, so a test can change the file there. */
@@ -81,35 +87,42 @@ export class ChannelBotNotesReader extends Context.Service<
 export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
   options: ReaderOptions = {},
 ) {
-  const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const home = yield* ChannelBotHome.ChannelBotHome;
   const files = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
   const afterStat = options.afterStat ?? Effect.void;
   const afterRead = options.afterRead ?? Effect.void;
 
+  const stat = (file: NodeFS.promises.FileHandle) =>
+    Effect.tryPromise({ try: () => file.stat({ bigint: true }), catch: failed });
+
   const readRange = Effect.fn("ChannelBotNotesReader.readRange")(function* (
-    file: FileSystem.File,
+    file: NodeFS.promises.FileHandle,
     start: number,
     length: number,
   ) {
     const buffer = new Uint8Array(length);
     let filled = 0;
     while (filled < length) {
-      const read = yield* file.read(buffer.subarray(filled), { position: BigInt(start + filled) });
-      if (read === 0) break;
-      filled += read;
+      const { bytesRead } = yield* Effect.tryPromise({
+        try: () => file.read(buffer, filled, length - filled, start + filled),
+        catch: failed,
+      });
+      if (bytesRead === 0) break;
+      filled += bytesRead;
     }
     return buffer.subarray(0, filled);
   });
 
   // Reads the newest part twice through one handle and retries unless both reads and both stats
   // agree: a write during the first read leaves it torn, and the second read then differs even
-  // when the write kept the size and the millisecond mtime.
-  const readTail = Effect.fn("ChannelBotNotesReader.readTail")(function* (file: FileSystem.File) {
+  // when the write kept the size and the mtime.
+  const readTail = Effect.fn("ChannelBotNotesReader.readTail")(function* (
+    file: NodeFS.promises.FileHandle,
+  ) {
     for (let attempt = 0; attempt < READ_ATTEMPTS; attempt++) {
-      const before = yield* file.stat;
-      if (before.type !== "File") return yield* failed();
+      const before = yield* stat(file);
+      if (!before.isFile()) return yield* failed();
       yield* afterStat;
       const size = Number(before.size);
       const truncated = size > TAIL_BYTES;
@@ -117,13 +130,12 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
       const first = yield* readRange(file, start, size - start);
       yield* afterRead;
       const second = yield* readRange(file, start, size - start);
-      const after = yield* file.stat;
+      const after = yield* stat(file);
       const unchanged =
         first.length === size - start &&
         sameBytes(first, second) &&
         after.size === before.size &&
-        Option.getOrUndefined(after.mtime)?.getTime() ===
-          Option.getOrUndefined(before.mtime)?.getTime();
+        after.mtimeNs === before.mtimeNs;
       if (unchanged) return { bytes: wholeLines(first, truncated), truncated };
     }
     return yield* failed();
@@ -131,18 +143,29 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
 
   const list = Effect.fn("ChannelBotNotesReader.list")(function* () {
     yield* home.requireHome;
-    // Opening a FIFO for reading waits for a writer and holds a pool thread, so only a regular
-    // file is opened; the handle's own stat still refuses one swapped in meanwhile.
-    const read = yield* fs.stat(files.notes).pipe(
-      Effect.flatMap((info) =>
-        info.type === "File"
-          ? Effect.scoped(fs.open(files.notes, { flag: "r" }).pipe(Effect.flatMap(readTail)))
-          : Effect.fail(failed()),
+    const read = yield* Effect.scoped(
+      Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () =>
+            NodeFS.promises.open(files.notes, OPEN_FLAGS).then(Option.some, (cause: unknown) => {
+              if (isMissing(cause)) return Option.none<NodeFS.promises.FileHandle>();
+              throw cause;
+            }),
+          catch: failed,
+        }),
+        (file) =>
+          Option.match(file, {
+            onNone: () => Effect.void,
+            onSome: (handle) => Effect.tryPromise(() => handle.close()).pipe(Effect.ignore),
+          }),
+      ).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeed(null),
+            onSome: readTail,
+          }),
+        ),
       ),
-      Effect.catchTags({
-        PlatformError: (cause) =>
-          cause.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(failed()),
-      }),
     );
     if (read === null) return { revision: null, notes: [], truncated: false };
     const notes = parseChannelBotNotes(new TextDecoder().decode(read.bytes));
