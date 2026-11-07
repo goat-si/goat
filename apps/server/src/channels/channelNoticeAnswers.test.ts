@@ -287,6 +287,40 @@ describe("a background command's answer goes to the request whose run started it
         assert.lengthOf(sent, 2);
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
+
+  it.effect("sends nothing when the request is stopped between the check and the send", () =>
+    Effect.gen(function* () {
+      const notices = [
+        {
+          thread: session,
+          run: "run:notice",
+          about: "run:logistics",
+          status: "completed",
+          answer: "Done.",
+          completedAt: at,
+        },
+      ];
+      const sql = yield* seed(notices);
+      let reads = 0;
+      const live = tasks[logistics.id];
+      if (live === undefined) throw new Error("The logistics task is missing");
+      const stopping = {
+        ...tasks,
+        // The judgement reads the task first; the person stops it before the send.
+        get [logistics.id]() {
+          reads += 1;
+          return reads === 1 ? live : { task: { ...live.task, status: "cancelled" } };
+        },
+      };
+      const { sent, deps } = world(notices, stopping);
+      assert.strictEqual(yield* deliverNoticeAnswers({ sql, ...deps }), 0);
+      assert.lengthOf(sent, 0);
+      const marker = yield* sql<{ readonly state: string; readonly reason: string }>`
+        SELECT json_extract(value_json, '$.state') AS state, json_extract(value_json, '$.reason') AS reason
+        FROM channel_runtime_state WHERE key = 'notice-answer:goat-bot-session:set3:run:notice'`;
+      assert.deepStrictEqual(marker[0], { state: "skipped", reason: "stale" });
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
 });
 
 describe("a notice answer's shape and place", () => {

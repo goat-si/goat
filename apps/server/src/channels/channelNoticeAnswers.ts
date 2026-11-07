@@ -117,12 +117,24 @@ export const deliverNoticeAnswers = Effect.fn("ChannelWorkerReports.noticeAnswer
         replyTo: outcome.task.originInputId,
         task: outcome.task,
       });
-      yield* sql.withTransaction(
-        ledger
-          .enqueueDeliveries([delivery], nowIso)
-          .pipe(Effect.andThen(marker({ state: "sent" }))),
+      const queued = yield* sql.withTransaction(
+        Effect.gen(function* () {
+          // The request can be stopped or retried after the judgement; check again under the write.
+          const fresh = yield* ledger.getTask(outcome.task.taskId);
+          if (
+            fresh === undefined ||
+            fresh.task.status === "cancelled" ||
+            fresh.task.generation !== outcome.task.generation
+          ) {
+            yield* marker({ state: "skipped", reason: "stale" });
+            return false;
+          }
+          yield* ledger.enqueueDeliveries([delivery], nowIso);
+          yield* marker({ state: "sent" });
+          return true;
+        }),
       );
-      sent += 1;
+      if (queued) sent += 1;
     }
     return sent;
   },

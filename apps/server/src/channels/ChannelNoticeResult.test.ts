@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelReceptionInput, ChannelTask, RunId } from "@goat/contracts";
-import { MessageId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { MessageId, NodeId, ProviderInstanceId, RuntimeRequestId, ThreadId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -222,4 +223,51 @@ describe("a background command's notice run cannot report for its request", () =
       assert.strictEqual((yield* ledger.getTask(turn.taskId))?.task.status, "running");
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect(
+    "an approval the notice asks for waits on its request, where a person can answer",
+    () => {
+      const harness = harnessFor();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* gateway.ingest(goatInput("look: plan the logistics", "a1"), rpcContext);
+        yield* runtime.drain;
+        yield* reports.reconcile(runtime.ownerToken);
+        const turn = yield* onlyTask;
+        const session = turn.worker!.threadId;
+        const notice = harness.world.addRun(session, MessageId.make("message:command-notice"));
+        noticeRunsOf(harness.world).set(notice.id, sessionRun(turn));
+        const noticeNode = NodeId.make("node:notice");
+        harness.world.runs.set(
+          session,
+          (harness.world.runs.get(session) ?? []).map((run) =>
+            run.id === notice.id ? { ...run, rootNodeId: noticeNode } : run,
+          ),
+        );
+        harness.world.runtimeRequests.set(session, [
+          {
+            id: RuntimeRequestId.make("approval:notice"),
+            nodeId: noticeNode,
+            providerTurnId: null,
+            nativeRequestRef: null,
+            kind: "command",
+            status: "pending",
+            responseCapability: { type: "message" },
+            createdAt: DateTime.makeUnsafe("2026-10-12T00:00:00.000Z"),
+            resolvedAt: null,
+          } as never,
+        ]);
+        yield* reports.reconcile(runtime.ownerToken);
+        const needsYou = (yield* ledger.getTask(turn.taskId))?.task.observed?.needsYou ?? [];
+        assert.deepStrictEqual(
+          needsYou.map((need) => need.kind),
+          ["approval"],
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
