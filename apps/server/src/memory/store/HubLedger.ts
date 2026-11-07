@@ -604,22 +604,34 @@ export const makeHubLedger = (
       covered,
       maxRows: Number.POSITIVE_INFINITY,
     });
-    // Only rows the checkpoint covers ever become removable, so only they set the next time.
-    const waiting = yield* stored(
-      "hub-compact-next-eligible",
-      sql<{
-        operation_id: string;
-        at: number;
-      }>`SELECT operation_id,committed_at AS at FROM memory_hub_operations WHERE space=${space} AND hub_sequence<=${retention.retentionFloor} AND committed_at>${logCutoff(now, true)} AND operation_id NOT IN (SELECT json_extract(o.metadata_json,'$.operationId') FROM memory_outbox o WHERE o.space=${space} AND o.status IN ('pending','running','retry') AND json_extract(o.metadata_json,'$.operationId') IS NOT NULL) ORDER BY committed_at`,
-    );
-    const next = waiting.find((row) => covered.has(row.operation_id))?.at;
+    // Only rows the checkpoint covers ever become removable, so only they set the next time. Young
+    // rows are paged in commit order and the walk stops at the first covered one.
+    const page = M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS;
+    let next: number | undefined;
+    for (
+      let afterAt = logCutoff(now, true), afterSequence = Number.MAX_SAFE_INTEGER;
+      next === undefined;
+    ) {
+      const rows = yield* stored(
+        "hub-compact-next-eligible",
+        sql<{
+          operation_id: string;
+          at: number;
+          hub_sequence: number;
+        }>`SELECT operation_id,committed_at AS at,hub_sequence FROM memory_hub_operations WHERE space=${space} AND hub_sequence<=${retention.retentionFloor} AND (committed_at>${afterAt} OR committed_at=${afterAt} AND hub_sequence>${afterSequence}) AND operation_id NOT IN (SELECT json_extract(o.metadata_json,'$.operationId') FROM memory_outbox o WHERE o.space=${space} AND o.status IN ('pending','running','retry') AND json_extract(o.metadata_json,'$.operationId') IS NOT NULL) ORDER BY committed_at,hub_sequence LIMIT ${page}`,
+      );
+      next = rows.find((row) => covered.has(row.operation_id))?.at;
+      const last = rows.at(-1);
+      if (rows.length < page || last === undefined) break;
+      afterAt = last.at;
+      afterSequence = last.hub_sequence;
+    }
     return {
       eligibleLogicalBytes: [...eligible.operations, ...eligible.events].reduce(
         (sum, row) => sum + row.bytes,
         0,
       ),
-      nextEligibleAtMs:
-        next === null || next === undefined ? null : next + M.MEMORY_LOG_PRESSURE_RETENTION_MS,
+      nextEligibleAtMs: next === undefined ? null : next + M.MEMORY_LOG_PRESSURE_RETENTION_MS,
     };
   });
   const compactEligibleHistoryTx: MemoryStoreShape["compactEligibleHistoryTx"] = Effect.fn(

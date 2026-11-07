@@ -45,32 +45,38 @@ export const makeStoreReclaim = Effect.fnUntraced(function* (
     Effect.logWarning("Memory store reclaim failed", { stage, errorTag: error._tag }).pipe(
       Effect.as(false),
     );
-  const reclaim = Effect.fn("MemoryStoreReclaim.reclaim")(function* (
-    environmentId: M.EnvironmentId,
-  ) {
-    const own = yield* Deferred.make<MemoryStoreReclaimResult>();
-    const running = yield* Ref.modify(
-      inFlight,
-      (
-        current,
-      ): readonly [
-        Option.Option<Deferred.Deferred<MemoryStoreReclaimResult>>,
-        Option.Option<Deferred.Deferred<MemoryStoreReclaimResult>>,
-      ] => (Option.isSome(current) ? [current, current] : [Option.none(), Option.some(own)]),
-    );
-    if (Option.isSome(running)) return yield* Deferred.await(running.value);
-    return yield* reclaimNow(environmentId).pipe(
-      Effect.tap((result) => Deferred.succeed(own, result)),
-      // An interrupted reclaim must not leave waiters hanging or block the next one.
-      Effect.ensuring(
-        Deferred.succeed(own, {
-          outcome: "failed",
-          eligibleLogicalBytes: 0,
-          nextEligibleAtMs: null,
-        }).pipe(Effect.andThen(Ref.set(inFlight, Option.none()))),
-      ),
-    );
-  });
+  const failedResult: MemoryStoreReclaimResult = {
+    outcome: "failed",
+    eligibleLogicalBytes: 0,
+    nextEligibleAtMs: null,
+  };
+  const reclaim = Effect.fn("MemoryStoreReclaim.reclaim")((environmentId: M.EnvironmentId) =>
+    // Claiming the slot and registering its release happen without an interruption point, so an
+    // interrupted owner always settles its waiters and frees the slot for the next reclaim.
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const own = yield* Deferred.make<MemoryStoreReclaimResult>();
+        const running = yield* Ref.modify(
+          inFlight,
+          (
+            current,
+          ): readonly [
+            Option.Option<Deferred.Deferred<MemoryStoreReclaimResult>>,
+            Option.Option<Deferred.Deferred<MemoryStoreReclaimResult>>,
+          ] => (Option.isSome(current) ? [current, current] : [Option.none(), Option.some(own)]),
+        );
+        if (Option.isSome(running)) return yield* restore(Deferred.await(running.value));
+        return yield* restore(reclaimNow(environmentId)).pipe(
+          Effect.tap((result) => Deferred.succeed(own, result)),
+          Effect.ensuring(
+            Deferred.succeed(own, failedResult).pipe(
+              Effect.andThen(Ref.set(inFlight, Option.none())),
+            ),
+          ),
+        );
+      }),
+    ),
+  );
   const reclaimNow = Effect.fnUntraced(function* (environmentId: M.EnvironmentId) {
     const bound = yield* Ref.get(hub);
     const compacted = Option.isNone(bound)

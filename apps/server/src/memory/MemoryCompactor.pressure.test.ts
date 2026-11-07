@@ -44,9 +44,11 @@ describe("MemoryCompactor pressure", () => {
       );
       yield* compactor.reclaim(principal());
       const now = yield* Clock.currentTimeMillis;
+      const sql = yield* SqlClient.SqlClient;
+      // More uncovered young rows than one page, all older than the covered one, are paged past.
+      yield* sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<300) INSERT INTO memory_hub_operations(hub_sequence,space,operation_id,memory_id,origin_environment,operation_digest,entry_json,committed_at) SELECT -i,${space},printf('00000000-0000-4000-8000-%012d',i+200000),${memoryId},${hubEnv},${"e".repeat(64)},'{}',${now - 1} FROM n`;
       const covered = yield* store.transact(store.pressureEligibilityTx(space, now));
       assert.strictEqual(covered.nextEligibleAtMs, now + M.MEMORY_LOG_PRESSURE_RETENTION_MS);
-      const sql = yield* SqlClient.SqlClient;
       yield* sql`DELETE FROM memory_hub_operations WHERE space=${space}`;
       yield* sql`INSERT INTO memory_hub_operations(hub_sequence,space,operation_id,memory_id,origin_environment,operation_digest,entry_json,committed_at) VALUES (0,${space},'00000000-0000-4000-8000-000000999999',${memoryId},${hubEnv},${"d".repeat(64)},'{}',${now})`;
       const uncovered = yield* store.transact(store.pressureEligibilityTx(space, now));

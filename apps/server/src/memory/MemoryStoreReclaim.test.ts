@@ -215,6 +215,23 @@ describe("MemoryStoreReclaim", () => {
       assert.strictEqual(compactions, 1);
     }).pipe(Effect.provide(services)),
   );
+  it.effect("an interrupted reclaim releases its waiters and the next reclaim runs", () =>
+    Effect.gen(function* () {
+      const reclaim = yield* Quota.MemoryStoreReclaim;
+      yield* reclaim.bindHub(Option.some({ memorySpaceId: space, reclaim: Effect.sleep(60_000) }));
+      const owner = yield* reclaim.reclaim(env).pipe(Effect.forkChild);
+      const waiter = yield* reclaim.reclaim(env).pipe(Effect.forkChild);
+      yield* TestClock.adjust(1);
+      yield* Fiber.interrupt(owner);
+      assert.deepInclude(yield* Fiber.join(waiter), { outcome: "failed" });
+      let compactions = 0;
+      yield* reclaim.bindHub(
+        Option.some({ memorySpaceId: space, reclaim: Effect.sync(() => compactions++) }),
+      );
+      yield* reclaim.reclaim(env);
+      assert.strictEqual(compactions, 1);
+    }).pipe(Effect.provide(services)),
+  );
   it.effect("a reclaim requested after the previous one finished runs again", () =>
     Effect.gen(function* () {
       const reclaim = yield* Quota.MemoryStoreReclaim;
