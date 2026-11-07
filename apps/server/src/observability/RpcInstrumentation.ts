@@ -210,6 +210,7 @@ const RPC_AGGREGATES = {
   [CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.readBotArtifact]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.retryTask]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getTask]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listTasks]: "channel",

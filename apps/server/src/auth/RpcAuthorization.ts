@@ -78,6 +78,7 @@ export const RPC_REQUIRED_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts]: AuthFilesystemReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.readBotArtifact]: AuthFilesystemReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.retryTask]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.getInput]: AuthOrchestrationReadScope,
   [SLACK_CHANNEL_WS_METHODS.getSettings]: AuthOrchestrationReadScope,
   [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: AuthOrchestrationReadScope,

@@ -48,6 +48,7 @@ import {
   childWorkKeylessRequestKeyFor,
   childWorkPromptDigestFor,
   childWorkStopCommandIdFor,
+  retiredWorkerKeyFor,
 } from "./channelIds.ts";
 
 /** At most this many active delegated subagents per channel task. */
@@ -79,7 +80,9 @@ export class ChannelChildWorkError extends Schema.TaggedError<ChannelChildWorkEr
 export type ChannelChildWorkOwnership =
   | { readonly _tag: "not_channel_owned" }
   | { readonly _tag: "worker"; readonly task: ChannelTask; readonly ownerId: string }
-  | { readonly _tag: "child"; readonly record: ChannelChildWorkRecord };
+  | { readonly _tag: "child"; readonly record: ChannelChildWorkRecord }
+  /** The worker of an attempt a person retried; it launches nothing more. */
+  | { readonly _tag: "retired_worker" };
 
 export type ChannelChildWorkAdmission =
   | { readonly _tag: "not_channel_owned" }
@@ -290,6 +293,12 @@ const make = Effect.gen(function* () {
         ownerId: stored.ownerId,
       } as const satisfies ChannelChildWorkOwnership;
     }
+    const retired = yield* sql<{ readonly key: string }>`
+      SELECT key FROM channel_runtime_state WHERE key = ${retiredWorkerKeyFor(callerThreadId)}
+    `.pipe(Effect.mapError((error) => toError("Unable to read the retired worker record.", error)));
+    if (retired.length > 0) {
+      return { _tag: "retired_worker" } as const satisfies ChannelChildWorkOwnership;
+    }
     const record = yield* store
       .findByDestinationThread(callerThreadId)
       .pipe(Effect.mapError((error) => toError("Unable to read child-work records.", error)));
@@ -323,13 +332,15 @@ const make = Effect.gen(function* () {
     // A terminal task's worker still answering a late turn launches nothing new. A cancel
     // racing this check is resolved by the stop traversal (reserved records release) and by
     // reconcile, so the admission never outlives its owner.
-    if (isChannelTaskTerminal(ownership.task.status)) {
+    if (ownership._tag === "retired_worker" || isChannelTaskTerminal(ownership.task.status)) {
       return yield* new ChannelChildWorkError({
         reason: "owner_terminal",
         detail:
-          "This work is " +
-          ownership.task.status +
-          ", so it no longer launches subagents or threads.",
+          ownership._tag === "retired_worker"
+            ? "This attempt was retried, so it no longer launches subagents or threads."
+            : "This work is " +
+              ownership.task.status +
+              ", so it no longer launches subagents or threads.",
       });
     }
     const promptDigest = childWorkPromptDigestFor(input.prompt);
@@ -362,6 +373,12 @@ const make = Effect.gen(function* () {
     const result = yield* store
       .admitReserved(record, capacity)
       .pipe(Effect.mapError((error) => toError("Unable to record child work.", error)));
+    if (result._tag === "owner_settled") {
+      return yield* new ChannelChildWorkError({
+        reason: "owner_terminal",
+        detail: "This work finished or was retried, so it no longer launches subagents or threads.",
+      });
+    }
     if (result._tag === "at_capacity") {
       return yield* new ChannelChildWorkError({
         reason: "at_capacity",

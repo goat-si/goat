@@ -4,7 +4,7 @@ import type {
   GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import type { EnvironmentId } from "@goat/contracts";
+import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useLayoutEffect, useRef, useState } from "react";
 import {
@@ -25,6 +25,7 @@ import { useConnectedEnvironmentIds } from "~/state/environments";
 
 import { Button } from "../ui/button";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
+import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
 
 const TONE_ICON = {
   neutral: CircleIcon,
@@ -46,9 +47,12 @@ const TONE_TEXT = {
 export function GoatBotTaskChip({
   card,
   tail,
+  retryEnvironmentId = null,
 }: {
   readonly card: GoatBotTaskCard;
   readonly tail: boolean;
+  /** Where this failed or stopped work can run again; null hides Retry. */
+  readonly retryEnvironmentId?: EnvironmentId | null;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const Icon = TONE_ICON[card.tone];
@@ -63,6 +67,11 @@ export function GoatBotTaskChip({
         <div className="flex items-center gap-1.5 px-3 pt-2.5 text-2xs leading-4 font-medium">
           <Icon className={cn("size-3.5 shrink-0", TONE_TEXT[card.tone])} />
           <span className="truncate">{card.statusLabel}</span>
+          {card.attemptLabel ? (
+            <span className="shrink-0 text-goat-bubble-in-foreground/65">
+              · {card.attemptLabel}
+            </span>
+          ) : null}
           {card.attentionLabel ? (
             <span className="ml-auto shrink-0 text-warning-foreground">{card.attentionLabel}</span>
           ) : null}
@@ -116,7 +125,15 @@ export function GoatBotTaskChip({
           <time dateTime={card.updatedAt} className="shrink-0">
             Updated {formatShortTimestamp(card.updatedAt, timestampFormat)}
           </time>
-          <GoatBotTaskTarget target={card.target} />
+          <div className="flex items-start gap-1">
+            {card.retryable && retryEnvironmentId !== null ? (
+              <GoatBotTaskRetry
+                environmentId={retryEnvironmentId}
+                taskId={ChannelTaskId.make(card.key)}
+              />
+            ) : null}
+            <GoatBotTaskTarget target={card.target} />
+          </div>
         </div>
       </div>
     </div>

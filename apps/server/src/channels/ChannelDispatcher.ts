@@ -75,7 +75,11 @@ import { commitTransition } from "./channelTaskWrites.ts";
 import { chooseBotModel } from "./channelBotModel.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import { workerInstruction } from "./channelWorkerBrief.ts";
-import { ENDED_RUN_STATUSES, isThreadMissing } from "./channelWorkerObservation.ts";
+import {
+  ENDED_RUN_STATUSES,
+  isThreadMissing,
+  STOP_LAUNCH_GRACE_MS,
+} from "./channelWorkerObservation.ts";
 import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 
@@ -105,9 +109,6 @@ const withoutKey = <V>(map: ReadonlyMap<string, V>, key: string) => {
   next.delete(key);
   return next;
 };
-
-/** How long a stop keeps looking for a worker whose launch was in flight when it was asked. */
-const STOP_LAUNCH_GRACE_MS = 120_000;
 
 /** The narrower of two memory ceilings. */
 const lowerMemoryCeiling = (

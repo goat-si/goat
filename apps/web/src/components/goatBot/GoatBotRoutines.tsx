@@ -72,8 +72,28 @@ function RoutineRow({ environmentId, row }: { environmentId: EnvironmentId; row:
     label: "GOAT Bot routine enabled",
     reportFailure: false,
   });
+  const canRunNow = useAtomValue(
+    serverEnvironment.runScheduledTaskNow.permissionAtom(environmentId),
+  );
+  const runNow = useAtomCommand(serverEnvironment.runScheduledTaskNow, {
+    label: "GOAT Bot routine run now",
+    reportFailure: false,
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const runAgain = async () => {
+    if (running) return;
+    setRunning(true);
+    setRunError(null);
+    const result = await runNow({ environmentId, input: { id: row.id } });
+    setRunning(false);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const failure = squashAtomCommandFailure(result);
+      setRunError(failure instanceof Error ? failure.message : String(failure));
+    }
+  };
   const toggle = async (enabled: boolean) => {
     if (busy) return;
     setBusy(true);
@@ -106,6 +126,11 @@ function RoutineRow({ environmentId, row }: { environmentId: EnvironmentId; row:
             {row.lastText}
           </span>
         </Link>
+        {row.lastFailed && canRunNow ? (
+          <Button size="xs" variant="outline" disabled={running} onClick={() => void runAgain()}>
+            Run now
+          </Button>
+        ) : null}
         <Switch
           checked={row.enabled}
           disabled={busy || !canOperate}
@@ -116,6 +141,11 @@ function RoutineRow({ environmentId, row }: { environmentId: EnvironmentId; row:
       {error !== null ? (
         <p role="alert" className="pt-1 text-xs text-destructive">
           Couldn't {row.enabled ? "pause" : "resume"} this routine: {error}
+        </p>
+      ) : null}
+      {runError !== null ? (
+        <p role="alert" className="pt-1 text-xs text-destructive">
+          Couldn't run this routine: {runError}
         </p>
       ) : null}
     </li>
