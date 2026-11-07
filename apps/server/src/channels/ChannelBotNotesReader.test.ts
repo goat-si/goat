@@ -189,6 +189,30 @@ describe("ChannelBotNotesReader", () => {
     }).pipe(Effect.provide(readerLayer({ afterStat })));
   });
 
+  it.effect("reads again when a write keeps the size and the modification time", () => {
+    const hook = { current: Effect.void, calls: 0 };
+    const afterRead = Effect.suspend(() => {
+      hook.calls++;
+      return hook.calls > 1 ? Effect.void : hook.current;
+    });
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const files = yield* writeNotes("- 2026-10-17: Old A. (asked in input-1)\n");
+      // Whole seconds survive utimes exactly, so both versions carry the same mtime.
+      const mtime = new Date(1_700_000_000_000);
+      yield* fs.utimes(files.notes, mtime, mtime);
+      hook.current = fs
+        .writeFileString(files.notes, "- 2026-10-17: New B. (asked in input-1)\n")
+        .pipe(Effect.andThen(fs.utimes(files.notes, mtime, mtime)), Effect.orDie);
+      const result = yield* list;
+      assert.deepStrictEqual(
+        result.notes.map((note) => note.text),
+        ["New B."],
+      );
+      assert.strictEqual(hook.calls, 2);
+    }).pipe(Effect.provide(readerLayer({ afterRead })));
+  });
+
   it.effect("reports a notes path it cannot read as a failure, not as no notes", () =>
     Effect.gen(function* () {
       const files = yield* notesFile;

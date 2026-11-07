@@ -66,7 +66,12 @@ const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
 export interface ReaderOptions {
   /** Runs between the first stat and the read, so a test can change the file there. */
   readonly afterStat?: Effect.Effect<void>;
+  /** Runs between the two reads of one attempt. */
+  readonly afterRead?: Effect.Effect<void>;
 }
+
+const sameBytes = (left: Uint8Array, right: Uint8Array) =>
+  left.length === right.length && left.every((byte, index) => byte === right[index]);
 
 export class ChannelBotNotesReader extends Context.Service<
   ChannelBotNotesReader,
@@ -81,9 +86,26 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
   const home = yield* ChannelBotHome.ChannelBotHome;
   const files = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
   const afterStat = options.afterStat ?? Effect.void;
+  const afterRead = options.afterRead ?? Effect.void;
 
-  // Reads the newest part of the file through one handle and retries when the file changed
-  // meanwhile, so the bytes and their revision come from one version of the file.
+  const readRange = Effect.fn("ChannelBotNotesReader.readRange")(function* (
+    file: FileSystem.File,
+    start: number,
+    length: number,
+  ) {
+    const buffer = new Uint8Array(length);
+    let filled = 0;
+    while (filled < length) {
+      const read = yield* file.read(buffer.subarray(filled), { position: BigInt(start + filled) });
+      if (read === 0) break;
+      filled += read;
+    }
+    return buffer.subarray(0, filled);
+  });
+
+  // Reads the newest part twice through one handle and retries unless both reads and both stats
+  // agree: a write during the first read leaves it torn, and the second read then differs even
+  // when the write kept the size and the millisecond mtime.
   const readTail = Effect.fn("ChannelBotNotesReader.readTail")(function* (file: FileSystem.File) {
     for (let attempt = 0; attempt < READ_ATTEMPTS; attempt++) {
       const before = yield* file.stat;
@@ -91,22 +113,17 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
       yield* afterStat;
       const size = Number(before.size);
       const start = Math.max(0, size - TAIL_BYTES - 1);
-      const buffer = new Uint8Array(size - start);
-      let filled = 0;
-      while (filled < buffer.length) {
-        const read = yield* file.read(buffer.subarray(filled), {
-          position: BigInt(start + filled),
-        });
-        if (read === 0) break;
-        filled += read;
-      }
+      const first = yield* readRange(file, start, size - start);
+      yield* afterRead;
+      const second = yield* readRange(file, start, size - start);
       const after = yield* file.stat;
       const unchanged =
-        filled === buffer.length &&
+        first.length === size - start &&
+        sameBytes(first, second) &&
         after.size === before.size &&
         Option.getOrUndefined(after.mtime)?.getTime() ===
           Option.getOrUndefined(before.mtime)?.getTime();
-      if (unchanged) return { bytes: wholeLines(buffer, start > 0), truncated: start > 0 };
+      if (unchanged) return { bytes: wholeLines(first, start > 0), truncated: start > 0 };
     }
     return yield* failed();
   });
