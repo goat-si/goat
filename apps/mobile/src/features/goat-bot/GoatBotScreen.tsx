@@ -29,7 +29,11 @@ import {
   releaseGoatBotAttachments,
 } from "./GoatBotComposerAttachments";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import {
+  startOpeningDetail,
+  useSelectWorkspaceDetail,
+} from "../workspace/useSelectWorkspaceDetail";
+import { botThreadDetail, openBotThreadAction } from "./goatBotThreadNavigation";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
@@ -402,12 +406,14 @@ export function GoatBotScreen(props: {
   const selectDetail = useSelectWorkspaceDetail();
   const navigation = useNavigation();
   const selectThread = useCallback(
-    (thread: ThreadSelection) =>
-      selectDetail({
-        name: "Thread",
-        params: { environmentId: String(thread.environmentId), threadId: String(thread.id) },
-      }),
-    [selectDetail],
+    (thread: ThreadSelection) => {
+      const detail = botThreadDetail(thread);
+      // Android shows one page at a time; iOS opens the thread over the bot, so Back returns to it.
+      if (Platform.OS === "android") return selectDetail(detail);
+      startOpeningDetail(detail);
+      navigation.dispatch(openBotThreadAction(thread));
+    },
+    [selectDetail, navigation],
   );
   const onSelectThread = props.onSelectThread ?? selectThread;
   const onSelectTask = useCallback(
