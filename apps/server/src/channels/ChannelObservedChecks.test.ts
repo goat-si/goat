@@ -12,6 +12,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import { fakeLaunchWakes } from "./testkit/launchWakesFake.ts";
 import {
   botMessages,
   linkSlackUser,
@@ -131,7 +132,9 @@ describe("channel check evidence", () => {
         yield* Fiber.join(producer);
         // A fresh service recovers from SQL alone; no completion event or in-memory subscription.
         const restarted = yield* ChannelWorkerReports.ChannelWorkerReports.pipe(
-          Effect.provide(ChannelWorkerReports.layer),
+          Effect.provide(
+            ChannelWorkerReports.layer.pipe(Layer.provide(fakeLaunchWakes(harness.world))),
+          ),
         );
         assert.strictEqual(yield* restarted.reconcile(runtime.ownerToken), 1);
         yield* runtime.drain;

@@ -69,6 +69,7 @@ import * as ChannelGateway from "../ChannelGateway.ts";
 import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
 import * as ChannelIdentityService from "../ChannelIdentityService.ts";
 import * as ChannelLayers from "../ChannelLayers.ts";
+import { fakeLaunchWakes } from "./launchWakesFake.ts";
 import * as ChannelLedger from "../ChannelLedger.ts";
 import * as ChannelRuntime from "../ChannelRuntime.ts";
 import * as ChannelTransport from "../ChannelTransport.ts";
@@ -820,6 +821,7 @@ export function makeHarness(
         IdAllocator.layer,
         options.sshRemote ?? layerNoSshHosts,
         options.memoryLayer ?? Layer.empty,
+        fakeLaunchWakes(world),
       ),
     ),
   );
