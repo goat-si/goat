@@ -228,7 +228,8 @@ project’s pushed branch. Launching needs <strong>Full access</strong>.</p>
 <span class="line"><span style="color:#79B8FF">  "launchedBy"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"Grok Bot"</span><span style="color:#E1E4E8">,</span></span>
 <span class="line"><span style="color:#79B8FF">  "notifyWebhook"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">true</span></span>
 <span class="line"><span style="color:#E1E4E8">}</span></span></code></pre>
-<p>The run appears in Fleet under its provider and in the thread list with “via Grok Bot”. When an
+<p>The run appears in the thread list with “via Grok Bot”, and in Fleet under its provider while it
+runs and for 15 minutes after it last changed. When an
 environment signed in to the same account can see the run, GOAT follows it and reports when it
 ends. Otherwise it keeps only the link and says so (<code>tracking: "link-only"</code>), and never posts <code>run.completed</code> for it. Devin Cloud sessions
 started outside GOAT are always link-only. <strong>Stop</strong> on a registered run’s thread only stops
