@@ -33,6 +33,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as AutomationHold from "../automationHold.ts";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
@@ -73,6 +74,11 @@ export class ChannelRuntime extends Context.Service<
     readonly settle: (inputIds: ReadonlyArray<ChannelInputId>) => Effect.Effect<void>;
     /** What a new owner does first: settle deliveries a previous owner left in flight. */
     readonly recover: Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
+    /**
+     * Claims the workers, then makes sure tasks an older build created for member bots are back
+     * with their bots. False until both succeed, so no work runs on a misattributed task.
+     */
+    readonly claimForWork: Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
     readonly ownerToken: string;
   }
 >()("goat/channels/ChannelRuntime") {}
@@ -82,6 +88,7 @@ const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
   const sessionFirst = yield* ChannelSessionFirst.ChannelSessionFirst;
+  const members = yield* ChannelBotMembers.ChannelBotMembers;
   const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
   const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
@@ -103,6 +110,19 @@ const make = Effect.gen(function* () {
       staleBefore: DateTime.formatIso(DateTime.subtractDuration(now, Duration.millis(STALE_MS))),
     });
   });
+
+  const repairBots = Effect.gen(function* () {
+    const changed = yield* ledger.ensureTaskBotsRepaired();
+    if (changed > 0) yield* Effect.logInfo("channel tasks returned to their bots", { changed });
+    return true;
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("channel task bot repair failed", { cause }).pipe(Effect.as(false)),
+    ),
+  );
+  const claimForWork = claim.pipe(
+    Effect.flatMap((owns) => (owns ? repairBots : Effect.succeed(false))),
+  );
 
   const startReception = (inputId: ChannelInputId) =>
     Effect.gen(function* () {
@@ -315,12 +335,13 @@ const make = Effect.gen(function* () {
   const recover = Effect.gen(function* () {
     const now = DateTime.formatIso(yield* DateTime.now);
     yield* ledger.settleInterruptedDeliveries({ owner, now });
+    yield* members.reconcileAll;
     yield* sessionFirst.observe(owner);
     yield* sessionFirst.deadlines(owner);
   });
 
   const drain = Effect.gen(function* () {
-    if (!(yield* claim)) return;
+    if (!(yield* claimForWork)) return;
     // A forked reception may commit work for the next pass, so stop only when nothing moved.
     for (let pass = 0; pass < 50; pass += 1) {
       const started = yield* runPass;
@@ -337,6 +358,7 @@ const make = Effect.gen(function* () {
     deliverReceipts: deliverReceipts(),
     settle,
     recover,
+    claimForWork,
     ownerToken: owner,
   });
 });
@@ -351,7 +373,6 @@ export const layer = Layer.effect(ChannelRuntime, make);
 export const layerBackground = Layer.effectDiscard(
   Effect.gen(function* () {
     const runtime = yield* ChannelRuntime;
-    const ledger = yield* ChannelLedger.ChannelLedger;
     const wake = yield* ChannelWake.ChannelWake;
     const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
     const eventSink = yield* EventSink.EventSinkV2;
@@ -361,12 +382,7 @@ export const layerBackground = Layer.effectDiscard(
     const owning = yield* Ref.make(false);
 
     const heartbeat = Effect.gen(function* () {
-      const now = yield* DateTime.now;
-      const owns = yield* ledger.claimOwnership({
-        token: runtime.ownerToken,
-        now: DateTime.formatIso(now),
-        staleBefore: DateTime.formatIso(DateTime.subtractDuration(now, Duration.millis(STALE_MS))),
-      });
+      const owns = yield* runtime.claimForWork;
       const before = yield* Ref.getAndSet(owning, owns);
       if (owns && !before) {
         // Newly owning: deliveries a previous owner left in flight are settled before new work.

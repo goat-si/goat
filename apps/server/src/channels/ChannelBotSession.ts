@@ -108,9 +108,7 @@ const requireTarget = (task: ChannelTask) =>
 export class ChannelBotSession extends Context.Service<
   ChannelBotSession,
   {
-    readonly eligible: (
-      task: ChannelTask,
-    ) => Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
+    readonly eligible: Effect.Success<typeof makeSessionEligibility>;
     /** Runs a GOAT Bot turn in its conversation's session; "deferred" retries on a later pass. */
     readonly serve: (
       stored: ChannelLedger.ChannelStoredTask,
@@ -511,13 +509,14 @@ const make = Effect.gen(function* () {
         "The requester’s permission to start this work changed.",
         "permission_changed",
       );
-    const identity = yield* Effect.option(profiles.identity(initial.task.requester.ownerId));
+    const identity = yield* Effect.option(profiles.identity(initial.ownerId, initial.botId));
     if (Option.isNone(identity)) return yield* fail(initial, owner, Rotation.PROFILE_UNREADABLE);
     // The memory the session may use, lowered to what the requester's scopes allow now.
     const allowed = captureMemoryGrantCeiling(requester.grantedScopes, false);
     const recorded = target.memoryGrantCeiling ?? "none";
     const memoryGrantCeiling = MEMORY_RANK[allowed] < MEMORY_RANK[recorded] ? allowed : recorded;
-    const key = bindingKeyFor(initial.task, { ...target, memoryGrantCeiling }, sharing, requester);
+    const ceiling = { ...target, memoryGrantCeiling };
+    const key = bindingKeyFor(initial.task, ceiling, sharing, requester, initial.botId);
     let row = yield* currentRow(key);
     const read = yield* Rotation.readSessionRecords(threads, row?.thread_id);
     const records = read === "unknown" ? Option.none() : read;

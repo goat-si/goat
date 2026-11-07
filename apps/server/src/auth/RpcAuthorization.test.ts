@@ -74,6 +74,24 @@ describe("RPC authorization scopes", () => {
       yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationOperateScope], method, input);
     }),
   );
+  it.effect("refuses creating, hiding, deleting and restoring bots to a read-only session", () =>
+    Effect.gen(function* () {
+      for (const [method, input] of [
+        [CHANNEL_GATEWAY_WS_METHODS.createBot, { clientRequestId: "c1", name: "Helper" }],
+        [CHANNEL_GATEWAY_WS_METHODS.setBotHidden, { botId: "b1", hidden: true }],
+        [CHANNEL_GATEWAY_WS_METHODS.deleteBot, { botId: "b1" }],
+        [CHANNEL_GATEWAY_WS_METHODS.restoreBot, { botId: "b1" }],
+      ] as const) {
+        for (const scopes of [[], [AuthOrchestrationReadScope]]) {
+          const denied = yield* Effect.flip(
+            RpcAuthorization.authorizeRpcCall(scopes, method, input),
+          );
+          expect(denied.requiredPermission).toBe(AuthOrchestrationOperateScope);
+        }
+        yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationOperateScope], method, input);
+      }
+    }),
+  );
   it.effect("protects bot task thread reads and view changes", () =>
     Effect.gen(function* () {
       for (const [method, scope] of [

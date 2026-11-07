@@ -14,6 +14,7 @@ import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ChannelDispatcher from "../channels/ChannelDispatcher.ts";
 import { channelDispatcherIdleServices } from "../channels/testkit/channelDispatcherIdleServices.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
+import * as ChannelBotProfiles from "../channels/ChannelBotProfiles.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
 import * as Receipts from "./CommandReceiptStore.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
@@ -197,11 +198,7 @@ function makeThreadCreatedEvent(input: {
       branch: null,
       worktreePath: null,
       activeProviderThreadId: null,
-      lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
-        rootThreadId: input.threadId,
-      },
+      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: input.threadId },
       forkedFrom: null,
       createdAt: input.now,
       updatedAt: input.now,
@@ -5483,6 +5480,7 @@ it.effect.each(turnStartMemoryCases)(
             let forwardPending = true;
             const channelTask: ChannelLedger.ChannelStoredTask = {
               ownerId: "owner",
+              botId: MemoryContracts.BotId.make("main"),
               pendingAnswerMessageId: undefined,
               completionHold: undefined,
               task: {
@@ -5526,6 +5524,7 @@ it.effect.each(turnStartMemoryCases)(
               Layer.provide(Layer.mock(UsageLimitSources.UsageLimitSources)({})),
               Layer.provide(
                 Layer.mergeAll(
+                  Layer.mock(ChannelBotProfiles.ChannelBotProfiles)({}),
                   Layer.mock(ChannelLedger.ChannelLedger)({
                     getTask: () => Effect.succeed(channelTask),
                     isForwardPending: (sequence) =>

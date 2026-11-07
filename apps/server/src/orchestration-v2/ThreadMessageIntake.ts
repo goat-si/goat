@@ -78,12 +78,11 @@ const dispatchToBot = Effect.fn("ThreadMessageIntake.dispatchToBot")(function* (
   }
   const ledger = ledgerOption.value;
   const gateway = gatewayOption.value;
+  // Main or an active member of this owner; any other bot thread is refused, never main.
   const bot = yield* ledger
-    .getBot(owner.ownerId)
+    .resolveIngressBot(owner.ownerId, command.threadId)
     .pipe(Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })));
-  if (bot === undefined || bot.bot.threadId !== command.threadId) {
-    return yield* new ChannelGatewayError({ reason: "forbidden" });
-  }
+  if (bot === undefined) return yield* new ChannelGatewayError({ reason: "forbidden" });
   const receivedAt = DateTime.formatIso(yield* DateTime.now);
   const result = yield* gateway.ingest(
     {

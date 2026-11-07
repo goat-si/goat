@@ -13,6 +13,11 @@ import {
   ChannelListBotsResult,
   ChannelUpdateBotInput,
   ChannelUpdateBotResult,
+  ChannelBotResult,
+  ChannelCreateBotInput,
+  ChannelDeleteBotInput,
+  ChannelRestoreBotInput,
+  ChannelSetBotHiddenInput,
   ChannelListChildWorkInput,
   ChannelListChildWorkResult,
   ChannelListBotThreadsInput,
@@ -28,7 +33,7 @@ import {
   ChannelIngestInput,
   ChannelIngestResult,
   ChannelInputSnapshot,
-  ChannelListTasksInput,
+  ChannelListTasksRpcInput,
   ChannelListTasksResult,
 } from "./channelGateway.ts";
 import { ChannelTask } from "./channelLedger.ts";
@@ -70,6 +75,30 @@ const ChannelUpdateBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.updateBot, {
   error: ChannelRpcError,
 });
 
+const ChannelCreateBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.createBot, {
+  payload: ChannelCreateBotInput,
+  success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
+const ChannelSetBotHiddenRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.setBotHidden, {
+  payload: ChannelSetBotHiddenInput,
+  success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
+const ChannelDeleteBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.deleteBot, {
+  payload: ChannelDeleteBotInput,
+  success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
+const ChannelRestoreBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.restoreBot, {
+  payload: ChannelRestoreBotInput,
+  success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
 const ChannelListBotThreadsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotThreads, {
   payload: ChannelListBotThreadsInput,
   success: ChannelListBotThreadsResult,
@@ -101,7 +130,7 @@ const ChannelGetTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getTask, {
 });
 
 const ChannelListTasksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listTasks, {
-  payload: ChannelListTasksInput,
+  payload: ChannelListTasksRpcInput,
   success: ChannelListTasksResult,
   error: ChannelRpcError,
 });
@@ -157,6 +186,10 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelGetBotStatusRpc,
   ChannelListBotsRpc,
   ChannelUpdateBotRpc,
+  ChannelCreateBotRpc,
+  ChannelSetBotHiddenRpc,
+  ChannelDeleteBotRpc,
+  ChannelRestoreBotRpc,
   ChannelListBotThreadsRpc,
   ChannelListChildWorkRpc,
   ChannelUpdateTaskViewRpc,

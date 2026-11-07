@@ -5,14 +5,18 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as BotThreads from "./ChannelBotThreads.ts";
+import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 import * as ChildStore from "./channelChildWorkStore.ts";
 import {
   botThreadId,
   environmentId,
+  goatInput,
   makeHarness,
   owner,
   ownerId,
+  rpcContext,
   setupBot,
 } from "./testkit/ChannelHarness.ts";
 
@@ -164,5 +168,24 @@ describe("ChannelBotThreads", () => {
         ),
       ),
     );
+  });
+
+  it.effect("lists work a person started by messaging the bot, with the messages since", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(goatInput("do: count the stars", "real-1"), rpcContext);
+      yield* runtime.drain;
+      yield* gateway.ingest(goatInput("thanks", "real-2"), rpcContext);
+      yield* runtime.drain;
+      const result = yield* (yield* BotThreads.ChannelBotThreads).list(owner);
+      assert.deepStrictEqual(
+        result.rows.map((row) => (row.kind === "task" ? row.task.title : row.kind)),
+        ["count the stars"],
+      );
+      assert.strictEqual(result.mainMessageCount, 2);
+    }).pipe(Effect.provide(harness.layer));
   });
 });

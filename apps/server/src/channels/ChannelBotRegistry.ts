@@ -14,13 +14,17 @@
  * @module ChannelBotRegistry
  */
 import {
+  BotId,
   type ChannelBotRef,
   type ChannelEnsureBotInput,
   ChannelGatewayError,
+  CHANNEL_GATEWAY_WS_METHODS,
+  type ChannelGetBotStatusInput,
   type ChannelGetBotStatusResult,
   type RuntimeMode,
   type ThreadId,
   type EnvironmentId,
+  MAIN_BOT_ID,
 } from "@goat/contracts";
 import { resolveGoatBotModelSelection } from "@goat/shared/serverSettings";
 import * as Context from "effect/Context";
@@ -62,6 +66,7 @@ export class ChannelBotRegistry extends Context.Service<
      */
     readonly status: (
       owner: ChannelConnectionOwner,
+      botId?: BotId,
     ) => Effect.Effect<ChannelGetBotStatusResult, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotRegistry") {}
@@ -236,11 +241,14 @@ const make = Effect.gen(function* () {
       return visitedAt === null ? undefined : DateTime.formatIso(visitedAt);
     }).pipe(Effect.orElseSucceed(() => undefined));
 
-  const status: ChannelBotRegistry["Service"]["status"] = (owner) =>
+  const status: ChannelBotRegistry["Service"]["status"] = (
+    owner,
+    botId = BotId.make(MAIN_BOT_ID),
+  ) =>
     Effect.gen(function* () {
-      const bot = (yield* ledger.getBot(owner.ownerId))?.bot ?? null;
+      const bot = (yield* ledger.getBotById(owner.ownerId, botId))?.bot ?? null;
       const readThrough = yield* botReadThrough(bot);
-      const waitingCount = yield* ledger.countWaitingTasks(owner.ownerId, readThrough);
+      const waitingCount = yield* ledger.countWaitingTasks(owner.ownerId, readThrough, botId);
       return { bot, waitingCount };
     }).pipe(Effect.mapError(persistence));
 
@@ -248,3 +256,11 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ChannelBotRegistry, make);
+
+export const statusHandler = (
+  service: ChannelBotRegistry["Service"],
+  owner: ChannelConnectionOwner,
+) => ({
+  [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: (input: ChannelGetBotStatusInput) =>
+    service.status(owner, input.botId),
+});

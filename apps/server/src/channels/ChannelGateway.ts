@@ -13,11 +13,13 @@
  * @module ChannelGateway
  */
 import {
+  BotId,
   type ChannelDeliveryReceipt,
   ChannelGatewayError,
   type ChannelIdentityLinkConsumeInput,
   type ChannelIdentityLinkConsumeResult,
   type ChannelIngestInput,
+  MAIN_BOT_ID,
   type ChannelIngestResult,
   type ChannelInputId,
   type ChannelInputSnapshot,
@@ -200,23 +202,34 @@ const replyAddressKey = (address: ChannelReplyAddress) => {
 
 const ledgerFailure = (cause: ChannelLedger.ChannelLedgerError) =>
   new ChannelGatewayError({
-    reason: cause.reason === "idempotency_conflict" ? "idempotency_conflict" : "persistence_failed",
+    reason:
+      cause.reason === "idempotency_conflict"
+        ? "idempotency_conflict"
+        : cause.reason === "bot_inactive"
+          ? "forbidden"
+          : "persistence_failed",
   });
 
 const forbidden = () => new ChannelGatewayError({ reason: "forbidden" });
 
 /**
  * The keys an input is stored under, applied after the caller check. GOAT bot input belongs to
- * the owner's one bot conversation whichever bot thread it came from, so a replacement bot keeps
- * the history and open questions. MCP callers share one connection, so the request namespace
+ * its bot's one conversation whichever thread of that bot it came from, so a replacement bot
+ * keeps the history and open questions. MCP callers share one connection, so the request namespace
  * scopes their conversations and retry keys: two agents sending the same key stay two inputs in
  * two conversations.
  */
 const scopedForCaller = (
   input: ChannelIngestInput,
   context: ChannelIngressContext,
+  botId: BotId,
 ): ChannelIngestInput => {
-  if (input.kind === "goat") return { ...input, conversationKey: GOAT_CONVERSATION_KEY };
+  if (input.kind === "goat")
+    return {
+      ...input,
+      conversationKey:
+        botId === MAIN_BOT_ID ? GOAT_CONVERSATION_KEY : GOAT_CONVERSATION_KEY + ":" + botId,
+    };
   if (input.kind !== "mcp" || context.caller.type !== "mcp") return input;
   const namespace = context.caller.requestNamespace;
   const scope = (key: string) => JSON.stringify([namespace, key]);
@@ -285,9 +298,13 @@ const make = Effect.gen(function* () {
           Effect.provideContext(attachmentServices),
         );
 
-  /** Checks that the caller may speak for this channel, conversation, and reply address. */
+  /**
+   * Checks that the caller may speak for this channel, conversation, and reply address, and names
+   * the bot the input is for: the active bot of a GOAT thread, else main.
+   */
   const checkCaller = (input: ChannelIngestInput, context: ChannelIngressContext) =>
     Effect.gen(function* () {
+      const main = BotId.make(MAIN_BOT_ID);
       const caller = context.caller;
       const address = input.replyAddress;
       if (address.kind !== input.kind) return yield* forbidden();
@@ -297,15 +314,15 @@ const make = Effect.gen(function* () {
           if (address.kind !== "goat" || input.connectionId !== GOAT_CONNECTION_ID) {
             return yield* forbidden();
           }
-          const bot = yield* ledger.getBot(context.ownerId).pipe(Effect.mapError(ledgerFailure));
-          if (bot === undefined || bot.bot.threadId !== address.threadId) {
-            return yield* forbidden();
-          }
+          const bot = yield* ledger
+            .resolveIngressBot(context.ownerId, address.threadId)
+            .pipe(Effect.mapError(ledgerFailure));
+          if (bot === undefined) return yield* forbidden();
           if (input.conversationKey !== address.threadId) return yield* forbidden();
           if (!admitsGoatAttachments(input.attachments)) {
             return yield* new ChannelGatewayError({ reason: "invalid_input" });
           }
-          return;
+          return bot.botId;
         }
         case "mcp": {
           if (caller.type !== "mcp" || address.kind !== "mcp") return yield* forbidden();
@@ -317,7 +334,7 @@ const make = Effect.gen(function* () {
           ) {
             return yield* forbidden();
           }
-          return;
+          return main;
         }
         case "slack": {
           if (
@@ -329,7 +346,7 @@ const make = Effect.gen(function* () {
           ) {
             return yield* forbidden();
           }
-          return;
+          return main;
         }
         case "imessage": {
           if (
@@ -342,7 +359,7 @@ const make = Effect.gen(function* () {
             input.attachments.length !== 0
           )
             return yield* forbidden();
-          return;
+          return main;
         }
       }
     });
@@ -435,9 +452,9 @@ const make = Effect.gen(function* () {
       }
       if (input.kind === "goat" || input.kind === "mcp" || input.kind === "imessage")
         yield* home.requireHome;
-      yield* checkCaller(input, context);
+      const botId = yield* checkCaller(input, context);
       const requester = yield* resolveRequester(input, context);
-      const stored = scopedForCaller(input, context);
+      const stored = scopedForCaller(input, context, botId);
       const conversationId = conversationIdFor({
         ownerId: context.ownerId,
         kind: stored.kind,
@@ -476,6 +493,7 @@ const make = Effect.gen(function* () {
           contentHash: contentHashFor(stored),
           requester,
           acceptedAt,
+          botId,
           ...(requester === undefined
             ? {
                 rejectNotice: noticeDelivery(
