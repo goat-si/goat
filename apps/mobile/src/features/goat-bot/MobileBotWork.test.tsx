@@ -2,9 +2,32 @@ import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { BotThreadRow, ChannelTaskId } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
+import { AsyncResult } from "effect/reactivity";
 
 vi.mock("react-native", () => ({
+  Platform: { OS: "ios" },
+  Switch: ({
+    value,
+    disabled,
+    accessibilityLabel,
+    onValueChange,
+  }: {
+    value?: boolean;
+    disabled?: boolean;
+    accessibilityLabel?: string;
+    onValueChange?: (value: boolean) => void;
+  }) => (
+    <input
+      type="checkbox"
+      role="switch"
+      aria-label={accessibilityLabel}
+      checked={value}
+      disabled={disabled}
+      onChange={() => onValueChange?.(!value)}
+    />
+  ),
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Modal: ({ children, visible }: { children?: ReactNode; visible: boolean }) =>
@@ -51,14 +74,16 @@ const state = vi.hoisted(() => ({
     refresh: vi.fn(),
   },
   routines: {
-    data: null as null | { tasks: never[] },
+    data: null as null | { tasks: unknown[] },
     error: null as string | null,
     isPending: true,
     isSuccess: false,
     refresh: vi.fn(),
   },
+  setEnabled: vi.fn(),
 }));
 
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
@@ -68,7 +93,14 @@ vi.mock("../../state/channels", () => ({
   },
 }));
 vi.mock("../../state/server", () => ({
-  serverEnvironment: { scheduledTasksLive: () => "routines" },
+  serverEnvironment: {
+    scheduledTasksLive: () => "routines",
+    setScheduledTaskEnabled: {
+      label: "set enabled",
+      permissionAtom: () => "permission",
+      run: state.setEnabled,
+    },
+  },
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
@@ -106,6 +138,7 @@ function reset() {
     Object.assign(query, { data: null, error: null, isPending: true, isSuccess: false });
   state.task.refresh.mockClear();
   state.routines.refresh.mockClear();
+  state.setEnabled.mockReset();
 }
 async function render(taskId?: ChannelTaskId, taskCard?: ReactNode) {
   if (!root) root = createRoot(container);
@@ -170,6 +203,43 @@ it("exposes work tabs as buttons and updates their selected state", async () => 
   await act(async () => tabs[1]?.click());
   expect(tabs[0]?.getAttribute("aria-pressed")).toBe("false");
   expect(tabs[1]?.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("a refused pause keeps the routine's stored state and shows why", async () => {
+  reset();
+  Object.assign(state.routines, {
+    isPending: false,
+    isSuccess: true,
+    data: {
+      tasks: [
+        {
+          id: "digest",
+          title: "Daily digest",
+          prompt: "Summarize the inbox",
+          enabled: true,
+          schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [] },
+          threadId: "bot",
+          nextRunAt: null,
+          lastRunAt: null,
+          lastRunStatus: "never",
+          lastRunError: null,
+        },
+      ],
+    },
+  });
+  state.setEnabled.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("Denied"))));
+  await render();
+  await press("Work");
+  await press("Routines");
+  expect(container.textContent).toContain("Daily at 09:00 · Not scheduled");
+  const toggle = container.querySelector<HTMLInputElement>('[aria-label="Pause Daily digest"]');
+  await act(async () => toggle?.click());
+  expect(state.setEnabled).toHaveBeenCalledWith(expect.anything(), {
+    environmentId: "env",
+    input: { id: "digest", enabled: false },
+  });
+  expect(container.textContent).toContain("Couldn't pause this routine: Denied");
+  expect(toggle?.checked).toBe(true);
 });
 
 it("distinguishes task thread loading, missing, offline, and retry states", async () => {
