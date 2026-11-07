@@ -83,6 +83,7 @@ const state = vi.hoisted(() => ({
   setEnabled: vi.fn(),
   runNow: vi.fn(),
   retry: vi.fn(),
+  openThread: vi.fn(),
 }));
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
@@ -174,7 +175,13 @@ async function render(taskId?: ChannelTaskId, taskCard?: ReactNode) {
   if (!root) root = createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotWork visible taskId={taskId} taskCard={taskCard} onOpenTask={() => {}} />,
+      <MobileBotWork
+        visible
+        taskId={taskId}
+        taskCard={taskCard}
+        onOpenTask={() => {}}
+        onOpenThread={state.openThread}
+      />,
     ),
   );
 }
@@ -393,4 +400,32 @@ it("Library and Computer show their own views", async () => {
   expect(container.textContent).toContain("Files need a newer GOAT server.");
   await press("Computer");
   expect(container.textContent).toContain("Loading machines…");
+});
+
+it("opens the coding thread a task launched, such as a bot turn's", async () => {
+  reset();
+  state.openThread.mockClear();
+  const at = "2026-11-07T10:00:00.000Z";
+  const rows = [
+    decodeRow({
+      kind: "task",
+      task: { taskId: "turn", title: "Start one task", status: "running", updatedAt: at },
+      view: { taskId: "turn", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    }),
+    decodeRow({
+      kind: "coding",
+      taskId: "turn",
+      environmentId: "env",
+      threadId: "thread:child",
+      state: "bound",
+      lastActivityAt: at,
+    }),
+  ];
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows } });
+  await render(ChannelTaskId.make("turn"));
+  await press("Open work thread");
+  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread:child" });
 });
