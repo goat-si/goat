@@ -27,6 +27,7 @@ import {
   ChannelTaskId,
 } from "./channelCommon.ts";
 import { ChannelBotRef, ChannelTask, ChannelTaskChip, ChannelTaskStatus } from "./channelLedger.ts";
+import { ChannelSkillProposal } from "./channelSkillProposal.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { GoatBotHomeClaim } from "./settings.ts";
 
@@ -153,6 +154,8 @@ export const ChannelTaskReportInput = Schema.Struct({
   summary: TrimmedNonEmptyString,
   milestone: Schema.optional(Schema.Boolean),
   question: Schema.optional(TrimmedNonEmptyString),
+  /** Only on a completed report; see ChannelSkillProposal. */
+  skillProposal: Schema.optional(ChannelSkillProposal),
 });
 export type ChannelTaskReportInput = typeof ChannelTaskReportInput.Type;
 

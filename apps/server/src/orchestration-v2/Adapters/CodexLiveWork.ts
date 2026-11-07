@@ -95,9 +95,10 @@ export const makeCodexLiveWork = <Turn extends CodexLiveTurn<Turn>>(input: {
     return false;
   });
 
-  const hasPendingBackgroundWorkForThread = Effect.fn(
-    "CodexAdapterV2.hasPendingBackgroundWorkForThread",
-  )(function* (providerThread: OrchestrationV2ProviderThread) {
+  // Untraced: the event stream calls this for every provider event.
+  const hasPendingBackgroundWorkForThread = Effect.fnUntraced(function* (
+    providerThread: OrchestrationV2ProviderThread,
+  ) {
     const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
     if (
       nativeThreadId != null &&

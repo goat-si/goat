@@ -5,11 +5,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Terminal from "effect/Terminal";
-import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
+import { CliError, Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as BootService from "../cloud/bootService.ts";
+import { formatBootServiceBaseDirOption } from "./serviceOtherHomeError.ts";
 import { compareExactServiceVersions } from "../cloud/serviceProtocol.ts";
 import type * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -40,6 +41,13 @@ const reconcileService = Effect.fn("cli.service.reconcile")(function* (options?:
 }) {
   const service = yield* BootService.BootService;
   const status = yield* service.status;
+  if (!status.installed && status.installedBaseDir !== undefined) {
+    const option = formatBootServiceBaseDirOption(status.installedBaseDir);
+    const message =
+      `The GOAT service serves ${status.installedBaseDir}. Pass ${option} to manage it, or run ` +
+      `goat service uninstall ${option} first to move it; both data directories are kept.`;
+    return yield* new CliError.UserError({ cause: message, userMessage: message });
+  }
   if (status.installed && status.current) {
     return { changed: false, status } satisfies ServiceReconcileResult;
   }
@@ -83,6 +91,7 @@ export function formatServiceStatus(
         "GOAT service",
         "  Status: not installed for this home",
         `  The service for this user serves ${status.installedBaseDir} and was left alone.`,
+        `  Next: Pass ${formatBootServiceBaseDirOption(status.installedBaseDir)} to manage it.`,
       ].join("\n");
     }
     return "GOAT service\n  Status: not installed\n  Next: Run `goat service install`.";
@@ -203,7 +212,9 @@ const serviceRestartCommand = Command.make("restart", projectLocationFlags).pipe
             ? `Restarted the GOAT service${onVersion}.`
             : outcome === "queued"
               ? `Queued a restart of the GOAT service${onVersion}. This session runs inside the service and disconnects when it goes down.\nLogs: ${status.logPath}`
-              : "GOAT service is not installed.",
+              : status.installedBaseDir !== undefined
+                ? `The GOAT service serves ${status.installedBaseDir} and was not restarted. Pass ${formatBootServiceBaseDirOption(status.installedBaseDir)} to restart it.`
+                : "GOAT service is not installed.",
         );
       }),
     ),
@@ -228,7 +239,7 @@ const serviceUninstallCommand = Command.make("uninstall", projectLocationFlags).
           removed
             ? "Removed the GOAT service."
             : foreign
-              ? `The GOAT service serves ${before.installedBaseDir} and was left unchanged.`
+              ? `The GOAT service serves ${before.installedBaseDir} and was left unchanged. Pass ${formatBootServiceBaseDirOption(before.installedBaseDir)} to remove it.`
               : "GOAT service is not installed.",
         );
       }).pipe(Effect.provide(layer(config)));
@@ -320,7 +331,7 @@ const reportServiceSetupFailure = (error: BootService.BootServiceError) =>
 export const recoverServiceOnboardingOffer = <R>(
   offer: Effect.Effect<
     ServiceOnboardingOutcome,
-    BootService.BootServiceError | Terminal.QuitError,
+    BootService.BootServiceError | CliError.UserError | Terminal.QuitError,
     R
   >,
 ) =>
@@ -331,6 +342,8 @@ export const recoverServiceOnboardingOffer = <R>(
         Console.log(`Skipping background setup: ${error.message}`).pipe(
           Effect.as("skipped" as const),
         ),
+      UserError: (error) =>
+        Console.warn(error.userMessage ?? error.message).pipe(Effect.as("skipped" as const)),
       BootServiceCommandError: reportServiceSetupFailure,
       BootServiceInstallError: reportServiceSetupFailure,
       BootServicePrerequisiteError: reportServiceSetupFailure,

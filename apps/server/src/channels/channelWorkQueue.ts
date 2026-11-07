@@ -7,6 +7,8 @@
  */
 import type { ChannelTask, ChannelWorkerRun } from "@goat/contracts";
 
+import { questionTextForModel } from "./channelSkillProposalText.ts";
+
 export type WorkItemState =
   | "queued"
   | "in progress"
@@ -101,7 +103,7 @@ export const pendingDigest = (
           ")",
         ...(item.note === undefined ? [] : ["  " + item.note]),
         ...item.task.openQuestions.map(
-          (question) => "  waiting for an answer to: " + question.text,
+          (question) => "  waiting for an answer to: " + questionTextForModel(item.task, question),
         ),
         ...runs,
       ].join("\n");

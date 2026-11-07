@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
 import type * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
+import * as Project from "../../../project/ProjectService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as ProjectHandlers from "./handlers.ts";
 import { clientLaunchHarness, withLaunchService } from "./handlers.testkit.ts";
@@ -66,5 +67,33 @@ it.effect("a launch steps an inherited mode down to the provider's, and refuses 
 
     const offered = yield* launchPi("approval-required");
     expect(offered.launched[0]?.runtimeMode).toBe("approval-required");
+  }),
+);
+
+it.effect("an update the project refuses tells the agent why", () =>
+  Effect.gen(function* () {
+    const harness = clientLaunchHarness({ runtimeModeCeiling: "full-access", launched: [] });
+    const detail = "Project monograms must contain at most two characters.";
+    const dependencies = Layer.merge(
+      harness.dependencies,
+      Layer.mock(Project.ProjectService)({
+        update: (input) =>
+          Effect.fail(new Project.ProjectInvalidError({ projectId: input.projectId, detail })),
+      }),
+    );
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+
+    const refused = yield* toolkit
+      .handle("goat_project_update", {
+        projectId: harness.projectId,
+        projectIcon: { kind: "monogram", text: "ABC", color: "blue" },
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+
+    expect(refused.at(-1)?.result).toMatchObject({ code: "invalid_request", message: detail });
   }),
 );

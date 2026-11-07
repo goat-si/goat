@@ -43,6 +43,14 @@ describe("device setup guidance", () => {
     ).toContain("Device Manager");
   });
 
+  it("does not suggest installing a simulator when discovery is incomplete", () => {
+    const state = deviceState({
+      hostStatuses: { local: { status: "ready", incompletePlatforms: ["ios"] } },
+    });
+    expect(platformSetupStatus(state, "ios").message).toContain("discovery reported a problem");
+    expect(platformSetupStatus(state, "android").message).toContain("Device Manager");
+  });
+
   it("counts a remote device host when this machine has no simulator tooling", () => {
     const state = deviceState({
       hostStatus: "idle",

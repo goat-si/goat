@@ -1,6 +1,7 @@
 import {
   type ChannelGatewayError,
   type ChannelInboundMessage,
+  type ChannelTaskEvent,
   OrchestratorMcpFailure,
   ServerSettingsError,
 } from "@goat/contracts";
@@ -73,6 +74,19 @@ const mcpContextOf = (scope: McpInvocationContext.McpInvocationScope) => ({
   },
 });
 
+/** An agent gets the event without its sender: who sent it and their scopes stay server-side. */
+export const withoutSender = (event: ChannelTaskEvent | null): ChannelTaskEvent | null => {
+  if (event?.type === "task.followup.received") {
+    const { sender: _sender, ...payload } = event.payload;
+    return { ...event, payload };
+  }
+  if (event?.type === "task.question.answered") {
+    const { sender: _sender, ...payload } = event.payload;
+    return { ...event, payload };
+  }
+  return event;
+};
+
 const sessionPreflight = Effect.fn("channel.sessionPreflight")(function* () {
   const scope = yield* McpInvocationContext.McpInvocationContext;
   if (scope.thread?.runId === undefined)
@@ -94,7 +108,9 @@ export const layer = McpToolAccess.toLayer(
       channel_task_follow_up: McpToolAccess.writesAfter(sessionPreflight, (input, caller) =>
         Effect.gen(function* () {
           const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
-          return yield* actions.followUp({ ...input, caller }).pipe(Effect.mapError(failureFor));
+          return withoutSender(
+            yield* actions.followUp({ ...input, caller }).pipe(Effect.mapError(failureFor)),
+          );
         }),
       ),
       channel_task_stop: McpToolAccess.writesAfter(sessionPreflight, (input, caller) =>
@@ -106,7 +122,9 @@ export const layer = McpToolAccess.toLayer(
       channel_task_answer: McpToolAccess.writesAfter(sessionPreflight, (input, caller) =>
         Effect.gen(function* () {
           const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
-          return yield* actions.answer({ ...input, caller }).pipe(Effect.mapError(failureFor));
+          return withoutSender(
+            yield* actions.answer({ ...input, caller }).pipe(Effect.mapError(failureFor)),
+          );
         }),
       ),
       channel_ingest: McpToolAccess.writes((input) =>

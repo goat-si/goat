@@ -4,7 +4,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "~/components/ui/button";
 import {
   PullRequestMarkdownTextarea,
-  type PullRequestMentionScope,
+  type PullRequestCompletionScope,
 } from "~/components/pullRequest/PullRequestMarkdownTextarea";
 import { textDirection } from "~/textDirection";
 import type { EnvironmentId } from "@goat/contracts";
@@ -37,7 +37,7 @@ interface DiffCommentAnnotationProps {
   secondaryAction?: DiffCommentSecondaryAction;
   focusOnMount?: boolean;
   /** Set only for pull request comments, where `@` completes the repository's users. */
-  mentionScope?: PullRequestMentionScope | null;
+  completionScope?: PullRequestCompletionScope | null;
   environmentId?: EnvironmentId | undefined;
 }
 
@@ -54,7 +54,7 @@ export function DiffCommentAnnotation({
   pending = false,
   secondaryAction,
   focusOnMount = true,
-  mentionScope = null,
+  completionScope = null,
   environmentId,
 }: DiffCommentAnnotationProps) {
   const [localDraftText, setLocalDraftText] = useState("");
@@ -111,7 +111,7 @@ export function DiffCommentAnnotation({
     >
       <PullRequestMarkdownTextarea
         ref={textareaRef}
-        mentionScope={mentionScope}
+        completionScope={completionScope}
         autoFocus={focusOnMount}
         size="sm"
         value={displayedText}

@@ -218,8 +218,9 @@ to review and edit before sending.
 Apple's on-device speech transcription requires a supported device with iOS 26
 or later. When it is unavailable, GOAT can use an environment to transcribe instead.
 
-The first use may download Apple's speech model and needs a network connection.
-Later transcription works offline for that language. Recordings can be up to five
+GOAT uses the first supported language in **Settings → General → Language & Region**,
+then tries the app language if none is supported. The first use may download Apple's
+speech model and needs a network connection. Later transcription works offline for that language. Recordings can be up to five
 minutes long. Canceling, leaving the screen, or an audio interruption discards the
 recording and preserves your existing draft. While recording, the screen stays
 awake; it can sleep normally once recording stops.
@@ -251,8 +252,9 @@ By default, the desktop app uses this computer's Codex sign-in or OpenCodex to
 transcribe. In a browser, the thread's environment uses its transcription service.
 The recorder shows where transcription runs.
 
-You can instead choose **Transcribe on** a connected environment from the
-composer's dictation options. This sends recordings to that environment and uses a
+You can instead choose **Transcribe on** a connected environment: right-click the
+composer's microphone (long-press on a touch screen, or press Shift+F10) to open the
+dictation options. This sends recordings to that environment and uses a
 speech model installed there. The choice belongs to this device; select **Use
 existing voice input** to turn it off. Someone with voice management permission can
 download, select, or remove models from **Manage voice models** in the same menu.

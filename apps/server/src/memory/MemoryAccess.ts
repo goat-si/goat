@@ -90,3 +90,10 @@ export function captureMemoryGrantCeiling(
       ? "read_write"
       : "read";
 }
+
+/** Memory ceilings from least to most. */
+export const MEMORY_GRANT_RANK = {
+  none: 0,
+  read: 1,
+  read_write: 2,
+} as const satisfies Record<M.MemoryTaskGrantCeiling, number>;

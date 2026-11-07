@@ -130,10 +130,7 @@ export interface AcpSessionRuntimeOptions {
   readonly cancelBehavior?: "interrupt" | "wait-for-prompt";
   readonly cancelTimeout?: Duration.Input;
   readonly clientCapabilities?: EffectAcpSchema.InitializeRequest["clientCapabilities"];
-  readonly clientInfo: {
-    readonly name: string;
-    readonly version: string;
-  };
+  readonly clientInfo: NonNullable<EffectAcpSchema.InitializeRequest["clientInfo"]>;
   readonly authMethodId?: string;
   /** Authenticate before opening: Antigravity selects its credential source from the method. */
   readonly authenticateEagerly?: boolean;

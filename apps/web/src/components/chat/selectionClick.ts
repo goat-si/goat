@@ -6,7 +6,13 @@ export function isSelectionClick(event: MouseEvent<HTMLElement>) {
   if (!selection || selection.isCollapsed) return false;
   for (let index = 0; index < selection.rangeCount; index++) {
     const range = selection.getRangeAt(index);
-    if (!range.collapsed && range.intersectsNode(event.currentTarget)) return true;
+    if (range.collapsed) continue;
+    if (
+      event.currentTarget.contains(range.startContainer) ||
+      event.currentTarget.contains(range.endContainer)
+    ) {
+      return true;
+    }
   }
   return false;
 }

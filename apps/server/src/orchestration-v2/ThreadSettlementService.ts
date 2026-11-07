@@ -380,8 +380,13 @@ export const make = Effect.gen(function* () {
         autoSettleOnMerge: projectSettings.sidebarAutoSettleOnMerge,
         autoSettleKeepPullRequests: projectSettings.sidebarAutoSettleKeepPullRequests,
       });
-      // A finished task lane can settle before any date is due; one on a branch waits for its lookup.
-      if (due !== null || (isDelegatedLaneCandidate(thread) && thread.branch === null))
+      // Branch threads without a stored PR link wait for lookup; other due threads and branchless lanes settle now.
+      const awaitsBranchLookup =
+        thread.branch !== null && visibleThreadPullRequests(thread.pullRequests ?? []).length === 0;
+      if (
+        !awaitsBranchLookup &&
+        (due !== null || (isDelegatedLaneCandidate(thread) && thread.branch === null))
+      )
         dueThreads.add(thread.id);
       const key = JSON.stringify([
         thread,
@@ -726,7 +731,7 @@ export const make = Effect.gen(function* () {
     function* (threadId: ThreadId) {
       const settled = yield* readThreadMetadata(threadId);
       if (settled.settledOverride !== "settled") return;
-      yield* terminals.closeIdle({ threadId });
+      yield* terminals.closeOnSettle({ threadId });
       const worktreePath = settled.worktreePath;
       if (worktreePath === null || !(yield* fileSystem.exists(worktreePath))) return;
       // Recheck after closing and worktree I/O; re-engaged threads must not be cleaned up.

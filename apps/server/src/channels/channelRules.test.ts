@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import type { AuthEnvironmentScope } from "@goat/contracts";
 import {
   ChannelDispatchTarget,
   ChannelGatewayError,
@@ -171,6 +172,64 @@ describe("task transitions", () => {
     assert.isFalse(unknown.ok);
   });
 
+  it("finishes a skill proposal task from received only when nothing is asked, and never dispatches or retries it", () => {
+    const skillProposal = {
+      name: "deploy-check",
+      summary: "Check a deploy",
+      text: "1. Compare the tag.",
+      sourceTaskId: "task-0",
+      sourceTitle: "Check the deploy",
+      requesterName: "Owner",
+    };
+    const waiting = { status: "received", worker: undefined, generation: 1 };
+    const done = (overrides: Record<string, unknown>) =>
+      applyChannelTaskEvent(
+        task({ ...waiting, ...overrides }),
+        event("task.completed", { generation: 1, summary: "Saved skill deploy-check" }),
+      ).ok;
+    assert.isTrue(done({ skillProposal }));
+    assert.isFalse(done({}));
+    const asked = {
+      questionId: "q-1",
+      text: "Save this as a skill?",
+      askedAt: NOW,
+      options: ["Save", "Not now"],
+    };
+    assert.isFalse(done({ skillProposal, status: "waiting_input", openQuestions: [asked] }));
+    assert.isFalse(
+      applyChannelTaskEvent(
+        task({ ...waiting, skillProposal }),
+        event("task.dispatch.claimed", {
+          generation: 1,
+          target: decodeTarget({
+            environmentId: "env-1",
+            projectId: "project-1",
+            modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" },
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            workspaceStrategy: { type: "worktree" },
+          }),
+          leaseExpiresAt: NOW,
+        }),
+      ).ok,
+    );
+    assert.isFalse(
+      applyChannelTaskEvent(
+        task({ ...waiting, skillProposal, status: "completed" }),
+        event("task.retry.requested", { generation: 2 }),
+      ).ok,
+    );
+    // Answered (received again), only completion settles it; while asking, a stop still works.
+    const stop = event("task.cancelled", {});
+    assert.isFalse(applyChannelTaskEvent(task({ ...waiting, skillProposal }), stop).ok);
+    assert.isTrue(
+      applyChannelTaskEvent(
+        task({ ...waiting, skillProposal, status: "waiting_input", openQuestions: [asked] }),
+        stop,
+      ).ok,
+    );
+  });
+
   it("records a worker observation without moving the task, and keeps only pull requests once it ends", () => {
     const observed = {
       pullRequests: [
@@ -327,6 +386,42 @@ describe("linked account permissions", () => {
         runtimeModeCeiling: "approval-required",
       }),
     );
+  });
+
+  it("lets someone else direct a person's work only with at least that person's memory", () => {
+    const asker = {
+      ...task().requester,
+      grantedScopes: ["orchestration:operate", "memory:read"] as Array<AuthEnvironmentScope>,
+    };
+    const colleague = (grantedScopes: Array<AuthEnvironmentScope>) => ({
+      ...asker,
+      principalId: "colleague",
+      grantedScopes,
+    });
+    assert.isFalse(mayAnswerFor(colleague(["orchestration:operate"]), asker));
+    assert.isTrue(mayAnswerFor(colleague(["orchestration:operate", "memory:read"]), asker));
+    assert.isTrue(
+      mayAnswerFor(colleague(["orchestration:operate", "memory:read", "memory:write"]), asker),
+    );
+    const writer = { ...asker, grantedScopes: [...asker.grantedScopes, "memory:write" as const] };
+    assert.isFalse(mayAnswerFor(colleague(["orchestration:operate", "memory:read"]), writer));
+    // The owner holds every scope, so they cover anyone's work.
+    const environmentOwner = colleague([
+      "orchestration:read",
+      "orchestration:operate",
+      "settings:write",
+      "memory:read",
+      "memory:write",
+    ]);
+    assert.isTrue(mayAnswerFor({ ...environmentOwner, principalId: "owner" }, writer));
+    // The person who asked keeps directing their own work after losing memory; their runs follow.
+    // Only on the same connection: the same principal elsewhere is compared like anyone else.
+    const lost = {
+      ...asker,
+      grantedScopes: ["orchestration:operate"] as Array<AuthEnvironmentScope>,
+    };
+    assert.isTrue(mayAnswerFor(lost, writer, true));
+    assert.isFalse(mayAnswerFor(lost, writer));
   });
 });
 

@@ -37,6 +37,12 @@ it("says when the only service belongs to another home", () => {
     ),
     "The service for this user serves /home/other/.t3 and was left alone.",
   );
+  expect(
+    formatServiceStatus(
+      { ...status, installed: false, current: false, installedBaseDir: "/srv/other's home" },
+      "0.0.29",
+    ),
+  ).toContain(`--base-dir '/srv/other'"'"'s home'`);
 });
 
 const newerServiceStatus = { ...status, current: false, installedVersion: "999.0.0" };
@@ -70,6 +76,36 @@ function makeTestService(
 }
 
 it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands", (it) => {
+  it.effect.each(["install", "update"] as const)(
+    "%s refuses a foreign home before reconciling",
+    (command) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-cli-test-" });
+        const { service, installOptions } = makeTestService({
+          ...newerServiceStatus,
+          installed: false,
+          installedBaseDir: "/srv/other home",
+        });
+        vi.spyOn(BootService, "layer").mockReturnValue(
+          Layer.succeed(BootService.BootService, service),
+        );
+        const error = yield* Command.runWith(serviceCommand, { version: packageJson.version })([
+          command,
+          "--base-dir",
+          baseDir,
+        ]).pipe(
+          Effect.provideService(HostProcess.Environment, {}),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+          Effect.flip,
+        );
+        expect(error).toMatchObject({
+          _tag: "UserError",
+          userMessage: expect.stringContaining("--base-dir '/srv/other home'"),
+        });
+        expect(installOptions).toEqual([]);
+      }),
+  );
   it.effect.each(["install", "update"] as const)(
     "%s refuses a downgrade before changing the service",
     (command) =>

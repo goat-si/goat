@@ -152,11 +152,19 @@ describe("gitLabViewerPermissions", () => {
       ],
       comment: true,
       resolve: true,
-      verdicts: ["comment", "approve"],
+      verdicts: ["comment", "approve", "request-changes"],
       requestReviewers: true,
+      maintainerEdits: false,
       labels: true,
       updateMethods: ["rebase"],
     });
+  });
+
+  it("allows maintainer edits only when GitLab permits them", () => {
+    expect(
+      gitLabViewerPermissions({ viewerCanMerge: false, viewerCanEditMaintainerEdits: true })
+        .maintainerEdits,
+    ).toBe(true);
   });
 
   it("keeps merge, now and later, from a viewer GitLab says cannot", () => {
@@ -164,8 +172,9 @@ describe("gitLabViewerPermissions", () => {
       actions: ["ready", "draft", "close", "reopen"],
       comment: true,
       resolve: true,
-      verdicts: ["comment", "approve"],
+      verdicts: ["comment", "approve", "request-changes"],
       requestReviewers: true,
+      maintainerEdits: false,
       labels: false,
     });
   });
@@ -196,6 +205,7 @@ describe("getChangeRequest base freshness", () => {
     checks: [],
     viewerCanMerge: true,
     reviewerIds: [],
+    reviewerUsers: [],
   };
 
   it.effect.each(["getChangeRequestPreview", "getChangeRequestSummary"] as const)(
@@ -346,6 +356,7 @@ describe("merge request reads", () => {
     checks: [],
     viewerCanMerge: true,
     reviewerIds: [],
+    reviewerUsers: [],
   };
 
   const countingProvider = Effect.gen(function* () {
@@ -523,6 +534,7 @@ describe("review decisions", () => {
     checks: [],
     viewerCanMerge: true,
     reviewerIds: [],
+    reviewerUsers: [],
   };
   const providerWith = (
     getListStates: GitLabPullRequestCli.GitLabPullRequestCli["Service"]["getListStates"],

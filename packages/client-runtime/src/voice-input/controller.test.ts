@@ -76,6 +76,22 @@ function createHarness(
 }
 
 describe("resolveTranscriptCommit", () => {
+  it.each([
+    ["코드를", 3, "검토해 주세요", "ko_KR", "코드를 검토해 주세요"],
+    ["𞤀", 2, "𞤦", "ff-Adlm", "𞤀 𞤦"],
+    ["नमस्ते", 6, "दुनिया", "hi-IN", "नमस्ते दुनिया"],
+    ["Änderungen", 0, "Weitere", "de_DE", "Weitere Änderungen"],
+    ["修正キャッシュ", 7, "テストも", "ja-JP", "修正キャッシュテストも"],
+    ["โลก", 0, "สวัสดี", "th-TH", "สวัสดีโลก"],
+    ["Hello", 5, "𝟚", "auto", "Hello 𝟚"],
+    ["Hello", 5, "世界", "auto", "Hello世界"],
+  ])("handles dictation spacing for %s and %s", (text, caret, spoken, locale, expected) => {
+    const captured = draft({ text, selection: { start: caret, end: caret } });
+    expect(resolveTranscriptCommit(captured, captured, spoken, locale)).toMatchObject({
+      kind: "commit",
+      text: expected,
+    });
+  });
   it("replaces the recorded UTF-16 selection around emoji and composer tokens", () => {
     const text = "Fix 🧪 then $review please";
     const tokenStart = text.indexOf("$review");

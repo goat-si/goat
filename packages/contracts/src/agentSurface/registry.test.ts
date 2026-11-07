@@ -111,6 +111,14 @@ const OFF_GRAMMAR_NAMES = [
 // Calling); they are how an agent reaches every path, so they are not themselves a resource.
 const META_TOOL_NAMES = ["goat_describe", "goat_call"] as const;
 
+it("asks for separate secrets while retaining login and payment card handoffs", () => {
+  const handoff = agentSurfaceRegistry["handoff.create"];
+  expect(handoff.description).toContain("one standalone secret per private card");
+  expect(handoff.description).toContain("never combine separate secrets");
+  expect(handoff.guide).toContain("request kind login");
+  expect(handoff.guide).toContain("request kind card");
+});
+
 describe("agent surface grammar", () => {
   it("declares screen run as a thread-scoped write with non-replayable input", () => {
     const screen = agentSurfaceRegistry["surface.screen_run"];

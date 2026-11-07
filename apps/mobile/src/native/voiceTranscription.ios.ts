@@ -1,5 +1,6 @@
 import AppleTranscription from "@react-native-ai/apple/src/NativeAppleTranscription";
 import { File } from "expo-file-system";
+import { Settings } from "react-native";
 
 import {
   VoiceTranscriptionError,
@@ -9,8 +10,14 @@ import {
   type VoiceTranscriptionOptions,
 } from "@goat/client-runtime/voice-input";
 
-function getDeviceLocale(): string {
-  return Intl.DateTimeFormat().resolvedOptions().locale;
+function getPreferredLocales(): string[] {
+  const languages: unknown = Settings.get("AppleLanguages");
+  const preferred = Array.isArray(languages)
+    ? languages.filter(
+        (language): language is string => typeof language === "string" && language.length > 0,
+      )
+    : [];
+  return [...new Set([...preferred, Intl.DateTimeFormat().resolvedOptions().locale])];
 }
 
 function wrapError(
@@ -34,9 +41,9 @@ function getNativeErrorCode(error: unknown): string | undefined {
 }
 
 export function getLocalVoiceTranscriber(): VoiceTranscriber | null {
-  const locale = getDeviceLocale();
-  if (!AppleTranscription.isAvailable(locale)) return null;
-  return { prepare: (options) => prepareVoiceTranscription(locale, options) };
+  const locales = getPreferredLocales();
+  if (!AppleTranscription.isAvailable(locales[0] ?? "")) return null;
+  return { prepare: (options) => prepareVoiceTranscription(locales, options) };
 }
 
 export function getVoiceTranscriber(
@@ -64,17 +71,40 @@ export function getVoiceTranscriber(
 }
 
 async function prepareVoiceTranscription(
-  locale: string,
+  locales: readonly string[],
   { signal }: VoiceTranscriptionOptions,
 ): Promise<PreparedVoiceTranscription> {
   throwIfVoiceTranscriptionAborted(signal);
-  if (!AppleTranscription.isAvailable(locale)) {
+  if (!AppleTranscription.isAvailable(locales[0] ?? "")) {
     throw new VoiceTranscriptionError(
       "unavailable",
       "Voice transcription requires a supported device with iOS 26 or later.",
     );
   }
 
+  let unsupported: VoiceTranscriptionError | undefined;
+  for (const locale of locales) {
+    try {
+      return await prepareLocale(locale, signal);
+    } catch (error) {
+      if (!(error instanceof VoiceTranscriptionError) || error.code !== "unsupported-locale")
+        throw error;
+      unsupported = error;
+    }
+  }
+  throw (
+    unsupported ??
+    new VoiceTranscriptionError(
+      "unsupported-locale",
+      "Voice transcription does not support any of your languages.",
+    )
+  );
+}
+
+async function prepareLocale(
+  locale: string,
+  signal: AbortSignal,
+): Promise<PreparedVoiceTranscription> {
   try {
     const supportedLocale = await AppleTranscription.prepare(locale);
     throwIfVoiceTranscriptionAborted(signal);
@@ -88,7 +118,7 @@ async function prepareVoiceTranscription(
     if (getNativeErrorCode(error) === "AppleTranscriptionUnsupportedLocale") {
       throw new VoiceTranscriptionError(
         "unsupported-locale",
-        "Voice transcription does not support this device language.",
+        "Voice transcription does not support any of your languages.",
         { cause: error },
       );
     }

@@ -111,7 +111,7 @@ const maintain = (observeOnly = false) => {
       db.prepare("PRAGMA wal_checkpoint(PASSIVE)").get();
       state = db.prepare("PRAGMA wal_checkpoint(NOOP)").get();
     }
-    if (!observeOnly && state.log === state.checkpointed && (state.log >= 10000 || oversized())) {
+    if (!observeOnly && state.log === state.checkpointed && (state.log >= workerData.backpressureFrames || oversized())) {
       const timeout = Number(db.prepare("PRAGMA busy_timeout").get().timeout);
       db.exec("PRAGMA busy_timeout = 0;");
       try { db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get(); }
@@ -121,7 +121,7 @@ const maintain = (observeOnly = false) => {
     walFrames = state.log;
     checkpointedFrames = state.checkpointed;
     const wasPaused = blocked || unknown;
-    blocked = state.log >= 10000 || oversized();
+    blocked = state.log >= workerData.backpressureFrames || oversized();
     if (wasPaused && !blocked) parentPort.postMessage({ type: "admission-recovered" });
     if (unknown) parentPort.postMessage({ type: "maintenance-recovered" });
     unknown = false;

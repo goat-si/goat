@@ -1,5 +1,5 @@
 import { type PointerEvent as ReactPointerEvent } from "react";
-import { type SensorProps } from "@dnd-kit/core";
+import { type SensorProps, type AutoScrollOptions } from "@dnd-kit/core";
 import { getOwnerDocument, getWindow } from "@dnd-kit/utilities";
 
 // Pointer travel before a press on a row starts a drag, or a press on its
@@ -17,6 +17,7 @@ type Options = {
 };
 
 export class SidebarPointerSensor {
+  static autoScrollOptions: AutoScrollOptions = { threshold: { x: 0, y: 0.05 }, acceleration: 3 };
   static activators = [
     {
       eventName: "onPointerDown" as const,

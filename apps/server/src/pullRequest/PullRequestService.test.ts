@@ -1,3 +1,17 @@
+import {
+  project,
+  changeRequest,
+  hostedChangeRequest,
+  unusable,
+  requestFailed,
+  fakeProvider,
+  keyedByCanonicalKey,
+  sshAliasHost,
+  cloudSessionUrl,
+  cloudInput,
+  cloudResult,
+  cloudProject,
+} from "./pullRequestTestFixtures.ts";
 import * as Clock from "effect/Clock";
 import { SourceControlProviderKind } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -29,12 +43,10 @@ import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.t
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import type { SourceControlProvider } from "@goat/source-control-core/server/SourceControlProvider";
-import { isSshRemoteUrl } from "@goat/shared/sourceControl";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import { fakePullRequestProvider } from "@goat/source-control-testing/fakeSourceControlDriver";
 import {
   PullRequestProviderError,
-  type ProviderChangeRequest,
   type PullRequestProviderApi,
 } from "@goat/source-control-core/server/PullRequestProvider";
 import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
@@ -48,82 +60,6 @@ const FULL_REVIEW: PullRequestReviewCapabilities = {
   verdicts: ["comment", "approve", "request-changes"],
 };
 const FULL_REVIEWERS: PullRequestReviewerCapabilities = { request: true, listCandidates: true };
-
-function project(input: {
-  readonly id: string;
-  readonly title: string;
-  readonly workspaceRoot: string;
-  readonly repository?: string;
-  readonly provider?: string;
-  readonly host?: string;
-  readonly remoteUrl?: string;
-}): OrchestrationProjectShell {
-  const host = input.host ?? (input.provider === "gitlab" ? "gitlab.com" : "github.com");
-  return {
-    id: input.id as ProjectId,
-    title: input.title,
-    workspaceRoot: input.workspaceRoot,
-    ...(input.repository
-      ? {
-          repositoryIdentity: {
-            canonicalKey: `${host}/${input.repository}`,
-            locator: {
-              source: "git-remote" as const,
-              remoteName: "origin",
-              remoteUrl: input.remoteUrl ?? `https://${host}/${input.repository}.git`,
-            },
-            provider: SourceControlProviderKind.make(input.provider ?? "github"),
-            displayName: input.repository,
-          },
-        }
-      : {}),
-    defaultModelSelection: null,
-    scripts: [],
-    createdAt: "2026-07-01T00:00:00Z",
-    updatedAt: "2026-07-01T00:00:00Z",
-  };
-}
-
-function changeRequest(number: number, updatedAt: string): ProviderChangeRequest {
-  return {
-    number,
-    title: `Change request ${number}`,
-    url: `https://host/pull/${number}`,
-    author: { login: "octocat", name: null, avatarUrl: null },
-    headBranch: `feat/${number}`,
-    baseBranch: "main",
-    state: "open",
-    isDraft: false,
-    mergeability: "mergeable",
-    additions: 1,
-    deletions: 0,
-    createdAt: "2026-07-01T00:00:00Z",
-    updatedAt,
-    reviewRequestLogins: [],
-    labels: [],
-  };
-}
-
-function hostedChangeRequest(body: string, additions = 1) {
-  return {
-    ...changeRequest(1, "2026-07-02T00:00:00Z"),
-    body,
-    additions,
-    changedFiles: 2,
-    mergedAt: null,
-    closedAt: null,
-    reviewers: [],
-    checks: [],
-    mergeCapabilities: { merge: true, squash: true, rebase: true },
-    viewerPermissions: {
-      actions: ["merge"] as const,
-      comment: true,
-      resolve: true,
-      verdicts: ["comment", "approve", "request-changes"] as const,
-      requestReviewers: true,
-    },
-  };
-}
 
 it.effect("reads maintainer edits and changes them through the update command", () =>
   Effect.gen(function* () {
@@ -210,62 +146,6 @@ it.effect("does not wait for an in-flight detail read to display a preview", () 
   }),
 );
 
-function unusable(provider: SourceControlProviderKind, reason: "missing-tool" | "unauthenticated") {
-  return new PullRequestProviderError({
-    provider,
-    operation: "getViewer",
-    reason,
-    detail: `${provider} is not usable.`,
-  });
-}
-
-const requestFailed = new PullRequestProviderError({
-  provider: SourceControlProviderKind.make("github"),
-  operation: "listChangeRequests",
-  reason: "failed",
-  detail: "HTTP 404",
-});
-
-function fakeProvider(
-  kind: SourceControlProviderKind,
-  overrides: Partial<PullRequestProviderApi> = {},
-): PullRequestProviderApi {
-  return fakePullRequestProvider(kind, {
-    // An open pull request with nothing holding it, which a merge reads first.
-    getChangeRequest: () => Effect.succeed(hostedChangeRequest("")),
-    ...(kind === "github" ? { mergeMessageRewrite: (message: string) => message } : {}),
-    ...(kind === "azure-devops"
-      ? { repositoryKey: ({ canonicalKey }: { readonly canonicalKey: string }) => canonicalKey }
-      : {}),
-    ...overrides,
-  });
-}
-
-// Like Azure DevOps, whose repository names repeat across organizations and projects.
-const keyedByCanonicalKey = {
-  repositoryKey: ({ canonicalKey }: { readonly canonicalKey: string }) => canonicalKey,
-};
-
-/** A host whose SSH remotes name an alias, so discovery says which server serves them. */
-const sshAliasHost = {
-  resolveRemoteWebHost: ({ cwd, context, resolveContext }) =>
-    isSshRemoteUrl(context.remoteUrl)
-      ? resolveContext({
-          cwd,
-          context: {
-            ...context,
-            provider: { kind: SourceControlProviderKind.make("unknown"), name: "", baseUrl: "" },
-          },
-        }).pipe(
-          Effect.map((resolved) =>
-            resolved === null || resolved.provider.kind === "unknown"
-              ? null
-              : new URL(resolved.provider.baseUrl).host,
-          ),
-        )
-      : Effect.succeed(null),
-} as SourceControlProvider["Service"];
-
 function makeService(input: {
   readonly settings?: ServerSettings;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
@@ -323,23 +203,6 @@ function makeService(input: {
   );
 }
 
-const cloudSessionUrl = "https://claude.ai/code/session_ABC123";
-const cloudInput = {
-  projectId: "p1" as ProjectId,
-  repository: "https://github.com/acme/web",
-  sessionUrl: cloudSessionUrl,
-};
-const cloudResult = {
-  prUrl: "https://github.com/acme/web/pull/7",
-  branch: "claude/result",
-  summary: "Changed function.",
-};
-const cloudProject = project({
-  id: "p1",
-  title: "web",
-  workspaceRoot: "/fixture/source",
-  repository: "acme/web",
-});
 const verifiedCloudCredential: NonNullable<PullRequestProviderApi["withVerifiedCredential"]> = (
   _input,
   use,
@@ -1365,6 +1228,136 @@ it.effect("puts the author a query names exactly ahead of those it only begins",
       ["octocat", "riven-example", "sam-browne"],
     );
     assert.strictEqual(result.truncated, true);
+  }),
+);
+
+it.effect.each(["failed", "rate-limited", "unauthenticated"] as const)(
+  "propagates a %s scoped reference search",
+  (reason) =>
+    Effect.gen(function* () {
+      const failure = new PullRequestProviderError({
+        provider: SourceControlProviderKind.make("github"),
+        operation: "searchRepositoryReferences",
+        reason,
+        detail: "The host could not search",
+      });
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "repo", workspaceRoot: "/a", repository: "acme/repo" }),
+        ],
+        providers: [
+          fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            searchRepositoryReferences: () => Effect.fail(failure),
+          }),
+        ],
+      });
+      const result = yield* Effect.result(
+        service.filterOptions({ kind: "references", projectId: "p1" as ProjectId, query: "12" }),
+      );
+      assert.strictEqual(result._tag, "Failure");
+      if (result._tag === "Failure") assert.strictEqual(result.failure.cause, failure);
+    }),
+);
+
+it.effect.each([true, false])(
+  "marks reference results incomplete when another repository fails (matches: %s)",
+  (hasMatch) =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "repo", workspaceRoot: "/a", repository: "acme/repo" }),
+          project({ id: "p2", title: "other", workspaceRoot: "/b", repository: "acme/other" }),
+        ],
+        providers: [
+          fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            searchRepositoryReferences: ({ repository }) =>
+              repository === "acme/other"
+                ? Effect.fail(requestFailed)
+                : Effect.succeed({
+                    items: hasMatch
+                      ? [
+                          {
+                            reference: "#12",
+                            kind: "issue",
+                            number: 12,
+                            title: "Found",
+                            state: "open",
+                          },
+                        ]
+                      : [],
+                    truncated: false,
+                  }),
+          }),
+        ],
+      });
+      const result = yield* service.filterOptions({ kind: "references", query: "12" });
+      assert.deepStrictEqual(
+        result.references.map((reference) => reference.reference),
+        hasMatch ? ["#12"] : [],
+      );
+      assert.strictEqual(result.truncated, true);
+    }),
+);
+
+it.effect("ranks references by number, keeping the host's recent-first order", () =>
+  Effect.gen(function* () {
+    const queries: Array<{
+      repository: string;
+      query?: string | undefined;
+      sigil?: "#" | "!" | undefined;
+    }> = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({ id: "p2", title: "tree", workspaceRoot: "/b", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          searchRepositoryReferences: (input) =>
+            Effect.sync(() => {
+              queries.push(input);
+              return {
+                items: [
+                  { reference: "#129", kind: "issue", number: 129, title: "Newest", state: "open" },
+                  {
+                    reference: "#7",
+                    kind: "issue",
+                    number: 7,
+                    title: "Fix #12 again",
+                    state: "open",
+                  },
+                  {
+                    reference: "#12",
+                    kind: "change-request",
+                    number: 12,
+                    title: "Exact",
+                    state: "merged",
+                  },
+                  {
+                    reference: "#120",
+                    kind: "issue",
+                    number: 120,
+                    title: "Older",
+                    state: "closed",
+                  },
+                ],
+                truncated: false,
+              };
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.filterOptions({ kind: "references", query: "12", sigil: "#" });
+
+    assert.deepStrictEqual(
+      queries.map(({ repository, query, sigil }) => ({ repository, query, sigil })),
+      [{ repository: "pingdotgg/t3code", query: "12", sigil: "#" }],
+    );
+    assert.deepStrictEqual(
+      result.references.map((candidate) => candidate.reference),
+      ["#12", "#129", "#120", "#7"],
+    );
   }),
 );
 

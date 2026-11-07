@@ -8,7 +8,7 @@ import { guardErrors } from "@goat/shared/errorGuards";
 import {
   compareRuntimeProtocols,
   type RuntimeProtocolRanges,
-} from "@goat/shared/sshRuntimeProtocol";
+} from "@goat/shared/sshRuntimeProtocolComparison";
 
 export const SMOKE_TIMEOUT_MS = 30_000;
 

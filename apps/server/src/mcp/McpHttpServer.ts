@@ -1,3 +1,5 @@
+import { tracedToolRegistration } from "./toolSpans.ts";
+import { normalizeMcpHttpResponse } from "./normalizeMcpHttpResponse.ts";
 import {
   boundSnapshotMetadata,
   cutText,
@@ -256,18 +258,6 @@ type McpAuthMiddleware = (
   HttpServerRequest.HttpServerRequest
 >;
 
-const normalizeMcpHttpResponse = (
-  response: HttpServerResponse.HttpServerResponse,
-): HttpServerResponse.HttpServerResponse => {
-  const bodyIsEmpty =
-    response.body._tag === "Empty" ||
-    (response.body._tag === "Uint8Array" && response.body.contentLength === 0) ||
-    (response.body._tag === "Raw" && response.body.contentLength === 0);
-  return response.status === 200 && bodyIsEmpty
-    ? HttpServerResponse.setStatus(response, 202)
-    : response;
-};
-
 // Session tokens are `<payload>.<signature>`; registry tokens are a bare base64url secret.
 const looksLikeProviderToken = (token: string) => token.length > 0 && !token.includes(".");
 
@@ -276,8 +266,9 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
   const listing = listingSetting(yield* Effect.serviceOption(Settings.ServerSettingsService));
   const permissions = yield* Effect.serviceOption(Profiles.PermissionProfiles);
-  return Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
-    const request = yield* HttpServerRequest.HttpServerRequest;
+  const authenticateRequest = Effect.fn("McpHttpServer.authenticateRequest")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+  ) {
     const token = parseBearerToken(request) ?? "";
     const invocation =
       (yield* registry.resolve(token)) ??
@@ -330,6 +321,12 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
         message,
       });
     }
+    return invocation;
+  });
+  // The HTTP span covers the downstream tool call.
+  return Effect.fnUntraced(function* (httpEffect) {
+    const invocation = yield* authenticateRequest(yield* HttpServerRequest.HttpServerRequest);
+    if (HttpServerResponse.isHttpServerResponse(invocation)) return invocation;
     return yield* withCallerListing(
       listing,
       permissions,
@@ -930,9 +927,11 @@ const withListedNames = <A, E, R>(
       ...server,
       addTool: (options) =>
         server.addTool(
-          forwardedContentRegistration(
-            listedRegistration(
-              advertisedRegistration(options, tools[options.tool.name]?.parametersSchema.ast),
+          tracedToolRegistration(
+            forwardedContentRegistration(
+              listedRegistration(
+                advertisedRegistration(options, tools[options.tool.name]?.parametersSchema.ast),
+              ),
             ),
           ),
         ),

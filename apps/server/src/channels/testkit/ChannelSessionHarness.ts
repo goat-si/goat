@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   TurnItemId,
   type ChannelTask,
+  type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
   type ThreadId,
 } from "@goat/contracts";
@@ -35,24 +36,32 @@ export const makeSessionHarness = (options: { readonly driver?: "opencode" } = {
                     : []),
                   ...own,
                 ],
-                messages: own.flatMap((item) =>
-                  item.type !== "assistant_message"
-                    ? []
-                    : [
-                        {
-                          id: item.messageId,
-                          threadId,
-                          runId: item.runId,
-                          nodeId: null,
-                          role: "assistant" as const,
-                          text: item.text,
-                          streaming: item.streaming,
-                          attachments: [],
-                          createdAt: item.updatedAt,
-                          updatedAt: item.updatedAt,
-                        },
-                      ],
-                ),
+                messages: [
+                  // Base user messages stay: a background command's notice is one.
+                  ...("messages" in records
+                    ? (records.messages as OrchestrationV2ThreadProjection["messages"]).filter(
+                        (message) => message.role === "user",
+                      )
+                    : []),
+                  ...own.flatMap((item) =>
+                    item.type !== "assistant_message"
+                      ? []
+                      : [
+                          {
+                            id: item.messageId,
+                            threadId,
+                            runId: item.runId,
+                            nodeId: null,
+                            role: "assistant" as const,
+                            text: item.text,
+                            streaming: item.streaming,
+                            attachments: [],
+                            createdAt: item.updatedAt,
+                            updatedAt: item.updatedAt,
+                          },
+                        ],
+                  ),
+                ],
               };
             }),
           ),

@@ -68,6 +68,13 @@ const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instructi
     ").",
 ];
 
+/** Only a worker on this machine can offer a skill; origin.report has no field for one. */
+const SKILL_PROPOSAL_RULE = `If the finished work followed a repeatable procedure the person will likely ask for again, you may add skillProposal to your completed ${goatCallText("channel.task_report")}: a short lowercase name, a one-line summary, and the procedure as Markdown. GOAT asks the person and saves it as a skill only if they agree. Never put secrets, tokens, or personal data in it.`;
+
+/** Every worker and bot session runs on the person's own machine, beside their private data. */
+export const PERSONAL_DATA_RULE =
+  "Personal data rule: read browser memory or history (such as Aside), mail, messages, passwords, the keychain, ~/.ssh or other credential files only when the person's request asks about that data. Never search the whole home folder (rg, find or grep over ~ or /Users/<name>); look in GOAT Bot's notes, the project folders and GOAT's tools (memory.recall, thread.search) first.";
+
 /**
  * The rules every channel worker follows. A worker on this machine reports with
  * channel_task_report; one on another machine reports to its origin with goat_origin_report. A
@@ -84,6 +91,7 @@ export const channelWorkerRules = (
         `If you need a decision from the person who asked, call ${goatCallText("channel.task_report")} with this taskId and generation, status "waiting_input", a new eventId, and your question, then stop.`,
         kind === "turn" ? TURN_REPORT_RESULT : REPORT_RESULT,
         kind === "turn" ? TURN_FINISH : FINISH,
+        PERSONAL_DATA_RULE,
       ]
     : [
         `For progress on long work, call ${goatCallText("origin.report")} with status progress at meaningful milestones.`,
@@ -91,6 +99,7 @@ export const channelWorkerRules = (
         `If you need a decision from the person who asked, call ${goatCallText("origin.report")} with status needs_input and your question, then stop.`,
         REPORT_RESULT,
         FINISH,
+        PERSONAL_DATA_RULE,
       ];
 
 /**
@@ -99,14 +108,14 @@ export const channelWorkerRules = (
  * writable during a turn, while repository or system changes go to a coding thread.
  */
 export const GOAT_BOT_READ_ONLY_RULE =
-  "You run with full access and are read-only outside your own scratch and artifacts folders: nothing in GOAT stops you, so keep this rule yourself. Read anything that helps: files anywhere on this machine, git history and status, logs, system status, and GOAT's tools. You may write temporary scripts or intermediate files only inside your scratch folder and user-visible reports or outputs only inside your artifacts folder. Outside those folders, change nothing yourself: no repository file edits, no commands that write, install, delete, move, or restart anything, no commits or pushes, and no settings changes in GOAT or anywhere else. Subagents you start keep the same rule. If the request needs a repository or system change, that is a coding thread: launch it by the routing rule instead of changing anything yourself; if it is unclear whether the person wants the change, ask them first.";
+  "You run with full access and are read-only outside your own scratch and artifacts folders: nothing in GOAT stops you, so keep this rule yourself. Read what helps: project files, git history and status, logs, system status, and GOAT's tools, within the personal data rule. You may write temporary scripts or intermediate files only inside your scratch folder and user-visible reports or outputs only inside your artifacts folder. Outside those folders, change nothing yourself: no repository file edits, no commands that write, install, delete, move, or restart anything, no commits or pushes, and no settings changes in GOAT or anywhere else. Subagents you start keep the same rule. If the request needs a repository or system change, that is a coding thread: launch it by the routing rule instead of changing anything yourself; if it is unclear whether the person wants the change, ask them first.";
 
 /**
  * The grok-bot split a GOAT Bot turn applies: settle small lookups from its own reads, delegate
  * investigations to bounded subagents, and hand coding work to worktree threads whose results
  * comes back into the same conversation.
  */
-export const GOAT_BOT_ROUTING_RULE = `Route what this needs one of three ways. Small lookups and basic tasks you settle yourself: read the files, notes, memory, or task status that answer it, or run a bounded script or report in your scratch or artifacts folder, and reply. Investigations that take several steps or parallel searching go to bounded subagents with ${goatCallText("task.create")} (up to 8 in parallel, using mode "async" when fanning out or doing other work in parallel): wait for them when needed and fold what they found into your answer; never paste their output raw. Work that changes a repository goes to a coding thread: ${goatCallText("thread.launch")} here or ${goatCallText("ssh.thread_launch")} on another machine, always with a worktree workspace (up to 4 in parallel); when you launch background subagents or coding threads, send an immediate update to the person with ${goatCallText("channel.task_report")} (status "running", milestone true, and a new eventId) so they hear right away, and when GOAT tells you that child work ended, report its result back into this conversation. Follow-ups from the person arrive while you work: acknowledge each one, answer what you can between waits on children, and fold the rest in when the child completes.`;
+export const GOAT_BOT_ROUTING_RULE = `Route what this needs one of three ways. Small lookups and basic tasks you settle yourself: read the files, notes, memory, or task status that answer it, or run a bounded script or report in your scratch or artifacts folder, and reply. Investigations that take several steps or parallel searching go to bounded subagents with ${goatCallText("task.create")} (up to 8 in parallel, using mode "async" when fanning out or doing other work in parallel): wait for them when needed and fold what they found into your answer; never paste their output raw. Work that changes a repository goes to a coding thread: ${goatCallText("thread.launch")} here or ${goatCallText("ssh.thread_launch")} on another machine, always with a worktree workspace (up to 4 in parallel); when you launch background subagents or coding threads, send an immediate update to the person with ${goatCallText("channel.task_report")} (status "running", milestone true, and a new eventId) so they hear right away, and when GOAT tells you that child work ended, report its result back into this conversation. Follow-ups from the person arrive while you work: acknowledge each one, answer what you can between waits on children, and fold the rest in when the child completes. When GOAT starts a run to tell you a background command ended, answer only the request that started it, or reply NO_REPLY if there is nothing new for that person.`;
 
 /**
  * GOAT Bot hands work to the machines that have room for it; the general placement guidance is in
@@ -142,6 +151,7 @@ export const workerInstruction = (task: BriefTask, files: ChannelBotFiles) =>
         JSON.stringify(task.notesChangeRequested) +
         "). Edit the notes file only to make that change.",
     ...channelWorkerRules("local"),
+    SKILL_PROPOSAL_RULE,
   ].join("\n");
 
 /**
@@ -181,6 +191,7 @@ export const turnInstruction = (
         files.notes +
         ") yourself to make exactly that change, and change nothing else.",
     ...channelWorkerRules("local", "turn"),
+    SKILL_PROPOSAL_RULE,
   ].join("\n");
 
 /**

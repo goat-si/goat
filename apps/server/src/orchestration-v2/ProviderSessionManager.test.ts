@@ -1,3 +1,18 @@
+import {
+  makeProviderSession,
+  emptyState,
+  type TestProviderRuntimeState,
+  modelSelection,
+  CODEX_DRIVER,
+  runtimePolicy,
+} from "./ProviderSessionFixture.testkit.ts";
+export {
+  modelSelection,
+  CODEX_DRIVER,
+  runtimePolicy,
+  emptyState,
+} from "./ProviderSessionFixture.testkit.ts";
+import { registerExtensionSessionChecks } from "./ProviderExtensionSessionChecks.testkit.ts";
 import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import * as CodexRoutes from "../provider/CodexRouteService.ts";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
@@ -45,7 +60,6 @@ import {
   ScheduledTaskId,
   NodeId,
   type OrchestrationV2ThreadProjection,
-  type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderCapabilities,
@@ -104,6 +118,7 @@ import * as ComputerUseTestkit from "../cua/ComputerUseLeases.testkit.ts";
 import { askComputer, carriesSkill } from "./ComputerUseSkill.testkit.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ReleaseTest from "./ProviderSessionManager.persistence.testkit.ts";
 import {
   layerTestDatabase,
   layerTestStores,
@@ -126,54 +141,7 @@ const ExclusiveCapabilities: OrchestrationV2ProviderCapabilities = {
     supportsMultipleProviderThreadsPerSession: false,
   },
 };
-interface TestProviderRuntimeState {
-  readonly openCount: number;
-  readonly closeCount: number;
-  readonly interruptCount: number;
-  readonly resumeCount: number;
-  readonly unloadedNativeThreadIds: ReadonlyArray<string>;
-  readonly eventQueues: ReadonlyMap<
-    string,
-    Queue.Queue<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>
-  >;
-}
-const emptyState: TestProviderRuntimeState = {
-  openCount: 0,
-  closeCount: 0,
-  interruptCount: 0,
-  resumeCount: 0,
-  unloadedNativeThreadIds: [],
-  eventQueues: new Map(),
-};
-const modelSelection = {
-  instanceId: ProviderInstanceId.make("codex"),
-  model: "gpt-5.4",
-} satisfies ModelSelection;
-const CODEX_DRIVER = ProviderDriverKind.make("codex");
-const runtimePolicy = {
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  cwd: process.cwd(),
-} satisfies ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-function makeProviderSession(input: {
-  readonly providerSessionId: ProviderSessionId;
-  readonly now: DateTime.Utc;
-  readonly capabilities?: OrchestrationV2ProviderCapabilities;
-}): OrchestrationV2ProviderSession {
-  return {
-    id: input.providerSessionId,
-    driver: CODEX_DRIVER,
-    providerInstanceId: modelSelection.instanceId,
-    status: "ready",
-    cwd: process.cwd(),
-    model: "gpt-5.4",
-    capabilities: input.capabilities ?? CodexCapabilities,
-    createdAt: input.now,
-    updatedAt: input.now,
-    lastError: null,
-  };
-}
-function makeThreadCreatedEvent(input: {
+export function makeThreadCreatedEvent(input: {
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly threadId: ThreadId;
   readonly now: DateTime.Utc;
@@ -217,7 +185,7 @@ function makeThreadCreatedEvent(input: {
     };
   });
 }
-function makeProviderThread(input: {
+export function makeProviderThread(input: {
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly threadId: ThreadId;
   readonly providerSessionId: ProviderSessionId;
@@ -358,6 +326,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
   options: {
     readonly failEventStream?: boolean;
     readonly capabilities?: OrchestrationV2ProviderCapabilities;
+    readonly extensionStatuses?: OrchestrationV2ProviderSession["extensionStatuses"];
     readonly mcpConfigs?: Ref.Ref<
       ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
     >;
@@ -418,11 +387,16 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
         }
         const now = yield* DateTime.now;
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>();
-        const session = makeProviderSession({
-          providerSessionId: input.providerSessionId,
-          now,
-          ...(options.capabilities === undefined ? {} : { capabilities: options.capabilities }),
-        });
+        let session: OrchestrationV2ProviderSession = {
+          ...makeProviderSession({
+            providerSessionId: input.providerSessionId,
+            now,
+            ...(options.capabilities === undefined ? {} : { capabilities: options.capabilities }),
+          }),
+          ...(options.extensionStatuses === undefined
+            ? {}
+            : { extensionStatuses: options.extensionStatuses }),
+        };
         yield* Ref.update(state, (current) => {
           const eventQueues = new Map(current.eventQueues);
           eventQueues.set(String(input.providerSessionId), events);
@@ -440,7 +414,9 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
           instanceId: ProviderInstanceId.make("codex"),
           driver: CODEX_DRIVER,
           providerSessionId: input.providerSessionId,
-          providerSession: session,
+          get providerSession() {
+            return session;
+          },
           events: options.failEventStream
             ? Stream.fail(
                 new ProviderAdapter.ProviderAdapterEventStreamError({
@@ -449,7 +425,13 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
                   cause: "process exited",
                 }),
               )
-            : Stream.fromQueue(events),
+            : Stream.fromQueue(events).pipe(
+                Stream.tap((event) =>
+                  Effect.sync(() => {
+                    if (event.type === "provider_session.updated") session = event.providerSession;
+                  }),
+                ),
+              ),
           ...(options.backgroundTasksEndWithProcess === false
             ? {}
             : { backgroundTasksEndWithProcess: true as const }),
@@ -496,13 +478,14 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
       }),
   });
 });
-function layerTest(input: {
+export function layerTest(input: {
   readonly state: Ref.Ref<TestProviderRuntimeState>;
   readonly idleTimeoutMs: number;
   readonly maxIdlePinMs?: number;
   readonly beforeIdleFiberInterrupt?: Effect.Effect<void>;
   readonly failEventStream?: boolean;
   readonly capabilities?: OrchestrationV2ProviderCapabilities;
+  readonly extensionStatuses?: OrchestrationV2ProviderSession["extensionStatuses"];
   readonly mcpConfigs?: Ref.Ref<
     ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
   >;
@@ -581,6 +564,9 @@ function layerTest(input: {
     makeProviderAdapter(input.state, {
       failEventStream: input.failEventStream ?? false,
       ...(input.capabilities === undefined ? {} : { capabilities: input.capabilities }),
+      ...(input.extensionStatuses === undefined
+        ? {}
+        : { extensionStatuses: input.extensionStatuses }),
       ...(input.mcpConfigs === undefined ? {} : { mcpConfigs: input.mcpConfigs }),
       ...(input.beforeOpen === undefined ? {} : { beforeOpen: input.beforeOpen }),
       ...(input.hasPendingBackgroundWork === undefined
@@ -1595,6 +1581,16 @@ it.effect("ProviderSessionManagerV2 stops a session still opening when its layer
     assert.equal((yield* Ref.get(state)).closeCount, 1);
   }),
 );
+registerExtensionSessionChecks({
+  emptyState,
+  modelSelection,
+  CODEX_DRIVER,
+  runtimePolicy,
+  makeThreadCreatedEvent,
+  makeProviderThread,
+  layerTest,
+});
+
 it.effect("ProviderSessionManagerV2 interrupts event subscriptions on server shutdown", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -3340,14 +3336,17 @@ it.effect("ProviderSessionManagerV2 marks pending runtime requests non-live on r
       yield* eventSink.write({
         events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
       });
-      const pendingRequest = yield* makePendingRuntimeRequestEvents({
-        idAllocator,
+      const requestArgs = { idAllocator, threadId, providerSessionId, providerThread, now };
+      const pendingRequest = yield* makePendingRuntimeRequestEvents(requestArgs);
+      const historical = yield* makePendingRuntimeRequestEvents(requestArgs);
+      yield* ReleaseTest.seedRequestFilter({
+        sink: eventSink,
+        projections: projectionStore,
         threadId,
-        providerSessionId,
-        providerThread,
+        pending: pendingRequest,
+        historical,
         now,
       });
-      yield* eventSink.write({ events: pendingRequest.events });
       yield* manager.open({
         threadId,
         providerSessionId,
@@ -3359,16 +3358,11 @@ it.effect("ProviderSessionManagerV2 marks pending runtime requests non-live on r
         reason: "runtime_error",
         detail: "process exited",
       });
-      const projection = yield* projectionStore.getThreadProjection(threadId);
-      const request = projection.runtimeRequests.at(-1);
-      const requestNode = projection.nodes.find((node) => node.id === request?.nodeId);
-      const requestTurnItem = projection.turnItems.find(
-        (item) => item.type === "approval_request" && item.requestId === request?.id,
+      ReleaseTest.assertReleasedRequest(
+        yield* projectionStore.getThreadProjection(threadId),
+        pendingRequest,
+        historical,
       );
-      assert.equal(request?.status, "expired");
-      assert.equal(request?.responseCapability.type, "not_resumable");
-      assert.equal(requestNode?.status, "failed");
-      assert.equal(requestTurnItem?.status, "failed");
     });
     yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
   }),

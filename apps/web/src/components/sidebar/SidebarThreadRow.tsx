@@ -12,7 +12,10 @@ import {
   hasQueuedTurnStart,
   QUEUED_TURN_START_GRACE_MS,
 } from "@goat/client-runtime/state/thread-settled";
-import { resolveSettledThreadTimestamp } from "@goat/client-runtime/state/thread-sort";
+import {
+  resolveSettledThreadTimestamp,
+  resolveThreadActivityTimestamp,
+} from "@goat/client-runtime/state/thread-sort";
 import { type EnvironmentThreadSearchMatch } from "@goat/client-runtime/state/thread-search";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import {
@@ -137,9 +140,6 @@ export type SidebarProviderEntry = Pick<
   | "acpRegistryIconUrl"
   | "models"
 >;
-function threadTimeTimestamp(thread: SidebarThreadSummary): string {
-  return thread.latestUserMessageAt ?? thread.updatedAt;
-}
 
 function JumpHintBadge(props: { label: string }) {
   return (
@@ -1135,7 +1135,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                         timestamp={
                           variantAction === "unsettle"
                             ? resolveSettledThreadTimestamp(thread)
-                            : threadTimeTimestamp(thread)
+                            : resolveThreadActivityTimestamp(thread)
                         }
                       />
                     </span>
@@ -1643,7 +1643,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
                 />
               </span>
               <span className="w-8 shrink-0 text-right text-xs text-muted-foreground/55 dark:text-muted-foreground/70 tabular-nums">
-                <RelativeTimeLabel timestamp={threadTimeTimestamp(thread)} />
+                <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
               </span>
             </span>
             {props.searchMatch ? (

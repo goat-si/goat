@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   deleted: vi.fn(),
   download: vi.fn(),
   copy: vi.fn(),
+  write: vi.fn(),
   share: vi.fn(),
   shareFromSource: vi.fn(),
   available: vi.fn(),
@@ -56,6 +57,11 @@ vi.mock("expo-file-system", () => {
     async copy(destination: File): Promise<void> {
       await mocks.copy(this.uri, destination.uri);
     }
+
+    // Native write is asynchronous: the file exists only once its promise resolves.
+    write(bytes: Uint8Array): Promise<void> {
+      return mocks.write(this.uri, bytes);
+    }
   }
 
   return { Directory, File, Paths: { cache: "file:///cache" } };
@@ -74,7 +80,9 @@ vi.mock("./shareFileFromSource", () => ({ shareFileFromSource: mocks.shareFromSo
 import {
   downloadAndShareAttachment,
   downloadAttachmentForPreview,
+  shareGeneratedAttachment,
   shareLocalAttachment,
+  writeGeneratedAttachmentFile,
 } from "./attachmentDownload";
 import { isForegroundHandoffActive } from "./foreground-handoff";
 
@@ -92,6 +100,8 @@ beforeEach(() => {
   mocks.deleted.mockReset();
   mocks.download.mockReset();
   mocks.copy.mockReset();
+  mocks.write.mockReset();
+  mocks.write.mockResolvedValue(undefined);
   mocks.share.mockReset();
   mocks.shareFromSource.mockReset();
   mocks.available.mockReset();
@@ -342,5 +352,57 @@ describe("attachment preview files", () => {
     await task;
     expect(mocks.share).not.toHaveBeenCalled();
     expect(mocks.deleted).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("generated attachment files", () => {
+  const generated = {
+    bytes: new Uint8Array([37, 80, 68, 70]),
+    attachment: { name: "q3-report.pdf", mimeType: "application/pdf" },
+  };
+  const pendingWrite = () => {
+    let finish = () => {};
+    mocks.write.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    return () => finish();
+  };
+
+  it("opens the share sheet only after the file's bytes are written", async () => {
+    const finishWrite = pendingWrite();
+    const shared = shareGeneratedAttachment({ ...generated, signal: new AbortController().signal });
+    await vi.waitFor(() => expect(mocks.write).toHaveBeenCalledOnce());
+    expect(mocks.share).not.toHaveBeenCalled();
+    finishWrite();
+    await expect(shared).resolves.toBe(true);
+    const [writtenUri] = mocks.write.mock.calls[0] as [string, Uint8Array];
+    expect(mocks.share).toHaveBeenCalledExactlyOnceWith(writtenUri, expect.anything());
+  });
+
+  it("hands out a preview file only after its bytes are written", async () => {
+    const finishWrite = pendingWrite();
+    let ready = false;
+    const preview = writeGeneratedAttachmentFile(generated).then((file) => {
+      ready = true;
+      return file;
+    });
+    await vi.waitFor(() => expect(mocks.write).toHaveBeenCalledOnce());
+    expect(ready).toBe(false);
+    finishWrite();
+    const file = await preview;
+    expect(file.uri).toBe((mocks.write.mock.calls[0] as [string])[0]);
+    file.dispose();
+  });
+
+  it("reports a failed write instead of sharing a missing file, and removes its copy", async () => {
+    mocks.write.mockRejectedValue(new Error("disk full"));
+    await expect(
+      shareGeneratedAttachment({ ...generated, signal: new AbortController().signal }),
+    ).rejects.toThrow("disk full");
+    expect(mocks.share).not.toHaveBeenCalled();
+    expect(mocks.deleted).toHaveBeenCalledOnce();
   });
 });

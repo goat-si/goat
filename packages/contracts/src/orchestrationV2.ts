@@ -1,3 +1,5 @@
+export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
+import { PiExtensionStatuses } from "./piExtensionStatus.ts";
 import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
@@ -7,6 +9,11 @@ export * from "./orchestrationV2Attribution.ts";
 import { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 export { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
+import {
+  kindUnionWithFallback,
+  OrchestrationV2Notification,
+} from "./orchestrationV2Notification.ts";
+export * from "./orchestrationV2Notification.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
 import { Handoff, HandoffJson, HandoffActor } from "./handoff.ts";
@@ -21,7 +28,6 @@ import { withRecordIdTable } from "./orchestrationV2IdTable.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
@@ -82,7 +88,7 @@ import {
   TurnItemId,
 } from "./baseSchemas.ts";
 import { ChannelMessageMeta } from "./channelCommon.ts";
-import { ChannelTaskChip, ChannelTimelineRecord } from "./channelLedger.ts";
+import { ChannelTimelineRecord } from "./channelLedger.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import { OrchestrationV2CloudTask } from "./cloudTask.ts";
 import { ThreadGuestShare } from "./guestShare.ts";
@@ -947,12 +953,6 @@ export const OrchestrationV2Subagent = Schema.Struct({
 });
 export type OrchestrationV2Subagent = typeof OrchestrationV2Subagent.Type;
 
-export function isOrchestrationV2WorkActive(
-  status: OrchestrationV2ExecutionNode["status"],
-): boolean {
-  return status === "pending" || status === "running" || status === "waiting";
-}
-
 export const OrchestrationV2CheckpointScope = Schema.Struct({
   id: CheckpointScopeId,
   threadId: ThreadId,
@@ -976,6 +976,7 @@ export const OrchestrationV2ProviderSession = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   model: Schema.NullOr(TrimmedNonEmptyString),
   capabilities: OrchestrationV2ProviderCapabilities,
+  extensionStatuses: PiExtensionStatuses,
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   lastError: Schema.NullOr(Schema.String),
@@ -989,43 +990,6 @@ export const OrchestrationV2ProviderSessionDetached = Schema.Struct({
 });
 export type OrchestrationV2ProviderSessionDetached =
   typeof OrchestrationV2ProviderSessionDetached.Type;
-
-function encodedKind(member: Schema.Top): string {
-  const encoded = SchemaAST.toEncoded(member.ast);
-  const kind = SchemaAST.isObjects(encoded)
-    ? encoded.propertySignatures.find((property) => property.name === "kind")?.type
-    : undefined;
-  if (kind !== undefined && SchemaAST.isLiteral(kind) && typeof kind.literal === "string") {
-    return kind.literal;
-  }
-  throw new Error("Each member of a kind union needs a literal string `kind`.");
-}
-
-function kindUnionWithFallback<
-  const Members extends ReadonlyArray<Schema.Top & { readonly Encoded: { readonly kind: string } }>,
-  Unknown extends Schema.Top,
->(
-  members: Members,
-  unknown: (kind: Schema.optional<Schema.String>) => Unknown,
-  fallback: (value: Unknown["Type"]) => Schema.Union<Members>["Encoded"],
-) {
-  const knownKinds: ReadonlySet<string> = new Set(members.map(encodedKind));
-  const unknownKind = unknown(
-    Schema.optional(
-      Schema.String.check(
-        Schema.makeFilter(
-          (kind: string) => !knownKinds.has(kind) || "A known kind must decode in full.",
-        ),
-      ),
-    ),
-  ).pipe(
-    Schema.decodeTo(Schema.Union(members), {
-      decode: SchemaGetter.transform(fallback),
-      encode: SchemaGetter.forbidden(() => "Unknown kinds are decode-only."),
-    }),
-  );
-  return Schema.Union([...members, unknownKind]);
-}
 
 const PendingBackgroundTaskFields = {
   taskId: TrimmedNonEmptyString,
@@ -1258,70 +1222,6 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
   respondedBy: Schema.optional(UserInputRespondedBy),
 });
 export type OrchestrationV2RuntimeRequest = typeof OrchestrationV2RuntimeRequest.Type;
-
-const SubagentNotificationSource = Schema.Struct({
-  kind: Schema.Literal("subagent"),
-  childThreadId: Schema.optional(ThreadId),
-});
-const CommandNotificationSource = Schema.Struct({ kind: Schema.Literal("command") });
-
-/** Encode legacy background_command/background_task shapes first so older clients accept command/subagent sources. */
-export const OrchestrationV2NotificationSource = kindUnionWithFallback(
-  [
-    Schema.Struct({
-      kind: Schema.Literal("delegated_task"),
-      taskIds: Schema.Array(NodeId),
-      childThreadId: Schema.optional(ThreadId),
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("background_task"),
-      work: Schema.Literal("subagent"),
-      childThreadId: Schema.optional(ThreadId),
-    }).pipe(
-      Schema.decodeTo(Schema.toType(SubagentNotificationSource), {
-        decode: SchemaGetter.transform(({ childThreadId }) =>
-          childThreadId === undefined
-            ? { kind: "subagent" as const }
-            : { kind: "subagent" as const, childThreadId },
-        ),
-        encode: SchemaGetter.transform(({ childThreadId }) => ({
-          kind: "background_task" as const,
-          work: "subagent" as const,
-          ...(childThreadId === undefined ? {} : { childThreadId }),
-        })),
-      }),
-    ),
-    Schema.Struct({ kind: Schema.Literal("background_command").transform("command") }),
-    SubagentNotificationSource,
-    CommandNotificationSource,
-    Schema.Struct({ kind: Schema.Literal("monitor") }),
-    Schema.Struct({
-      kind: Schema.Literal("question"),
-      threadId: ThreadId,
-      requestId: RuntimeRequestId,
-      humanRequired: Schema.Boolean,
-    }),
-    Schema.Struct({ kind: Schema.Literal("background_task") }),
-    Schema.Struct({ kind: Schema.Literal("system") }),
-  ],
-  (kind) => Schema.Struct({ kind }),
-  () => ({ kind: "background_task" }),
-);
-export type OrchestrationV2NotificationSource = typeof OrchestrationV2NotificationSource.Type;
-
-export const OrchestrationV2Notification = Schema.Struct({
-  source: OrchestrationV2NotificationSource,
-  outcome: Schema.Literals(["completed", "failed", "cancelled", "updated", "unknown"]),
-  summary: TrimmedNonEmptyString,
-  detail: Schema.optional(Schema.String),
-  /**
-   * The channel ledger task this notification shows, for GOAT bot task chips. The status here
-   * is the task's; the item status only says the record exists. A chip this build cannot read
-   * decodes as absent, leaving the plain notification.
-   */
-  ledgerTask: ForwardCompatibleOptional(ChannelTaskChip),
-});
-export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Type;
 
 /** Why GOAT compacted a thread on its own, on the `/compact` it sent. */
 export const OrchestrationV2IdleCompaction = Schema.Literals(["beforeCacheExpires", "onReturn"]);
@@ -3124,6 +3024,7 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+    expectedLatestRunId: Schema.optional(RunId),
     settledAt: Schema.optional(Schema.DateTimeUtc),
   }),
   /** Rejects changes since snapshotAt or any explicit settled override to preserve user actions. */

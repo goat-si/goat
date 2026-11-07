@@ -5,6 +5,7 @@ import {
   resolveTerminalOpenLocation,
   stagePendingTerminalLaunch,
   takePendingTerminalLaunch,
+  terminalLaunchAttachOptions,
 } from "./terminalLaunchContext";
 
 describe("resolveTerminalOpenLocation", () => {
@@ -56,6 +57,15 @@ describe("resolveTerminalOpenLocation", () => {
 });
 
 describe("pending terminal launches", () => {
+  it("carries an action's settlement preference into terminal attachment", () => {
+    expect(terminalLaunchAttachOptions(null)).toEqual({});
+    expect(
+      terminalLaunchAttachOptions({ cwd: "/repo", worktreePath: null, stopOnSettle: true }),
+    ).toEqual({
+      stopOnSettle: true,
+      restartIfNotRunning: true,
+    });
+  });
   it("stages and consumes launch details for a specific terminal target", () => {
     const target = {
       environmentId: EnvironmentId.make("env-1"),
@@ -70,6 +80,7 @@ describe("pending terminal launches", () => {
         worktreePath: "/repo/worktrees/feature",
         env: { FOO: "bar" },
         initialInput: "pnpm dev\r",
+        stopOnSettle: true,
       },
     });
 
@@ -78,6 +89,7 @@ describe("pending terminal launches", () => {
       worktreePath: "/repo/worktrees/feature",
       env: { FOO: "bar" },
       initialInput: "pnpm dev\r",
+      stopOnSettle: true,
     });
     expect(takePendingTerminalLaunch(target)).toBeNull();
   });

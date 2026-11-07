@@ -33,18 +33,18 @@ const CAPABILITIES: PullRequestCapabilities = {
   search: true,
   reactions: true,
   mentions: true,
+  referenceSigils: ["#", "!"],
   // GitLab's viewed marks live in browser-local storage.
   viewedFiles: "environment",
   review: {
     inlineComment: true,
     reply: true,
     resolve: true,
-    // GitLab has no requested-changes verdict.
-    verdicts: ["comment", "approve"],
+    verdicts: ["comment", "approve", "request-changes"],
   },
-  reviewers: { request: true, listCandidates: true },
+  reviewers: { request: true, listCandidates: true, searchCandidates: true },
   labels: true,
-  edit: { changeRequest: true, comment: true },
+  edit: { changeRequest: true, comment: true, maintainerEdits: true },
 };
 
 const UNAVAILABLE_REQUIREMENT = {
@@ -69,6 +69,7 @@ const MERGE_ACTIONS: ReadonlySet<string> = new Set([
 export function gitLabViewerPermissions(input: {
   readonly viewerCanMerge: boolean;
   readonly viewerCanEditLabels?: boolean | undefined;
+  readonly viewerCanEditMaintainerEdits?: boolean | undefined;
 }): PullRequestViewerPermissions {
   return {
     actions: CAPABILITIES.actions.filter(
@@ -79,6 +80,7 @@ export function gitLabViewerPermissions(input: {
     verdicts: CAPABILITIES.review.verdicts,
     requestReviewers: true,
     labels: input.viewerCanEditLabels === true,
+    maintainerEdits: input.viewerCanEditMaintainerEdits === true,
     ...(input.viewerCanMerge ? { updateMethods: CAPABILITIES.updateMethods } : {}),
   };
 }
@@ -318,12 +320,17 @@ export const make = Effect.gen(function* () {
 
     // Merge settings only affect the detail panel's actions.
     getChangeRequestPreview: (input) =>
-      cli.getMergeRequestDetail(input).pipe(Effect.mapError(fail("getChangeRequestPreview"))),
+      cli
+        .getMergeRequestDetail({ ...input, maintainerEdits: false })
+        .pipe(Effect.mapError(fail("getChangeRequestPreview"))),
 
     getChangeRequestSummary: (input) =>
       Effect.all(
         [
-          mergeRequestWithStats(input),
+          mergeRequestWithStats(
+            input,
+            cli.getMergeRequestDetail({ ...input, maintainerEdits: false }),
+          ),
           listStates({
             cwd: input.cwd,
             host: input.host,
@@ -486,6 +493,7 @@ export const make = Effect.gen(function* () {
           host: input.host,
           repository: input.repository,
           number: input.number,
+          query: input.query,
         })
         .pipe(Effect.mapError(fail("listReviewerCandidates"))),
 
@@ -532,6 +540,17 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(fail("searchRepositoryAuthors"))),
 
+    searchRepositoryReferences: (input) =>
+      cli
+        .searchProjectReferences({
+          cwd: input.cwd,
+          host: input.host,
+          repository: input.repository,
+          search: input.query,
+          sigil: input.sigil,
+        })
+        .pipe(Effect.mapError(fail("searchRepositoryReferences"))),
+
     setReviewerRequest: writing((input) =>
       cli
         .setReviewerRequest({
@@ -569,6 +588,9 @@ export const make = Effect.gen(function* () {
           number: input.number,
           ...(input.title === undefined ? {} : { title: input.title }),
           ...(input.body === undefined ? {} : { description: input.body }),
+          ...(input.maintainerCanModify === undefined
+            ? {}
+            : { allowCollaboration: input.maintainerCanModify }),
         })
         .pipe(Effect.mapError(fail("updateChangeRequest"))),
     ),

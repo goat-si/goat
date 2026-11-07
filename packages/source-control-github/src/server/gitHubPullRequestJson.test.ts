@@ -1,3 +1,6 @@
+import { toReviewerCandidates } from "./gitHubReviewerCandidates.ts";
+import { through, user, row, listPage } from "./gitHubPullRequestJsonTestFixtures.ts";
+import { toRepositoryReferences, referenceSearchQuery } from "./gitHubReferenceSearch.ts";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
@@ -17,7 +20,6 @@ import {
   toPullRequestCore,
   toPullRequestFilesViewedPage,
   toPullRequestRows,
-  toReviewerCandidates,
   toReviewThreadCommentsPage,
   toCanWrite,
   toReviewThreadPage,
@@ -34,52 +36,6 @@ import {
 } from "./pullRequestReads.graphql.ts";
 import { ReviewThreadComments, ReviewThreads } from "./pullRequestReviews.graphql.ts";
 
-const through =
-  <S extends Schema.Codec<unknown, unknown>, A>(schema: S, map: (result: S["Type"]) => A | null) =>
-  (raw: string): Result.Result<A, unknown> => {
-    const decoded = Schema.decodeUnknownResult(schema)(
-      (JSON.parse(raw) as { readonly data: unknown }).data,
-    );
-    if (Result.isFailure(decoded)) return Result.fail(decoded.failure);
-    const mapped = map(decoded.success);
-    return mapped === null ? Result.fail("not found") : Result.succeed(mapped);
-  };
-
-const user = (login: string, fields: Record<string, unknown> = {}) => ({
-  __typename: "User",
-  login,
-  ...fields,
-});
-
-const row = (fields: Record<string, unknown>) => ({
-  number: 1,
-  title: "Add the pull requests page",
-  url: "https://github.com/goat-si/goat/pull/1",
-  author: null,
-  headRefName: "feat/page",
-  baseRefName: "main",
-  state: "OPEN",
-  isDraft: false,
-  mergeable: "UNKNOWN",
-  reviewDecision: null,
-  latestReviews: { nodes: [] },
-  createdAt: "2026-07-01T00:00:00Z",
-  updatedAt: "2026-07-02T00:00:00Z",
-  mergedAt: null,
-  repository: { nameWithOwner: "goat-si/goat" },
-  reviewRequests: { nodes: [] },
-  labels: { nodes: [] },
-  commits: { nodes: [] },
-  ...fields,
-});
-
-const listPage = (page: ReturnType<typeof toPullRequestRows>) => ({
-  items: page.rows.map((row) => ({
-    ...row.item,
-    ...(row.repository === null ? {} : { repository: row.repository }),
-  })),
-  rawCount: page.rawCount,
-});
 const decodePullRequestListJson = through(LenientPullRequestList.result, (result) =>
   listPage(toPullRequestRows(result.repository?.pullRequests)),
 );
@@ -1585,6 +1541,40 @@ describe("host-native stack decoding", () => {
 const decodeWatchedResult = Schema.decodeUnknownSync(PullRequestWatchFingerprint.result);
 const decodeWatched = (pullRequest: object) =>
   decodeWatchedResult({ repository: { pullRequest } }).repository!.pullRequest!;
+
+describe("repository references", () => {
+  it.each([
+    [undefined, "repo:o/r sort:updated-desc"],
+    ["12", "repo:o/r sort:updated-desc"],
+    ['say "hi"', 'repo:o/r in:title "say \\"hi\\"" sort:updated-desc'],
+  ])("searches %j as %j", (query, q) => {
+    expect(referenceSearchQuery("o/r", query)).toBe(q);
+  });
+
+  it("puts the exact number first and maps issue and pull request states", () => {
+    const result = toRepositoryReferences({
+      search: {
+        pageInfo: { hasNextPage: true },
+        nodes: [
+          { __typename: "PullRequest", number: 3, title: "Merged", pullRequestState: "MERGED" },
+          { __typename: "Issue", number: 2, title: "Closed", issueState: "CLOSED" },
+          null,
+        ],
+      },
+      repository: {
+        issueOrPullRequest: { __typename: "Issue", number: 1, title: "Exact", issueState: "OPEN" },
+      },
+    });
+    expect(result).toEqual({
+      items: [
+        { reference: "#1", kind: "issue", number: 1, title: "Exact", state: "open" },
+        { reference: "#3", kind: "change-request", number: 3, title: "Merged", state: "merged" },
+        { reference: "#2", kind: "issue", number: 2, title: "Closed", state: "closed" },
+      ],
+      truncated: true,
+    });
+  });
+});
 
 describe("pull request lookups", () => {
   it("refuses what GitHub cannot name, so one bad row cannot fail a whole batch", () => {

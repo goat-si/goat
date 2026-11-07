@@ -111,6 +111,86 @@ export function settlementSweepCacheTests({
     ),
   );
 
+  it.effect(
+    "keeps an overdue unlinked branch thread with an open PR when retention is enabled",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const thread = makeThread("overdue-open-pr", { branch: "feature" });
+          const fixture = yield* makeHarness({
+            snapshot: makeSnapshot([thread]),
+            settings: {
+              ...DEFAULT_SERVER_SETTINGS,
+              sidebarAutoSettleAfterDays: 2,
+              sidebarAutoSettleKeepPullRequests: true,
+            },
+            branchPullRequest: () =>
+              Effect.succeed({
+                number: 42,
+                title: "Pull request",
+                url: "https://example.test/owner/repository/pull/42",
+                baseRef: "main",
+                headRef: "feature",
+                state: "open" as const,
+                repositoryKey: "example.test/owner/repository",
+                updatedAt: NOW,
+                closedAt: null,
+                mergedAt: null,
+              }),
+          });
+          yield* Effect.gen(function* () {
+            const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+            yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+            expect(yield* Ref.get(fixture.commands)).toEqual([]);
+            expect(yield* Ref.get(fixture.branchCalls)).toHaveLength(1);
+          }).pipe(Effect.provide(fixture.layer));
+        }),
+      ),
+  );
+
+  it.effect("keeps an overdue unlinked branch thread when its PR lookup fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const thread = makeThread("overdue-lookup-failure", { branch: "feature" });
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([thread]),
+          settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: 2 },
+          branchPullRequest: () => Effect.die(new Error("lookup unavailable")),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          expect(yield* Ref.get(fixture.commands)).toEqual([]);
+          expect(yield* Ref.get(fixture.branchCalls)).toHaveLength(1);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("settles an overdue unlinked branch thread only after an empty PR lookup", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const thread = makeThread("overdue-no-pr", { branch: "feature" });
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([thread]),
+          settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: 2 },
+          branchPullRequest: () => Effect.succeed(null),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          expect(yield* Ref.get(fixture.branchCalls)).toHaveLength(1);
+          expect((yield* Ref.get(fixture.commands)).map((command) => command.threadId)).toEqual([
+            thread.id,
+          ]);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
   it.effect("settles unchanged threads when their inactivity deadline passes", () =>
     Effect.scoped(
       Effect.gen(function* () {

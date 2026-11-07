@@ -14,6 +14,7 @@ export interface ProjectScriptInput {
   readonly runOnWorktreeCreate: ProjectScript["runOnWorktreeCreate"];
   readonly waitForSetup: boolean;
   readonly runOnSettle: boolean;
+  readonly stopOnSettle?: boolean;
   readonly runAsCheck?: boolean;
   readonly checkInSharedCheckout?: boolean;
   readonly previewUrl: Exclude<ProjectScript["previewUrl"], undefined> | null;
@@ -29,6 +30,7 @@ export function buildProjectScript(id: string, input: ProjectScriptInput): Proje
     runOnWorktreeCreate: input.runOnWorktreeCreate,
     ...(input.runOnWorktreeCreate && input.waitForSetup ? { async: false } : {}),
     ...(input.runOnSettle ? { runOnSettle: true } : {}),
+    ...(input.stopOnSettle ? { stopOnSettle: true } : {}),
     ...(input.runAsCheck ? { runAsCheck: true } : {}),
     ...(input.runAsCheck && input.checkInSharedCheckout ? { checkInSharedCheckout: true } : {}),
     ...(input.previewUrl === null

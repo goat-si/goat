@@ -233,6 +233,40 @@ describe("channel tasks", () => {
     ).toThrow();
     expect(() => decodeTaskEvent({ ...base, type: "task.deleted", payload: {} })).toThrow();
   });
+
+  it("keeps a follow-up's and an answer's sender, and decodes events stored without one", () => {
+    const base = {
+      eventId: "event-2",
+      sequence: 8,
+      taskId: "task-1",
+      taskVersion: 5,
+      occurredAt: "2026-10-12T00:00:07.000Z",
+      actor: "user",
+    };
+    const sender = {
+      requester: { ...requester, principalId: "colleague" },
+      connectionId: "slack-1",
+    };
+    const followUp = {
+      ...base,
+      type: "task.followup.received",
+      payload: { inputId: "input-2", text: "also check logs", from: "Colleague", generation: 1 },
+    };
+    const answer = {
+      ...base,
+      type: "task.question.answered",
+      payload: { questionId: "question-1", answer: "sda" },
+    };
+    for (const event of [followUp, answer]) {
+      // Stored before senders were recorded: decodes unchanged, with no sender.
+      expect(roundTrip(ChannelTaskEvent, event).payload).not.toHaveProperty("sender");
+      const withSender = roundTrip(ChannelTaskEvent, {
+        ...event,
+        payload: { ...event.payload, sender },
+      });
+      expect(withSender.payload).toMatchObject({ sender });
+    }
+  });
 });
 
 describe("timeline records", () => {
@@ -278,6 +312,15 @@ describe("timeline records", () => {
         },
       }),
     ).toMatchObject({ entry: { meta: { inReplyToInputId: "input-1" } } });
+    expect(
+      roundTrip(ChannelTimelineRecord, {
+        recordKey: "event:profile-name:scout:change-1",
+        entry: { type: "event", text: "Renamed to Scout" },
+      }),
+    ).toEqual({
+      recordKey: "event:profile-name:scout:change-1",
+      entry: { type: "event", text: "Renamed to Scout" },
+    });
   });
 });
 

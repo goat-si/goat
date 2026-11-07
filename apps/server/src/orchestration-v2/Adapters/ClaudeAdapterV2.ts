@@ -1,3 +1,4 @@
+import { readToolSearchSetting, resolveAutoCompactWindow } from "./ClaudeCompactSettings.ts";
 import { blockedClaudeCuaServers } from "./goatClaudeMcpServers.ts";
 import { createClaudeReportedContext } from "../../provider/ClaudeReportedContext.ts";
 import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
@@ -2631,14 +2632,6 @@ const decodeClaudeSubagentCacheSettings = Schema.decodeUnknownEffect(
     ),
   ),
 );
-const decodeClaudeEnvSettings = Schema.decodeUnknownEffect(
-  fromLenientJson(
-    Schema.StructWithRest(
-      Schema.Struct({ env: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)) }),
-      [Schema.Record(Schema.String, Schema.Unknown)],
-    ),
-  ),
-);
 
 function claudeBypassAvailability(
   settings: typeof ClaudeBypassSettings.Type,
@@ -3810,6 +3803,7 @@ const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
 };
 
 interface ActiveClaudeTurnContext {
+  readonly autoCompactWindow: string;
   readonly queryPolicy: ClaudeRuntimeQueryPolicy;
   input: ProviderAdapter.ProviderAdapterV2TurnInput;
   memoryRelease?: Effect.Effect<void>;
@@ -3908,6 +3902,8 @@ interface ActiveClaudeSubagent {
 }
 
 interface ClaudeLiveQueryContext {
+  readonly settingsCwd: string | null;
+  readonly launchArgSettings: ClaudeSdkSettings | undefined;
   readonly queryPolicy: ClaudeRuntimeQueryPolicy;
   readonly nativeThreadId: string;
   readonly query: ClaudeAgentSdkQuerySession;
@@ -4453,15 +4449,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     },
   );
 
-  const readToolSearchSetting = (filePath: string) =>
-    fileSystem.readFileString(filePath).pipe(
-      Effect.flatMap(decodeClaudeEnvSettings),
-      Effect.map((settings) => {
-        const value = settings.env?.ENABLE_TOOL_SEARCH;
-        return typeof value === "string" ? value : undefined;
-      }),
-      Effect.orElseSucceed(() => undefined),
-    );
   // A worktree's .git file points at <main>/.git/worktrees/<name>, whose commondir leads back to
   // <main>/.git. A bare repository has no main checkout, so its worktree keeps its own file.
   const mainCheckoutRoot = (checkout: string) =>
@@ -4497,14 +4484,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
       if (path.dirname(directory) === directory) return cwd;
     }
   });
-  // Settings env beats the process env, local over project over user, and a local file an older
-  // Claude Code left in cwd applies under the root one. resolveSettings reads local from cwd only.
-  const resolveToolSearchOverride = Effect.fn("ClaudeAdapterV2.resolveToolSearchOverride")(
-    function* (cwd: string | null, launchArgSettings: ClaudeSdkSettings | undefined) {
-      const launchValue = launchArgSettings?.env?.ENABLE_TOOL_SEARCH;
-      if (typeof launchValue === "string") return claudeToolSearchOverride(launchValue);
+  const settingsFilesByPrecedence = Effect.fn("ClaudeAdapterV2.settingsFilesByPrecedence")(
+    function* (cwd: string | null) {
       const localDirectory = cwd === null ? null : yield* localSettingsDirectory(cwd);
-      const settingsFiles = [
+      return [
         ...(cwd === null || localDirectory === null
           ? []
           : [
@@ -4514,8 +4497,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ]),
         path.join(homePath, "settings.json"),
       ];
-      for (const settingsFile of settingsFiles) {
-        const value = yield* readToolSearchSetting(settingsFile);
+    },
+  );
+  // Settings env beats the process env, launch arguments over local over project over user.
+  const resolveToolSearchOverride = Effect.fn("ClaudeAdapterV2.resolveToolSearchOverride")(
+    function* (cwd: string | null, launchArgSettings: ClaudeSdkSettings | undefined) {
+      const launchValue = launchArgSettings?.env?.ENABLE_TOOL_SEARCH;
+      if (typeof launchValue === "string") return claudeToolSearchOverride(launchValue);
+      for (const settingsFile of yield* settingsFilesByPrecedence(cwd)) {
+        const value = yield* readToolSearchSetting(fileSystem, settingsFile);
         if (value !== undefined) return claudeToolSearchOverride(value);
       }
       return claudeToolSearchOverride(adapterOptions.environment.ENABLE_TOOL_SEARCH);
@@ -4957,17 +4947,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {
                   usedTokens: usage,
                   maxTokens,
-                  ...claudeAutoCompactThreshold(
-                    adapterOptions.settings.autoCompactWindow,
-                    maxTokens,
-                  ),
+                  ...claudeAutoCompactThreshold(context.autoCompactWindow, maxTokens),
                   updatedAt: DateTime.formatIso(now),
                 }
               : claudeProviderTurnTokenUsage(
                   usage,
                   context.input.modelSelection,
                   DateTime.formatIso(now),
-                  adapterOptions.settings.autoCompactWindow,
+                  context.autoCompactWindow,
                   context.streamUsage?.requestedAt,
                   maxTokens,
                 );
@@ -10460,6 +10447,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const context: ClaudeLiveQueryContext = {
             queryPolicy,
             nativeThreadId,
+            settingsCwd: turnInput.runtimePolicy.cwd,
+            launchArgSettings,
             query: querySession,
             queryPolicyKey,
             mcpCredentialId: mcpSession?.providerSessionId,
@@ -10654,6 +10643,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   );
             const querySession = yield* openQuery(turnInput, nativeThreadId);
             const context: ActiveClaudeTurnContext = {
+              autoCompactWindow: yield* resolveAutoCompactWindow({
+                configured: adapterOptions.settings.autoCompactWindow,
+                model: compileClaudeModelSelection(turnInput.modelSelection, modelCatalog)
+                  .apiModelId,
+                launchSettings: querySession.launchArgSettings,
+                files: yield* settingsFilesByPrecedence(querySession.settingsCwd),
+                fileSystem,
+              }),
               input:
                 turnInput.refreshMemoryContext || nativeControl || promptUuid === null
                   ? withoutMemoryBody(turnInput)
@@ -11313,9 +11310,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             }
             return false;
           }),
-          hasPendingBackgroundWorkForThread: Effect.fn(
-            "ClaudeAdapterV2.hasPendingBackgroundWorkForThread",
-          )(function* (providerThread, options) {
+          // Untraced: the event stream calls this for every provider event.
+          hasPendingBackgroundWorkForThread: Effect.fnUntraced(function* (providerThread, options) {
             const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
             if (nativeThreadId === undefined || nativeThreadId === null) {
               return false;

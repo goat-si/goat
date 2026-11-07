@@ -2,10 +2,21 @@ import { ThreadId, type OrchestrationV2ThreadProjection } from "@goat/contracts"
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
-export const selectRestartContinuationCandidates = (sql: SqlClient.SqlClient) =>
+export type ProjectFilter = {
+  readonly include?: ReadonlyArray<string>;
+  readonly exclude?: ReadonlyArray<string>;
+};
+
+export const selectRestartContinuationCandidates = (
+  sql: SqlClient.SqlClient,
+  projects?: ProjectFilter,
+) =>
   sql<{ readonly thread_id: string }>`
   SELECT thread_id FROM orchestration_v2_projection_threads
-  WHERE deleted_at IS NULL AND thread_id IN (
+  WHERE deleted_at IS NULL
+    ${projects?.include === undefined ? sql`` : sql`AND project_id IN (SELECT value FROM json_each(${JSON.stringify(projects.include)}))`}
+    ${projects?.exclude === undefined ? sql`` : sql`AND project_id NOT IN (SELECT value FROM json_each(${JSON.stringify(projects.exclude)}))`}
+    AND thread_id IN (
     SELECT thread_id FROM orchestration_v2_projection_runs WHERE status = 'starting'
     UNION
     SELECT runs.thread_id FROM orchestration_v2_projection_runs AS runs

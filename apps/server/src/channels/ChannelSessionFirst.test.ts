@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ProviderInstanceId } from "@goat/contracts";
+import { MessageId, ProviderInstanceId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -15,6 +15,7 @@ import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { deliveryIdFor } from "./channelIds.ts";
 import { taskIdFor } from "./channelIds.ts";
+import { noticeRunsOf } from "./testkit/harnessMessages.ts";
 import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
 import {
   defaultScript,
@@ -129,6 +130,43 @@ describe("session first receipts", () => {
       assert.isFalse(messages.some((message) => message.text === "Done."));
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect(
+    "a background command's notice, NO_REPLY included, never becomes the first reply",
+    () => {
+      const harness = makeSessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(
+          goatInput("What is two plus two?", "notice"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+        const worker = task.worker!;
+        const notice = harness.world.addRun(worker.threadId, MessageId.make("message:notice"));
+        const own = worker.runId;
+        if (own === undefined) throw new Error("The task has no session run");
+        noticeRunsOf(harness.world).set(notice.id, own);
+        harness.assistant(
+          { ...task, worker: { ...worker, runId: notice.id } },
+          "NO_REPLY",
+          false,
+          3,
+        );
+        yield* runtime.runPass;
+        assert.isUndefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
+        harness.assistant(task, "Four.", false, 1);
+        yield* runtime.runPass;
+        assert.strictEqual((yield* ledger.getInput(input.inputId))?.snapshot.reply?.text, "Four.");
+        const { messages } = yield* botMessages;
+        assert.isFalse(messages.some((message) => message.text.includes("NO_REPLY")));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect("a claim before dispatch survives a runtime restart as one turn", () => {
     const harness = makeHarness({ botWorkspace: true });

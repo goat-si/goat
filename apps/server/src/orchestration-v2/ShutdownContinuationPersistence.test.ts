@@ -41,7 +41,7 @@ const layerShutdownTest = ProviderRuntimeRecovery.layer.pipe(
       ),
     ),
   ),
-  Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: true })),
+  Layer.provideMerge(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: true })),
 );
 const providerInstanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId: providerInstanceId, model: "gpt-5.4" };
@@ -249,12 +249,46 @@ it.effect(
         new Set(yield* projections.getRecoveryThreadIds("shutdown-continuation")),
         new Set(expected),
       );
+      assert.deepEqual(
+        yield* projections.getRecoveryThreadIds("shutdown-continuation", { include: [] }),
+        [],
+      );
+      assert.deepEqual(
+        yield* projections.getRecoveryThreadIds("shutdown-continuation", {
+          exclude: ["project:recovery"],
+        }),
+        [],
+      );
+      assert.deepEqual(
+        new Set(
+          yield* projections.getRecoveryThreadIds("shutdown-continuation", {
+            include: ["project:recovery"],
+          }),
+        ),
+        new Set(expected),
+      );
       for (const id of expected) {
         const projection = yield* projections.getRuntimeRecoveryProjection(id);
         assert.isDefined(restartContinuationRun(projection, now), id);
       }
       const summary = yield* recovery.prepareForShutdown;
       assert.deepEqual(summary, { candidates: 3, continued: 3 });
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ continueThreadsAfterServerUpdate: false });
+      assert.deepEqual(yield* recovery.prepareForShutdown, { candidates: 3, continued: 0 });
+      yield* settings.updateSettings({
+        projectSettingsOverrides: {
+          [ProjectId.make("project:recovery")]: { continueThreadsAfterServerUpdate: true },
+        },
+      });
+      assert.deepEqual(yield* recovery.prepareForShutdown, { candidates: 3, continued: 3 });
+      yield* settings.updateSettings({
+        continueThreadsAfterServerUpdate: true,
+        projectSettingsOverrides: {
+          [ProjectId.make("project:recovery")]: { continueThreadsAfterServerUpdate: false },
+        },
+      });
+      assert.deepEqual(yield* recovery.prepareForShutdown, { candidates: 3, continued: 0 });
       const rows = yield* sql<{
         readonly thread_id: string;
       }>`SELECT thread_id FROM orchestration_v2_effect_outbox WHERE effect_type = 'provider-runtime.continue'`;

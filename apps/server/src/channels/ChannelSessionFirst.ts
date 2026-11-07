@@ -22,8 +22,10 @@ import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelWake from "./ChannelWake.ts";
-import { mayAnswerFor } from "./ChannelGateway.ts";
+import { mayDirect } from "./ChannelGateway.ts";
+import { senderOf } from "./channelSenderAuthority.ts";
 import { resolveSessionRun } from "./channelBotSessionRuns.ts";
+import { noticeMessageIds } from "./channelNoticeAnswers.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
@@ -189,7 +191,7 @@ const make = Effect.gen(function* () {
         target !== undefined &&
         target.ownerId === requester.ownerId &&
         target.task.conversationId === stored.snapshot.conversationId &&
-        mayAnswerFor(requester, target.task.requester)
+        mayDirect(requester, stored.message.connectionId, target.task)
       )
         threadTask = target;
       const terminal =
@@ -227,6 +229,7 @@ const make = Effect.gen(function* () {
                     text: stored.message.text,
                     from: requester.displayName,
                     generation: threadTask.task.generation,
+                    sender: senderOf(requester, stored.message.connectionId),
                   },
                 },
                 now,
@@ -363,11 +366,17 @@ const make = Effect.gen(function* () {
           event?.type === "turn-item.updated"
             ? [...records.turnItems.filter((item) => item.id !== event.payload.id), event.payload]
             : records.turnItems;
+        // A background command's notice answers on its own path, never as the request's first word.
+        const notices = noticeMessageIds(records.messages);
+        const noticeRuns = new Set(
+          records.runs.flatMap((run) => (notices.has(run.userMessageId) ? [run.id] : [])),
+        );
         for (const item of items.toSorted((a, b) => a.ordinal - b.ordinal)) {
           if (
             item.type !== "assistant_message" ||
             item.runId === null ||
-            item.parentItemId !== null
+            item.parentItemId !== null ||
+            noticeRuns.has(item.runId)
           )
             continue;
           const intent = yield* resolveSessionRun(sql, threadId, records, item.runId);

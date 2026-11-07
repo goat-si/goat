@@ -1,6 +1,4 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync or sign.
-import * as NodeCrypto from "node:crypto";
-
+import { makeDpopKey } from "./dpop.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { authScopeResponse, AuthStandardClientScopes } from "@goat/contracts";
@@ -8,11 +6,6 @@ import {
   LEGACY_DEV_SESSION_COOKIE_PREFIX,
   LEGACY_SESSION_COOKIE_NAME,
 } from "@goat/contracts/legacyT3Names";
-import {
-  computeDpopAccessTokenHash,
-  computeDpopJwkThumbprint,
-  type DpopPublicJwk,
-} from "@goat/shared/dpop";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -101,36 +94,6 @@ const requestMetadata = {
   os: "macOS",
   browser: "Chrome",
   ipAddress: "192.168.1.23",
-};
-
-const makeDpopKey = () => {
-  const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
-  const publicJwk = publicKey.export({ format: "jwk" }) as DpopPublicJwk;
-  let proofCount = 0;
-  return {
-    thumbprint: computeDpopJwkThumbprint(publicJwk),
-    sign: (input: {
-      readonly method: string;
-      readonly url: string;
-      readonly token: string;
-      readonly iat: number;
-    }) => {
-      const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-      const header = encode({ typ: "dpop+jwt", alg: "ES256", jwk: publicJwk });
-      const payload = encode({
-        htm: input.method,
-        htu: input.url,
-        jti: `proof-${++proofCount}`,
-        iat: input.iat,
-        ath: computeDpopAccessTokenHash(input.token),
-      });
-      const signature = NodeCrypto.sign("sha256", Buffer.from(`${header}.${payload}`), {
-        key: privateKey,
-        dsaEncoding: "ieee-p1363",
-      }).toString("base64url");
-      return `${header}.${payload}.${signature}`;
-    },
-  };
 };
 
 it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
@@ -889,6 +852,38 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         );
       }).pipe(Effect.provide(server), Effect.scoped);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["DPoP", "dpop", "dPoP"])("accepts %s for a proof-bound HTTP request", (scheme) =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const key = makeDpopKey();
+      const { access_token: token } = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        "desktop-bootstrap-token",
+        ["orchestration:read"],
+        requestMetadata,
+        { proofKeyThumbprint: key.thumbprint },
+      );
+      const iat = Math.floor((yield* DateTime.now).epochMilliseconds / 1_000);
+      const request = {
+        method: "GET",
+        url: "/api/auth/session",
+        cookies: {},
+        headers: {
+          host: "192.168.1.50:3773",
+          authorization: `${scheme} ${token}`,
+          dpop: key.sign({
+            method: "GET",
+            url: "http://192.168.1.50:3773/api/auth/session",
+            token,
+            iat,
+          }),
+        },
+      } as never;
+      expect((yield* serverAuth.authenticateHttpRequest(request)).sessionId).toBeTypeOf("string");
+    }).pipe(
+      Effect.provide(layerEnvironmentAuth({ desktopBootstrapToken: "desktop-bootstrap-token" })),
+    ),
   );
 
   it.effect("binds a DPoP session's RPC socket ticket to its proof key", () =>

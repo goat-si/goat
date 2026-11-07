@@ -30,7 +30,29 @@ const prepareOrdinaryContinuations = Effect.fn(
 }) {
   const enabled = yield* input.settings.getSettings.pipe(Effect.orElseSucceed(() => null));
   if (!enabled) return { candidates: 0, continued: 0 };
-  const threadIds = input.candidates.filter((threadId) => !input.protectedThreads.has(threadId));
+  const enabledProjects = Object.entries(enabled.projectSettingsOverrides)
+    .filter(([, overrides]) => overrides.continueThreadsAfterServerUpdate === true)
+    .map(([id]) => id);
+  const disabledProjects = Object.entries(enabled.projectSettingsOverrides)
+    .filter(([, overrides]) => overrides.continueThreadsAfterServerUpdate === false)
+    .map(([id]) => id);
+  if (!enabled.continueThreadsAfterServerUpdate && enabledProjects.length === 0)
+    return { candidates: 0, continued: 0 };
+  const needsFilter = !enabled.continueThreadsAfterServerUpdate || disabledProjects.length > 0;
+  const filtered = needsFilter
+    ? new Set(
+        yield* input.projections.getRecoveryThreadIds(
+          "shutdown-continuation",
+          enabled.continueThreadsAfterServerUpdate
+            ? { exclude: disabledProjects }
+            : { include: enabledProjects },
+        ),
+      )
+    : null;
+  const threadIds = input.candidates.filter(
+    (threadId) =>
+      !input.protectedThreads.has(threadId) && (filtered === null || filtered.has(threadId)),
+  );
   return yield* runShutdownContinuationTasks(threadIds, (threadId) =>
     backgroundReads(
       Effect.gen(function* () {
@@ -124,7 +146,7 @@ export const prepare = Effect.fn("ProviderRuntimeShutdown.prepare")(function* (i
   return {
     ...prepared,
     summary: {
-      candidates: ordinary.candidates + prepared.threads.size,
+      candidates: candidates.length,
       continued: ordinary.continued + prepared.threads.size,
     },
   };

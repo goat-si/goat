@@ -237,7 +237,9 @@ export function foldIntoQueuedNotice(
     !isNoticeMessage(queued) ||
     // Monitor notices follow the current conversation's model and others keep the run's own,
     // so only notices of one source kind share a turn.
-    queued.notification?.source.kind !== command.notification.source.kind
+    queued.notification?.source.kind !== command.notification.source.kind ||
+    // A notice about another run's work answers another request, so it gets a turn of its own.
+    queued.notification.aboutRunId !== command.notification.aboutRunId
   )
     return undefined;
   const notices = foldNotice(parseNotices(queued.id, queued.text), {

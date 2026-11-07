@@ -39,9 +39,9 @@ export const CHANNEL_COPY = {
   questionAlreadyAnswered:
     "That question was already answered, so I didn't pass this on. Send it as a new message if it still matters.",
   answerNotAllowed:
-    "I can't pass that on: answering this task's question needs the same access as the person who asked for it.",
+    "I can't pass that on: answering this task's question needs the same access as the person who asked for it, GOAT memory included.",
   approvalNotAllowed:
-    "I can't pass that on: answering this approval needs the same access as the person who asked for the work.",
+    "I can't pass that on: answering this approval needs the same access as the person who asked for the work, GOAT memory included.",
   approvalAlreadyAnswered: "That approval was already answered.",
   approvalFailed:
     "I couldn't pass that approval on. Open the work's thread in GOAT to answer it there.",

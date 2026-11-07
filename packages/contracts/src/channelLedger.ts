@@ -23,6 +23,7 @@ import {
   ChannelTaskId,
 } from "./channelCommon.ts";
 import { ChannelTaskBrief, ChannelTaskMemoryDelivered } from "./channelBrief.ts";
+import { ChannelSkillProposal, ChannelTaskSkillProposal } from "./channelSkillProposal.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { MemoryTaskGrantCeiling } from "./memory.ts";
@@ -169,6 +170,7 @@ export const ChannelProposedCompletion = Schema.Struct({
   generation: PositiveInt,
   runId: RunId,
   summary: TrimmedNonEmptyString,
+  skillProposal: Schema.optional(ChannelSkillProposal),
 });
 export type ChannelProposedCompletion = typeof ChannelProposedCompletion.Type;
 
@@ -254,6 +256,7 @@ export const ChannelTask = Schema.Struct({
   /** The person's request, quoted from the origin input, to change or forget a GOAT Bot note. */
   notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
   proposedCompletion: Schema.optional(ChannelProposedCompletion),
+  skillProposal: Schema.optional(ChannelTaskSkillProposal),
   openQuestions: Schema.Array(ChannelOpenQuestion),
   /** The worker thread's pull requests, pending native requests and usage-limit wait. */
   observed: Schema.optional(ChannelWorkerObservation),
@@ -304,6 +307,16 @@ const ChannelTaskEventBaseFields = {
   actor: ChannelTaskEventActor,
 } as const;
 
+/**
+ * Who sent a follow-up or an answer, and on which connection, so delivery can check that they may
+ * still direct the work. Events stored before this was recorded have none.
+ */
+export const ChannelTaskSender = Schema.Struct({
+  requester: ChannelRequester,
+  connectionId: Schema.optional(TrimmedNonEmptyString),
+});
+export type ChannelTaskSender = typeof ChannelTaskSender.Type;
+
 const taskEvent = <Type extends ChannelTaskEventType, Payload extends Schema.Struct.Fields>(
   type: Type,
   payload: Payload,
@@ -348,6 +361,7 @@ export const ChannelTaskEvent = Schema.Union([
     questionId: ChannelQuestionId,
     answer: Schema.String,
     projectChoice: Schema.optional(ChannelAnswerProjectChoice),
+    sender: Schema.optional(ChannelTaskSender),
   }),
   /**
    * A later message about this work, recorded with the reply to it and then sent to the task's
@@ -360,6 +374,7 @@ export const ChannelTaskEvent = Schema.Union([
     from: TrimmedNonEmptyString,
     /** The generation it was written to; a later generation's worker never receives it. */
     generation: PositiveInt,
+    sender: Schema.optional(ChannelTaskSender),
   }),
   taskEvent("task.completion.proposed", { proposal: ChannelProposedCompletion }),
   taskEvent("task.completed", {
@@ -455,6 +470,11 @@ export const ChannelTimelineRecord = Schema.Struct({
     Schema.Struct({
       type: Schema.Literal("task_chip"),
       chip: ChannelTaskChip,
+    }),
+    /** A line about the bot itself, such as a rename; recorded after the change it describes. */
+    Schema.Struct({
+      type: Schema.Literal("event"),
+      text: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
     }),
   ]),
 });

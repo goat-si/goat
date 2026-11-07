@@ -148,6 +148,7 @@ export interface TransitionOptions {
   /** A remote worker state change committed with the event. */
   readonly remoteWorker?: ChannelLedger.RemoteWorkerStateUpdate;
   readonly completeForwardSequence?: number;
+  readonly createdTasks?: ReadonlyArray<ChannelLedger.CreatedTask & { readonly ownerId: string }>;
 }
 
 export const prepareTransition = (
@@ -211,6 +212,7 @@ export const commitTransition = Effect.fn("channel.commitTransition")(function* 
     ...(options.completeForwardSequence === undefined
       ? {}
       : { completeForwardSequence: options.completeForwardSequence }),
+    ...(options.createdTasks === undefined ? {} : { createdTasks: options.createdTasks }),
   });
   if (sequence === 0) return undefined;
   return prepared.next;

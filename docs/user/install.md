@@ -152,7 +152,21 @@ already installed.
 ## Desktop app
 
 Download a release from [GitHub Releases](https://github.com/goat-si/goat-releases/releases).
+
+### Linux
+
+AppImage and `.deb` downloads are available for x86_64 and ARM64. Check your
+architecture with `uname -m`: choose `x86_64.AppImage` or `amd64.deb` for
+`x86_64`, and `arm64.AppImage` or `arm64.deb` for `aarch64`.
+
 On Debian and Ubuntu, install the `.deb` with `sudo apt install ./<file>.deb`.
+For an AppImage, open a terminal in the download folder and replace the filename
+below with the one you downloaded:
+
+```bash
+chmod +x ./GOAT.AppImage
+./GOAT.AppImage
+```
 
 The `.deb` updates itself like the other desktop builds. It asks for your
 password to install each update. If your desktop has no password prompt, the

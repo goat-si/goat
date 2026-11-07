@@ -9,7 +9,17 @@ import {
   GOAT_SCREEN_CODE_SKILL_ENV,
   GOAT_SCREEN_CODE_SKILL_GATE_ENV,
 } from "./mcpExtensionSource.ts";
-import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
+import {
+  buildPiRpcLaunch,
+  materializePiGoatMcpExtension,
+  resolvePiLaunchArgs,
+} from "./mcpInjection.ts";
+import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
 import { OMO_PROFILE } from "./profile.ts";
 import { legacyEnvName } from "@goat/contracts/legacyT3Names";
 
@@ -229,3 +239,34 @@ describe("pi GOAT MCP injection", () => {
     assert.isTrue(resolvePiLaunchArgs("--model deepseek/v4").ok);
   });
 });
+
+it.live("keeps the previous extension readable until its replacement is complete", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const directory = yield* fs.makeTempDirectoryScoped();
+    const dest = yield* materializePiGoatMcpExtension(directory);
+    yield* fs.writeFileString(dest, "previous extension");
+    const started = yield* Deferred.make<void>();
+    const resume = yield* Deferred.make<void>();
+    const writer = yield* Effect.forkChild(
+      materializePiGoatMcpExtension(directory).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          writeFileString: (path, data, options) =>
+            Effect.gen(function* () {
+              yield* fs.writeFileString(path, "", options);
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(resume);
+              yield* fs.writeFileString(path, data, options);
+            }),
+        }),
+      ),
+    );
+    yield* Deferred.await(started);
+    const duringWrite = yield* fs.readFileString(dest);
+    yield* Deferred.succeed(resume, undefined);
+    yield* Fiber.join(writer);
+    assert.strictEqual(duringWrite, "previous extension");
+    assert.strictEqual(yield* fs.readFileString(dest), PI_GOAT_MCP_EXTENSION_SOURCE);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

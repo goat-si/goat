@@ -86,6 +86,7 @@ export const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
     readonly wait?: Duration.Input;
     readonly unsupported?: boolean;
     readonly release?: PreviewBrowser.PreviewBrowserRelease | null;
+    readonly pinnedRelease?: boolean;
     readonly variant?: PreviewBrowser.PreviewBrowserVariant;
     readonly executablePath?: string;
     readonly env?: NodeJS.ProcessEnv;
@@ -113,7 +114,7 @@ export const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
           };
   const browser = yield* PreviewBrowser.makePreviewBrowser({
     baseDir,
-    release,
+    ...(options.pinnedRelease ? {} : { release }),
     ...(options.variant === undefined ? {} : { variant: options.variant }),
     ...(options.executablePath === undefined ? {} : { executablePath: options.executablePath }),
     ...(options.wait === undefined ? {} : { wait: options.wait }),

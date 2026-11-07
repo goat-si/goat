@@ -52,11 +52,11 @@ export const checkCliMention = (
       ? { text: mention.text, ref: mention.ref, problem: message }
       : null;
   }
-  // The lease proxy is dispatched in bin.ts before either CLI tree loads. Its accepted flags
+  // The lease proxy is dispatched in binMain.ts before either CLI tree loads. Its accepted flags
   // come from the argument parser, so a removed flag will become audit drift again.
   if (
     words[1] === "cua-lease-proxy" &&
-    readLines("apps/server/src/bin.ts").some((line) =>
+    readLines("apps/server/src/binMain.ts").some((line) =>
       line.includes('command === "cua-lease-proxy"'),
     )
   ) {

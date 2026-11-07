@@ -1,3 +1,20 @@
+import {
+  toReviewerCandidates,
+  type GitHubReviewerCandidateInput,
+} from "./gitHubReviewerCandidates.ts";
+import {
+  parseRepositorySelector,
+  diffCursorPage,
+  isCommitSha,
+  decodeRevisionRefs,
+  decodeMergeBase,
+  GRAPHQL_MERGE_METHODS,
+} from "./gitHubPullRequestInput.ts";
+import {
+  toRepositoryReferences,
+  referenceSearchQuery,
+  type SearchRepositoryReferences,
+} from "./gitHubReferenceSearch.ts";
 import { matchesUnsortedListing, searchQuery } from "./gitHubPullRequestSearch.ts";
 import { toPullRequestActionSummary } from "./gitHubActionSummary.ts";
 import {
@@ -38,7 +55,6 @@ import {
   type PullRequestListState,
   type PullRequestMergeMethod,
   type PullRequestOmittedFileStat,
-  type PullRequestReaction,
   type PullRequestReactionContent,
   type PullRequestReviewCommentDraft,
   type PullRequestReviewVerdict,
@@ -94,8 +110,8 @@ import {
   toPullRequestSummary,
   toPullRequestWatchFingerprint,
   toReviewDismissalsPage,
-  toReviewerCandidates,
   toReviewThreadCommentsPage,
+  toLaterReviewThreadPage,
   toReviewThreadPage,
   toStackMembership,
   toViewerPermissions,
@@ -596,12 +612,9 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly allowReserve?: boolean | undefined;
     }) => Effect.Effect<GitHubViewerAccess & GitHubRepositoryAccess, GitHubPullRequestApiError>;
 
-    readonly listReviewerCandidates: (input: {
-      readonly cwd: string;
-      readonly repository: string;
-      readonly host: string;
-      readonly number: number;
-    }) => Effect.Effect<PullRequestReviewerCandidateList, GitHubPullRequestApiError>;
+    readonly listReviewerCandidates: (
+      input: GitHubReviewerCandidateInput,
+    ) => Effect.Effect<PullRequestReviewerCandidateList, GitHubPullRequestApiError>;
 
     readonly setReviewerRequest: (input: {
       readonly cwd: string;
@@ -641,6 +654,8 @@ export class GitHubPullRequestApi extends Context.Service<
       { readonly items: ReadonlyArray<PullRequestActor>; readonly truncated: boolean },
       GitHubPullRequestApiError
     >;
+
+    readonly searchRepositoryReferences: SearchRepositoryReferences;
 
     readonly setLabels: (input: {
       readonly cwd: string;
@@ -730,47 +745,6 @@ export class GitHubPullRequestApi extends Context.Service<
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
   }
 >()("@goat/source-control-github/server/GitHubPullRequestApi") {}
-
-function parseRepositorySelector(value: string): {
-  readonly owner: string;
-  readonly name: string;
-} {
-  const parts = value.trim().split("/").filter(Boolean);
-  return { name: parts.at(-1) ?? "", owner: parts.at(-2) ?? "" };
-}
-
-/** Bound decimal length to prevent exponential notation in request paths. */
-function diffCursorPage(cursor: string): number | null {
-  return /^[1-9][0-9]{0,6}$/.test(cursor) ? Number(cursor) : null;
-}
-
-function isCommitSha(value: string): boolean {
-  return /^[0-9a-f]{7,64}$/i.test(value);
-}
-
-const decodeRevisionRefs = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({
-      sha: Schema.optional(Schema.String),
-      parents: Schema.optional(Schema.Array(Schema.Struct({ sha: Schema.String }))),
-      base: Schema.optional(Schema.Struct({ sha: Schema.String })),
-      head: Schema.optional(Schema.Struct({ sha: Schema.String })),
-    }),
-  ),
-);
-
-/** Where a pull request's head forked off its base, the commit its patch is computed from. */
-const decodeMergeBase = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({ merge_base_commit: Schema.Struct({ sha: Schema.String }) }),
-  ),
-);
-
-const GRAPHQL_MERGE_METHODS = {
-  merge: "MERGE",
-  squash: "SQUASH",
-  rebase: "REBASE",
-} as const satisfies Record<PullRequestMergeMethod, string>;
 
 const PullRequestGraphQLGroup = GraphQLGroup.merge(
   PullRequestBatchesGraphQLGroup,
@@ -2049,57 +2023,47 @@ export const make = Effect.gen(function* () {
         const { owner, name } = parseRepositorySelector(input.repository);
         const target = { ...input, operation: "listReviewThreadComments" };
         let requestedReviewers = 50;
-        const threadPage = (
-          after: string | null,
-        ): Effect.Effect<GitHubReviewThreadPage, GitHubPullRequestApiError> => {
-          const read = () =>
-            client.ReviewThreads({ owner, name, number: input.number, after, requestedReviewers });
-          return read().pipe(
-            Effect.catchIf(
-              (error) => requestedReviewers > 0 && isRefusedRequestedReviewersOnly(error),
-              () => {
-                requestedReviewers = 0;
-                return read();
-              },
-            ),
-            graphql(target),
-            Effect.map(toReviewThreadPage),
-            Effect.flatMap(found(target)),
-          );
-        };
-        const entries: GitHubReviewThreadEntry[] = [];
-        const avatarsByLogin = new Map<string, string>();
-        const botLogins = new Set<string>();
-        let reviewers: ReadonlyArray<PullRequestActor> = [];
-        let reactions: GitHubReviewThreadPage["reactions"] = [];
-        const reactionsById = new Map<string, ReadonlyArray<PullRequestReaction>>();
-        const editedAtById = new Map<string, string>();
-        let commits: GitHubReviewThreadPage["commits"] = [];
-        let viewer: GitHubReviewThreadPage["viewer"] = { canUpdate: true, didAuthor: false };
-        const dismissalsByReviewId = new Map<string, string>();
-        let dismissalCursor: string | null = null;
-        let cursor: string | null = null;
-        let page = 0;
-        do {
-          const read: GitHubReviewThreadPage = yield* threadPage(cursor);
-          entries.push(...read.threads);
-          for (const login of read.botLogins) botLogins.add(login);
-          for (const [login, avatarUrl] of read.avatarsByLogin)
+        const readFirst = () =>
+          client.ReviewThreads({ owner, name, number: input.number, requestedReviewers });
+        const first: GitHubReviewThreadPage = yield* readFirst().pipe(
+          Effect.catchIf(
+            (error) => requestedReviewers > 0 && isRefusedRequestedReviewersOnly(error),
+            () => {
+              requestedReviewers = 0;
+              return readFirst();
+            },
+          ),
+          graphql(target),
+          Effect.map(toReviewThreadPage),
+          Effect.flatMap(found(target)),
+        );
+        const entries: GitHubReviewThreadEntry[] = [...first.threads];
+        const avatarsByLogin = new Map(first.avatarsByLogin);
+        const botLogins = new Set(first.botLogins);
+        const { reviewers, reactions, reactionsById, editedAtById, commits, viewer } = first;
+        const dismissalsByReviewId = new Map(first.dismissalsByReviewId);
+        const dismissalCursor = first.nextDismissalCursor;
+        let cursor = first.nextCursor;
+        let page = 1;
+        // Later pages carry the threads alone; the PR-wide fields above come from the first.
+        while (cursor !== null && page < REVIEW_THREAD_PAGES) {
+          const later: Pick<
+            GitHubReviewThreadPage,
+            "threads" | "nextCursor" | "avatarsByLogin" | "botLogins"
+          > = yield* client
+            .ReviewThreadPages({ owner, name, number: input.number, after: cursor })
+            .pipe(
+              graphql(target),
+              Effect.map(toLaterReviewThreadPage),
+              Effect.flatMap(found(target)),
+            );
+          entries.push(...later.threads);
+          for (const login of later.botLogins) botLogins.add(login);
+          for (const [login, avatarUrl] of later.avatarsByLogin)
             avatarsByLogin.set(login, avatarUrl);
-          if (page === 0) {
-            reviewers = read.reviewers;
-            reactions = read.reactions;
-            for (const [id, entry] of read.reactionsById) reactionsById.set(id, entry);
-            for (const [id, editedAt] of read.editedAtById) editedAtById.set(id, editedAt);
-            commits = read.commits;
-            viewer = read.viewer;
-            for (const [id, message] of read.dismissalsByReviewId)
-              dismissalsByReviewId.set(id, message);
-            dismissalCursor = read.nextDismissalCursor;
-          }
-          cursor = read.nextCursor;
+          cursor = later.nextCursor;
           page += 1;
-        } while (cursor !== null && page < REVIEW_THREAD_PAGES);
+        }
 
         if (dismissalCursor !== null) {
           let after: string | null = dismissalCursor;
@@ -2180,10 +2144,10 @@ export const make = Effect.gen(function* () {
         const { owner, name } = parseRepositorySelector(input.repository);
         const operation = "listReviewerCandidates";
         return client
-          .ReviewerCandidates({ owner, name, number: input.number })
+          .ReviewerCandidates({ owner, name, number: input.number, query: input.query ?? null })
           .pipe(
             graphql({ ...input, operation, allowReserve: true }),
-            Effect.map(toReviewerCandidates),
+            Effect.map((result) => toReviewerCandidates(result, input.query)),
             Effect.flatMap(found({ ...input, operation })),
           );
       },
@@ -2237,6 +2201,32 @@ export const make = Effect.gen(function* () {
             Effect.map(toRepositoryAuthors),
             Effect.flatMap(found({ ...input, operation })),
           );
+      },
+    ),
+
+    searchRepositoryReferences: Effect.fn("GitHubPullRequestApi.searchRepositoryReferences")(
+      function (input) {
+        const { owner, name } = parseRepositorySelector(input.repository);
+        const parsed = /^\d+$/.test(input.query ?? "") ? Number(input.query) : 0;
+        // GraphQL validates `$number: Int!` even when `@include` skips the lookup.
+        const exact = parsed > 0 && parsed <= 2_147_483_647;
+        const search = (lookup: boolean) =>
+          client.RepositoryReferences({
+            owner,
+            name,
+            q: referenceSearchQuery(input.repository, input.query),
+            number: lookup ? parsed : 0,
+            exact: lookup,
+          });
+        return search(exact).pipe(
+          // A missing number fails the whole query, which would discard the search results.
+          Effect.catchIf(
+            (error) => exact && isNotFoundOnly(error),
+            () => search(false),
+          ),
+          graphql({ ...input, operation: "searchRepositoryReferences", allowReserve: true }),
+          Effect.map(toRepositoryReferences),
+        );
       },
     ),
 

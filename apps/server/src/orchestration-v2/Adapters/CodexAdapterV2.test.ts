@@ -4411,7 +4411,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   const BG_COMMAND_ITEM = "call-codex-bg-command";
   const BG_COMMAND = "sleep 20 && echo CODEX_BG_WAKE_DONE";
   const BG_PROMPT = "Start the sleep in the background and reply STARTED.";
-
   const backgroundCommandItem = (status: "inProgress" | "completed"): Record<string, unknown> => ({
     type: "commandExecution",
     id: BG_COMMAND_ITEM,
@@ -4425,7 +4424,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     exitCode: status === "completed" ? 0 : null,
     durationMs: status === "completed" ? 25_000 : null,
   });
-
   const backgroundExecTranscript = makeCodexReplayTranscript({
     scenario: BG_SCENARIO,
     entries: [
@@ -4532,7 +4530,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           }),
         );
         yield* harness.awaitUntil(() => harness.continuationRequests.length > 0, "wake request");
-        assert.isTrue(harness.continuationRequests[0]?.detail?.isWellFormed());
+        const wake = harness.continuationRequests[0];
+        assert.isTrue(wake?.detail?.isWellFormed());
+        assert.equal(wake?.notification?.aboutRunId, "run-attempt-codex-bg-wake-surrogate");
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );

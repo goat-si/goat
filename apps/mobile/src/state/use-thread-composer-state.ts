@@ -15,6 +15,7 @@ import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-
 import { resolvePendingHandoff } from "@goat/client-runtime/handoff";
 import {
   deriveProviderSubagentStatus,
+  deriveProviderExtensionStatuses,
   deriveResumableRunId,
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
@@ -943,6 +944,9 @@ export function useThreadComposerState() {
     dispatchingQueuedMessageId,
     activeWorkStartedAt,
     runlessWorkActive,
+    extensionStatuses: deriveProviderExtensionStatuses(
+      selectedThreadProjection?.projection ?? null,
+    ),
     providerSubagentStatus,
     isCompacting,
     composerDraftKey,

@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import { mayAnswerFor } from "./ChannelGateway.ts";
+import { mayDirect } from "./ChannelGateway.ts";
 import type * as ChannelLedger from "./ChannelLedger.ts";
 
 export const isTerminalThread = Effect.fn("ChannelTaskThread.isTerminal")(function* (
@@ -17,7 +17,7 @@ export const isTerminalThread = Effect.fn("ChannelTaskThread.isTerminal")(functi
     target !== undefined &&
     target.ownerId === stored.requester.ownerId &&
     target.task.conversationId === stored.snapshot.conversationId &&
-    mayAnswerFor(stored.requester, target.task.requester) &&
+    mayDirect(stored.requester, stored.message.connectionId, target.task) &&
     ["completed", "failed", "cancelled"].includes(target.task.status)
   );
 });

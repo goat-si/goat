@@ -38,6 +38,7 @@ export function itemIcon(item: OrchestrationV2TurnItem): ThreadActivityIcon {
         return "message";
       case "background_task":
       case "system":
+      case "goat_bot_event":
         return "zap";
       default:
         source satisfies never;

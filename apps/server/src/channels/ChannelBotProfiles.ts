@@ -67,6 +67,14 @@ export class ChannelBotProfiles extends Context.Service<
       input: ChannelUpdateBotInput,
       owner: ProfileOwner,
     ) => Effect.Effect<BotProfile, ChannelGatewayError>;
+    /** The same write, with the fields whose stored value it changed. */
+    readonly updateWithChanges: (
+      input: ChannelUpdateBotInput,
+      owner: ProfileOwner,
+    ) => Effect.Effect<
+      { readonly bot: BotProfile; readonly changed: ReadonlyArray<"name" | "purpose"> },
+      ChannelGatewayError
+    >;
     /** A bot's identity; an absent main row was never edited, so it is the default. */
     readonly identity: (
       ownerId: string,
@@ -202,7 +210,7 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const update = Effect.fn("ChannelBotProfiles.update")(function* (
+  const updateWithChanges = Effect.fn("ChannelBotProfiles.update")(function* (
     input: ChannelUpdateBotInput,
     owner: ProfileOwner,
   ) {
@@ -226,7 +234,10 @@ const make = Effect.gen(function* () {
           yield* sql`UPDATE channel_runtime_state
             SET value_json = ${encodeProfile(next)}, updated_at = ${now}
             WHERE key = ${prefix + encodeURIComponent(input.botId)}`;
-          return { ...listed, ...changes };
+          const changed = (["name", "purpose"] as const).filter(
+            (field) => input[field] !== undefined && input[field] !== record[field],
+          );
+          return { bot: { ...listed, ...changes }, changed };
         }),
       )
       .pipe(
@@ -238,6 +249,8 @@ const make = Effect.gen(function* () {
         persistenceFailed,
       );
   });
+  const update: ChannelBotProfiles["Service"]["update"] = (input, owner) =>
+    updateWithChanges(input, owner).pipe(Effect.map(({ bot }) => bot));
 
   const identity = Effect.fn("ChannelBotProfiles.identity")(function* (
     ownerId: string,
@@ -268,6 +281,6 @@ const make = Effect.gen(function* () {
     );
   });
 
-  return ChannelBotProfiles.of({ list, update, identity, modelFor });
+  return ChannelBotProfiles.of({ list, update, updateWithChanges, identity, modelFor });
 });
 export const layer = Layer.effect(ChannelBotProfiles, make);

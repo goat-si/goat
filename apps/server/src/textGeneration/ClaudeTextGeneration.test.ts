@@ -1,3 +1,4 @@
+import { claudeStructuredErrorCases } from "./claudeStructuredErrorCases.ts";
 import { processProbeSource } from "../testUtils/processProbe.ts";
 import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as M from "@goat/contracts";
@@ -1204,6 +1205,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
   const apiError = "API Error: 400 Model blocked by guardrail: 4 endpoints excluded";
   const wrapperNotice = "Using the OpenRouter credential from the global credential file.";
   it.effect.each([
+    ...claudeStructuredErrorCases(apiError),
     [
       "the stdout error over a stderr notice",
       JSON.stringify({ is_error: true, api_error_status: 400, result: apiError }),
@@ -1227,8 +1229,8 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
       }),
       "error: unknown option '--no-session-persistence'",
     ],
-  ] as const)("reports %s when the Claude CLI fails", ([, output, expected]) =>
-    withFakeClaudeEnv({ output, stderr: wrapperNotice, exitCode: 1 }, (textGeneration) =>
+  ] as const)("reports %s when the Claude CLI fails", ([, output, expected, stderr]) =>
+    withFakeClaudeEnv({ output, stderr: stderr ?? wrapperNotice, exitCode: 1 }, (textGeneration) =>
       Effect.gen(function* () {
         const error = yield* Effect.flip(
           textGeneration.generateThreadTitle({

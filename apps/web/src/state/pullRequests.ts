@@ -647,6 +647,8 @@ export function usePullRequestFilterOptions(
   return {
     labels: query.values.flatMap(([, options]) => options.labels),
     authors: query.values.flatMap(([, options]) => options.authors),
+    references: query.values.flatMap(([, options]) => options.references),
+    truncated: query.values.some(([, options]) => options.truncated),
     error: query.error,
     isPending: query.isPending,
   };

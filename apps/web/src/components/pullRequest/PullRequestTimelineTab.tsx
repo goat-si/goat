@@ -56,8 +56,8 @@ import {
 } from "./pullRequestPresentation";
 import { PullRequestGlyph } from "./pullRequestIcons";
 import {
-  type PullRequestMentionScope,
-  pullRequestMentionScope,
+  type PullRequestCompletionScope,
+  pullRequestCompletionScope,
 } from "./PullRequestMarkdownTextarea";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
@@ -68,7 +68,7 @@ interface ReactionSurface {
   readonly environmentId: EnvironmentId;
   readonly threadRef: ScopedThreadRef | null;
   readonly reference: PullRequestRef;
-  readonly mentionScope: PullRequestMentionScope | null;
+  readonly completionScope: PullRequestCompletionScope | null;
   readonly onRefresh: () => void;
 }
 
@@ -302,7 +302,7 @@ function ConversationCard({
             value={editable.body}
             cwd={cwd}
             environmentId={reactions.environmentId}
-            mentionScope={reactions.mentionScope}
+            completionScope={reactions.completionScope}
             threadRef={reactions.threadRef}
             label="Edit comment"
             saving={saving}
@@ -700,7 +700,7 @@ export function PullRequestTimelineTab({
     environmentId,
     threadRef,
     reference,
-    mentionScope: pullRequestMentionScope(detail, environmentId, reference),
+    completionScope: pullRequestCompletionScope(detail, environmentId, reference),
     onRefresh,
   };
   const editable = new Map(

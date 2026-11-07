@@ -1,6 +1,6 @@
 // Relay JSON-RPC verbatim; schema decoding would reject foreign payloads.
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
-import * as NodeReadline from "node:readline";
+import { readAcpMcpLines } from "./AcpMcpLineReader.ts";
 
 import { ignoreClosedPipe } from "@goat/shared/closedPipe";
 import { discardResponseBody, responsePayloads } from "@goat/shared/mcpResponsePayloads";
@@ -450,8 +450,9 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
     });
 
     const dispatch = Effect.fn("AcpMcpStdioBridge.dispatch")(function* (
-      line: string,
+      line: string | null,
     ): Effect.fn.Return<void> {
+      if (line === null) return yield* respondWithError(null, "Message too large", -32600);
       if (line.trim().length === 0) return;
       const parsed = yield* Effect.try((): unknown => JSON.parse(line)).pipe(Effect.result);
       if (Result.isFailure(parsed)) {
@@ -490,11 +491,10 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
       return yield* launch(task);
     });
 
-    // oxlint-disable-next-line goat/guard-error-emitters -- Async iteration rejects when readline emits an error.
-    const reader = NodeReadline.createInterface({ input: options.input });
-    yield* Stream.runForEach(Stream.fromAsyncIterable(reader, bridgeError), dispatch).pipe(
-      Effect.ignoreCause,
-    );
+    yield* Stream.runForEach(
+      Stream.fromAsyncIterable(readAcpMcpLines(options.input), bridgeError),
+      dispatch,
+    ).pipe(Effect.ignoreCause);
     yield* Fiber.awaitAll(running);
   });
 }

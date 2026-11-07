@@ -56,7 +56,7 @@ import { compactTraceAttributes } from "@goat/shared/observability";
 import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { resolveProjectFileBackedSetting } from "@goat/shared/projectSettings";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
-import { resolveSpawnCommand } from "@goat/shared/shell";
+import { resolveSpawnCommand, runsGitWithoutConsole } from "@goat/shared/shell";
 import * as ServerConfig from "../config.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import { removeLinkedWorktree } from "./worktreeRemoval.ts";
@@ -929,6 +929,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               cwd: commandInput.cwd,
               env: spawnEnv,
               forceKillAfter: input.forceKillAfterMs ?? 1_000,
+              ...(runsGitWithoutConsole(hostPlatform, executable, commandInput.args)
+                ? { detached: true, windowsHide: true }
+                : {}),
             }),
           )
           .pipe(

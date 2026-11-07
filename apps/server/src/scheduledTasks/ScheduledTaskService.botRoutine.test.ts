@@ -1,10 +1,14 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId } from "@goat/contracts";
+import { BotId, CommandId, ScheduledTaskId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
 import type * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import type { BotEvent } from "../channels/ChannelBotEvents.ts";
+import { watchRoutines } from "../channels/ChannelBotRoutineEvents.ts";
 import { webhookTaskInput, withWebhookService } from "./ScheduledRunFixture.testkit.ts";
 
 const botThread = "goat-bot-thread";
@@ -339,4 +343,47 @@ it.effect(
       { workers },
     );
   },
+);
+
+it.effect(
+  "the routine line watcher sees set up, pause and resume made through the real service",
+  () =>
+    withWebhookService(
+      ({ service, sql }) =>
+        Effect.gen(function* () {
+          yield* registerBot(sql);
+          const lines = yield* Queue.unbounded<BotEvent>();
+          const snapshots = yield* Queue.unbounded<number>();
+          yield* watchRoutines({
+            subscribe: () =>
+              service
+                .subscribeList()
+                .pipe(Stream.tap((result) => Queue.offer(snapshots, result.tasks.length))),
+            botForThread: (threadId) =>
+              Effect.succeed(
+                threadId === botThread
+                  ? { ownerId: "owner", botId: BotId.make("main") }
+                  : undefined,
+              ),
+            emit: (event) => Queue.offer(lines, event).pipe(Effect.asVoid),
+          }).pipe(Effect.forkScoped);
+          // The watcher's first snapshot is its baseline; change routines only after it.
+          assert.strictEqual(yield* Queue.take(snapshots), 0);
+          // The feed keeps only the latest list, so each change waits for the line before it.
+          const saved = yield* service.upsert(yield* routineInput(), {
+            memoryGrantCeiling: "none",
+            owner,
+          });
+          assert.strictEqual((yield* Queue.take(lines)).text, "Routine Check in set up");
+          const id = ScheduledTaskId.make(saved.task.id);
+          yield* service.setEnabled({ id, enabled: false });
+          assert.strictEqual((yield* Queue.take(lines)).text, "Routine Check in paused");
+          yield* service.upsert(yield* routineInput({ enabled: true }), {
+            memoryGrantCeiling: "none",
+            owner,
+          });
+          assert.strictEqual((yield* Queue.take(lines)).text, "Routine Check in resumed");
+        }).pipe(Effect.scoped),
+      {},
+    ),
 );

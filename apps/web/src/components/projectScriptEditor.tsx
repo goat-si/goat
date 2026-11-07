@@ -85,6 +85,7 @@ export interface NewProjectScriptInput {
   runOnWorktreeCreate: boolean;
   waitForSetup: boolean;
   runOnSettle: boolean;
+  stopOnSettle?: boolean;
   runAsCheck?: boolean;
   checkInSharedCheckout?: boolean;
   /** Omit to preserve the current shortcut when the form did not edit it. */
@@ -102,6 +103,7 @@ export const EMPTY_PROJECT_SCRIPT_INPUT: NewProjectScriptInput = {
   runOnWorktreeCreate: false,
   waitForSetup: false,
   runOnSettle: false,
+  stopOnSettle: false,
   keybinding: null,
   previewUrl: null,
   autoOpenPreview: false,
@@ -126,6 +128,7 @@ export function editorRequestForScript(
       runOnWorktreeCreate: script.runOnWorktreeCreate,
       waitForSetup: script.runOnWorktreeCreate && script.async === false,
       runOnSettle: script.runOnSettle ?? false,
+      stopOnSettle: script.stopOnSettle ?? false,
       runAsCheck: script.runAsCheck ?? false,
       checkInSharedCheckout: script.runAsCheck === true && script.checkInSharedCheckout === true,
       keybinding: keybindingValueForCommand(keybindings, commandForProjectScript(script.id)),
@@ -279,6 +282,7 @@ function ProjectScriptEditorForm({
   );
   const [waitForSetup, setWaitForSetup] = useState(request.initial.waitForSetup);
   const [runOnSettle, setRunOnSettle] = useState(request.initial.runOnSettle);
+  const [stopOnSettle, setStopOnSettle] = useState(request.initial.stopOnSettle ?? false);
   const [runAsCheck, setRunAsCheck] = useState(request.initial.runAsCheck ?? false);
   const [checkInSharedCheckout, setCheckInSharedCheckout] = useState(
     request.initial.checkInSharedCheckout ?? false,
@@ -366,6 +370,7 @@ function ProjectScriptEditorForm({
         runOnWorktreeCreate,
         waitForSetup: runOnWorktreeCreate && waitForSetup,
         runOnSettle,
+        stopOnSettle,
         runAsCheck,
         checkInSharedCheckout: runAsCheck && checkInSharedCheckout,
         ...((request.scriptId === null && canChangeKeybinding) || changesKeybinding
@@ -528,6 +533,13 @@ function ProjectScriptEditorForm({
               <Switch
                 checked={runOnSettle}
                 onCheckedChange={(checked) => setRunOnSettle(Boolean(checked))}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+              <span>Stop this action when the thread settles</span>
+              <Switch
+                checked={stopOnSettle}
+                onCheckedChange={(checked) => setStopOnSettle(Boolean(checked))}
               />
             </label>
             <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">

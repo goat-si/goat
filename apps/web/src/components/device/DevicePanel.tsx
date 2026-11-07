@@ -37,7 +37,12 @@ import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { DeviceLoadingView } from "./DeviceLoadingView";
 import { DeviceOwnership } from "./DeviceOwnership";
-import { DeviceSetup, deviceHubReadiness, isAndroidDiscoveryUncertain } from "./DeviceSetup";
+import {
+  DeviceSetup,
+  deviceHubReadiness,
+  incompleteListings,
+  isAndroidDiscoveryUncertain,
+} from "./DeviceSetup";
 import { DeviceWorkspace } from "./DeviceWorkspace";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
 import { floatPreview } from "../preview/floatPreview";
@@ -185,8 +190,16 @@ export function DevicePanel(props: {
   const diagnostics = state.hosts.flatMap((host) => {
     const status = state.hostStatuses[host.id];
     const detail = status?.detail ?? (host.kind === "local" ? state.hostStatusDetail : undefined);
-    return detail && (status?.status ?? state.hostStatus) === "ready"
-      ? [{ hostId: host.id, label: host.label, detail }]
+    const incomplete = incompleteListings(status);
+    return (detail || incomplete.length > 0) && (status?.status ?? state.hostStatus) === "ready"
+      ? [
+          {
+            hostId: host.id,
+            label: host.label,
+            detail: detail ?? "Device discovery is incomplete.",
+            incomplete,
+          },
+        ]
       : [];
   });
   const unavailablePlatforms = state.hosts.flatMap((host) =>
@@ -225,6 +238,7 @@ export function DevicePanel(props: {
                 key={`${environmentId}\u0000${diagnostic.hostId}\u0000${diagnostic.detail}`}
                 label={diagnostic.label}
                 detail={diagnostic.detail}
+                incomplete={diagnostic.incomplete}
               />
             ))}
           </div>
@@ -423,12 +437,17 @@ function DeviceNotice(props: {
   );
 }
 
-function DeviceDiscoveryWarning(props: { readonly label: string; readonly detail: string }) {
+function DeviceDiscoveryWarning(props: {
+  readonly label: string;
+  readonly detail: string;
+  readonly incomplete: ReadonlyArray<DevicePlatform>;
+}) {
   const [dismissed, setDismissed] = useState(false);
   if (dismissed) return null;
   return (
     <DeviceNotice tone="warning" onDismiss={() => setDismissed(true)}>
       <p className="font-medium">Device discovery warning · {props.label}</p>
+      {props.incomplete.length > 0 ? <p>Some devices may be missing or out of date.</p> : null}
       {props.detail}
     </DeviceNotice>
   );
