@@ -140,6 +140,15 @@ describe("browser skill", () => {
     expect(computerUseAppNote("darwin", "com.apple.Safari")).toContain("File > Open Location");
     expect(computerUseAppNote("darwin", "constructor")).toBeUndefined();
   });
+
+  it("opens KakaoTalk chats through a numbered descendant and verifies the new window", () => {
+    const note = computerUseAppNote("darwin", "KakaoTalk") ?? "";
+    expect(note).toContain("`double_click` on a numbered descendant of its row");
+    expect(note).toContain("then read `list_windows` to verify the chat opened");
+    expect(note).not.toContain(
+      "Click the chat's cell by its `element_token` (it selects the row), then `press_key` Return to open the chat",
+    );
+  });
 });
 
 describe("computer use skill text", () => {
