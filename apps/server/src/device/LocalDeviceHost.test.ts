@@ -47,6 +47,8 @@ const agentFixture = Effect.fn("agentFixture")(function* (
   options: {
     readonly onReady?: (origin: string) => Effect.Effect<void>;
     readonly net?: NetService.NetService["Service"];
+    readonly runs?: Array<ReadonlyArray<string>>;
+    readonly cleanStop?: ProcessRunner.ProcessRunOutput;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -96,10 +98,13 @@ const agentFixture = Effect.fn("agentFixture")(function* (
         ),
     ),
     Effect.provideService(ProcessRunner.ProcessRunner, {
-      run: (input) =>
-        input.args.includes("devices")
-          ? startup(stateDir)
-          : Effect.succeed(input.args.includes("-list-avds") ? avdOutput : processOutput(0)),
+      run: (input) => {
+        options.runs?.push(input.args);
+        if (input.args.includes("devices")) return startup(stateDir);
+        if (input.args.includes("--clean") && options.cleanStop)
+          return Effect.succeed(options.cleanStop);
+        return Effect.succeed(input.args.includes("-list-avds") ? avdOutput : processOutput(0));
+      },
     }),
     Effect.provideService(
       HttpClient.HttpClient,
@@ -718,3 +723,57 @@ it.effect(
       expect(yield* fs.exists(`${baseDir}/tools`)).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+describe("AgentDevice stop", () => {
+  const daemonStops = (runs: ReadonlyArray<ReadonlyArray<string>>) =>
+    runs.filter((args) => args.includes("daemon")).map((args) => args.slice(1).join(" "));
+  const startDaemon = (fs: FileSystem.FileSystem) => (stateDir: string) =>
+    fs
+      .writeFileString(
+        `${stateDir}/daemon.json`,
+        JSON.stringify({ httpPort: 12345, token: "token" }),
+      )
+      .pipe(Effect.orDie, Effect.as(processOutput(0)));
+
+  it.effect("stopping device support or agent access also ends the daemon's retained runners", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const runs: Array<ReadonlyArray<string>> = [];
+      const { host, stateDir } = yield* agentFixture(startDaemon(fs), undefined, undefined, {
+        runs,
+      });
+      yield* host.ensureAgentReady(() => Effect.void);
+      yield* host.stopAgent;
+      yield* host.ensureAgentReady(() => Effect.void);
+      yield* host.stop;
+      expect(daemonStops(runs)).toEqual([
+        `daemon stop --clean --state-dir ${stateDir}`,
+        `daemon stop --clean --state-dir ${stateDir}`,
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("still stops the daemon when agent-device refuses retained-runner cleanup", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const runs: Array<ReadonlyArray<string>> = [];
+      const refused = processOutput(
+        1,
+        JSON.stringify({
+          success: false,
+          error: { details: { reason: "daemon-clean-not-detached" } },
+        }),
+      );
+      const { host, stateDir } = yield* agentFixture(startDaemon(fs), undefined, undefined, {
+        runs,
+        cleanStop: refused,
+      });
+      yield* host.ensureAgentReady(() => Effect.void);
+      yield* host.stop;
+      expect(daemonStops(runs)).toEqual([
+        `daemon stop --clean --state-dir ${stateDir}`,
+        `daemon stop --state-dir ${stateDir}`,
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});

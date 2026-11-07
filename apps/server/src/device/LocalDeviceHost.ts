@@ -620,25 +620,49 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
     }
   });
 
+  const runDaemonStop = (
+    agentTool: { readonly entryPath: string; readonly nodePath: string },
+    clean: boolean,
+  ) =>
+    runner.run({
+      command: agentTool.nodePath,
+      args: [
+        agentTool.entryPath,
+        "daemon",
+        "stop",
+        ...(clean ? ["--clean"] : []),
+        "--state-dir",
+        agentDeviceStateDir(path, config.stateDir),
+      ],
+      env: { ...hostEnvironment, AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1" },
+      timeout: Duration.seconds(10),
+      timeoutBehavior: "timedOutResult",
+    });
+
+  // A plain stop leaves the daemon's XCTest runners running for reuse; --clean ends them. agent-device
+  // refuses --clean for a daemon it cannot prove is its own, so a plain stop still follows.
   const stopAgentDeviceDaemon = (
     agentTool: { readonly entryPath: string; readonly nodePath: string } | null,
   ) =>
     agentTool
-      ? runner
-          .run({
-            command: agentTool.nodePath,
-            args: [
-              agentTool.entryPath,
-              "daemon",
-              "stop",
-              "--state-dir",
-              agentDeviceStateDir(path, config.stateDir),
-            ],
-            env: { ...hostEnvironment, AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1" },
-            timeout: Duration.seconds(10),
-            timeoutBehavior: "timedOutResult",
-          })
-          .pipe(Effect.ignore)
+      ? runDaemonStop(agentTool, true).pipe(
+          Effect.result,
+          Effect.flatMap((result) =>
+            result._tag === "Success" && result.success.code === 0 && !result.success.timedOut
+              ? Effect.void
+              : Effect.logWarning(
+                  "agent-device runner cleanup did not finish; stopping the daemon without it",
+                  {
+                    outcome:
+                      result._tag === "Failure"
+                        ? String(result.failure)
+                        : result.success.timedOut
+                          ? "timed out"
+                          : `exit ${result.success.code}: ${result.success.stdout.slice(0, 400)}`,
+                  },
+                ).pipe(Effect.andThen(runDaemonStop(agentTool, false)), Effect.ignore),
+          ),
+        )
       : Effect.void;
 
   let agentToolRef: { readonly entryPath: string; readonly nodePath: string } | null = null;
