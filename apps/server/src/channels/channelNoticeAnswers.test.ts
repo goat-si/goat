@@ -14,7 +14,7 @@ import {
   resultRunsOf,
 } from "./channelNoticeAnswers.ts";
 
-const session = ThreadId.make("goat-bot-session:set3");
+const session = ThreadId.make("goat-bot-session:question-a-set");
 const broken = ThreadId.make("goat-bot-session:broken");
 const logistics = { id: ChannelTaskId.make("task:logistics"), input: "input:logistics" };
 const questionA = { id: ChannelTaskId.make("task:question-a"), input: "input:question-a" };
@@ -274,7 +274,7 @@ describe("a background command's answer goes to the request whose run started it
         const notices = [old("run:unread", "First."), old("run:retrying", "Second.")];
         const sql = yield* seed(notices);
         yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
-        VALUES ('notice-answer:goat-bot-session:set3:run:retrying',
+        VALUES ('notice-answer:goat-bot-session:question-a-set:run:retrying',
           ${JSON.stringify({ state: "retry", attempts: 9, nextAt: at })}, ${at})`;
         const { sent, deps } = world(notices, tasks);
         yield* TestClock.adjust("8 days");
@@ -317,7 +317,7 @@ describe("a background command's answer goes to the request whose run started it
       assert.lengthOf(sent, 0);
       const marker = yield* sql<{ readonly state: string; readonly reason: string }>`
         SELECT json_extract(value_json, '$.state') AS state, json_extract(value_json, '$.reason') AS reason
-        FROM channel_runtime_state WHERE key = 'notice-answer:goat-bot-session:set3:run:notice'`;
+        FROM channel_runtime_state WHERE key = 'notice-answer:goat-bot-session:question-a-set:run:notice'`;
       assert.deepStrictEqual(marker[0], { state: "skipped", reason: "stale" });
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
