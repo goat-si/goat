@@ -184,6 +184,7 @@ import {
   FloatingWorkingControl,
 } from "./floating-working-control";
 import { connectionFloatingStatus, type FloatingWorkingStatus } from "./floating-working-status";
+import { workingFloatingStatus } from "./turn-settle";
 import {
   derivePendingUserInputMaxHeight,
   ESTIMATED_KEYBOARD_HEIGHT,
@@ -754,9 +755,8 @@ function ThreadDetailBody(
     if (props.isCompacting && contentPresentationKind === "ready") {
       return { kind: "compacting" };
     }
-    if (props.activeWorkStartedAt !== null && contentPresentationKind === "ready") {
-      return { kind: "working", startedAt: props.activeWorkStartedAt };
-    }
+    const working = workingFloatingStatus(props.activeWorkStartedAt, props.activityRun);
+    if (working !== null && contentPresentationKind === "ready") return working;
     if (pendingBackgroundWork !== null && contentPresentationKind === "ready") {
       return {
         kind: "background",
