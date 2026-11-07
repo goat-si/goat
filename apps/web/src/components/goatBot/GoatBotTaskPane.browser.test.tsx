@@ -1,4 +1,10 @@
-import { BotProfile, BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import {
+  BotProfile,
+  BotThreadRow,
+  ChannelTaskId,
+  type ChannelTaskStatus,
+  EnvironmentId,
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -15,7 +21,7 @@ const state = vi.hoisted(() => ({
     value: { status: "started", taskId: "task-1", generation: 3 },
   } as { _tag: string; value: Record<string, unknown> },
   row: { status: "waiting_input", generation: undefined, unread: true } as {
-    status: string;
+    status: ChannelTaskStatus;
     generation: number | undefined;
     unread: boolean;
   },
@@ -189,7 +195,7 @@ it("a deleted member's task link says it was deleted and sends nothing", async (
   expect(state.send).not.toHaveBeenCalled();
 });
 
-function resetRetry(status: string, generation?: number) {
+function resetRetry(status: ChannelTaskStatus, generation?: number) {
   state.update.mockClear();
   state.retryResult = {
     _tag: "Success",

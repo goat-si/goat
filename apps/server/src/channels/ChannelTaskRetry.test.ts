@@ -5,10 +5,13 @@ import {
   type OrchestrationV2Subagent,
   ThreadId,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as BotThreads from "./ChannelBotThreads.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
@@ -17,6 +20,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { childWorkIdFor, workerLaunchIdsFor } from "./channelIds.ts";
+import { makeTaskRetry } from "./channelTaskRetry.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   goatInput,
@@ -53,6 +57,32 @@ const retry = (task: ChannelTask, clientRequestId: string, who = owner) =>
     const threads = yield* BotThreads.ChannelBotThreads;
     return yield* threads.retry({ taskId: task.taskId, clientRequestId }, who);
   });
+
+/**
+ * A retry whose first look at a worker thread waits for release: it has read the task by then,
+ * so a test can commit another retry in between and see what the late one does.
+ */
+const pausedRetry = Effect.gen(function* () {
+  const real = yield* ThreadManagement.ThreadManagementService;
+  const reading = yield* Deferred.make<void>();
+  const release = yield* Deferred.make<void>();
+  let paused = false;
+  const getThreadRecords = ((...args: Parameters<typeof real.getThreadRecords>) => {
+    if (paused) return real.getThreadRecords(...args);
+    paused = true;
+    return Deferred.succeed(reading, undefined).pipe(
+      Effect.andThen(Deferred.await(release)),
+      Effect.andThen(real.getThreadRecords(...args)),
+    );
+  }) as typeof real.getThreadRecords;
+  const retry = yield* makeTaskRetry.pipe(
+    Effect.provideService(ThreadManagement.ThreadManagementService, {
+      ...real,
+      getThreadRecords,
+    }),
+  );
+  return { retry, reading, release };
+});
 
 const refusalOf = (result: { readonly status: string; readonly reason?: string }) =>
   result.status === "refused" ? result.reason : result.status;
@@ -91,14 +121,52 @@ describe("a person retries a GOAT Bot task", () => {
     },
   );
 
-  it.effect("two different taps at once start one attempt", () => {
+  it.effect(
+    "a tap that read the task before another retry committed judges the new attempt",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const { task, runtime } = yield* failedTask(harness);
+        const late = yield* pausedRetry;
+        const lateTap = yield* Effect.forkChild(
+          late.retry({ taskId: task.taskId, clientRequestId: "tap-late" }, owner),
+        );
+        // The late tap has read attempt 1 as failed and is checking its old worker.
+        yield* Deferred.await(late.reading);
+        assert.strictEqual(refusalOf(yield* retry(task, "tap-first")), "started");
+        yield* runtime.drain;
+        const secondThread = workerLaunchIdsFor(task.taskId, 2).threadId;
+        harness.world.setStatus(secondThread, 1, "failed");
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).status, "failed");
+        // Attempt 2 failed, but its worker still has a subagent running.
+        harness.world.subagents.set(secondThread, [liveSubagent("thread:second-child")]);
+        yield* Deferred.succeed(late.release, undefined);
+        assert.strictEqual(refusalOf(yield* Fiber.join(lateTap)), "still_running");
+        assert.strictEqual((yield* onlyTask).generation, 2);
+        yield* runtime.drain;
+        assert.strictEqual(harness.world.launches.length, 2);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("the same tap racing itself starts one attempt and both answers name it", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const { task, runtime } = yield* failedTask(harness);
-      const results = yield* Effect.all([retry(task, "tap-a"), retry(task, "tap-b")], {
-        concurrency: "unbounded",
-      });
-      assert.deepStrictEqual(results.map(refusalOf).toSorted(), ["not_finished", "started"]);
+      const late = yield* pausedRetry;
+      const lateTap = yield* Effect.forkChild(
+        late.retry({ taskId: task.taskId, clientRequestId: "tap-same" }, owner),
+      );
+      yield* Deferred.await(late.reading);
+      const first = yield* retry(task, "tap-same");
+      yield* Deferred.succeed(late.release, undefined);
+      assert.deepStrictEqual(yield* Fiber.join(lateTap), first);
+      assert.deepStrictEqual(first, { status: "started", taskId: task.taskId, generation: 2 });
+      const sql = yield* SqlClient.SqlClient;
+      const retries = yield* sql<{ readonly count: number }>`SELECT count(*) AS count
+        FROM channel_task_events WHERE task_id = ${task.taskId} AND type = 'task.retry.requested'`;
+      assert.strictEqual(retries[0]?.count, 1);
       yield* runtime.drain;
       assert.strictEqual(harness.world.launches.length, 2);
     }).pipe(Effect.provide(harness.layer));
