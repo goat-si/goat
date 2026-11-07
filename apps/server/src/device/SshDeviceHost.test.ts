@@ -4,6 +4,7 @@ import * as Net from "@goat/shared/Net";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -487,4 +488,100 @@ it.effect.each([
       // A transport failure has no remote shell to ask.
       if (exitCode === 255) expect(shellChecks).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// Starts a fake SSH device host, stops it with the given remote stop result, and returns the logs.
+const stopFakeHost = Effect.fn("stopFakeHost")(function* (stop: {
+  readonly output: string;
+  readonly exitCode: number;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const home = yield* fs.makeTempDirectoryScoped();
+  const logs: Array<unknown> = [];
+  const spawner = ChildProcessSpawner.make((command) =>
+    Effect.gen(function* () {
+      if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
+      const forwarding = command.args.includes("-L");
+      let output = "";
+      let exitCode = 0;
+      const stdin = command.options.stdin;
+      if (
+        !forwarding &&
+        stdin &&
+        typeof stdin === "object" &&
+        "stream" in stdin &&
+        Stream.isStream(stdin.stream)
+      ) {
+        const script = yield* stdin.stream.pipe(
+          Stream.decodeText(),
+          Stream.runFold(
+            () => "",
+            (a, b) => a + b,
+          ),
+        );
+        if (/const mode = "([^"]+)"/.exec(script)?.[1] === "stop") {
+          output = stop.output;
+          exitCode = stop.exitCode;
+        } else
+          output = JSON.stringify({
+            nodePath: "/node",
+            platforms: [{ platform: "ios", available: true }],
+            hubPort: 1234,
+            helpers: { serveSimAxSettings: null, serveSimCli: null },
+          });
+      }
+      return ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(123),
+        stdout: Stream.make(new TextEncoder().encode(output)),
+        stderr: Stream.empty,
+        all: Stream.empty,
+        exitCode: forwarding
+          ? Effect.never
+          : Effect.succeed(ChildProcessSpawner.ExitCode(exitCode)),
+        isRunning: Effect.succeed(forwarding),
+        kill: () => Effect.void,
+        stdin: Sink.drain,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+        unref: Effect.succeed(Effect.void),
+      });
+    }),
+  );
+  const host = yield* SshDeviceHost.make(
+    { kind: "ssh", id: "studio", label: "Studio", target: "studio.example" },
+    () => Effect.void,
+  ).pipe(
+    Effect.provide(Layer.mergeAll(ServerConfig.layerTest(home, home), Net.layer)),
+    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    Effect.provideService(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok"))),
+      ),
+    ),
+  );
+  yield* host.ensureReady(() => Effect.void);
+  yield* host.stop.pipe(
+    Effect.provide(Logger.layer([Logger.make(({ message }) => logs.push(message))])),
+  );
+  return logs;
+});
+
+it.effect("logs a device host's failed runner cleanup and a stop that never reached it", () =>
+  Effect.gen(function* () {
+    expect(
+      yield* stopFakeHost({
+        output: JSON.stringify({ cleanupWarning: "exit 1: refused" }),
+        exitCode: 0,
+      }),
+    ).toContainEqual([
+      "agent-device runner cleanup did not finish; its daemon stopped without it",
+      { hostId: "studio", cleanupWarning: "exit 1: refused" },
+    ]);
+    const unreachable = yield* stopFakeHost({ output: "", exitCode: 255 });
+    expect(unreachable).toContainEqual([
+      "agent-device did not stop; its daemon and runners may still be running",
+      expect.objectContaining({ hostId: "studio" }),
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
