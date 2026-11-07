@@ -4,6 +4,7 @@ import * as NodeChildProcess from "node:child_process";
 import { assert, describe, it } from "@effect/vitest";
 import { ChannelGatewayError, EnvironmentId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -56,7 +57,8 @@ const readerLayer = (
         SqlitePersistence.layerMemory,
       ),
     ),
-    Layer.provideMerge(NodeServices.layer),
+    // Notes written here carry the day in this zone, which the assertions name.
+    Layer.provideMerge(Layer.merge(NodeServices.layer, DateTime.layerCurrentZoneOffset(0))),
   );
 
 const notesFile = Effect.gen(function* () {

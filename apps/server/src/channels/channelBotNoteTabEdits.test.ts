@@ -9,7 +9,9 @@ import {
   type ChannelRequester,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
@@ -18,6 +20,10 @@ import { NOTES_HEADER } from "./channelBotNoteLines.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { makeChannelBotNoteWriter, type NoteWriterHooks } from "./channelBotNoteTabEdits.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
+
+// A note line carries the day where GOAT runs; dates here are UTC unless a case sets its own zone.
+const services = Layer.merge(NodeServices.layer, DateTime.layerCurrentZoneOffset(0));
+const seoulServices = Layer.merge(NodeServices.layer, DateTime.layerCurrentZoneNamed("Asia/Seoul"));
 
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
@@ -53,12 +59,16 @@ const setup = (text: string, hooks: NoteWriterHooks = {}) =>
     yield* fs.makeDirectory(files.dir, { recursive: true });
     if (text !== "") yield* fs.writeFileString(files.notes, text);
     const writer = yield* makeChannelBotNoteWriter(fs, files, noOpenTasks, hooks);
-    const edit = (message: string, who: ChannelRequester | null = person()) =>
+    const edit = (
+      message: string,
+      who: ChannelRequester | null = person(),
+      readAt = "2026-11-07T10:00:00Z",
+    ) =>
       Effect.map(
         writer.tabEdit(
           { intent: "message", text: message },
           "input-1",
-          "2026-11-07T10:00:00Z",
+          readAt,
           Effect.succeed(who ?? undefined),
         ),
         (answer) => answer?.text,
@@ -74,7 +84,7 @@ describe("Memory tab note edits", () => {
       assert.isUndefined(yield* edit("Please forget the Fridays note"));
       assert.isUndefined(yield* edit(goatBotForgetNoteMessage(fridays) + " and the rest"));
       assert.isUndefined(yield* edit('Please change this note: "I deploy on Fridays."'));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
   it.effect("refuse agents, people without a link, and routines change nothing", () =>
@@ -101,7 +111,7 @@ describe("Memory tab note edits", () => {
         ),
       );
       assert.strictEqual(yield* read, text);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
   it.effect(
@@ -118,7 +128,20 @@ describe("Memory tab note edits", () => {
             "\n- 2026-11-07: I deploy on Mondays. (asked in input-1)" +
             ' (replaces: "I deploy on Fridays.")\n',
         );
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+
+  // 17:10 UTC is already Nov 8 in Seoul, where GOAT runs.
+  it.effect("a change made after midnight where GOAT runs carries that day, not UTC's", () =>
+    Effect.gen(function* () {
+      const { edit, read } = yield* setup(NOTES_HEADER + line(fridays, "a") + "\n");
+      yield* edit(
+        goatBotChangeNoteMessage(fridays, "I deploy on Mondays."),
+        person(),
+        "2026-11-07T17:10:00Z",
+      );
+      assert.include(yield* read, "\n- 2026-11-08: I deploy on Mondays. (asked in input-1)");
+    }).pipe(Effect.scoped, Effect.provide(seoulServices)),
   );
 
   it.effect("notes with quotes are matched exactly, and a longer message goes to reception", () =>
@@ -136,7 +159,7 @@ describe("Memory tab note edits", () => {
       );
       const saved = yield* read;
       assert.isTrue(saved.endsWith(" (replaces: " + JSON.stringify(second) + ")\n"));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
   it.effect("a forget refuses while a task that may edit the notes is open", () =>
@@ -161,7 +184,7 @@ describe("Memory tab note edits", () => {
       );
       assert.strictEqual(answer?.text, CHANNEL_COPY.noteEditBusy);
       assert.strictEqual(yield* fs.readFileString(files.notes), text);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
   it.effect("a forget leaves the file untouched when it changes before the rename, twice", () => {
@@ -190,7 +213,7 @@ describe("Memory tab note edits", () => {
         (yield* fs.readDirectory(files.dir)).filter((name) => name.startsWith("memory.md.")),
         [],
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+    }).pipe(Effect.scoped, Effect.provide(services));
   });
 
   it.effect("a forget says so when the note came back right after the rename", () =>
@@ -210,7 +233,7 @@ describe("Memory tab note edits", () => {
         Effect.succeed(person()),
       );
       assert.strictEqual(answer?.text, CHANNEL_COPY.noteCameBack);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
   it.effect.skipIf(windowsHost)(
@@ -233,7 +256,7 @@ describe("Memory tab note edits", () => {
           Effect.succeed(person()),
         );
         assert.strictEqual(answer?.text, CHANNEL_COPY.noteUnverified);
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
   it.effect("a forget keeps a byte order mark and never touches a file at another name", () =>
@@ -251,7 +274,7 @@ describe("Memory tab note edits", () => {
       const bytes = yield* fs.readFile(files.notes);
       assert.deepStrictEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
       assert.strictEqual((yield* read).replace(/^\uFEFF/u, ""), NOTES_HEADER + keep);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
   it.effect("a forget leaves a file that is not UTF-8 exactly as it was", () =>
@@ -265,7 +288,7 @@ describe("Memory tab note edits", () => {
         CHANNEL_COPY.noteEditFailed,
       );
       assert.deepStrictEqual([...(yield* fs.readFile(files.notes))], [...original]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
   it.effect("a forget removes a long correction chain and keeps the notes around it", () =>
@@ -281,7 +304,7 @@ describe("Memory tab note edits", () => {
         CHANNEL_COPY.noteForgotten,
       );
       assert.strictEqual(yield* read, NOTES_HEADER + keep);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
   it.effect("a file over 1 MiB is not edited", () =>
@@ -294,6 +317,6 @@ describe("Memory tab note edits", () => {
         CHANNEL_COPY.noteFileTooLarge,
       );
       assert.strictEqual((yield* read).length, text.length);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(services)),
   );
 });

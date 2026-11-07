@@ -11,8 +11,10 @@
  * @module channelBotNotes
  */
 import type { ChannelReceptionSkill } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import {
@@ -97,10 +99,21 @@ export interface ChannelBotNoteSaved {
 export const noteSource = (sourceInputId: string) =>
   " (asked in " + sourceInputId.replace(/\s+/gu, "") + ")";
 
-/** One dated note line as reception writes it, or undefined for an empty note. */
+/**
+ * The calendar day of `at` where GOAT runs: the current time zone when one is set, else this
+ * machine's. People and models read the day in the notes file, so UTC would be a day off.
+ */
+export const noteDay = (at: string) =>
+  Effect.map(Effect.serviceOption(DateTime.CurrentTimeZone), (zone) =>
+    DateTime.formatIsoDate(
+      DateTime.setZone(DateTime.makeUnsafe(at), Option.getOrElse(zone, DateTime.zoneMakeLocal)),
+    ),
+  );
+
+/** One dated note line as reception writes it, or undefined for an empty note. `day` is YYYY-MM-DD. */
 export const channelBotNoteLine = (
   note: string,
-  date: string,
+  day: string,
   sourceInputId: string,
   replaces?: string,
 ) => {
@@ -108,7 +121,7 @@ export const channelBotNoteLine = (
   if (text === "") return undefined;
   return (
     "- " +
-    date.slice(0, 10) +
+    day.slice(0, 10) +
     ": " +
     text +
     noteSource(sourceInputId) +
@@ -136,7 +149,8 @@ export const appendChannelBotNote = (
 ) =>
   Effect.gen(function* () {
     const nothing: ChannelBotNoteSaved = {};
-    if (channelBotNoteLine(note, date, sourceInputId) === undefined) return nothing;
+    const day = yield* noteDay(date);
+    if (channelBotNoteLine(note, day, sourceInputId) === undefined) return nothing;
     const source = noteSource(sourceInputId);
     const saved = (replaced: boolean): ChannelBotNoteSaved =>
       replaces === undefined ? {} : { correction: replaced ? "replaced" : "unmatched" };
@@ -154,7 +168,7 @@ export const appendChannelBotNote = (
     yield* fs.writeFileString(
       files.notes,
       appendPrefix(exists, text) +
-        channelBotNoteLine(note, date, sourceInputId, target?.text) +
+        channelBotNoteLine(note, day, sourceInputId, target?.text) +
         "\n",
       { flag: "a" },
     );
