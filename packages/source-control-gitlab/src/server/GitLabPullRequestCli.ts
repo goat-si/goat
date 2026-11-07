@@ -1,3 +1,4 @@
+import { makeGitLabRequestChanges } from "./gitLabRequestChanges.ts";
 import type {
   GitLabDiscussionThreads,
   GitLabMergeRequestListBatch,
@@ -114,7 +115,8 @@ export type GitLabPullRequestCliError =
   | GitLabDiffCommitParentUnavailableError
   | GitLabDiffFileContentsUnavailableError
   | GitLabDiffRefsUnavailableError
-  | GitLabViewerUnavailableError;
+  | GitLabViewerUnavailableError
+  | import("./gitLabPullRequestErrors.ts").GitLabMutationRefusedError;
 
 /** GitLab's `per_page` limit. */
 const MAX_PAGE_SIZE = 100;
@@ -140,7 +142,6 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly cwd: string;
       readonly host?: string | undefined;
     }) => Effect.Effect<string, GitLabPullRequestCliError>;
-
     readonly listMergeRequests: (input: {
       readonly cwd: string;
       readonly host?: string | undefined;
@@ -158,7 +159,6 @@ export class GitLabPullRequestCli extends Context.Service<
        */
       readonly graphql?: boolean;
     }) => Effect.Effect<GitLabMergeRequestListBatch, GitLabPullRequestCliError>;
-
     /** Whether this host's GraphQL list takes every filter the REST list does. */
     readonly supportsGraphqlList: (input: {
       readonly cwd: string;
@@ -1186,6 +1186,7 @@ export const make = Effect.gen(function* () {
         );
 
   const viewerUsername = makeGitLabViewer(api);
+  const requestChanges = makeGitLabRequestChanges(graphqlRead, viewerUsername);
 
   return GitLabPullRequestCli.of({
     getViewerUsername: viewerUsername,
@@ -1700,10 +1701,9 @@ export const make = Effect.gen(function* () {
     submitReview: Effect.fn("GitLabPullRequestCli.submitReview")(function* (input) {
       const project = projectPath(input.repository);
       const mergeRequest = `projects/${project}/merge_requests/${input.number}`;
-      // GitLab has no pending review to attach comments to, so a review is replayed as the
-      // requests it is made of: the line comments, then the summary, then the verdict. A
-      // failure part-way therefore leaves what was already posted in place, which is why
-      // the verdict goes last — a half-sent review is never an approval.
+      if (input.verdict === "request-changes") {
+        yield* requestChanges(input);
+      }
       if (input.comments.length > 0) {
         const refs = yield* getDiffRefs(input);
         yield* Effect.forEach(

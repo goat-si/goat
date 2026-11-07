@@ -152,7 +152,7 @@ describe("gitLabViewerPermissions", () => {
       ],
       comment: true,
       resolve: true,
-      verdicts: ["comment", "approve"],
+      verdicts: ["comment", "approve", "request-changes"],
       requestReviewers: true,
       labels: true,
       updateMethods: ["rebase"],
@@ -164,7 +164,7 @@ describe("gitLabViewerPermissions", () => {
       actions: ["ready", "draft", "close", "reopen"],
       comment: true,
       resolve: true,
-      verdicts: ["comment", "approve"],
+      verdicts: ["comment", "approve", "request-changes"],
       requestReviewers: true,
       labels: false,
     });
