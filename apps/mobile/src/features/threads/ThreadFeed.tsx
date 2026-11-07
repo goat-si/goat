@@ -234,6 +234,7 @@ import {
 } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
+import { settledRunAnchorId } from "./turn-settle";
 import { htmlRenderFrameHeight } from "@goat/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
@@ -2110,6 +2111,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   const { themeAppearance } = useAppearancePreferences();
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
+  const settleAnchorFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2867,8 +2869,11 @@ export const ThreadFeed = memo(function ThreadFeed({
   })();
   // An interrupted run unfolds; a run that is no longer latest folds back.
   const [previousLatestRun, setPreviousLatestRun] = useState(props.latestRun);
+  // A settling run folds its work above its reply; anchor the reply, not the user message above.
+  const [settleAnchorId, setSettleAnchorId] = useState<string | null>(null);
   if (previousLatestRun !== props.latestRun) {
     setPreviousLatestRun(props.latestRun);
+    setSettleAnchorId(settledRunAnchorId(previousLatestRun, props.latestRun, presentedFeed));
     const latest = props.latestRun;
     const previous = previousLatestRun;
     if (latest && previous) {
@@ -2998,11 +3003,33 @@ export const ThreadFeed = memo(function ThreadFeed({
     if (disclosureAnchorKeyRef.current !== null) {
       settleDisclosureAfterLayout();
     }
+    if (settleAnchorId !== null) releaseSettleAnchorAfterLayout();
   };
+  const settleAnchorIndex =
+    settleAnchorId === null ? -1 : presentedFeed.findIndex((row) => row.id === settleAnchorId);
+  const releaseSettleAnchorAfterLayout = useEffectEvent(() => {
+    if (settleAnchorFrameRef.current !== null) cancelAnimationFrame(settleAnchorFrameRef.current);
+    settleAnchorFrameRef.current = requestAnimationFrame(() => {
+      settleAnchorFrameRef.current = requestAnimationFrame(() => {
+        settleAnchorFrameRef.current = null;
+        setSettleAnchorId(null);
+      });
+    });
+  });
+  // oxlint-disable-next-line goat/react-effect-budget -- the fold's rows measure after commit; release the anchor once they settle
+  useEffect(() => {
+    if (settleAnchorId === null) return;
+    releaseSettleAnchorAfterLayout();
+    return () => {
+      if (settleAnchorFrameRef.current !== null) cancelAnimationFrame(settleAnchorFrameRef.current);
+      settleAnchorFrameRef.current = null;
+    };
+  }, [settleAnchorId]);
 
-  const shouldRestoreVisibleContentPosition = (entry: ThreadFeedRow) => {
+  const shouldRestoreVisibleContentPosition = (entry: ThreadFeedRow, index: number) => {
     const disclosureAnchorKey = disclosureAnchorKeyRef.current;
-    return disclosureAnchorKey === null || entry.id === disclosureAnchorKey;
+    if (disclosureAnchorKey !== null) return entry.id === disclosureAnchorKey;
+    return settleAnchorIndex < 0 || index >= settleAnchorIndex;
   };
 
   const maintainVisibleContentPosition = {
