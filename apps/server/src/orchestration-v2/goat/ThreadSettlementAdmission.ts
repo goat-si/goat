@@ -18,7 +18,10 @@ export function settlementAdmission(input: {
     ["preparing", "starting", "running", "waiting"].includes(run.status),
   );
   const queued = input.runs.some(
-    (run) => run.status === "queued" && !input.automaticQueuedRuns.includes(run),
+    (run) =>
+      run.status === "queued" &&
+      (!input.automaticQueuedRuns.includes(run) ||
+        (input.expectedLatestRunId !== undefined && run.queueHeld !== true)),
   );
   return {
     stale: input.expectedLatestRunId !== undefined && latest?.id !== input.expectedLatestRunId,

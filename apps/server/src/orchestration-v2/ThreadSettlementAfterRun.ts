@@ -41,12 +41,12 @@ export const settleAfterRun = Effect.fn("orchestrationV2.threadManagement.settle
         )
           return true;
         if (
-          following.some(
-            (candidate) =>
-              candidate.status !== "queued" &&
-              !["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
-                candidate.status,
-              ),
+          following.some((candidate) =>
+            candidate.status === "queued"
+              ? candidate.queueHeld !== true
+              : !["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+                  candidate.status,
+                ),
           )
         )
           return false;

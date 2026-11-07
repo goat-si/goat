@@ -1,3 +1,4 @@
+import * as ThreadSettlementAfterRun from "./ThreadSettlementAfterRun.ts";
 import { expect, it } from "@effect/vitest";
 import {
   CommandId,
@@ -104,6 +105,7 @@ it.effect.each([
       ordinal: 2,
       status: "running" as OrchestrationV2Run["status"],
       userMessageId: MessageId.make("follow-up"),
+      queueHeld: followUp === "held-notification",
     };
     const dispatched: Array<string> = [];
     // The notification starts after the completed run was observed, before settlement commits.
@@ -218,4 +220,110 @@ it.effect.each([
     yield* Fiber.join(fiber);
     expect(dispatched).toEqual(settles ? ["thread.settle"] : []);
   }),
+);
+
+it.effect.each([
+  { kind: "notification", queueHeld: false },
+  { kind: "delegated", queueHeld: undefined },
+] as const)(
+  "waits for a runnable queued $kind before dispatching settlement",
+  ({ kind, queueHeld }) =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make(`thread:queued-${kind}`);
+      const projectId = ProjectId.make("project:queued");
+      const originalId = RunId.make("run:original");
+      const followId = RunId.make("run:follow");
+      const original = {
+        id: originalId,
+        ordinal: 1,
+        status: "completed",
+        userMessageId: MessageId.make("original"),
+      } as unknown as OrchestrationV2Run;
+      let follow = {
+        id: followId,
+        ordinal: 2,
+        status: "queued",
+        queueHeld,
+        userMessageId: MessageId.make("follow"),
+      } as unknown as OrchestrationV2Run;
+      const messages = [
+        {
+          id: follow.userMessageId,
+          runId: followId,
+          role: "user",
+          ...(kind === "notification" ? { notification: {} } : { delegatedCompletion: {} }),
+        },
+      ];
+      const subscribed = yield* Deferred.make<void>();
+      const runningHandled = yield* Deferred.make<void>();
+      const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+      const attempts = yield* Queue.unbounded<string>();
+      let sequence = 0;
+      const orchestrator = yield* Orchestrator.OrchestratorV2.pipe(
+        Effect.provide(
+          Layer.mock(Orchestrator.OrchestratorV2)({
+            getThreadEventSequence: () => Effect.succeed(sequence),
+            streamStoredEventsFrom: () =>
+              Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                Stream.drain,
+                Stream.concat(
+                  Stream.fromQueue(events).pipe(
+                    Stream.tap((event) =>
+                      event.sequence === 2
+                        ? Deferred.succeed(runningHandled, undefined)
+                        : Effect.void,
+                    ),
+                  ),
+                ),
+              ),
+          }),
+        ),
+      );
+      const fiber = yield* ThreadSettlementAfterRun.settleAfterRun({
+        threadId,
+        projectId,
+        run: original,
+        timeoutMs: 86_400_000,
+        orchestrator,
+        records: () =>
+          Effect.succeed({
+            thread: { id: threadId, projectId },
+            runs: [original, follow],
+            messages,
+          } as never),
+        dispatch: (command) =>
+          Queue.offer(attempts, command.type).pipe(
+            Effect.as({ sequence: 1, storedEvents: [] } as never),
+          ),
+      }).pipe(Effect.forkScoped);
+      yield* Effect.raceFirst(
+        Deferred.await(subscribed),
+        Fiber.await(fiber).pipe(Effect.andThen(Effect.die("settled while follow-up was queued"))),
+      );
+      expect(yield* Queue.size(attempts)).toBe(0);
+      follow = { ...follow, status: "running" };
+      sequence = 1;
+      yield* Queue.offer(events, {
+        sequence,
+        event: { type: "run.updated", threadId, payload: follow },
+      } as unknown as OrchestrationV2StoredEvent);
+      sequence = 2;
+      yield* Queue.offer(events, {
+        sequence,
+        event: { type: "run.updated", threadId, payload: follow },
+      } as unknown as OrchestrationV2StoredEvent);
+      yield* Effect.raceFirst(
+        Deferred.await(runningHandled),
+        Fiber.await(fiber).pipe(Effect.andThen(Effect.die("settled while follow-up was running"))),
+      );
+      expect(yield* Queue.size(attempts)).toBe(0);
+      follow = { ...follow, status: "completed" };
+      sequence = 3;
+      yield* Queue.offer(events, {
+        sequence,
+        event: { type: "run.updated", threadId, payload: follow },
+      } as unknown as OrchestrationV2StoredEvent);
+      yield* Fiber.join(fiber);
+      expect(yield* Queue.takeAll(attempts)).toEqual(["thread.settle"]);
+    }).pipe(Effect.scoped),
 );
