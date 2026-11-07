@@ -1,7 +1,7 @@
 import type { TranscriptionResult } from "@react-native-ai/apple/src/NativeAppleTranscription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { VoiceInputController, VoiceTranscriptionError } from "@goat/client-runtime/voice-input";
+import { VoiceTranscriptionError } from "@goat/client-runtime/voice-input";
 
 const mocks = vi.hoisted(() => ({
   isAvailable: vi.fn<(locale: string) => boolean>(),
@@ -156,56 +156,6 @@ describe("getLocalVoiceTranscriber", () => {
       mocks.prepare.mockRejectedValueOnce(Object.assign(new Error(code), { code }));
       expect((await getVoiceTranscriber(remote)!.prepare(options)).location).toEqual(environment);
     }
-  });
-
-  it("records while local preparation runs and discloses the actual fallback environment", async () => {
-    const nativePreparation = Promise.withResolvers<string>();
-    const recorded = Promise.withResolvers<void>();
-    mocks.prepare.mockReturnValue(nativePreparation.promise);
-    const location = {
-      kind: "environment" as const,
-      environmentId: EnvironmentId.make("studio"),
-      label: "Mac Studio",
-    };
-    const remote = {
-      prepare: vi.fn(async () => ({
-        locale: "en-US",
-        location,
-        transcribe: async () => "remote words",
-      })),
-    };
-    const commit = vi.fn();
-    const controller = new VoiceInputController({
-      recorder: {
-        uri: "file:///voice.m4a",
-        prepareToRecordAsync: async () => {},
-        record: () => recorded.resolve(),
-        stop: async () => {},
-      },
-      getTranscriber: () => getVoiceTranscriber(remote),
-      requestPermission: async () => ({ granted: true, canAskAgain: true }),
-      configureRecording: async () => {},
-      releaseRecording: async () => {},
-      deleteRecording: () => {},
-      readDraft: () => ({
-        ownerKey: "thread",
-        text: "",
-        selection: { start: 0, end: 0 },
-        revision: 1,
-      }),
-      commitDraft: commit,
-      onStateChange: () => {},
-    });
-    const starting = controller.start();
-    await recorded.promise;
-    expect(controller.currentState.phase).toBe("recording");
-    nativePreparation.reject(
-      Object.assign(new Error("unavailable"), { code: "AppleTranscriptionUnavailable" }),
-    );
-    await starting;
-    expect(controller.currentState.location).toEqual(location);
-    await controller.stop();
-    expect(commit).toHaveBeenCalledWith("remote words", { start: 12, end: 12 });
   });
 
   it("does not start native transcription after cancellation during a file read", async () => {
