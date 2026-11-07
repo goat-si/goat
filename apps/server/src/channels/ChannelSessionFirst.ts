@@ -30,6 +30,7 @@ import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
 import { isTerminalThread, mainThreadInput } from "./channelTerminalThread.ts";
+import { isMemoryTabEdit } from "./channelBotNoteTabEdits.ts";
 import { makeCreatedTasks, prepareTransition } from "./channelTaskWrites.ts";
 
 export class ChannelSessionFirst extends Context.Service<
@@ -180,6 +181,12 @@ const make = Effect.gen(function* () {
       stored.requester === undefined ||
       stored.message.intent !== "message" ||
       /^link\s/iu.test(stored.message.text)
+    )
+      return false;
+    // Reception edits for a tab sentence in the main conversation or a finished task's thread.
+    if (
+      isMemoryTabEdit(stored.message) &&
+      (stored.message.taskId === undefined || (yield* isTerminalThread(ledger, stored)))
     )
       return false;
     const requester = stored.requester;
