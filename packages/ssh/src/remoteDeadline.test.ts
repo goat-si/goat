@@ -29,20 +29,9 @@ const runShell = (
     child.stdin.end(script);
   });
 
-// A stopped watchdog leaves its tick to end by itself; one reading the never FIFO ends when the
-// FIFO gains and loses a writer.
-const releaseNever = (dir: string) => {
-  try {
-    NodeFS.closeSync(
-      NodeFS.openSync(
-        NodePath.join(dir, "never"),
-        NodeFS.constants.O_WRONLY | NodeFS.constants.O_NONBLOCK,
-      ),
-    );
-  } catch {
-    // No reader is left.
-  }
-};
+// A clock that never ticks again. A stopped watchdog leaves its tick to end by itself, so it
+// ends once the test removes its directory.
+const HOLD = 'while [ -d "$GOAT_TEST_DIR" ]; do /bin/sleep 0.1; done; exit 0';
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadline wrapper", () => {
   it("wraps only scripts that sh reads from stdin", () => {
@@ -102,13 +91,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
     async (shell) => {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
       try {
-        for (const fifo of ["ticking", "never"])
+        for (const fifo of ["ticking"])
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
         // The watchdog's clock records the watchdog's PID and then ticks far past the test.
         const clock = NodePath.join(dir, "sleep");
         NodeFS.writeFileSync(
           clock,
-          '#!/bin/sh\necho $PPID > "$GOAT_TEST_DIR/watchdog.pid"\nprintf x > "$GOAT_TEST_DIR/ticking"\nexec cat "$GOAT_TEST_DIR/never"\n',
+          '#!/bin/sh\necho $PPID > "$GOAT_TEST_DIR/watchdog.pid"\nprintf x > "$GOAT_TEST_DIR/ticking"\n' +
+            HOLD +
+            "\n",
           { mode: 0o755 },
         );
         const script = withRemoteDeadline('cat "$1/ticking" >/dev/null\nexit 3', 60_000, clock);
@@ -121,7 +112,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
         const watchdog = Number(NodeFS.readFileSync(NodePath.join(dir, "watchdog.pid"), "utf8"));
         expect(() => process.kill(watchdog, 0)).toThrow();
       } finally {
-        releaseNever(dir);
         NodeFS.rmSync(dir, { recursive: true, force: true });
       }
     },
@@ -162,7 +152,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
         expect(result).not.toBe(0);
         expect(NodeFS.readFileSync(NodePath.join(dir, "released"), "utf8")).toBe("owner-alive\n");
       } finally {
-        if (NodeFS.existsSync(NodePath.join(dir, "never"))) releaseNever(dir);
         NodeFS.rmSync(dir, { recursive: true, force: true });
       }
     },
@@ -175,7 +164,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
       try {
         const bin = NodePath.join(dir, "bin");
         NodeFS.mkdirSync(bin);
-        for (const fifo of ["gate", "block", "never"])
+        for (const fifo of ["gate", "block"])
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
         const shims: Record<string, string> = {
           uname: "echo MINGW64_NT-10.0-26200",
@@ -189,7 +178,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
             'n=$(($(/bin/cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
             'if [ "$n" = 1 ]; then exec /bin/cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
             'if [ "$n" = 9 ]; then printf x > "$GOAT_TEST_DIR/block"; fi',
-            'if [ "$n" -gt 8 ] || { [ "$n" -gt 3 ] && [ "$GOAT_TEST_GRACE" = hold ]; }; then exec /bin/cat "$GOAT_TEST_DIR/never"; fi',
+            'if [ "$n" -gt 8 ] || { [ "$n" -gt 3 ] && [ "$GOAT_TEST_GRACE" = hold ]; }; then ' +
+              HOLD +
+              "; fi",
           ].join("\n"),
         };
         for (const [name, body] of Object.entries(shims))
@@ -225,7 +216,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
           );
         }
       } finally {
-        if (NodeFS.existsSync(NodePath.join(dir, "never"))) releaseNever(dir);
         NodeFS.rmSync(dir, { recursive: true, force: true });
       }
     },
@@ -236,7 +226,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
     try {
       const bin = NodePath.join(dir, "bin");
       NodeFS.mkdirSync(bin);
-      for (const fifo of ["gate", "block", "never"])
+      for (const fifo of ["gate", "block"])
         NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
       // Git Bash has no pgrep and a ps without -o. A PID read from a process list can be reused
       // before it is signalled, so neither may be asked.
@@ -260,7 +250,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
           'n=$(($(/bin/cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
           'if [ "$n" = 1 ]; then exec /bin/cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
           'if [ "$n" = 4 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
-          'if [ "$n" -gt 3 ]; then exec /bin/cat "$GOAT_TEST_DIR/never"; fi',
+          'if [ "$n" -gt 3 ]; then ' + HOLD + "; fi",
         ].join("\n"),
       };
       for (const [name, body] of Object.entries(shims))
@@ -295,7 +285,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
       expect(NodeFS.existsSync(NodePath.join(dir, "taskkill"))).toBe(false);
       expect(NodeFS.existsSync(NodePath.join(dir, "listed"))).toBe(false);
     } finally {
-      if (NodeFS.existsSync(NodePath.join(dir, "never"))) releaseNever(dir);
       NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -308,7 +297,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
     async ({ shell, deadline }) => {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
       try {
-        for (const fifo of ["go", "never"])
+        for (const fifo of ["go"])
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
         // Ticks start and end around the script. Without a deadline tick 3 lets the script finish,
         // so the watchdog is stopped mid-tick; with one, the script waits to be hung up.
@@ -319,7 +308,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
             "#!/bin/sh",
             'n=$(($(cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
             'if [ "$n" = 3 ] && [ "$GOAT_TEST_DEADLINE" = false ]; then printf x > "$GOAT_TEST_DIR/go"; fi',
-            'if [ "$n" -gt 3 ]; then exec cat "$GOAT_TEST_DIR/never"; fi',
+            'if [ "$n" -gt 3 ]; then ' + HOLD + "; fi",
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
@@ -355,7 +344,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
         // The watchdog is stopped by the shell that started it, after the hang-up if there was one.
         expect(signalled).toEqual(deadline ? ["group", "child"] : ["child"]);
       } finally {
-        releaseNever(dir);
         NodeFS.rmSync(dir, { recursive: true, force: true });
       }
     },
@@ -365,7 +353,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
     async (shell) => {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
       try {
-        for (const fifo of ["gate", "block", "keep", "never"])
+        for (const fifo of ["gate", "block", "keep"])
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
         // Tick 1 waits until the script is stuck and later deadline ticks pass at once. Tick 4 comes
         // only for a script nothing hung up: it releases the script, and later ticks wait.
@@ -377,7 +365,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
             'n=$(($(cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
             'if [ "$n" = 1 ]; then exec cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
             'if [ "$n" = 4 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
-            'if [ "$n" -gt 4 ]; then exec cat "$GOAT_TEST_DIR/never"; fi',
+            'if [ "$n" -gt 4 ]; then ' + HOLD + "; fi",
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
@@ -420,7 +408,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
         // Release the surviving sibling so nothing outlives the test.
         NodeFS.writeFileSync(NodePath.join(dir, "keep"), "");
       } finally {
-        releaseNever(dir);
         NodeFS.rmSync(dir, { recursive: true, force: true });
       }
     },

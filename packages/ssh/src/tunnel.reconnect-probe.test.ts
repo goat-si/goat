@@ -67,6 +67,12 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if (reason === "cancelled") yield* f.fs.writeFileString(`${f.test}/drain`, reason);
           yield* f.shiftHostClock(60);
           const first = yield* launch(f, undefined, true);
+          if (reason === "unknown") {
+            // A server that did not answer its activity probe may not answer the app either.
+            assert.equal(first.status, "pending");
+            assert.equal(first.pending?.reason, "unknown");
+            return;
+          }
           assert.equal(first.status, "ready");
           if (first.status !== "ready") return;
           assert.equal(first.pending?.reason, reason === "cancelled" ? "busy" : reason);

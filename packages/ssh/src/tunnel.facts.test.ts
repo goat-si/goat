@@ -122,6 +122,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         const counts: Record<string, number> = {};
         for (const name of log.trim().split("\n")) counts[name] = (counts[name] ?? 0) + 1;
         // Measured at 9109d68047: awk 0, cat 49, date 19, grep 56, ps 12, sed 35, shasum 15, stat 38.
+        // Each remembered pinned-runner key costs a stat of the runner, which proves it unchanged.
         const bounds: Record<string, number> = {
           awk: 20,
           cat: 18,
@@ -129,7 +130,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
           grep: 0,
           ps: 12,
           sed: 1,
-          stat: 19,
+          stat: 21,
         };
         for (const [name, bound] of Object.entries(bounds))
           assert.isAtMost(counts[name] ?? 0, bound, name);
