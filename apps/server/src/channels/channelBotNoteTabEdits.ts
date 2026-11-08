@@ -111,6 +111,19 @@ export interface NoteWriterHooks {
   readonly afterRename?: Effect.Effect<void>;
 }
 
+/** A note GOAT kept after refusing to forget it while other work held a notes grant. */
+export interface KeptNote {
+  readonly note: string;
+  /** The tasks that held a grant when the forget was refused. */
+  readonly holders: ReadonlyArray<string>;
+}
+
+interface RefusedForget {
+  readonly note: string;
+  readonly raw: string;
+  readonly holders: ReadonlySet<string>;
+}
+
 const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 // A forget rewrites the file, so it keeps a byte order mark and refuses bytes that are not UTF-8.
 const strictDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -183,6 +196,8 @@ export const makeChannelBotNoteWriter = (
     const grantOpen = Effect.map(ledger.listTasksByStatus(OPEN_STATUSES), (open) =>
       open.some((stored) => stored.task.notesChangeRequested !== undefined),
     );
+    // Forgets refused while a grant was open, by note text. In memory: a restart forgets them.
+    const refused = new Map<string, RefusedForget>();
     /**
      * A restart re-runs an input whose note was saved before a refusal could apply. Its first
      * answer, read from the file and never written again: a task holding a grant may be editing it.
@@ -253,6 +268,97 @@ export const makeChannelBotNoteWriter = (
     const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => gate.withPermits(1)(effect);
 
     const readNotes = readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES);
+
+    /**
+     * Records a Memory tab forget refused while tasks hold a notes grant, with the line as it stands,
+     * so keepRefused can put it back if those tasks remove it anyway. Call under the writers' lock.
+     */
+    const recordRefused = Effect.fn("channelBotNoteTabEdits.recordRefused")(function* (
+      note: string,
+      open: ReadonlyArray<ChannelLedger.ChannelStoredTask>,
+    ) {
+      const holders = open
+        .filter((stored) => stored.task.notesChangeRequested !== undefined)
+        .map((stored) => stored.task.taskId as string);
+      const read = yield* readNotes;
+      if (holders.length === 0 || read === null || read.truncated) return;
+      const line = parseChannelBotNoteLines(decode(read.bytes)).findLast(
+        (candidate) => candidate.replacedBy === undefined && candidate.text === note,
+      );
+      if (line === undefined) return;
+      const key = collapseNoteText(line.text);
+      const prior = refused.get(key);
+      refused.set(key, {
+        note: line.text,
+        raw: prior?.raw ?? line.raw,
+        holders: new Set([...(prior?.holders ?? []), ...holders]),
+      });
+    });
+    const recordRefusedQuietly = (
+      note: string,
+      open: ReadonlyArray<ChannelLedger.ChannelStoredTask>,
+    ) =>
+      recordRefused(note, open).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("GOAT Bot refused forget not recorded", { cause }),
+        ),
+      );
+
+    /** recordRefused for a message refused elsewhere; only a whole tab forget sentence counts. */
+    const refusedMessage = Effect.fn("channelBotNoteTabEdits.refusedMessage")(
+      function* (message: string) {
+        const request = tabRequest(message);
+        if (request?.kind !== "forget") return;
+        const open = yield* ledger.listTasksByStatus(OPEN_STATUSES);
+        yield* recordRefusedQuietly(request.note, open);
+      },
+      Effect.catch((cause) => Effect.logWarning("GOAT Bot refused forget not recorded", { cause })),
+    );
+
+    /**
+     * Puts back refused forgets once every task that held the grant has ended and its run stopped
+     * (`runsOpen` names tasks whose run still works). A note still in force then is left alone, so a
+     * later change is never undone; a missing one is appended as it stood once no grant is open.
+     */
+    const keepRefused = (runsOpen: ReadonlySet<string>) =>
+      gate.withPermits(1)(
+        Effect.gen(function* () {
+          if (refused.size === 0) return [];
+          const open = new Set(
+            (yield* ledger.listTasksByStatus(OPEN_STATUSES)).map(
+              (stored) => stored.task.taskId as string,
+            ),
+          );
+          const quiet = [...refused].filter(([, record]) =>
+            [...record.holders].every((task) => !open.has(task) && !runsOpen.has(task)),
+          );
+          if (quiet.length === 0) return [];
+          const read = yield* readNotes;
+          if (read?.truncated === true) return [];
+          const text = read === null ? "" : decode(read.bytes);
+          const inForce = new Set(
+            parseChannelBotNoteLines(text)
+              .filter((line) => line.replacedBy === undefined)
+              .map((line) => collapseNoteText(line.text)),
+          );
+          const granted = yield* grantOpen;
+          const kept: Array<KeptNote & { readonly raw: string }> = [];
+          for (const [key, record] of quiet) {
+            // Still there: nothing to put back, and a later change to it must stand.
+            if (inForce.has(key)) refused.delete(key);
+            else if (!granted)
+              kept.push({ note: record.note, holders: [...record.holders], raw: record.raw });
+          }
+          if (kept.length === 0) return [];
+          yield* fs.writeFileString(
+            files.notes,
+            appendPrefix(read !== null, text) + kept.map((note) => note.raw).join("\n") + "\n",
+            { flag: "a" },
+          );
+          for (const note of kept) refused.delete(collapseNoteText(note.note));
+          return kept.map(({ note, holders }): KeptNote => ({ note, holders }));
+        }),
+      );
 
     const change = Effect.fn("channelBotNoteTabEdits.change")(function* (
       note: string,
@@ -325,8 +431,12 @@ export const makeChannelBotNoteWriter = (
       readAt: string,
     ) {
       const open = yield* ledger.listTasksByStatus(OPEN_STATUSES);
-      if (open.some((stored) => stored.task.notesChangeRequested !== undefined))
+      if (open.some((stored) => stored.task.notesChangeRequested !== undefined)) {
+        if (request.kind === "forget") yield* recordRefusedQuietly(request.note, open);
         return CHANNEL_COPY.noteEditBusy;
+      }
+      // A request for this note that goes through now is the person's latest word on it.
+      refused.delete(collapseNoteText(request.note));
       for (let attempt = 0; attempt < EDIT_ATTEMPTS; attempt++) {
         const read = yield* readNotes;
         if (read?.truncated === true) return CHANNEL_COPY.noteFileTooLarge;
@@ -377,7 +487,15 @@ export const makeChannelBotNoteWriter = (
       return answer;
     });
 
-    return { save, saveIf, exclusive, tabEdit, grantOpen };
+    return {
+      save,
+      saveIf,
+      exclusive,
+      tabEdit,
+      grantOpen,
+      recordRefusedForget: refusedMessage,
+      keepRefused,
+    };
   });
 
 /**
