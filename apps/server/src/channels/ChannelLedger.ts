@@ -1093,8 +1093,11 @@ const make = Effect.gen(function* () {
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
         FROM channel_tasks
         WHERE conversation_id = ${conversationId}
-          AND status IN ('running', 'waiting_input')
-          AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) > 0
+          AND ((status IN ('running', 'waiting_input')
+              AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) > 0)
+            OR (status IN ('completed', 'failed') AND EXISTS (
+              SELECT 1 FROM json_each(task_json, '$.observed.needsYou')
+              WHERE json_extract(value, '$.kind') = 'approval')))
         ORDER BY created_at DESC
       `.pipe(
         Effect.map((rows) => rows.map((row) => storedTask(row).task)),
@@ -1284,13 +1287,11 @@ const make = Effect.gen(function* () {
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
         FROM channel_tasks
         WHERE owner_id = ${ownerId} AND bot_id = ${botId}
-          AND (
-            status = 'waiting_input'
-            OR (
-              status = 'running'
-              AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) > 0
-            )
-          )
+          AND (status = 'waiting_input'
+            OR (status = 'running' AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) > 0)
+            OR (status IN ('completed', 'failed') AND EXISTS (
+              SELECT 1 FROM json_each(task_json, '$.observed.needsYou')
+              WHERE json_extract(value, '$.kind') = 'approval')))
       `,
       ).pipe(
         Effect.map((rows) => {

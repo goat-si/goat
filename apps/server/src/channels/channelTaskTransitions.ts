@@ -292,7 +292,8 @@ export function applyChannelTaskEvent(
         }
       }
       if (task.status === "completed" || task.status === "failed" || task.status === "cancelled") {
-        if (observed.result === undefined)
+        // An approval asked after the task finished stays; a question does not reopen it.
+        if (observed.result === undefined && task.observed?.result !== undefined)
           return reject("A finished task only accepts run evidence.");
         return {
           ok: true,
@@ -300,8 +301,8 @@ export function applyChannelTaskEvent(
             ...base,
             observed: {
               pullRequests: task.observed?.pullRequests ?? [],
-              needsYou: [],
-              result: observed.result,
+              needsYou: observed.needsYou.filter((need) => need.kind === "approval"),
+              ...(observed.result === undefined ? {} : { result: observed.result }),
             },
           },
         };

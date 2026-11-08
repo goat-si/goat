@@ -283,6 +283,26 @@ describe("goatBotFaceTasks", () => {
     expect(tasks).toMatchObject({ waiting: 2, active: 0 });
     expect(goatBotFace(input({ tasks }), T0).state).toBe("waiting");
   });
+
+  it("counts a finished task as waiting only while an approval is still open", () => {
+    const approval = chip("done", 1, "completed", "2026-11-07T09:00:00.000Z", {
+      observed: {
+        needsYou: [
+          {
+            kind: "approval",
+            since: "2026-11-07T09:01:00.000Z",
+            approval: { requestId: "request:1", threadId: "thread:1" },
+          },
+        ],
+      },
+    });
+    expect(goatBotFaceTasks([approval])).toMatchObject({ waiting: 1, active: 0, ended: null });
+    const question = chip("asked", 1, "completed", "2026-11-07T09:00:00.000Z", {
+      observed: { needsYou: [{ kind: "question", since: "2026-11-07T09:01:00.000Z" }] },
+    });
+    expect(goatBotFaceTasks([question]).waiting).toBe(0);
+    expect(goatBotFaceTasks([question]).ended).not.toBeNull();
+  });
 });
 
 function chip(

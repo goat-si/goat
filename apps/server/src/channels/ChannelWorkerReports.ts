@@ -71,6 +71,7 @@ import { failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import { commitWorkerObserved, reconcileLateApprovals } from "./channelLateApprovals.ts";
 import {
   completionHoldCount,
   isThreadMissing,
@@ -589,19 +590,20 @@ const make = Effect.gen(function* () {
         const card =
           latest.task.requester.originKind !== "mcp" &&
           newApprovals(latest.task.observed?.needsYou, observed.needsYou).length > 0;
-        const wrote = yield* commitTransition(
+        const requests = [...runtimeRequests, ...childRequests];
+        const wrote = yield* commitWorkerObserved(
           ledger,
           latest,
-          {
-            type: "task.worker.observed",
-            payload: { generation: latest.task.generation, observed },
-          },
-          { owner, ...(card ? { narrate: true } : {}) },
+          observed,
+          owner,
+          card,
+          requests,
+          threads,
         );
         if (wrote === undefined) return latest !== stored;
-        const reread = yield* ledger.getTask(task.taskId);
+        const reread = wrote === "unchanged" ? latest : yield* ledger.getTask(task.taskId);
         if (reread === undefined) return true;
-        if (reread.task.version !== wrote.version) return true;
+        if (wrote !== "unchanged" && reread.task.version !== wrote.version) return true;
         latest = reread;
       }
 
@@ -764,7 +766,9 @@ const make = Effect.gen(function* () {
         if (result._tag === "None") continue;
         const observed = observeWorker({
           pullRequests: stored.task.observed?.pullRequests ?? [],
-          needsYou: [],
+          needsYou: (stored.task.observed?.needsYou ?? []).filter(
+            (need) => need.kind === "approval",
+          ),
           result: result.value,
         });
         if (channelWorkerObservationEquals(stored.task.observed, observed)) continue;
@@ -858,7 +862,7 @@ const make = Effect.gen(function* () {
           });
         }
       }
-      return changed;
+      return changed + (yield* reconcileLateApprovals(owner, { ledger, threads, sql }));
     });
 
   const isWorkerThread: ChannelWorkerReports["Service"]["isWorkerThread"] = (threadId) =>

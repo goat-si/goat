@@ -277,7 +277,13 @@ describe("task transitions", () => {
       completed.task,
       event("task.worker.observed", { generation: 2, observed }, 7),
     );
-    assert.isFalse(afterEnd.ok);
+    assert.isTrue(afterEnd.ok);
+    if (!afterEnd.ok) return;
+    // Completion cleared the wait. A later approval stays; the usage-limit pause does not.
+    assert.deepStrictEqual(afterEnd.task.observed, {
+      pullRequests: observed.pullRequests,
+      needsYou: [{ kind: "approval", since: NOW }],
+    });
     const retried = applyChannelTaskEvent(
       completed.task,
       event("task.retry.requested", { generation: 3 }, 7),
