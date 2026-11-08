@@ -273,6 +273,9 @@ describe("LaunchWatchService runs the thread starts itself", () => {
         let runs = [{ runId: run1, ordinal: 1 }];
         let hold: Deferred.Deferred<void> | undefined;
         const readStarted = yield* Queue.unbounded<void>();
+        // The first sweep's disk read outlasts the clock jump below, as it can under load.
+        const listed = yield* Deferred.make<void>();
+        world.replicasListed = Deferred.await(listed);
         world.hostCall = (call) =>
           call.tool === "goat_thread_wait"
             ? Effect.succeed({
@@ -292,6 +295,7 @@ describe("LaunchWatchService runs the thread starts itself", () => {
             expect(yield* Queue.take(world.idleWaits)).toBe(120_000);
             // Off the hourly sweep's ticks, so only the follower meets the deadline below.
             yield* TestClock.adjust(5 * 24 * 60 * 60_000 + 10 * 60_000);
+            yield* Deferred.succeed(listed, undefined);
             runs = [...runs, { runId: run2, ordinal: 2 }];
             yield* look(world);
             yield* Queue.take(reported);

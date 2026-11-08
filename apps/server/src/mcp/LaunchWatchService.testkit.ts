@@ -53,6 +53,8 @@ export interface World {
   pressureBlocked?: boolean;
   settings?: ServerSettings.ServerSettingsService["Service"];
   payloadStaged?: Effect.Effect<void>;
+  /** Runs as a sweep finishes listing kept replicas, before it sleeps again. */
+  replicasListed?: Effect.Effect<void>;
   /** Answers to local waits, taken one per wait. */
   readonly waits: Queue.Queue<WaitAnswer>;
   readonly waitCalls: Array<ThreadManagementService.ThreadManagementWaitInput>;
@@ -338,6 +340,16 @@ const layerFor = (world: World, baseDir: string) =>
             const fs = yield* FileSystem.FileSystem;
             return {
               ...fs,
+              readDirectory: (...args: Parameters<typeof fs.readDirectory>) =>
+                fs
+                  .readDirectory(...args)
+                  .pipe(
+                    Effect.ensuring(
+                      args[0].endsWith("watch-replicas")
+                        ? Effect.suspend(() => world.replicasListed ?? Effect.void)
+                        : Effect.void,
+                    ),
+                  ),
               rename: (from: string, to: string) =>
                 fs
                   .rename(from, to)
