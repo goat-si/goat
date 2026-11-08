@@ -538,15 +538,15 @@ const make = Effect.gen(function* () {
     if (record === undefined) return { _tag: "ended", reason: "revoked" };
     if (record.controlId !== controlId) return { _tag: "ended", reason: "replaced" };
     if (record.ended !== undefined) return { _tag: "ended", reason: record.ended };
-    if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
+    if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) {
+      controlSettings.delete(controlId);
       return { _tag: "ended", reason: "expired" };
-    const controlSetting = controlSettings.get(controlId);
+    }
+    const controlSetting = controlSettings.get(controlId) ?? Option.getOrUndefined(serverSettings);
     const snapshot =
-      controlSetting !== undefined
-        ? yield* controlSetting.getSettings.pipe(Effect.option)
-        : Option.isSome(serverSettings)
-          ? yield* serverSettings.value.getSettings.pipe(Effect.option)
-          : Option.none();
+      controlSetting === undefined
+        ? Option.none()
+        : yield* controlSetting.getSettings.pipe(Effect.option);
     const strict = Option.isNone(snapshot) || snapshot.value.cuaStrictInputGuards;
     if (record.everyApp !== undefined && strict && !(yield* fullAccessAdmitted(threadId))) {
       if (end(threadId, "revoked", DateTime.toEpochMillis(now), controlId)) yield* changed;
