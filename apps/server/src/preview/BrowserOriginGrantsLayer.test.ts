@@ -15,7 +15,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Grants from "./BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
-import { makeCuaCommittedPolicy } from "../cuaCommittedPolicy.ts";
+import { makeCuaCommittedPolicy, type CuaCommittedPolicyRead } from "../cuaCommittedPolicy.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
 class ManifestUnavailable extends Schema.TaggedError<ManifestUnavailable>()(
@@ -512,7 +512,7 @@ it.effect("a settings change ends blocked claims and pending requests without a 
 );
 
 const buildPolicyGrants = (
-  committedPolicy: ServerSettings.ServerSettingsService["Service"]["committedPolicy"],
+  committedPolicy: CuaCommittedPolicyRead,
   publish: (union: { readonly origins: ReadonlyArray<string> }) => Effect.Effect<string>,
 ) =>
   Effect.gen(function* () {
