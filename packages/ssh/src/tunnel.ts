@@ -773,8 +773,7 @@ if ! goat_runtime_ready; then
   esac
   printf '%s %s %s %s\\n' "$GOAT_ARCHIVE_VERSION" "$GOAT_EXPECTED" "$GOAT_EXECUTABLE_SHA256" "$GOAT_RECORD_SOURCE" > "$GOAT_STAGING/.install-record"
   printf '%s\\n' "$GOAT_ARCHIVE_VERSION" > "$GOAT_STAGING/.install-complete"
-  goat_runtime_fs rm -rf "$GOAT_RUNTIME_DIR"
-  goat_runtime_fs mv "$GOAT_STAGING" "$GOAT_RUNTIME_DIR"
+  goat_runtime_publish "$GOAT_STAGING" "$GOAT_RUNTIME_DIR" "$GOAT_ARCHIVE_VERSION"
 fi
 if [ -n "\${GOAT_LOCK:-}" ]; then
   goat_lock_cleanup

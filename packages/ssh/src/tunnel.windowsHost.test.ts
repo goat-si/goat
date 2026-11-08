@@ -348,6 +348,8 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
     "cleanup-locked",
     "destination-appears",
     "destination-race",
+    "destination-empty",
+    "competitor-complete",
   ] as const)("installs the Windows zip with publish failure %s", (failure) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -387,7 +389,15 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
         `${bin}/cygpath`,
         `#!/bin/sh\nif [ "$1" = -S ]; then echo '${sys32}'; else printf '%s\\n' "$2"; fi\n`,
       );
-      yield* fs.writeFileString(`${sys32}/tar.exe`, `#!/bin/sh\nexec tar -xzf "$2" -C "$4" "$5"\n`);
+      const published = `${home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}`;
+      // competitor-complete: another installer finishes this version while ours extracts.
+      yield* fs.writeFileString(
+        `${sys32}/tar.exe`,
+        `#!/bin/sh\ntar -xzf "$2" -C "$4" "$5" || exit 1\n` +
+          (failure === "competitor-complete"
+            ? `mkdir -p '${published}' && printf '#!/bin/sh\\necho "goat v${ARCHIVE.archiveVersion}"\\n' > '${published}/goat' && chmod 755 '${published}/goat' && echo '${ARCHIVE.archiveVersion}' > '${published}/.install-complete' && touch '${published}/competitor'\n`
+            : ""),
+      );
       yield* fs.writeFileString(
         `${bin}/wget`,
         `#!/bin/sh\nif [ "$1" = --help ]; then echo --retry-on-http-error; exit 0; fi\nurl=""; out=""\nwhile [ $# -gt 0 ]; do\n  case "$1" in -O) out="$2"; shift 2 ;; http*) url="$1"; shift ;; *) shift ;; esac\ndone\ncp "${release}/$(basename "$url")" "$out"\n`,
@@ -413,6 +423,7 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
 gnu_target=; if [ "$1" = -T ]; then gnu_target=1; shift; fi
 case "$1" in */.staging-*)
   if [ '${failure}' = destination-race ]; then mkdir -p "$2" && touch "$2/other-install"; fi
+  if [ '${failure}' = destination-empty ]; then mkdir -p "$2"; fi
   if { [ '${failure}' = always ] || [ '${failure}' = cleanup-locked ]; } || { { [ '${failure}' = once ] || [ '${failure}' = destination-appears ]; } && [ ! -e '${root}/attempt' ]; }; then
     touch '${root}/attempt'; echo 'mv: Permission denied' >&2; exit 1
   fi ;;
@@ -481,17 +492,24 @@ exec '${realRm}' "$@"
         }
         return;
       }
+      if (failure === "competitor-complete") {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout, `goat v${ARCHIVE.archiveVersion}\n`);
+        assert.isTrue(yield* fs.exists(`${published}/competitor`));
+        assert.isFalse(yield* fs.exists(`${published}/.install-record`));
+        const versions = yield* fs.readDirectory(`${home}/.goat/runtime/goat/versions`);
+        assert.isFalse(versions.some((name) => name.startsWith(".staging-")));
+        return;
+      }
       if (failure === "destination-race") {
         assert.notEqual(result.status, 0);
         assert.include(result.stderr, "Directory not empty");
-        const published = `${home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}`;
         assert.deepEqual(yield* fs.readDirectory(published), ["other-install"]);
         return;
       }
       if (failure === "destination-appears") {
         assert.notEqual(result.status, 0);
         assert.include(result.stderr, "already exists");
-        const published = `${home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}`;
         assert.deepEqual(yield* fs.readDirectory(published), []);
         return;
       }

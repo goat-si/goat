@@ -9,7 +9,7 @@ export const REMOTE_RUNTIME_PUBLISH_SCRIPT = String.raw`goat_runtime_fs() (
     MINGW* | MSYS* | CYGWIN*) ;;
     *) "$@"; exit $? ;;
   esac
-  # mv into an existing directory nests the stage in it; GNU -T makes the rename refuse instead.
+  # mv nests a stage in an existing directory; GNU -T renames onto an empty one, refuses the rest.
   if [ "$1" = mv ]; then set -- mv -T "$2" "$3"; fi
   for delay in 0 1 2 4 8 10 10 10; do
     [ "$delay" = 0 ] || sleep "$delay"
@@ -31,6 +31,17 @@ export const REMOTE_RUNTIME_PUBLISH_SCRIPT = String.raw`goat_runtime_fs() (
   printf '%s\n' 'An antivirus/real-time scan may be locking the new goat.exe. Consider excluding %USERPROFILE%\.goat\runtime, then retry.' >&2
   exit "$status"
 )
+goat_runtime_publish() {
+  # Another installer may have completed this version during extraction on Windows; keep it.
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+      if [ -x "$2/goat" ] && [ "$(cat "$2/.install-complete" 2>/dev/null)" = "$3" ]; then
+        goat_runtime_fs rm -rf "$1" || :; return 0
+      fi ;;
+  esac
+  goat_runtime_fs rm -rf "$2"
+  goat_runtime_fs mv "$1" "$2"
+}
 `;
 
 /**
