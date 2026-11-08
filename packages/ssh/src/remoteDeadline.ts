@@ -34,9 +34,10 @@ export function remoteDeadlineSettleMs(timeoutMs: number) {
 }
 
 /**
- * The script runs in a subshell so this shell can stop the watchdog the moment it ends: a ticking
- * watchdog held a Windows SSH channel open until its next tick. This shell, whose PID the
- * script's lock records as owner, outlives a hang-up until the script's own cleanup has run.
+ * The watchdog runs inside the script's job and hangs up only its own process group, so no PID read
+ * from a process list is ever signalled. The job's shell outlives the script's own hang-up cleanup
+ * and then stops the watchdog, which never ends by itself while that shell is alive; the outer
+ * shell, which the script's locks record as owner, waits for the job.
  */
 export function withRemoteDeadline(
   script: string,
@@ -45,66 +46,81 @@ export function withRemoteDeadline(
   sleep = "command -p sleep",
 ) {
   const seconds = Math.ceil(timeoutMs / 1000) + GRACE_SECONDS;
-  return `trap ':' HUP
+  return `trap 'goat_deadline_hup=1' HUP
+goat_deadline_hup=
+# bash gives the job its own process group; dash without a terminal cannot, and keeps this shell's.
+set -m 2>/dev/null || :
 (
-  trap '' HUP
-  goat_deadline_sleep=; goat_deadline_stop=
-  # The script ended: stop the running tick and leave. KILL, since a TERM landing between a tick's
-  # fork and exec is lost; a stop before a tick is named is acted on once it is.
-  trap 'if [ -n "$goat_deadline_sleep" ]; then kill -KILL "$goat_deadline_sleep" 2>/dev/null; wait "$goat_deadline_sleep" 2>/dev/null; exit 0; fi; goat_deadline_stop=1' TERM
-  goat_deadline_tick() {
-    [ -z "$goat_deadline_stop" ] || exit 0
-    ${sleep} ${CHECK_SECONDS} &
-    goat_deadline_sleep=$!
-    if [ -n "$goat_deadline_stop" ]; then kill -KILL "$goat_deadline_sleep" 2>/dev/null; wait "$goat_deadline_sleep" 2>/dev/null; exit 0; fi
-    wait "$goat_deadline_sleep"
-    goat_deadline_sleep=
-  }
-  goat_deadline_left=${seconds}
-  while [ "$goat_deadline_left" -gt 0 ]; do
-    goat_deadline_tick
-    kill -0 $$ 2>/dev/null || exit 0
-    goat_deadline_left=$((goat_deadline_left - ${CHECK_SECONDS}))
-  done
-  if [ "$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" = "$$" ]; then kill -HUP 0
-  else
-    # Freeze each child before reading its children, so none forks or orphans one unseen. Git Bash
-    # has no pgrep; its ps lists PID PPID ..., with a status letter in front of some rows.
-    goat_deadline_children() {
-      if command -v pgrep >/dev/null 2>&1; then pgrep -P "$1" 2>/dev/null || true
-      else ps 2>/dev/null | awk -v p="$1" 'NR > 1 { if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 } if ($2 == p) print $1 }'; fi
+  trap : HUP
+  set +m 2>/dev/null || :
+  (
+    trap '' HUP
+    # Leaving from the trap stops the watchdog even when TERM lands just before a wait begins. Its
+    # tick ends by itself: a shell may already have reaped it, so its PID could name another
+    # process. The tick holds nothing but /dev/null.
+    trap 'exit 0' TERM
+    # Sets goat_deadline_ppid and goat_deadline_pgid for this process.
+    goat_deadline_ids() {
+      if [ -r /proc/self/stat ] && IFS= read -r goat_deadline_stat </proc/self/stat; then
+        set -f; set -- \${goat_deadline_stat##*) }; set +f
+      else
+        [ -n "\${goat_deadline_me:-}" ] || goat_deadline_me="$(exec sh -c 'echo "$PPID"')"
+        set -f; set -- - $(ps -o ppid=,pgid= -p "$goat_deadline_me" 2>/dev/null); set +f
+      fi
+      goat_deadline_ppid="\${2:-}"; goat_deadline_pgid="\${3:-}"
     }
-    goat_deadline_self="$(exec sh -c 'echo "$PPID"')"
-    goat_deadline_tree=
-    for goat_deadline_child in $(goat_deadline_children $$); do
-      [ "$goat_deadline_child" != "$goat_deadline_self" ] || continue
-      kill -STOP "$goat_deadline_child" 2>/dev/null
-      goat_deadline_tree="$goat_deadline_tree $goat_deadline_child $(goat_deadline_children "$goat_deadline_child")"
+    goat_deadline_ids; goat_deadline_job="$goat_deadline_ppid"
+    goat_deadline_alive() { goat_deadline_ids; [ -n "$goat_deadline_job" ] && [ "$goat_deadline_ppid" = "$goat_deadline_job" ]; }
+    goat_deadline_tick() { ${sleep} ${CHECK_SECONDS} & wait $!; }
+    goat_deadline_left=${seconds}
+    while [ "$goat_deadline_left" -gt 0 ]; do
+      goat_deadline_tick
+      goat_deadline_alive || exit 0
+      goat_deadline_left=$((goat_deadline_left - ${CHECK_SECONDS}))
     done
-    for goat_deadline_child in $goat_deadline_tree; do kill -HUP "$goat_deadline_child" 2>/dev/null; done
-    for goat_deadline_child in $goat_deadline_tree; do kill -CONT "$goat_deadline_child" 2>/dev/null; done
-  fi
-  case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*)
-      # Native goat.exe children can ignore the hang-up. After the script's own cleanup had its
-      # grace, end what is left of its tree.
-      goat_deadline_left=${WINDOWS_HANGUP_GRACE_SECONDS}
-      while [ "$goat_deadline_left" -gt 0 ] && kill -0 $$ 2>/dev/null; do
-        goat_deadline_tick
-        goat_deadline_left=$((goat_deadline_left - ${CHECK_SECONDS}))
-      done
-      if kill -0 $$ 2>/dev/null && goat_deadline_winpid="$(cat "/proc/$$/winpid" 2>/dev/null)"; then
-        MSYS2_ARG_CONV_EXCL='*' taskkill.exe /PID "$goat_deadline_winpid" /T /F >/dev/null 2>&1
-      fi ;;
-  esac
-) >/dev/null 2>&1 </dev/null &
-goat_deadline_watchdog=$!
-(
-trap - HUP
+    # Only a group that is this run's alone: the job's own, or the session shell's when it leads its
+    # group, as under sshd. Inside another caller's group nothing is hung up.
+    if [ "$goat_deadline_pgid" = "$goat_deadline_job" ] || [ "$goat_deadline_pgid" = "$$" ]; then
+      kill -HUP 0
+    fi
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*)
+        # Native goat.exe children can ignore the hang-up. After the script's own cleanup had its
+        # grace, end the job's tree; its shell waits for this watchdog, so its PID still names it.
+        goat_deadline_left=${WINDOWS_HANGUP_GRACE_SECONDS}
+        while [ "$goat_deadline_left" -gt 0 ]; do
+          goat_deadline_tick
+          goat_deadline_alive || exit 0
+          goat_deadline_left=$((goat_deadline_left - ${CHECK_SECONDS}))
+        done
+        if goat_deadline_winpid="$(cat "/proc/$goat_deadline_job/winpid" 2>/dev/null)"; then
+          MSYS2_ARG_CONV_EXCL='*' taskkill.exe /PID "$goat_deadline_winpid" /T /F >/dev/null 2>&1
+        fi ;;
+    esac
+    # The job's shell signals this PID, so it stays until stopped or orphaned.
+    while :; do goat_deadline_tick; goat_deadline_alive || exit 0; done
+  ) >/dev/null 2>&1 </dev/null &
+  goat_deadline_watchdog=$!
+  (
+  trap - HUP
 ${script}
-)
-goat_deadline_status=$?
-kill "$goat_deadline_watchdog" 2>/dev/null
-wait "$goat_deadline_watchdog" 2>/dev/null
+  )
+  goat_deadline_status=$?
+  kill -TERM "$goat_deadline_watchdog" 2>/dev/null
+  until wait "$goat_deadline_watchdog" 2>/dev/null; [ "$?" -le 128 ]; do :; done
+  exit "$goat_deadline_status"
+) </dev/null &
+goat_deadline_job=$!
+set +m 2>/dev/null || :
+goat_deadline_status=
+while :; do
+  wait "$goat_deadline_job"; goat_deadline_last=$?
+  # A job reaped by an earlier wait answers 127; its status is the one already kept.
+  [ -z "$goat_deadline_status" ] || [ "$goat_deadline_last" != 127 ] || break
+  goat_deadline_status="$goat_deadline_last"
+  # A hang-up of this shell cuts the wait short while the job still runs its cleanup.
+  [ -n "$goat_deadline_hup" ] || break
+  goat_deadline_hup=
+done
 exit "$goat_deadline_status"`;
 }

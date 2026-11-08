@@ -819,23 +819,26 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
           'again="$(' + key + ')"; after_again="$(digests)"',
           'pin_runner "$HOME/b"',
           'rewritten="$(' + key + ')"',
+          // A write that bypasses pin_runner is seen through the runner's own signature.
+          'cp "$HOME/a" "$HOME/next.pin"',
+          'overwritten="$(' + key + ')"',
           // A reinstalled executable is seen through a remembered key.
           'printf "#!/bin/sh\\n# reinstalled\\n" > "$HOME/.goat/runtime/goat/versions/1.2.3/goat"',
           'reinstalled="$(' + key + ')"',
-          'printf "%s\\n" "$first" "$again" "$rewritten" "$reinstalled" "$after_first" "$after_again"',
+          'printf "%s\\n" "$first" "$again" "$rewritten" "$overwritten" "$reinstalled" "$after_first" "$after_again"',
           // A memo that cannot be emptied is not used again.
           'FACT_MEMO="$HOME"; pin_runner "$HOME/a"; printf "memo=%s\\n" "$FACT_MEMO"',
         ].join("\n"),
         { HOME: dir, PATH: bin + ":" + (process.env.PATH ?? "") },
       );
-      const [first, again, rewritten, reinstalled, afterFirst, afterAgain, memoLine] = out
-        .trim()
-        .split("\n");
+      const [first, again, rewritten, overwritten, reinstalled, afterFirst, afterAgain, memoLine] =
+        out.trim().split("\n");
       assert.include(first, "versions/1.2.3/goat ");
       assert.equal(again, first);
       assert.equal(afterAgain, afterFirst);
       assert.notEqual(rewritten, first);
-      assert.notEqual(reinstalled, rewritten);
+      assert.equal(overwritten, first);
+      assert.notEqual(reinstalled, overwritten);
       assert.equal(memoLine, "memo=");
     } finally {
       NodeFS.rmSync(dir, { recursive: true, force: true });

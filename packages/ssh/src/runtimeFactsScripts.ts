@@ -52,12 +52,16 @@ file_sig_set() {
   esac
 }
 file_sig() { file_sig_set "$1" && printf '%s' "$FILE_SIG"; }
-# A remembered key holds only while its executable keeps the signature and install marker it had.
+# A remembered key holds only while its executable keeps the signature and install marker it had,
+# and a remembered runner keeps its own.
 fact_memo_get() {
   [ -n "$FACT_MEMO" ] && [ -f "$FACT_MEMO" ] && [ -r "$FACT_MEMO" ] || return 1
   while IFS= read -r memo_path && IFS= read -r memo_name && IFS= read -r memo_key &&
-    IFS= read -r memo_exe && IFS= read -r memo_sig; do
+    IFS= read -r memo_exe && IFS= read -r memo_sig && IFS= read -r memo_path_sig; do
     [ "$memo_path" = "$1" ] || continue
+    if [ "$memo_path" != "$memo_exe" ]; then
+      file_sig_set "$memo_path" && [ "$FILE_SIG" = "$memo_path_sig" ] || return 1
+    fi
     file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] || return 1
     fact_slurp "\${memo_exe%/goat}/.install-complete" && [ "$FACT_TEXT" = "\${memo_name%.*}" ] || return 1
     FACT_NAME="$memo_name"; FACT_KEY="$memo_key"; return 0
@@ -66,12 +70,17 @@ fact_memo_get() {
 }
 fact_memo_put() {
   [ -n "$FACT_MEMO" ] || return 0
+  memo_path_sig="$fact_sig"
   case "$1" in
     "$HOME/.goat/runtime/goat/versions"/*/goat) ;;
-    *) [ "$1" = "\${RUNNER_CANDIDATE_FILE:-}.pin" ] || return 0 ;;
+    *)
+      [ "$1" = "\${RUNNER_CANDIDATE_FILE:-}.pin" ] || return 0
+      # A later write in the second the runner last changed could leave its signature unchanged.
+      file_sig_set "$1" && [ "\${FILE_SIG##*:}" -lt "$fact_now" ] || return 0
+      memo_path_sig="$FILE_SIG" ;;
   esac
-  case "$1$FACT_NAME$FACT_KEY$fact_exe$fact_sig" in *"$fact_nl"*) return 0 ;; esac
-  printf '%s\\n%s\\n%s\\n%s\\n%s\\n' "$1" "$FACT_NAME" "$FACT_KEY" "$fact_exe" "$fact_sig" >>"$FACT_MEMO" 2>/dev/null || :
+  case "$1$FACT_NAME$FACT_KEY$fact_exe$fact_sig$memo_path_sig" in *"$fact_nl"*) return 0 ;; esac
+  printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' "$1" "$FACT_NAME" "$FACT_KEY" "$fact_exe" "$fact_sig" "$memo_path_sig" >>"$FACT_MEMO" 2>/dev/null || :
 }
 # Pins runner bytes $1 for this script; exec keys remembered for an earlier pin no longer apply.
 pin_runner() { cp "$1" "\${RUNNER_CANDIDATE_FILE:?}.pin" || return 1; fact_memo_drop; }
@@ -98,7 +107,8 @@ exec_fact_key() {
   valid_version "$fact_version" && [ "$fact_exe" = "$fact_versions/$fact_version/goat" ] || return 1
   file_sig_set "$fact_exe" || return 1
   fact_sig="$FILE_SIG"
-  [ "$(( $(date +%s) - \${fact_sig##*:} ))" -ge 2 ] || return 1
+  fact_now="$(date +%s)"
+  [ "$(( fact_now - \${fact_sig##*:} ))" -ge 2 ] || return 1
   # A runner installs a version without its marker instead of running it.
   fact_slurp "$fact_versions/$fact_version/.install-complete" && [ "$FACT_TEXT" = "$fact_version" ] || return 1
   case "$fact_via" in exe) FACT_NAME="$fact_version.exe" ;; *) FACT_NAME="$fact_version.runner" ;; esac
