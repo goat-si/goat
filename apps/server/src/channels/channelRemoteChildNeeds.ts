@@ -51,13 +51,21 @@ export const remoteLaunchChildren = (
 };
 
 const readStored = (sql: SqlClient.SqlClient, correlationId: string) =>
-  sql<{ readonly observation: string | null; readonly reports_supported: number | null }>`
-    SELECT observation, reports_supported FROM remote_dispatches
+  sql<{
+    readonly observation: string | null;
+    readonly reports_supported: number | null;
+    readonly delete_requested_at: string | null;
+  }>`
+    SELECT observation, reports_supported, delete_requested_at FROM remote_dispatches
     WHERE correlation_id = ${correlationId} AND kind IN ('task', 'thread')
     LIMIT 1
   `.pipe(
     Effect.flatMap((rows): Effect.Effect<StoredRead> => {
       const row = rows[0];
+      // A recorded delete is a known empty read. A missing row or blank observation stays unread.
+      if (row !== undefined && row.delete_requested_at != null && row.delete_requested_at !== "") {
+        return Effect.succeed({ status: "read" as const, needsYou: [] });
+      }
       if (
         row === undefined ||
         row.reports_supported === 0 ||
