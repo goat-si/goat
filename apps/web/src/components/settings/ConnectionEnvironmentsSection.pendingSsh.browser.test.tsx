@@ -15,7 +15,7 @@ import {
 import type { EnvironmentPresentation } from "../../state/environments";
 import { TooltipProvider } from "../ui/tooltip";
 import { expect, it, vi } from "vite-plus/test";
-import { act, render, stubGlobal } from "../../../test/render";
+import { act, fakeTimers, render, stubGlobal } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   preflightSshHost: vi.fn(),
@@ -34,6 +34,7 @@ const state = vi.hoisted(() => ({
   environments: null as unknown as Atom.Writable<ReadonlyArray<EnvironmentPresentation>>,
   runtimeReply: null as SshHostResult | null,
   runtimeReplies: new Map<string, SshHostResult>(),
+  statusReads: 0,
   toast: vi.fn(),
 }));
 
@@ -127,7 +128,10 @@ vi.mock("../../state/sshRuntime", async () => {
   return {
     sshRuntime: createSshRuntimeState(Atom.runtime(Layer.empty), {
       status: (target) =>
-        Effect.sync(() => state.runtimeReplies.get(target.alias) ?? state.runtimeReply!),
+        Effect.sync(() => {
+          state.statusReads += 1;
+          return state.runtimeReplies.get(target.alias) ?? state.runtimeReply!;
+        }),
       update: () => Effect.sync(() => state.runtimeReply!),
     }),
   };
@@ -374,4 +378,31 @@ it("retries a failed route add against the same machine and offers fingerprint r
   expect(screen.container.textContent).toContain("Couldn't add route");
   expect(() => button("Review fingerprint", screen.container)).toThrow();
   expect(button("Retry", screen.container)).toBeTruthy();
+});
+
+it("stops reading a stale preparing status once an add fails and shows only the failure", async () => {
+  using fixture = setup();
+  await using screen = await render(section(fixture.registry));
+  using _timers = fakeTimers();
+  const gate = provisionGate();
+  await connectFromDialog(await openAddDialog(), target.alias);
+  await gate.entered;
+  state.runtimeReply = {
+    kind: "ok",
+    status: {
+      host: target.alias,
+      state: "preparing",
+      phase: "uploading",
+      runtimeVersion: null,
+      requestedVersion: "0.4.3",
+    },
+  };
+  await gate.settle({ _tag: "Failure", cause: Cause.fail(new Error("Connection reset")) });
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Connection reset"));
+  const reads = state.statusReads;
+  await act(() => vi.advanceTimersByTimeAsync(5_000));
+  expect(state.statusReads).toBe(reads);
+  expect(screen.container.textContent).not.toMatch(/Installing GOAT|Uploading GOAT|first setup/i);
+  expect(button("Retry", screen.container)).toBeTruthy();
+  expect(button("Dismiss", screen.container)).toBeTruthy();
 });

@@ -35,6 +35,8 @@ type SshRuntimeSettingsRowProps = {
   readonly enabled: boolean;
   readonly pendingAdd?: boolean;
   readonly connecting?: boolean;
+  /** The add this row follows has ended, so a "preparing" status is stale: no phase, no polling. */
+  readonly settled?: boolean;
   readonly preparationInSubtitle?: boolean;
   readonly preparationProgress?: Pick<DesktopSshPreparationProgress, "phase">;
   readonly originLabel?: string;
@@ -65,6 +67,7 @@ function SshRuntimeSettingsRowContent({
   originLabel,
   pendingAdd,
   connecting,
+  settled,
   preparationProgress,
   preparationInSubtitle,
   onReviewTrust,
@@ -74,7 +77,8 @@ function SshRuntimeSettingsRowContent({
   const { alias, hostname, username, port } = target;
   const [input] = useState(() => ({ environmentId, target: { alias, hostname, username, port } }));
   const result = useAtomValue(sshRuntime.statusAtom(input));
-  const status = result?.status;
+  const stale = settled === true && result?.status?.state === "preparing";
+  const status = stale ? undefined : result?.status;
   useCheckForUpdateWhenHostIsNewer([status?.runtimeVersion]);
   const phase =
     preparationProgress !== undefined
@@ -102,7 +106,7 @@ function SshRuntimeSettingsRowContent({
 
   useEffect(() => {
     if (!enabled) return;
-    const state = result?.status?.state;
+    const state = stale ? undefined : result?.status?.state;
     const delay =
       connecting || busy || state === "preparing"
         ? 1_000
@@ -112,7 +116,7 @@ function SshRuntimeSettingsRowContent({
     if (delay === null) return;
     const timer = setTimeout(() => void sshRuntime.refresh.run(registry, input), delay);
     return () => clearTimeout(timer);
-  }, [registry, input, result, enabled, busy, connecting]);
+  }, [registry, input, result, enabled, busy, connecting, stale]);
 
   // A connection attempt that ended (a Retry, or a reconnect) decided the runtime's state; read it.
   const wasConnecting = useRef(connecting);

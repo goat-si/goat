@@ -1,6 +1,7 @@
 import { RegistryContext } from "@effect/atom-react";
 import { useContext } from "react";
 
+import { sshRuntime } from "~/state/sshRuntime";
 import { Button } from "../ui/button";
 import { EnvironmentRow } from "./EnvironmentRow";
 import { type PendingSshAdd, dismissPendingSshAdd, retryPendingSshAdd } from "./pendingSshAdds";
@@ -45,6 +46,7 @@ export function PendingSshAddRow({
             enabled
             pendingAdd
             connecting={!failed}
+            settled={failed}
             originLabel={originLabel}
             {...(add.progress === null ? {} : { preparationProgress: add.progress })}
             {...(failed && onReviewTrust ? { onReviewTrust } : {})}
@@ -61,7 +63,14 @@ export function PendingSshAddRow({
           >
             Retry
           </Button>
-          <Button variant="ghost" size="xs" onClick={() => dismissPendingSshAdd(registry, add.key)}>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => {
+              dismissPendingSshAdd(registry, add.key);
+              sshRuntime.forget(registry, { environmentId: add.environmentId, target: add.target });
+            }}
+          >
             Dismiss
           </Button>
         </>
