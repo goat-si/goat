@@ -167,7 +167,7 @@ const make = Effect.gen(function* () {
       ),
     );
   });
-  const coordinator = Effect.fnUntraced(function* () {
+  const coordinator = Effect.fn("OriginRoutedDelete.coordinator")(function* () {
     const service = yield* Effect.serviceOption(
       RemoteDispatchCoordinator.RemoteDispatchCoordinator,
     );
@@ -301,13 +301,9 @@ const make = Effect.gen(function* () {
       threadId: dispatchRow.remote_thread_id,
       requestKey: input.clientRequestId,
     }).pipe(Effect.result);
-    if (called._tag === "Failure") {
-      if (isSshError(called.failure) && definiteRemoteRefusal(called.failure))
-        yield* dispatch
-          .clearDelete(dispatchRow.correlation_id, input.clientRequestId)
-          .pipe(Effect.mapError(unavailable));
+    // No stored outcome came back; a lost delete may have committed, so intent stays.
+    if (called._tag === "Failure")
       return { state: "unknown" as const, receiptId: record.receiptId };
-    }
     const outcome = yield* decodeOutcome(called.success).pipe(Effect.mapError(unavailable));
     if (outcome._tag === "accepted") {
       const payload = {
