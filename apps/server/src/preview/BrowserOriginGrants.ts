@@ -900,48 +900,33 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         : ("admit" as const),
     };
   });
-  const judgeReply = Effect.fn("BrowserOriginGrants.judgeReply")(function* (
-    threadId: ThreadId,
-    claimId: string,
-    generation: number,
-    urls: ReadonlyArray<string>,
-    outside: boolean,
-  ) {
-    const claim = claims.get(claimId);
-    const live =
-      claim?.threadId === threadId && claim.claimGeneration === generation ? claim : undefined;
-    if (outside)
-      return { deliver: false, ...(live === undefined ? {} : { end: "origin_changed" as const }) };
-    if (live === undefined) return { deliver: false };
-    const hosts = deps.blockedHostsNow?.();
-    if (hosts === undefined) return { deliver: false, end: "blocked_url" as const };
-    if (urls.length === 0) {
-      if (isBlockedBrowserUrl(live.origin, hosts))
-        return { deliver: false, end: "blocked_url" as const };
-    } else {
-      for (const url of urls) {
-        if (isBlockedBrowserUrl(url, hosts)) return { deliver: false, end: "blocked_url" as const };
-        if (!sameOrigin(url, live.origin))
+  // Lock-free: the proxy's reply loop waits on this answer, and ending a claim can restart the driver.
+  const judgeReply = Effect.fn("BrowserOriginGrants.judgeReply")(
+    (
+      threadId: ThreadId,
+      claimId: string,
+      generation: number,
+      urls: ReadonlyArray<string>,
+      outside: boolean,
+    ) =>
+      Effect.sync(() => {
+        const live = claimValues(threadId).find(
+          (claim) => claim.claimId === claimId && claim.claimGeneration === generation,
+        );
+        if (live === undefined) return { deliver: false };
+        if (outside) return { deliver: false, end: "origin_changed" as const };
+        const hosts = deps.blockedHostsNow?.();
+        const origin = claims.get(claimId)?.origin ?? "";
+        if (
+          hosts === undefined ||
+          [origin, ...live.origins, ...urls].some((url) => isBlockedBrowserUrl(url, hosts))
+        )
+          return { deliver: false, end: "blocked_url" as const };
+        if (!urls.every((url) => live.origins.some((scope) => sameOrigin(url, scope))))
           return { deliver: false, end: "origin_changed" as const };
-      }
-    }
-    const verdict = yield* judgeClaimCall(
-      threadId,
-      "get_browser_state",
-      { tab_id: live.tab.tabId },
-      {
-        claimId,
-        claimGeneration: generation,
-      },
-    );
-    if (verdict === "admit") return { deliver: true };
-    const blocked =
-      verdict === "blocked" || (typeof verdict === "object" && verdict.status === "blocked");
-    return {
-      deliver: false,
-      end: blocked ? ("blocked_url" as const) : ("origin_changed" as const),
-    };
-  });
+        return { deliver: true };
+      }),
+  );
   return {
     claimsSupported: Effect.sync(deps.supported),
     capabilityChanged: advance,
