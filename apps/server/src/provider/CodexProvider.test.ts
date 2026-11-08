@@ -11,6 +11,7 @@ import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import { snapshotChecks } from "./ProviderDiagnosis.ts";
+import { providerConstraints } from "../mcp/ProviderConstraints.ts";
 
 import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
 
@@ -309,6 +310,78 @@ it.effect(
       assert.equal(snapshot.codexRoute?.state, "home");
       assert.isUndefined(snapshot.codexRoute?.effectiveBaseUrl);
       assert.equal(snapshot.status, "error");
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+const ROUTED_MODEL = {
+  additionalSpeedTiers: [],
+  defaultReasoningEffort: "medium",
+  description: "Routed model",
+  displayName: "Claude Opus",
+  hidden: false,
+  id: "anthropic/claude-opus-5-5",
+  isDefault: true,
+  model: "anthropic/claude-opus-5-5",
+  serviceTiers: [],
+  supportedReasoningEfforts: [{ description: "Balanced", reasoningEffort: "medium" }],
+};
+it.effect.each([
+  { endpoint: "http://127.0.0.1:10100/v1", usable: true },
+  { endpoint: undefined, usable: false },
+  { endpoint: "https://api.openai.com/v1", usable: false },
+])(
+  "a logged-out Codex lists models and accepts child tasks only when its endpoint is not OpenAI's: $endpoint",
+  ({ endpoint, usable }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const fixture = yield* routeFixture({ role: "home" });
+      const config = endpoint === undefined ? {} : { openai_base_url: endpoint };
+      const peer = ROUTED_CODEX.replace(
+        "const write = (message)",
+        `Object.assign(overrides, ${JSON.stringify(config)});\nconst write = (message)`,
+      )
+        .replace(
+          "result = { account: null, requiresOpenaiAuth: false }",
+          "result = { account: null, requiresOpenaiAuth: true }",
+        )
+        .replace(
+          "result = { data: [], nextCursor: null }",
+          `result = { data: [${JSON.stringify(ROUTED_MODEL)}], nextCursor: null }`,
+        );
+      const binary = `${fixture.input.execution.home}/logged-out-codex`;
+      yield* fs.writeFileString(binary, peer);
+      yield* fs.chmod(binary, 0o755);
+      const snapshot = yield* checkCodexProviderStatus(
+        { ...fixture.input.settings, modelRoute: "default", binaryPath: binary },
+        undefined,
+        {},
+      );
+      const constraints = providerConstraints(
+        {
+          ...snapshot,
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+        },
+        true,
+      );
+      if (usable) {
+        assert.equal(snapshot.status, "ready");
+        assert.equal(snapshot.auth.status, "unknown");
+        assert.equal(snapshot.codexRoute?.effectiveBaseUrl, endpoint);
+        assert.include(
+          snapshot.models.map((model) => model.slug),
+          ROUTED_MODEL.model,
+        );
+        assert.deepStrictEqual(constraints, []);
+        return;
+      }
+      assert.equal(snapshot.status, "error");
+      assert.equal(snapshot.auth.status, "unauthenticated");
+      assert.deepStrictEqual(snapshot.models, []);
+      assert.include(
+        constraints,
+        "Codex CLI is not authenticated. Run `codex login` and try again.",
+      );
     }).pipe(Effect.provide(NodeServices.layer)),
 );
 
