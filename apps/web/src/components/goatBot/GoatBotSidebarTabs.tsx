@@ -39,6 +39,7 @@ export function GoatBotSidebarTabs() {
     slackEnabled,
     supportsMembers,
   } = useBotRoster();
+  const mainName = roster[0]?.profile?.name ?? "GOAT Bot";
   if (!enabled) return null;
   return (
     <>
@@ -53,13 +54,13 @@ export function GoatBotSidebarTabs() {
       {mode === "bot" && (
         <div className="max-h-[70dvh] overflow-y-auto">
           <GoatBotSidebarRow
-            name={roster[0]?.profile?.name ?? "GOAT Bot"}
+            name={mainName}
             slackEnabled={slackEnabled}
             main={roster[0]?.profile ?? null}
           />
           {rowsLoaded && rows.length === 0 && (
             <p className="px-4 text-xs text-sidebar-muted-foreground">
-              Work GOAT Bot starts will appear here.
+              Work {mainName} starts will appear here.
             </p>
           )}
           {environmentId && (
@@ -68,7 +69,7 @@ export function GoatBotSidebarTabs() {
           {environmentId && supportsMembers ? (
             <>
               <GoatBotMemberRoster environmentId={environmentId} groups={groups} />
-              <NewBotButton environmentId={environmentId} />
+              <NewBotButton environmentId={environmentId} mainName={mainName} />
             </>
           ) : (
             <NewBotComingSoon />
@@ -79,7 +80,13 @@ export function GoatBotSidebarTabs() {
   );
 }
 
-function NewBotButton({ environmentId }: { environmentId: EnvironmentId }) {
+function NewBotButton({
+  environmentId,
+  mainName,
+}: {
+  environmentId: EnvironmentId;
+  mainName: string;
+}) {
   const canCreate = useAtomValue(channelEnvironment.createBot.permissionAtom(environmentId));
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
@@ -99,6 +106,7 @@ function NewBotButton({ environmentId }: { environmentId: EnvironmentId }) {
         <GoatBotNewBotDialog
           environmentId={environmentId}
           canSubmit={canCreate}
+          mainName={mainName}
           onClose={() => setOpen(false)}
           onCreated={(bot) => void navigate({ to: "/bot", search: { bot: bot.botId } })}
         />

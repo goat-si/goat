@@ -30,7 +30,7 @@ export type GoatBotEnsureState =
   | { readonly state: "pending" }
   | { readonly state: "confirmed"; readonly bot: GoatBotRef }
   | { readonly state: "legacy_active" }
-  | { readonly state: "failed"; readonly message: string };
+  | { readonly state: "failed"; readonly message?: string };
 
 export type GoatBotAvailability =
   | { readonly kind: "unsupported" }
@@ -43,7 +43,7 @@ export type GoatBotAvailability =
     }
   | { readonly kind: "connecting"; readonly environmentId: EnvironmentId }
   | { readonly kind: "legacy_active"; readonly environmentId: EnvironmentId }
-  | { readonly kind: "error"; readonly environmentId: EnvironmentId; readonly message: string }
+  | { readonly kind: "error"; readonly environmentId: EnvironmentId; readonly message?: string }
   | { readonly kind: "ready"; readonly bot: GoatBotRef };
 
 /** Resolve home before selecting an environment; absent capabilities preserve old-server behavior. */
@@ -177,7 +177,11 @@ export function resolveGoatBotAvailability(input: {
     case "legacy_active":
       return { kind: "legacy_active", environmentId };
     case "failed":
-      return { kind: "error", environmentId, message: input.ensure.message };
+      return {
+        kind: "error",
+        environmentId,
+        ...(input.ensure.message === undefined ? {} : { message: input.ensure.message }),
+      };
     case "confirmed":
       return input.ensure.bot.environmentId === environmentId
         ? { kind: "ready", bot: input.ensure.bot }

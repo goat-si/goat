@@ -25,13 +25,23 @@ import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelBotEvents from "./ChannelBotEvents.ts";
 import * as ChannelSessionTaskActions from "./channelSessionTaskActions.ts";
 import { NOTES_HEADER, parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import { deliveryIdFor, taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { environmentId, goatInput, rpcContext, setupBot } from "./testkit/ChannelHarness.ts";
+import {
+  botMessages,
+  environmentId,
+  goatInput,
+  linkSlackUser,
+  rpcContext,
+  setupBot,
+  slackContext,
+  slackInput,
+} from "./testkit/ChannelHarness.ts";
 
 /**
  * Notes changes asked for in chat under the default session routing: the session's model calls
@@ -641,6 +651,67 @@ describe("notes changes from a GOAT Bot session turn", () => {
       const result = yield* callNotes(harness, turn.caller, edit(turn, "tidy my notes"));
       assert.strictEqual(result.reason, "task_finished");
       assert.deepStrictEqual(yield* notices, [CHANNEL_COPY.noteEditTaskDone]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  const memoryUpdated = Effect.gen(function* () {
+    yield* (yield* ChannelBotEvents.ChannelBotEvents).flush;
+    const records = yield* botMessages;
+    return records.turnItems.flatMap((item) =>
+      item.type === "notification" && item.source.kind === "goat_bot_event" ? [item.summary] : [],
+    );
+  });
+
+  it.effect(
+    "a Slack session remember leaves one Memory updated line and a repeat leaves it one",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        yield* writeNotes(NOTES_HEADER);
+        const ingested = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          slackInput("remember that I deploy on Fridays", "slack-session"),
+          slackContext,
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        const turn = yield* boundTurn(harness, ingested.inputId);
+        const saved = yield* callNotes(
+          harness,
+          turn.caller,
+          remember(turn, fridays, "remember that I deploy on Fridays"),
+        );
+        assert.strictEqual(saved.outcome, "saved");
+        assert.deepStrictEqual(yield* memoryUpdated, ["Memory updated"]);
+        const again = yield* callNotes(
+          harness,
+          turn.caller,
+          remember(turn, fridays, "remember that I deploy on Fridays"),
+        );
+        assert.strictEqual(again.outcome, "saved");
+        assert.deepStrictEqual(yield* memoryUpdated, ["Memory updated"]);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a remember from the GOAT app and a refused one leave no Memory updated line", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* writeNotes(NOTES_HEADER);
+      const turn = yield* sessionTurn(harness, "remember that I deploy on Mondays", "goat-session");
+      const saved = yield* callNotes(
+        harness,
+        turn.caller,
+        remember(turn, "I deploy on Mondays.", "remember that I deploy on Mondays"),
+      );
+      assert.strictEqual(saved.outcome, "saved");
+      const refused = yield* callNotes(harness, turn.caller, {
+        ...remember(turn, fridays, "not in this message"),
+        inputId: turn.inputId,
+      });
+      assert.strictEqual(refused.outcome, "refused");
+      assert.deepStrictEqual(yield* memoryUpdated, []);
     }).pipe(Effect.provide(harness.layer));
   });
 });

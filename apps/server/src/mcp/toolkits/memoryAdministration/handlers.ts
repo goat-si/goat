@@ -7,6 +7,7 @@ import * as MemorySettingsService from "../../../memory/MemorySettingsService.ts
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { invocationPermit, memoryError, memoryFailure } from "../memory/handlers.ts";
 import { loadCaller } from "../../threadAccess.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { MemoryAdministrationToolkit } from "./tools.ts";
 const decode = Schema.decodeUnknownEffect(M.MemoryHubDisableInput);
 const disabled = Schema.decodeUnknownEffect(M.MemoryHubDisableResult);
@@ -21,6 +22,15 @@ const requireNotPlan = Effect.gen(function* () {
     return yield* new M.OrchestratorMcpFailure({
       code: "capability_denied",
       message: "Memory administration writes are unavailable in plan mode.",
+    });
+});
+const clientOnly = Effect.gen(function* () {
+  const scope = yield* McpInvocationContext.McpInvocationContext;
+  if (scope.thread !== undefined)
+    return yield* new M.OrchestratorMcpFailure({
+      code: "capability_denied",
+      message:
+        "Memory administration writes require an outside MCP client with live settings:write access.",
     });
 });
 const writePermit = Effect.fn("MemoryAdministration.writePermit")(function* () {
@@ -60,6 +70,7 @@ export const layer = McpToolAccess.toLayer(MemoryAdministrationToolkit, {
   ),
   goat_memory_hub_reconcile: McpToolAccess.writesWithCapability((input) =>
     Effect.gen(function* () {
+      yield* clientOnly;
       yield* requireNotPlan;
       const value = yield* decodeReconcile(input, {
         onExcessProperty: "error",
@@ -72,6 +83,7 @@ export const layer = McpToolAccess.toLayer(MemoryAdministrationToolkit, {
   ),
   goat_memory_report_attempts_reset: McpToolAccess.writesWithCapability((input) =>
     Effect.gen(function* () {
+      yield* clientOnly;
       yield* requireNotPlan;
       const value = yield* decodeReportReset(input, {
         onExcessProperty: "error",
@@ -89,28 +101,36 @@ export const layer = McpToolAccess.toLayer(MemoryAdministrationToolkit, {
     }).pipe(Effect.mapError(memoryError)),
   ),
   memory_settings_update: McpToolAccess.writesWithCapability((input) =>
-    Effect.gen(function* () {
-      const value = yield* decodeSettingsUpdate(input);
-      const service = yield* MemorySettingsService.MemorySettingsService;
-      return yield* service.update(value, yield* invocationPermit("settings"));
-    }).pipe(Effect.mapError(memoryError)),
+    clientOnly.pipe(
+      Effect.andThen(
+        Effect.gen(function* () {
+          const value = yield* decodeSettingsUpdate(input);
+          const service = yield* MemorySettingsService.MemorySettingsService;
+          return yield* service.update(value, yield* invocationPermit("settings"));
+        }).pipe(Effect.mapError(memoryError)),
+      ),
+    ),
   ),
   memory_hub_disable: McpToolAccess.destructive(
     McpToolAccess.writesWithCapability((input) =>
-      Effect.gen(function* () {
-        const value = yield* decode(input);
-        const service = yield* MemorySyncService.MemorySyncService;
-        return yield* service
-          .updateHubSettings(
-            { ...value, action: "configure", settings: { mode: "disabled" } },
-            yield* invocationPermit("settings"),
-          )
-          .pipe(
-            Effect.flatMap((result) =>
-              disabled({ settings: result.view.settings, version: result.view.version }),
-            ),
-          );
-      }).pipe(Effect.mapError(memoryError)),
+      clientOnly.pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            const value = yield* decode(input);
+            const service = yield* MemorySyncService.MemorySyncService;
+            return yield* service
+              .updateHubSettings(
+                { ...value, action: "configure", settings: { mode: "disabled" } },
+                yield* invocationPermit("settings"),
+              )
+              .pipe(
+                Effect.flatMap((result) =>
+                  disabled({ settings: result.view.settings, version: result.view.version }),
+                ),
+              );
+          }).pipe(Effect.mapError(memoryError)),
+        ),
+      ),
     ),
   ),
 });

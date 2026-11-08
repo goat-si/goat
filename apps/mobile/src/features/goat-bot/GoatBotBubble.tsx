@@ -48,9 +48,15 @@ export function GoatBotBubble(props: {
   );
 }
 
-export function GoatBotTypingIndicator() {
+export function GoatBotTypingIndicator({
+  botName = "GOAT Bot",
+}: { readonly botName?: string } = {}) {
   return (
-    <View accessibilityRole="text" accessibilityLabel="GOAT Bot is replying" className="self-start">
+    <View
+      accessibilityRole="text"
+      accessibilityLabel={`${botName} is replying`}
+      className="self-start"
+    >
       <GoatBotBubble side="in" tail>
         {(textColor) => (
           <View className="flex-row items-center justify-center" style={{ minHeight: 40, gap: 2 }}>

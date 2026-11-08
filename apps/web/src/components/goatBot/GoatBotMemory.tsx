@@ -17,7 +17,7 @@ import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
-import { useGoatBotMember } from "./goatBotMemberContext";
+import { useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 
 /** GOAT Bot's notes, read only; changing or forgetting one is a message the person sends. */
 export function GoatBotMemory({
@@ -32,6 +32,7 @@ export function GoatBotMemory({
   refreshKey?: string | null | undefined;
 }) {
   const member = useGoatBotMember();
+  const botName = useGoatBotName();
   const supported =
     useServerConfigs().get(environmentId)?.environment.capabilities.goatBotNotes === true;
   const notes = useEnvironmentQuery(
@@ -44,7 +45,7 @@ export function GoatBotMemory({
   useEffect(() => {
     if (trigger !== null) refresh();
   }, [trigger, refresh]);
-  const failure = notes.failure === null ? null : botNotesFailure(notes.failure);
+  const failure = notes.failure === null ? null : botNotesFailure(notes.failure, botName);
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">{GOAT_BOT_NOTES_COPY}</p>
@@ -87,6 +88,7 @@ function NoteList({
   truncated: boolean;
   onDraft: ((text: string) => void) | undefined;
 }) {
+  const botName = useGoatBotName();
   const view = goatBotNotesView({ notes, truncated });
   const [showReplaced, setShowReplaced] = useState(false);
   const replacedId = useId();
@@ -98,7 +100,7 @@ function NoteList({
         <p className="text-xs text-muted-foreground">{GOAT_BOT_NOTES_TRUNCATED_COPY}</p>
       )}
       {view.empty === "none" ? (
-        <p>No notes yet. Ask GOAT Bot to remember a standing rule.</p>
+        <p>No notes yet. Ask {botName} to remember a standing rule.</p>
       ) : view.empty === "none_in_window" ? (
         <p>No complete note fits in the newest 64 KB of memory.md.</p>
       ) : view.empty === "no_current" ? (

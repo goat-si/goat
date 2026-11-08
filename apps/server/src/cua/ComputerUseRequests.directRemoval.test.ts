@@ -31,7 +31,9 @@ it.effect("a published removal revokes a live grant and retires its old mention"
             subscribeChanges: PubSub.subscribe(changes).pipe(Effect.map(Stream.fromSubscription)),
           });
         }),
-      ).pipe(Layer.provide(ServerSettings.layerTest({ enableCua: true })));
+      ).pipe(
+        Layer.provide(ServerSettings.layerTest({ enableCua: true, cuaStrictInputGuards: true })),
+      );
       yield* orchestrator.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make("direct-old-mention"),

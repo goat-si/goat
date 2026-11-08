@@ -55,9 +55,12 @@ const tagOf = (error: unknown) =>
   typeof error === "object" && error !== null && "_tag" in error ? error._tag : undefined;
 
 /** Why the notes cannot be shown, and whether trying again can help. */
-export function botNotesFailure(error: unknown): { message: string; retry: boolean } {
+export function botNotesFailure(
+  error: unknown,
+  botName = "GOAT Bot",
+): { message: string; retry: boolean } {
   if (tagOf(error) === "EnvironmentAuthorizationError")
-    return { message: "This device can't read GOAT Bot's notes.", retry: false };
+    return { message: `This device can't read ${botName}'s notes.`, retry: false };
   if (
     tagOf(error) === "ChannelGatewayError" &&
     typeof error === "object" &&
@@ -65,8 +68,8 @@ export function botNotesFailure(error: unknown): { message: string; retry: boole
     "reason" in error &&
     error.reason === "not_home"
   )
-    return { message: "GOAT Bot's notes are on its home computer.", retry: false };
-  return { message: "Couldn't load GOAT Bot's notes.", retry: true };
+    return { message: `${botName}'s notes are on its home computer.`, retry: false };
+  return { message: `Couldn't load ${botName}'s notes.`, retry: true };
 }
 
 interface NotesRefreshRow {

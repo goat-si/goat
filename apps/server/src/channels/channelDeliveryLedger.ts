@@ -19,15 +19,25 @@ export const deliveryLedger = (
   changed: Effect.Effect<void>,
   expired: Effect.Effect<void>,
 ): Pick<ChannelLedger["Service"], "claimDueDeliveries" | "recordDelivery" | "expireReceipts"> => {
-  const expireRows = (now: string) => sql<{
-    readonly delivery_id: string;
-  }>`UPDATE channel_outbox SET
+  const expireRows = Effect.fn("channelDeliveryLedger.expireRows")(function* (now: string) {
+    const rows = yield* sql<
+      UndeliveredSourceRow & { readonly state: string }
+    >`UPDATE channel_outbox SET
     state = CASE WHEN state = 'delivering' THEN 'ambiguous' ELSE 'failed' END,
     last_error_code = 'receipt_deadline', updated_at = ${now}
     WHERE state IN ('pending', 'delivering') AND EXISTS (
       SELECT 1 FROM channel_inbox i WHERE channel_outbox.cause_key = 'reply:' || i.input_id
         AND i.accepted_at <= ${DateTime.formatIso(DateTime.makeUnsafe(Date.parse(now) - 60_000))})
-    RETURNING delivery_id`;
+    RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json,
+      last_error_code, state`;
+    yield* Effect.forEach(
+      rows,
+      (row) =>
+        copyUndeliveredReply(sql, row, row.state === "ambiguous" ? "ambiguous" : "failed", now),
+      { discard: true },
+    );
+    return rows;
+  });
   // Rows held behind an expired receipt are free now, so the channel loop is told once the
   // operation's own transaction commits. Callers never nest these operations in another one.
   const expiring = <A, E, R>(
@@ -137,7 +147,7 @@ export const deliveryLedger = (
         updated_at = ${input.now}
         WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
           AND (${input.attempt ?? null} IS NULL OR attempts = ${input.attempt ?? null})
-        RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json`;
+        RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json, last_error_code`;
               const recorded = updated[0];
               if (
                 recorded !== undefined &&

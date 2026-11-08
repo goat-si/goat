@@ -59,6 +59,8 @@ export const ChannelTaskNeedsYou = Schema.Struct({
   kind: ChannelTaskNeedsYouKind,
   since: IsoDateTime,
   approval: Schema.optional(ChannelTaskApprovalRef),
+  /** Set for a native question, in the same shape as an approval ref. */
+  question: Schema.optional(ChannelTaskApprovalRef),
 });
 export type ChannelTaskNeedsYou = typeof ChannelTaskNeedsYou.Type;
 
@@ -115,7 +117,10 @@ export const channelWorkerObservationEquals = (
         item.since === b.needsYou[index]?.since &&
         item.approval?.requestId === b.needsYou[index]?.approval?.requestId &&
         item.approval?.threadId === b.needsYou[index]?.approval?.threadId &&
-        item.approval?.host === b.needsYou[index]?.approval?.host,
+        item.approval?.host === b.needsYou[index]?.approval?.host &&
+        item.question?.requestId === b.needsYou[index]?.question?.requestId &&
+        item.question?.threadId === b.needsYou[index]?.question?.threadId &&
+        item.question?.host === b.needsYou[index]?.question?.host,
     ) &&
     a.pullRequests.length === b.pullRequests.length &&
     a.pullRequests.every((item, index) => {

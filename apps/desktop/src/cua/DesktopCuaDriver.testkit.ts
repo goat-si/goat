@@ -479,7 +479,7 @@ export const fixture = Effect.fn(function* (
       manifests.set(
         path,
         cuaDriverCapabilityManifest({
-          applications: admittedCuaApplications(apps, input.hostBundleIds),
+          applications: admittedCuaApplications(apps, input.hostBundleIds, input.includeProtected),
         }),
       );
       return path;

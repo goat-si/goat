@@ -185,7 +185,9 @@ export const withRequests = <A, E, R>(
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        settingsLayer ?? ServerSettings.layerTest({ enableCua: true }),
+        // Approval-focused request suites run in the opt-in block mode; default-admission tests
+        // explicitly turn strict input guards off.
+        settingsLayer ?? ServerSettings.layerTest({ enableCua: true, cuaStrictInputGuards: true }),
         leasesDetecting(signals, setCuaWatch),
         Layer.mock(CuaDriver.CuaDriver)({
           enabled: Effect.succeed(true),

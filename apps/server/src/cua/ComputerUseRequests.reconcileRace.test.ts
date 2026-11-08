@@ -68,7 +68,9 @@ it.effect("a failed settings observer cannot reuse a mention after an unseen rem
             ),
           });
         }),
-      ).pipe(Layer.provide(ServerSettings.layerTest({ enableCua: true })));
+      ).pipe(
+        Layer.provide(ServerSettings.layerTest({ enableCua: true, cuaStrictInputGuards: true })),
+      );
       yield* orchestrator.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make("unobserved-named"),
