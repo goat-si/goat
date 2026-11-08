@@ -36,7 +36,7 @@ goat_runtime_publish() {
   case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
       if [ -x "$2/goat" ] && [ "$(cat "$2/.install-complete" 2>/dev/null)" = "$3" ]; then
-        goat_runtime_fs rm -rf "$1" || :; return 0
+        rm -rf "$1" 2>/dev/null || :; return 0
       fi ;;
   esac
   goat_runtime_fs rm -rf "$2"

@@ -662,7 +662,7 @@ if ! goat_runtime_ready; then
     if [ -n "$GOAT_LOCK_CANDIDATE" ]; then
       rm -rf "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK/\${GOAT_LOCK_CANDIDATE##*/}"
     fi
-    if [ -n "$GOAT_STAGING" ]; then goat_runtime_fs rm -rf "$GOAT_STAGING"; fi
+    if [ -n "$GOAT_STAGING" ]; then goat_runtime_fs rm -rf "$GOAT_STAGING" || :; fi
   }
   trap 'goat_exit=$?; goat_lock_cleanup || true; exit "$goat_exit"' 0
   trap 'exit 1' 1 2 3 15

@@ -350,6 +350,7 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
     "destination-race",
     "destination-empty",
     "competitor-complete",
+    "competitor-locked",
   ] as const)("installs the Windows zip with publish failure %s", (failure) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -394,7 +395,7 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
       yield* fs.writeFileString(
         `${sys32}/tar.exe`,
         `#!/bin/sh\ntar -xzf "$2" -C "$4" "$5" || exit 1\n` +
-          (failure === "competitor-complete"
+          (failure === "competitor-complete" || failure === "competitor-locked"
             ? `mkdir -p '${published}' && printf '#!/bin/sh\\necho "goat v${ARCHIVE.archiveVersion}"\\n' > '${published}/goat' && chmod 755 '${published}/goat' && echo '${ARCHIVE.archiveVersion}' > '${published}/.install-complete' && touch '${published}/competitor'\n`
             : ""),
       );
@@ -450,7 +451,7 @@ exec '${realMv}' "$@"
         `#!/bin/sh
 case "$*" in
   *'/.staging-'*)
-    if [ '${failure}' = cleanup-locked ] && [ "$1" = -rf ] && [ -d "$2" ]; then echo 'rm: Permission denied' >&2; exit 1; fi ;;
+    if { [ '${failure}' = cleanup-locked ] || [ '${failure}' = competitor-locked ]; } && [ "$1" = -rf ] && [ -d "$2" ]; then echo 'rm: Permission denied' >&2; exit 1; fi ;;
   *'/versions/${ARCHIVE.archiveVersion}')
     if [ '${failure}' = remove-once ] && [ ! -e '${root}/removed' ]; then
       touch '${root}/removed'; echo 'rm: Permission denied' >&2; exit 1
@@ -492,13 +493,19 @@ exec '${realRm}' "$@"
         }
         return;
       }
-      if (failure === "competitor-complete") {
+      if (failure === "competitor-complete" || failure === "competitor-locked") {
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stdout, `goat v${ARCHIVE.archiveVersion}\n`);
         assert.isTrue(yield* fs.exists(`${published}/competitor`));
         assert.isFalse(yield* fs.exists(`${published}/.install-record`));
         const versions = yield* fs.readDirectory(`${home}/.goat/runtime/goat/versions`);
-        assert.isFalse(versions.some((name) => name.startsWith(".staging-")));
+        // A stage a scan still holds is reported and left behind; the install still succeeds.
+        const locked = failure === "competitor-locked";
+        assert.equal(
+          versions.some((name) => name.startsWith(".staging-")),
+          locked,
+        );
+        if (locked) assert.include(result.stderr, "antivirus/real-time scan");
         return;
       }
       if (failure === "destination-race") {
