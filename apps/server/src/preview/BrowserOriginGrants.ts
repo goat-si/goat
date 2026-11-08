@@ -205,9 +205,9 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         );
         const fenced = yield* next.pipe(Effect.catchCause(() => Effect.succeed(false)));
         if (!fenced)
-          yield* Effect.logError("No driver fence is available").pipe(
-            Effect.andThen(deps.onFenceFailure?.() ?? Effect.void),
-          );
+          yield* Effect.logError(
+            "No confirmed driver restart fenced the unapplied narrowing; turning browser claims off unless a newer driver already passed its probe",
+          ).pipe(Effect.andThen(deps.onFenceFailure?.() ?? Effect.void));
         const pending = yield* Effect.sync(() => {
           const queued = pendingFence;
           pendingFence = undefined;
