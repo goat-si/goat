@@ -8,7 +8,6 @@
 import * as NodeCrypto from "node:crypto";
 
 import {
-  ChannelTaskId,
   goatBotChangeNoteMessage,
   goatBotForgetNoteMessage,
   type ChannelRequester,
@@ -54,13 +53,14 @@ const OPEN_STATUSES: ReadonlyArray<ChannelTaskStatus> = [
   "running",
   "waiting_input",
 ];
-// Answers that mean the person's change or forget reached the notes file.
-const APPLIED: ReadonlySet<string> = new Set([
-  CHANNEL_COPY.noteChanged,
-  CHANNEL_COPY.noteForgotten,
-  CHANNEL_COPY.noteCameBack,
-  CHANNEL_COPY.noteUnverified,
-]);
+
+/**
+ * Whether a task that held a notes grant can no longer edit by hand: its stop has reached the
+ * worker and the worker's runs have ended. The server answers this from the ledger and threads.
+ */
+export type GrantHolderEnded = (
+  taskId: string,
+) => Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
 
 // The fixed words around the notes, taken from the sentences the clients build.
 const FORGET_PREFIX = goatBotForgetNoteMessage("").slice(0, -2);
@@ -190,9 +190,10 @@ const stillThere = (fileText: string, removedTexts: ReadonlySet<string>) =>
 export const makeChannelBotNoteWriter = (
   fs: FileSystem.FileSystem,
   files: ChannelBotFiles,
-  ledger: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus" | "hasPendingForward">,
+  ledger: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus">,
   hooks: NoteWriterHooks = {},
   refusals: RefusedNotes = memoryRefusedNotes(),
+  holderEnded: GrantHolderEnded = () => Effect.succeed(true),
 ) =>
   Effect.map(Semaphore.make(1), (gate) => {
     const grantHolders = Effect.map(
@@ -207,18 +208,17 @@ export const makeChannelBotNoteWriter = (
 
     /**
      * Writes back refused notes whose grants have all ended; call it under the lock. A grant ends
-     * once its task is no longer open and no stop or follow-up still waits to reach its worker.
+     * once its task is no longer open and holderEnded says its worker can no longer edit.
      */
     const settleRefused = Effect.gen(function* () {
       const pending = yield* refusals.list;
       if (pending.length === 0) return 0;
       const open = new Set<string>(yield* grantHolders);
-      const reaching = new Set<string>();
+      const live = new Set<string>();
       for (const holder of new Set(pending.flatMap((entry) => entry.holders)))
-        if (!open.has(holder) && (yield* ledger.hasPendingForward(ChannelTaskId.make(holder))))
-          reaching.add(holder);
+        if (!open.has(holder) && !(yield* holderEnded(holder))) live.add(holder);
       const due = pending.filter((entry) =>
-        entry.holders.every((holder) => !open.has(holder) && !reaching.has(holder)),
+        entry.holders.every((holder) => !open.has(holder) && !live.has(holder)),
       );
       if (due.length === 0) return 0;
       const read = yield* readNotes;
@@ -416,9 +416,9 @@ export const makeChannelBotNoteWriter = (
         if (refused !== undefined) yield* refusals.add(refused);
         return CHANNEL_COPY.noteEditBusy;
       }
-      const answer = yield* edit(request, inputId, readAt);
-      if (APPLIED.has(answer)) yield* dropRefusalsFor(request.note);
-      return answer;
+      // Dropped before the edit, so a crash after it cannot leave a refusal to undo the edit.
+      yield* dropRefusalsFor(request.note);
+      return yield* edit(request, inputId, readAt);
     });
 
     const edit = Effect.fn("channelBotNoteTabEdits.edit")(function* (
