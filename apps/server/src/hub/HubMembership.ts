@@ -441,7 +441,7 @@ const make = Effect.gen(function* () {
     return output.code === 0 ? decodeJson(Connection, output.stdout) : undefined;
   });
 
-  /** A Hub client needs no link record, so an unreadable link status does not stop it. */
+  /** On a Hub whose link status answers 403, a Hub client is found from the device itself. */
   const hubClientKey = Effect.fn("HubMembership.hubClientKey")(function* (alias: string) {
     const connection = yield* deviceConnection(alias);
     return connection?.state === "connected" && connection.transport !== "link"
@@ -589,8 +589,9 @@ const make = Effect.gen(function* () {
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
       if (!(yield* permitted(caller))) return yield* withdrawn(caller, alias, steps);
-      // A Hub answers link status with 403 (opencodex#8184); only Remote Link needs it.
       const { status, forbidden } = yield* readHomeLinks();
+      // A Hub answers link status with 403 (opencodex#8184), and only Remote Link needs it then.
+      if (status === undefined && !forbidden) return homeUnavailable("join", alias, steps, false);
       if (status?.role === "child")
         return result(
           "join",
@@ -623,7 +624,7 @@ const make = Effect.gen(function* () {
         return result("join", alias, "failed", preflight.detail, steps, { transport });
       if (transport === "hub-client")
         return yield* joinHubClient(scope, caller, alias, input.decisionId, steps);
-      if (status === undefined) return homeUnavailable("join", alias, steps, forbidden);
+      if (status === undefined) return homeUnavailable("join", alias, steps, true);
       if (!(yield* ocx.directAlias(alias)))
         return result(
           "join",
@@ -730,7 +731,7 @@ const make = Effect.gen(function* () {
       if (record !== undefined)
         member = { kind: "remote-link", id: record.id, tunnelPort: record.tunnelPort };
       else if (status === undefined) {
-        const key = yield* hubClientKey(alias);
+        const key = forbidden ? yield* hubClientKey(alias) : undefined;
         if (key === undefined) return homeUnavailable("leave", alias, steps, forbidden);
         member = { kind: "hub-client", id: key };
       } else {
@@ -828,7 +829,7 @@ const make = Effect.gen(function* () {
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
       const { status, forbidden } = yield* readHomeLinks();
-      if (status === undefined && (yield* hubClientKey(alias)) === undefined)
+      if (status === undefined && (!forbidden || (yield* hubClientKey(alias)) === undefined))
         return homeUnavailable("repair", alias, steps, forbidden);
       const record = status?.links.find((entry) => entry.alias === alias);
       if (input.decisionId !== undefined) {

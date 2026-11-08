@@ -910,3 +910,45 @@ it.effect("a Hub client leaves a Hub whose link status answers 403", () =>
     expect(hub.calls).toContain(`home access key remove ${MINI_KEY} --yes --json`);
   }),
 );
+
+const connectedMini = {
+  state: "connected",
+  serverUrl: "https://hub.tailnet-example.ts.net:8443",
+  apiKeyId: MINI_KEY,
+};
+
+it.effect("an unreadable link status without a 403 stops a Hub client join before the invite", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ platform: "posix", linkStatus: "failed" });
+    const result = yield* hub.membership.join(scope, {
+      deviceAlias: "mini",
+      transport: "hub-client",
+    });
+    expect(result.state).toBe("failed");
+    expect(hub.calls).not.toContain("handoff mini");
+  }),
+);
+
+it.effect("an unreadable link status without a 403 leaves a Hub client connected", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ linkStatus: "failed", connection: connectedMini });
+    const result = yield* hub.membership.leave(scope, { deviceAlias: "mini" });
+    expect(result.state).toBe("failed");
+    expect(
+      hub.calls.some((call) => call.includes("disconnect") || call.includes("key remove")),
+    ).toBe(false);
+  }),
+);
+
+it.effect.each([
+  { linkStatus: "forbidden", state: "child" },
+  { linkStatus: "failed", state: "failed" },
+] as const)(
+  "repairing a Hub client when link status is $linkStatus ends $state",
+  ({ linkStatus, state }) =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ linkStatus, connection: connectedMini });
+      const result = yield* hub.membership.repair(scope, { deviceAlias: "mini" });
+      expect(result.state).toBe(state);
+    }),
+);

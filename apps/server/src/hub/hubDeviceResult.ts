@@ -62,8 +62,7 @@ export const phaseMessage = (phase: string | undefined) =>
       ? "OpenCodex refused the command."
       : `OpenCodex stopped at ${phase}.`;
 
-/** OpenCodex answers `ocx link status` with 403 on a Hub whose public listener is not loopback. */
 export const linkStatusUnreadable = (forbidden: boolean) =>
   forbidden
-    ? "This machine's OpenCodex refused ocx link status with 403, which it does in Hub mode when its public listener is not loopback (lidge-jun/opencodex#8184). Join devices to this Hub with transport hub-client, or bind its public listener to loopback."
+    ? "This machine's OpenCodex answered ocx link status with a link-management 403. OpenCodex does this in Hub mode when the public listener is not loopback (lidge-jun/opencodex#8184); on such a Hub, join devices with transport hub-client."
     : "This machine's OpenCodex link status is unavailable.";
