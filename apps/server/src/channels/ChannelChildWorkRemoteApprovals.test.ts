@@ -214,4 +214,66 @@ describe("GOAT Bot reads an approval from a thread launched on another machine",
       assert.strictEqual(yield* cards, cardsBefore + 1);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect("drops a shown ssh approval once that thread's delete is recorded", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("do: write the release notes", "ssh-del"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* admitSsh(task, "del", "completed");
+      harness.world.setStatus(task.worker!.threadId, 1, "completed", "Started the notes thread.");
+      yield* runtime.drain;
+      yield* insertThreadDispatch("del", sshObservation);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, [stampedSshApproval]);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE remote_dispatches SET delete_requested_at = ${since}
+        WHERE correlation_id = ${"corr:del"}`;
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const told = (yield* botMessages).messages.filter((message) =>
+        message.text.includes("no longer waiting"),
+      );
+      assert.strictEqual(told.length, 1);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("drops a running task's ssh approval once that thread's delete is recorded", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("do: write the release notes", "ssh-del-run"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* admitSsh(task, "del-run", "bound");
+      yield* insertThreadDispatch("del-run", sshObservation);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).status, "running");
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, [stampedSshApproval]);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE remote_dispatches SET delete_requested_at = ${since}
+        WHERE correlation_id = ${"corr:del-run"}`;
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const told = (yield* botMessages).messages.filter((message) =>
+        message.text.includes("no longer waiting"),
+      );
+      assert.strictEqual(told.length, 1);
+      assert.strictEqual((yield* onlyTask).status, "running");
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
 });
