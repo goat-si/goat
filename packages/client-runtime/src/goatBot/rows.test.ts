@@ -751,6 +751,50 @@ describe("questions a task asks in the main chat", () => {
     // A server that does not name open questions may not route an answer sent to a task.
     expect(answerTasks({ n1: proposal(1) })).toEqual([["n1"], ["b1", undefined], ["pending:c1"]]);
   });
+
+  it("shows an approval question of a known task in the main chat and closes it with the chip", () => {
+    const asked: GoatBotMessagePresentation = {
+      tone: "question",
+      readAt: null,
+      requestKey: null,
+      taskId: "work",
+      questionId: "approval:rm",
+      options: ["Approve A1", "Deny A1"],
+    };
+    const items = [
+      bot("b1", "2026-10-12T12:00:00Z", "work: the agent wants to run a command."),
+      notice("n1", "2026-10-12T12:00:01Z"),
+    ];
+    const open = { n1: { ...card("work", 1), openQuestionIds: ["approval:rm"] } };
+    expect(optionsIn(null, items, open, { b1: asked })).toEqual([
+      ["b1", ["Approve A1", "Deny A1"]],
+    ]);
+    expect(optionsIn("work", items, open, { b1: asked })).toEqual([
+      ["b1", ["Approve A1", "Deny A1"]],
+    ]);
+    const closed = { n1: { ...card("work", 2), openQuestionIds: [] } };
+    expect(optionsIn(null, items, closed, { b1: asked })).toEqual([["b1", []]]);
+    expect(optionsIn("work", items, closed, { b1: asked })).toEqual([["b1", []]]);
+    const pending = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf(items),
+        pendingInputs: [
+          {
+            clientKey: "c1",
+            taskId: "work",
+            text: "Approve A1",
+            createdAt: "2026-10-12T12:00:02Z",
+            state: "sending",
+            requestKey: null,
+          },
+        ],
+        readers: readers({ b1: asked }, open),
+        taskId: null,
+      }),
+    ).map((row) => row.id);
+    expect(pending).toContain("b1");
+    expect(pending).toContain("pending:c1");
+  });
 });
 
 describe("goatBotReplyingSince", () => {

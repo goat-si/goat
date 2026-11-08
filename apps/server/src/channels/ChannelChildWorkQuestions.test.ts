@@ -150,7 +150,14 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
               threadId: ThreadId.make("thread:live"),
             },
           },
-          { kind: "question", since },
+          {
+            kind: "question",
+            since,
+            question: {
+              requestId: RuntimeRequestId.make("request:question"),
+              threadId: ThreadId.make("thread:live"),
+            },
+          },
         ];
         yield* reports.reconcile(runtime.ownerToken);
         assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, expected);
@@ -514,6 +521,126 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
       const ledger = yield* ChannelLedger.ChannelLedger;
       const [run] = yield* ledger.listWorkerRuns([task.taskId]);
       assert.strictEqual(run?.status, "waiting");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("answers a launched thread single-choice question from the bot chat", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const sql = yield* SqlClient.SqlClient;
+      yield* gateway.ingest(goatInput("do: start the build", "nq1"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* launch(task, "live", "bound");
+      harness.world.runs.set("thread:live", []);
+      const pending = request("pick", "user_input");
+      harness.world.runtimeRequests.set("thread:live", [pending]);
+      harness.world.userInputQuestions.set(pending.id, [
+        {
+          id: "cache",
+          header: "Cache",
+          question: "Which cache should the build use?",
+          options: [
+            { label: "Keep it", description: "Reuse the cache" },
+            { label: "Clear it", description: "Start fresh" },
+          ],
+        },
+      ]);
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, [
+        {
+          kind: "question",
+          since,
+          question: {
+            requestId: pending.id,
+            threadId: ThreadId.make("thread:live"),
+          },
+        },
+      ]);
+      yield* runtime.drain;
+      const cards = (yield* botMessages).messages.filter(
+        (message) => message.channel?.kind === "question",
+      );
+      assert.strictEqual(cards.length, 1);
+      assert.strictEqual(cards[0]?.channel?.questionId, pending.id);
+      assert.strictEqual(cards[0]?.channel?.taskId, task.taskId);
+      assert.deepStrictEqual(cards[0]?.channel?.options, ["Keep it", "Clear it"]);
+      assert.include(cards[0]?.text ?? "", "Which cache should the build use?");
+
+      yield* gateway.ingest({ ...goatInput("Keep it", "nq2"), taskId: task.taskId }, rpcContext);
+      yield* runtime.drain;
+      const [answered] = responses(harness);
+      assert.strictEqual(answered?.threadId, ThreadId.make("thread:live"));
+      assert.strictEqual(answered?.requestId, pending.id);
+      assert.deepStrictEqual(answered?.answers, { cache: "Keep it" });
+      assert.strictEqual(answered?.decision, undefined);
+      assert.strictEqual(answered?.respondedBy?.type, "client");
+      assert.strictEqual(
+        answered?.respondedBy && "label" in answered.respondedBy
+          ? answered.respondedBy.label
+          : undefined,
+        "GOAT Bot",
+      );
+      const followups = yield* sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM channel_task_events WHERE task_id = ${task.taskId} AND type = 'task.followup.received'`;
+      assert.strictEqual(followups[0]?.count, 0);
+      const texts = (yield* botMessages).messages.map((message) => message.text);
+      assert.ok(texts.some((text) => text.includes("Sent your answer to ")));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("sends one untagged line when a launched thread asks more than one question", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("do: start the build", "mq1"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* launch(task, "live", "bound");
+      harness.world.runs.set("thread:live", []);
+      const pending = request("many", "user_input");
+      harness.world.runtimeRequests.set("thread:live", [pending]);
+      harness.world.userInputQuestions.set(pending.id, [
+        {
+          id: "one",
+          header: "One",
+          question: "First?",
+          options: [{ label: "A", description: "A" }],
+        },
+        {
+          id: "two",
+          header: "Two",
+          question: "Second?",
+          options: [{ label: "B", description: "B" }],
+        },
+      ]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const lines = (yield* botMessages).messages.filter((message) =>
+        message.text.includes("is asking something in its coding thread"),
+      );
+      assert.strictEqual(lines.length, 1);
+      assert.strictEqual(lines[0]?.channel?.taskId, undefined);
+      assert.strictEqual(
+        lines[0]?.text,
+        task.title + " is asking something in its coding thread. Open the work thread to answer.",
+      );
+      assert.strictEqual(
+        (yield* botMessages).messages.filter(
+          (message) => message.channel?.questionId === pending.id,
+        ).length,
+        0,
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 });

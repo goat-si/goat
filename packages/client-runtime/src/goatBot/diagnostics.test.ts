@@ -171,6 +171,33 @@ describe("diagnoseGoatBot", () => {
     expect(diagnoseGoatBot(input).verdict).toBe("attention");
   });
 
+  it("names a waiting approval separately from an answer", () => {
+    const approval = healthy({
+      rows: [],
+      turnsWaiting: [{ taskId: "turn", kind: "approval" } as never],
+    });
+    expect(line(approval, "work")).toMatchObject({
+      tone: "warn",
+      text: "1 waiting for your approval",
+      action: { kind: "open_chat", label: "Open the chat" },
+    });
+    const mixed = healthy({
+      rows: [],
+      turnsWaiting: [
+        { taskId: "a", kind: "approval" } as never,
+        { taskId: "b", kind: "answer" } as never,
+      ],
+    });
+    expect(line(mixed, "work")?.text).toBe(
+      "1 waiting for your approval · 1 waiting for your answer",
+    );
+    const listed = healthy({
+      rows: [task("turn", "running")],
+      turnsWaiting: [{ taskId: "turn", kind: "approval" } as never],
+    });
+    expect(line(listed, "work")?.text).toBe("1 waiting for your answer");
+  });
+
   it("counts a bot turn that waits for an answer, which the task list leaves out", () => {
     const delegated = healthy({ rows: [], turnsWaiting: ["turn"] });
     expect(line(delegated, "work")).toMatchObject({
