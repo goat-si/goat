@@ -446,3 +446,47 @@ it.effect("two edits for different tasks never both hold a notes grant", () => {
     assert.strictEqual(refused.reason, "busy");
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect("a refused forget's note comes back only after the tidy turn's run has ended", () => {
+  const harness = sessionHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const fs = yield* FileSystem.FileSystem;
+    const notes = yield* files;
+    yield* fs.makeDirectory(notes.dir, { recursive: true });
+    const kept = line("I deploy on Fridays.", "earlier");
+    yield* fs.writeFileString(notes.notes, NOTES_HEADER + kept + "\n");
+    const tidy = yield* turn(harness, "tidy my notes", "tidy");
+    const actions = yield* ChannelSessionNoteActions.ChannelSessionNoteActions;
+    const granted = yield* actions.change({
+      caller: tidy.caller,
+      taskId: tidy.task.taskId,
+      inputId: tidy.inputId,
+      kind: "edit",
+      quote: "tidy my notes",
+    });
+    assert.strictEqual(granted.outcome, "granted");
+    const writer = yield* ChannelBotNoteWriter;
+    const refused = yield* writer.tabEdit(
+      { intent: "message", text: goatBotForgetNoteMessage("I deploy on Fridays.") },
+      "tab-forget",
+      "2026-11-07T10:00:00.000Z",
+      Effect.succeed(tidy.task.requester),
+    );
+    assert.strictEqual(refused?.text, CHANNEL_COPY.noteEditBusy);
+    // The tidy deletes the refused note by hand; its task is then stopped, but its run still works.
+    yield* fs.writeFileString(notes.notes, NOTES_HEADER);
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    yield* commitTransition(
+      ledger,
+      (yield* ledger.getTask(tidy.task.taskId))!,
+      { type: "task.cancelled", payload: { reason: "Stopped." } },
+      { owner: (yield* ChannelRuntime.ChannelRuntime).ownerToken },
+    );
+    assert.strictEqual(yield* writer.settleRefused, 0);
+    assert.notInclude(yield* fs.readFileString(notes.notes), kept);
+    harness.world.setStatus(tidy.caller.threadId, 1, "completed");
+    assert.strictEqual(yield* writer.settleRefused, 1);
+    assert.include(yield* fs.readFileString(notes.notes), kept);
+  }).pipe(Effect.provide(harness.layer));
+});

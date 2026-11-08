@@ -39,11 +39,7 @@ const person = (overrides: Partial<ChannelRequester> = {}): ChannelRequester => 
   ...overrides,
 });
 
-const noOpenTasks: Pick<
-  ChannelLedger.ChannelLedger["Service"],
-  "listTasksByStatus" | "hasPendingForward"
-> = {
-  hasPendingForward: () => Effect.succeed(false),
+const noOpenTasks: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
   listTasksByStatus: () => Effect.succeed([]),
 };
 
@@ -175,11 +171,7 @@ describe("Memory tab note edits", () => {
       yield* fs.makeDirectory(files.dir, { recursive: true });
       const text = NOTES_HEADER + line(fridays, "a") + "\n";
       yield* fs.writeFileString(files.notes, text);
-      const busy: Pick<
-        ChannelLedger.ChannelLedger["Service"],
-        "listTasksByStatus" | "hasPendingForward"
-      > = {
-        hasPendingForward: () => Effect.succeed(false),
+      const busy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
         listTasksByStatus: () =>
           Effect.succeed([
             { task: { notesChangeRequested: "tidy my notes" } } as ChannelLedger.ChannelStoredTask,
@@ -206,11 +198,7 @@ describe("Memory tab note edits", () => {
         yield* fs.makeDirectory(files.dir, { recursive: true });
         const text = NOTES_HEADER + line("Staging is staging-02.", "input-2") + "\n";
         yield* fs.writeFileString(files.notes, text);
-        const busy: Pick<
-          ChannelLedger.ChannelLedger["Service"],
-          "listTasksByStatus" | "hasPendingForward"
-        > = {
-          hasPendingForward: () => Effect.succeed(false),
+        const busy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
           listTasksByStatus: () =>
             Effect.succeed([
               {
@@ -249,11 +237,7 @@ describe("Memory tab note edits", () => {
           return real.writeFileString(path, data, options);
         },
       };
-      const busy: Pick<
-        ChannelLedger.ChannelLedger["Service"],
-        "listTasksByStatus" | "hasPendingForward"
-      > = {
-        hasPendingForward: () => Effect.succeed(false),
+      const busy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
         listTasksByStatus: () =>
           Effect.succeed([
             { task: { notesChangeRequested: "tidy my notes" } } as ChannelLedger.ChannelStoredTask,
@@ -289,11 +273,7 @@ describe("Memory tab note edits", () => {
           NOTES_HEADER + line(fridays, "a") + "\n" + kept + "\n",
         );
         let open = true;
-        const tidy: Pick<
-          ChannelLedger.ChannelLedger["Service"],
-          "listTasksByStatus" | "hasPendingForward"
-        > = {
-          hasPendingForward: () => Effect.succeed(false),
+        const tidy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
           listTasksByStatus: () =>
             Effect.succeed(
               open
@@ -350,11 +330,7 @@ describe("Memory tab note edits", () => {
       const text = NOTES_HEADER + line(fridays, "a") + "\n";
       yield* fs.writeFileString(files.notes, text);
       let open = true;
-      const tidy: Pick<
-        ChannelLedger.ChannelLedger["Service"],
-        "listTasksByStatus" | "hasPendingForward"
-      > = {
-        hasPendingForward: () => Effect.succeed(false),
+      const tidy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
         listTasksByStatus: () =>
           Effect.succeed(
             open
@@ -515,17 +491,14 @@ describe("Memory tab note edits", () => {
 
 describe("notes a refused tab request named", () => {
   /** A notes file and a writer whose one grant holder and its stop can be ended by the test. */
-  const guarded = (text: string, refusals?: RefusedNotes) =>
+  const guarded = (text: string, refusals?: RefusedNotes, hooks: NoteWriterHooks = {}) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
       yield* fs.makeDirectory(files.dir, { recursive: true });
       yield* fs.writeFileString(files.notes, text);
       const state = { open: true, stopPending: false };
-      const ledger: Pick<
-        ChannelLedger.ChannelLedger["Service"],
-        "listTasksByStatus" | "hasPendingForward"
-      > = {
+      const ledger: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
         listTasksByStatus: () =>
           Effect.succeed(
             state.open
@@ -536,9 +509,10 @@ describe("notes a refused tab request named", () => {
                 ]
               : [],
           ),
-        hasPendingForward: () => Effect.succeed(state.stopPending),
       };
-      const writer = yield* makeChannelBotNoteWriter(fs, files, ledger, {}, refusals);
+      const writer = yield* makeChannelBotNoteWriter(fs, files, ledger, hooks, refusals, () =>
+        Effect.succeed(!state.stopPending),
+      );
       const ask = (message: string, inputId: string) =>
         Effect.map(
           writer.tabEdit(
@@ -625,5 +599,25 @@ describe("notes a refused tab request named", () => {
       );
       assert.strictEqual(yield* read, text);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+  it.effect(
+    "a forget that dies right after its rename leaves no refusal to bring the note back",
+    () =>
+      Effect.gen(function* () {
+        const refusals = memoryRefusedNotes();
+        const { state, writer, ask, read } = yield* guarded(
+          NOTES_HEADER + line(fridays, "a") + "\n",
+          refusals,
+          { afterRename: Effect.die("the server stopped") },
+        );
+        yield* ask(goatBotForgetNoteMessage(fridays), "refused");
+        state.open = false;
+        state.stopPending = true;
+        yield* Effect.exit(ask(goatBotForgetNoteMessage(fridays), "again"));
+        assert.notInclude(yield* read, fridays);
+        state.stopPending = false;
+        assert.strictEqual(yield* writer.settleRefused, 0);
+        assert.notInclude(yield* read, fridays);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
