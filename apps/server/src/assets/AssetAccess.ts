@@ -49,7 +49,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import { base64UrlDecodeUtf8, base64UrlEncode } from "../auth/utils.ts";
+import { openAssetClaims, sealAssetClaims } from "./assetClaimsSeal.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
@@ -206,14 +206,6 @@ export type ResolvedAsset =
       readonly repository?: string;
       readonly expiresAt: number;
     };
-
-function decodeClaims(encodedPayload: string): AssetClaims | null {
-  try {
-    return Option.getOrNull(decodeAssetClaims(base64UrlDecodeUtf8(encodedPayload)));
-  } catch {
-    return null;
-  }
-}
 
 function decodeRelativePath(value: string): string | null {
   try {
@@ -908,7 +900,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       Math.ceil(expiresAt / HTML_ATTACHMENT_TOKEN_BUCKET_MS) * HTML_ATTACHMENT_TOKEN_BUCKET_MS;
     claims = { ...claims, expiresAt };
   }
-  const encodedPayload = base64UrlEncode(encodeAssetClaims(claims));
+  const encodedPayload = sealAssetClaims(encodeAssetClaims(claims), signingSecret);
   const token = `${encodedPayload}.${fromSecret(signingSecret).sign(encodedPayload)}`;
   return {
     relativeUrl: `${ASSET_ROUTE_PREFIX}/${token}/${encodeURIComponent(fileName)}`,
@@ -919,24 +911,10 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   };
 });
 
-export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
-  token: string,
+const resolveClaims = Effect.fn("AssetAccess.resolveClaims")(function* (
+  claims: AssetClaims,
   relativePath: string,
 ) {
-  const [encodedPayload, signature] = token.split(".");
-  if (!encodedPayload || !signature) return null;
-
-  const secretStore = yield* ServerSecretStore.ServerSecretStore;
-  const signingSecret = yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32).pipe(
-    Effect.tapError((cause) => Effect.logError("Failed to load the asset signing key.", { cause })),
-    Effect.orElseSucceed(() => null),
-  );
-  if (!signingSecret) return null;
-  if (!fromSecret(signingSecret).verify(encodedPayload, signature)) return null;
-
-  const claims = decodeClaims(encodedPayload);
-  if (!claims || claims.expiresAt <= (yield* Clock.currentTimeMillis)) return null;
-
   if (claims.kind === "attachment") {
     const config = yield* ServerConfig.ServerConfig;
     const attachmentPath = resolveAttachmentPathById({
@@ -1076,3 +1054,24 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
   });
   return workspaceFile ? ({ kind: "file", path: workspaceFile } satisfies ResolvedAsset) : null;
 });
+
+export const resolveVerifiedAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
+  token: string,
+  relativePath: string,
+) {
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return null;
+  const secretStore = yield* ServerSecretStore.ServerSecretStore;
+  const signingSecret = yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32).pipe(
+    Effect.tapError((cause) => Effect.logError("Failed to load the asset signing key.", { cause })),
+    Effect.orElseSucceed(() => null),
+  );
+  if (!signingSecret || !fromSecret(signingSecret).verify(payload, signature)) return null;
+  const claims = Option.getOrNull(decodeAssetClaims(openAssetClaims(payload, signingSecret)));
+  if (!claims || claims.expiresAt <= (yield* Clock.currentTimeMillis)) return null;
+  const asset = yield* resolveClaims(claims, relativePath);
+  return asset === null ? null : { asset, expiresAt: claims.expiresAt };
+});
+
+export const resolveAsset = (token: string, relativePath: string) =>
+  resolveVerifiedAsset(token, relativePath).pipe(Effect.map((verified) => verified?.asset ?? null));
