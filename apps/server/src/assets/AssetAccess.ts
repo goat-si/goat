@@ -1055,7 +1055,7 @@ const resolveClaims = Effect.fn("AssetAccess.resolveClaims")(function* (
   return workspaceFile ? ({ kind: "file", path: workspaceFile } satisfies ResolvedAsset) : null;
 });
 
-export const resolveVerifiedAsset = Effect.fn("AssetAccess.resolveVerifiedAsset")(function* (
+export const resolveVerifiedAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
   token: string,
   relativePath: string,
 ) {
