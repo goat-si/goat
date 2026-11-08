@@ -422,3 +422,66 @@ describe("GOAT Bot hears about a launched thread's approvals after its task ende
     },
   );
 });
+
+describe("GOAT Bot keeps a launched thread's approval until the thread says what happened", () => {
+  /** A running task whose launched thread showed an approval, then ended its turn. */
+  const shownThenEnded = (harness: ReturnType<typeof makeHarness>, key: string) =>
+    Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("do: start the build", key), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* launch(task, "live", "bound");
+      harness.world.runs.set("thread:live", []);
+      harness.world.runtimeRequests.set("thread:live", [request("write", "file-change")]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_runtime_state SET value_json = json_set(value_json, '$.state', 'completed') WHERE key >= 'child-work:' AND key < 'child-work;'`;
+      return { runtime, reports, shown: (yield* onlyTask).observed?.needsYou };
+    });
+
+  const told = (text: string) =>
+    Effect.map(
+      botMessages,
+      (records) => records.messages.filter((message) => message.text.includes(text)).length,
+    );
+
+  it.effect("keeps the approval through a failed read and reports the decision after", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { runtime, reports, shown } = yield* shownThenEnded(harness, "kept-read");
+      harness.world.recordFailures.add("thread:live");
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, shown);
+      harness.world.recordFailures.delete("thread:live");
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, shown);
+      harness.world.runtimeRequests.set("thread:live", [
+        { ...request("write", "file-change"), status: "resolved", decision: "accept" },
+      ]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.strictEqual(yield* told("Approved in the coding thread"), 1);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("says once that an approval expired before anyone answered it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { runtime, reports } = yield* shownThenEnded(harness, "expired");
+      harness.world.runtimeRequests.set("thread:live", [
+        { ...request("write", "file-change"), status: "expired" },
+      ]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.strictEqual(yield* told("expired before anyone answered it"), 1);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});

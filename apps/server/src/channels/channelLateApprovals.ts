@@ -59,14 +59,24 @@ const accepted = (decision: string) =>
 const answeredInChat = (request: RequestSnapshot) =>
   request.respondedBy?.type === "client" && request.respondedBy.label === "GOAT Bot";
 
-const approvalResultText = (title: string, decision: string) =>
-  accepted(decision)
+const approvalResultText = (title: string, request: RequestSnapshot) => {
+  if (request.status === "expired")
+    return (
+      "The approval in the coding thread expired before anyone answered it. " +
+      title +
+      " stopped waiting."
+    );
+  if (request.status === "cancelled")
+    return "The approval in the coding thread was cancelled. " + title + " stopped waiting.";
+  return accepted(request.decision ?? "decline")
     ? "Approved in the coding thread. " + title + " continues."
     : "Denied in the coding thread. " + title + " will not do it.";
+};
 
 /**
- * One message per approval that was waiting and is now resolved in the thread. Answering it from
- * the chat (GOAT Bot) sends its own receipt, and an MCP requester never hears one.
+ * One message per approval that was waiting and has now ended in the thread: decided, expired or
+ * cancelled. Answering it from the chat (GOAT Bot) sends its own receipt, and an MCP requester
+ * never hears one.
  */
 const approvalResultDeliveries = (
   task: ChannelTask,
@@ -78,14 +88,14 @@ const approvalResultDeliveries = (
     const requestId = need.approval?.requestId;
     if (need.kind !== "approval" || requestId === undefined) return [];
     const request = byId.get(requestId);
-    if (request?.status !== "resolved" || request.decision === undefined || answeredInChat(request))
-      return [];
+    if (request === undefined || request.status === "pending" || answeredInChat(request)) return [];
+    if (request.status === "resolved" && request.decision === undefined) return [];
     return [
       replyDelivery({
         causeKey: "approval-result:" + requestId,
         destination: task.originAddress,
         kind: "receipt",
-        text: approvalResultText(task.title, request.decision),
+        text: approvalResultText(task.title, request),
         task,
         ...(task.originAddress.kind === "slack"
           ? { mentionActorId: task.requester.externalActorId }
@@ -123,18 +133,36 @@ export const commitWorkerObserved = Effect.fn("channelLateApprovals.commitObserv
     unread,
     (threadId) =>
       threads.getThreadRecords(threadId, ["runtimeRequests"]).pipe(
-        Effect.map((records) => records.runtimeRequests),
-        Effect.orElseSucceed((): ReadonlyArray<RequestSnapshot> => []),
+        Effect.map((records) => ({ threadId, requests: records.runtimeRequests })),
+        Effect.catchIf(isThreadMissing, () => Effect.succeed({ threadId, requests: [] })),
+        Effect.orElseSucceed(() => ({ threadId, requests: "unreadable" as const })),
       ),
     { concurrency: 1 },
   );
-  const deliveries = approvalResultDeliveries(stored.task, [...requests, ...reread.flat()]);
+  const unreadable = new Set(
+    reread.flatMap((read) => (read.requests === "unreadable" ? [read.threadId] : [])),
+  );
+  const seen = reread.flatMap((read) => (read.requests === "unreadable" ? [] : read.requests));
+  const pending = new Set(
+    seen.flatMap((request) => (request.status === "pending" ? [request.id] : [])),
+  );
+  // An approval this pass could not read, or that still waits, stays shown until its thread says.
+  const kept = (stored.task.observed?.needsYou ?? []).filter(
+    (need) =>
+      need.approval !== undefined &&
+      unread.has(need.approval.threadId) &&
+      (unreadable.has(need.approval.threadId) || pending.has(need.approval.requestId)),
+  );
+  const next: ChannelWorkerObservation =
+    kept.length === 0 ? observed : { ...observed, needsYou: [...observed.needsYou, ...kept] };
+  if (channelWorkerObservationEquals(stored.task.observed, next)) return undefined;
+  const deliveries = approvalResultDeliveries(stored.task, [...requests, ...seen]);
   return yield* commitTransition(
     ledger,
     stored,
     {
       type: "task.worker.observed",
-      payload: { generation: stored.task.generation, observed },
+      payload: { generation: stored.task.generation, observed: next },
     },
     {
       owner,
@@ -195,7 +223,7 @@ const lateRows = (sql: SqlClient.SqlClient, since: string) =>
         AND json_extract(c.value_json, '$.generation') = t.generation
         AND json_extract(c.value_json, '$.destination.threadId') IS NOT NULL
         AND json_extract(c.value_json, '$.destination.host') IS NULL
-      `.pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<LateRow>));
+      `;
 
 /** How many finished tasks learned about a launched thread's approvals this pass. */
 export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile")(
