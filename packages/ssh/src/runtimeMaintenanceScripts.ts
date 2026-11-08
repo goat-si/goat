@@ -1,3 +1,5 @@
+import { applyScriptPlaceholders } from "./remoteRuntime.ts";
+
 // Use the existing post-install round trip: young executables remain unkeyed everywhere else.
 export const REMOTE_RUNTIME_FACT_WARMUP_SCRIPT = String.raw`warm_runtime_facts() (
   [ -n "$GOAT_FACTS_DIR" ] || exit 0
@@ -194,3 +196,17 @@ $cwd"
 }
 (cleanup_runtime_versions) || { printf 'ssh.runtime.cleanup.skipped inspection, lock, or cleanup failed\n' >&2 || true; }
 `;
+
+const REMOTE_LOG_TAIL_SCRIPT = `set -eu
+STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
+LOG_FILE="$STATE_DIR/server.log"
+if [ -f "$LOG_FILE" ]; then
+  tail -n 80 "$LOG_FILE" 2>/dev/null || true
+fi
+`;
+
+export function buildRemoteLogTailScript(stateKey: string): string {
+  return applyScriptPlaceholders(REMOTE_LOG_TAIL_SCRIPT, {
+    GOAT_STATE_KEY: stateKey,
+  });
+}

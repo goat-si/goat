@@ -104,6 +104,7 @@ import * as NativeWindows from "./runtimeWindows.ts";
 import { makeManagedTrust } from "./managedTrust.ts";
 import { makeTargetAdmission, type RequestTicket } from "./targetAdmission.ts";
 import { makePreparationRetries } from "./preparationRetry.ts";
+import { makeKeyedSingleFlight } from "./keyedSingleFlight.ts";
 import { makeFailureEnrichment, runtimeFailureResult } from "./sshFailureDiagnostics.ts";
 import {
   makeRemoteSessions,
@@ -114,6 +115,7 @@ import {
   type RemoteMcpClientSessionOptions,
 } from "./remoteSessions.ts";
 import {
+  buildRemoteLogTailScript,
   REMOTE_RUNTIME_CLEANUP_SCRIPT,
   REMOTE_RUNTIME_FACT_WARMUP_SCRIPT,
 } from "./runtimeMaintenanceScripts.ts";
@@ -1181,14 +1183,6 @@ rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
 printf '{"stopped":true}\\n'
 `;
 
-const REMOTE_LOG_TAIL_SCRIPT = `set -eu
-STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
-LOG_FILE="$STATE_DIR/server.log"
-if [ -f "$LOG_FILE" ]; then
-  tail -n 80 "$LOG_FILE" 2>/dev/null || true
-fi
-`;
-
 export class SshInvalidArchiveVersionError extends Schema.TaggedError<SshInvalidArchiveVersionError>()(
   "SshInvalidArchiveVersionError",
   { archiveVersion: Schema.String },
@@ -1456,12 +1450,6 @@ export function buildRemoteStopScript(
     GOAT_REPLACEMENT_LOCK: REMOTE_REPLACEMENT_LOCK_SCRIPT,
     GOAT_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
     ...stopWaitPlaceholders(options),
-  });
-}
-
-function buildRemoteLogTailScript(stateKey: string): string {
-  return applyScriptPlaceholders(REMOTE_LOG_TAIL_SCRIPT, {
-    GOAT_STATE_KEY: stateKey,
   });
 }
 
@@ -4171,7 +4159,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return { resolvedTarget, key: targetConnectionKey(resolvedTarget) };
   });
 
-  const status = Effect.fn("ssh/tunnel.status")(function* (
+  const statusOnce = Effect.fn("ssh/tunnel.status")(function* (
     target: DesktopSshEnvironmentTarget,
   ): Effect.fn.Return<SshHostResult, SshEnvironmentEffectError, SshEnvironmentEffectContext> {
     const requestKey = targetConnectionKey(target);
@@ -4499,6 +4487,14 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     statuses.set(key, enriched);
     return enriched;
   });
+  // Desktop views ask about one host at once, and one probe answers them all. Any generation
+  // change (disconnect, forget, a new intent) starts a new flight for later callers.
+  const statusFlights = makeKeyedSingleFlight<SshHostResult, SshEnvironmentEffectError>();
+  const status = (target: DesktopSshEnvironmentTarget) =>
+    statusFlights(
+      JSON.stringify([targetConnectionKey(target), [...generations]]),
+      statusOnce(target),
+    );
 
   const requireReadyEntry = Effect.fn("ssh/tunnel.requireReadyEntry")(function* (
     target: DesktopSshEnvironmentTarget,
