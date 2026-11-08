@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import { chromium, type Browser, type BrowserContext } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
@@ -615,8 +616,19 @@ it.effect.each([
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
+      const reports = yield* (yield* Manager.PreviewManager).subscribeEvents;
       yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
-      yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
+      yield* Effect.promise(() => f.page.goto(`${f.allowed}/settled`));
+      // The tab reports each load over CDP after reading its title; wait for this load's report
+      // (its own path tells it from the fixture's) so the spies below see only the operation.
+      yield* PubSub.take(reports).pipe(
+        Effect.repeat({
+          until: (event) =>
+            event.type === "navigated" &&
+            event.snapshot.navStatus._tag === "Success" &&
+            event.snapshot.navStatus.url === `${f.allowed}/settled`,
+        }),
+      );
       const probe = yield* Effect.promise(() => f.page.context().newCDPSession(f.page));
       const protocol = vi.spyOn(
         Object.getPrototypeOf(probe) as { send: typeof probe.send },
