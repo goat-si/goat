@@ -31,6 +31,7 @@ import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
 import { isTerminalThread, mainThreadInput } from "./channelTerminalThread.ts";
 import { isMemoryTabEdit } from "./channelBotNoteTabEdits.ts";
+import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
 import { makeCreatedTasks, prepareTransition } from "./channelTaskWrites.ts";
 
@@ -66,6 +67,7 @@ const make = Effect.gen(function* () {
   const choices = makeInboundChoices(ledger);
   const sessions = yield* ChannelBotSession.ChannelBotSession;
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
+  const notes = yield* ChannelBotNoteWriter;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const settings = yield* ServerSettings.ServerSettingsService;
@@ -309,6 +311,8 @@ const make = Effect.gen(function* () {
     )
       return false;
     if ((yield* settings.getSettings).goatBotSessionRouting === "reception") return false;
+    // Main chat is reception's while a notes grant is open, so a remember is refused at once.
+    if (threadTask === undefined && (yield* notes.grantOpen)) return false;
     if (yield* reception.isDeterministicReply(stored)) {
       if (threadTask === undefined) return false;
       stored = mainThreadInput(stored);
