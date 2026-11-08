@@ -662,6 +662,11 @@ process.stderr.write('reader waiting');`,
         );
         // Only an ssh that never started proves no script did.
         assert.isUndefined(yield* settleOf("spawn-failed"));
+        // A status other than 255 is the remote shell's own; it relays it only after the script,
+        // its job and its watchdog have ended, so nothing is left to wait for.
+        assert.isUndefined(
+          yield* settleOf(makeFailedProcess({ stdout: "", stderr: "", exitCode: 7 })),
+        );
       }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer()))),
   );
 });

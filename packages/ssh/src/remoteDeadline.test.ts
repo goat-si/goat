@@ -91,6 +91,27 @@ const RECORD_KILLS = [
   "",
 ].join("\n");
 
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+};
+// Opening without a reader would block; ENXIO means no reader is left to release.
+const releaseFifo = (path: string) => {
+  let fd: number;
+  try {
+    fd = NodeFS.openSync(path, NodeFS.constants.O_WRONLY | NodeFS.constants.O_NONBLOCK);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENXIO") return;
+    throw error;
+  }
+  NodeFS.closeSync(fd);
+};
+
 // The caller leads its group and runs the wrapped shell in it, beside a sibling that a hang-up of
 // the whole group would end.
 const runInCaller = async (
@@ -110,10 +131,13 @@ const runInCaller = async (
     env: { GOAT_TEST_DIR: dir, ...env },
     sessionLeader: true,
     onExit: () => {
-      const sibling = Number(NodeFS.readFileSync(NodePath.join(dir, "sibling.pid"), "utf8"));
-      siblingAlive = process.kill(sibling, 0);
-      // Release the surviving sibling so nothing outlives the test.
-      NodeFS.writeFileSync(NodePath.join(dir, "keep"), "");
+      try {
+        const sibling = Number(NodeFS.readFileSync(NodePath.join(dir, "sibling.pid"), "utf8"));
+        siblingAlive = isAlive(sibling);
+      } finally {
+        // Release a surviving sibling so nothing outlives the test, even when the check threw.
+        releaseFifo(NodePath.join(dir, "keep"));
+      }
     },
   });
   const read = (name: string) => NodeFS.readFileSync(NodePath.join(dir, name), "utf8");
