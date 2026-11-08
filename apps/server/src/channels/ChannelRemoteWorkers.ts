@@ -2111,8 +2111,7 @@ const make = Effect.gen(function* () {
         return "stop" as const;
       }
       const runId = stored.task.worker?.runId;
-      // A worker that asked and then failed, was stopped, or reported failing after asking ends
-      // the task, as on this machine.
+      // A worker that asked and then failed or was stopped ends the task, as on this machine.
       if (
         stored.task.status === "waiting_input" &&
         stored.pendingAnswerMessageId === undefined &&
@@ -2121,38 +2120,35 @@ const make = Effect.gen(function* () {
         watched.runId === runId &&
         latest === runId &&
         TERMINAL.has(watched.status) &&
-        (watched.status !== "completed" || failedAfterAsking(stored.task, watched.reported)) &&
+        watched.status !== "completed" &&
         !limited
       ) {
         yield* commitTransition(
           ledger,
           stored,
-          watched.status === "completed"
-            ? settleCompletedRun({
-                task: stored.task,
-                runId,
-                reported: watched.reported,
-                fallbackSummary: watched.summary?.trim() || "Finished.",
-                now: yield* nowIso,
-              })
-            : watched.status === "cancelled"
-              ? { type: "task.cancelled", payload: { reason: "The coding thread was stopped." } }
-              : {
-                  type: "task.failed",
-                  payload: {
-                    generation: stored.task.generation,
-                    reason: watched.status,
-                    summary:
-                      "The coding thread ended with " + watched.status.replaceAll("_", " ") + ".",
-                  },
+          watched.status === "cancelled"
+            ? { type: "task.cancelled", payload: { reason: "The coding thread was stopped." } }
+            : {
+                type: "task.failed",
+                payload: {
+                  generation: stored.task.generation,
+                  reason: watched.status,
+                  summary:
+                    "The coding thread ended with " + watched.status.replaceAll("_", " ") + ".",
                 },
+              },
           { owner, narrate: true, completionHold: null },
         );
         return "stop" as const;
       }
+      // One that reported failing after it asked settles like a finished run, holds included.
+      const failedAfterQuestion =
+        stored.task.status === "waiting_input" &&
+        watched?.status === "completed" &&
+        failedAfterAsking(stored.task, watched.reported);
       const settles =
-        stored.task.status === "running" &&
-        stored.task.openQuestions.length === 0 &&
+        ((stored.task.status === "running" && stored.task.openQuestions.length === 0) ||
+          failedAfterQuestion) &&
         stored.pendingAnswerMessageId === undefined &&
         runId !== undefined &&
         watched !== null &&

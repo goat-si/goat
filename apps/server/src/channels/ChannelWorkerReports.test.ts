@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ChannelTaskEventId, type ThreadResultReport } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -12,7 +13,14 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { RemoteMachine, correlationOf, remoteScript, until } from "./testing/RemoteMachine.ts";
+import { REMOTE_SETTLE_WAIT_MS } from "./ChannelRemoteWorkers.ts";
+import {
+  RemoteMachine,
+  correlationOf,
+  remoteScript,
+  settle,
+  until,
+} from "./testing/RemoteMachine.ts";
 import {
   goatInput,
   makeHarness,
@@ -135,28 +143,54 @@ describe("a worker on another machine that asked the person", () => {
     return { machine, harness };
   };
 
-  it.effect("ends the task and closes the question when it reports a failure after asking", () => {
-    const { machine, harness } = remoteHarness();
-    return Effect.gen(function* () {
+  /** A remote worker asks, then its run completes reporting a failure stamped `reportedAt`. */
+  const askThenFail = (
+    machine: RemoteMachine,
+    reportedAt: (askedAt: DateTime.Utc) => string | undefined,
+  ) =>
+    Effect.gen(function* () {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
-      yield* gateway.ingest(
-        goatInput("do@mac-studio: tidy the notes file", "remote-asked"),
-        rpcContext,
-      );
+      yield* gateway.ingest(goatInput("do@mac-studio: tidy the notes", "remote-asked"), rpcContext);
       yield* until("running", (task) => task.status === "running");
       const correlationId = correlationOf(machine);
       machine.report(correlationId, "needs_input", "Which notes file?");
       const asked = yield* until("question", (task) => task.status === "waiting_input");
-      const askedAt = DateTime.makeUnsafe(asked.openQuestions[0]!.askedAt);
+      const at = reportedAt(DateTime.makeUnsafe(asked.openQuestions[0]!.askedAt));
       machine.finishRun(correlationId, "completed", "Stopping here.", {
         outcome: "failed",
         summary: "There is no notes file to tidy.",
-        reportedAt: DateTime.formatIso(DateTime.add(askedAt, { minutes: 1 })),
+        ...(at === undefined ? {} : { reportedAt: at }),
       });
+    });
+
+  it.effect("ends the task once nothing holds the run, and closes the question", () => {
+    const { machine, harness } = remoteHarness();
+    machine.setHolds({ backgroundTasks: 0, continuationPending: true });
+    return Effect.gen(function* () {
+      yield* askThenFail(machine, (askedAt) =>
+        DateTime.formatIso(DateTime.add(askedAt, { minutes: 1 })),
+      );
+      // A continuation still to come keeps the task open, as for a finished run.
+      yield* TestClock.adjust(Duration.millis(REMOTE_SETTLE_WAIT_MS * 2));
+      yield* settle();
+      assert.strictEqual((yield* onlyTask).status, "waiting_input");
+      machine.setHolds({ backgroundTasks: 0, continuationPending: false });
       const ended = yield* until("failed", (task) => task.status === "failed", 400);
       assert.strictEqual(ended.resultSummary, "There is no notes file to tidy.");
       assert.deepStrictEqual(ended.openQuestions, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("keeps waiting when an older remote sends no report time", () => {
+    const { machine, harness } = remoteHarness();
+    return Effect.gen(function* () {
+      yield* askThenFail(machine, () => undefined);
+      yield* TestClock.adjust(Duration.millis(REMOTE_SETTLE_WAIT_MS * 2));
+      yield* settle();
+      const waiting = yield* onlyTask;
+      assert.strictEqual(waiting.status, "waiting_input");
+      assert.lengthOf(waiting.openQuestions, 1);
     }).pipe(Effect.provide(harness.layer));
   });
 });
