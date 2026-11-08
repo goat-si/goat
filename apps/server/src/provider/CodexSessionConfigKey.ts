@@ -1,3 +1,4 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- The key needs a synchronous deterministic digest.
 import * as NodeCrypto from "node:crypto";
 
 import type { CodexSettings } from "@goat/contracts";

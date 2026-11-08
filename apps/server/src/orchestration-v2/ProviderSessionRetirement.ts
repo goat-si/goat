@@ -38,16 +38,21 @@ export type Retirement = "current" | "released" | "retiring";
  * running is released, one still running work is marked so it stops within a probe after the work
  * ends, and turns that would add work to it are refused by the caller.
  */
-export const make = <Entry extends RetirableSession>(input: {
+export const make = <
+  Entry extends RetirableSession,
+  LookupError,
+  ReleaseError,
+  ActivityError,
+>(input: {
   readonly sessions: Ref.Ref<Map<string, Entry>>;
   readonly adapters: {
     readonly get: (
       instanceId: ProviderInstanceId,
-    ) => Effect.Effect<{ readonly sessionConfigKey?: string | undefined }, unknown>;
+    ) => Effect.Effect<{ readonly sessionConfigKey?: string | undefined }, LookupError>;
   };
   /** Releases unless a turn is busy on the session. */
-  readonly release: (providerSessionId: ProviderSessionId) => Effect.Effect<void, unknown>;
-  readonly reschedule: (providerSessionId: ProviderSessionId) => Effect.Effect<void, unknown>;
+  readonly release: (providerSessionId: ProviderSessionId) => Effect.Effect<void, ReleaseError>;
+  readonly reschedule: (providerSessionId: ProviderSessionId) => Effect.Effect<void, ActivityError>;
   readonly withOpenLock: <A, E, R>(
     providerSessionId: ProviderSessionId,
     effect: Effect.Effect<A, E, R>,

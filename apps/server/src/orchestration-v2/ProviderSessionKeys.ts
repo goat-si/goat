@@ -24,7 +24,7 @@ export function sessionKey(providerSessionId: ProviderSessionId): string {
   return String(providerSessionId);
 }
 
-export function providerThreadRuntimeKey(
+function providerThreadRuntimeKey(
   providerThread: Parameters<
     ProviderAdapter.ProviderAdapterV2SessionRuntime["resumeThread"]
   >[0]["providerThread"],
