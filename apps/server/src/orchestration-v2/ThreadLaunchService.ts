@@ -35,7 +35,6 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import {
   buildTemporaryWorktreeBranchName,
   flattenTemporaryWorktreeBranchName,
@@ -67,6 +66,10 @@ import {
 } from "./preparationLog.ts";
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
 import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
+import {
+  preparationRunStopped,
+  watchPreparationInterruption,
+} from "./goat/PreparationInterruption.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
   | { readonly type: "root"; readonly branch?: string | undefined }
@@ -883,7 +886,9 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.onError((cause) =>
         Effect.gen(function* () {
-          const cancelled = Cause.hasInterruptsOnly(cause);
+          const cancelled =
+            Cause.hasInterruptsOnly(cause) ||
+            (yield* preparationRunStopped(threads, threadId, runId));
           yield* setupTracker.finish(
             threadId,
             cancelled ? "cancelled" : "failed",
@@ -1023,20 +1028,10 @@ const make = Effect.gen(function* () {
       const afterSequence = yield* threads.getThreadEventSequence(threadId);
       const projection = yield* threads.getThreadRecords(threadId, ["runs"]);
       if (projection.runs.find((run) => run.id === runId)?.status !== "preparing") return;
-      const interruption = threads
-        .streamStoredEventsFrom({ threadId, afterSequence, eventType: "run.updated" })
-        .pipe(
-          Stream.filter(
-            (stored) =>
-              stored.event.type === "run.updated" &&
-              stored.event.payload.id === runId &&
-              (stored.event.payload.status === "interrupted" ||
-                stored.event.payload.status === "cancelled"),
-          ),
-          Stream.runHead,
-          Effect.flatMap((event) => (Option.isSome(event) ? Effect.interrupt : Effect.never)),
-        );
-      yield* Effect.raceFirst(prepare, interruption);
+      yield* Effect.raceFirst(
+        prepare,
+        watchPreparationInterruption({ threads, threadId, runId, afterSequence }),
+      );
     });
     yield* preparation.pipe(
       Effect.onError((cause) =>
