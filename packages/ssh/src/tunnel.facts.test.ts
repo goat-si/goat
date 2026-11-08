@@ -144,12 +144,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
       ];
       for (const name of counted) {
         // Each shim drops its own directory, so later shims (clock, identity) still apply.
-        // awk also records its program, so a failed bound names the calls it counted.
+        // Each also records its first arguments: a failed bound names the awk programs it counted,
+        // and the per-check bounds below match each awk to the check that ran it.
         yield* f.fs.writeFileString(
           `${bin}/${name}`,
-          name === "awk"
-            ? `#!/bin/sh\nprintf 'awk %s\\n' "$(printf '%s' "$*" | tr '\\n' ' ' | cut -c1-60)" >> "$HOME/.test/counted.log"\nPATH="\${PATH#*:}" exec awk "$@"\n`
-            : `#!/bin/sh\necho ${name} >> "$HOME/.test/counted.log"\nPATH="\${PATH#*:}" exec ${name} "$@"\n`,
+          `#!/bin/sh\nprintf '${name} %s\\n' "$(printf '%s' "$*" | tr '\\n' ' ' | cut -c1-60)" >> "$HOME/.test/counted.log"\nPATH="\${PATH#*:}" exec ${name} "$@"\n`,
         );
         yield* f.fs.chmod(`${bin}/${name}`, 0o755);
       }
@@ -157,6 +156,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         `${bin}:${f.home}/.test/clock:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`,
       );
       const awkPrograms = new Map<Record<string, number>, string[]>();
+      const checksOf = new Map<Record<string, number>, [string, number, number][]>();
       const counts = Effect.gen(function* () {
         const log = yield* f.fs.readFileString(`${f.home}/.test/counted.log`);
         yield* f.fs.writeFileString(`${f.home}/.test/counted.log`, "");
@@ -175,6 +175,13 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         const bounded = programs.filter((program) => !perCheck.some((p) => program.startsWith(p)));
         seen.awk = bounded.length;
         awkPrograms.set(seen, bounded);
+        const count = (prefix: string) => lines.filter((line) => line.startsWith(prefix)).length;
+        // Each per-check awk filters what its check's own command printed: never more awk than reads.
+        checksOf.set(seen, [
+          ["uid filter", count("awk NF==1 { print $1 }"), count("ps -o uid=")],
+          ["liveness read", count("awk { print $1 }"), count("sed -n s/.*) //p")],
+          ["lock owner presence", count("awk -v p="), count("ps -e -o pid=")],
+        ]);
         const events = yield* f.fs.readFileString(`${f.test}/events`);
         yield* f.fs.writeFileString(`${f.test}/events`, "");
         seen.goat = events.split("\n").filter((line) => line.includes('"type":"exec"')).length;
@@ -272,6 +279,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             bound,
             `${script} ${name}${name === "awk" ? `: ${(awkPrograms.get(seen) ?? []).join(" | ")}` : ""}`,
           );
+      for (const [script, [seen]] of Object.entries(bounds))
+        for (const [check, awk, reads] of checksOf.get(seen) ?? [])
+          assert.isAtMost(awk, reads, `${script} ${check}: awk calls per read`);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
