@@ -1,5 +1,5 @@
 export const WINDOWS_MANIFEST_SUPPORT_SCRIPT = `windows_cached_own() {
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ;; *) return 1 ;; esac
+  case "\${fact_uname-$(uname -s)}" in MINGW*|MSYS*|CYGWIN*) ;; *) return 1 ;; esac
   exec_fact_key "$2" || return 1
   [ "$(fact_get "version.$FACT_NAME" "$FACT_KEY")" = "goat v$1" ] || return 1
   wc_own="$(fact_get "own.$FACT_NAME" "$FACT_KEY")" || return 1
@@ -8,7 +8,7 @@ export const WINDOWS_MANIFEST_SUPPORT_SCRIPT = `windows_cached_own() {
   signals_json "$1" "$2" "$3"
 }
 windows_manifest_key() {
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ;; *) return 1 ;; esac
+  case "\${fact_uname-$(uname -s)}" in MINGW*|MSYS*|CYGWIN*) ;; *) return 1 ;; esac
   wm_version="$1"; wm_exe="$2"; wm_dir="\${2%/goat}"
   [ -f "$wm_exe" ] && [ ! -L "$wm_exe" ] || return 1
   wm_marker="$wm_dir/goat-manifest-shell-v1.sha256"

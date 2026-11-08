@@ -1133,9 +1133,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 acquire_replacement_lock || { printf 'Another client is replacing the remote runtime.\\n' >&2; exit 1; }; [ -e "$STATE_DIR/run-t3.sh" ] || rm -f "$STATE_DIR/run-goat.sh" || :
-REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
-REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-REMOTE_PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
+fact_slurp "$MANAGED_FILE" || FACT_TEXT=; REMOTE_MANAGED="$FACT_TEXT"
+fact_slurp "$PID_FILE" || FACT_TEXT=; REMOTE_PID="$FACT_TEXT"
+fact_slurp "$PORT_FILE" || FACT_TEXT=; REMOTE_PORT="$FACT_TEXT"
 # Forget may stop only an owned runtime; external/unknown state belongs to another owner.
 if [ @@GOAT_STOP_OWNED_ONLY@@ = 1 ] && [ "$REMOTE_MANAGED" != managed ]; then
   printf '{"stopped":false,"activity":"unknown"}\\n'

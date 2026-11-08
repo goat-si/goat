@@ -23,12 +23,13 @@ runtime_file="$HOME/.goat/userdata/server-runtime.json"
 ${REMOTE_PROTOCOL_TOKEN_SCRIPT}
 # The probe's subshells share exec keys of installed executables; it never pins a runner.
 FACT_MEMO="$(mktemp "\${TMPDIR:-/tmp}/goat-facts.XXXXXX" 2>/dev/null)" || FACT_MEMO=
+fact_clock_start
 trap 'probe_exit=$?; [ -z "$FACT_MEMO" ] || rm -f "$FACT_MEMO" 2>/dev/null || :; exit "$probe_exit"' EXIT
 ${WINDOWS_MANIFEST_SUPPORT_SCRIPT}
 prune_removed_facts
 ready_version() {
   valid_version "$1" && [ -x "$HOME/.goat/runtime/goat/versions/$1/goat" ] &&
-    [ "$(cat "$HOME/.goat/runtime/goat/versions/$1/.install-complete" 2>/dev/null)" = "$1" ]
+    fact_file_is "$HOME/.goat/runtime/goat/versions/$1/.install-complete" "$1"
 }
 signals_json() {
   # Positional parameters are scoped to this function, not the enclosing script.
@@ -226,9 +227,8 @@ probe_live() {
   live_status="$1"
   live_fields="$(printf ',"liveStatus":"%s"' "$1")"
   if [ "$1" = live ] && valid_positive "$5" &&
-     [ "$(cat "$state/managed" 2>/dev/null || true)" = managed ] &&
-     [ "$(cat "$state/pid" 2>/dev/null || true)" = "$5" ] &&
-     [ "$(cat "$state/port" 2>/dev/null || true)" = "$6" ]; then live_owned=true; fi
+     fact_file_is "$state/managed" managed && fact_file_is "$state/pid" "$5" &&
+     fact_file_is "$state/port" "$6"; then live_owned=true; fi
   if [ "$1" = live ] && [ "$live_owned" = false ] && [ -n "$state_key" ] &&
      managed_orphan "$5" "$6" "$2" "$state"; then
     live_fields="$live_fields,\\"liveAdoptable\\":true"
@@ -268,7 +268,7 @@ if [ "$live_answered" = 0 ]; then
   done
 fi
 [ "$live_status" != none ] || collect_installed_candidates
-case "$(uname -s)" in
+case "\${fact_uname-$(uname -s)}" in
   Darwin) platform=darwin ;; Linux) platform=linux ;; MINGW*|MSYS*|CYGWIN*) platform=win32 ;;
   *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -s)" >&2; exit 1 ;;
 esac

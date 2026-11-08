@@ -689,6 +689,12 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
         noNewline: "123",
         trailing: "123\n\n\n",
         inside: "1\n\n2\n",
+        // Archive runners declare an empty node script; node runners declare one.
+        archiveRunner:
+          "#!/bin/sh\nGOAT_NODE_SCRIPT_PATH=''\nGOAT_ARCHIVE_VERSION='1.2.3'\nexec x\n",
+        nodeRunner: "GOAT_NODE_SCRIPT_PATH='/srv/cli.mjs'\nGOAT_ARCHIVE_VERSION='1.2.3'\n",
+        legacyNode: "T3_NODE_SCRIPT_PATH='/srv/cli.mjs'\nT3_ARCHIVE_VERSION='0.9.0'\n",
+        emptyBoth: "GOAT_NODE_SCRIPT_PATH=''\nGOAT_NODE_SCRIPT_PATH=''\nGOAT_ARCHIVE_VERSION=''\n",
       };
       for (const [name, text] of Object.entries(files))
         NodeFS.writeFileSync(NodePath.join(dir, name), text);
@@ -702,7 +708,17 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
         'same() { if [ "$2" = "$3" ]; then echo "$1 ok"; else printf "%s DIFF old=[%s] new=[%s]\\n" "$1" "$2" "$3"; fi; }',
         "for f in " + paths.join(" ") + "; do",
         '  same hint "$(old_hint "$f" GOAT_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)" "$(read_runner_hint "$f" GOAT_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)"',
+        // One awk for both declarations an exec key reads, as the two calls it replaced saw them.
+        '  old_node="$(read_runner_hint "$f" GOAT_NODE_SCRIPT_PATH T3_NODE_SCRIPT_PATH 2>/dev/null || :)"',
+        '  old_version="$(read_runner_hint "$f" GOAT_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)"',
+        '  runner_key_hints "$f"',
+        '  same node "$' +
+          '{old_node:+1}" "$RUNNER_NODE_DECLARED"; same version "$old_version" "$RUNNER_ARCHIVE_VERSION"',
         '  fact_slurp "$f" || :; same cat "$(cat "$f" 2>/dev/null || true)" "$FACT_TEXT"',
+        '  for want in 123 "" 1.2.3; do',
+        '    if [ "$(cat "$f" 2>/dev/null || true)" = "$want" ]; then old_is=yes; else old_is=no; fi',
+        '    if fact_file_is "$f" "$want"; then new_is=yes; else new_is=no; fi; same file_is "$old_is" "$new_is"',
+        "  done",
         '  if [ -f "$f" ]; then',
         '    old_record="$(tr \'\\n\' \' \' <"$f")"; fact_read_record "$f"',
         '    same record "$old_record" "$FACT_TEXT"',
