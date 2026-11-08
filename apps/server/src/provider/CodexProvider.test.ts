@@ -326,18 +326,18 @@ const ROUTED_MODEL = {
   supportedReasoningEfforts: [{ description: "Balanced", reasoningEffort: "medium" }],
 };
 it.effect.each([
-  { endpoint: "http://127.0.0.1:10100/v1", usable: true },
-  { endpoint: undefined, usable: false },
-  { endpoint: "https://api.openai.com/v1", usable: false },
-  { endpoint: "https://api.openai.com./v1", usable: false },
-  // An OPENAI_BASE_URL that disagrees with config leaves the endpoint unverified.
+  { name: "local OpenCodex", endpoint: "http://127.0.0.1:10100/v1", usable: true },
+  { name: "omitted openai_base_url (OpenAI default)", endpoint: undefined, usable: false },
+  { name: "explicit OpenAI", endpoint: "https://api.openai.com/v1", usable: false },
+  { name: "trailing-dot OpenAI host", endpoint: "https://api.openai.com./v1", usable: false },
   {
+    name: "unverified endpoint (OPENAI_BASE_URL disagrees with config)",
     endpoint: "http://127.0.0.1:10100/v1",
     environment: { OPENAI_BASE_URL: "http://127.0.0.1:9999/v1" },
     usable: false,
   },
 ])(
-  "a logged-out Codex lists models and accepts child tasks only when its endpoint is not OpenAI's: $endpoint",
+  "a logged-out Codex lists models and accepts child tasks only when its endpoint is not OpenAI's: $name",
   ({ endpoint, environment, usable }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
