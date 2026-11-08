@@ -38,6 +38,7 @@ import {
   remoteUploadCommand,
   SshEnvironmentManager,
 } from "./tunnel.ts";
+import { REMOTE_PROTOCOL_TOKEN_SCRIPT } from "./runtimeFactsScripts.ts";
 import { REMOTE_HOST_PROCESS_SCRIPT } from "./runtimeOwnershipScripts.ts";
 
 // Stand-ins for the Git Bash host: uname reports MINGW, PowerShell answers for two
@@ -207,6 +208,93 @@ describe("Windows SSH host", () => {
       assert.notEqual(runWithDoubles(bin, "server_alive 9999").status, 0);
       assert.equal(runWithDoubles(bin, 'printf %s "$MSYS"').stdout, "winsymlinks:sys");
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect(
+    "records a native server's live answers on Git Bash, keyed by its ps -W row and record",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-facts-" });
+        const bin = `${home}/bin`;
+        const versions = `${home}/.goat/runtime/goat/versions/1.2.3`;
+        yield* fs.makeDirectory(bin, { recursive: true });
+        yield* fs.makeDirectory(versions, { recursive: true });
+        yield* fs.writeFileString(`${versions}/.install-complete`, "1.2.3\n");
+        const doubles = {
+          uname: "echo MINGW64_NT-10.0-26200",
+          // Executables changed in the last 2 s are not keyed; this clock is far ahead of them.
+          date: '[ "$1" = +%s ] && echo 4102444800',
+          // Git Bash ps has no -o. A Cygwin row with a status letter shifts its columns by one.
+          ps: '[ "$1" = -W ] || { echo "ps: unknown option -- o" >&2; exit 1; }\necho "      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND"\necho "I    1234    1233    4242       5555  pty0      197609 14:00:00 /usr/bin/bash"\ncat "$HOME/ps-row"',
+        };
+        for (const [name, body] of Object.entries(doubles)) {
+          yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
+          yield* fs.chmod(`${bin}/${name}`, 0o755);
+        }
+        yield* fs.writeFileString(
+          `${versions}/goat`,
+          '#!/bin/sh\necho "$*" >>"$HOME/helper-starts"\necho "live 1.2.3 1 1 4242 3773"\n',
+        );
+        yield* fs.chmod(`${versions}/goat`, 0o755);
+        const record = (startedAt: string) =>
+          fs.writeFileString(
+            `${home}/server-runtime.json`,
+            JSON.stringify({ pid: 4242, port: 3773, startedAt }),
+          );
+        const row = (start: string, exe: string) =>
+          fs.writeFileString(
+            `${home}/ps-row`,
+            `  4198546       0       0       4242     ?      197609 ${start} ${exe}\n`,
+          );
+        yield* record("2026-11-08T14:23:57.123Z");
+        yield* fs.writeFileString(`${home}/port`, "3773\n");
+        yield* fs.writeFileString(`${home}/pid`, "4242\n");
+        const goatExe = "C:\\Users\\Jo Doe\\.goat\\runtime\\goat\\versions\\1.2.3\\goat.exe";
+        yield* row("14:23:57", goatExe);
+        const ask = () => {
+          const result = NodeChildProcess.spawnSync(
+            remoteShell,
+            [
+              "-c",
+              `${REMOTE_PROTOCOL_TOKEN_SCRIPT}\nlive_fact "$GOAT_EXE" "$HOME/server-runtime.json" "$HOME/port" "$HOME/pid"`,
+            ],
+            {
+              encoding: "utf8",
+              env: {
+                ...process.env,
+                HOME: home,
+                GOAT_EXE: `${versions}/goat`,
+                PATH: `${bin}:${process.env.PATH ?? ""}`,
+              },
+            },
+          );
+          assert.equal(result.status, 0, result.stderr);
+          assert.equal(result.stdout, "live 1.2.3 1 1 4242 3773\n");
+        };
+        const starts = () =>
+          fs
+            .readFileString(`${home}/helper-starts`)
+            .pipe(Effect.map((log) => log.trim().split("\n").length));
+
+        ask();
+        ask();
+        assert.equal(yield* starts(), 1);
+        // Another program that took the PID at the same displayed start time does not match.
+        yield* row("14:23:57", "C:\\Windows\\System32\\notepad.exe");
+        ask();
+        ask();
+        assert.equal(yield* starts(), 2);
+        // A process from an earlier day shows only its date, in two columns.
+        yield* row("Nov 07", goatExe);
+        ask();
+        ask();
+        assert.equal(yield* starts(), 3);
+        // A restarted server rewrites its record, even at the same PID, port and displayed start.
+        yield* record("2026-11-08T14:23:57.456Z");
+        ask();
+        assert.equal(yield* starts(), 4);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect("passes a usable Windows working directory to initial and supervisor launches", () =>

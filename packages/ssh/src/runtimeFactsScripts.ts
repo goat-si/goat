@@ -10,8 +10,8 @@ import {
 // replaced or restarted misses and is asked again. Failures are never recorded, and a record is
 // kept only when its key still holds after the answer. Windows hosts need this most: a goat.exe
 // start there has taken over 5 s, so a probe that asked every time ran past the 60 s SSH timeout.
-// MSYS stat keys executables by NTFS file ID and times; MSYS ps cannot report a process start
-// time, so answers from a live server are not recorded there and are asked every time.
+// MSYS stat keys executables by NTFS file ID and times. MSYS ps has no -o, so a live server there
+// is keyed by its ps -W row (see fact_process_start).
 const REMOTE_FACTS_SCRIPT = `GOAT_FACTS_DIR="$HOME/.goat/ssh-launch/facts"
 FACT_NAME=; FACT_KEY=
 fact_nl='
@@ -102,6 +102,19 @@ fact_put() {
     printf '%s\\n%s\\n' "$2" "$3" >"$fact_tmp" && mv -f "$fact_tmp" "$GOAT_FACTS_DIR/$1" || rm -f "$fact_tmp"
   ) 2>/dev/null || true
 }
+# Start identity of process $1. Git Bash and Cygwin ps lists native processes only through -W, by
+# WINPID (column 4 after an optional status letter), with a start shown to the second today and
+# to the day before; the whole row, executable path included, is the key. A server GOAT restarts
+# still misses: it rewrites the runtime record, whose startedAt and instanceId are in the key.
+fact_process_start() {
+  if [ -z "\${fact_windows:-}" ]; then
+    case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) fact_windows=1 ;; *) fact_windows=0 ;; esac
+  fi
+  if [ "$fact_windows" = 0 ]; then LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null; return; fi
+  ps -W 2>/dev/null | awk -v p="$1" '
+    NR > 1 { if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 } if ($4 == p) { $1 = $1; print; found = 1; exit } }
+    END { exit !found }'
+}
 # Prints the output of goat run as "$2" "$3"..., recorded as fact $1 of that executable.
 exec_fact() {
   fact_kind="$1"; shift
@@ -124,11 +137,11 @@ live_fact_key() {
   valid_positive "$fact_pid" || return 1
   fact_record_port="$(printf '%s\\n' "$fact_record" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')"
   valid_positive "$fact_record_port" || return 1
-  fact_start="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$fact_pid" 2>/dev/null)" && [ -n "$fact_start" ] || return 1
+  fact_start="$(fact_process_start "$fact_pid")" && [ -n "$fact_start" ] || return 1
   fact_port="$(cat "$3" 2>/dev/null || true)"; fact_remembered="$(cat "$4" 2>/dev/null || true)"
   fact_remembered_start=
   if valid_positive "$fact_remembered"; then
-    fact_remembered_start="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$fact_remembered" 2>/dev/null || true)"
+    fact_remembered_start="$(fact_process_start "$fact_remembered" || true)"
   fi
   FACT_KEY="$fact_live|$fact_record|$fact_start|$fact_port|$fact_remembered|$fact_remembered_start"
 }
