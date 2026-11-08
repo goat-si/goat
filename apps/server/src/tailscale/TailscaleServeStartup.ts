@@ -1,9 +1,13 @@
 import { disableTailscaleServe, ensureTailscaleServe } from "@goat/tailscale";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import { HttpServer } from "effect/http";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 
 import { loopbackUrlHostForAddress } from "../startupAccess.ts";
 
@@ -13,17 +17,18 @@ export interface TailscaleServeTarget {
   readonly localHost: string;
 }
 
-interface ConfiguredTailscaleServe {
-  readonly localPort: number;
-  readonly servePort: number;
-}
-
 interface TailscaleServeStartupBase {
   readonly enabled: boolean;
   readonly servePort: number;
   readonly parked: Deferred.Deferred<void>;
   readonly awaitActivation: Effect.Effect<void>;
 }
+
+const serveRetrySchedule = Schedule.exponential("2 seconds").pipe(
+  Schedule.modifyDelay(({ duration }) =>
+    Effect.succeed(Duration.min(duration, Duration.seconds(60))),
+  ),
+);
 
 const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <E, R, E2, R2>(input: {
   readonly servePort: number;
@@ -48,39 +53,59 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <E,
         servePort: input.servePort,
         localHost: loopbackUrlHostForAddress(address),
       };
-      return yield* input.ensure(target).pipe(
-        Effect.as({ localPort, servePort: input.servePort } satisfies ConfiguredTailscaleServe),
-        Effect.tap(() =>
-          Effect.logInfo("Tailscale Serve configured", {
-            localPort,
-            servePort: input.servePort,
-          }),
+      const attempted = yield* Ref.make(false);
+      const attempts = yield* Ref.make(0);
+      const fiber = yield* Effect.gen(function* () {
+        const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1);
+        yield* Ref.set(attempted, true);
+        yield* input.ensure(target);
+        yield* Effect.logInfo("Tailscale Serve configured", {
+          localPort,
+          servePort: input.servePort,
+          attempts: attempt,
+        });
+      }).pipe(
+        Effect.tapError((cause) =>
+          Ref.get(attempts).pipe(
+            Effect.flatMap((attempt) => {
+              const log = attempt <= 1 ? Effect.logWarning : Effect.logDebug;
+              return log("Failed to configure Tailscale Serve; retrying", {
+                cause,
+                localPort,
+                servePort: input.servePort,
+              });
+            }),
+          ),
         ),
-        Effect.catch((cause) =>
-          Effect.logWarning("Failed to configure Tailscale Serve", {
-            cause,
-            localPort,
-            servePort: input.servePort,
-          }).pipe(Effect.as(null)),
+        Effect.retry(serveRetrySchedule),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      return { fiber, attempted, servePort: input.servePort };
+    }),
+    (attempt) => {
+      if (attempt === null) return Effect.void;
+      // Interrupt first: an in-flight `tailscale serve` can still install the route.
+      return Fiber.interrupt(attempt.fiber).pipe(
+        Effect.flatMap(() => Ref.get(attempt.attempted)),
+        Effect.flatMap((started) =>
+          started
+            ? input.disable({ servePort: attempt.servePort }).pipe(
+                Effect.tap(() =>
+                  Effect.logInfo("Tailscale Serve disabled", {
+                    servePort: attempt.servePort,
+                  }),
+                ),
+                Effect.catch((cause) =>
+                  Effect.logWarning("Failed to disable Tailscale Serve", {
+                    cause,
+                    servePort: attempt.servePort,
+                  }),
+                ),
+              )
+            : Effect.void,
         ),
       );
-    }),
-    (configured) =>
-      configured
-        ? input.disable({ servePort: configured.servePort }).pipe(
-            Effect.tap(() =>
-              Effect.logInfo("Tailscale Serve disabled", {
-                servePort: configured.servePort,
-              }),
-            ),
-            Effect.catch((cause) =>
-              Effect.logWarning("Failed to disable Tailscale Serve", {
-                cause,
-                servePort: configured.servePort,
-              }),
-            ),
-          )
-        : Effect.void,
+    },
   );
 });
 

@@ -20,6 +20,8 @@ const httpServer = (address: NetAddress.SocketAddress) =>
     }),
   );
 
+const loopback = httpServer(NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 3773));
+
 it.effect("re-applies the saved port after a failed start", () =>
   Effect.gen(function* () {
     const calls = yield* Queue.unbounded<number>();
@@ -39,7 +41,7 @@ it.effect("re-applies the saved port after a failed start", () =>
       awaitActivation: Effect.void,
       ensure,
       disable: () => Effect.void,
-    }).pipe(Layer.provide(httpServer(NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 3773))));
+    }).pipe(Layer.provide(loopback));
 
     yield* Effect.scoped(
       Effect.gen(function* () {
@@ -49,5 +51,56 @@ it.effect("re-applies the saved port after a failed start", () =>
         expect(yield* Queue.take(calls)).toBe(47743);
       }),
     );
+  }),
+);
+
+it.effect("turns the saved port off after a successful apply", () =>
+  Effect.gen(function* () {
+    const disabled = yield* Queue.unbounded<number>();
+    const applied = yield* Deferred.make<number>();
+    const parked = yield* Deferred.make<void>();
+    const ensure = Effect.fn("TailscaleServeStartup.test.ensureSucceeds")(function* (
+      target: TailscaleServeTarget,
+    ) {
+      yield* Deferred.succeed(applied, target.servePort);
+    });
+    const layer = layerTailscaleServeStartup({
+      enabled: true,
+      servePort: 47743,
+      parked,
+      awaitActivation: Effect.void,
+      ensure,
+      disable: (request: { readonly servePort: number }) =>
+        Queue.offer(disabled, request.servePort).pipe(Effect.asVoid),
+    }).pipe(Layer.provide(loopback));
+
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(layer);
+        expect(yield* Deferred.await(applied)).toBe(47743);
+      }),
+    );
+    expect(yield* Queue.take(disabled)).toBe(47743);
+  }),
+);
+
+it.effect("does not turn Serve off when no attempt started", () =>
+  Effect.gen(function* () {
+    const disabled = yield* Ref.make<ReadonlyArray<number>>([]);
+    const ensured = yield* Ref.make(0);
+    const parked = yield* Deferred.make<void>();
+    const layer = layerTailscaleServeStartup({
+      enabled: true,
+      servePort: 47743,
+      parked,
+      awaitActivation: Effect.void,
+      ensure: () => Ref.update(ensured, (count) => count + 1),
+      disable: (request: { readonly servePort: number }) =>
+        Ref.update(disabled, (ports) => [...ports, request.servePort]),
+    }).pipe(Layer.provide(httpServer(NetAddress.unixPathAddress("/tmp/goat.sock"))));
+
+    yield* Effect.scoped(Layer.build(layer));
+    expect(yield* Ref.get(ensured)).toBe(0);
+    expect(yield* Ref.get(disabled)).toEqual([]);
   }),
 );
