@@ -1,4 +1,12 @@
 import { makeCodexInheritedHistory } from "./CodexInheritedHistory.ts";
+import { selectMetadataTranscripts } from "./AgentSessionTranscriptSelection.ts";
+import { resolveClaudeConfigDir } from "./AgentSessionClaudeHome.ts";
+import {
+  codexStateOnlyCandidateGroups,
+  codexThreadIdFromRolloutPath,
+  readCodexProjectState,
+  readCodexThreadNames,
+} from "./CodexStateDatabase.ts";
 import { transcriptIdentity, sameTranscriptIdentity } from "./AgentSessionTranscriptIdentity.ts";
 import { LEGACY_MANAGED_WORKTREE_PATH } from "@goat/contracts/legacyT3Names";
 import * as NodeOS from "node:os";
@@ -52,7 +60,6 @@ import {
 const TRANSCRIPT_PREFIX_BYTES = 32 * 1024;
 const METADATA_READ_BYTES = 8 * 1024;
 const MAX_TRANSCRIPT_SCAN_BYTES = 1024 * 1024;
-const MAX_CODEX_SESSION_INDEX_BYTES = 1024 * 1024;
 
 const MAX_TRANSCRIPTS_PER_SOURCE = 5000;
 
@@ -131,11 +138,6 @@ const TranscriptRecord = Schema.Struct({
   ),
 });
 
-const CodexSessionIndexEntry = Schema.Struct({
-  id: Schema.String,
-  thread_name: Schema.String,
-});
-
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
 const decodeTranscriptRecord = Schema.decodeUnknownOption(Schema.fromJsonString(TranscriptRecord));
@@ -149,10 +151,6 @@ const decodePiEntryLinks = Schema.decodeUnknownOption(
 );
 const selectTranscriptPath = createTranscriptJsonSelector(TranscriptRecord);
 const decodeCodexTurnMetadata = Schema.decodeUnknownOption(CodexTurnMetadata);
-const decodeCodexSessionIndexEntry = Schema.decodeUnknownOption(
-  Schema.fromJsonString(CodexSessionIndexEntry),
-);
-
 type DecodedTranscriptRecord = typeof TranscriptRecord.Type;
 
 interface AgentSessionTranscriptMetadata {
@@ -226,26 +224,6 @@ interface MetadataReadBudget {
   operationsRemaining: number;
   recordsRemaining: number;
   truncated: boolean;
-}
-
-function selectMetadataTranscripts(transcripts: ReadonlyArray<TranscriptCandidate>) {
-  const selected: Array<TranscriptCandidate> = [];
-  let pending = Array.from(
-    Map.groupBy(transcripts, (transcript) => transcript.providerInstanceId).values(),
-    (entries) => entries.values(),
-  );
-  while (pending.length > 0 && selected.length < MAX_TRANSCRIPTS_PER_SOURCE) {
-    const nextRound: typeof pending = [];
-    for (const iterator of pending) {
-      if (selected.length === MAX_TRANSCRIPTS_PER_SOURCE) break;
-      const next = iterator.next();
-      if (next.done) continue;
-      selected.push(next.value);
-      nextRound.push(iterator);
-    }
-    pending = nextRound;
-  }
-  return selected;
 }
 
 function splitTranscriptRecords(contents: string, limit: number): string[] {
@@ -325,17 +303,6 @@ function foldClaudeFields(fields: ClaudeFields, record: DecodedTranscriptRecord)
 // these leading blocks when deriving a title; imported messages keep them.
 const CODEX_TITLE_PREAMBLE =
   /^(?:\s*(?:<(recommended_plugins|environment_context|user_instructions|INSTRUCTIONS|in-app-browser-context)(?:\s[^>]*)?>[\s\S]*?<\/\1>|# AGENTS\.md instructions\b[^\n]*|## My request for Codex:))+/;
-
-// Codex appends an entry per rename; like Codex, the newest nonempty name wins.
-function parseCodexThreadNames(contents: string): ReadonlyMap<string, string> {
-  const names = new Map<string, string>();
-  for (const line of contents.split("\n")) {
-    const entry = Option.getOrUndefined(decodeCodexSessionIndexEntry(line));
-    const name = entry?.thread_name.trim();
-    if (entry !== undefined && name) names.set(entry.id, name);
-  }
-  return names;
-}
 
 function deriveTitle(source: AgentSessionSource, text: string): string | undefined {
   const request = source === "codex" ? text.replace(CODEX_TITLE_PREAMBLE, "") : text;
@@ -1074,41 +1041,6 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const readCodexThreadNames = Effect.fn("AgentSessionScanner.readCodexThreadNames")(function* (
-    homePath: string,
-  ) {
-    const indexPath = path.join(homePath, "session_index.jsonl");
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const file = yield* fileSystem.open(indexPath, { flag: "r" });
-        const size = Number((yield* file.stat).size);
-        const start = Math.max(0, size - MAX_CODEX_SESSION_INDEX_BYTES);
-        yield* file.seek(BigInt(start), "start");
-        const bytes = yield* file.readAlloc(size - start);
-        const contents = Option.match(bytes, {
-          onNone: () => "",
-          onSome: (value) => new TextDecoder().decode(value),
-        });
-        // A tail read can start mid-record.
-        return parseCodexThreadNames(
-          start > 0 ? contents.slice(contents.indexOf("\n") + 1) : contents,
-        );
-      }),
-    ).pipe(Effect.orElseSucceed((): ReadonlyMap<string, string> => new Map()));
-  });
-
-  const resolveClaudeConfigDir = (homePath: string, environmentHome?: string): string => {
-    const configured = homePath.trim();
-    if (configured.length > 0) {
-      return path.resolve(expandHomePath(configured, homeDir));
-    }
-    const fromEnvironment = environmentHome?.trim() ?? "";
-    if (fromEnvironment.length > 0) {
-      return path.resolve(expandHomePath(fromEnvironment, homeDir));
-    }
-    return path.join(homeDir, ".claude");
-  };
-
   const discoverClaudeTranscripts = Effect.fn("AgentSessionScanner.discoverClaudeTranscripts")(
     function* (homePath: string, providerInstanceId: ProviderInstanceId, operationBudget: number) {
       const projectsDir = path.join(homePath, "projects");
@@ -1285,6 +1217,7 @@ export const make = Effect.gen(function* () {
     source: AgentSessionSource,
     transcripts: ReadonlyArray<TranscriptCandidate>,
     budget: MetadataReadBudget,
+    codexCwdByThread?: ReadonlyMap<string, string>,
   ) {
     const byOwnerAndCwd = new Map<
       string,
@@ -1298,8 +1231,15 @@ export const make = Effect.gen(function* () {
     >();
 
     for (const transcript of transcripts) {
-      const cwd = yield* readCwd(source, transcript, budget);
-      if (cwd === null || cwd === false) continue;
+      const metadataCwd = yield* readCwd(source, transcript, budget);
+      if (metadataCwd === null || metadataCwd === false) continue;
+      const threadId =
+        source === "codex" ? codexThreadIdFromRolloutPath(transcript.filePath) : undefined;
+      const overriddenCwd =
+        threadId === undefined
+          ? undefined
+          : codexCwdByThread?.get(`${transcript.providerInstanceId}\0${threadId}`);
+      const cwd = overriddenCwd ?? metadataCwd;
       const key = `${transcript.providerInstanceId}\0${cwd}`;
       const existing = byOwnerAndCwd.get(key);
       if (existing) {
@@ -1321,12 +1261,22 @@ export const make = Effect.gen(function* () {
       source,
       providerInstanceId: group.providerInstanceId,
       homePath: group.homePath,
-      threadCount: group.transcripts.length,
+      threadCount:
+        source === "codex"
+          ? new Set(
+              group.transcripts.map(
+                (transcript) =>
+                  codexThreadIdFromRolloutPath(transcript.filePath) ?? transcript.filePath,
+              ),
+            ).size
+          : group.transcripts.length,
       lastActiveAtMs: group.lastActiveAtMs,
       transcripts: group.transcripts,
     }));
   });
 
+  let cachedCandidates: ReadonlyArray<RawCandidate> | null = null;
+  let cachedCodexCwdByThread: ReadonlyMap<string, string> | null = null;
   const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* () {
     const settings = yield* serverSettings.getSettings.pipe(
       Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
@@ -1334,6 +1284,7 @@ export const make = Effect.gen(function* () {
 
     const raw: Array<RawCandidate> = [];
     let truncated = false;
+    let collectedCodexCwdByThread: ReadonlyMap<string, string> | null = null;
 
     for (const source of ["claudeAgent", "codex", "pi"] as const) {
       const instances: Array<{
@@ -1363,7 +1314,10 @@ export const make = Effect.gen(function* () {
         return leftDefault - rightDefault;
       });
       const homes: Array<{ homePath: string; providerInstanceId: ProviderInstanceId }> = [];
+      const stateHomes: Array<{ homePath: string; providerInstanceId: ProviderInstanceId }> = [];
       const seenHomes = new Set<string>();
+      const seenStateHomes = new Set<string>();
+      let effectiveHomePath: string | undefined;
       for (const { instanceId, config: instance } of instances) {
         const environmentHome = (name: "CLAUDE_CONFIG_DIR" | "CODEX_HOME") => {
           const configured = instance.environment?.findLast(
@@ -1382,10 +1336,12 @@ export const make = Effect.gen(function* () {
         } else if (source === "claudeAgent") {
           const config = decodeClaudeSettings(instance.config ?? {});
           if (Option.isNone(config)) continue;
-          homePath = resolveClaudeConfigDir(
-            config.value.homePath,
-            environmentHome("CLAUDE_CONFIG_DIR"),
-          );
+          homePath = resolveClaudeConfigDir({
+            homePath: config.value.homePath,
+            environmentHome: environmentHome("CLAUDE_CONFIG_DIR"),
+            homeDir,
+            path,
+          });
         } else {
           const config = decodeCodexSettings(instance.config ?? {});
           if (Option.isNone(config)) continue;
@@ -1400,13 +1356,27 @@ export const make = Effect.gen(function* () {
             Effect.provideService(Path.Path, path),
           );
           homePath = layout.sharedHomePath;
+          effectiveHomePath = layout.effectiveHomePath;
         }
 
         const homeKey = `${source}\0${yield* directoryIdentity(homePath)}`;
+        if (source === "codex") {
+          for (const stateHomePath of [homePath, effectiveHomePath]) {
+            if (stateHomePath === undefined) continue;
+            const stateHomeKey = `${source}\0${yield* directoryIdentity(stateHomePath)}`;
+            if (seenStateHomes.has(stateHomeKey)) continue;
+            seenStateHomes.add(stateHomeKey);
+            stateHomes.push({ homePath: stateHomePath, providerInstanceId: instanceId });
+          }
+        }
         if (seenHomes.has(homeKey)) continue;
         seenHomes.add(homeKey);
         homes.push({ homePath, providerInstanceId: instanceId });
       }
+
+      const codexState = source === "codex" ? yield* readCodexProjectState(stateHomes) : null;
+      truncated ||= codexState?.complete === false;
+      if (source === "codex") collectedCodexCwdByThread = codexState?.cwdByThread ?? null;
 
       const transcriptCandidates: Array<TranscriptCandidate> = [];
       const baseOperationBudget = Math.floor(
@@ -1437,24 +1407,43 @@ export const make = Effect.gen(function* () {
       if (transcriptCandidates.length > MAX_TRANSCRIPTS_PER_SOURCE) {
         truncated = true;
       }
-      const selectedTranscripts = selectMetadataTranscripts(transcriptCandidates);
+      const selectedTranscripts = selectMetadataTranscripts(
+        transcriptCandidates,
+        MAX_TRANSCRIPTS_PER_SOURCE,
+      );
       const metadataBudget: MetadataReadBudget = {
         bytesRemaining: MAX_METADATA_BYTES_PER_SOURCE,
         operationsRemaining: MAX_METADATA_OPERATIONS_PER_SOURCE,
         recordsRemaining: MAX_METADATA_RECORDS_PER_SOURCE,
         truncated: false,
       };
-      raw.push(...(yield* groupTranscriptsByCwd(source, selectedTranscripts, metadataBudget)));
+      raw.push(
+        ...(yield* groupTranscriptsByCwd(
+          source,
+          selectedTranscripts,
+          metadataBudget,
+          codexState?.cwdByThread,
+        )),
+      );
+      if (codexState !== null) {
+        raw.push(
+          ...codexStateOnlyCandidateGroups(
+            stateHomes,
+            codexState.stateByHome,
+            selectedTranscripts,
+          ).map((group): RawCandidate => ({ ...group, source: "codex", transcripts: [] })),
+        );
+      }
       truncated ||= metadataBudget.truncated;
     }
 
+    cachedCandidates = raw;
+    cachedCodexCwdByThread = collectedCodexCwdByThread;
     return { candidates: raw, truncated };
   });
 
-  let cachedCandidates: ReadonlyArray<RawCandidate> | null = null;
   const scan = Effect.fn("AgentSessionScanner.scan")(function* (input: AgentSessionScanInput) {
     const { candidates: raw, truncated } = yield* collectCandidates();
-    cachedCandidates = raw;
 
     const merged = new Map<
       string,
@@ -1596,7 +1585,6 @@ export const make = Effect.gen(function* () {
     const cutoffMs = nowMs - RECENT_THREAD_WINDOW_MS;
 
     const candidates = cachedCandidates ?? (yield* collectCandidates()).candidates;
-    cachedCandidates = candidates;
 
     const eligibleTranscripts: Array<{
       readonly candidate: RawCandidate;
@@ -1699,7 +1687,15 @@ export const make = Effect.gen(function* () {
           if (Option.isNone(snapshot.cwd)) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
-          const expandedCwd = expandHomePath(snapshot.cwd.value.trim(), homeDir);
+          const rolloutThreadId =
+            candidate.source === "codex"
+              ? codexThreadIdFromRolloutPath(transcript.filePath)
+              : undefined;
+          const mappedCwd =
+            rolloutThreadId === undefined
+              ? undefined
+              : cachedCodexCwdByThread?.get(`${candidate.providerInstanceId}\0${rolloutThreadId}`);
+          const expandedCwd = expandHomePath((mappedCwd ?? snapshot.cwd.value).trim(), homeDir);
           if (
             !path.isAbsolute(expandedCwd) ||
             (yield* directoryIdentity(path.resolve(expandedCwd))) !== rootIdentity
@@ -1735,7 +1731,7 @@ export const make = Effect.gen(function* () {
           if (candidate.source === "codex") {
             const names =
               codexThreadNamesByHome.get(candidate.homePath) ??
-              (yield* readCodexThreadNames(candidate.homePath));
+              (yield* readCodexThreadNames(candidate.homePath, fileSystem, path));
             codexThreadNamesByHome.set(candidate.homePath, names);
             savedTitle = names.get(parsedThread.providerSessionId);
           }
