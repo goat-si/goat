@@ -68,7 +68,7 @@ function GoatBotSidebarObserver({
   main: BotProfile | null;
 }) {
   const count = useGoatBotWaitingCount();
-  const readMenu = useGoatBotReadMenu(count);
+  const readMenu = useGoatBotReadMenu(count, name);
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const pathname = useLocation({ select: (location) => location.pathname });
   const task = useLocation({
@@ -209,7 +209,7 @@ function GoatBotConversationRow({
           <span
             className="size-2.5 rounded-full bg-info"
             role="img"
-            aria-label="Unread GOAT Bot messages"
+            aria-label={`Unread ${name} messages`}
           />
         ) : null}
       </span>

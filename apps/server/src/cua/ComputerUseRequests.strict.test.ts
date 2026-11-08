@@ -9,9 +9,10 @@ import {
 } from "@goat/shared/cuaDriverManifest";
 
 import { threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
-import { sessionId, supported, withRequests } from "./ComputerUseRequests.testkit.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { supported, withRequests } from "./ComputerUseRequests.testkit.ts";
 
-it.effect("without strict input guards a named protected app follows the person's approval", () =>
+it.effect("without strict input guards a named protected app is admitted without a handoff", () =>
   withHarness(({ orchestrator }) =>
     Effect.gen(function* () {
       yield* orchestrator.dispatch({
@@ -25,15 +26,14 @@ it.effect("without strict input guards a named protected app follows the person'
         createdBy: "user",
         creationSource: "web",
       });
-      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      yield* withRequests(orchestrator, supported, ({ request }) =>
         Effect.gen(function* () {
-          const first = yield* request({ apps: ["com.example.Other"] });
-          if (first.kind !== "needs_human") return assert.fail("expected approval");
-          yield* handoffs.respond(
-            { threadId, handoffId: first.handoff.handoffId, action: "completed" },
-            sessionId,
-          );
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaStrictInputGuards: false,
+          });
           assert.equal((yield* request({ apps: ["com.1password.safari"] })).kind, "available");
+          const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+          assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
         }),
       );
     }),
@@ -60,7 +60,7 @@ const looseListing = [
 ] as const;
 
 it.effect.each(["com.apple.Passwords", "1Password", "C:\\Apps\\1Password.exe"])(
-  "without strict input guards a protected app named by its listed id or name goes to approval (%s)",
+  "without strict input guards a listed protected app id or name is admitted (%s)",
   (app) =>
     withHarness(({ orchestrator }) =>
       withRequests(
@@ -68,7 +68,10 @@ it.effect.each(["com.apple.Passwords", "1Password", "C:\\Apps\\1Password.exe"])(
         supported,
         ({ request }) =>
           Effect.gen(function* () {
-            assert.equal((yield* request({ apps: [app] })).kind, "needs_human");
+            yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+              cuaStrictInputGuards: false,
+            });
+            assert.equal((yield* request({ apps: [app] })).kind, "available");
           }),
         ...looseListing,
       ),
@@ -94,16 +97,16 @@ it.effect(
         yield* withRequests(
           orchestrator,
           supported,
-          ({ request, handoffs }) =>
+          ({ request }) =>
             Effect.gen(function* () {
-              const first = yield* request({ apps: ["com.example.Editor"] });
-              if (first.kind !== "needs_human") return assert.fail("expected approval");
-              yield* handoffs.respond(
-                { threadId, handoffId: first.handoff.handoffId, action: "completed" },
-                sessionId,
-              );
+              yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+                cuaStrictInputGuards: false,
+              });
+              assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
               assert.equal((yield* request({ apps: ["com.apple.Passwords"] })).kind, "available");
               assert.equal((yield* request({ apps: ["com.example.Missing"] })).kind, "refused");
+              const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+              assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
             }),
           ...looseListing,
         );

@@ -1,4 +1,4 @@
-import { commandOf, reportOutcome } from "./adapterHelpers.ts";
+import { commandOf, declinedNote, reportOutcome, sessionGrantLabel } from "./adapterHelpers.ts";
 import * as NodeURL from "node:url";
 
 import {
@@ -102,6 +102,7 @@ import {
   type OpenCodeToolResult,
 } from "../toolItems.ts";
 import { goatRemoteMcpConfig } from "../goatMcpConfig.ts";
+import { openCodeLiveWork } from "../liveWork.ts";
 
 const OpenCode2ProviderCapabilities = {
   sessions: {
@@ -402,15 +403,6 @@ export const cuaMcpServerName = Effect.fn("cuaMcpServerName")(function* (threadI
 
 // Rejection without a message stops the whole execution, meaning Cancel.
 const DECLINED = "The user declined this request.";
-
-// Steer before decline; otherwise the model sees only Unable to execute command and retries.
-const declinedNote = (action: string, resources: ReadonlyArray<string>) =>
-  `The user declined the ${action} request${resources.length === 0 ? "" : ` (${resources.join(", ")})`}. Do not retry it; continue without it or ask the user how to proceed.`;
-
-const sessionGrantLabel = (action: string, save: ReadonlyArray<string>) =>
-  save.every((pattern) => pattern === "*")
-    ? `Allow every ${action} request this session`
-    : `Allow ${save.join(", ")} this session`;
 
 const text = (value: string | undefined, fallback: string) => value?.trim() || fallback;
 
@@ -3548,6 +3540,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       events: Stream.fromQueue(events),
       // Idle release must wait for background children and held wakes after parent settlement.
       hasPendingBackgroundWork: Effect.sync(() => [...threads.values()].some(owesWork)),
+      holdsLiveWork: openCodeLiveWork(
+        () => pending.size > 0,
+        () => [...busy].filter((sessionId) => ownerOf(sessionId) !== undefined),
+        () => client.session.active(),
+      ),
       hasPendingBackgroundWorkForThread: (providerThread) =>
         Effect.sync(() => {
           const nativeId = providerThread.nativeThreadRef?.nativeId;

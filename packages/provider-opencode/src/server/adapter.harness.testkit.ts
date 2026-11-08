@@ -170,6 +170,7 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
   const startTurn = (
     text = "hello",
     startProviderThread: OrchestrationV2ProviderThread = providerThread,
+    turnPolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy = policy,
   ) =>
     runtime.startTurn({
       ...options.memory,
@@ -211,7 +212,7 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
         attachments: [],
       },
       modelSelection,
-      runtimePolicy: policy,
+      runtimePolicy: turnPolicy,
     });
   return {
     nativeSessionId,

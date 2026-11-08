@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
+import { goatBotName, type BotRosterEntry } from "@goat/client-runtime/goatBot";
 import type { BotProfile, BotThreadRow, ChannelUpdateTaskViewInput } from "@goat/contracts";
 import { Alert, Text, View } from "react-native";
 import { useNavigationThreadShells } from "../../state/entities";
@@ -21,7 +21,8 @@ export function MobileBotRoster(props: {
   const roster = useMobileBotRoster(props.selectedKey);
   const preview = useMobileBotPreview();
   const shells = useNavigationThreadShells();
-  const manage = useMobileBotManage(roster.environmentId);
+  const mainName = goatBotName(roster.groups.main);
+  const manage = useMobileBotManage(roster.environmentId, mainName);
   const [sheet, setSheet] = useState<
     { readonly mode: "create" } | { readonly mode: "edit"; readonly bot: BotProfile } | null
   >(null);
@@ -144,6 +145,7 @@ export function MobileBotRoster(props: {
           sheet={sheet}
           environmentId={roster.environmentId}
           manage={manage}
+          mainName={mainName}
           onCreated={(bot) => props.onOpenBot({ kind: "member", profile: bot })}
           onClose={() => setSheet(null)}
         />
@@ -156,6 +158,7 @@ function BotSheet(props: {
   readonly sheet: { readonly mode: "create" } | { readonly mode: "edit"; readonly bot: BotProfile };
   readonly environmentId: NonNullable<ReturnType<typeof useMobileBotRoster>["environmentId"]>;
   readonly manage: ReturnType<typeof useMobileBotManage>;
+  readonly mainName: string;
   readonly onCreated: (bot: BotProfile) => void;
   readonly onClose: () => void;
 }) {
@@ -185,7 +188,12 @@ function BotSheet(props: {
         return null;
       }}
     >
-      <MobileNewBotModel environmentId={props.environmentId} model={model} onChange={setModel} />
+      <MobileNewBotModel
+        environmentId={props.environmentId}
+        model={model}
+        onChange={setModel}
+        mainName={props.mainName}
+      />
     </MobileBotProfileSheet>
   );
 }

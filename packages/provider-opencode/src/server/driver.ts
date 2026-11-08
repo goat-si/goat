@@ -113,6 +113,7 @@ function selectOpenCodeRuntimeAdapter(input: {
   readonly probe: OpenCodeRuntimeProbe;
   readonly v1: ProviderAdapter.ProviderAdapterV2["Service"];
   readonly v2: ProviderAdapter.ProviderAdapterV2["Service"];
+  readonly sessionConfigKey: string;
 }): ProviderAdapter.ProviderAdapterV2["Service"] {
   const pick = <PE>(probed: Effect.Effect<ProbedOpenCode | undefined, PE>) =>
     byOpenCodeRuntime(probed, { v1: Effect.succeed(input.v1), v2: Effect.succeed(input.v2) });
@@ -120,6 +121,7 @@ function selectOpenCodeRuntimeAdapter(input: {
   return {
     instanceId: input.v1.instanceId,
     driver: DRIVER_KIND,
+    sessionConfigKey: input.sessionConfigKey,
     getCapabilities: () => Effect.flatMap(hot, (adapter) => adapter.getCapabilities()),
     planSelectionTransition: (transition) =>
       Effect.flatMap(hot, (adapter) => adapter.planSelectionTransition(transition)),
@@ -327,6 +329,9 @@ export const OpenCodeDriver: ProviderDriver<
       v2: yield* OpenCode2AdapterV2.make(instanceId).pipe(
         Effect.provideService(OpenCode2Server.OpenCode2Server, openCode2Server),
       ),
+      // Sessions belong to the build that opened them: a rebuild closes this build's server
+      // owner, so ProviderSessionRetirement retires them even when the settings came back unchanged.
+      sessionConfigKey: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
     });
     const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
       openCode2Server.withConnection(({ client }) => loadOpenCode2Catalog(client, host.paths.cwd)),

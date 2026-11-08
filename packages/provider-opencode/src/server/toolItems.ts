@@ -7,6 +7,12 @@ import type { ToolPart } from "@opencode-ai/sdk/v2";
 // Search results stay on the timeline wire, so keep their text a preview.
 const SEARCH_PREVIEW_MAX_CHARS = 8_000;
 
+export function openCodeToolTitle(part: ToolPart): string | null {
+  return part.state.status === "running" || part.state.status === "completed"
+    ? (part.state.title ?? null)
+    : null;
+}
+
 type ToolItemBase = Omit<
   Extract<OrchestrationV2TurnItem, { type: "dynamic_tool" }>,
   "type" | "toolName" | "input" | "output"

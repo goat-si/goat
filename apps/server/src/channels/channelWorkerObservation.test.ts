@@ -88,14 +88,19 @@ describe("needsYouFromRuntimeRequests", () => {
   it("names the request and thread of an approval only when asked to", () => {
     const worker = ThreadId.make("thread:worker");
     const pending = request("command");
-    const named = needsYouFromRuntimeRequests([pending, request("user_input")], () => worker);
+    const question = request("user_input");
+    const named = needsYouFromRuntimeRequests([pending, question], () => worker);
     assert.deepStrictEqual(named, [
       {
         kind: "approval",
         since: "2026-10-17T09:30:00.000Z",
         approval: { requestId: pending.id, threadId: worker },
       },
-      { kind: "question", since: "2026-10-17T09:30:00.000Z" },
+      {
+        kind: "question",
+        since: "2026-10-17T09:30:00.000Z",
+        question: { requestId: question.id, threadId: worker },
+      },
     ]);
     // Only approvals not listed before get a card.
     const later = request("file-change", "pending", "2026-10-17T09:40:00.000Z");

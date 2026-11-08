@@ -90,6 +90,7 @@ import {
 import { makeCheckpointReplicationAdmission } from "./serverSettingsCheckpointAdmission.ts";
 import { preserveSecretReferences } from "./provider/preserveSecretReferences.ts";
 import { makeCuaCommittedPolicy, type CuaCommittedPolicyRead } from "./cuaCommittedPolicy.ts";
+import { hubAdministrationSettings } from "./serverSettingsHubAdministration.ts";
 
 import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
 import { makeSettingsSecretMaterializer } from "./settingsSecretMaterialization.ts";
@@ -128,7 +129,7 @@ const MemoryHubTransitionMarker = Schema.Struct({
   previousHubSpace: Schema.optionalKey(MemorySpaceId),
   provenance: Schema.optionalKey(Schema.NullOr(MemoryHubProvenance)),
 });
-type HubTransitionMarker = typeof MemoryHubTransitionMarker.Type;
+export type HubTransitionMarker = typeof MemoryHubTransitionMarker.Type;
 const encodeServerSettings = Schema.encodeEffect(ServerSettings);
 const encodeServerSettingsJson = Schema.encodeUnknownEffect(
   fromJsonStringPretty(
@@ -720,9 +721,10 @@ const ownerPolicyServices = (
   };
 };
 
-const HubSettingsLock = Context.Reference<boolean>("goat/serverSettings/HubSettingsLock", {
-  defaultValue: () => false,
-});
+type LoadedSettings = {
+  readonly settings: ServerSettings;
+  readonly parseFailure: Option.Option<unknown>;
+};
 
 /** Interface seam for the parallel L2 administrator; this layer supplies its settings owner. */
 export class MemoryHubAdminSettings extends Context.Service<
@@ -745,84 +747,6 @@ export class MemoryHubAdminSettings extends Context.Service<
   // @effect-diagnostics-next-line deterministicKeys:off -- L2's separately implemented administrator consumes this runtime key.
   "goat/memory/MemoryHubService/MemoryHubAdminSettings",
 ) {}
-
-const hubAdministrationSettings = (
-  read: ServerSettingsService["Service"]["getSettings"],
-  withLock: MemoryHubAdminSettings["Service"]["withLock"],
-  marker: Effect.Effect<HubTransitionMarker | null>,
-  applyLocked: MemoryHubSettingsTransitions["Service"]["applyMemoryHubTransition"],
-  readPublication: MemoryHubAdminSettings["Service"]["readPublication"],
-): MemoryHubAdminSettings["Service"] => ({
-  withLock: (effect) => withLock(effect.pipe(Effect.provideService(HubSettingsLock, true))),
-  readPublication,
-  read: read.pipe(
-    Effect.map((current) => ({
-      settings: current.memoryHub,
-      version: current.memoryHubVersion,
-      provenance: current.memoryHubProvenance ?? null,
-    })),
-    Effect.mapError(() => new MemoryHubError({ code: "storage_failed" })),
-  ),
-  readPreviousHubRequestId: Effect.map(marker, (saved) => saved?.requestId ?? null),
-  readPreviousHubSpace: read.pipe(
-    Effect.flatMap((current) =>
-      current.memoryHub.mode === "hub" && current.memoryHub.memorySpaceId !== null
-        ? Effect.succeed(current.memoryHub.memorySpaceId)
-        : Effect.map(marker, (saved) => saved?.previousHubSpace ?? null),
-    ),
-    Effect.mapError(() => new MemoryHubError({ code: "storage_failed" })),
-  ),
-  apply: (record, permit) =>
-    Effect.gen(function* () {
-      if (!(yield* HubSettingsLock)) return yield* new MemoryHubError({ code: "storage_failed" });
-      yield* permit;
-      const current = yield* read.pipe(
-        Effect.mapError(() => new MemoryHubError({ code: "storage_failed" })),
-      );
-      if (record.stage !== "activated")
-        return yield* new MemoryHubError({ code: "bootstrap_required" });
-      const action = record.action;
-      let settings = current.memoryHub;
-      if (action.action === "configure") {
-        settings = action.settings;
-        // The administrator supplies the space only after SQL publication commits.
-        if (settings.mode === "hub" && settings.memorySpaceId === null)
-          return yield* new MemoryHubError({ code: "bootstrap_required" });
-      } else if (action.action === "installCredential") {
-        if (!record.secretName) return yield* new MemoryHubError({ code: "bootstrap_required" });
-        settings = {
-          mode: "member",
-          hubEnvironmentId: action.hubEnvironmentId,
-          endpoint: action.endpoint,
-          memorySpaceId: action.memorySpaceId,
-          secretName: record.secretName,
-        };
-      }
-      const view = yield* applyLocked(
-        {
-          requestId: record.requestId,
-          expectedVersion: record.expectedVersion,
-          settings,
-          provenance:
-            record.initialization === "auto-initialized" &&
-            settings.mode === "hub" &&
-            settings.memorySpaceId !== null
-              ? { source: "auto-initialized", memorySpaceId: settings.memorySpaceId }
-              : action.action === "configure" || action.action === "installCredential"
-                ? null
-                : (current.memoryHubProvenance ?? null),
-        },
-        permit,
-      ).pipe(
-        Effect.mapError((error) =>
-          error._tag === "ServerSettingsError"
-            ? new MemoryHubError({ code: "storage_failed" })
-            : error,
-        ),
-      );
-      return { view };
-    }),
-});
 
 export class ServerSettingsService extends Context.Service<
   ServerSettingsService,
@@ -1050,6 +974,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     applyMemoryHubTransition: (input, permit) =>
       writeSemaphore.withPermits(1)(applyHubLocked(input, permit)),
     adminSettings: hubAdministrationSettings(
+      getSettings,
       getSettings,
       (effect) => writeSemaphore.withPermits(1)(effect),
       Ref.get(hubMarkerRef),
@@ -1556,10 +1481,12 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const loadSettingsFromDisk = Effect.fn("ServerSettings.loadFromDisk")(function* (
-    publishConnectPolicy = true,
+  // Callers hold writeSemaphore: this publishes policy and writes the secret store and file.
+  const loadSettingsAttempt = Effect.fn("ServerSettings.loadAttempt")(function* (
+    publishConnectPolicy: boolean,
   ) {
     let settings: ServerSettings = DEFAULT_SERVER_SETTINGS;
+    let observedRaw: string | undefined;
     let legacyProviders: Readonly<Record<string, unknown>> | undefined;
     let legacySourceControl: Parameters<typeof migrateLegacySourceControlSettings>[1] = {};
     let parseFailure = Option.none<unknown>();
@@ -1568,6 +1495,7 @@ const make = Effect.gen(function* () {
     const settingsExists = yield* readConfigExists;
     if (settingsExists) {
       const raw = yield* readRawConfig;
+      observedRaw = raw;
       settingsFileTrusted = yield* publishExternalHub(raw, publishConnectPolicy);
       const decoded = decodeServerSettingsJsonExit(raw);
       const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
@@ -1731,24 +1659,63 @@ const make = Effect.gen(function* () {
       settingsFileTrusted &&
       (migrated !== loaded || legacyProviders !== undefined || hasLegacySourceControl)
     ) {
-      yield* writeSettingsAtomically(migrated);
-      for (const move of sourceControlMigration.secretMoves) {
-        yield* secretStore.remove(move.from).pipe(Effect.ignore);
-      }
+      const written = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          // An edit made while this load ran wins; the caller loads those bytes instead.
+          const currentRaw = (yield* readConfigExists) ? yield* readRawConfig : undefined;
+          if (currentRaw !== observedRaw) return false;
+          yield* writeSettingsAtomically(migrated);
+          for (const move of sourceControlMigration.secretMoves) {
+            yield* secretStore.remove(move.from).pipe(Effect.ignore);
+          }
+          return true;
+        }),
+      );
+      if (!written) return "changed" as const;
     }
     return { settings: migrated, parseFailure };
   });
 
-  const settingsCache = yield* Cache.makeWith((_key: typeof cacheKey) => loadSettingsFromDisk(), {
-    capacity: 1,
-    timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
+  const loadSettingsFromDisk = Effect.fn("ServerSettings.loadFromDisk")(function* (
+    publishConnectPolicy = true,
+  ) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const loaded = yield* loadSettingsAttempt(publishConnectPolicy);
+      if (loaded !== "changed") return loaded;
+    }
+    return yield* new ServerSettingsError({
+      settingsPath,
+      operation: "read-file",
+      cause: "settings file kept changing during migration",
+    });
   });
+
+  // Code holding writeSemaphore must never Cache.get: a pending lookup waits for that permit.
+  const settingsCache = yield* Cache.makeWith(
+    (_key: typeof cacheKey): Effect.Effect<LoadedSettings, ServerSettingsError> =>
+      writeSemaphore.withPermits(1)(
+        Cache.getSuccess(settingsCache, cacheKey).pipe(
+          Effect.flatMap(
+            Option.match({ onNone: () => loadSettingsFromDisk(), onSome: Effect.succeed }),
+          ),
+        ),
+      ),
+    {
+      capacity: 1,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
+    },
+  );
 
   const getSettingsFromCache = Cache.get(settingsCache, cacheKey).pipe(
     Effect.map((loaded) => loaded.settings),
   );
-  const reloadSettings = Cache.invalidate(settingsCache, cacheKey).pipe(
-    Effect.andThen(Cache.get(settingsCache, cacheKey)),
+  const reloadLocked = loadSettingsFromDisk().pipe(
+    Effect.tap((loaded) => Cache.set(settingsCache, cacheKey, loaded)),
+    Effect.tapError(() => Cache.invalidate(settingsCache, cacheKey)),
+  );
+  const cachedLocked = Cache.getSuccess(settingsCache, cacheKey).pipe(
+    Effect.flatMap(Option.match({ onNone: () => reloadLocked, onSome: Effect.succeed })),
+    Effect.map((loaded) => loaded.settings),
   );
 
   const materializeSettingsSecrets = yield* makeSettingsSecretMaterializer;
@@ -1918,7 +1885,7 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
     Effect.gen(function* () {
       if (beforeCommit) yield* beforeCommit;
-      const { settings: current, parseFailure } = yield* cuaPolicy.loaded(reloadSettings);
+      const { settings: current, parseFailure } = yield* cuaPolicy.loaded(reloadLocked);
       if (Option.isSome(parseFailure)) {
         return yield* new ServerSettingsError({
           settingsPath,
@@ -1995,7 +1962,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         // Reloading publishes Connect policy, so a denied caller must not reach it.
         if (beforeCommit) yield* beforeCommit;
-        const { settings: current, parseFailure } = yield* cuaPolicy.loaded(reloadSettings);
+        const { settings: current, parseFailure } = yield* cuaPolicy.loaded(reloadLocked);
         if (Option.isSome(parseFailure))
           return yield* new ServerSettingsError({
             settingsPath,
@@ -2045,7 +2012,7 @@ const make = Effect.gen(function* () {
     permit,
   ) =>
     Effect.gen(function* () {
-      const current = yield* getSettingsFromCache;
+      const current = yield* cachedLocked;
       const marker = yield* Ref.get(hubMarkerRef);
       const previousHubSpace =
         input.settings.mode === "hub" && input.settings.memorySpaceId !== null
@@ -2071,7 +2038,7 @@ const make = Effect.gen(function* () {
 
   const withSettingsSnapshot: ServerSettingsService["Service"]["withSettingsSnapshot"] = (use) =>
     writeSemaphore.withPermits(1)(
-      getSettingsFromCache.pipe(
+      cachedLocked.pipe(
         Effect.flatMap(materializeSettingsSecrets),
         Effect.map(resolveTextGenerationProvider),
         Effect.flatMap(use),
@@ -2081,7 +2048,7 @@ const make = Effect.gen(function* () {
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
       yield* refreshCommittedHub;
-      const { settings } = yield* cuaPolicy.loaded(reloadSettings);
+      const { settings } = yield* cuaPolicy.loaded(reloadLocked);
       yield* emitChange(settings);
     }).pipe(Effect.tapError(() => cuaPolicy.unavailable)),
   );
@@ -2126,7 +2093,7 @@ const make = Effect.gen(function* () {
     ownerPublication,
     ownerIdentity,
     (effect) => writeSemaphore.withPermits(1)(effect),
-    getSettingsFromCache,
+    cachedLocked,
     updateSettingsWhileLocked,
   );
 
@@ -2192,6 +2159,7 @@ const make = Effect.gen(function* () {
       writeSemaphore.withPermits(1)(applyHubLocked(input, permit)),
     adminSettings: hubAdministrationSettings(
       getSettingsFromCache,
+      cachedLocked,
       (effect) => writeSemaphore.withPermits(1)(effect),
       Ref.get(hubMarkerRef),
       applyHubLocked,
@@ -2208,7 +2176,7 @@ const make = Effect.gen(function* () {
     withSettingsSnapshot,
     withStoredSettingsSnapshot: <A, E, R>(
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
-    ) => writeSemaphore.withPermits(1)(getSettingsFromCache.pipe(Effect.flatMap(use))),
+    ) => writeSemaphore.withPermits(1)(cachedLocked.pipe(Effect.flatMap(use))),
     get subscribeProviderChanges() {
       return PubSub.subscribe(providerChangesPubSub).pipe(
         Effect.map((subscription) =>

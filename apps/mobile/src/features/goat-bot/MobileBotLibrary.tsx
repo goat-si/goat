@@ -21,8 +21,10 @@ export function MobileBotLibrary(props: {
   readonly environmentId: EnvironmentId | null;
   readonly connected: boolean;
   readonly supported: boolean;
+  readonly botName?: string;
 }) {
   const { environmentId, connected, supported } = props;
+  const botName = props.botName ?? "GOAT Bot";
   const readable = environmentId !== null && connected && supported;
   const files = useEnvironmentQuery(
     readable ? channelEnvironment.listBotArtifacts({ environmentId, input: {} }) : null,
@@ -64,7 +66,7 @@ export function MobileBotLibrary(props: {
     if (environmentId === null || signal === undefined || signal.aborted) return;
     setOpening(file.relativePath);
     setMessages((current) => withoutKey(current, file.relativePath));
-    const result = await openBotLibraryFile(environmentId, file.relativePath, signal);
+    const result = await openBotLibraryFile(environmentId, file.relativePath, signal, botName);
     if (signal.aborted) {
       if (result.kind === "image") result.preview.file.dispose();
       return;
@@ -76,12 +78,12 @@ export function MobileBotLibrary(props: {
   if (!connected)
     return (
       <Text className="text-foreground-muted">
-        Files are unavailable while GOAT Bot is offline.
+        Files are unavailable while {botName} is offline.
       </Text>
     );
   if (!supported)
     return <Text className="text-foreground-muted">Files need a newer GOAT server.</Text>;
-  const failure = files.cause === null ? null : botArtifactsFailure(files.cause);
+  const failure = files.cause === null ? null : botArtifactsFailure(files.cause, botName);
   if (failure !== null)
     return (
       <View className="gap-1">
@@ -99,7 +101,7 @@ export function MobileBotLibrary(props: {
     );
   if (files.data === null) return <Text className="text-foreground-muted">Loading files…</Text>;
   if (files.data.artifacts.length === 0)
-    return <Text className="text-foreground-muted">Files GOAT Bot saves will appear here.</Text>;
+    return <Text className="text-foreground-muted">Files {botName} saves will appear here.</Text>;
   return (
     <View className="gap-1 py-2">
       {files.data.truncated ? (

@@ -351,10 +351,15 @@ export function FloatingWorkingControl(props: {
           <View pointerEvents="box-none" className="flex-row items-center gap-4">
             <Animated.View
               pointerEvents={capsuleInteractive ? "box-none" : "none"}
-              className="h-[44px] items-center justify-center overflow-hidden rounded-full border border-border bg-glass-fallback shadow-md shadow-black/10"
+              className="h-[44px] items-center justify-center overflow-hidden rounded-full bg-glass-fallback shadow-md shadow-black/10"
               style={capsuleStyle}
             >
               {capsuleContent}
+              {/* Drawn over the rows: a layout border would shrink their 44pt boxes to 42. */}
+              <View
+                pointerEvents="none"
+                className="absolute inset-0 rounded-full border border-border"
+              />
             </Animated.View>
 
             <Animated.View

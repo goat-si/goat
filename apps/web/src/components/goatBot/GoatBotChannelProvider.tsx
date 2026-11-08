@@ -6,6 +6,7 @@ import {
   runAtomCommand,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
+import { GoatBotUnreachable } from "@goat/client-runtime/goatBot";
 import { CHANNEL_GATEWAY_WS_METHODS } from "@goat/contracts";
 import type { PropsWithChildren } from "react";
 
@@ -31,7 +32,7 @@ async function run<W, A, E>(command: AtomCommand<W, A, E>, value: W): Promise<A>
   const result = await runAtomCommand(appAtomRegistry, command, value, { reportFailure: false });
   if (result._tag === "Failure") {
     // A dropped connection interrupts the request; keep Effect internals off the screen.
-    if (isAtomCommandInterrupted(result)) throw new Error("Couldn't reach GOAT Bot.");
+    if (isAtomCommandInterrupted(result)) throw new GoatBotUnreachable();
     throw squashAtomCommandFailure(result);
   }
   return result.value;
