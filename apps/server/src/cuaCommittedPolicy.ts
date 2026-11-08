@@ -26,8 +26,8 @@ const HOST_LIMIT = 4096;
 const HOST_CHARS = 262_144;
 
 const hostsOf = (policy: CuaCommittedPolicy): ReadonlyArray<string> | undefined => {
-  if (policy._tag !== "committed" || policy.blockedBrowserHosts.length > HOST_LIMIT)
-    return undefined;
+  if (policy._tag !== "committed") return undefined;
+  if (policy.blockedBrowserHosts.length > HOST_LIMIT) return undefined;
   let size = 0;
   const hosts = [];
   for (const host of policy.blockedBrowserHosts) {
@@ -46,7 +46,7 @@ export const makeCuaCommittedPolicy = Effect.gen(function* () {
     readonly sequence: number;
     readonly hosts: ReadonlyArray<string> | undefined;
   }> = [];
-  let current = initial;
+  let current: CuaCommittedPolicy = initial;
   let sequence = 0;
   let cursor = 0;
   let emittedThrough = 0;

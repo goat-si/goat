@@ -529,6 +529,126 @@ effectIt.effect("withholds a reply from a blocked origin even when it was grante
   }),
 );
 
+effectIt.effect("withholds a claimed reply that has no URL when that claim origin is blocked", () =>
+  Effect.gen(function* () {
+    const secret = { tab_id: "tab-1", title: "secret title" };
+    const claim = {
+      claimId: "claim-1",
+      claimGeneration: 2,
+      pid: 42,
+      windowId: 7,
+      targetId: "target-1",
+      tabId: "tab-1",
+      origins: ["https://blocked.test"],
+    };
+    const local = yield* harness();
+    yield* local.push({
+      ...active(),
+      browserClaims: [{ ...claim, blockedHosts: ["blocked.test"] }],
+    });
+    yield* local.applied;
+    yield* supportedDriver(local);
+    yield* local.send(call(3, "get_browser_state", { tab_id: "tab-1" }));
+    yield* local.nextToDriver;
+    yield* local.reply(
+      JSON.stringify({ jsonrpc: "2.0", id: 3, result: { structuredContent: secret } }),
+    );
+    assert.notInclude(JSON.stringify(yield* local.nextToProvider), "secret title");
+    const remote = yield* harness({
+      judgeBrowserClaimReply: () => Effect.succeed(false),
+    });
+    yield* remote.push({ ...active(), browserClaims: [claim] });
+    yield* remote.applied;
+    yield* supportedDriver(remote);
+    yield* remote.send(call(4, "get_browser_state", { tab_id: "tab-1" }));
+    yield* remote.nextToDriver;
+    yield* remote.reply(
+      JSON.stringify({ jsonrpc: "2.0", id: 4, result: { structuredContent: secret } }),
+    );
+    assert.notInclude(JSON.stringify(yield* remote.nextToProvider), "secret title");
+  }),
+);
+
+effectIt.effect("withholds a claimed read when the reply report fails", () =>
+  Effect.gen(function* () {
+    const h = yield* harness({
+      judgeBrowserClaimReply: () => Effect.die("report failed"),
+    });
+    yield* h.push({
+      ...active(),
+      browserClaims: [
+        {
+          claimId: "claim-1",
+          claimGeneration: 2,
+          pid: 42,
+          windowId: 7,
+          targetId: "target-1",
+          tabId: "tab-1",
+          origins: ["https://example.test"],
+        },
+      ],
+    });
+    yield* h.applied;
+    yield* supportedDriver(h);
+    yield* h.send(call(5, "get_browser_state", { tab_id: "tab-1" }));
+    yield* h.nextToDriver;
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 5,
+        result: { structuredContent: { tab_id: "tab-1", title: "secret title" } },
+      }),
+    );
+    const answer = yield* h.nextToProvider;
+    assert.notInclude(JSON.stringify(answer), "secret title");
+    const released = h.reservations.find((item) => item.action === "release");
+    assert.equal(
+      released !== undefined && "notSent" in released && released.notSent === true,
+      true,
+    );
+  }),
+);
+
+effectIt.effect("withholds a claimed write reply without saying the call was not sent", () =>
+  Effect.gen(function* () {
+    const h = yield* harness({
+      judgeBrowserClaimReply: () => Effect.succeed(false),
+    });
+    yield* h.push({
+      ...active(),
+      browserClaims: [
+        {
+          claimId: "claim-1",
+          claimGeneration: 2,
+          pid: 42,
+          windowId: 7,
+          targetId: "target-1",
+          tabId: "tab-1",
+          origins: ["https://example.test"],
+        },
+      ],
+    });
+    yield* h.applied;
+    yield* supportedDriver(h);
+    yield* h.send(call(6, "browser_click", { tab_id: "tab-1" }));
+    yield* h.nextToDriver;
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 6,
+        result: { structuredContent: { tab_id: "tab-1", title: "secret title" } },
+      }),
+    );
+    const answer = yield* h.nextToProvider;
+    assert.notInclude(JSON.stringify(answer), "secret title");
+    const released = h.reservations.find((item) => item.action === "release");
+    assert.equal(
+      released !== undefined && "notSent" in released && released.notSent === true,
+      false,
+    );
+  }),
+);
+
 effectIt.effect("a claim admits only its own tab under app-restricted control", () =>
   Effect.gen(function* () {
     const h = yield* harness();

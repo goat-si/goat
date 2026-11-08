@@ -12,6 +12,7 @@ import type {
   ComputerUseCallReservation,
   ComputerUseHumanInputSource,
   ComputerUseLeaseUpdate,
+  ComputerUseLeaseBrowserClaimReply,
   ComputerUseOverlayCommand,
   ComputerUsePrimitiveReply,
   ComputerUsePrimitiveRequest,
@@ -505,6 +506,9 @@ export interface LeaseProxyOptions<EU, ED> {
    */
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
   readonly onBrowserClaimReport?: (report: BrowserClaimReport) => void;
+  readonly judgeBrowserClaimReply?: (
+    report: ComputerUseLeaseBrowserClaimReply,
+  ) => Effect.Effect<boolean>;
   /** Tells the server where the overlay draws the agent's cursor, or null when it draws none. */
   readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
   /** The macOS helper draws the agent cursor, so the proxy answers the cursor tools. */

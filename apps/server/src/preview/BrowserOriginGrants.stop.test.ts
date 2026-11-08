@@ -805,11 +805,7 @@ it.effect(
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        yield* Effect.addFinalizer(() =>
-          Deferred.isDone(release).pipe(
-            Effect.flatMap((done) => (done ? Effect.void : Deferred.succeed(release, undefined))),
-          ),
-        );
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined).pipe(Effect.ignore));
         let hold = false;
         let hosts: ReadonlyArray<string> = [];
         const service = yield* makeTestBrowserOriginGrants({
@@ -842,24 +838,24 @@ it.effect(
           .blockedHostsChanged(["a.test"])
           .pipe(Effect.forkChild({ startImmediately: true }));
         yield* Deferred.await(entered);
-        const admission = yield* Deferred.make<{ readonly status: string }>();
-        yield* Effect.gen(function* () {
-          const decision = yield* service.admitClaimCall(
+        const admitted = yield* Deferred.make<string>();
+        const admission = yield* service
+          .admitClaimCall(
             threadId,
             "browser_click",
             { tab_id: "tab-b", url: "https://b.test/secret" },
             [],
+          )
+          .pipe(
+            Effect.tap((decision) => Deferred.succeed(admitted, decision.status)),
+            Effect.forkChild({ startImmediately: true }),
           );
-          yield* Deferred.succeed(admission, decision);
-        }).pipe(Effect.forkChild({ startImmediately: true }));
         yield* Effect.yieldNow;
-        const polled = yield* Deferred.poll(admission);
-        assert.isTrue(Option.isSome(polled));
-        if (Option.isSome(polled)) {
-          assert.equal(polled.value._tag, "Success");
-          if (polled.value._tag === "Success") assert.equal(polled.value.value.status, "blocked");
-        }
+        const polled = yield* Deferred.poll(admitted);
+        if (Option.isNone(polled)) return assert.fail("admission waited on the manifest write");
+        assert.equal(yield* polled.value, "blocked");
         yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(admission);
         yield* Fiber.join(publishing);
       }),
     ),

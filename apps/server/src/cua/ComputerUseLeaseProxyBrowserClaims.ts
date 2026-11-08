@@ -1,9 +1,11 @@
 import { authorizeClaimBind, type PendingBrowserBind } from "./ComputerUseClaimBindAuthority.ts";
 import type { ComputerUseLeaseUpdate } from "@goat/contracts";
+import type { ComputerUseLeaseBrowserClaimReply } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { retainedTerminal, type OutstandingCall } from "./ComputerUseLeaseProxyOptions.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
-import { refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+import { cutOff, refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+import { isReadOnlyCall } from "./ComputerUseLeaseMessages.ts";
 import { isBlockedBrowserUrl } from "@goat/shared/preview";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -92,6 +94,11 @@ const browserReplyBlocked = (result: unknown, claim: ProxyBrowserClaim): boolean
         urls.some(
           (url) => typeof url === "string" && isBlockedBrowserUrl(url, claim.blockedHosts ?? []),
         )
+      )
+        return true;
+      if (
+        urls.every((url) => typeof url !== "string") &&
+        claim.origins.some((origin) => isBlockedBrowserUrl(origin, claim.blockedHosts ?? []))
       )
         return true;
     }
@@ -230,7 +237,10 @@ export interface SelectedClaim {
   readonly binding?: PendingBrowserBind;
 }
 
-export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => void) => {
+export const makeProxyBrowserClaims = (
+  report?: (value: BrowserClaimReport) => void,
+  judge?: (reply: ComputerUseLeaseBrowserClaimReply) => Effect.Effect<boolean>,
+) => {
   let pids: ReadonlyArray<number> = [];
   let claims: ReadonlyArray<ProxyBrowserClaim> = [];
   let pending: ReadonlyArray<PendingBrowserBind> = [];
@@ -347,25 +357,65 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
             claim.claimId === selected.claimId &&
             claim.claimGeneration === selected.claimGeneration,
         );
-  const outside = (result: unknown, claim: ProxyBrowserClaim | undefined) => {
+  const withhold = Effect.fn("ComputerUseLeaseProxyBrowserClaims.withhold")(function* (
+    result: unknown,
+    claim: ProxyBrowserClaim | undefined,
+  ) {
     if (claim === undefined) return false;
     const current =
       claims.find(
         (value) =>
           value.claimId === claim.claimId && value.claimGeneration === claim.claimGeneration,
       ) ?? claim;
+    const urls: Array<string> = [];
+    let malformed = false;
+    const collect = (value: unknown, depth: number) => {
+      if (depth > 12 || !isRecord(value)) return;
+      if (value.tab_id === current.tabId) {
+        for (const url of [value.url, isRecord(value.page) ? value.page.url : undefined]) {
+          if (url === undefined) continue;
+          if (
+            typeof url !== "string" ||
+            url.length > 8192 ||
+            urls.length >= 16 ||
+            !URL.canParse(url)
+          ) {
+            malformed = true;
+            continue;
+          }
+          urls.push(url);
+        }
+      }
+      for (const entry of Object.values(value)) {
+        if (Array.isArray(entry)) for (const item of entry) collect(item, depth + 1);
+        else collect(entry, depth + 1);
+      }
+    };
+    collect(result, 0);
     const blocked = browserReplyBlocked(result, current);
-    if (!blocked && !browserReplyOutsideClaim(result, current)) return false;
+    const outside = malformed || browserReplyOutsideClaim(result, current);
+    const allowed =
+      judge === undefined
+        ? true
+        : yield* judge({
+            type: "browserClaimReply",
+            claimId: current.claimId,
+            claimGeneration: current.claimGeneration,
+            urls: malformed ? [] : urls,
+            ...(blocked || outside ? { outside: true as const } : {}),
+          }).pipe(Effect.catchCause(() => Effect.succeed(false)));
+    if (!blocked && !outside && allowed) return false;
     invalid.add(key(claim));
-    report?.({
-      browserClaimEnded: {
-        claimId: claim.claimId,
-        claimGeneration: claim.claimGeneration,
-        reason: blocked ? "blocked_url" : "origin_changed",
-      },
-    });
+    if (judge === undefined)
+      report?.({
+        browserClaimEnded: {
+          claimId: claim.claimId,
+          claimGeneration: claim.claimGeneration,
+          reason: blocked ? "blocked_url" : "origin_changed",
+        },
+      });
     return true;
-  };
+  });
   const refuseReply = Effect.fn("ComputerUseLeaseProxyBrowserClaims.refuseReply")(function* (
     request: OutstandingCall,
     key: string,
@@ -373,17 +423,30 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     gone: () => boolean,
     release: (request: OutstandingCall, completed: true, notSent: boolean) => Effect.Effect<void>,
   ) {
-    yield* release(request, true, true);
+    const read = request.tool === "get_browser_state" || isReadOnlyCall(request.tool, request.args);
+    yield* release(request, true, read);
     if (gone()) return;
     outstanding.delete(key);
     yield* request.sink.answer(
-      refusal(
-        retainedTerminal(request),
-        request.id,
-        request.method,
-        "outside_manifest",
-        "The browser claim ended because the origin changed.",
-      ),
+      read
+        ? refusal(
+            retainedTerminal(request),
+            request.id,
+            request.method,
+            "outside_manifest",
+            "The browser claim ended because the origin changed.",
+          )
+        : cutOff(
+            request.id,
+            request.tool,
+            {
+              _tag: "other",
+              detail: "outside_manifest",
+              message: "The browser reply was withheld because the claim could not be confirmed.",
+            },
+            request.args,
+            retainedTerminal(request),
+          ),
       "settled",
     );
   });
@@ -409,5 +472,5 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
       "This driver does not support browser claims.",
     );
   });
-  return { update, gate, allowed, outside, refuseReply, attach, unsupported, report };
+  return { update, gate, allowed, withhold, refuseReply, attach, unsupported, report };
 };

@@ -107,6 +107,7 @@ const originOf = (url: string) => {
     return "";
   }
 };
+const sameOrigin = (url: string, origin: string) => originOf(url) === origin && origin !== "";
 
 export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(function* (
   deps: Dependencies,
@@ -899,6 +900,48 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         : ("admit" as const),
     };
   });
+  const judgeReply = Effect.fn("BrowserOriginGrants.judgeReply")(function* (
+    threadId: ThreadId,
+    claimId: string,
+    generation: number,
+    urls: ReadonlyArray<string>,
+    outside: boolean,
+  ) {
+    const claim = claims.get(claimId);
+    const live =
+      claim?.threadId === threadId && claim.claimGeneration === generation ? claim : undefined;
+    if (outside)
+      return { deliver: false, ...(live === undefined ? {} : { end: "origin_changed" as const }) };
+    if (live === undefined) return { deliver: false };
+    const hosts = deps.blockedHostsNow?.();
+    if (hosts === undefined) return { deliver: false, end: "blocked_url" as const };
+    if (urls.length === 0) {
+      if (isBlockedBrowserUrl(live.origin, hosts))
+        return { deliver: false, end: "blocked_url" as const };
+    } else {
+      for (const url of urls) {
+        if (isBlockedBrowserUrl(url, hosts)) return { deliver: false, end: "blocked_url" as const };
+        if (!sameOrigin(url, live.origin))
+          return { deliver: false, end: "origin_changed" as const };
+      }
+    }
+    const verdict = yield* judgeClaimCall(
+      threadId,
+      "get_browser_state",
+      { tab_id: live.tab.tabId },
+      {
+        claimId,
+        claimGeneration: generation,
+      },
+    );
+    if (verdict === "admit") return { deliver: true };
+    const blocked =
+      verdict === "blocked" || (typeof verdict === "object" && verdict.status === "blocked");
+    return {
+      deliver: false,
+      end: blocked ? ("blocked_url" as const) : ("origin_changed" as const),
+    };
+  });
   return {
     claimsSupported: Effect.sync(deps.supported),
     capabilityChanged: advance,
@@ -920,6 +963,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     bindingsFor,
     snapshotFor,
     judgeClaimCall,
+    judgeReply,
     admitClaimCall,
     verifyBindCall,
     claimsFor,
