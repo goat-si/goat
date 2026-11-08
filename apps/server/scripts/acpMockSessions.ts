@@ -8,7 +8,7 @@ export const mockSessionPage = (
     sessionId:
       index !== 0
         ? `mock-session-${index + 1}`
-        : scenario === "id-whitespace"
+        : scenario === "id-whitespace" || scenario === "dropped-keeps-cursor"
           ? ` ${sessionId} `
           : scenario === "id-oversized"
             ? "x".repeat(1_025)
@@ -33,15 +33,17 @@ export const mockSessionPage = (
             ? { additionalDirectories: [`${cwd}/extra`] }
             : {}),
   })),
-  ...(scenario === "cursor-unchanged"
-    ? { nextCursor: "next-page" }
+  ...(scenario === "cursor-unchanged" || scenario === "dropped-keeps-cursor"
+    ? { nextCursor: scenario === "dropped-keeps-cursor" ? "after-page" : "next-page" }
     : scenario === "cursor-whitespace"
       ? { nextCursor: " next-page " }
       : scenario === "cursor-oversized"
         ? { nextCursor: "x".repeat(2_049) }
-        : scenario === "cursor-blank"
-          ? { nextCursor: "  " }
-          : count > 256
-            ? { nextCursor: "after-page" }
-            : {}),
+        : scenario === "cursor-too-long"
+          ? { nextCursor: "x".repeat(16_385) }
+          : scenario === "cursor-blank"
+            ? { nextCursor: "  " }
+            : count > 256
+              ? { nextCursor: "after-page" }
+              : {}),
 });

@@ -387,7 +387,7 @@ describe("ACP Registry probe", () => {
     );
   });
 
-  it.effect("reports an oversized provider page instead of silently losing sessions", () => {
+  it.effect("keeps every valid session and the raw cursor from a large provider page", () => {
     const input = {
       instanceId,
       settings: decodeSettings({ agentId: "mock-agent" }),
@@ -396,8 +396,10 @@ describe("ACP Registry probe", () => {
     };
     return Effect.gen(function* () {
       const listed = yield* listAcpRegistrySessions(input);
-      expect(listed.sessions).toHaveLength(256);
-      expect(listed).toMatchObject({ truncated: true, nextCursor: "after-page" });
+      expect(listed.sessions).toHaveLength(257);
+      expect(listed.sessions.at(-1)?.sessionId).toBe("mock-session-257");
+      expect(listed.rawCursor).toBe("after-page");
+      expect(listed.cursorDropped).toBe(false);
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, sessionListCatalog(257)),
       Effect.provide(NodeServices.layer),
@@ -459,12 +461,13 @@ describe("ACP Registry probe", () => {
   );
 
   it.effect.each([
-    ["cursor-whitespace", "next-page"],
-    ["cursor-oversized", "x".repeat(2_048)],
-    ["cursor-blank", null],
+    ["cursor-whitespace", " next-page ", false],
+    ["cursor-oversized", "x".repeat(2_049), false],
+    ["cursor-blank", null, false],
+    ["cursor-too-long", null, true],
   ] as const)(
-    "marks a page incomplete when %s changes the provider cursor",
-    ([scenario, expectedCursor]) => {
+    "keeps the provider cursor exactly unless %s is blank or too long to hold",
+    ([scenario, rawCursor, cursorDropped]) => {
       const input = {
         instanceId,
         settings: decodeSettings({ agentId: "mock-agent" }),
@@ -474,8 +477,8 @@ describe("ACP Registry probe", () => {
       return Effect.gen(function* () {
         const listed = yield* listAcpRegistrySessions(input);
         expect(listed.sessions).toHaveLength(1);
-        expect(listed.nextCursor).toBe(expectedCursor);
-        expect(listed.truncated).toBe(true);
+        expect(listed.rawCursor).toBe(rawCursor);
+        expect(listed.cursorDropped).toBe(cursorDropped);
       }).pipe(
         Effect.provideService(
           AcpRegistrySupport.AcpRegistryCatalog,
@@ -486,6 +489,28 @@ describe("ACP Registry probe", () => {
       );
     },
   );
+
+  it.effect("keeps the provider cursor when a session id is dropped", () => {
+    const input = {
+      instanceId,
+      settings: decodeSettings({ agentId: "mock-agent" }),
+      cwd: process.cwd(),
+      environment: process.env,
+    };
+    return Effect.gen(function* () {
+      const listed = yield* listAcpRegistrySessions(input);
+      expect(listed.sessions.map((session) => session.sessionId)).toEqual(["mock-session-2"]);
+      expect(listed.rawCursor).toBe("after-page");
+      expect(listed.droppedSessions).toBe(true);
+    }).pipe(
+      Effect.provideService(
+        AcpRegistrySupport.AcpRegistryCatalog,
+        sessionListCatalog(2, "dropped-keeps-cursor"),
+      ),
+      Effect.provide(NodeServices.layer),
+      Effect.scoped,
+    );
+  });
 
   it.effect("keeps an unchanged provider cursor and complete page unmarked", () => {
     const input = {
