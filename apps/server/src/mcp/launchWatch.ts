@@ -221,6 +221,8 @@ export interface WatchedRun {
   readonly completedAt: number | null;
   /** The id of the message that started it; undefined when it could not be read. */
   readonly trigger: string | undefined;
+  /** A server wake cancelled before it started, as a stale pull request wake is: it did no work. */
+  readonly dropped: boolean;
 }
 
 export const noRunDetails: LaunchWatchRunDetails = {
@@ -413,7 +415,10 @@ const wentOn = (watch: LaunchWatch, run: WatchedRun, runs: ReadonlyArray<Watched
     end !== null &&
     runs.some(
       (later) =>
-        later.ordinal > run.ordinal && later.requestedAt <= end && ownRun(watch, later.trigger),
+        later.ordinal > run.ordinal &&
+        later.requestedAt <= end &&
+        !later.dropped &&
+        ownRun(watch, later.trigger),
     )
   );
 };
@@ -451,7 +456,7 @@ export function discoverRuns(
     const wasHeld = watch.heldRuns.includes(run.runId);
     if (!wasHeld && (run.ordinal <= from || known(run))) continue;
     if (run.trigger === undefined && !run.terminal) held.push(run.runId);
-    else if (!ownRun(watch, run.trigger)) skipped = keepRecent(skipped, run.runId);
+    else if (run.dropped || !ownRun(watch, run.trigger)) skipped = keepRecent(skipped, run.runId);
     // A held run (a retry, or one whose start was unread) is reported however the thread went
     // on, so it is owed like an armed run rather than found.
     else if (wasHeld) pending.push(run.runId);
@@ -489,7 +494,7 @@ export function discoverRuns(
   };
 }
 
-/** Whether a found run's end goes unreported because the thread went straight on to its own next run. */
+/** Whether a found run's end goes unreported: the thread went straight on, or it was a dropped wake. */
 export const wentOnFrom = (watch: LaunchWatch, runId: RunId, runs: ReadonlyArray<WatchedRun>) => {
   const run = runs.find((candidate) => candidate.runId === runId);
   // A retry owed after this end is followed to its own end, so this one is reported as usual.
@@ -497,7 +502,7 @@ export const wentOnFrom = (watch: LaunchWatch, runId: RunId, runs: ReadonlyArray
     watch.discoveredRuns.includes(runId) &&
     !watch.followAgain.includes(runId) &&
     run !== undefined &&
-    wentOn(watch, run, runs)
+    (run.dropped || wentOn(watch, run, runs))
   );
 };
 

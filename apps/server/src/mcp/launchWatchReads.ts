@@ -10,7 +10,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { QUESTION_ESCALATION_MESSAGE_PREFIX } from "../orchestration-v2/QuestionEscalationService.ts";
 import type * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { isNoticeId } from "../orchestration-v2/TurnDigest.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import {
   EXCERPT_MAX_CHARS,
@@ -54,6 +56,23 @@ const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 const decodeFailureStatus = Schema.decodeUnknownEffect(RemoteRunFailureStatus);
 type RemoteRead = OrchestratorMcpThreadReadResult;
 
+/**
+ * A wake the server queued that was cancelled before it started: a notice dropped as stale, a
+ * question answered first, or a disposed child completion. A person's or a launcher's own queued
+ * message is still news when cancelled, and so is any run that started.
+ */
+const droppedWake = (run: {
+  readonly status: string;
+  readonly startedAt: unknown;
+  readonly cause: string | undefined;
+  readonly trigger: string | undefined;
+}) =>
+  run.status === "cancelled" &&
+  run.startedAt == null &&
+  (run.cause === "delegated_wake_disposed" ||
+    (run.trigger !== undefined &&
+      (isNoticeId(run.trigger) || run.trigger.startsWith(QUESTION_ESCALATION_MESSAGE_PREFIX))));
+
 const localRun = (run: OrchestrationV2Run): WatchedRun => ({
   runId: run.id,
   ordinal: run.ordinal,
@@ -61,17 +80,32 @@ const localRun = (run: OrchestrationV2Run): WatchedRun => ({
   requestedAt: DateTime.toEpochMillis(run.requestedAt),
   completedAt: run.completedAt === null ? null : DateTime.toEpochMillis(run.completedAt),
   trigger: run.userMessageId,
+  dropped: droppedWake({
+    status: run.status,
+    startedAt: run.startedAt,
+    cause: run.terminationCause?.kind,
+    trigger: run.userMessageId,
+  }),
 });
 
 const remoteRuns = (read: RemoteRead, triggers: ReadonlyMap<string, string>): Array<WatchedRun> =>
-  read.recentRuns.map((run) => ({
-    runId: run.runId,
-    ordinal: run.ordinal,
-    terminal: isTerminalStatus(run.status),
-    requestedAt: Date.parse(run.requestedAt),
-    completedAt: run.completedAt === null ? null : Date.parse(run.completedAt),
-    trigger: triggers.get(run.runId),
-  }));
+  read.recentRuns.map((run) => {
+    const trigger = triggers.get(run.runId);
+    return {
+      runId: run.runId,
+      ordinal: run.ordinal,
+      terminal: isTerminalStatus(run.status),
+      requestedAt: Date.parse(run.requestedAt),
+      completedAt: run.completedAt === null ? null : Date.parse(run.completedAt),
+      trigger,
+      dropped: droppedWake({
+        status: run.status,
+        startedAt: run.startedAt,
+        cause: run.terminationCause?.kind,
+        trigger,
+      }),
+    };
+  });
 
 /**
  * The message that started each run whose start the items show: the run's first item, when it is
