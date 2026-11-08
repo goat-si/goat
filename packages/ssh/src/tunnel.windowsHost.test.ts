@@ -340,80 +340,194 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
     assert.equal(posix.archiveLength, archive.byteLength);
   });
 
-  it.effect(
-    "installs the win32-x64 zip archive on a Windows Git Bash host with wget and System32 tar.exe",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const crypto = yield* Crypto.Crypto;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-install-" });
-        const home = `${root}/home`;
-        const bin = `${root}/bin`;
-        const sys32 = `${root}/System32`;
-        const stage = `${root}/stage/goat-${ARCHIVE.archiveVersion}-win32-x64`;
-        const release = `${root}/release`;
-        for (const dir of [home, bin, sys32, stage, release]) {
-          yield* fs.makeDirectory(dir, { recursive: true });
+  it.effect.each([
+    "none",
+    "once",
+    "always",
+    "remove-once",
+    "cleanup-locked",
+    "destination-appears",
+    "destination-race",
+    "destination-empty",
+    "competitor-complete",
+    "competitor-locked",
+  ] as const)("installs the Windows zip with publish failure %s", (failure) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const crypto = yield* Crypto.Crypto;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-install-" });
+      const home = `${root}/home`;
+      const bin = `${root}/bin`;
+      const sys32 = `${root}/System32`;
+      const stage = `${root}/stage/goat-${ARCHIVE.archiveVersion}-win32-x64`;
+      const release = `${root}/release`;
+      for (const dir of [home, bin, sys32, stage, release]) {
+        yield* fs.makeDirectory(dir, { recursive: true });
+      }
+      yield* fs.writeFileString(
+        `${stage}/goat`,
+        `#!/bin/sh\nif [ "$1" = --version ]; then echo 'goat v${ARCHIVE.archiveVersion}'; else exit 2; fi\n`,
+      );
+      yield* fs.chmod(`${stage}/goat`, 0o755);
+      const zipPath = `${release}/goat-${ARCHIVE.archiveVersion}-win32-x64.zip`;
+      NodeChildProcess.execFileSync("tar", [
+        "-czf",
+        zipPath,
+        "-C",
+        `${root}/stage`,
+        `goat-${ARCHIVE.archiveVersion}-win32-x64`,
+      ]);
+      const sha = Hex.encode(yield* crypto.digest("SHA-256", yield* fs.readFile(zipPath)));
+      yield* fs.writeFileString(
+        `${release}/SHA256SUMS`,
+        `${sha} *goat-${ARCHIVE.archiveVersion}-win32-x64.zip\n`,
+      );
+      yield* fs.writeFileString(
+        `${bin}/uname`,
+        `#!/bin/sh\nif [ "$1" = -s ]; then echo MINGW64_NT-10.0-26200; else echo x86_64; fi\n`,
+      );
+      yield* fs.writeFileString(
+        `${bin}/cygpath`,
+        `#!/bin/sh\nif [ "$1" = -S ]; then echo '${sys32}'; else printf '%s\\n' "$2"; fi\n`,
+      );
+      const published = `${home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}`;
+      // competitor-complete: another installer finishes this version while ours extracts.
+      yield* fs.writeFileString(
+        `${sys32}/tar.exe`,
+        `#!/bin/sh\ntar -xzf "$2" -C "$4" "$5" || exit 1\n` +
+          (failure === "competitor-complete" || failure === "competitor-locked"
+            ? `mkdir -p '${published}' && printf '#!/bin/sh\\necho "goat v${ARCHIVE.archiveVersion}"\\n' > '${published}/goat' && chmod 755 '${published}/goat' && echo '${ARCHIVE.archiveVersion}' > '${published}/.install-complete' && touch '${published}/competitor'\n`
+            : ""),
+      );
+      yield* fs.writeFileString(
+        `${bin}/wget`,
+        `#!/bin/sh\nif [ "$1" = --help ]; then echo --retry-on-http-error; exit 0; fi\nurl=""; out=""\nwhile [ $# -gt 0 ]; do\n  case "$1" in -O) out="$2"; shift 2 ;; http*) url="$1"; shift ;; *) shift ;; esac\ndone\ncp "${release}/$(basename "$url")" "$out"\n`,
+      );
+      for (const file of [`${bin}/uname`, `${bin}/cygpath`, `${sys32}/tar.exe`, `${bin}/wget`]) {
+        yield* fs.chmod(file, 0o755);
+      }
+      for (const dir of (process.env.PATH ?? "").split(":")) {
+        if (!dir) continue;
+        const entries = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
+        for (const entry of entries) {
+          if (entry === "curl" || entry === "wget" || entry === "uname" || entry === "cygpath")
+            continue;
+          yield* fs.symlink(`${dir}/${entry}`, `${bin}/${entry}`).pipe(Effect.ignore);
         }
-        yield* fs.writeFileString(
-          `${stage}/goat`,
-          `#!/bin/sh\nif [ "$1" = --version ]; then echo 'goat v${ARCHIVE.archiveVersion}'; else exit 2; fi\n`,
+      }
+      const realMv = NodeChildProcess.execFileSync("which", ["mv"], { encoding: "utf8" }).trim();
+      yield* fs.remove(`${bin}/mv`);
+      yield* fs.writeFileString(
+        `${bin}/mv`,
+        `#!/bin/sh
+# Git Bash's GNU mv: -T renames onto an empty directory and refuses a non-empty one.
+gnu_target=; if [ "$1" = -T ]; then gnu_target=1; shift; fi
+case "$1" in */.staging-*)
+  if [ '${failure}' = destination-race ]; then mkdir -p "$2" && touch "$2/other-install"; fi
+  if [ '${failure}' = destination-empty ]; then mkdir -p "$2"; fi
+  if { [ '${failure}' = always ] || [ '${failure}' = cleanup-locked ]; } || { { [ '${failure}' = once ] || [ '${failure}' = destination-appears ]; } && [ ! -e '${root}/attempt' ]; }; then
+    touch '${root}/attempt'; echo 'mv: Permission denied' >&2; exit 1
+  fi ;;
+esac
+if [ -n "$gnu_target" ] && [ -d "$2" ] && ! rmdir "$2" 2>/dev/null; then
+  echo "mv: cannot move '$1' to '$2': Directory not empty" >&2; exit 1
+fi
+exec '${realMv}' "$@"
+`,
+      );
+      yield* fs.chmod(`${bin}/mv`, 0o755);
+      yield* fs.remove(`${bin}/sleep`);
+      yield* fs.writeFileString(
+        `${bin}/sleep`,
+        failure === "destination-appears"
+          ? `#!/bin/sh\nmkdir -p '${home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}'\n`
+          : "#!/bin/sh\nexit 0\n",
+      );
+      yield* fs.chmod(`${bin}/sleep`, 0o755);
+      const realRm = NodeChildProcess.execFileSync("which", ["rm"], { encoding: "utf8" }).trim();
+      yield* fs.remove(`${bin}/rm`);
+      yield* fs.writeFileString(
+        `${bin}/rm`,
+        `#!/bin/sh
+case "$*" in
+  *'/.staging-'*)
+    if { [ '${failure}' = cleanup-locked ] || [ '${failure}' = competitor-locked ]; } && [ "$1" = -rf ] && [ -d "$2" ]; then echo 'rm: Permission denied' >&2; exit 1; fi ;;
+  *'/versions/${ARCHIVE.archiveVersion}')
+    if [ '${failure}' = remove-once ] && [ ! -e '${root}/removed' ]; then
+      touch '${root}/removed'; echo 'rm: Permission denied' >&2; exit 1
+    fi ;;
+esac
+exec '${realRm}' "$@"
+`,
+      );
+      yield* fs.chmod(`${bin}/rm`, 0o755);
+      const result = NodeChildProcess.spawnSync(remoteShell, ["-s"], {
+        input: buildRemoteHostDownloadScript(ARCHIVE),
+        encoding: "utf8",
+        env: { ...process.env, HOME: home, PATH: bin },
+      });
+      if (failure === "always" || failure === "cleanup-locked") {
+        assert.notEqual(result.status, 0);
+        assert.include(result.stderr, "antivirus/real-time scan");
+        assert.include(result.stderr, "%USERPROFILE%\\.goat\\runtime");
+        const versions = `${home}/.goat/runtime/goat/versions`;
+        const leftovers = (yield* fs.readDirectory(versions)).filter((name) =>
+          name.startsWith(".staging-"),
         );
-        yield* fs.chmod(`${stage}/goat`, 0o755);
-        const zipPath = `${release}/goat-${ARCHIVE.archiveVersion}-win32-x64.zip`;
-        NodeChildProcess.execFileSync("tar", [
-          "-czf",
-          zipPath,
-          "-C",
-          `${root}/stage`,
-          `goat-${ARCHIVE.archiveVersion}-win32-x64`,
-        ]);
-        const sha = Hex.encode(yield* crypto.digest("SHA-256", yield* fs.readFile(zipPath)));
-        yield* fs.writeFileString(
-          `${release}/SHA256SUMS`,
-          `${sha} *goat-${ARCHIVE.archiveVersion}-win32-x64.zip\n`,
-        );
-        yield* fs.writeFileString(
-          `${bin}/uname`,
-          `#!/bin/sh\nif [ "$1" = -s ]; then echo MINGW64_NT-10.0-26200; else echo x86_64; fi\n`,
-        );
-        yield* fs.writeFileString(
-          `${bin}/cygpath`,
-          `#!/bin/sh\nif [ "$1" = -S ]; then echo '${sys32}'; else printf '%s\\n' "$2"; fi\n`,
-        );
-        yield* fs.writeFileString(
-          `${sys32}/tar.exe`,
-          `#!/bin/sh\nexec tar -xzf "$2" -C "$4" "$5"\n`,
-        );
-        yield* fs.writeFileString(
-          `${bin}/wget`,
-          `#!/bin/sh\nif [ "$1" = --help ]; then echo --retry-on-http-error; exit 0; fi\nurl=""; out=""\nwhile [ $# -gt 0 ]; do\n  case "$1" in -O) out="$2"; shift 2 ;; http*) url="$1"; shift ;; *) shift ;; esac\ndone\ncp "${release}/$(basename "$url")" "$out"\n`,
-        );
-        for (const file of [`${bin}/uname`, `${bin}/cygpath`, `${sys32}/tar.exe`, `${bin}/wget`]) {
-          yield* fs.chmod(file, 0o755);
+        assert.equal(leftovers.length, failure === "cleanup-locked" ? 1 : 0);
+        if (failure === "cleanup-locked") {
+          yield* fs.writeFileString(
+            `${bin}/mv`,
+            `#!/bin/sh\n[ "$1" != -T ] || shift\nexec '${realMv}' "$@"\n`,
+          );
+          // A staging directory a scan still holds must not block the next install.
+          const runAgain = () =>
+            NodeChildProcess.spawnSync(remoteShell, ["-s"], {
+              input: buildRemoteHostDownloadScript(ARCHIVE),
+              encoding: "utf8",
+              env: { ...process.env, HOME: home, PATH: bin },
+            });
+          const locked = runAgain();
+          assert.equal(locked.status, 0, locked.stderr);
+          assert.isTrue(yield* fs.exists(`${versions}/${leftovers[0]}`));
         }
-        for (const dir of (process.env.PATH ?? "").split(":")) {
-          if (!dir) continue;
-          const entries = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-          for (const entry of entries) {
-            if (entry === "curl" || entry === "wget" || entry === "uname" || entry === "cygpath")
-              continue;
-            yield* fs.symlink(`${dir}/${entry}`, `${bin}/${entry}`).pipe(Effect.ignore);
-          }
-        }
-        const result = NodeChildProcess.spawnSync(remoteShell, ["-s"], {
-          input: buildRemoteHostDownloadScript(ARCHIVE),
-          encoding: "utf8",
-          env: { ...process.env, HOME: home, PATH: bin },
-        });
+        return;
+      }
+      if (failure === "competitor-complete" || failure === "competitor-locked") {
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stdout, `goat v${ARCHIVE.archiveVersion}\n`);
-        const record = yield* fs.readFileString(
-          `${home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}/.install-record`,
+        assert.isTrue(yield* fs.exists(`${published}/competitor`));
+        assert.isFalse(yield* fs.exists(`${published}/.install-record`));
+        const versions = yield* fs.readDirectory(`${home}/.goat/runtime/goat/versions`);
+        // A stage a scan still holds is reported and left behind; the install still succeeds.
+        const locked = failure === "competitor-locked";
+        assert.equal(
+          versions.some((name) => name.startsWith(".staging-")),
+          locked,
         );
-        assert.include(record.trim(), `${ARCHIVE.archiveVersion} ${sha} `);
-        assert.isTrue(record.trim().endsWith(" https"));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        if (locked) assert.include(result.stderr, "antivirus/real-time scan");
+        return;
+      }
+      if (failure === "destination-race") {
+        assert.notEqual(result.status, 0);
+        assert.include(result.stderr, "Directory not empty");
+        assert.deepEqual(yield* fs.readDirectory(published), ["other-install"]);
+        return;
+      }
+      if (failure === "destination-appears") {
+        assert.notEqual(result.status, 0);
+        assert.include(result.stderr, "already exists");
+        assert.deepEqual(yield* fs.readDirectory(published), []);
+        return;
+      }
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, `goat v${ARCHIVE.archiveVersion}\n`);
+      const record = yield* fs.readFileString(
+        `${home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}/.install-record`,
+      );
+      assert.include(record.trim(), `${ARCHIVE.archiveVersion} ${sha} `);
+      assert.isTrue(record.trim().endsWith(" https"));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect(

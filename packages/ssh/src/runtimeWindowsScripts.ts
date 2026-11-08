@@ -100,6 +100,16 @@ function Json-Write([string]$p,$v) {
   try { $f.Write($bytes,0,$bytes.Length); $f.Flush($true) } finally { $f.Dispose() }
   if (Test-Path -LiteralPath $p) { [IO.File]::Replace($tmp,$p,$null) } else { [IO.File]::Move($tmp,$p) }
 }
+function Publish-Stage([string]$stage,[string]$destination) {
+  # On-access scans briefly hold a new goat.exe open, and Windows then refuses the directory move.
+  foreach ($delay in @(0,1,2,4,8,10,10,10)) {
+    if ($delay) { Start-Sleep -Seconds $delay }
+    if (Test-Path -LiteralPath $destination) { throw 'immutable-version-exists' }
+    try { [IO.Directory]::Move($stage,$destination); return }
+    catch { if (($_.Exception.GetBaseException().HResult -band 65535) -notin @(5,32,33)) { throw } }
+  }
+  throw 'runtime-locked'
+}
 function Hash([string]$p) {
   Assert-Tree $p
   return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -317,7 +327,7 @@ try {
       $selection=[pscustomobject]@{version=$r.version; executablePath=(Join-Path $destination 'goat.exe'); baseDir=$baseDir; sha256=(Hash (Join-Path $stage 'goat.exe'))}
       Json-Write (Join-Path $stage '.native-install.json') $selection
       [IO.File]::WriteAllText((Join-Path $stage '.install-complete'),$r.version,$utf8)
-      [IO.Directory]::Move($stage,$destination)
+      Publish-Stage $stage $destination
       Verify-Binary $selection
       Report $selection $false $null
     } finally { $zip.Dispose(); $memory.Dispose() }

@@ -166,7 +166,9 @@ const nativeWindowsCommand = Effect.fn("ssh.windows.command")(function* (
           reason === undefined
             ? error
             : failure(
-                `GOAT's native Windows ${request.op} on ${target.alias} stopped (${reason}); its runtime and data were left as they were.`,
+                reason === "runtime-locked"
+                  ? `GOAT could not publish its new runtime on ${target.alias} because another program kept goat.exe open. An antivirus/real-time scan may be locking it; consider excluding %USERPROFILE%\\.goat\\runtime, then retry.`
+                  : `GOAT's native Windows ${request.op} on ${target.alias} stopped (${reason}); its runtime and data were left as they were.`,
                 error,
               ),
         );
