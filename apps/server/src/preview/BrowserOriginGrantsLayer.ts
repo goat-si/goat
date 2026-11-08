@@ -20,7 +20,6 @@ const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const settings = yield* ServerSettings.ServerSettingsService;
   const runSync = Effect.runSyncWith(yield* Effect.context<never>());
-  const changes = yield* settings.subscribeChanges;
   const { environmentId } = yield* environment.getDescriptor;
   const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
   const bind = yield* Effect.serviceOption(BrowserClaimBind);
@@ -78,12 +77,28 @@ const make = Effect.gen(function* () {
   });
   const responder = yield* Effect.serviceOption(BrowserClaimResponder);
   if (Option.isSome(responder)) yield* responder.value.register(service.answer);
-  yield* changes.pipe(
-    Stream.map((value) => value.blockedBrowserHosts),
-    Stream.changesWith((a, b) => a.length === b.length && a.every((host, i) => host === b[i])),
-    Stream.runForEach((hosts) => service.blockedHostsChanged(hosts)),
-    Effect.forkScoped,
-  );
+  const policy = settings.committedPolicy;
+  const sameHosts = (
+    left: ReadonlyArray<string> | undefined,
+    right: ReadonlyArray<string> | undefined,
+  ) =>
+    left === right ||
+    (left !== undefined &&
+      right !== undefined &&
+      left.length === right.length &&
+      left.every((host, index) => host === right[index]));
+  if (policy?.changes !== undefined) {
+    const feed = policy.changes;
+    yield* feed.pipe(
+      Stream.changesWith(sameHosts),
+      Stream.runForEach((hosts) =>
+        service
+          .blockedHostsChanged(hosts)
+          .pipe(Effect.tap(() => Effect.sync(() => policy.acknowledge?.()))),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    );
+  }
   const setDriverCapability = Effect.fn("BrowserOriginGrants.setDriverCapability")(function* (
     value: boolean,
   ) {

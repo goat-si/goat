@@ -89,7 +89,7 @@ import {
 } from "./AgentWorkspaceTerminalPolicy.ts";
 import { makeCheckpointReplicationAdmission } from "./serverSettingsCheckpointAdmission.ts";
 import { preserveSecretReferences } from "./provider/preserveSecretReferences.ts";
-import { makeCuaCommittedPolicy, type CuaCommittedPolicy } from "./cuaCommittedPolicy.ts";
+import { makeCuaCommittedPolicy, type CuaCommittedPolicyRead } from "./cuaCommittedPolicy.ts";
 
 import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
 import { makeSettingsSecretMaterializer } from "./settingsSecretMaterialization.ts";
@@ -832,7 +832,7 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
-    readonly committedPolicy?: Effect.Effect<CuaCommittedPolicy>;
+    readonly committedPolicy?: CuaCommittedPolicyRead;
     readonly blockedBrowserHostsSnapshot?: Effect.Effect<
       ReadonlyArray<string>,
       ServerSettingsError

@@ -576,13 +576,14 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     }).pipe(Effect.uninterruptible),
   );
   const blockedHostsChanged = Effect.fn("BrowserOriginGrants.blockedHostsChanged")(
-    (hosts: ReadonlyArray<string>) =>
+    (hosts: ReadonlyArray<string> | undefined) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
           const signals: Array<Deferred.Deferred<void>> = [];
           let changed = false;
+          const blocked = (url: string) => hosts === undefined || isBlockedBrowserUrl(url, hosts);
           for (const [id, entry] of pending) {
-            if (!isBlockedBrowserUrl(entry.origin, hosts)) continue;
+            if (!blocked(entry.origin)) continue;
             pending.delete(id);
             ended.set(id, { threadId: entry.threadId, reason: "blocked_url" });
             if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
@@ -591,7 +592,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
             changed = true;
           }
           for (const [id, claim] of claims) {
-            if (!isBlockedBrowserUrl(claim.origin, hosts)) continue;
+            if (!blocked(claim.origin)) continue;
             claims.delete(id);
             ended.set(id, { threadId: claim.threadId, reason: "blocked_url" });
             rememberBlockedClaim(id, claim.threadId);

@@ -15,6 +15,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Grants from "./BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
+import { makeCuaCommittedPolicy } from "../cuaCommittedPolicy.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
 class ManifestUnavailable extends Schema.TaggedError<ManifestUnavailable>()(
@@ -507,5 +508,95 @@ it.effect("a settings change ends blocked claims and pending requests without a 
       "blocked_url",
     );
     assert.deepEqual((yield* service.snapshotFor(threadId)).claims, []);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a committed blocked-host publication ends the claim without a settings event", () =>
+  Effect.gen(function* () {
+    const base = Context.get(
+      yield* Layer.build(ServerSettings.layerTest()),
+      ServerSettings.ServerSettingsService,
+    );
+    const initial = yield* base.getSettings;
+    const policy = yield* makeCuaCommittedPolicy;
+    yield* policy.publish(initial, Option.none());
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const hash = "a".repeat(64);
+    const settings = {
+      ...base,
+      committedPolicy: policy.read,
+      subscribeChanges: Effect.succeed(Stream.empty),
+    };
+    const context = yield* Layer.build(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ServerSettings.ServerSettingsService, settings),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                decodeDescriptor({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: (union) =>
+                union.origins.length === 0
+                  ? Deferred.succeed(entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                      Effect.as(hash),
+                    )
+                  : Effect.succeed(hash),
+              readConfig: Effect.succeed({
+                capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+              }),
+              install: () => Effect.void,
+            }),
+            Layer.succeed(BrowserClaimBind, {
+              bind: (request) =>
+                Effect.succeed({
+                  targetId: "target",
+                  tabId: "tab",
+                  title: "Site",
+                  url: request.origin,
+                  driverGeneration: 1,
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const service = Context.get(context, Grants.BrowserOriginGrants);
+    yield* service.setDriverCapability(true);
+    const threadId = ThreadId.make("thread:blocked");
+    const answer = yield* service.claim({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
+    yield* policy.publish({ ...initial, blockedBrowserHosts: ["example.test"] }, Option.none());
+    yield* Effect.yieldNow;
+    if (!(yield* Deferred.isDone(entered))) {
+      assert.equal(
+        yield* service.endReason(threadId, answer.agentResult.claim.claimId),
+        "blocked_url",
+      );
+      return;
+    }
+    assert.equal(
+      yield* service.endReason(threadId, answer.agentResult.claim.claimId),
+      "blocked_url",
+    );
+    assert.deepEqual((yield* service.snapshotFor(threadId)).claims, []);
+    assert.isFalse(yield* Deferred.isDone(release));
+    yield* Deferred.succeed(release, undefined);
   }).pipe(Effect.scoped),
 );
