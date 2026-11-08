@@ -104,6 +104,22 @@ describe("note file assets", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("issues note file URLs that reveal no server path (#2564)", () =>
+    Effect.gen(function* () {
+      const { notesDir } = yield* ServerConfig.ServerConfig;
+      const file = yield* attachment("0123456789abcde5.png", png);
+      const result = yield* issueNoteFileUrl({ _tag: "note-file", path: file.path });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const token = suffix.slice(0, suffix.indexOf("/"));
+      const decoded = Buffer.from(token.split(".")[0]!, "base64url").toString("latin1");
+      for (const secret of [notesDir, file.file, "/.attachments/"]) {
+        expect(result.relativeUrl).not.toContain(secret);
+        expect(decoded).not.toContain(secret);
+      }
+      expect(yield* issue(file.path)).toMatchObject({ kind: "file", path: file.file });
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it("admits only attachment folder paths", () => {
     for (const path of [".git/config", "../x.png", "note.md", ".attachments/../note.md"])
       expect(isInput({ resource: { _tag: "note-file", path } })).toBe(false);
