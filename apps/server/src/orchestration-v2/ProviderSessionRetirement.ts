@@ -45,8 +45,9 @@ export const unlessInterrupted =
   <A>(fallback: A) =>
   <B, E, R>(effect: Effect.Effect<B, E, R>): Effect.Effect<A | B, E, R> =>
     effect.pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterrupts(cause) ? Effect.failCause(cause) : Effect.succeed(fallback),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterrupts(cause),
+        () => Effect.succeed(fallback),
       ),
     );
 
@@ -88,15 +89,19 @@ export const make = <
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
 }) => {
-  const logged = (providerSessionId: ProviderSessionId) =>
-    Effect.catchCause((cause) =>
-      Cause.hasInterrupts(cause)
-        ? Effect.failCause(cause)
-        : Effect.logWarning("orchestration-v2.driver-session.retire-failed", {
-            providerSessionId,
-            cause,
-          }),
-    );
+  const logged =
+    (providerSessionId: ProviderSessionId) =>
+    <E, R>(effect: Effect.Effect<void, E, R>) =>
+      effect.pipe(
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterrupts(cause),
+          (cause) =>
+            Effect.logWarning("orchestration-v2.driver-session.retire-failed", {
+              providerSessionId,
+              cause,
+            }),
+        ),
+      );
   const setRetiring = (key: string, retiring: boolean) =>
     Ref.update(input.sessions, (current) => {
       const latest = current.get(key);
