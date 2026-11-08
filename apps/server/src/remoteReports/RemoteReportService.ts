@@ -769,6 +769,7 @@ const make = Effect.gen(function* () {
                 const reportedSummary = result.summary?.trim();
                 reported = {
                   outcome: result.outcome,
+                  reportedAt: result.reportedAt,
                   ...(reportedSummary === undefined || reportedSummary === ""
                     ? {}
                     : { summary: reportedSummary.slice(0, REMOTE_REPORT_SUMMARY_MAX_CHARS) }),

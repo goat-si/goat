@@ -96,7 +96,10 @@ export const settleCompletedRun = (input: {
 export const failedAfterAsking = (
   task: Pick<ChannelTask, "openQuestions">,
   result:
-    | { readonly outcome: ThreadResultOutcome | null; readonly reportedAt: string | null }
+    | {
+        readonly outcome: ThreadResultOutcome | null;
+        readonly reportedAt?: string | null | undefined;
+      }
     | undefined,
 ): boolean => {
   const reportedAt = result?.reportedAt ?? null;

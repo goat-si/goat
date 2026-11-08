@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ChannelTaskEventId, type ThreadResultReport } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -11,6 +12,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import { RemoteMachine, correlationOf, remoteScript, until } from "./testing/RemoteMachine.ts";
 import {
   goatInput,
   makeHarness,
@@ -65,25 +67,28 @@ const provide = (harness: ReturnType<typeof makeHarness>) =>
   Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)));
 
 describe("a worker's outcome after it asked the person", () => {
-  it.effect("a failure reported after the question ends the task and closes the question", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const { threadId, runtime } = yield* askedTask;
-      assert.strictEqual((yield* onlyTask).status, "waiting_input");
-      yield* storeReport(
-        harness,
-        threadId,
-        { outcome: "failed", summary: "There is no notes file to tidy." },
-        "2026-10-12T00:01:00.000Z",
-      );
-      harness.world.setStatus(threadId, 1, "completed", "Stopping here.");
-      yield* runtime.drain;
-      const ended = yield* onlyTask;
-      assert.strictEqual(ended.status, "failed");
-      assert.strictEqual(ended.resultSummary, "There is no notes file to tidy.");
-      assert.deepStrictEqual(ended.openQuestions, []);
-    }).pipe(provide(harness));
-  });
+  it.effect.each(["failed", "cancelled"] as const)(
+    "a %s outcome reported after the question ends the task and closes the question",
+    (outcome) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const { threadId, runtime } = yield* askedTask;
+        assert.strictEqual((yield* onlyTask).status, "waiting_input");
+        yield* storeReport(
+          harness,
+          threadId,
+          { outcome, summary: "There is no notes file to tidy." },
+          "2026-10-12T00:01:00.000Z",
+        );
+        harness.world.setStatus(threadId, 1, "completed", "Stopping here.");
+        yield* runtime.drain;
+        const ended = yield* onlyTask;
+        assert.strictEqual(ended.status, "failed");
+        assert.strictEqual(ended.resultSummary, "There is no notes file to tidy.");
+        assert.deepStrictEqual(ended.openQuestions, []);
+      }).pipe(provide(harness));
+    },
+  );
 
   it.effect("a failure reported before the question leaves the task waiting for the answer", () => {
     const harness = makeHarness();
@@ -119,5 +124,39 @@ describe("a worker's outcome after it asked the person", () => {
       assert.strictEqual(stopped.status, "cancelled");
       assert.deepStrictEqual(stopped.openQuestions, []);
     }).pipe(provide(harness));
+  });
+});
+
+describe("a worker on another machine that asked the person", () => {
+  const remoteHarness = () => {
+    const machine = new RemoteMachine();
+    const harness = makeHarness({ sshRemote: machine.layer });
+    harness.script.current = remoteScript;
+    return { machine, harness };
+  };
+
+  it.effect("ends the task and closes the question when it reports a failure after asking", () => {
+    const { machine, harness } = remoteHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(
+        goatInput("do@mac-studio: tidy the notes file", "remote-asked"),
+        rpcContext,
+      );
+      yield* until("running", (task) => task.status === "running");
+      const correlationId = correlationOf(machine);
+      machine.report(correlationId, "needs_input", "Which notes file?");
+      const asked = yield* until("question", (task) => task.status === "waiting_input");
+      const askedAt = DateTime.makeUnsafe(asked.openQuestions[0]!.askedAt);
+      machine.finishRun(correlationId, "completed", "Stopping here.", {
+        outcome: "failed",
+        summary: "There is no notes file to tidy.",
+        reportedAt: DateTime.formatIso(DateTime.add(askedAt, { minutes: 1 })),
+      });
+      const ended = yield* until("failed", (task) => task.status === "failed", 400);
+      assert.strictEqual(ended.resultSummary, "There is no notes file to tidy.");
+      assert.deepStrictEqual(ended.openQuestions, []);
+    }).pipe(Effect.provide(harness.layer));
   });
 });

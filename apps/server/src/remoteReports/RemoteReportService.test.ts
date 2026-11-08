@@ -474,11 +474,11 @@ it.effect.each([undefined, " \n ", "x".repeat(4000)])(
           VALUES (${threadId}, ${runA}, ${JSON.stringify(report)}, ${"2026-10-12T00:00:00.000Z"})
         `;
         const result = yield* service.wait(waitInput);
-        expect(result.observedRun?.reported).toEqual(
-          summary?.trim()
-            ? { outcome: "succeeded", summary: "x".repeat(4000) }
-            : { outcome: "succeeded" },
-        );
+        expect(result.observedRun?.reported).toEqual({
+          outcome: "succeeded",
+          ...(summary?.trim() ? { summary: "x".repeat(4000) } : {}),
+          reportedAt: "2026-10-12T00:00:00.000Z",
+        });
       }),
     ),
 );

@@ -89,7 +89,7 @@ import {
   mergeOfferedModels,
   type OfferedProviders,
 } from "./channelOfferedModels.ts";
-import { settleCompletedRun } from "./channelRunOutcome.ts";
+import { failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
 import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
 import { decodeHostQuotas, remoteQuotaFields } from "./remoteQuotaCandidates.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
@@ -2111,7 +2111,8 @@ const make = Effect.gen(function* () {
         return "stop" as const;
       }
       const runId = stored.task.worker?.runId;
-      // A worker that asked and then failed or was stopped ends the task, as on this machine.
+      // A worker that asked and then failed, was stopped, or reported failing after asking ends
+      // the task, as on this machine.
       if (
         stored.task.status === "waiting_input" &&
         stored.pendingAnswerMessageId === undefined &&
@@ -2120,23 +2121,31 @@ const make = Effect.gen(function* () {
         watched.runId === runId &&
         latest === runId &&
         TERMINAL.has(watched.status) &&
-        watched.status !== "completed" &&
+        (watched.status !== "completed" || failedAfterAsking(stored.task, watched.reported)) &&
         !limited
       ) {
         yield* commitTransition(
           ledger,
           stored,
-          watched.status === "cancelled"
-            ? { type: "task.cancelled", payload: { reason: "The coding thread was stopped." } }
-            : {
-                type: "task.failed",
-                payload: {
-                  generation: stored.task.generation,
-                  reason: watched.status,
-                  summary:
-                    "The coding thread ended with " + watched.status.replaceAll("_", " ") + ".",
+          watched.status === "completed"
+            ? settleCompletedRun({
+                task: stored.task,
+                runId,
+                reported: watched.reported,
+                fallbackSummary: watched.summary?.trim() || "Finished.",
+                now: yield* nowIso,
+              })
+            : watched.status === "cancelled"
+              ? { type: "task.cancelled", payload: { reason: "The coding thread was stopped." } }
+              : {
+                  type: "task.failed",
+                  payload: {
+                    generation: stored.task.generation,
+                    reason: watched.status,
+                    summary:
+                      "The coding thread ended with " + watched.status.replaceAll("_", " ") + ".",
+                  },
                 },
-              },
           { owner, narrate: true, completionHold: null },
         );
         return "stop" as const;
