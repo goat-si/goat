@@ -18,6 +18,8 @@ export const trustPredicate =
 export const killSwitch = "vars.LIDGE_RUNNERS == 'on'";
 /** The shipped ci runs-on: a trusted run's heavy entries on lidge while LIDGE_RUNNERS is on. */
 export const lidgeRunner = `\${{ matrix.runner == 'windows' && 'windows-2025' || (matrix.runner == 'linux' && ${killSwitch} && ${trustPredicate}) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-24.04' }}`;
+/** The shipped gate-job runs-on: a trusted run's goat-scope, screenshot gate and result on lidge. */
+export const lidgeGateRunner = `\${{ ${killSwitch} && ${trustPredicate} && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-24.04' }}`;
 export const validWorkflow = `on:
   push:
 jobs:
