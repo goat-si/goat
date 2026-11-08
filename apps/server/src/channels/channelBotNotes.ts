@@ -93,6 +93,8 @@ export const readChannelBotNotes = (files: ChannelBotFiles, query: string) =>
 export interface ChannelBotNoteSaved {
   /** Set when the note was a correction: whether it replaced the note it named. */
   readonly correction?: "replaced" | "unmatched";
+  /** True only when this call appended a line. A repeat for the same input did not. */
+  readonly wrote: boolean;
 }
 
 /** How a note line names the input that asked for it; ids keep no whitespace, so the name ends at ")". */
@@ -148,18 +150,20 @@ export const appendChannelBotNote = (
   replaces?: string,
 ) =>
   Effect.gen(function* () {
-    const nothing: ChannelBotNoteSaved = {};
+    const nothing: ChannelBotNoteSaved = { wrote: false };
     const day = yield* noteDay(date);
     if (channelBotNoteLine(note, day, sourceInputId) === undefined) return nothing;
     const source = noteSource(sourceInputId);
-    const saved = (replaced: boolean): ChannelBotNoteSaved =>
-      replaces === undefined ? {} : { correction: replaced ? "replaced" : "unmatched" };
+    const saved = (replaced: boolean, wrote: boolean): ChannelBotNoteSaved =>
+      replaces === undefined
+        ? { wrote }
+        : { correction: replaced ? "replaced" : "unmatched", wrote };
     yield* fs.makeDirectory(files.dir, { recursive: true });
     const exists = yield* fs.exists(files.notes);
     const text = exists ? yield* fs.readFileString(files.notes) : "";
     if (text.includes(source)) {
       const first = parseChannelBotNoteLines(text).find((earlier) => earlier.raw.includes(source));
-      return saved(first?.replaces !== undefined);
+      return saved(first?.replaces !== undefined, false);
     }
     const target =
       replaces === undefined
@@ -172,7 +176,7 @@ export const appendChannelBotNote = (
         "\n",
       { flag: "a" },
     );
-    return saved(target !== undefined);
+    return saved(target !== undefined, true);
   });
 
 // Typography a model may change when it copies words: case, curly quotes, dashes, spacing.
