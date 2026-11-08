@@ -588,27 +588,32 @@ process.stderr.write('reader waiting');`,
           remoteDeadlineSettleMs(75_000),
         );
         assert.isUndefined(yield* timeOut({ remoteCommandArgs: ["goat", "--version"] }));
-        // A dropped connection leaves the script running the same way.
-        const dropped = yield* Effect.flip(
-          runSshCommand(target, {
-            remoteCommandArgs: ["sh", "-s"],
-            stdin: "true\n",
-            timeoutMs: 75_000,
-          }).pipe(
-            Effect.provideService(
-              ChildProcessSpawner.ChildProcessSpawner,
-              lazyChildProcessSpawner(() =>
-                Effect.succeed(
-                  makeFailedProcess({ stdout: "", stderr: "Connection reset\n", exitCode: 255 }),
+        const drop = (stderr: string) =>
+          Effect.flip(
+            runSshCommand(target, {
+              remoteCommandArgs: ["sh", "-s"],
+              stdin: "true\n",
+              timeoutMs: 75_000,
+            }).pipe(
+              Effect.provideService(
+                ChildProcessSpawner.ChildProcessSpawner,
+                lazyChildProcessSpawner(() =>
+                  Effect.succeed(makeFailedProcess({ stdout: "", stderr, exitCode: 255 })),
                 ),
               ),
             ),
-          ),
-        );
+          ).pipe(
+            Effect.map((error) =>
+              error instanceof SshCommandError ? error.remoteSettleMs : undefined,
+            ),
+          );
+        // A connection dropped after authentication leaves the script running the same way.
         assert.equal(
-          dropped instanceof SshCommandError ? dropped.remoteSettleMs : undefined,
+          yield* drop('Authenticated to fixture using "publickey".\nConnection reset\n'),
           remoteDeadlineSettleMs(75_000),
         );
+        // Without authentication ssh never asked for a session, so no script outlives it.
+        assert.isUndefined(yield* drop("Connection to devbox.example.com port 2222 timed out\n"));
       }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer()))),
   );
 });

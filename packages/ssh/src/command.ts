@@ -435,10 +435,11 @@ function stdinStream(
 
 /**
  * A remote script whose client timed out or lost the connection may keep running until its
- * watchdog's deadline. (Exit 255 can also be the script's own; then the wait is only longer.)
+ * watchdog's deadline. ssh reports authentication before it asks for a session, so without that
+ * no script started. (Exit 255 can also be the script's own; then the wait is only longer.)
  */
-const remoteScriptSettle = (input: RunSshCommandOptions) =>
-  typeof input.stdin === "string" && isRemoteShellScript(input.remoteCommandArgs)
+const remoteScriptSettle = (input: RunSshCommandOptions, authenticated: boolean) =>
+  authenticated && typeof input.stdin === "string" && isRemoteShellScript(input.remoteCommandArgs)
     ? { remoteSettleMs: remoteDeadlineSettleMs(input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS) }
     : {};
 
@@ -629,7 +630,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
           stderr,
           fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
         }),
-      ...(exitCode === 255 ? remoteScriptSettle(input) : {}),
+      ...(exitCode === 255 ? remoteScriptSettle(input, progress.authenticated) : {}),
     });
   }
 
@@ -685,7 +686,7 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
               exitCode: null,
               stderr: progress.stderr,
               message: progress.stderr.trim() ? `${message}\n${progress.stderr.trim()}` : message,
-              ...remoteScriptSettle(input),
+              ...remoteScriptSettle(input, progress.authenticated),
             });
           }),
       }),
