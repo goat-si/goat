@@ -86,8 +86,11 @@ for the result; approval alone does not mean the route works or the Child is
 Ready. If the request expired or the instance changed while you reviewed it,
 ask the agent to request approval again.
 
-End this instance's active sessions and turns before changing its route or
-Home authentication.
+Changing an instance's route, Home authentication, binary path, environment or
+CODEX_HOME path restarts its Codex process. GOAT restarts it at once when
+nothing is running on it. Otherwise running turns, goals and subagents finish
+first, and a new turn on that instance stops with a message until they do; stop
+that work to restart sooner.
 
 [Claude Code](./providers-claude.md#use-opencodex-home),
 [OpenCode](./providers-opencode.md#use-opencodex-home), and
