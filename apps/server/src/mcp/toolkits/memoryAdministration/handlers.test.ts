@@ -296,15 +296,24 @@ it.effect("a GOAT thread's own credential cannot run the memory recovery writes"
       environmentId: "fixture-memory-mcp",
       expectedVersion: 1,
     };
-    expect((yield* Fixture.call("goat_memory_hub_reconcile", hub, thread)).result.isError).toBe(
-      true,
-    );
-    expect(
-      (yield* Fixture.call("goat_memory_report_attempts_reset", report, thread)).result.isError,
-    ).toBe(true);
+    const before = yield* Fixture.call("memory_settings_get", {});
+    for (const [name, input] of [
+      ["goat_memory_hub_reconcile", hub],
+      ["goat_memory_report_attempts_reset", report],
+      ["memory_settings_update", { requestId: Fixture.id(21), enabled: false }],
+      [
+        "memory_hub_disable",
+        { requestId: M.MemoryOperationId.make(Fixture.id(14)), expectedVersion: 0 },
+      ],
+    ] as const) {
+      const result = yield* Fixture.call(name, input, thread);
+      expect(result.result.isError, name).toBe(true);
+      expect(result.body, name).toMatchObject({ code: "capability_denied" });
+    }
     const rows = yield* sql<{
       automatic_attempts: number;
     }>`SELECT automatic_attempts FROM memory_report_outbox WHERE report_id=${report.reportIds[0]}`;
     expect(rows[0]?.automatic_attempts).toBe(10);
+    expect((yield* Fixture.call("memory_settings_get", {})).body).toEqual(before.body);
   }).pipe(Effect.provide(Fixture.layer)),
 );

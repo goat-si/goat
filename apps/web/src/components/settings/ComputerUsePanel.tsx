@@ -265,7 +265,7 @@ export function ComputerUsePanel({
         {...searchableSetting("computer-use")}
         serverScoped
         settingKeys={["enableCua"]}
-        description={`Let agents see and use apps on ${hostLabel} in the background, without taking over your cursor. Threads in full access mode use every app without asking; other threads ask you first. Turning it on sets everything up; turning it off stops computer use right away.`}
+        description={`Let agents see and use apps on ${hostLabel}. By default every app and foreground action is allowed without an approval card, including unattended work; Strict input guards opts into restrictions. Turning it on sets everything up; turning it off stops computer use right away.`}
         status={
           line || (setup.on && !advanced.open) ? (
             <ComputerUseStatus
@@ -353,7 +353,7 @@ export function ComputerUsePanel({
             <SettingSwitchRow
               {...searchableSetting("computer-use-strict-input-guards")}
               settingKey="cuaStrictInputGuards"
-              description="Off by default: agents act on input directly and see what the OS and driver refuse. On adds GOAT's own checks before input is sent: chat sends need confirmation, paste and off-window clicks are refused, approved and denied app lists apply, and a failed step stops the steps after it."
+              description="Off by default: all apps and foreground actions are allowed without an approval card, and agents see what the OS and driver refuse. On restores app and foreground approvals, protected and denied app rules, unattended-origin limits, and input checks such as chat-send confirmation and paste refusal."
               label="Strict input guards"
               checked={strictInputGuards}
               canConfigure={canConfigure}

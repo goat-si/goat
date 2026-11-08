@@ -233,8 +233,9 @@ const FleetRailItem = memo(function FleetRailItem({ active }: { active: boolean 
 const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
   const botWaiting = useGoatBotWaitingCount();
   const { roster } = useBotRoster();
+  const mainName = roster[0]?.profile?.name ?? "GOAT Bot";
   const setMode = useGlobalAgentStore((state) => state.setMode);
-  const botReadMenu = useGoatBotReadMenu(botWaiting);
+  const botReadMenu = useGoatBotReadMenu(botWaiting, mainName);
   return (
     <>
       <RailTooltip label={roster[0]?.profile?.name ?? "GOAT Bot"}>

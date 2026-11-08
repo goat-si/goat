@@ -23,12 +23,14 @@ export function MobileBotMemory(props: {
   readonly supported: boolean;
   /** A member bot's sheet, which shows the same notes as the main bot's. */
   readonly member: boolean;
+  readonly botName?: string;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
   readonly onDraft?: ((text: string) => void) | undefined;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
   readonly refreshKey?: string | undefined;
 }) {
   const { environmentId, connected, supported, onDraft } = props;
+  const botName = props.botName ?? "GOAT Bot";
   const readable = environmentId !== null && connected && supported;
   const notes = useEnvironmentQuery(
     readable ? channelEnvironment.listBotNotes({ environmentId, input: {} }) : null,
@@ -40,7 +42,7 @@ export function MobileBotMemory(props: {
   useEffect(() => {
     if (trigger !== null) refresh();
   }, [trigger, refresh]);
-  const failure = notes.cause === null ? null : botNotesFailure(notes.cause);
+  const failure = notes.cause === null ? null : botNotesFailure(notes.cause, botName);
   return (
     <View className="gap-3 py-2">
       <Text className="text-foreground-muted">{GOAT_BOT_NOTES_COPY}</Text>
@@ -49,7 +51,7 @@ export function MobileBotMemory(props: {
       ) : null}
       {!connected ? (
         <Text className="text-foreground-muted">
-          Notes are unavailable while GOAT Bot is offline.
+          Notes are unavailable while {botName} is offline.
         </Text>
       ) : !supported ? (
         <Text className="text-foreground-muted">Notes need a newer GOAT server.</Text>
@@ -74,6 +76,7 @@ export function MobileBotMemory(props: {
           notes={notes.data.notes}
           truncated={notes.data.truncated}
           onDraft={onDraft}
+          botName={botName}
         />
       )}
     </View>
@@ -85,6 +88,7 @@ function MobileNoteList(props: {
   readonly notes: ReadonlyArray<ChannelBotNote>;
   readonly truncated: boolean;
   readonly onDraft: ((text: string) => void) | undefined;
+  readonly botName: string;
 }) {
   const view = goatBotNotesView({ notes: props.notes, truncated: props.truncated });
   const [showReplaced, setShowReplaced] = useState(false);
@@ -96,7 +100,7 @@ function MobileNoteList(props: {
       ) : null}
       {view.empty === "none" ? (
         <Text className="text-foreground-muted">
-          No notes yet. Ask GOAT Bot to remember a standing rule.
+          No notes yet. Ask {props.botName} to remember a standing rule.
         </Text>
       ) : view.empty === "none_in_window" ? (
         <Text className="text-foreground-muted">

@@ -163,6 +163,20 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("gives each build of an instance a new session key, so its open sessions retire", () =>
+    Effect.gen(function* () {
+      // A rebuild closes the instance's server owner, so even unchanged settings get a new key.
+      const first = yield* create({}, noHttp);
+      const second = yield* create({}, noHttp);
+      assert.isString(first.orchestrationAdapter.sessionConfigKey);
+      assert.isString(second.orchestrationAdapter.sessionConfigKey);
+      assert.notStrictEqual(
+        first.orchestrationAdapter.sessionConfigKey,
+        second.orchestrationAdapter.sessionConfigKey,
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("answers capability reads without waiting on an unreachable server", () =>
     Effect.gen(function* () {
       const hang = HttpClient.make(() => Effect.never);

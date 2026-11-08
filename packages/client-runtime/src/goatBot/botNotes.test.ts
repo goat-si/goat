@@ -101,20 +101,21 @@ describe("botNotesFailure", () => {
           message: "no",
           requiredScope: "memory:read",
         }),
+        "Goaty",
       ),
-    ).toEqual({ message: "This device can't read GOAT Bot's notes.", retry: false });
+    ).toEqual({ message: "This device can't read Goaty's notes.", retry: false });
   });
 
   it("a server that is not GOAT Bot's home points there", () => {
-    expect(botNotesFailure(new ChannelGatewayError({ reason: "not_home" }))).toEqual({
-      message: "GOAT Bot's notes are on its home computer.",
+    expect(botNotesFailure(new ChannelGatewayError({ reason: "not_home" }), "Goaty")).toEqual({
+      message: "Goaty's notes are on its home computer.",
       retry: false,
     });
   });
 
   it("anything else can be retried", () => {
-    expect(botNotesFailure(new Error("socket closed"))).toEqual({
-      message: "Couldn't load GOAT Bot's notes.",
+    expect(botNotesFailure(new Error("socket closed"), "Goaty")).toEqual({
+      message: "Couldn't load Goaty's notes.",
       retry: true,
     });
   });

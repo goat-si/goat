@@ -1,9 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   ChannelChildWorkId,
-  ChannelWorkerObservation,
+  type ChannelReceptionInput,
   type ChannelTaskNeedsYou,
+  ChannelQuestionId,
   NodeId,
+  ProviderInstanceId,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
   RuntimeRequestId,
@@ -12,21 +14,25 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
+import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChildStore from "./channelChildWorkStore.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import { receptionDecisionChannels } from "./testkit/channelReceptionHarness.ts";
 import {
   botMessages,
+  defaultScript,
   goatInput,
   linkSlackUser,
   makeHarness,
+  modelSelection,
   onlyTask,
   owner,
   ownerId,
@@ -152,7 +158,14 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
               threadId: ThreadId.make("thread:live"),
             },
           },
-          { kind: "question", since },
+          {
+            kind: "question",
+            since,
+            question: {
+              requestId: RuntimeRequestId.make("request:question"),
+              threadId: ThreadId.make("thread:live"),
+            },
+          },
         ];
         yield* reports.reconcile(runtime.ownerToken);
         assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, expected);
@@ -518,190 +531,298 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
       assert.strictEqual(run?.status, "waiting");
     }).pipe(Effect.provide(harness.layer));
   });
-});
 
-const encodeObservation = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerObservation));
-const sshHost = "mac-studio";
-const sshThread = ThreadId.make("thread:remote");
-const sshApprovalId = RuntimeRequestId.make("approval:ssh");
-
-const sshObservation = {
-  pullRequests: [],
-  needsYou: [
-    {
-      kind: "approval" as const,
-      since,
-      approval: { requestId: sshApprovalId, threadId: sshThread },
-    },
-  ],
-};
-
-const admitSsh = Effect.fn(function* (
-  task: { readonly taskId: string; readonly generation: number },
-  id: string,
-  state: "bound" | "completed",
-) {
-  const admitted = yield* (yield* ChildStore.ChannelChildWorkStore).admitReserved(
-    {
-      ownerId,
-      taskId: task.taskId as never,
-      childWorkId: ChannelChildWorkId.make(id),
-      generation: task.generation,
-      callerThreadId: ThreadId.make("thread:caller"),
-      requestKey: id,
-      promptDigest: "digest",
-      surface: "ssh_thread_launch",
-      destination: { correlationId: "corr:" + id, host: sshHost },
-      state,
-      createdAt: since,
-      updatedAt: since,
-    },
-    100,
-  );
-  assert.strictEqual(admitted._tag, "admitted");
-});
-
-const insertThreadDispatch = (id: string, observation: typeof sshObservation | null) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`INSERT INTO remote_dispatches (
-      correlation_id, kind, origin_thread_id, host, remote_thread_id, launched_run_id, read_key,
-      delivery, reports_supported, state, observation, created_at, updated_at
-    ) VALUES (
-      ${"corr:" + id}, 'thread', ${"thread:origin"}, ${sshHost}, ${sshThread},
-      ${"run:remote"}, ${"read-key-" + id}, 'wake', 1, 'running',
-      ${observation === null ? null : encodeObservation(observation)}, ${since}, ${since}
-    )`;
-  });
-
-const stampedSshApproval = {
-  kind: "approval" as const,
-  since,
-  approval: { requestId: sshApprovalId, threadId: sshThread, host: sshHost },
-};
-
-describe("GOAT Bot reads an approval from a thread launched on another machine", () => {
-  it.effect("shows an approval an ssh-launched thread asks for after the task finished", () => {
+  it.effect("answers a launched thread single-choice question from the bot chat", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-      yield* gateway.ingest(goatInput("do: write the release notes", "ssh-late"), rpcContext);
+      const sql = yield* SqlClient.SqlClient;
+      yield* gateway.ingest(goatInput("do: start the build", "nq1"), rpcContext);
       yield* runtime.drain;
       const task = yield* onlyTask;
-      yield* admitSsh(task, "late", "completed");
-      harness.world.setStatus(task.worker!.threadId, 1, "completed", "Started the notes thread.");
-      yield* runtime.drain;
-      assert.strictEqual((yield* onlyTask).status, "completed");
-      const cardsBefore = yield* cards;
-      yield* insertThreadDispatch("late", sshObservation);
+      yield* launch(task, "live", "bound");
+      harness.world.runs.set("thread:live", []);
+      const pending = request("pick", "user_input");
+      harness.world.runtimeRequests.set("thread:live", [pending]);
+      harness.world.userInputQuestions.set(pending.id, [
+        {
+          id: "cache",
+          header: "Cache",
+          question: "Which cache should the build use?",
+          options: [
+            { label: "Keep it", description: "Reuse the cache" },
+            { label: "Clear it", description: "Start fresh" },
+          ],
+        },
+      ]);
       yield* reports.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, [
+        {
+          kind: "question",
+          since,
+          question: {
+            requestId: pending.id,
+            threadId: ThreadId.make("thread:live"),
+          },
+        },
+      ]);
       yield* runtime.drain;
-      const finished = yield* onlyTask;
-      assert.strictEqual(finished.status, "completed");
-      assert.deepStrictEqual(finished.observed?.needsYou, [stampedSshApproval]);
-      assert.strictEqual(yield* cards, cardsBefore + 1);
-      const version = finished.version;
-      yield* reports.reconcile(runtime.ownerToken);
-      assert.strictEqual((yield* onlyTask).version, version);
+      const cards = (yield* botMessages).messages.filter(
+        (message) => message.channel?.kind === "question",
+      );
+      assert.strictEqual(cards.length, 1);
+      assert.strictEqual(cards[0]?.channel?.questionId, ChannelQuestionId.make(pending.id));
+      assert.strictEqual(cards[0]?.channel?.taskId, task.taskId);
+      assert.deepStrictEqual(cards[0]?.channel?.options, ["Keep it", "Clear it"]);
+      assert.include(cards[0]?.text ?? "", "Which cache should the build use?");
+
+      yield* gateway.ingest({ ...goatInput("Keep it", "nq2"), taskId: task.taskId }, rpcContext);
+      yield* runtime.drain;
+      const [answered] = responses(harness);
+      assert.strictEqual(answered?.threadId, ThreadId.make("thread:live"));
+      assert.strictEqual(answered?.requestId, pending.id);
+      assert.deepStrictEqual(answered?.answers, { cache: "Keep it" });
+      assert.strictEqual(answered?.decision, undefined);
+      assert.strictEqual(answered?.respondedBy?.type, "client");
+      assert.strictEqual(
+        answered?.respondedBy && "label" in answered.respondedBy
+          ? answered.respondedBy.label
+          : undefined,
+        "GOAT Bot",
+      );
+      const followups = yield* sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM channel_task_events WHERE task_id = ${task.taskId} AND type = 'task.followup.received'`;
+      assert.strictEqual(followups[0]?.count, 0);
+      const texts = (yield* botMessages).messages.map((message) => message.text);
+      assert.ok(texts.some((text) => text.includes("Sent your answer to ")));
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("says once that the approval on that machine is no longer waiting", () => {
+  it.effect("keeps a completed launch's pending question until the request resolves", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-      yield* gateway.ingest(goatInput("do: write the release notes", "ssh-gone"), rpcContext);
+      yield* gateway.ingest(goatInput("do: start the build", "done-q"), rpcContext);
       yield* runtime.drain;
       const task = yield* onlyTask;
-      yield* admitSsh(task, "gone", "completed");
-      harness.world.setStatus(task.worker!.threadId, 1, "completed", "Started the notes thread.");
-      yield* runtime.drain;
-      yield* insertThreadDispatch("gone", sshObservation);
+      yield* launch(task, "live", "completed");
+      harness.world.runs.set("thread:live", []);
+      const pending = request("pick", "user_input");
+      harness.world.runtimeRequests.set("thread:live", [pending]);
+      harness.world.userInputQuestions.set(pending.id, [
+        {
+          id: "file",
+          header: "File",
+          question: "Which file?",
+          options: [
+            { label: "c.txt", description: "C" },
+            { label: "d.txt", description: "D" },
+          ],
+        },
+      ]);
       yield* reports.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, [
+        {
+          kind: "question",
+          since,
+          question: {
+            requestId: pending.id,
+            threadId: ThreadId.make("thread:live"),
+          },
+        },
+      ]);
       yield* runtime.drain;
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`UPDATE remote_dispatches SET observation = ${encodeObservation({
-        pullRequests: [],
-        needsYou: [],
-      })} WHERE correlation_id = ${"corr:gone"}`;
-      yield* reports.reconcile(runtime.ownerToken);
-      yield* reports.reconcile(runtime.ownerToken);
-      yield* runtime.drain;
-      const told = (yield* botMessages).messages.filter((message) =>
-        message.text.includes("no longer waiting"),
+      const cards = (yield* botMessages).messages.filter(
+        (message) => message.channel?.questionId === ChannelQuestionId.make(pending.id),
       );
-      assert.strictEqual(told.length, 1);
-      assert.strictEqual(
-        told[0]?.text,
-        "The approval on mac-studio is no longer waiting in the coding thread. write the release notes continues if it was approved.",
-      );
+      assert.strictEqual(cards.length, 1);
+      assert.deepStrictEqual(cards[0]?.channel?.options, ["c.txt", "d.txt"]);
+      yield* gateway.ingest({ ...goatInput("d.txt", "done-a"), taskId: task.taskId }, rpcContext);
+      yield* runtime.drain;
+      const [answered] = responses(harness);
+      assert.deepStrictEqual(answered?.answers, { file: "d.txt" });
+      yield* reports.reconcile(runtime.ownerToken);
       assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("keeps a shown ssh approval when the dispatch has no observation", () => {
-    const harness = makeHarness();
+  it.effect("answers a turn's launched question from the bot chat as the question alone", () => {
+    const harness = makeHarness({
+      botWorkspace: true,
+      channelsLayer: receptionDecisionChannels,
+      settingsLayer: ServerSettings.layerTest({
+        textGenerationModelSelection: modelSelection,
+        defaultRuntimeMode: "full-access",
+        goatBotModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-6-luna",
+        },
+      }).pipe(Layer.orDie),
+    });
+    harness.script.current = (input: ChannelReceptionInput) => {
+      const text = input.inputText ?? "";
+      if (input.mode === "input" && text.startsWith("look:")) {
+        const instruction = text.slice("look:".length).trim();
+        return Effect.succeed({
+          replyText: "On it.",
+          action: { type: "run_turn" as const, title: instruction, instruction },
+        });
+      }
+      return defaultScript(input);
+    };
     return Effect.gen(function* () {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-      yield* gateway.ingest(goatInput("do: write the release notes", "ssh-keep"), rpcContext);
-      yield* runtime.drain;
-      const task = yield* onlyTask;
-      yield* admitSsh(task, "keep", "completed");
-      harness.world.setStatus(task.worker!.threadId, 1, "completed", "Started the notes thread.");
-      yield* runtime.drain;
-      yield* insertThreadDispatch("keep", sshObservation);
-      yield* reports.reconcile(runtime.ownerToken);
-      yield* runtime.drain;
-      const shown = (yield* onlyTask).observed?.needsYou;
-      assert.deepStrictEqual(shown, [stampedSshApproval]);
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`UPDATE remote_dispatches SET observation = NULL WHERE correlation_id = ${"corr:keep"}`;
+      yield* gateway.ingest(goatInput("look: which file should I change?", "turn-q"), rpcContext);
+      yield* runtime.drain;
       yield* reports.reconcile(runtime.ownerToken);
-      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, shown);
-      yield* sql`UPDATE remote_dispatches SET reports_supported = 0, observation = ${encodeObservation(
+      const task = yield* onlyTask;
+      assert.strictEqual(task.kind, "turn");
+      yield* launch(task, "live", "bound");
+      harness.world.runs.set("thread:live", []);
+      const pending = request("pick", "user_input");
+      harness.world.runtimeRequests.set("thread:live", [pending]);
+      harness.world.userInputQuestions.set(pending.id, [
         {
-          pullRequests: [],
-          needsYou: [],
+          id: "file",
+          header: "File",
+          question: "Which file?",
+          options: [
+            { label: "c.txt", description: "C" },
+            { label: "d.txt", description: "D" },
+          ],
         },
-      )} WHERE correlation_id = ${"corr:keep"}`;
+      ]);
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
-      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, shown);
-      const told = (yield* botMessages).messages.filter((message) =>
-        message.text.includes("no longer waiting"),
+      const cards = (yield* botMessages).messages.filter(
+        (message) => message.channel?.kind === "question",
       );
-      assert.strictEqual(told.length, 0);
+      assert.strictEqual(cards.length, 1);
+      assert.strictEqual(cards[0]?.text, "Which file?");
+      assert.strictEqual(cards[0]?.channel?.questionId, ChannelQuestionId.make(pending.id));
+      assert.strictEqual(cards[0]?.channel?.taskId, task.taskId);
+      assert.deepStrictEqual(cards[0]?.channel?.options, ["c.txt", "d.txt"]);
+      yield* gateway.ingest({ ...goatInput("d.txt", "turn-a"), taskId: task.taskId }, rpcContext);
+      yield* runtime.drain;
+      const [answered] = responses(harness);
+      assert.deepStrictEqual(answered?.answers, { file: "d.txt" });
+      assert.strictEqual(answered?.decision, undefined);
+      const followups = yield* sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM channel_task_events WHERE task_id = ${task.taskId} AND type = 'task.followup.received'`;
+      assert.strictEqual(followups[0]?.count, 0);
     }).pipe(Effect.provide(harness.layer));
   });
-
-  it.effect("shows an approval an ssh-launched thread asks for while the task is running", () => {
+  it.effect("tells Slack to open the work thread instead of sending a native-question card", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(slackInput("do: start the build", "sq1"), slackContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* launch(task, "live", "bound");
+      harness.world.runs.set("thread:live", []);
+      const pending = request("slack", "user_input");
+      harness.world.runtimeRequests.set("thread:live", [pending]);
+      harness.world.userInputQuestions.set(pending.id, [
+        {
+          id: "file",
+          header: "File",
+          question: "Which file?",
+          options: [
+            { label: "c.txt", description: "C" },
+            { label: "d.txt", description: "D" },
+          ],
+        },
+      ]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const asking = harness.slackSent.filter((send) =>
+        send.message.text.includes("is asking something in its coding thread"),
+      );
+      assert.strictEqual(asking.length, 1);
+      assert.strictEqual(
+        asking[0]?.message.text,
+        task.title + " is asking something in its coding thread. Open the work thread to answer.",
+      );
+      assert.strictEqual(asking[0]?.message.options, undefined);
+      assert.strictEqual(asking[0]?.message.questionId, undefined);
+      assert.strictEqual(asking[0]?.message.taskId, undefined);
+      assert.strictEqual(
+        harness.slackSent.some(
+          (send) => send.message.questionId === ChannelQuestionId.make(pending.id),
+        ),
+        false,
+      );
+      yield* gateway.ingest(slackInput("c.txt", "sq2"), slackContext);
+      yield* runtime.drain;
+      assert.strictEqual(responses(harness).length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+  it.effect("sends one untagged line when a launched thread asks more than one question", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-      yield* gateway.ingest(goatInput("do: write the release notes", "ssh-run"), rpcContext);
+      yield* gateway.ingest(goatInput("do: start the build", "mq1"), rpcContext);
       yield* runtime.drain;
       const task = yield* onlyTask;
-      yield* admitSsh(task, "run", "bound");
-      yield* insertThreadDispatch("run", sshObservation);
-      const cardsBefore = yield* cards;
+      yield* launch(task, "live", "bound");
+      harness.world.runs.set("thread:live", []);
+      const pending = request("many", "user_input");
+      harness.world.runtimeRequests.set("thread:live", [pending]);
+      harness.world.userInputQuestions.set(pending.id, [
+        {
+          id: "one",
+          header: "One",
+          question: "First?",
+          options: [{ label: "A", description: "A" }],
+        },
+        {
+          id: "two",
+          header: "Two",
+          question: "Second?",
+          options: [{ label: "B", description: "B" }],
+        },
+      ]);
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
-      const running = yield* onlyTask;
-      assert.strictEqual(running.status, "running");
-      assert.deepStrictEqual(running.observed?.needsYou, [stampedSshApproval]);
-      assert.strictEqual(yield* cards, cardsBefore + 1);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const lines = (yield* botMessages).messages.filter((message) =>
+        message.text.includes("is asking something in its coding thread"),
+      );
+      assert.strictEqual(lines.length, 1);
+      assert.strictEqual(lines[0]?.channel?.taskId, undefined);
+      assert.strictEqual(
+        lines[0]?.text,
+        task.title + " is asking something in its coding thread. Open the work thread to answer.",
+      );
+      assert.strictEqual(
+        (yield* botMessages).messages.filter(
+          (message) => message.channel?.questionId === ChannelQuestionId.make(pending.id),
+        ).length,
+        0,
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 });

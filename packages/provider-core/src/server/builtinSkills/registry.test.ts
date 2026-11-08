@@ -385,15 +385,15 @@ describe("computer use skill against what agents receive today", () => {
     expect(codeSpans.filter((span) => Object.hasOwn(CUA_DRIVER_EXCLUDED_TOOLS, span))).toEqual([]);
   });
 
-  it("teaches full-access foreground authority and same-turn approval without self-restoring", () => {
+  it("teaches default and strict foreground authority without self-restoring", () => {
     const line = guidance.split("\n").find((entry) => entry.includes("`bring_to_front`")) ?? "";
     expect(line).toContain("`computer_use.request` with `foreground: true` and no `apps`");
     expect(line).toContain(
-      "Full-access turns already have foreground authority without asking, whatever started them.",
+      "With strict input guards off, every turn already has foreground authority without asking, whatever started it; with them on, full-access turns do.",
     );
     expect(line).toContain("it waits for the answer in this turn");
     expect(line).toMatch(/Pause, Stop or the end of the turn revokes it/);
-    expect(line).toContain("full-access foreground returns automatically only next turn");
+    expect(line).toContain("automatically admitted foreground returns only next turn");
     expect(guidance).not.toContain("ask them first");
     expect(guidance).toContain("Never restore focus yourself.");
   });

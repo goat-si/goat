@@ -5,6 +5,8 @@ import {
   goatBotActivityTask,
   goatBotItemReaders,
   goatBotReplyingSince,
+  goatBotEnsureFailure,
+  GOAT_BOT_NOT_ACCEPTED,
   initialGoatBotEnsure,
   observeResidentAtom,
   residentAtomValue,
@@ -152,7 +154,10 @@ function newQueue(environmentId: EnvironmentId) {
       // message is never sent again.
       forget(clientKey);
       if (result.state === "rejected")
-        return { requestKey: result.inputId, rejected: "GOAT Bot did not accept this message" };
+        return {
+          requestKey: result.inputId,
+          rejected: GOAT_BOT_NOT_ACCEPTED,
+        };
       return { requestKey: result.inputId };
     },
   });
@@ -453,7 +458,7 @@ export function useGoatBotSession(
             ? { kind: "legacy_active" }
             : {
                 kind: "failed",
-                message: error instanceof Error ? error.message : "Couldn't reach GOAT Bot",
+                ...goatBotEnsureFailure(error),
               },
         );
       }

@@ -15,7 +15,22 @@ export interface GoatBotEnsureMachine {
 export type GoatBotEnsureResult =
   | { readonly kind: "confirmed"; readonly bot: GoatBotRef }
   | { readonly kind: "legacy_active" }
-  | { readonly kind: "failed"; readonly message: string };
+  | { readonly kind: "failed"; readonly message?: string };
+
+/** The connection dropped. The bot's chat names the bot instead of showing this message. */
+export class GoatBotUnreachable extends Error {
+  readonly _tag = "GoatBotUnreachable";
+  constructor() {
+    super("The connection dropped. Try again when it reconnects.");
+  }
+}
+
+/** A failed ensure's stored text, or nothing when the chat should name the bot itself. */
+export function goatBotEnsureFailure(error: unknown): { readonly message?: string } {
+  if (error instanceof GoatBotUnreachable || !(error instanceof Error) || error.message === "")
+    return {};
+  return { message: error.message };
+}
 
 export const initialGoatBotEnsure: GoatBotEnsureMachine = {
   generation: null,
@@ -59,6 +74,9 @@ export function settleGoatBotEnsure(
       ? { state: "confirmed", bot: result.bot }
       : result.kind === "legacy_active"
         ? { state: "legacy_active" }
-        : { state: "failed", message: result.message };
+        : {
+            state: "failed",
+            ...(result.message === undefined ? {} : { message: result.message }),
+          };
   return { ...machine, pending: null, ensure };
 }
