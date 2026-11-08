@@ -981,6 +981,15 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const { next, notify } = recordFailure(watch, now, error);
+      yield* Effect.logWarning("launch watch: follower contact failed", {
+        watchId: watch.id,
+        host: watch.host,
+        threadId: watch.threadId,
+        runId,
+        failures: next.outage?.failures,
+        nextRetryAt: next.outage?.nextRetryAt,
+        error,
+      });
       let saved = next;
       if (notify && next.outage !== null) {
         const sent = yield* deliver(next, outageWake({ watch: next, outage: next.outage }), {
