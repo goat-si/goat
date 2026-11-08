@@ -56,6 +56,7 @@ import {
   remoteTaskQuestionNotice,
 } from "./reportFrame.ts";
 import { storeInboxReport } from "./RemoteReportInbox.ts";
+import { persistThreadObservation, threadKnownRun } from "./remoteThreadObservation.ts";
 import {
   RemoteDispatchError,
   type RemoteDispatchRecord,
@@ -681,6 +682,7 @@ const make = Effect.gen(function* () {
           latest_at = ${last?.createdAt ?? r.latest_at}, state = ${state}, updated_at = ${at},
           last_error = ${forced === "lost" ? "Remote report binding or thread is unavailable." : null}
           WHERE correlation_id = ${id}`;
+              yield* persistThreadObservation(sql, id, known?.runId ?? r.known_run_id, observed);
             }),
           ),
         );
@@ -717,10 +719,7 @@ const make = Effect.gen(function* () {
       readKey: r.read_key,
       afterSequence: r.report_cursor,
       watchRunId: null,
-      knownRun:
-        r.known_run_id === null || r.known_run_status === null
-          ? null
-          : { runId: r.known_run_id, status: r.known_run_status },
+      knownRun: threadKnownRun(r),
       timeoutMs: 300_000,
     }).pipe(
       Effect.flatMap(decodeReportWait),
