@@ -66,7 +66,10 @@ import {
 } from "./preparationLog.ts";
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
 import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
-import { watchPreparationInterruption } from "./goat/PreparationInterruption.ts";
+import {
+  preparationRunStopped,
+  watchPreparationInterruption,
+} from "./goat/PreparationInterruption.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
   | { readonly type: "root"; readonly branch?: string | undefined }
@@ -883,7 +886,9 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.onError((cause) =>
         Effect.gen(function* () {
-          const cancelled = Cause.hasInterruptsOnly(cause);
+          const cancelled =
+            Cause.hasInterruptsOnly(cause) ||
+            (yield* preparationRunStopped(threads, threadId, runId));
           yield* setupTracker.finish(
             threadId,
             cancelled ? "cancelled" : "failed",
