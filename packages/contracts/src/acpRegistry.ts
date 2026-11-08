@@ -152,10 +152,17 @@ export const AcpRegistrySession = Schema.Struct({
 });
 export type AcpRegistrySession = typeof AcpRegistrySession.Type;
 
+const AcpRegistryContinuation = Schema.String.check(
+  Schema.isMinLength(16),
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[A-Za-z0-9_-]+$/),
+);
+
 export const AcpRegistryListSessionsInput = Schema.Struct({
   instanceId: ProviderInstanceId,
   projectId: ProjectId,
   cursor: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_048))),
+  continuation: Schema.optionalKey(AcpRegistryContinuation),
 });
 export type AcpRegistryListSessionsInput = typeof AcpRegistryListSessionsInput.Type;
 
@@ -163,6 +170,7 @@ export const AcpRegistryListSessionsResult = Schema.Struct({
   sessions: Schema.Array(AcpRegistrySession).check(Schema.isMaxLength(256)),
   truncated: Schema.optionalKey(Schema.Boolean),
   nextCursor: Schema.NullOr(Schema.String.check(Schema.isMaxLength(2_048))),
+  continuation: Schema.optionalKey(AcpRegistryContinuation),
   canLoad: Schema.Boolean,
   canResume: Schema.Boolean,
   canDelete: Schema.Boolean,
@@ -306,6 +314,7 @@ export const AcpRegistryOperationErrorReason = Schema.Literals([
   "archive_invalid",
   "authentication_failed",
   "checksum_mismatch",
+  "continuation_unavailable",
   "download_failed",
   "install_failed",
   "instance_not_found",
