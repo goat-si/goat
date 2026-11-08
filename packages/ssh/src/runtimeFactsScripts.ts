@@ -168,12 +168,48 @@ compat_fact() {
 }
 `;
 
-export const REMOTE_PROTOCOL_TOKEN_SCRIPT = `valid_version() {
-  printf '%s\\n' "$1" | LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$'
+// The validators run for every token a host reports and must stay builtins: under MSYS each
+// external command costs about 50 ms. Characters are listed, not ranged, so no locale widens them.
+export const REMOTE_PROTOCOL_TOKEN_SCRIPT = `token_digits=0123456789
+token_chars=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-
+# 0 or a decimal integer without a leading zero.
+valid_numeric_id() {
+  case "$1" in 0) return 0 ;; ''|0*|*[!$token_digits]*) return 1 ;; esac
 }
+# Dot-separated SemVer identifiers $2: prerelease ($1=pre) numbers carry no leading zero.
+valid_dot_ids() {
+  ids_rest="$2."
+  while [ -n "$ids_rest" ]; do
+    ids_part="\${ids_rest%%.*}"; ids_rest="\${ids_rest#*.}"
+    case "$ids_part" in ''|*[!$token_chars]*) return 1 ;; esac
+    if [ "$1" = pre ]; then
+      case "$ids_part" in *[!$token_digits]*) ;; *) valid_numeric_id "$ids_part" || return 1 ;; esac
+    fi
+  done
+}
+valid_version() {
+  ver_core="\${1%%[-+]*}"; ver_rest="\${1#"$ver_core"}"
+  ver_major="\${ver_core%%.*}"; ver_tail="\${ver_core#*.}"
+  [ "$ver_tail" != "$ver_core" ] || return 1
+  ver_minor="\${ver_tail%%.*}"; ver_patch="\${ver_tail#*.}"
+  [ "$ver_patch" != "$ver_tail" ] &&
+    valid_numeric_id "$ver_major" && valid_numeric_id "$ver_minor" && valid_numeric_id "$ver_patch" || return 1
+  case "$ver_rest" in
+    '') ;;
+    -*)
+      ver_rest="\${ver_rest#-}"
+      valid_dot_ids pre "\${ver_rest%%+*}" || return 1
+      case "$ver_rest" in *+*) valid_dot_ids build "\${ver_rest#*+}" ;; esac ;;
+    +*) valid_dot_ids build "\${ver_rest#+}" ;;
+    *) return 1 ;;
+  esac
+}
+# At most 2^53 - 1. Sixteen digits compare as two halves, which 32-bit shell arithmetic can hold.
 valid_uint() {
-  printf '%s\\n' "$1" | LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)$' || return 1
-  [ "\${#1}" -le 16 ] && awk -v n="$1" 'BEGIN { exit !(n <= 9007199254740991) }'
+  valid_numeric_id "$1" && [ "\${#1}" -le 16 ] || return 1
+  [ "\${#1}" -lt 16 ] && return 0
+  uint_high="\${1%????????}"; uint_low="\${1#????????}"
+  [ "$uint_high" -lt 90071992 ] || { [ "$uint_high" = 90071992 ] && [ "$uint_low" -le 54740991 ]; }
 }
 valid_positive() { valid_uint "$1" && [ "$1" != 0 ]; }
 valid_port() { valid_uint "$1" && [ "$1" -le 65535 ]; }

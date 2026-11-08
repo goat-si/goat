@@ -1,3 +1,7 @@
+// Validator checks run shells synchronously; the Effect spawner adds nothing to them.
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
+
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
@@ -8,6 +12,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";
 import { ChildProcessSpawner } from "effect/process";
 import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
+import { REMOTE_PROTOCOL_TOKEN_SCRIPT } from "./runtimeFactsScripts.ts";
 import { installArchivePsDouble, uploadTarget } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 import { prepareRemoteRuntime } from "./tunnel.ts";
@@ -494,5 +499,109 @@ sleep() {
         );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
+  );
+});
+
+// The validators run for every token a host reports; under MSYS each external command costs about
+// 50 ms, so they stay shell builtins and accept exactly the SemVer and safe-integer grammar.
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote token validators", () => {
+  const semver =
+    /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/u;
+  const uint = (token: string) =>
+    /^(0|[1-9][0-9]*)$/u.test(token) && token.length <= 16 && BigInt(token) <= 9007199254740991n;
+  const versions = [
+    "1.2.3",
+    "0.0.0",
+    "10.20.30",
+    "01.2.3",
+    "1.02.3",
+    "1.2.03",
+    "1.2",
+    "1.2.3.4",
+    "",
+    "v1.2.3",
+    "1.2.3-0",
+    "1.2.3-00",
+    "1.2.3-01",
+    "1.2.3-0a",
+    "1.2.3-a0",
+    "1.2.3-rc.1",
+    "1.2.3-rc.01",
+    "1.2.3-rc-1",
+    "1.2.3--",
+    "1.2.3-",
+    "1.2.3-.a",
+    "1.2.3-a.",
+    "1.2.3-a..b",
+    "1.2.3+build",
+    "1.2.3+build.001",
+    "1.2.3+",
+    "1.2.3+a+b",
+    "1.2.3-a+b",
+    "1.2.3-a+b+c",
+    "1.2.3+a.",
+    "-1.2.3",
+    "0.1.6-nightly.20261108.346",
+    "1.2.3-preview.20260911.10",
+    "1.2.3-\u00e9",
+    "1.2.3-a_b",
+    "1.2.3 ",
+    " 1.2.3",
+    "1.2.3\nfoo",
+    "1.2.3-*",
+    "1.2.3-a b",
+    "1.2.3-[a]",
+  ];
+  const integers = [
+    "0",
+    "1",
+    "00",
+    "01",
+    "10",
+    "65535",
+    "65536",
+    "-1",
+    "+1",
+    "1.0",
+    "",
+    " 1",
+    "1 ",
+    "a",
+    "9007199254740991",
+    "9007199254740992",
+    "9007199254740990",
+    "8999999999999999",
+    "9007199300000000",
+    "9007199254740999",
+    "1000000000000000",
+    "10000000000000000",
+    "99999999999999999",
+    "\u0663",
+    "1\n2",
+  ];
+  const quote = (token: string) => "'" + token.replaceAll("'", "'\\''") + "'";
+  it.each(
+    ["dash", "bash"].flatMap((shell) => ["C", "C.UTF-8"].map((locale) => ({ shell, locale }))),
+  )(
+    "accept exactly the SemVer and safe-integer grammar without external commands ($shell, $locale)",
+    ({ shell, locale }) => {
+      const body = [
+        ...versions.map((token) => "valid_version " + quote(token) + " && echo 1 || echo 0"),
+        ...integers.map((token) => "valid_uint " + quote(token) + " && echo 1 || echo 0"),
+        ...integers.map((token) => "valid_port " + quote(token) + " && echo 1 || echo 0"),
+      ].join("\n");
+      // An empty PATH proves the validators start no external command.
+      const result = NodeChildProcess.spawnSync(
+        shell,
+        ["-c", REMOTE_PROTOCOL_TOKEN_SCRIPT + "\nPATH=/nonexistent\n" + body],
+        { encoding: "utf8", env: { ...process.env, LC_ALL: locale } },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(result.stdout.trim().split("\n"), [
+        ...versions.map((token) => (semver.test(token) ? "1" : "0")),
+        ...integers.map((token) => (uint(token) ? "1" : "0")),
+        ...integers.map((token) => (uint(token) && Number(token) <= 65535 ? "1" : "0")),
+      ]);
+    },
   );
 });
