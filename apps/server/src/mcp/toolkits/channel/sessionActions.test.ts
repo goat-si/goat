@@ -1,5 +1,11 @@
 import { assert, it } from "@effect/vitest";
-import { ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
+import {
+  ChannelTaskEventId,
+  ChannelTaskId,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
@@ -11,7 +17,13 @@ import * as ChannelRuntime from "../../../channels/ChannelRuntime.ts";
 import { commitTransition } from "../../../channels/channelTaskWrites.ts";
 import { ChannelQuestionId } from "@goat/contracts";
 import * as ChannelSessionTaskActions from "../../../channels/channelSessionTaskActions.ts";
-import { ask, runsOf, sessionHarness } from "../../../channels/ChannelBotSession.testkit.ts";
+import * as ChannelWorkerReports from "../../../channels/ChannelWorkerReports.ts";
+import {
+  ask,
+  current,
+  runsOf,
+  sessionHarness,
+} from "../../../channels/ChannelBotSession.testkit.ts";
 import { setupBot } from "../../../channels/testkit/ChannelHarness.ts";
 import { environmentId, makeHarness } from "../../../channels/testkit/ChannelHarness.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -310,5 +322,49 @@ it.effect("an agent's follow-up and answer results leave out the sender the serv
       assert.notProperty(ChannelHandlers.withoutSender(event)!.payload, "sender");
     }
     assert.isNull(ChannelHandlers.withoutSender(null));
+  }).pipe(Effect.provide(harness.layer));
+});
+
+/** The task id as agents sometimes copy it, without its "channel-task:" prefix. */
+const bareTaskId = (taskId: ChannelTaskId) =>
+  ChannelTaskId.make(taskId.split(":").slice(1).join(":"));
+
+it.effect(
+  "a worker report naming its task without the channel-task: prefix still settles it",
+  () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const task = yield* ask("look: my last email", "bare-report");
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* reports.report(
+        {
+          taskId: bareTaskId(task.taskId),
+          eventId: ChannelTaskEventId.make("bare-report-failed"),
+          generation: task.generation,
+          status: "failed",
+          summary: "No mail connector is available.",
+        },
+        task.worker!.threadId,
+      );
+      const settled = yield* current(task.taskId);
+      assert.strictEqual(settled.status, "failed");
+      assert.strictEqual(settled.resultSummary, "No mail connector is available.");
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect("a session stops a task it names without the channel-task: prefix", () => {
+  const harness = sessionHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const source = yield* ask("look: source", "bare-stop-source");
+    const target = yield* ask("look: target", "bare-stop-target");
+    const threadId = source.worker!.threadId;
+    const caller = { threadId, runId: runsOf(harness, threadId)[0]!.id };
+    const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
+    const stopped = yield* actions.stop({ caller, taskId: bareTaskId(target.taskId) });
+    assert.strictEqual(stopped?.type, "task.cancelled");
+    assert.strictEqual((yield* current(target.taskId)).status, "cancelled");
   }).pipe(Effect.provide(harness.layer));
 });
