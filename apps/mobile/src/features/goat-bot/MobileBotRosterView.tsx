@@ -280,7 +280,7 @@ export function MobileBotRosterView(props: {
             : null}
           {bot.kind === "main" && props.rows.length === 0 ? (
             <Text className="ml-10 px-4 py-3 text-foreground-muted">
-              Work GOAT Bot starts will appear here.
+              Work {bot.profile?.name ?? "GOAT Bot"} starts will appear here.
             </Text>
           ) : null}
           {bot.kind === "main" &&

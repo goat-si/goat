@@ -20,6 +20,7 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Toggle } from "../ui/toggle";
 import { ToggleGroup } from "../ui/toggle-group";
+import { useGoatBotName } from "./goatBotMemberContext";
 
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 
@@ -40,6 +41,7 @@ export function GoatBotCheckInForm(props: {
   const [weekdays, setWeekdays] = useState<readonly number[]>(CHECK_IN_DEFAULT_WEEKDAYS);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const botName = useGoatBotName();
   const save = async () => {
     if (bot === null || saving) return;
     setSaving(true);
@@ -73,7 +75,7 @@ export function GoatBotCheckInForm(props: {
       }}
     >
       <p className="text-xs text-muted-foreground">
-        GOAT Bot looks over your open work and messages you only when something needs you.
+        {botName} looks over your open work and messages you only when something needs you.
       </p>
       <div className="flex items-center gap-2">
         <Label htmlFor="goat-bot-check-in-time">At</Label>

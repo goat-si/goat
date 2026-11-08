@@ -1,7 +1,6 @@
 import {
   AcpRegistryListProvidersResult,
   AcpRegistryOperationError,
-  AcpRegistryListSessionsResult,
   AcpRegistryProbeResult,
   type AcpRegistryProbeAuthMethod,
   type AcpRegistryProbeModel,
@@ -34,6 +33,7 @@ import {
   flattenSelectChoices,
 } from "@goat/provider-acp/server/sessionConfig";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
+import type { AcpRegistrySessionPage } from "@goat/provider-core/server/driver";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 
 const MAX_AUTH_METHODS = 32;
@@ -43,6 +43,9 @@ const MAX_NAME_LENGTH = 160;
 const MAX_DESCRIPTION_LENGTH = 1_024;
 const MAX_COMMANDS = 128;
 const MAX_COMMAND_LINE_LENGTH = 2_048;
+const MAX_LISTED_SESSIONS = 1_280;
+const MAX_LISTED_SESSION_BYTES = 1_048_576;
+const MAX_RAW_CURSOR_CHARS = 16_384;
 const PROBE_TIMEOUT_SECONDS = 60;
 const PROBE_TIMEOUT = `${PROBE_TIMEOUT_SECONDS} seconds`;
 const COMMAND_ADVERTISEMENT_GRACE = "500 millis";
@@ -584,58 +587,95 @@ function managementFailure(
     : new AcpRegistryOperationError({ ...failure, cause: error });
 }
 
+const listedSessionBytes = (session: {
+  readonly sessionId: string;
+  readonly cwd: string;
+  readonly additionalDirectories: ReadonlyArray<string>;
+  readonly title: string | null;
+  readonly updatedAt: string | null;
+}) =>
+  session.sessionId.length +
+  session.cwd.length +
+  (session.title?.length ?? 0) +
+  (session.updatedAt?.length ?? 0) +
+  session.additionalDirectories.reduce((sum, directory) => sum + directory.length, 0);
+
 export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions")(
   function* (input: AcpRegistryManagementInput & { readonly cursor?: string }) {
     const runtime = yield* makeAcpRegistryManagementRuntime(input);
     const initialized = yield* runtime.initialize();
     const listed = yield* runtime.listSessions(input.cursor);
-    // A session whose additional roots GOAT had to drop or cap no longer describes its whole scope.
+    const sessions: AcpRegistrySessionPage["sessions"][number][] = [];
+    let bytes = 0;
+    let droppedSessions = false;
     let directoriesCut = false;
-    const sessions = listed.sessions.slice(0, 256).flatMap((session) => {
+    let overflow = false;
+    for (const session of listed.sessions) {
       const sessionId = boundedOpaqueValue(session.sessionId, 1_024);
       const cwd = boundedOpaqueValue(session.cwd, 4_096);
-      if (sessionId === undefined || cwd === undefined) return [];
+      if (sessionId === undefined || cwd === undefined) {
+        droppedSessions = true;
+        continue;
+      }
       const directories = session.additionalDirectories ?? [];
-      const additionalDirectories = directories
-        .flatMap((directory) => {
-          const normalized = boundedOpaqueValue(directory, 4_096);
-          return normalized === undefined ? [] : [normalized];
-        })
-        .slice(0, 32);
-      if (additionalDirectories.length !== directories.length) directoriesCut = true;
-      return [
-        {
-          sessionId,
-          cwd,
-          additionalDirectories,
-          title:
-            session.title === undefined || session.title === null
-              ? null
-              : boundedText(session.title, 1_024) || null,
-          updatedAt:
-            session.updatedAt === undefined || session.updatedAt === null
-              ? null
-              : boundedText(session.updatedAt, 128) || null,
-          importedThreadId: null,
-        },
-      ];
-    });
-    const nextCursor =
-      listed.nextCursor === undefined || listed.nextCursor === null
-        ? null
-        : boundedText(listed.nextCursor, 2_048) || null;
-    const incomplete =
-      directoriesCut ||
-      sessions.length !== listed.sessions.length ||
-      nextCursor !== (listed.nextCursor ?? null);
-    return AcpRegistryListSessionsResult.make({
+      const additionalDirectories: string[] = [];
+      let cut = false;
+      for (const directory of directories) {
+        if (additionalDirectories.length === 32) {
+          cut = true;
+          break;
+        }
+        const normalized = boundedOpaqueValue(directory, 4_096);
+        if (normalized === undefined) {
+          cut = true;
+          continue;
+        }
+        additionalDirectories.push(normalized);
+      }
+      if (cut) directoriesCut = true;
+      const row = {
+        sessionId,
+        cwd,
+        additionalDirectories,
+        title:
+          session.title === undefined || session.title === null
+            ? null
+            : boundedText(session.title, 1_024) || null,
+        updatedAt:
+          session.updatedAt === undefined || session.updatedAt === null
+            ? null
+            : boundedText(session.updatedAt, 128) || null,
+        importedThreadId: null,
+      };
+      const size = listedSessionBytes(row);
+      if (sessions.length === MAX_LISTED_SESSIONS || bytes + size > MAX_LISTED_SESSION_BYTES) {
+        overflow = true;
+        break;
+      }
+      sessions.push(row);
+      bytes += size;
+    }
+    const provided = listed.nextCursor;
+    const cursorText = typeof provided === "string" ? provided : undefined;
+    const cursorDropped =
+      cursorText !== undefined &&
+      cursorText.trim().length > 0 &&
+      cursorText.length > MAX_RAW_CURSOR_CHARS;
+    const rawCursor =
+      cursorText !== undefined && cursorText.trim().length > 0 && !cursorDropped
+        ? cursorText
+        : null;
+    return {
       sessions,
-      ...(incomplete ? { truncated: true } : {}),
-      nextCursor,
+      rawCursor,
+      droppedSessions,
+      directoriesCut,
+      overflow,
+      cursorDropped,
       canLoad: initialized.agentCapabilities?.loadSession === true,
       canResume: initialized.agentCapabilities?.sessionCapabilities?.resume != null,
       canDelete: initialized.agentCapabilities?.sessionCapabilities?.delete != null,
-    });
+    } satisfies AcpRegistrySessionPage;
   },
   (effect) =>
     effect.pipe(

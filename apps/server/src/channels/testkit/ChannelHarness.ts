@@ -112,6 +112,7 @@ class WorkerWorld {
   readonly runtimeRequests = new Map<string, ReadonlyArray<OrchestrationV2RuntimeRequest>>();
   /** Approval prompts by request id, served as the thread's approval_request turn items. */
   readonly approvalPrompts = new Map<string, string>();
+  readonly userInputQuestions = new Map<string, readonly object[]>();
   /** Subagents a worker (or a subagent) thread started, by parent thread id. */
   readonly subagents = new Map<string, ReadonlyArray<OrchestrationV2Subagent>>();
   readonly shells = new Map<
@@ -422,9 +423,15 @@ export function makeHarness(
               runtimeRequests: world.runtimeRequests.get(threadId) ?? [],
               turnItems: (world.runtimeRequests.get(threadId) ?? []).flatMap((request) => {
                 const prompt = world.approvalPrompts.get(request.id);
-                return prompt === undefined
-                  ? []
-                  : [{ type: "approval_request", requestId: request.id, prompt }];
+                const questions = world.userInputQuestions.get(request.id);
+                return [
+                  ...(prompt === undefined
+                    ? []
+                    : [{ type: "approval_request" as const, requestId: request.id, prompt }]),
+                  ...(questions === undefined
+                    ? []
+                    : [{ type: "user_input_request" as const, requestId: request.id, questions }]),
+                ];
               }),
               providerThreads: [
                 ...(world.background.has(threadId)

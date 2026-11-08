@@ -1670,7 +1670,8 @@ const make = Effect.gen(function* () {
               UPDATE channel_outbox SET state = 'ambiguous', last_error_code = 'interrupted',
                 updated_at = ${input.now}
               WHERE state = 'delivering' AND destination_kind NOT IN ('goat', 'mcp')
-              RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json
+              RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json,
+                last_error_code
             `;
             yield* copyUndeliveredReplies(sql, interrupted, "ambiguous", input.now);
           }),

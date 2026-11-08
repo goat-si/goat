@@ -152,7 +152,7 @@ const TASKS = [
 const MATRIX_ORDER = ["check", "typecheck", CHANGED_TESTS_TASK, ...TASKS.slice(2)];
 /**
  * Minutes of plain Node work with no browsers, native headers or need for many cores. They run on
- * hosted ubuntu-24.04 even if a self-hosted pool returns, so they never queue behind half-hour
+ * hosted ubuntu-24.04 even when the lidge pool is on, so they never queue behind half-hour
  * server shards.
  */
 const HOSTED_TASKS = new Set([
@@ -502,8 +502,8 @@ function selectTasks(
 
 /**
  * The ci job matrix; test-server expands into its shards. Each entry carries the job title and its
- * runner pool, hosted, linux or windows. goat-ci.yml runs hosted and linux entries on ubuntu-24.04
- * since the EPYC pool was retired; linux marks the heavy work a self-hosted pool would take.
+ * runner pool, hosted, linux or windows. goat-ci.yml sends a trusted run's linux entries to the
+ * lidge pool while LIDGE_RUNNERS is on, and every other entry to a hosted image.
  */
 function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
   const include = [];

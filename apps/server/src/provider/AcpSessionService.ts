@@ -24,6 +24,11 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
+import {
+  acpContinuationKey,
+  makeAcpSessionContinuations,
+  type ContinuationPage,
+} from "./AcpSessionContinuations.ts";
 
 export class AcpSessionService extends Context.Service<
   AcpSessionService,
@@ -50,6 +55,12 @@ const make = Effect.gen(function* () {
     yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const crypto = yield* Crypto.Crypto;
+  const continuations = yield* makeAcpSessionContinuations();
+  const continuationUnavailable = () =>
+    new AcpRegistryOperationError({
+      reason: "continuation_unavailable",
+      message: "This session list expired. Refresh to list sessions again.",
+    });
   const acpRegistryProject = Effect.fn("AcpSessionService.project")(function* (
     projectId: ProjectId,
   ) {
@@ -103,21 +114,17 @@ const make = Effect.gen(function* () {
       nativeThreadId: input.sessionId,
     });
 
-  const listAcpRegistrySessions = Effect.fn("ws.acpRegistry.listSessions")(function* (
-    input: AcpRegistryListSessionsInput,
-  ) {
-    const project = yield* acpRegistryProject(input.projectId);
-    const { instance, manager } = yield* acpSessionManager(input.instanceId);
-    const listed = yield* manager.listSessions({
-      cwd: project.workspaceRoot,
-      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-    });
-    const sessions = yield* Effect.forEach(
-      listed.sessions,
+  const annotateSessions = (
+    instanceDriver: ProviderDriverKind,
+    instanceId: ProviderInstanceId,
+    sessions: ContinuationPage["sessions"],
+  ) =>
+    Effect.forEach(
+      sessions,
       (session) => {
         const threadId = importedAcpThreadId({
-          driver: instance.driverKind,
-          instanceId: input.instanceId,
+          driver: instanceDriver,
+          instanceId,
           sessionId: session.sessionId,
         });
         return threadManagement.getThreadShell(threadId).pipe(
@@ -137,7 +144,68 @@ const make = Effect.gen(function* () {
       },
       { concurrency: 16 },
     );
-    return { ...listed, sessions };
+
+  const finishList = (
+    instanceDriver: ProviderDriverKind,
+    instanceId: ProviderInstanceId,
+    page: ContinuationPage,
+  ) =>
+    annotateSessions(instanceDriver, instanceId, page.sessions).pipe(
+      Effect.map((sessions) => ({
+        sessions,
+        nextCursor: page.nextCursor,
+        ...(page.continuation === undefined ? {} : { continuation: page.continuation }),
+        ...(page.truncated ? { truncated: true as const } : {}),
+        canLoad: page.canLoad,
+        canResume: page.canResume,
+        canDelete: page.canDelete,
+      })),
+    );
+
+  // Provider calls stay outside the continuation permit so one slow agent cannot stall every key.
+  const listAcpRegistrySessions = Effect.fn("ws.acpRegistry.listSessions")(function* (
+    input: AcpRegistryListSessionsInput,
+  ) {
+    if (input.cursor !== undefined && input.continuation !== undefined) {
+      return yield* continuationUnavailable();
+    }
+    const project = yield* acpRegistryProject(input.projectId);
+    const { instance, manager } = yield* acpSessionManager(input.instanceId);
+    const key = acpContinuationKey(input.instanceId, input.projectId);
+    if (input.continuation !== undefined) {
+      const token = input.continuation;
+      // A claim made by begin or claim is released on any exit; after a commit release is a no-op.
+      const page = yield* Effect.acquireUseRelease(
+        continuations.begin(key, token),
+        (started) =>
+          started._tag === "Unavailable"
+            ? Effect.fail(continuationUnavailable())
+            : started._tag === "Ready"
+              ? Effect.succeed(started.page)
+              : manager
+                  .listSessions({ cwd: project.workspaceRoot, cursor: started.cursor })
+                  .pipe(
+                    Effect.flatMap((listed) =>
+                      continuations.commit(key, started.generation, listed),
+                    ),
+                  ),
+        (started) =>
+          started._tag === "Fetch" ? continuations.abort(key, started.generation) : Effect.void,
+      );
+      return yield* finishList(instance.driverKind, input.instanceId, page);
+    }
+    const committed = yield* Effect.acquireUseRelease(
+      continuations.claim(key),
+      (generation) =>
+        manager
+          .listSessions({
+            cwd: project.workspaceRoot,
+            ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+          })
+          .pipe(Effect.flatMap((listed) => continuations.commit(key, generation, listed))),
+      (generation) => continuations.abort(key, generation),
+    );
+    return yield* finishList(instance.driverKind, input.instanceId, committed);
   });
 
   const importAcpRegistrySession = Effect.fn("ws.acpRegistry.importSession")(function* (
@@ -272,6 +340,10 @@ const make = Effect.gen(function* () {
           cwd: project.workspaceRoot,
           sessionId: input.sessionId,
         });
+        yield* continuations.scrub(
+          acpContinuationKey(input.instanceId, input.projectId),
+          input.sessionId,
+        );
         return { deleted: true } as const;
       }),
     );

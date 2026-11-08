@@ -11,7 +11,7 @@ export const providerEntries = {
     description:
       "List native ACP sessions and imported threads. Incomplete results are refused; use Settings.",
     guide:
-      "GOAT refuses a page if it drops sessions or changes the provider cursor. A person can manage sessions in Settings.",
+      "GOAT refuses an incomplete page, including one that continues in Settings. A person can manage those sessions there.",
     parameters: {
       instanceId: "ACP provider instance ID.",
       projectId: "Project whose workspace contains the sessions.",

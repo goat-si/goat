@@ -27,8 +27,8 @@ import {
   type ChannelReceptionResult,
   type ChannelRequester,
   type ChannelTask,
-  type ChannelTaskApprovalRef,
   type ChannelTaskNeedsYou,
+  ChannelQuestionId,
   ChannelReceptionId,
   CommandId,
   CHANNEL_RECEPTION_TAIL_LIMITS,
@@ -86,7 +86,6 @@ import {
 import { droppedNoteNotice } from "./channelBotNoteTabEdits.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import {
-  boundRecall,
   canSeeTask,
   journalFor,
   matchMemoryLines,
@@ -100,9 +99,11 @@ import {
   threadDigest,
 } from "./channelBotRecall.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
-import { makeRemoteThreadRecall } from "./channelRemoteRecall.ts";
+import * as ChannelRemoteRecall from "./channelRemoteRecall.ts";
 import {
   approvalCard,
+  approvalReason,
+  approvalSent,
   type ApprovalReply,
   type OpenApprovalCard,
   openApprovalCards,
@@ -111,6 +112,11 @@ import {
 } from "./channelApprovalCards.ts";
 import { replyDelivery, turnAnswerReplyTo } from "./channelReplyDelivery.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
+import {
+  answerNativeQuestion,
+  approvalRequestDetail,
+  nativeQuestionDeliveries,
+} from "./channelNativeQuestionCards.ts";
 import { makeRoutineInputs, ROUTINE_COPY, routineDecision } from "./channelRoutineInputs.ts";
 import { mayAnswerTask, openQuestionTask, questionTextForModel } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
@@ -233,7 +239,7 @@ const make = Effect.gen(function* () {
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
   const memoryService = yield* Effect.serviceOption(MemoryService.MemoryService);
   const memorySync = yield* Effect.serviceOption(MemorySyncService.MemorySyncService);
-  const remoteThreadRecall = yield* makeRemoteThreadRecall;
+  const remoteThreadRecall = yield* ChannelRemoteRecall.makeRemoteThreadRecall;
 
   // Facts that do not change while the server runs.
   const linuxName =
@@ -637,68 +643,25 @@ const make = Effect.gen(function* () {
     conversationId: ChannelConversationId,
     connectionId: string,
     inputId: ChannelInputId,
-  ): Effect.Effect<ReadonlyArray<ChannelReceptionReadResult>> =>
+  ): Effect.Effect<
+    ReadonlyArray<ChannelReceptionReadResult & { readonly fallbacks: ReadonlyArray<string> }>
+  > =>
     Effect.forEach(
       reads,
       (read) =>
         runRead(read, viewer, conversationId, connectionId, inputId).pipe(
           Effect.timeoutOption(CHANNEL_READ_TIMEOUT_MS),
-          Effect.map((text) => ({
-            kind: read.kind,
-            query: read.query,
-            text: Option.match(text, {
-              onNone: () => "(took too long to read)",
-              onSome: boundRecall,
-            }),
-          })),
+          Effect.map((value) =>
+            ChannelRemoteRecall.presentRead(read, Option.getOrUndefined(value)),
+          ),
           Effect.catch((cause) =>
             Effect.logWarning("GOAT Bot read failed", { kind: read.kind, cause }).pipe(
-              Effect.as({ kind: read.kind, query: read.query, text: "(could not be read)" }),
+              Effect.as(ChannelRemoteRecall.presentRead(read, "(could not be read)")),
             ),
           ),
         ),
       { concurrency: "unbounded" },
     );
-
-  /** What an approval asks for, read from its thread's newest runs; missing words are fine. */
-  const approvalDetail = (approval: ChannelTaskApprovalRef) =>
-    Effect.gen(function* () {
-      const { runs } = yield* threads.getThreadRecords(approval.threadId, ["runs"]);
-      const records = yield* threads.getThreadRecords(
-        approval.threadId,
-        ["runtimeRequests", "turnItems"],
-        { turnItemRunIds: runs.slice(-2).map((run) => run.id) },
-      );
-      const item = records.turnItems.find(
-        (entry) => entry.type === "approval_request" && entry.requestId === approval.requestId,
-      );
-      return {
-        kind: records.runtimeRequests.find((request) => request.id === approval.requestId)?.kind,
-        prompt: item?.type === "approval_request" ? item.prompt : undefined,
-      };
-    }).pipe(
-      Effect.timeoutOption(CHANNEL_READ_TIMEOUT_MS),
-      Effect.map(Option.getOrUndefined),
-      Effect.orElseSucceed(() => undefined),
-    );
-
-  /** Same words a local answer records, and the provenance a remote respond requires. */
-  const approvalReason = (
-    decision: ApprovalReply["decision"],
-    answerer: ChannelRequester,
-    via: ChannelRequester["originKind"],
-  ) =>
-    (decision === "accept" ? "Approved" : "Denied") +
-    " by " +
-    answerer.displayName +
-    " from GOAT Bot (" +
-    via +
-    ").";
-
-  const approvalSent = (decision: ApprovalReply["decision"], title: string) =>
-    decision === "accept"
-      ? "Approved. " + title + " continues."
-      : "Denied. I told the agent on " + title + " not to.";
 
   /**
    * Answers one approval for a person allowed to answer for the work's requester. A local answer's
@@ -796,7 +759,7 @@ const make = Effect.gen(function* () {
       const deliveries: Array<ChannelLedger.ChannelOutboxInsert> = [];
       for (const card of openApprovalCards([task])) {
         if (!wanted.has(card.approval.requestId)) continue;
-        const detail = yield* approvalDetail(card.approval);
+        const detail = yield* approvalRequestDetail(card.approval, threads);
         const code = yield* ledger.issueApprovalCode({
           conversationId: task.conversationId,
           requestId: card.approval.requestId,
@@ -818,9 +781,11 @@ const make = Effect.gen(function* () {
             task,
             mentionActorId: tt.mentionFor(task.originAddress, task.requester.externalActorId),
             options: words.options,
+            questionId: ChannelQuestionId.make(card.approval.requestId),
           }),
         );
       }
+      deliveries.push(...(yield* nativeQuestionDeliveries(task, listed, threads)));
       return deliveries;
     });
 
@@ -887,7 +852,10 @@ const make = Effect.gen(function* () {
         : yield* answer(card);
     });
 
-  const { inboundChoice, isDeterministicReply, taskViewChoice } = makeInboundChoices(ledger);
+  const { inboundChoice, isDeterministicReply, taskViewChoice } = makeInboundChoices(
+    ledger,
+    threads,
+  );
 
   const receive: ChannelReceptionService["Service"]["receive"] = (inputId, owner) =>
     Effect.gen(function* () {
@@ -987,16 +955,21 @@ const make = Effect.gen(function* () {
       const choice = routine
         ? undefined
         : (viewChoice ?? (yield* inboundChoice(message, conversationId, tasks)));
+      const nativeAnswer =
+        choice?.type === "native-question"
+          ? yield* answerNativeQuestion(choice, yield* judgedNow, message, inputId, threads, ledger)
+          : undefined;
       const approvalReply =
-        choice?.type === "question"
+        nativeAnswer !== undefined || choice?.type === "question"
           ? undefined
           : message.intent === "message" && requester.originKind !== "mcp" && !routine
             ? parseApprovalReply(choice?.type === "approval-label" ? choice.text : message.text)
             : undefined;
       const answer =
-        approvalReply === undefined
+        nativeAnswer ??
+        (approvalReply === undefined
           ? yield* botNotes.tabEdit(message, inputId, readAt, routine ? undefined : judgedNow)
-          : yield* decideApprovalReply(approvalReply, conversationId, inputId, judgedNow, message);
+          : yield* decideApprovalReply(approvalReply, conversationId, inputId, judgedNow, message));
       if (answer !== undefined) {
         yield* ledger.completeReception({
           owner,
@@ -1030,6 +1003,7 @@ const make = Effect.gen(function* () {
       const hosts = yield* remoteWorkers.knownHosts;
       const bot = (yield* ledger.getBotById(stored.ownerId, stored.botId))?.bot;
       const targets = yield* allowedTargets(bot?.projectId);
+      const recallFallbacks: Array<string> = [];
       const outcome: ReceptionOutcome =
         choice?.type === "question"
           ? {
@@ -1168,6 +1142,7 @@ const make = Effect.gen(function* () {
                   : narrowed
                     ? results.map((result) => ({ ...result, query: "(withheld)" }))
                     : results;
+                recallFallbacks.push(...ChannelRemoteRecall.fallbackReasons(readResults));
                 const journalNow = journalFor(
                   yield* visibleTasks(current, conversationId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
@@ -1569,6 +1544,7 @@ const make = Effect.gen(function* () {
 
       const relatedTask = createdTasks[0]?.task;
       if (noteNotice !== undefined && replyText !== noteNotice) replyText += " " + noteNotice;
+      replyText = ChannelRemoteRecall.keepFallbacks(replyText, undefined, recallFallbacks);
       deliveries.unshift(
         replyDelivery({
           causeKey: "reply:" + inputId,

@@ -40,10 +40,11 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
     Layer.mergeAll(
       database,
       NodeServices.layer,
-      // Off, as on a fresh host: since D16 the setting decides nothing for full access threads.
+      // Strict preserves the full-access-only cases; individual suites opt into default admission.
       ServerSettings.ServerSettingsService.layerTest({
         enableCua: true,
         cuaFullAccessAutoAdmit: false,
+        cuaStrictInputGuards: true,
       }),
       Layer.mock(CuaDriver.CuaDriver)({ availableAppCatalog: Effect.succeedSome([]) }),
     ),
@@ -85,6 +86,20 @@ it.effect("another thread's live full-access control makes taking the screen sha
     yield* settings.updateSettings({ cuaStrictInputGuards: true });
     yield* leases.stop(other);
     assert.notProperty(yield* leases.controlState(owner, control.controlId), "shared");
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("strict-off keeps an every-app control active outside full-access runtime mode", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread-default-allow-control");
+    yield* threadIn(owner, "approval-required");
+    yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+      cuaStrictInputGuards: false,
+    });
+    const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    assert.deepInclude(yield* leases.controlState(owner, control.controlId), { _tag: "active" });
   }).pipe(Effect.provide(everyAppLayer)),
 );
 

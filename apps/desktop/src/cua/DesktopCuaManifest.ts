@@ -38,6 +38,7 @@ export async function prepareDesktopManifest(
         platform: input.platform,
         environment: cuaDriverListingEnvironment(process.env),
         hostBundleIds,
+        includeProtected: input.includeProtected === true,
         path: join(input.directory, "capability-manifest.yaml"),
         ...(input.listApplications ? { listApplications: input.listApplications } : {}),
       });

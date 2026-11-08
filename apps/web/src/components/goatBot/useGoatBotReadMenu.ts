@@ -16,8 +16,8 @@ const isMenuKey = (event: KeyboardEvent) =>
  * waiting badge for every client. Disabled with nothing unread; absent on servers that cannot
  * count read tasks, so the platform menu stays.
  */
-export function useGoatBotReadMenu(count: number | undefined) {
-  const markRead = useMarkGoatBotRead();
+export function useGoatBotReadMenu(count: number | undefined, botName = "GOAT Bot") {
+  const markRead = useMarkGoatBotRead(botName);
   const unread = count !== undefined && count > 0;
   const open = useRef(false);
   const showMenu = async (position: { x: number; y: number }) => {

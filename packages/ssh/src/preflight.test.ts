@@ -28,6 +28,7 @@ const fixture = (
     authExitCode?: number;
     facts?: string;
     factsHome?: string;
+    factsEnv?: string[];
     exactReleaseAbsent?: boolean;
     none?: boolean;
     alias?: boolean | string;
@@ -87,7 +88,10 @@ const fixture = (
         const remoteFacts =
           auth && input.factsHome
             ? yield* runPreflightProcess("env", [
+                "-u",
+                "SystemRoot",
                 `HOME=${input.factsHome}`,
+                ...(input.factsEnv ?? []),
                 "sh",
                 "-c",
                 `sh -c ${command.args.at(-1)}`,
@@ -674,4 +678,26 @@ it.effect("a rejected nightly does not bypass stable fallback lookup or disk enf
     expect(report.steps.find((step) => step.id === "disk")?.state).toBe("failed");
     expect(report.ready).toBe(false);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("finds System32 tar with SystemRoot unset and SYSTEMROOT set", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-preflight-win-" });
+    const bin = `${home}/bin`;
+    yield* fs.makeDirectory(bin);
+    for (const [name, body] of Object.entries({
+      uname: 'if [ "$1" = -s ]; then echo MINGW64_NT; else echo x86_64; fi',
+      cygpath: `[ -z "$SystemRoot" ] && [ "$SYSTEMROOT" = 'C:\\WINDOWS' ] && [ "$1" = -S ] && echo '${bin}'`,
+      "tar.exe": "exit 0",
+    })) {
+      yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
+      yield* fs.chmod(`${bin}/${name}`, 0o755);
+    }
+    const { report } = yield* fixture({
+      factsHome: home,
+      factsEnv: [`PATH=${bin}:${process.env.PATH ?? ""}`, "SYSTEMROOT=C:\\WINDOWS"],
+    });
+    expect(report.steps.find((step) => step.id === "platform")?.state).toBe("passed");
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );

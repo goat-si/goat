@@ -7,6 +7,7 @@ import {
   goatBotChangeNoteMessage,
   goatBotForgetNoteMessage,
   type ChannelRequester,
+  type ChannelReceptionResult,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
@@ -17,9 +18,28 @@ import * as Path from "effect/Path";
 
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import { NOTES_HEADER } from "./channelBotNoteLines.ts";
-import { channelBotFilesFor } from "./channelBotNotes.ts";
+import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import { makeChannelBotNoteWriter, type NoteWriterHooks } from "./channelBotNoteTabEdits.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
+import { inputIdFor } from "./channelIds.ts";
+import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ChannelBotEvents from "./ChannelBotEvents.ts";
+import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelRuntime from "./ChannelRuntime.ts";
+import {
+  botMessages,
+  defaultScript,
+  goatInput,
+  linkSlackUser,
+  makeHarness,
+  ownerId,
+  rpcContext,
+  setupBot,
+  slackContext,
+  slackInput,
+} from "./testkit/ChannelHarness.ts";
 
 // A note line carries the day where GOAT runs; dates here are UTC unless a case sets its own zone.
 const services = Layer.merge(NodeServices.layer, DateTime.layerCurrentZoneOffset(0));
@@ -464,5 +484,163 @@ describe("Memory tab note edits", () => {
       );
       assert.strictEqual((yield* read).length, text.length);
     }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+});
+
+const memoryUpdated = Effect.gen(function* () {
+  yield* (yield* ChannelBotEvents.ChannelBotEvents).flush;
+  const records = yield* botMessages;
+  return records.turnItems.flatMap((item) =>
+    item.type === "notification" && item.source.kind === "goat_bot_event" ? [item.summary] : [],
+  );
+});
+
+/** Reception answers remember itself, so a session does not take the message first. */
+const receptionRouting = Effect.flatMap(ServerSettings.ServerSettingsService, (settings) =>
+  settings.updateSettings({ goatBotSessionRouting: "reception" }),
+);
+
+const remembering = (decide: (text: string) => Partial<ChannelReceptionResult>) => {
+  const harness = makeHarness();
+  harness.script.current = (input) => {
+    if (input.mode !== "input") return defaultScript(input);
+    return Effect.succeed({
+      replyText: "Got it.",
+      action: { type: "report_only" },
+      ...decide(input.inputText ?? ""),
+    });
+  };
+  return harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
+};
+
+const serverNotes = Effect.gen(function* () {
+  return channelBotFilesFor(yield* Path.Path, (yield* ServerConfig.ServerConfig).stateDir);
+});
+
+describe("a Memory updated line when notes change outside the GOAT app", () => {
+  it.effect(
+    "a Slack remember that saves leaves one line, and that input saved again leaves none",
+    () => {
+      const layer = remembering((text) =>
+        text.startsWith("remember that") ? { remember: fridays, rememberQuote: text } : {},
+      );
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* receptionRouting;
+        yield* linkSlackUser();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const fs = yield* FileSystem.FileSystem;
+        const files = yield* serverNotes;
+        yield* gateway.ingest(
+          slackInput("remember that I deploy on Fridays", "slack-save"),
+          slackContext,
+        );
+        yield* runtime.drain;
+        assert.include(yield* fs.readFileString(files.notes), fridays);
+        assert.deepStrictEqual(yield* memoryUpdated, ["Memory updated"]);
+
+        const again = slackInput("remember that I deploy on Fridays", "slack-again");
+        yield* appendChannelBotNote(
+          fs,
+          files,
+          fridays,
+          "2026-11-07T10:00:00.000Z",
+          inputIdFor({
+            ...again,
+            ownerId,
+          }),
+        );
+        const before = yield* fs.readFileString(files.notes);
+        yield* gateway.ingest(again, slackContext);
+        yield* runtime.drain;
+        assert.strictEqual(yield* fs.readFileString(files.notes), before);
+        assert.deepStrictEqual(yield* memoryUpdated, ["Memory updated"]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("a remember from the GOAT app leaves no line", () => {
+    const layer = remembering(() => ({
+      remember: "I deploy on Mondays.",
+      rememberQuote: "remember that I deploy on Mondays",
+    }));
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* receptionRouting;
+      const fs = yield* FileSystem.FileSystem;
+      const files = yield* serverNotes;
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        goatInput("remember that I deploy on Mondays", "goat-save"),
+        rpcContext,
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      assert.include(yield* fs.readFileString(files.notes), "I deploy on Mondays.");
+      assert.deepStrictEqual(yield* memoryUpdated, []);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a refused remember and a change that finds nothing leave no line", () => {
+    const layer = remembering(() => ({
+      remember: fridays,
+      rememberQuote: "please remember Fridays",
+    }));
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* receptionRouting;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const fs = yield* FileSystem.FileSystem;
+      const files = yield* serverNotes;
+      yield* gateway.ingest(slackInput("hello there", "refused"), slackContext);
+      yield* runtime.drain;
+      assert.strictEqual(yield* fs.exists(files.notes), false);
+      yield* gateway.ingest(
+        slackInput(goatBotChangeNoteMessage("no such note", "Still nothing."), "missing"),
+        slackContext,
+      );
+      yield* runtime.drain;
+      assert.deepStrictEqual(yield* memoryUpdated, []);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "a Slack forget that removes a note leaves one line; the same forget from the app leaves none",
+    () => {
+      const layer = remembering(() => ({}));
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* receptionRouting;
+        yield* linkSlackUser();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const fs = yield* FileSystem.FileSystem;
+        const files = yield* serverNotes;
+        yield* appendChannelBotNote(fs, files, fridays, "2026-11-01T10:00:00.000Z", "earlier");
+        yield* gateway.ingest(
+          slackInput(goatBotForgetNoteMessage(fridays), "slack-forget"),
+          slackContext,
+        );
+        yield* runtime.drain;
+        assert.notInclude(yield* fs.readFileString(files.notes), fridays);
+        assert.deepStrictEqual(yield* memoryUpdated, ["Memory updated"]);
+
+        yield* appendChannelBotNote(
+          fs,
+          files,
+          "I deploy on Mondays.",
+          "2026-11-02T10:00:00.000Z",
+          "later",
+        );
+        yield* gateway.ingest(
+          goatInput(goatBotForgetNoteMessage("I deploy on Mondays."), "goat-forget"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        assert.notInclude(yield* fs.readFileString(files.notes), "I deploy on Mondays.");
+        assert.deepStrictEqual(yield* memoryUpdated, ["Memory updated"]);
+      }).pipe(Effect.provide(layer));
+    },
   );
 });
