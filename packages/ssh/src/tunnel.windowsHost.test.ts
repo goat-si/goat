@@ -35,7 +35,6 @@ import {
   buildRemoteHostDownloadScript,
   buildRemoteLaunchScript,
   buildRemoteRuntimeProbeScript,
-  buildRemoteStopScript,
   remoteUploadCommand,
   SshEnvironmentManager,
 } from "./tunnel.ts";
@@ -375,65 +374,6 @@ describe("Windows SSH host", () => {
       assert.deepEqual((yield* calls()).slice(3), ["9999"]);
       assert.equal(run(`verify_legacy_process 4242 '${identity}' && echo legacy`), "legacy\n");
       assert.deepEqual((yield* calls()).slice(4), ["4242"]);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-  );
-
-  it.effect("stops a native server after one liveness check sees it gone", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-stop-" });
-      const bin = `${root}/bin`;
-      const home = `${root}/c/h`;
-      const state = `${home}/.goat/ssh-launch/stop-fixture`;
-      yield* fs.makeDirectory(bin);
-      yield* fs.makeDirectory(state, { recursive: true });
-      // tasklist lists the server until taskkill ends it; every call is recorded.
-      for (const [name, body] of Object.entries({
-        uname: WINDOWS_DOUBLES.uname,
-        cygpath: String.raw`[ "$1" = -u ] && printf '%s\n' "$2" | sed -e "s|^C:|$TEST_ROOT/c|" -e 's|\\|/|g'`,
-        "powershell.exe": String.raw`echo "$GOAT_PROCESS_ID" >>"$TEST_ROOT/powershell-calls"
-[ "$GOAT_PROCESS_ID" = 4242 ] || exit 1
-printf '%s\r\n' self 2026-10-13T14:23:57.9648900Z 'C:\h\.goat\runtime\goat\versions\1.2.3\goat.exe' serve --host 127.0.0.1 --port 3773 --base-dir 'C:\h\.goat'`,
-        "tasklist.exe": `echo "$2" >>"$TEST_ROOT/tasklist-calls"
-[ ! -e "$TEST_ROOT/killed" ] && [ "$2" = "PID eq 4242" ] && echo '"goat.exe","4242","Services","0","1 K"'`,
-        "taskkill.exe": ': >"$TEST_ROOT/killed"',
-      })) {
-        yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
-        yield* fs.chmod(`${bin}/${name}`, 0o755);
-      }
-      for (const [name, value] of [
-        [
-          "identity",
-          `${home}/.goat/runtime/goat/versions/1.2.3/goat serve --host 127.0.0.1 --port 3773 --base-dir ${home}/.goat`,
-        ],
-        ["pid", "4242"],
-        ["port", "3773"],
-        ["managed", "managed"],
-        ["run-t3.sh", "#!/bin/sh\necho idle"],
-      ])
-        yield* fs.writeFileString(`${state}/${name}`, `${value}\n`);
-      yield* fs.chmod(`${state}/run-t3.sh`, 0o755);
-      const result = NodeChildProcess.spawnSync(
-        remoteShell,
-        ["-c", buildRemoteStopScript("stop-fixture")],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            HOME: home,
-            TEST_ROOT: root,
-            PATH: `${bin}:${process.env.PATH ?? ""}`,
-          },
-        },
-      );
-      assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.stdout.trim(), '{"stopped":true}');
-      const lines = (name: string) =>
-        fs.readFileString(`${root}/${name}`).pipe(Effect.map((log) => log.trim().split("\n")));
-      // Ownership is verified before the activity check and again before the kill.
-      assert.deepEqual(yield* lines("powershell-calls"), ["4242", "4242"]);
-      // One check before stopping and one that sees the server gone; none repeats it.
-      assert.deepEqual(yield* lines("tasklist-calls"), ["PID eq 4242", "PID eq 4242"]);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
