@@ -80,6 +80,7 @@ const localRun = (run: OrchestrationV2Run): WatchedRun => ({
   requestedAt: DateTime.toEpochMillis(run.requestedAt),
   completedAt: run.completedAt === null ? null : DateTime.toEpochMillis(run.completedAt),
   trigger: run.userMessageId,
+  queued: run.status === "queued",
   dropped: droppedWake({
     status: run.status,
     startedAt: run.startedAt,
@@ -98,6 +99,7 @@ const remoteRuns = (read: RemoteRead, triggers: ReadonlyMap<string, string>): Ar
       requestedAt: Date.parse(run.requestedAt),
       completedAt: run.completedAt === null ? null : Date.parse(run.completedAt),
       trigger,
+      queued: run.status === "queued",
       dropped: droppedWake({
         status: run.status,
         startedAt: run.startedAt,

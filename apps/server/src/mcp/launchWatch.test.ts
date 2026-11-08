@@ -34,6 +34,7 @@ const watchedRun = (
     completedAt?: number | null;
     trigger?: string | undefined;
     dropped?: boolean;
+    queued?: boolean;
   } = {},
 ): WatchedRun => {
   const completedAt = input.completedAt === undefined ? ordinal * 10 + 5 : input.completedAt;
@@ -45,6 +46,7 @@ const watchedRun = (
     completedAt,
     trigger: "trigger" in input ? input.trigger : `message:wake:${runId}`,
     dropped: input.dropped ?? false,
+    queued: input.queued ?? false,
   };
 };
 
@@ -386,6 +388,12 @@ it("leaves out a wake dropped from the queue before it started, and never counts
   const found = discoverRuns(watch, runs, 200);
   expect(found).toMatchObject({ pendingRuns: [run4], skippedRuns: [run2, run3, run5] });
   expect(wentOnFrom(found, run4!, runs)).toBe(false);
+  // Gone on only to a wake still queued, run-4 is followed until that wake starts or is dropped.
+  const queued = [...runs.slice(0, 4), watchedRun(run5!, 5, { requestedAt: 120, queued: true })];
+  const waiting = discoverRuns(watch, queued, 200);
+  expect(waiting).toMatchObject({ pendingRuns: [run4, run5], skippedRuns: [run2, run3] });
+  expect(wentOnFrom(waiting, run4!, queued)).toBe("queued");
+  expect(wentOnFrom(waiting, run4!, [...runs.slice(0, 4), watchedRun(run5!, 5)])).toBe(true);
 });
 
 it("starts a watch that never looked from the newest run it knows, else the newest run", () => {

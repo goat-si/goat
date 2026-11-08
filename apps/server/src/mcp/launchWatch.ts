@@ -17,6 +17,8 @@ import {
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 
+import { suggestedAction } from "./launchWatchText.ts";
+
 /**
  * Decisions and messages for launch watches, kept free of I/O so they can be
  * tested directly. A launch watch is a launcher thread's standing request to
@@ -223,6 +225,8 @@ export interface WatchedRun {
   readonly trigger: string | undefined;
   /** A server wake cancelled before it started, as a stale pull request wake is: it did no work. */
   readonly dropped: boolean;
+  /** Still waiting in the thread's queue, where a server wake may yet be dropped. */
+  readonly queued: boolean;
 }
 
 export const noRunDetails: LaunchWatchRunDetails = {
@@ -408,19 +412,21 @@ export function ownRun(watch: LaunchWatch, trigger: string | undefined): boolean
   return !(decodePart(from) === watch.threadId && decodePart(about) === watch.launcherThreadId);
 }
 
-/** Whether the thread went from this run straight into a later run of its own, never idle between. */
+/**
+ * Whether the thread went from this run straight into a later run of its own, never idle between;
+ * "queued" while every such run still waits in the queue, so none of them may ever start.
+ */
 const wentOn = (watch: LaunchWatch, run: WatchedRun, runs: ReadonlyArray<WatchedRun>) => {
   const end = run.completedAt;
-  return (
-    end !== null &&
-    runs.some(
-      (later) =>
-        later.ordinal > run.ordinal &&
-        later.requestedAt <= end &&
-        !later.dropped &&
-        ownRun(watch, later.trigger),
-    )
+  if (end === null) return false;
+  const next = runs.filter(
+    (later) =>
+      later.ordinal > run.ordinal &&
+      later.requestedAt <= end &&
+      !later.dropped &&
+      ownRun(watch, later.trigger),
   );
+  return next.length === 0 ? false : next.every((later) => later.queued) ? "queued" : true;
 };
 
 /**
@@ -460,7 +466,9 @@ export function discoverRuns(
     // A held run (a retry, or one whose start was unread) is reported however the thread went
     // on, so it is owed like an armed run rather than found.
     else if (wasHeld) pending.push(run.runId);
-    else if (run.terminal && wentOn(watch, run, sorted)) skipped = keepRecent(skipped, run.runId);
+    // Followed while the run it went on to is still queued, so its end is read again later.
+    else if (run.terminal && wentOn(watch, run, sorted) === true)
+      skipped = keepRecent(skipped, run.runId);
     else {
       pending.push(run.runId);
       found.push(run.runId);
@@ -495,7 +503,11 @@ export function discoverRuns(
 }
 
 /** Whether a found run's end goes unreported: the thread went straight on, or it was a dropped wake. */
-export const wentOnFrom = (watch: LaunchWatch, runId: RunId, runs: ReadonlyArray<WatchedRun>) => {
+export const wentOnFrom = (
+  watch: LaunchWatch,
+  runId: RunId,
+  runs: ReadonlyArray<WatchedRun>,
+): boolean | "queued" => {
   const run = runs.find((candidate) => candidate.runId === runId);
   // A retry owed after this end is followed to its own end, so this one is reported as usual.
   return (
@@ -839,34 +851,6 @@ export function failureFromRemoteStatus(
     log: null,
     canRetry: false,
   };
-}
-
-const AUTH_FAILURE = /authenticat|credential|permission denied|could not read username/i;
-
-/** One concrete next step for a run that failed before its agent started. */
-function suggestedAction(failure: OrchestratorMcpRunFailure, host: string | null): string {
-  const machine = host === null ? "this machine" : host;
-  if (failure.stage === "workspace_preparation") {
-    if (failure.retryable === true || /timed out|no progress|stalled/i.test(failure.message))
-      return `Git on ${machine} was slow or stuck, which a retry usually gets past. If the retry fails the same way, run the same git fetch in that repository on ${machine} to see whether the remote or the local repository is slow.`;
-    if (AUTH_FAILURE.test(failure.message))
-      return `Fix Git credentials or SSH access for that repository on ${machine}, then retry.`;
-    if (/setup script/i.test(failure.message))
-      return "Fix the project's setup script (its output is in the log), then retry.";
-    return `Check the base ref, branch and repository named in the error on ${machine}, then retry or launch again with a corrected workspace.`;
-  }
-  switch (failure.errorClass) {
-    case "usage_limit":
-      return "The provider's usage limit is reached. Launch again after it resets, or with another model.";
-    case "permission_error":
-      return `The provider refused to start. Check its sign-in and permissions on ${machine}, then launch again.`;
-    case "transport_error":
-      return `The provider could not be reached from ${machine}. Launch again once it is reachable.`;
-    case "validation_error":
-      return "The provider rejected the request, often the model or its options. Launch again with a supported model.";
-    default:
-      return "Read the thread, then send it a new message or launch again.";
-  }
 }
 
 /** Keeps the end of a log, where a failure shows. */
