@@ -48,3 +48,27 @@ export function nextSettleAnchorId(
   if (latest === null || previous?.runId !== latest.runId) return null;
   return threadFeedRunIsUnsettled(latest) ? null : current;
 }
+
+export interface SettleFollowHold {
+  readonly id: string;
+  readonly scroll: number;
+  readonly replyTop: number;
+}
+
+/** Following the end holds the reply still; away from the end the existing anchor is enough. */
+export function armSettleFollowHold(input: {
+  readonly following: boolean;
+  readonly anchorId: string | null;
+  readonly place: { readonly scroll: number; readonly replyTop: number } | null;
+}): SettleFollowHold | null {
+  if (!input.following || input.anchorId === null || input.place === null) return null;
+  return { id: input.anchorId, scroll: input.place.scroll, replyTop: input.place.replyTop };
+}
+
+/** Scroll that keeps the reply on screen when a fold moves it up in the list. */
+export function settleFollowHoldOffset(
+  held: { readonly scroll: number; readonly replyTop: number },
+  replyTop: number,
+): number {
+  return held.scroll + (replyTop - held.replyTop);
+}

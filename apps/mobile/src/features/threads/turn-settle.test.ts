@@ -3,8 +3,10 @@ import { expect, it } from "vite-plus/test";
 import type { ThreadFeedLatestRun } from "../../lib/threadActivity";
 import type { ThreadFeedRow } from "./pending-thread-feed";
 import {
+  armSettleFollowHold,
   nextSettleAnchorId,
   settledRunAnchorId,
+  settleFollowHoldOffset,
   turnCanStop,
   workingFloatingStatus,
 } from "./turn-settle";
@@ -66,4 +68,18 @@ it("a settling run keeps its final reply in place; other updates anchor nothing"
   const next: ThreadFeedLatestRun = { ...running, runId: RunId.make("run-2") };
   expect(nextSettleAnchorId("reply-1", completed, next, rows)).toBeNull();
   expect(nextSettleAnchorId("reply-1", completed, null, rows)).toBeNull();
+});
+
+it("while following, a settle keeps the reply where it is until the end can pin once", () => {
+  const place = { scroll: 900, replyTop: 1_400 };
+  expect(armSettleFollowHold({ following: true, anchorId: "reply-1", place })).toEqual({
+    id: "reply-1",
+    scroll: 900,
+    replyTop: 1_400,
+  });
+  // The fold moves the reply up in content; the offset follows so its place on screen stays.
+  expect(settleFollowHoldOffset(place, 1_100)).toBe(600);
+  expect(armSettleFollowHold({ following: false, anchorId: "reply-1", place })).toBeNull();
+  expect(armSettleFollowHold({ following: true, anchorId: null, place })).toBeNull();
+  expect(armSettleFollowHold({ following: true, anchorId: "reply-1", place: null })).toBeNull();
 });
