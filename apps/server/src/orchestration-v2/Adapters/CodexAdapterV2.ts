@@ -1323,7 +1323,8 @@ export function codexThreadRuntimeParams(input: {
     config: {
       ...CODEX_THREAD_CONFIG,
       ...(isGoatBotSessionThreadId(input.threadId ?? mcpSession?.threadId ?? "")
-        ? { "features.default_mode_request_user_input": false }
+        ? // The owner's hooks would steer a bot turn into running their own tools.
+          { "features.default_mode_request_user_input": false, "features.hooks": false }
         : {}),
       ...codexThreadMcpEnvironment(mcpSession),
       ...McpProviderSession.goatCodexServers(mcpSession?.goatMcpServers, {}),

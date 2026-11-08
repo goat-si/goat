@@ -32,6 +32,18 @@ it.each([true, false])(
   },
 );
 
+it.each([true, false])(
+  "session=%s turns off the user's Codex hooks only for GOAT Bot sessions",
+  (session) => {
+    // The owner's SessionStart and prompt hooks told bot turns to run their own tools.
+    const params = codexThreadRuntimeParams({
+      mcpSession: undefined,
+      threadId: ThreadId.make(session ? "goat-bot-session:hooks:1" : "ordinary"),
+    });
+    expect(params.config["features.hooks"]).toBe(session ? false : undefined);
+  },
+);
+
 it.effect.each([true, false])(
   "stale credential while busy: session=%s fails before turn/start; preserves ordinary behavior",
   (session) =>
