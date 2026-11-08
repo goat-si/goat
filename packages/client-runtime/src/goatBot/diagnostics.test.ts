@@ -438,7 +438,7 @@ describe("goatBotTurnsWaiting", () => {
       notification({ taskId: "turn-c", kind: "turn", status: "completed", taskVersion: 3 }),
       notification({ taskId: "work-a", kind: "work", ...asking }),
     ];
-    expect(goatBotTurnsWaiting(items as never)).toEqual(["turn-a"]);
+    expect(goatBotTurnsWaiting(items as never)).toEqual([{ taskId: "turn-a", kind: "answer" }]);
   });
 
   it("counts a running turn whose launched work waits on the person, until it ends", () => {
@@ -472,7 +472,10 @@ describe("goatBotTurnsWaiting", () => {
         observed: { pullRequests: [], needsYou: [] },
       }),
     ];
-    expect(goatBotTurnsWaiting(items as never)).toEqual(["turn-q", "turn-a"]);
+    expect(goatBotTurnsWaiting(items as never)).toEqual([
+      { taskId: "turn-q", kind: "answer" },
+      { taskId: "turn-a", kind: "approval" },
+    ]);
   });
 
   it("treats an older chip without a kind as a turn when the bot's session ran it", () => {
@@ -484,6 +487,6 @@ describe("goatBotTurnsWaiting", () => {
         worker: { threadId: "goat-bot-session:abc", generation: 1 },
       }),
     ];
-    expect(goatBotTurnsWaiting(items as never)).toEqual(["old-turn"]);
+    expect(goatBotTurnsWaiting(items as never)).toEqual([{ taskId: "old-turn", kind: "answer" }]);
   });
 });

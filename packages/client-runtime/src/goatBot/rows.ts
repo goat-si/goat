@@ -300,10 +300,13 @@ export function buildGoatBotTimeline(input: {
     const newest = newestCards.get(card.key);
     if (newest === undefined || card.revision > newest.revision) newestCards.set(card.key, card);
   }
-  const includesMessage = (taskId: string | null | undefined) =>
+  const includesMessage = (taskId: string | null | undefined, hasOptions = false) =>
     input.taskId === undefined ||
     (input.taskId === null
-      ? taskId == null || !knownTasks.has(taskId) || newestCards.get(taskId)?.askInChat === true
+      ? taskId == null ||
+        !knownTasks.has(taskId) ||
+        newestCards.get(taskId)?.askInChat === true ||
+        hasOptions
       : taskId === input.taskId);
   /** Whether a question's buttons still apply, when its task's card says; null when it cannot. */
   const questionOpen = (taskId: string | null | undefined, questionId: string | undefined) => {
@@ -311,6 +314,7 @@ export function buildGoatBotTimeline(input: {
     return questionId === undefined || open === undefined ? null : open.includes(questionId);
   };
   const cardDecidesOptions = new Set<string>();
+  const tasksWithOpenQuestion = new Set<string>();
   const committed: UngroupedRow[] = [];
   const committedRequestKeys = new Set<string>();
   const inputTexts = new Map<string, string>();
@@ -346,10 +350,14 @@ export function buildGoatBotTimeline(input: {
     if (item.type === "assistant_message") {
       if (item.text.trim().length === 0) continue;
       const presentation = input.readers.message(item);
-      if (!includesMessage(presentation?.taskId)) continue;
+      const hasOptions = (presentation?.options?.length ?? 0) > 0;
+      if (!includesMessage(presentation?.taskId, hasOptions)) continue;
       const tone = presentation?.tone ?? "reply";
       const open = questionOpen(presentation?.taskId, presentation?.questionId);
       if (open !== null) cardDecidesOptions.add(item.id);
+      if (hasOptions && open !== false && presentation?.taskId != null) {
+        tasksWithOpenQuestion.add(presentation.taskId);
+      }
       committed.push({
         kind: "bot",
         id: item.id,
@@ -410,7 +418,8 @@ export function buildGoatBotTimeline(input: {
           (entry.taskId ?? null) === input.taskId ||
           (input.taskId === null &&
             entry.taskId !== undefined &&
-            newestCards.get(entry.taskId)?.askInChat === true)) &&
+            (newestCards.get(entry.taskId)?.askInChat === true ||
+              tasksWithOpenQuestion.has(entry.taskId)))) &&
         !committedRequestKeys.has(entry.clientKey) &&
         (entry.requestKey === null || !committedRequestKeys.has(entry.requestKey)),
     )
