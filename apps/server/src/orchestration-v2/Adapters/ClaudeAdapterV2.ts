@@ -23,6 +23,7 @@ import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
+import { makeClaudeWakeReports } from "./claudeWakeNotice.ts";
 import {
   CLAUDE_MEMORY_READ_TOOLS,
   CLAUDE_MEMORY_SOURCE_TOOL,
@@ -4742,57 +4743,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             { readonly messages: ReadonlyArray<SDKMessage>; readonly detail: string | null }
           >(),
         );
-        // Wake results lack task ids and can follow queued prompts; retain reports for one user turn.
-        // Keep report stamps atomic with turn changes.
-        const wakeReportsByNativeThread = yield* Ref.make<{
-          readonly userTurns: ReadonlyMap<string, number>;
-          readonly reports: ReadonlyMap<
-            string,
-            ReadonlyMap<string, { readonly report: BackgroundWorkReport; readonly turn: number }>
-          >;
-        }>({ userTurns: new Map(), reports: new Map() });
-        const backgroundedSubagentTaskIds = yield* Ref.make<ReadonlySet<string>>(new Set());
-        // Nested subagent completions notify their owner and never wake the root.
-        const nestedSubagentTaskIds = yield* Ref.make<ReadonlySet<string>>(new Set());
-        const isNestedSubagentTask = (taskId: string) =>
-          Ref.get(nestedSubagentTaskIds).pipe(Effect.map((ids) => ids.has(taskId)));
-        const recordWakeReport = (
-          nativeThreadId: string,
-          taskId: string,
-          report: BackgroundWorkReport,
-        ) =>
-          Ref.update(wakeReportsByNativeThread, ({ userTurns, reports }) => ({
-            userTurns,
-            reports: new Map(reports).set(
-              nativeThreadId,
-              new Map(reports.get(nativeThreadId)).set(taskId, {
-                report,
-                turn: userTurns.get(nativeThreadId) ?? 0,
-              }),
-            ),
-          }));
-        const startUserTurnForWakeReports = (nativeThreadId: string) =>
-          Ref.update(wakeReportsByNativeThread, ({ userTurns, reports }) => {
-            const turn = (userTurns.get(nativeThreadId) ?? 0) + 1;
-            const updatedTurns = new Map(userTurns).set(nativeThreadId, turn);
-            const threadReports = reports.get(nativeThreadId);
-            if (threadReports === undefined) return { userTurns: updatedTurns, reports };
-            const kept = new Map([...threadReports].filter(([, entry]) => entry.turn >= turn - 1));
-            const updatedReports = new Map(reports);
-            if (kept.size === 0) updatedReports.delete(nativeThreadId);
-            else updatedReports.set(nativeThreadId, kept);
-            return { userTurns: updatedTurns, reports: updatedReports };
-          });
-        const takeWakeReports = (nativeThreadId: string) =>
-          Ref.modify(wakeReportsByNativeThread, (current) => {
-            const taken = current.reports.get(nativeThreadId);
-            if (taken === undefined) return [taken, current] as const;
-            const reports = new Map(current.reports);
-            reports.delete(nativeThreadId);
-            return [taken, { userTurns: current.userTurns, reports }] as const;
-          });
-        const clearWakeReports = (nativeThreadId: string) =>
-          takeWakeReports(nativeThreadId).pipe(Effect.asVoid);
+        const { recordWakeReport, startUserTurnForWakeReports, takeWakeReports, clearWakeReports } =
+          yield* makeClaudeWakeReports();
+
         // Empty roster levels can precede notifications; retain tasks for wake attribution.
         const lastKnownOpaqueTasks = yield* Ref.make(
           new Map<string, OrchestrationV2PendingBackgroundTask>(),
