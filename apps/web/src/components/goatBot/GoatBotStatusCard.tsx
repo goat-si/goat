@@ -5,6 +5,7 @@ import {
   type GoatBotDiagnosticAction,
   type GoatBotDiagnosticTone,
   type GoatBotDiagnosticsInput,
+  type GoatBotWaitingTurn,
 } from "@goat/client-runtime/goatBot";
 import {
   AuthSettingsWriteScope,
@@ -58,7 +59,7 @@ export function GoatBotStatusCard({
   readonly environmentId: EnvironmentId | null;
   readonly member: BotProfile | null;
   readonly rows: GoatBotDiagnosticsInput["rows"];
-  readonly turnsWaiting: ReadonlyArray<string>;
+  readonly turnsWaiting: ReadonlyArray<GoatBotWaitingTurn>;
   /** Called when a link leads back to the chat, so a sheet over it can close. */
   readonly onShowChat?: (() => void) | undefined;
   readonly className?: string;

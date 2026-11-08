@@ -101,7 +101,7 @@ export interface GoatBotDiagnosticsInput {
   /** Null until the bot's task rows have loaded; "unavailable" when its server cannot list them. */
   readonly rows: ReadonlyArray<BotThreadRow> | null | "failed" | "unavailable";
   /** The bot's own turns asking the person something; the task list leaves turns out. */
-  readonly turnsWaiting: ReadonlyArray<string>;
+  readonly turnsWaiting: ReadonlyArray<GoatBotWaitingTurn>;
   /** "unavailable" when the home cannot report Slack, which hides the line. */
   readonly slack:
     | ReadonlyArray<
@@ -198,7 +198,7 @@ function modelLine(
  */
 export function goatBotTurnsWaiting(
   items: ReadonlyArray<GoatBotFaceTaskItem>,
-): ReadonlyArray<string> {
+): ReadonlyArray<GoatBotWaitingTurn> {
   const newest = new Map<string, ChannelTaskChip>();
   for (const { item } of items) {
     if (item.type !== "notification" || item.ledgerTask === undefined) continue;
@@ -206,7 +206,7 @@ export function goatBotTurnsWaiting(
     if (previous === undefined || item.ledgerTask.taskVersion > previous.taskVersion)
       newest.set(item.ledgerTask.taskId, item.ledgerTask);
   }
-  const waiting: string[] = [];
+  const waiting: Array<{ readonly taskId: string; readonly kind: "approval" | "answer" }> = [];
   for (const chip of newest.values()) {
     // Older chips lack their kind, but a turn's worker is always the bot's session thread.
     const turn =
@@ -219,21 +219,46 @@ export function goatBotTurnsWaiting(
     if (
       (chip.status === "waiting_input" && chip.openQuestionCount > 0) ||
       (chip.observed?.needsYou.length ?? 0) > 0
-    )
-      waiting.push(chip.taskId);
+    ) {
+      waiting.push({
+        taskId: chip.taskId,
+        kind: chip.observed?.needsYou.some((item) => item.kind === "approval")
+          ? "approval"
+          : "answer",
+      });
+    }
   }
   return waiting;
 }
 
+/** A turn the chat is waiting on. A plain id, from an older caller, counts as an answer. */
+export type GoatBotWaitingTurn =
+  | string
+  | { readonly taskId: string; readonly kind: "approval" | "answer" };
+
+const waitingTurnId = (turn: GoatBotWaitingTurn): string =>
+  typeof turn === "string" ? turn : turn.taskId;
+
+const waitingTurnKind = (turn: GoatBotWaitingTurn): "approval" | "answer" =>
+  typeof turn === "string" || turn.kind !== "approval" ? "answer" : "approval";
+
+function waitingPhrase(approvals: number, answers: number): string | null {
+  const parts = [
+    approvals > 0 ? approvals + " waiting for your approval" : null,
+    answers > 0 ? answers + " waiting for your answer" : null,
+  ].filter((part) => part !== null);
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
 /** Waiting turns the task list does not already show as task rows, so none is counted twice. */
-export function goatBotTurnsOutsideList(
-  turns: ReadonlyArray<string>,
+export function goatBotTurnsOutsideList<T extends GoatBotWaitingTurn>(
+  turns: ReadonlyArray<T>,
   rows: ReadonlyArray<BotThreadRow>,
-): ReadonlyArray<string> {
+): ReadonlyArray<T> {
   const listed = new Set<string>(
     rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
   );
-  return turns.filter((taskId) => !listed.has(taskId));
+  return turns.filter((turn) => !listed.has(waitingTurnId(turn)));
 }
 
 /** The line that points the person back to a question the bot asked in its chat. */
@@ -243,17 +268,22 @@ export function goatBotWaitingInChatText(botName: string): string {
 
 function workLine(
   rows: GoatBotDiagnosticsInput["rows"],
-  turnsWaitingIds: ReadonlyArray<string>,
+  turnsWaiting: ReadonlyArray<GoatBotWaitingTurn>,
 ): GoatBotDiagnosticLine | null {
-  const turnsWaiting = Array.isArray(rows)
-    ? goatBotTurnsOutsideList(turnsWaitingIds, rows).length
-    : turnsWaitingIds.length;
+  const outside = Array.isArray(rows) ? goatBotTurnsOutsideList(turnsWaiting, rows) : turnsWaiting;
+  let approvals = 0;
+  let turnAnswers = 0;
+  for (const turn of outside) {
+    if (waitingTurnKind(turn) === "approval") approvals += 1;
+    else turnAnswers += 1;
+  }
+  const turnsOutside = outside.length;
   // A question in the chat is known without the task list, so it shows whatever the list's state.
-  if (!Array.isArray(rows) && turnsWaiting > 0)
+  if (!Array.isArray(rows) && turnsOutside > 0)
     return {
       key: "work",
       tone: "warn",
-      text: `${turnsWaiting} waiting for your answer`,
+      text: waitingPhrase(approvals, turnAnswers) ?? turnsOutside + " waiting for your answer",
       action: { kind: "open_chat", label: "Open the chat" },
     };
   if (rows === "unavailable") return null;
@@ -261,22 +291,21 @@ function workLine(
     return { key: "work", tone: "warn", text: "Couldn't load work", action: null };
   if (rows === null) return { key: "work", tone: "pending", text: "Loading work…", action: null };
   const tasks = rows.flatMap((row) => (row.kind === "task" ? [row.task] : []));
-  // A listed turn whose chat says it waits on the person is waiting, whatever its row status.
-  const waitingTurns = new Set(turnsWaitingIds);
+  // Listed rows stay an answer. Only a turn the list leaves out can name an approval.
+  const waitingIds = new Set(turnsWaiting.map(waitingTurnId));
   const running = tasks.filter(
-    (task) => task.status === "running" && !waitingTurns.has(task.taskId),
+    (task) => task.status === "running" && !waitingIds.has(task.taskId),
   ).length;
   const starting = tasks.filter(
     (task) => task.status === "received" || task.status === "dispatching",
   ).length;
   const waiting = tasks
-    .filter((task) => task.status === "waiting_input" || waitingTurns.has(task.taskId))
+    .filter((task) => task.status === "waiting_input" || waitingIds.has(task.taskId))
     .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
-  const waitingCount = waiting.length + turnsWaiting;
   const parts = [
-    running > 0 ? `${running} running` : null,
-    starting > 0 ? `${starting} starting or queued` : null,
-    waitingCount > 0 ? `${waitingCount} waiting for your answer` : null,
+    running > 0 ? running + " running" : null,
+    starting > 0 ? starting + " starting or queued" : null,
+    waitingPhrase(approvals, waiting.length + turnAnswers),
   ].filter((part) => part !== null);
   // A full page can leave older open tasks out, so the counts are only a lower bound.
   const full = tasks.length >= BOT_THREADS_PAGE;
@@ -285,7 +314,7 @@ function workLine(
       ? {
           key: "work",
           tone: "warn",
-          text: `Can't count open work: the newest ${BOT_THREADS_PAGE} tasks are finished`,
+          text: "Can't count open work: the newest " + BOT_THREADS_PAGE + " tasks are finished",
           action: null,
         }
       : { key: "work", tone: "ok", text: "No open work", action: null };
@@ -297,11 +326,11 @@ function workLine(
       tone: "warn",
       text,
       action: { kind: "open_task", taskId: oldest.taskId, label: "Answer" },
-      ...(turnsWaiting > 0
+      ...(turnsOutside > 0
         ? { alsoAction: { kind: "open_chat", label: "Open the chat" } as const }
         : {}),
     };
-  return turnsWaiting > 0
+  return turnsOutside > 0
     ? { key: "work", tone: "warn", text, action: { kind: "open_chat", label: "Open the chat" } }
     : { key: "work", tone: "ok", text, action: null };
 }

@@ -7,6 +7,7 @@ import {
   presentTaskStatus,
   retryRefusalText,
   taskAttemptLabel,
+  type GoatBotWaitingTurn,
 } from "@goat/client-runtime/goatBot";
 import { botRoutineRows, type BotRoutineRow } from "@goat/client-runtime/scheduledTasks";
 import {
@@ -60,7 +61,7 @@ export function MobileBotWork(props: {
     readonly defaultModelSelection: BotProfile["defaultModelSelection"];
   } | null;
   /** The bot's own turns asking a question in the chat behind this sheet. */
-  readonly turnsWaiting?: ReadonlyArray<string>;
+  readonly turnsWaiting?: ReadonlyArray<GoatBotWaitingTurn>;
   /** What the chat calls this bot. */
   readonly botName?: string;
   /** The main bot, named on a member's inherited model. */

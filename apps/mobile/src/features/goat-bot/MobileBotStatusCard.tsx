@@ -4,6 +4,7 @@ import {
   goatBotModelStatus,
   type GoatBotDiagnosticTone,
   type GoatBotDiagnosticsInput,
+  type GoatBotWaitingTurn,
 } from "@goat/client-runtime/goatBot";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
@@ -50,7 +51,7 @@ export function MobileBotStatusCard(props: {
   } | null;
   readonly rows: GoatBotDiagnosticsInput["rows"];
   readonly refreshRows: () => void;
-  readonly turnsWaiting: ReadonlyArray<string>;
+  readonly turnsWaiting: ReadonlyArray<GoatBotWaitingTurn>;
   readonly onOpenChat: () => void;
   readonly onOpenTask: (taskId: ChannelTaskId) => void;
   readonly botName?: string;
