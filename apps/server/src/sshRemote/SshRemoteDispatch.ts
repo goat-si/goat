@@ -1677,7 +1677,7 @@ const make = Effect.gen(function* () {
     authorize: Effect.Effect<RuntimeMode, E, R>,
   ): Effect.Effect<unknown, SshRemoteDispatchError | E, R> =>
     Effect.gen(function* () {
-      const alias = link.host.name;
+      const { name: alias, baseUrl: url } = link.host;
       const ceiling = yield* authorize;
       if (call.approvals === true)
         return yield* failure(
@@ -1717,7 +1717,7 @@ const make = Effect.gen(function* () {
             );
           return Effect.fail(
             error.kind === "transport" || error.kind === "http"
-              ? failure("host_unavailable", remoteUnavailableMessage(alias, error))
+              ? failure("host_unavailable", remoteUnavailableMessage(alias, error, { url }))
               : failure(
                   "remote_refused",
                   `GOAT on ${alias} could not run ${call.tool}: ${describe(error)}`,

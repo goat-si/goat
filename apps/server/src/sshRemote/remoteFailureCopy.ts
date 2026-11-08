@@ -47,10 +47,18 @@ export function classifyRemoteTransportFailure(error: unknown): RemoteTransportF
 }
 
 /** The sentence for a remote GOAT whose call failed in transport, before any reply. */
-export function remoteUnavailableMessage(alias: string, error: unknown): string {
+export function remoteUnavailableMessage(
+  alias: string,
+  error: unknown,
+  options?: { readonly url?: string },
+): string {
   switch (classifyRemoteTransportFailure(error)) {
-    case "refused":
-      return `GOAT on ${alias} is not accepting connections; it may be stopped or restarting. ${goatCallText("ssh.host_status")} shows whether its runtime is up.`;
+    case "refused": {
+      const url = options?.url;
+      return url
+        ? `Nothing is listening at ${url} for GOAT on ${alias}. If GOAT there is running, its address changed, for example a different Tailscale HTTPS port; create a pairing link on that machine and link it again with ${goatCallText("host_link.create")}.`
+        : `GOAT on ${alias} is not accepting connections; it may be stopped or restarting. ${goatCallText("ssh.host_status")} shows whether its runtime is up.`;
+    }
     case "timeout":
       return `GOAT on ${alias} is too busy to answer: the request timed out. A stalled server is usually overloaded or has a large database; Fleet shows its load and storage.`;
     case "dropped":
