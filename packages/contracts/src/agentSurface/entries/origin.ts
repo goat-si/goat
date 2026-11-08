@@ -128,7 +128,7 @@ export const originEntries = {
     description:
       "Delete the thread bound to this correlation when the read key matches. A request key deletes at most once; a repeat replays that outcome, including after the thread is gone.",
     guide:
-      "Pass the launch correlation id, its read key, the bound thread id, and a request key. The key authorizes only that thread. Deletion still refuses a nonterminal run, an active subagent, a provider-native child, or a thread above this session mode ceiling, and those refusals are stored so the same key replays them. A mode-limit refusal is not stored. Read origin.bound_delete_receipt to fence a key that must not run.",
+      "Pass the launch correlation id, its read key, the bound thread id, and a request key. The key authorizes only that thread. Deletion still refuses a nonterminal run or an active subagent, and stores those refusals so the same key replays them. A provider-native child, a thread above this session mode ceiling, or a mode-limit refusal is refused without a stored receipt, so the same key can run once that changes. Read origin.bound_delete_receipt to fence a key that must not run.",
     effect: "destructive",
     capability: "none",
     capabilityReason:
