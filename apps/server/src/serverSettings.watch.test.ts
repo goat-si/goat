@@ -539,7 +539,10 @@ it.effect("a settings update made during a cold-cache migration keeps its restri
         yield* service.committedPolicy ?? Effect.die("missing committed policy"),
         { _tag: "committed", enableCua: false, blockedBrowserHosts: ["blocked.example"] },
       );
-      assert.deepStrictEqual(yield* service.blockedBrowserHostsSnapshot, ["blocked.example"]);
+      assert.deepStrictEqual(
+        yield* service.blockedBrowserHostsSnapshot ?? Effect.die("missing blocked hosts"),
+        ["blocked.example"],
+      );
       const settings = yield* service.getSettings;
       assert.strictEqual(settings.enableCua, false);
       assert.deepStrictEqual(settings.blockedBrowserHosts, ["blocked.example"]);
@@ -552,5 +555,5 @@ it.effect("memory hub administration reads a cold settings cache under its own l
     const admin = yield* ServerSettingsModule.MemoryHubAdminSettings;
     const view = yield* admin.withLock(admin.read);
     assert.strictEqual(view.settings.mode, "disabled");
-  }).pipe(Effect.provide(layerServerSettings()), Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
 );
