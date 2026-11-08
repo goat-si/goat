@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
+  goatBotForgetNoteMessage,
   ProviderInstanceId,
   type ChannelInputId,
   type ChannelTaskId,
@@ -571,6 +572,31 @@ describe("notes changes from a GOAT Bot session turn", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("a forwarded Memory tab forget refused during a grant is put back after it", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const kept = line(fridays, "earlier");
+      yield* writeNotes(NOTES_HEADER + kept + "\n");
+      const tidy = yield* lookTurn(harness, "tidy my notes", "tidy");
+      yield* callNotes(harness, tidy.caller, edit(tidy, "tidy my notes"));
+      const sentence = goatBotForgetNoteMessage(fridays);
+      const more = yield* followUp(harness, tidy.task.taskId, sentence, "more");
+      const result = yield* callNotes(harness, tidy.caller, {
+        ...edit(tidy, sentence),
+        inputId: more.inputId,
+      });
+      assert.strictEqual(result.reason, "busy");
+      // The tidy turn carries out the refused forget anyway, then finishes.
+      yield* writeNotes(NOTES_HEADER);
+      harness.world.setStatus(tidy.caller.threadId, 1, "completed");
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.strictEqual((yield* ledger.getTask(tidy.task.taskId))?.task.status, "completed");
+      assert.strictEqual(yield* readNotes, NOTES_HEADER + kept + "\n");
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("a later refusal for a new reason posts its own notice", () => {
     const harness = sessionHarness();

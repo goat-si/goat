@@ -469,6 +469,7 @@ const make = Effect.gen(function* () {
               originKind: "goat",
               kind: "inbound",
               inputId: result.inputId,
+              clientMessageId: input.externalMessageId,
               ...(validatedTaskId === undefined ? {} : { taskId: validatedTaskId }),
             },
           },
