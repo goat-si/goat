@@ -49,7 +49,7 @@ export function WorkspaceSearchField({
             accessibilityRole="button"
             accessibilityLabel="Clear search"
             onPress={props.onClear}
-            className="h-11 w-11 items-center justify-center"
+            className="size-[44px] items-center justify-center"
           >
             <SymbolView name="xmark.circle.fill" size={18} tintColorClassName="accent-icon-muted" />
           </Pressable>

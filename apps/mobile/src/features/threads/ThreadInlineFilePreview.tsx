@@ -182,7 +182,7 @@ function InlineAudio(props: PreviewProps & { readonly resolveUri: () => Promise<
           props.onOpen();
         }}
       />
-      <View className="h-14 flex-row items-center gap-3 px-3 pb-2">
+      <View className="min-h-14 flex-row items-center gap-3 px-3 pb-2">
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={
@@ -190,7 +190,7 @@ function InlineAudio(props: PreviewProps & { readonly resolveUri: () => Promise<
           }
           accessibilityState={{ busy }}
           onPress={toggle}
-          className="h-11 w-11 items-center justify-center rounded-lg bg-subtle"
+          className="size-[44px] items-center justify-center rounded-lg bg-subtle"
         >
           <SymbolView
             name={playing ? "pause" : "play"}

@@ -58,7 +58,6 @@ import {
   clearAttempts,
   discoverRuns,
   dormantExpired,
-  endReported,
   finishedWake,
   goneWake,
   isTerminalStatus,
@@ -83,11 +82,10 @@ import {
   rearmRetriedRun,
   settleEnd,
   settleRun,
-  skipRun,
   wakeAttempt,
-  wentOnFrom,
   watchExpired as expired,
 } from "./launchWatch.ts";
+import { quietEnd } from "./launchWatchEnds.ts";
 import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
 
 /**
@@ -833,25 +831,12 @@ export const make = Effect.gen(function* () {
               const end = result.end ?? null;
               // A promoted message ends with the run it joined, and a run retried in place may
               // still sit at the end already reported; either is reported once.
-              if (
-                (endedRunId !== runId && watch.reportedRuns.includes(endedRunId)) ||
-                endReported(watch, endedRunId, end)
-              ) {
-                const contacted = recordContact(watch, now);
-                // A retry that arrived meanwhile still has the run followed once more.
-                yield* keep(
-                  endedRunId === runId
-                    ? settleEnd(contacted, runId, end, now)
-                    : settleRun(contacted, runId, now),
-                );
-                return 0;
+              const quiet = quietEnd(watch, runId, { runId: endedRunId, end }, details.runs, now);
+              if (quiet !== undefined) {
+                yield* keep(quiet.watch);
+                return quiet.again ? RETRY_MS : 0;
               }
               const title = details.title ?? watch.title;
-              // The thread went straight on to its own next run; that run's end reports it.
-              if (endedRunId === runId && wentOnFrom(watch, runId, details.runs)) {
-                yield* keep(skipRun(recordContact(watch, now), runId, now));
-                return 0;
-              }
               const wake = { watch, runId: endedRunId, status: result.status, ...details, end };
               const sent = yield* deliver(
                 watch,

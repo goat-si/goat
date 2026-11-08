@@ -20,7 +20,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { NOTES_HEADER, parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
-import { CHANNEL_COPY } from "./channelCopy.ts";
+import { CHANNEL_COPY, noteKeptNotice } from "./channelCopy.ts";
 import { inputIdFor, taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
@@ -472,6 +472,145 @@ describe("Memory tab requests with the default session routing", () => {
       assert.lengthOf(harness.world.launches, launches);
     }).pipe(Effect.provide(layer));
   });
+
+  const rememberText = "remember that the hotfix branch is hotfix-7";
+  const tidyTaskId = taskIdFor(
+    inputIdFor({ ...goatInput("Please tidy my notes", "tidy"), ownerId }),
+    0,
+  );
+
+  const tidyGrant = {
+    replyText: "Tidying your notes now.",
+    action: {
+      type: "run_turn" as const,
+      title: "Tidy notes",
+      instruction: "Tidy the notes file.",
+      notesChangeRequested: "Please tidy my notes",
+    },
+  };
+
+  const remembered = (
+    variant: "remember" | "run_turn" | "follow_up",
+  ): Partial<ChannelReceptionResult> => {
+    const note = {
+      replyText: "I'll remember that.",
+      remember: "The hotfix branch is hotfix-7.",
+      rememberQuote: rememberText,
+    };
+    if (variant === "run_turn") {
+      return {
+        ...note,
+        action: { type: "run_turn", title: "Remember the branch", instruction: rememberText },
+      };
+    }
+    if (variant === "follow_up")
+      return { ...note, action: { type: "follow_up", taskId: tidyTaskId } };
+    return note;
+  };
+
+  it.effect.each(["remember", "run_turn", "follow_up"] as const)(
+    "a remember during an open tidy grant is refused at once under session routing (%s)",
+    (variant) => {
+      const { harness, layer } = sessionHarness((text) =>
+        text.startsWith("Please tidy")
+          ? tidyGrant
+          : text === rememberText
+            ? remembered(variant)
+            : {},
+      );
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const text = NOTES_HEADER + line(fridays, "earlier") + "\n";
+        yield* writeNotes(text);
+        yield* routing("reception");
+        yield* send("Please tidy my notes", "tidy");
+        yield* routing("session");
+        const tidy = yield* (yield* ChannelLedger.ChannelLedger).getTask(tidyTaskId);
+        assert.strictEqual(tidy?.task.status, "running");
+        assert.isDefined(tidy?.task.notesChangeRequested);
+        const launches = harness.world.launches.length;
+        const tasks = yield* taskCount;
+        const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          goatInput(rememberText, "remember-" + variant),
+          rpcContext,
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        assert.deepStrictEqual(
+          (yield* repliesTo(input.inputId)).map((message) => message.text),
+          [CHANNEL_COPY.noteEditBusy],
+        );
+        assert.strictEqual(yield* readNotes, text);
+        assert.strictEqual(yield* taskCount, tasks);
+        assert.lengthOf(harness.world.launches, launches);
+        const forwarded = yield* (yield* SqlClient.SqlClient)<{
+          readonly count: number;
+        }>`SELECT COUNT(*) AS count FROM channel_task_events WHERE type = 'task.followup.received'`;
+        assert.strictEqual(forwarded[0]?.count, 0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("a remember with no notes grant still goes to the session", () => {
+    const { asked, harness, layer } = sessionHarness((text) =>
+      text === rememberText ? remembered("remember") : {},
+    );
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const text = NOTES_HEADER + line(fridays, "earlier") + "\n";
+      yield* writeNotes(text);
+      yield* routing("session");
+      yield* send(rememberText, "remember-session");
+      assert.notInclude(asked, rememberText);
+      assert.strictEqual(yield* readNotes, text);
+      assert.strictEqual(yield* taskCount, 1);
+      assert.lengthOf(harness.world.launches, 1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "a tidy that removes a note whose forget it was refused puts it back and says so",
+    () => {
+      const { harness, layer } = sessionHarness((text) =>
+        text.startsWith("Please tidy")
+          ? {
+              replyText: "Tidying your notes now.",
+              action: {
+                type: "run_turn",
+                title: "Tidy notes",
+                instruction: "Tidy the notes file.",
+                notesChangeRequested: "Please tidy my notes",
+              },
+            }
+          : {},
+      );
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const kept = line(fridays, "earlier");
+        const files = yield* writeNotes(NOTES_HEADER + kept + "\n");
+        yield* routing("reception");
+        yield* send("Please tidy my notes", "tidy");
+        yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
+        assert.include(yield* replies, CHANNEL_COPY.noteEditBusy);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const tidy = (yield* ledger.listTasks({ ownerId, limit: 50 })).tasks.find(
+          (task) => task.notesChangeRequested !== undefined,
+        )!;
+        // The tidy turn carries out the refused forget by hand, then finishes.
+        yield* (yield* FileSystem.FileSystem).writeFileString(files.notes, NOTES_HEADER);
+        const worker = (yield* ledger.getTask(tidy.taskId))!.task.worker!;
+        harness.world.setStatus(
+          worker.threadId,
+          1,
+          "completed",
+          "Tidied, and forgot the Fridays note.",
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        assert.strictEqual((yield* ledger.getTask(tidy.taskId))!.task.status, "completed");
+        assert.strictEqual(yield* readNotes, NOTES_HEADER + kept + "\n");
+        assert.include(yield* replies, noteKeptNotice(fridays));
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });
 
 describe("corrections the model reports", () => {

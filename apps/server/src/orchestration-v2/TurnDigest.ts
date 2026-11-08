@@ -55,6 +55,9 @@ function noticeLane(id: string): string | null {
   return remote === undefined ? null : `report:${segments(id, remote)[0]}`;
 }
 
+/** Whether a notice producer wrote this message id. */
+export const isNoticeId = (id: string) => noticeLane(id) !== null;
+
 /** The lane key for a launched thread, shared by run-end notices and inbox reports. */
 const threadLane = (host: string | null, threadId: string) => `thread:${host ?? ""}/${threadId}`;
 
@@ -204,7 +207,7 @@ export const isNoticeMessage = (message: {
   message.createdBy === "agent" &&
   message.creationSource === "server" &&
   message.notification !== undefined &&
-  noticeLane(message.id) !== null;
+  isNoticeId(message.id);
 
 /**
  * The event that folds a queued notice into the notice turn already waiting at the end of the

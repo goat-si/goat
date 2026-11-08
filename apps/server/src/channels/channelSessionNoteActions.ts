@@ -303,7 +303,11 @@ const make = Effect.gen(function* () {
         // Checked and recorded under the writers' lock, so two tasks never both hold a grant.
         const recorded = yield* writer.exclusive(
           Effect.gen(function* () {
-            if (yield* held) return "busy" as const;
+            if (yield* held) {
+              // A Memory tab forget forwarded into a task is kept if the grant holder removes it anyway.
+              yield* writer.recordRefusedForget(message.text);
+              return "busy" as const;
+            }
             const prepared = prepareTransition(
               latest,
               {

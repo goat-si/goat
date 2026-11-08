@@ -1,6 +1,7 @@
 import { countBusyTasks } from "./channelBusyTasks.ts";
 import { forwardQueries } from "./channelForwardQueries.ts";
 import { deliveryLedger } from "./channelDeliveryLedger.ts";
+import { copyUndeliveredReplies, type UndeliveredSourceRow } from "./channelUndeliveredReplies.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -1665,11 +1666,13 @@ const make = Effect.gen(function* () {
               UPDATE channel_outbox SET state = 'pending', updated_at = ${input.now}
               WHERE state = 'delivering' AND destination_kind IN ('goat', 'mcp')
             `;
-            yield* sql`
+            const interrupted = yield* sql<UndeliveredSourceRow>`
               UPDATE channel_outbox SET state = 'ambiguous', last_error_code = 'interrupted',
                 updated_at = ${input.now}
               WHERE state = 'delivering' AND destination_kind NOT IN ('goat', 'mcp')
+              RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json
             `;
+            yield* copyUndeliveredReplies(sql, interrupted, "ambiguous", input.now);
           }),
         )
         .pipe(
