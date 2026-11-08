@@ -28,6 +28,8 @@ it.layer(McpProviderSessions.layer)("OpenCode2 live work", (it) => {
           reply("session.active", { data: { [CHILD]: { type: "running" } } }),
           out("session.active"),
           reply("session.active", { data: {} }),
+          out("session.active"),
+          reply("session.active", { status: 502, body: { _tag: "UnknownError", message: "gone" } }),
         ]);
         const parentEnded = yield* Deferred.make<void>();
         yield* runtime.events.pipe(
@@ -45,6 +47,8 @@ it.layer(McpProviderSessions.layer)("OpenCode2 live work", (it) => {
         assert.isTrue(yield* holdsLiveWork({ pastPinCeiling: false }));
         // Past the pin ceiling the cached state is confirmed with OpenCode.
         assert.isTrue(yield* holdsLiveWork({ pastPinCeiling: true }));
+        assert.isFalse(yield* holdsLiveWork({ pastPinCeiling: true }));
+        // A server that cannot answer holds nothing, so a dead server never pins its session.
         assert.isFalse(yield* holdsLiveWork({ pastPinCeiling: true }));
       }).pipe(Effect.scoped),
   );

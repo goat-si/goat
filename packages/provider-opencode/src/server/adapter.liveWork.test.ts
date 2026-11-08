@@ -50,7 +50,11 @@ it.effect("holds a retiring session while a child session runs, until OpenCode s
         update: async (input: { sessionID: string }) => ({
           data: { id: input.sessionID, time: { created: 1, updated: 1 } },
         }),
-        status: async () => ({ data: statusReplies.shift() ?? {} }),
+        status: async () => {
+          const reply = statusReplies.shift();
+          if (reply === undefined) throw new Error("server gone");
+          return { data: reply };
+        },
         promptAsync: async (input: { messageID: string }) => {
           payloads.push(input);
           return { data: true };
@@ -88,6 +92,9 @@ it.effect("holds a retiring session while a child session runs, until OpenCode s
     assert.isTrue(yield* holdsLiveWork({ pastPinCeiling: false }));
     // Past the pin ceiling the cached state is confirmed with OpenCode.
     assert.isTrue(yield* holdsLiveWork({ pastPinCeiling: true }));
+    assert.isFalse(yield* holdsLiveWork({ pastPinCeiling: true }));
+    // A server that cannot answer holds nothing, so a dead server never pins its session.
+    yield* push(status(child, "busy"));
     assert.isFalse(yield* holdsLiveWork({ pastPinCeiling: true }));
   }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)), Effect.scoped),
 );

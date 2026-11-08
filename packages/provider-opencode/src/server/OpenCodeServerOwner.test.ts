@@ -89,7 +89,7 @@ it.effect("shares concurrent borrowers and closes after the idle TTL", () =>
   }).pipe(Effect.provide(TestClock.layer())),
 );
 
-it.effect("keeps a borrowed server through owner shutdown and stops it when the borrow ends", () =>
+it.effect("keeps a borrowed server through owner shutdown and stops it when the borrows end", () =>
   Effect.gen(function* () {
     const testRuntime = yield* makeRuntime;
     const release = yield* Deferred.make<void>();
@@ -108,8 +108,10 @@ it.effect("keeps a borrowed server through owner shutdown and stops it when the 
 
     yield* Scope.close(ownerScope, Exit.void);
     expect(yield* Ref.get(testRuntime.closes)).toBe(0);
-    const refused = yield* Effect.exit(owner.withServer((server) => Effect.succeed(server.url)));
-    expect(refused._tag).toBe("Failure");
+    // A session reconnecting its event stream borrows again before releasing; it reattaches.
+    expect(yield* owner.withServer((server) => Effect.succeed(server.url))).toBe(
+      "http://127.0.0.1:1",
+    );
     expect(yield* Ref.get(testRuntime.starts)).toBe(1);
 
     yield* Deferred.succeed(release, undefined);
@@ -117,6 +119,9 @@ it.effect("keeps a borrowed server through owner shutdown and stops it when the 
     // No clock adjustment: the stop must not wait for the idle TTL.
     yield* Deferred.await(testRuntime.closed);
     expect(yield* Ref.get(testRuntime.closes)).toBe(1);
+    const refused = yield* Effect.exit(owner.withServer((server) => Effect.succeed(server.url)));
+    expect(refused._tag).toBe("Failure");
+    expect(yield* Ref.get(testRuntime.starts)).toBe(1);
   }).pipe(Effect.provide(TestClock.layer())),
 );
 
