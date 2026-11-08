@@ -10,18 +10,19 @@ export const sourceRoot = NodeURL.fileURLToPath(new URL("../../", import.meta.ur
 export const zero = "0".repeat(40);
 export const workflowPath = ".github/workflows/goat-ci.yml";
 export const upstreamPath = ".github/workflows/upstream.yaml";
+/** Self-hosted labels the nightly guard allows; goat-ci refuses them. */
 export const runnerLabels = ["self-hosted", "linux", "x64", "goat", "epyc"];
-export const baseJob = { "runs-on": runnerLabels, steps: [{ run: "echo ok" }] };
-export const trustedRunner =
-  '${{ (github.event_name == \'workflow_dispatch\' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(\'["self-hosted","linux","x64","goat","epyc"]\') || \'ubuntu-24.04\' }}';
-export const lightRunner = trustedRunner.replace('"epyc"]', '"epyc-light"]');
-export const matrixRunner = trustedRunner.replace("${{ (", "${{ matrix.runner == 'epyc' && (");
-export const gateJob = { ...baseJob, "runs-on": lightRunner };
+export const baseJob = { "runs-on": "ubuntu-24.04", steps: [{ run: "echo ok" }] };
+export const trustPredicate =
+  "(github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)";
+export const killSwitch = "vars.LIDGE_RUNNERS == 'on'";
+/** The shipped ci runs-on: a trusted run's heavy entries on lidge while LIDGE_RUNNERS is on. */
+export const lidgeRunner = `\${{ matrix.runner == 'windows' && 'windows-2025' || (matrix.runner == 'linux' && ${killSwitch} && ${trustPredicate}) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-24.04' }}`;
 export const validWorkflow = `on:
   push:
 jobs:
   ci:
-    runs-on: [self-hosted, linux, x64, goat, epyc]
+    runs-on: ubuntu-24.04
     steps:
       - run: echo ok
 `;
@@ -69,7 +70,7 @@ export function screenshotWorkflow(patch: Record<string, unknown> = {}) {
     on: { pull_request: null },
     jobs: {
       ci: baseJob,
-      "screenshot-gate": { ...gateJob, permissions: screenshotPermissions, ...patch },
+      "screenshot-gate": { ...baseJob, permissions: screenshotPermissions, ...patch },
     },
   });
 }

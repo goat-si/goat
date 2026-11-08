@@ -34,7 +34,13 @@ it("cannot move PostgreSQL fixture processes onto a contributor’s self-hosted 
   const f = fixture({
     workflow: JSON.stringify({
       on: { pull_request: null },
-      jobs: { ci: baseJob, "connect-auth-postgres": baseJob },
+      jobs: {
+        ci: baseJob,
+        "connect-auth-postgres": {
+          ...baseJob,
+          "runs-on": ["self-hosted", "linux", "x64", "lidge"],
+        },
+      },
     }),
   });
   const result = f.hook(f.record(f.sha));
