@@ -13202,7 +13202,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               threadId: commandThreadId(command),
               commandType: command.type,
               rejectedAt,
-              error: cause instanceof Error ? cause.message : String(cause),
+              error:
+                cause._tag === "OrchestratorDispatchError" &&
+                typeof cause.cause === "string" &&
+                cause.cause.length > 0
+                  ? cause.cause
+                  : cause instanceof Error
+                    ? cause.message
+                    : String(cause),
             })
             .pipe(
               Effect.mapError(

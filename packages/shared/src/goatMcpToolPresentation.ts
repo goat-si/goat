@@ -113,6 +113,14 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Resolve", "Resolving", "Resolved", "a lost remote launch"],
     "thread-wait",
   ),
+  goat_origin_bound_delete: tool(
+    ["Delete", "Deleting", "Requested deletion of", "a bound origin thread"],
+    "thread-update",
+  ),
+  goat_origin_bound_delete_receipt: tool(
+    ["Read", "Reading", "Read", "a bound delete receipt"],
+    "thread-read",
+  ),
   goat_workflow_stop: tool(
     ["Stop", "Stopping", "Requested a stop for", "a workflow"],
     "workflow-stop",

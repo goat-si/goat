@@ -1,8 +1,10 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as RemoteReportService from "../../../remoteReports/RemoteReportService.ts";
+import * as OriginBoundDeleteService from "../../../remoteReports/OriginBoundDeleteService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { loadCaller } from "../../threadAccess.ts";
 import { RemoteReportToolkit } from "./tools.ts";
 
 /**
@@ -83,6 +85,23 @@ export const layer = McpToolAccess.toLayer(RemoteReportToolkit, {
     Effect.gen(function* () {
       const reports = yield* RemoteReportService.RemoteReportService;
       return yield* reports.resolveBinding(input).pipe(Effect.mapError(remoteReportFailure));
+    }),
+  ),
+  goat_origin_bound_delete: McpToolAccess.destructive(
+    McpToolAccess.writesThreads(
+      (input) => [input.threadId],
+      (input) =>
+        Effect.gen(function* () {
+          const service = yield* OriginBoundDeleteService.OriginBoundDeleteService;
+          const caller = yield* loadCaller();
+          return yield* service.delete(input, caller.limits);
+        }),
+    ),
+  ),
+  goat_origin_bound_delete_receipt: McpToolAccess.writesWithCapability((input) =>
+    Effect.gen(function* () {
+      const service = yield* OriginBoundDeleteService.OriginBoundDeleteService;
+      return yield* service.receipt(input);
     }),
   ),
 });
