@@ -14,17 +14,17 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import { useEffect, useRef } from "react";
 import { selectActiveRightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
-import { useProject, useQuietThreadShell } from "../../state/entities";
+import { useProject, useQuietThreadShell, useServerConfigs } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useLinkedThreadPullRequest } from "../ThreadStatusIndicators";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
-function repositoryForBranch(
+function ownRepositoryForUrl(
   identity: RepositoryIdentity | null | undefined,
-  branch: ThreadLinkedPullRequest,
-): string | null {
-  const parsed = sourceControlClients.parseChangeRequestUrl(branch.url);
+  url: string,
+): { readonly selector: string; readonly names: ReadonlyArray<string> } | null {
+  const parsed = sourceControlClients.parseChangeRequestUrl(url);
   if (identity == null || parsed === null) return null;
   const upstream = sourceControlClients
     .get(identity.provider)
@@ -62,8 +62,16 @@ function repositoryForBranch(
   const names = [selector, matching.displayName].filter(
     (name): name is string => name !== undefined,
   );
-  return names.some((name) => name.toLowerCase() === branch.repository.toLowerCase())
-    ? selector
+  return { selector, names };
+}
+
+function repositoryForBranch(
+  identity: RepositoryIdentity | null | undefined,
+  branch: ThreadLinkedPullRequest,
+): string | null {
+  const own = ownRepositoryForUrl(identity, branch.url);
+  return own?.names.some((name) => name.toLowerCase() === branch.repository.toLowerCase())
+    ? own.selector
     : null;
 }
 
@@ -88,15 +96,24 @@ export function useThreadLinkedPullRequest(input: {
       ? scopeProjectRef(input.environmentId, projectId)
       : null,
   );
+  const serverConfigs = useServerConfigs();
+  const serverConfig =
+    input.environmentId === null ? undefined : serverConfigs.get(input.environmentId);
+  // Servers without this capability never send a fork PR reference, so check the URL here.
+  const serverDropsForkPullRequests =
+    serverConfig !== undefined &&
+    serverConfig.environment.capabilities.forkBranchPullRequests !== true;
   const detectedRepository =
-    detected &&
-    branch &&
-    projectId !== null &&
-    branch.projectId === projectId &&
-    branch.number === detected.number &&
-    sourceControlClients.isSameChangeRequest(branch.url, detected.url)
-      ? repositoryForBranch(project?.repositoryIdentity, branch)
-      : null;
+    !detected || projectId === null
+      ? null
+      : branch &&
+          branch.projectId === projectId &&
+          branch.number === detected.number &&
+          sourceControlClients.isSameChangeRequest(branch.url, detected.url)
+        ? repositoryForBranch(project?.repositoryIdentity, branch)
+        : serverDropsForkPullRequests
+          ? (ownRepositoryForUrl(project?.repositoryIdentity, detected.url)?.selector ?? null)
+          : null;
   const replacement: ThreadLinkedPullRequest | null =
     persisted === null ||
     (persistedStatus?.pr.state !== "merged" && persistedStatus?.pr.state !== "closed") ||

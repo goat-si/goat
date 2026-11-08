@@ -187,7 +187,7 @@ it.effect("a narrowing failure is fenced even after support was lowered", () =>
   }),
 );
 
-it.effect("multiple narrowing failures record each and coalesce one follow-up fence", () =>
+it.effect("narrowing failures during a fence coalesce and stopped claims stay refused", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
@@ -197,6 +197,7 @@ it.effect("multiple narrowing failures record each and coalesce one follow-up fe
     const service = yield* makeBrowserOriginGrants({
       environmentId: EnvironmentId.make("environment:test"),
       supported: () => true,
+      blockedHostsNow: () => [],
       publish: () =>
         failWrites ? Effect.fail(new NarrowWriteFailure()) : Effect.succeed("a".repeat(64)),
       confirm: () =>
@@ -238,17 +239,30 @@ it.effect("multiple narrowing failures record each and coalesce one follow-up fe
       ThreadId.make("thread:b"),
       ThreadId.make("thread:c"),
     ];
-    for (const [index, threadId] of threads.entries())
-      assert.equal(
-        (yield* service.claim({
-          threadId,
-          pid: 42,
-          windowId: index + 1,
-          origin: `https://site${index}.test`,
-          windowTitle: "Browser",
-        })).agentResult.status,
-        "attached",
-      );
+    const judges: Array<Effect.Effect<unknown>> = [];
+    for (const [index, threadId] of threads.entries()) {
+      const { agentResult } = yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId: index + 1,
+        origin: `https://site${index}.test`,
+        windowTitle: "Browser",
+      });
+      if (agentResult.status !== "attached") throw new Error("Expected an attached claim");
+      const { claimId, claimGeneration } = agentResult.claim;
+      const args = {
+        tab_id: `tab-${index + 1}`,
+        target_id: "target",
+        session: `goat-claim:${claimId}`,
+        origin_scope: [`https://site${index}.test`],
+      };
+      const judge = service.judgeClaimCall(threadId, "get_browser_state", args, {
+        claimId,
+        claimGeneration,
+      });
+      assert.equal(yield* judge, "admit");
+      judges.push(judge);
+    }
     failWrites = true;
     const first = yield* service
       .stop(threads[0]!)
@@ -257,6 +271,7 @@ it.effect("multiple narrowing failures record each and coalesce one follow-up fe
     yield* service.stop(threads[1]!);
     yield* service.stop(threads[2]!);
     const observed = { marked, fences };
+    for (const judge of judges) assert.notEqual(yield* judge, "admit");
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.join(first);
     assert.deepEqual(observed, { marked: 2, fences: 1 });

@@ -187,6 +187,81 @@ describe("Memory tab note edits", () => {
     }).pipe(Effect.scoped, Effect.provide(services)),
   );
 
+  it.effect("a note whose forget was refused during a grant is put back once that work ends", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      const old = "I deploy on Thursdays.";
+      const kept = line(fridays, "b", old);
+      yield* fs.writeFileString(files.notes, NOTES_HEADER + line(old, "a") + "\n" + kept + "\n");
+      let open = [{ task: { taskId: "tidy", notesChangeRequested: "tidy my notes" } }];
+      const ledger: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+        listTasksByStatus: () => Effect.sync(() => open as Array<ChannelLedger.ChannelStoredTask>),
+      };
+      const writer = yield* makeChannelBotNoteWriter(fs, files, ledger);
+      const forget = writer.tabEdit(
+        { intent: "message", text: goatBotForgetNoteMessage(fridays) },
+        "input-1",
+        "2026-11-07",
+        Effect.succeed(person()),
+      );
+      assert.strictEqual((yield* forget)?.text, CHANNEL_COPY.noteEditBusy);
+      // The tidy carries out the refused forget by hand anyway.
+      const tidied = NOTES_HEADER + line(old, "a") + "\n";
+      yield* fs.writeFileString(files.notes, tidied);
+      assert.deepStrictEqual(yield* writer.keepRefused(new Set()), []);
+      open = [];
+      // The task ended but its run is still writing.
+      assert.deepStrictEqual(yield* writer.keepRefused(new Set(["tidy"])), []);
+      assert.strictEqual(yield* fs.readFileString(files.notes), tidied);
+      assert.deepStrictEqual(yield* writer.keepRefused(new Set()), [
+        { note: fridays, holders: ["tidy"] },
+      ]);
+      // Put back as it stood, so the note it corrected stays replaced.
+      assert.strictEqual(yield* fs.readFileString(files.notes), tidied + kept + "\n");
+      assert.deepStrictEqual(yield* writer.keepRefused(new Set()), []);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+
+  it.effect("a refused forget is not put back when the note survived or was forgotten later", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      const staging = "Staging is staging-02.";
+      const text = NOTES_HEADER + line(fridays, "a") + "\n" + line(staging, "b") + "\n";
+      yield* fs.writeFileString(files.notes, text);
+      let open = [{ task: { taskId: "tidy", notesChangeRequested: "tidy my notes" } }];
+      const ledger: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+        listTasksByStatus: () => Effect.sync(() => open as Array<ChannelLedger.ChannelStoredTask>),
+      };
+      const writer = yield* makeChannelBotNoteWriter(fs, files, ledger);
+      const forget = (note: string) =>
+        Effect.map(
+          writer.tabEdit(
+            { intent: "message", text: goatBotForgetNoteMessage(note) },
+            "input-1",
+            "2026-11-07",
+            Effect.succeed(person()),
+          ),
+          (answer) => answer?.text,
+        );
+      assert.strictEqual(yield* forget(fridays), CHANNEL_COPY.noteEditBusy);
+      assert.strictEqual(yield* forget(staging), CHANNEL_COPY.noteEditBusy);
+      open = [];
+      // The person asks again once the tidy is over, and that forget goes through.
+      assert.strictEqual(yield* forget(staging), CHANNEL_COPY.noteForgotten);
+      // The tidy left the other note in place; a later tidy removes it on purpose.
+      assert.deepStrictEqual(yield* writer.keepRefused(new Set()), []);
+      open = [{ task: { taskId: "later", notesChangeRequested: "tidy my notes again" } }];
+      yield* fs.writeFileString(files.notes, NOTES_HEADER);
+      open = [];
+      assert.deepStrictEqual(yield* writer.keepRefused(new Set()), []);
+      assert.strictEqual(yield* fs.readFileString(files.notes), NOTES_HEADER);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+
   it.effect(
     "a note reception saves waits while a task may edit the notes, unless that input saved it",
     () =>

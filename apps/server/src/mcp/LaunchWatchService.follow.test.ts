@@ -9,6 +9,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import {
+  advanceUntil,
   finished,
   launcher,
   local,
@@ -38,7 +39,10 @@ interface RunFacts {
   readonly completedAt?: number | null;
   /** The message that started it; a wake of the thread's own by default. */
   readonly trigger?: string;
-  readonly status?: "queued" | "running" | "completed";
+  readonly status?: "queued" | "running" | "completed" | "cancelled";
+  /** Null for a run that never started; left out, the fixture names no start. */
+  readonly startedAt?: number | null;
+  readonly cause?: "queued_cancelled" | "person_stop" | "delegated_wake_disposed";
 }
 
 /** Records a run of the target thread, which becomes its latest run. */
@@ -54,10 +58,34 @@ const addRun = (world: World, runId: RunId, ordinal: number, facts: RunFacts = {
       requestedAt: DateTime.makeUnsafe(requestedAt),
       completedAt: completedAt === null ? null : DateTime.makeUnsafe(completedAt),
       userMessageId: facts.trigger ?? `message:wake:${runId}`,
+      ...(facts.startedAt === undefined
+        ? {}
+        : {
+            startedAt: facts.startedAt === null ? null : DateTime.makeUnsafe(facts.startedAt),
+          }),
+      ...(facts.cause === undefined ? {} : { terminationCause: { kind: facts.cause } }),
     },
   ];
   world.shells.set(target, { ...world.shells.get(target), latestRunId: runId });
 };
+
+const prWake = (runId: RunId) =>
+  `message:pr-watch:github.com%2Fgoat-si%2Fgoat%232701:checks@abc:${runId}`;
+
+/** A pull request watch wake queued behind a busy turn, then dropped before it started. */
+const droppedWake = (runId: RunId): RunFacts => ({
+  status: "cancelled",
+  startedAt: null,
+  cause: "queued_cancelled",
+  trigger: prWake(runId),
+});
+
+const cancelled = (runId: RunId) =>
+  Effect.succeed({
+    threadId: target,
+    run: { id: runId, status: "cancelled" } as never,
+    timedOut: false,
+  });
 
 const external = (input: { readonly owner?: string; readonly host?: string } = {}) => ({
   owner: input.owner ?? "client:bot-a",
@@ -222,6 +250,127 @@ describe("LaunchWatchService runs the thread starts itself", () => {
       );
       expect(reportedRuns(world)).toEqual([run1, run3, run5]);
       expect(waitedRuns(world)).toEqual([run1, run3, run4, run5]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "leaves out wakes dropped before they started, found ended or still queued (#2705)",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const reported = yield* reportsQueue(world);
+        const baseDir = yield* tempDir;
+        addRun(world, run1, 1);
+        yield* withService(world, baseDir, (service) =>
+          Effect.gen(function* () {
+            yield* service.watchExternal(external());
+            yield* launchAndFinish(world, reported);
+            // Queued and dropped between two looks.
+            addRun(world, run2, 2, droppedWake(run2));
+            yield* look(world);
+            yield* Queue.take(world.idleWaits);
+            // Still queued when a look finds it, then dropped before it starts.
+            addRun(world, run3, 3, {
+              status: "queued",
+              completedAt: null,
+              startedAt: null,
+              trigger: prWake(run3),
+            });
+            yield* look(world);
+            expect(yield* Queue.take(world.waitStarted)).toBe(run3);
+            addRun(world, run3, 3, droppedWake(run3));
+            yield* Queue.offer(world.waits, cancelled(run3));
+            yield* Queue.take(world.idleWaits);
+            // A queued message a person cancelled is still news.
+            addRun(world, run4, 4, { ...droppedWake(run4), trigger: "message:person-1" });
+            yield* Queue.offer(world.waits, cancelled(run4));
+            yield* look(world);
+            yield* Queue.take(reported);
+            expect(yield* service.find(keyOf())).toMatchObject({
+              pendingRuns: [],
+              reportedRuns: [run1, run4],
+              skippedRuns: [run2, run3],
+            });
+          }),
+        );
+        expect(reportedRuns(world)).toEqual([run1, run4]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "reports a run the thread went on from once the queued wake it went on to is dropped (#2705)",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const reported = yield* reportsQueue(world);
+        const baseDir = yield* tempDir;
+        addRun(world, run1, 1);
+        yield* withService(world, baseDir, (service) =>
+          Effect.gen(function* () {
+            yield* service.watchExternal(external());
+            yield* launchAndFinish(world, reported);
+            // run-2 ended with a pull request wake still queued behind it.
+            addRun(world, run2, 2, { requestedAt: 20_000, completedAt: 25_000 });
+            addRun(world, run3, 3, {
+              requestedAt: 22_000,
+              completedAt: null,
+              status: "queued",
+              startedAt: null,
+              trigger: prWake(run3),
+            });
+            let waits = 0;
+            world.waitHandler = (input) => {
+              // The wake is dropped before run-2's end is read again.
+              if (++waits === 2)
+                addRun(world, run3, 3, { ...droppedWake(run3), requestedAt: 22_000 });
+              return finished(input.runId ?? run2);
+            };
+            yield* look(world);
+            yield* advanceUntil(Queue.take(reported));
+            yield* advanceUntil(Queue.take(world.idleWaits));
+            expect(yield* service.find(keyOf())).toMatchObject({
+              pendingRuns: [],
+              reportedRuns: [run1, run2],
+              skippedRuns: [run3],
+            });
+          }),
+        );
+        expect(reportedRuns(world)).toEqual([run1, run2]);
+        expect(waitedRuns(world)).toEqual([run1, run2, run2, run3]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("tells a dropped wake from a wake that started and was stopped (#2705)", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const reported = yield* reportsQueue(world);
+      const baseDir = yield* tempDir;
+      addRun(world, run1, 1);
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* service.watchExternal(external());
+          yield* launchAndFinish(world, reported);
+          addRun(world, run2, 2, { ...droppedWake(run2), startedAt: 20_000, cause: "person_stop" });
+          // A child completion disposed before it started, and a question answered first.
+          addRun(world, run3, 3, {
+            ...droppedWake(run3),
+            cause: "delegated_wake_disposed",
+            trigger: "message:thread:child:completion",
+          });
+          addRun(world, run4, 4, {
+            ...droppedWake(run4),
+            trigger: "question-escalation:child:request-1",
+          });
+          yield* Queue.offer(world.waits, cancelled(run2));
+          yield* look(world);
+          yield* Queue.take(reported);
+          expect(yield* service.find(keyOf())).toMatchObject({
+            reportedRuns: [run1, run2],
+            skippedRuns: [run3, run4],
+          });
+        }),
+      );
+      expect(reportedRuns(world)).toEqual([run1, run2]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

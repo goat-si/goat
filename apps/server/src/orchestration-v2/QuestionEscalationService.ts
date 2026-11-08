@@ -55,8 +55,9 @@ const encodeQuestion = Schema.encodeSync(
   Schema.fromJsonString(OrchestrationV2QuestionEscalation, { space: 2 }),
 );
 /** The launcher's wake for a question; decision routing reads it as proof the launcher was told. */
+export const QUESTION_ESCALATION_MESSAGE_PREFIX = "question-escalation:";
 export const questionEscalationMessageId = (threadId: string, requestId: string) =>
-  `question-escalation:${threadId}:${requestId}`;
+  `${QUESTION_ESCALATION_MESSAGE_PREFIX}${threadId}:${requestId}`;
 const escalationId = (threadId: ThreadId, requestId: RuntimeRequestId) =>
   questionEscalationMessageId(threadId, requestId);
 type QuestionKey = { threadId: ThreadId; requestId: RuntimeRequestId };

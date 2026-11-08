@@ -1254,10 +1254,8 @@ export interface DesktopBridge extends DesktopBridgeParts {
     credential: string,
   ) => Promise<AuthAccessTokenResult>;
   fetchSshSessionState: (httpBaseUrl: string, bearerToken: string) => Promise<AuthSessionState>;
-  issueSshWebSocketTicket: (
-    httpBaseUrl: string,
-    bearerToken: string,
-  ) => Promise<{ readonly ticket: string; readonly expiresAt: string }>;
+  /** Decode with AuthWebSocketTicketResultJson; Redacted cannot cross the context bridge. */
+  issueSshWebSocketTicket: (httpBaseUrl: string, bearerToken: string) => Promise<unknown>;
   onSshPasswordPrompt: (listener: (request: DesktopSshPasswordPromptRequest) => void) => () => void;
   resolveSshPasswordPrompt: (requestId: string, password: string | null) => Promise<void>;
   getServerExposureState: () => Promise<DesktopServerExposureState>;

@@ -26,14 +26,23 @@ export const skillProposalQuestion = (proposal: ChannelSkillProposal) =>
 export const questionTextForModel = (task: ChannelTask, question: ChannelOpenQuestion) =>
   task.skillProposal === undefined ? question.text : (question.text.split("\n", 1)[0] ?? "");
 
-/** The saved file names its approver, so only the person who asked may answer a proposal. */
+/**
+ * A skill proposal's Save writes text the GOAT app already shows and starts no run.
+ * Another GOAT session of the same owner may save it with orchestration:operate;
+ * memory, runtime, and principal are not compared. Every other answer still is.
+ */
 export const mayAnswerTask = (
   answerer: ChannelRequester,
   task: ChannelTask,
   connectionId?: string,
 ) =>
-  mayDirect(answerer, connectionId, task) &&
-  (task.skillProposal === undefined || answerer.principalId === task.requester.principalId);
+  (task.skillProposal !== undefined &&
+    answerer.ownerId === task.requester.ownerId &&
+    answerer.originKind === "goat" &&
+    task.requester.originKind === "goat" &&
+    answerer.grantedScopes.includes("orchestration:operate")) ||
+  (mayDirect(answerer, connectionId, task) &&
+    (task.skillProposal === undefined || answerer.principalId === task.requester.principalId));
 
 export const isSkillProposalAnswer = (answer: string) =>
   (SKILL_PROPOSAL_OPTIONS as ReadonlyArray<string>).includes(answer.trim());

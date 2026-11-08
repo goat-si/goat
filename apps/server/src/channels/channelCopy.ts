@@ -66,6 +66,12 @@ export const CHANNEL_COPY = {
     "I removed that note, but couldn't check my notes file afterwards. Please check the Memory tab.",
 } as const;
 
+/** Sent when GOAT put back a note it had refused to forget while another notes change ran. */
+export const noteKeptNotice = (note: string) =>
+  "I kept this note: " +
+  JSON.stringify(note) +
+  ". You asked me to forget it while another change to my notes was running, so that request changed nothing. Ask again if you still want it gone.";
+
 /** What a model reads for a person's message: its text, then the names of the files sent with it. */
 export const inboundTextWithFiles = (message: {
   readonly text: string;

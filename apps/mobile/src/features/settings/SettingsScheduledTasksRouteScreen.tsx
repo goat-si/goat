@@ -280,7 +280,7 @@ export function SettingsScheduledTasksRouteScreen() {
               accessibilityState={{ disabled: visibleEnvironments.length === 0 }}
               disabled={visibleEnvironments.length === 0}
               onPress={newTask}
-              className="size-11 items-center justify-center rounded-full disabled:opacity-50"
+              className="size-[44px] items-center justify-center rounded-full disabled:opacity-50"
             >
               <SymbolView name="plus" size={22} tintColorClassName="accent-icon" />
             </Pressable>
@@ -1184,7 +1184,7 @@ function EnvironmentTasks({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Actions for ${task.title}`}
-                className="h-11 w-11 items-center justify-center"
+                className="size-[44px] items-center justify-center"
               >
                 <SymbolView
                   name="ellipsis"
