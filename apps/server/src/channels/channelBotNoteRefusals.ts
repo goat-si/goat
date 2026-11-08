@@ -102,7 +102,10 @@ export const restoredLines = (
       .map((line) => collapseNoteText(line.text)),
   );
   return due.flatMap((entry) => {
-    if (inForce.has(collapseNoteText(entry.note))) return [];
+    const note = collapseNoteText(entry.note);
+    if (inForce.has(note)) return [];
+    // Two refusals that named one note bring it back once.
+    inForce.add(note);
     const replaced = entry.next !== undefined && inForce.has(collapseNoteText(entry.next));
     const line = replaced
       ? channelBotNoteLine(entry.note, entry.day, entry.source, entry.next)

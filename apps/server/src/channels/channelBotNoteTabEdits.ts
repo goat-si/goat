@@ -8,6 +8,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import {
+  ChannelTaskId,
   goatBotChangeNoteMessage,
   goatBotForgetNoteMessage,
   type ChannelRequester,
@@ -53,6 +54,13 @@ const OPEN_STATUSES: ReadonlyArray<ChannelTaskStatus> = [
   "running",
   "waiting_input",
 ];
+// Answers that mean the person's change or forget reached the notes file.
+const APPLIED: ReadonlySet<string> = new Set([
+  CHANNEL_COPY.noteChanged,
+  CHANNEL_COPY.noteForgotten,
+  CHANNEL_COPY.noteCameBack,
+  CHANNEL_COPY.noteUnverified,
+]);
 
 // The fixed words around the notes, taken from the sentences the clients build.
 const FORGET_PREFIX = goatBotForgetNoteMessage("").slice(0, -2);
@@ -182,7 +190,7 @@ const stillThere = (fileText: string, removedTexts: ReadonlySet<string>) =>
 export const makeChannelBotNoteWriter = (
   fs: FileSystem.FileSystem,
   files: ChannelBotFiles,
-  ledger: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus">,
+  ledger: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus" | "hasPendingForward">,
   hooks: NoteWriterHooks = {},
   refusals: RefusedNotes = memoryRefusedNotes(),
 ) =>
@@ -197,12 +205,21 @@ export const makeChannelBotNoteWriter = (
     const grantOpen = Effect.map(grantHolders, (holders) => holders.length > 0);
     const readNotes = readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES);
 
-    /** Writes back refused notes whose grants have all ended; call it under the lock. */
+    /**
+     * Writes back refused notes whose grants have all ended; call it under the lock. A grant ends
+     * once its task is no longer open and no stop or follow-up still waits to reach its worker.
+     */
     const settleRefused = Effect.gen(function* () {
       const pending = yield* refusals.list;
       if (pending.length === 0) return 0;
       const open = new Set<string>(yield* grantHolders);
-      const due = pending.filter((entry) => entry.holders.every((holder) => !open.has(holder)));
+      const reaching = new Set<string>();
+      for (const holder of new Set(pending.flatMap((entry) => entry.holders)))
+        if (!open.has(holder) && (yield* ledger.hasPendingForward(ChannelTaskId.make(holder))))
+          reaching.add(holder);
+      const due = pending.filter((entry) =>
+        entry.holders.every((holder) => !open.has(holder) && !reaching.has(holder)),
+      );
       if (due.length === 0) return 0;
       const read = yield* readNotes;
       // A file too large to read whole is left alone; its refusals wait for a later pass.
@@ -218,12 +235,18 @@ export const makeChannelBotNoteWriter = (
       yield* Effect.forEach(due, (entry) => refusals.remove(entry.inputId), { discard: true });
       return restore.length;
     });
-    // Before any other write: a failure here is logged and retried by the runtime's next pass.
-    const settleFirst = settleRefused.pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("GOAT Bot refused notes were not settled", { cause }),
-      ),
-    );
+    // Settled before any other write, and that write fails when this does: a refusal left over
+    // could otherwise undo the write later.
+    const settleFirst = settleRefused;
+    /** The person's own later change or forget of a note outranks a refusal that named it. */
+    const dropRefusalsFor = (note: string) =>
+      Effect.flatMap(refusals.list, (pending) =>
+        Effect.forEach(
+          pending.filter((entry) => entry.note === note),
+          (entry) => refusals.remove(entry.inputId),
+          { discard: true },
+        ),
+      );
     /**
      * A restart re-runs an input whose note was saved before a refusal could apply. Its first
      * answer, read from the file and never written again: a task holding a grant may be editing it.
@@ -261,7 +284,11 @@ export const makeChannelBotNoteWriter = (
     const save = (note: string, readAt: string, inputId: string, replaces?: string) =>
       gate.withPermits(1)(
         Effect.gen(function* () {
-          yield* settleFirst;
+          const settled = yield* Effect.result(settleFirst);
+          if (settled._tag === "Failure") {
+            yield* Effect.logWarning("GOAT Bot note was not saved", { cause: settled.failure });
+            return CHANNEL_COPY.noteNotSaved;
+          }
           const busy = yield* grantOpen.pipe(Effect.orElseSucceed(() => true));
           if (busy) {
             const prior = yield* savedBefore(inputId, replaces);
@@ -285,7 +312,11 @@ export const makeChannelBotNoteWriter = (
     ) =>
       gate.withPermits(1)(
         Effect.gen(function* () {
-          yield* settleFirst;
+          const settled = yield* Effect.result(settleFirst);
+          if (settled._tag === "Failure") {
+            yield* Effect.logWarning("GOAT Bot note was not saved", { cause: settled.failure });
+            return { notice: CHANNEL_COPY.noteNotSaved };
+          }
           const refused = yield* guard;
           if (refused !== undefined) return (yield* savedBefore(inputId, replaces)) ?? { refused };
           return { notice: yield* append(note, readAt, inputId, replaces) };
@@ -385,6 +416,16 @@ export const makeChannelBotNoteWriter = (
         if (refused !== undefined) yield* refusals.add(refused);
         return CHANNEL_COPY.noteEditBusy;
       }
+      const answer = yield* edit(request, inputId, readAt);
+      if (APPLIED.has(answer)) yield* dropRefusalsFor(request.note);
+      return answer;
+    });
+
+    const edit = Effect.fn("channelBotNoteTabEdits.edit")(function* (
+      request: TabRequest,
+      inputId: string,
+      readAt: string,
+    ) {
       for (let attempt = 0; attempt < EDIT_ATTEMPTS; attempt++) {
         const read = yield* readNotes;
         if (read?.truncated === true) return CHANNEL_COPY.noteFileTooLarge;
