@@ -1,0 +1,123 @@
+import { assert, describe, it } from "@effect/vitest";
+import { ChannelTaskEventId, type ThreadResultReport } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
+
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
+import {
+  goatInput,
+  makeHarness,
+  onlyTask,
+  rpcContext,
+  setupBot,
+} from "./testkit/ChannelHarness.ts";
+
+const ASKED = Date.parse("2026-10-12T00:00:00.000Z");
+
+/** A worker that asked the person a question; its run is still going. */
+const askedTask = Effect.gen(function* () {
+  yield* TestClock.setTime(ASKED);
+  yield* setupBot;
+  const gateway = yield* ChannelGateway.ChannelGateway;
+  const runtime = yield* ChannelRuntime.ChannelRuntime;
+  const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+  yield* gateway.ingest(goatInput("do: tidy the notes file", "asked"), rpcContext);
+  yield* runtime.drain;
+  const task = yield* onlyTask;
+  yield* reports.report(
+    {
+      taskId: task.taskId,
+      eventId: ChannelTaskEventId.make("asked-question"),
+      generation: task.generation,
+      status: "waiting_input",
+      summary: "Which file?",
+      question: "Which notes file?",
+    },
+    task.worker!.threadId,
+  );
+  return { task, threadId: task.worker!.threadId, runtime };
+});
+
+// The row goat_thread_report_result writes, at the time it was reported.
+const storeReport = (
+  harness: ReturnType<typeof makeHarness>,
+  threadId: string,
+  report: ThreadResultReport,
+  reportedAt: string,
+) =>
+  Effect.gen(function* () {
+    const run = harness.world.latestRun(threadId as never)!;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO thread_run_results (thread_id, run_id, report_json, reported_at)
+      VALUES (${threadId}, ${run.id}, ${JSON.stringify(report)}, ${reportedAt})
+    `;
+  });
+
+const provide = (harness: ReturnType<typeof makeHarness>) =>
+  Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)));
+
+describe("a worker's outcome after it asked the person", () => {
+  it.effect("a failure reported after the question ends the task and closes the question", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { threadId, runtime } = yield* askedTask;
+      assert.strictEqual((yield* onlyTask).status, "waiting_input");
+      yield* storeReport(
+        harness,
+        threadId,
+        { outcome: "failed", summary: "There is no notes file to tidy." },
+        "2026-10-12T00:01:00.000Z",
+      );
+      harness.world.setStatus(threadId, 1, "completed", "Stopping here.");
+      yield* runtime.drain;
+      const ended = yield* onlyTask;
+      assert.strictEqual(ended.status, "failed");
+      assert.strictEqual(ended.resultSummary, "There is no notes file to tidy.");
+      assert.deepStrictEqual(ended.openQuestions, []);
+    }).pipe(provide(harness));
+  });
+
+  it.effect("a failure reported before the question leaves the task waiting for the answer", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { threadId, runtime } = yield* askedTask;
+      yield* storeReport(
+        harness,
+        threadId,
+        { outcome: "failed", summary: "An earlier attempt failed." },
+        "2026-10-11T23:59:00.000Z",
+      );
+      harness.world.setStatus(threadId, 1, "completed", "Which notes file?");
+      yield* runtime.drain;
+      const waiting = yield* onlyTask;
+      assert.strictEqual(waiting.status, "waiting_input");
+      assert.lengthOf(waiting.openQuestions, 1);
+    }).pipe(provide(harness));
+  });
+
+  it.effect("a task stopped while it waits closes its question", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { runtime } = yield* askedTask;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const waiting = (yield* ledger.getTask((yield* onlyTask).taskId))!;
+      yield* commitTransition(
+        ledger,
+        waiting,
+        { type: "task.cancelled", payload: { reason: "Stopped." } },
+        { owner: runtime.ownerToken },
+      );
+      const stopped = yield* onlyTask;
+      assert.strictEqual(stopped.status, "cancelled");
+      assert.deepStrictEqual(stopped.openQuestions, []);
+    }).pipe(provide(harness));
+  });
+});
