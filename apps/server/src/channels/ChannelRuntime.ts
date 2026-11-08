@@ -38,6 +38,7 @@ import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
+import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import { hasUnsettledChannelDelivery } from "./channelDeliveryGate.ts";
 import { deliveryIdFor } from "./channelIds.ts";
@@ -101,6 +102,7 @@ const make = Effect.gen(function* () {
   const imessage = yield* ImessageChannelRuntime.ImessageChannelRuntime;
   const routineIntake = yield* ChannelRoutineIntake.ChannelRoutineIntake;
   const routineInputs = yield* makeRoutineInputs;
+  const notesWriter = yield* ChannelBotNoteWriter;
   const owner = "channel-owner:" + NodeCrypto.randomUUID();
   const receptionSlots = yield* Semaphore.make(RECEPTION_CONCURRENCY);
   const inFlight = yield* Ref.make(new Map<ChannelInputId, Fiber.Fiber<void, unknown>>());
@@ -319,6 +321,12 @@ const make = Effect.gen(function* () {
       ),
     );
     started += yield* reports.reconcile(owner);
+    // A refused Memory tab request's note comes back once the grant that could remove it ends.
+    yield* notesWriter.settleRefused.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("GOAT Bot refused notes were not settled", { cause }),
+      ),
+    );
     // Observers of workers on other machines run on their own fibers; this only starts missing ones.
     started += yield* remoteWorkers.ensure(owner);
     started += yield* routineStep(routineIntake.settle);

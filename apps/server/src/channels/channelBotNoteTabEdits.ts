@@ -36,6 +36,12 @@ import {
 } from "./channelBotNotes.ts";
 import { readChannelBotNotesTail } from "./channelBotNotesTail.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
+import {
+  memoryRefusedNotes,
+  refusalFor,
+  restoredLines,
+  type RefusedNotes,
+} from "./channelBotNoteRefusals.ts";
 
 /** The largest notes file a Memory tab edit reads and rewrites. */
 const NOTES_EDIT_MAX_BYTES = 1024 * 1024;
@@ -178,10 +184,45 @@ export const makeChannelBotNoteWriter = (
   files: ChannelBotFiles,
   ledger: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus">,
   hooks: NoteWriterHooks = {},
+  refusals: RefusedNotes = memoryRefusedNotes(),
 ) =>
   Effect.map(Semaphore.make(1), (gate) => {
-    const grantOpen = Effect.map(ledger.listTasksByStatus(OPEN_STATUSES), (open) =>
-      open.some((stored) => stored.task.notesChangeRequested !== undefined),
+    const grantHolders = Effect.map(
+      Effect.suspend(() => ledger.listTasksByStatus(OPEN_STATUSES)),
+      (open) =>
+        open
+          .filter((stored) => stored.task.notesChangeRequested !== undefined)
+          .map((stored) => stored.task.taskId),
+    );
+    const grantOpen = Effect.map(grantHolders, (holders) => holders.length > 0);
+    const readNotes = readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES);
+
+    /** Writes back refused notes whose grants have all ended; call it under the lock. */
+    const settleRefused = Effect.gen(function* () {
+      const pending = yield* refusals.list;
+      if (pending.length === 0) return 0;
+      const open = new Set<string>(yield* grantHolders);
+      const due = pending.filter((entry) => entry.holders.every((holder) => !open.has(holder)));
+      if (due.length === 0) return 0;
+      const read = yield* readNotes;
+      // A file too large to read whole is left alone; its refusals wait for a later pass.
+      if (read?.truncated === true) return 0;
+      const text = decode(read?.bytes ?? new Uint8Array());
+      const restore = restoredLines(parseChannelBotNoteLines(text), due);
+      if (restore.length > 0)
+        yield* fs.writeFileString(
+          files.notes,
+          appendPrefix(read !== null, text) + restore.join("\n") + "\n",
+          { flag: "a" },
+        );
+      yield* Effect.forEach(due, (entry) => refusals.remove(entry.inputId), { discard: true });
+      return restore.length;
+    });
+    // Before any other write: a failure here is logged and retried by the runtime's next pass.
+    const settleFirst = settleRefused.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("GOAT Bot refused notes were not settled", { cause }),
+      ),
     );
     /**
      * A restart re-runs an input whose note was saved before a refusal could apply. Its first
@@ -220,6 +261,7 @@ export const makeChannelBotNoteWriter = (
     const save = (note: string, readAt: string, inputId: string, replaces?: string) =>
       gate.withPermits(1)(
         Effect.gen(function* () {
+          yield* settleFirst;
           const busy = yield* grantOpen.pipe(Effect.orElseSucceed(() => true));
           if (busy) {
             const prior = yield* savedBefore(inputId, replaces);
@@ -243,6 +285,7 @@ export const makeChannelBotNoteWriter = (
     ) =>
       gate.withPermits(1)(
         Effect.gen(function* () {
+          yield* settleFirst;
           const refused = yield* guard;
           if (refused !== undefined) return (yield* savedBefore(inputId, replaces)) ?? { refused };
           return { notice: yield* append(note, readAt, inputId, replaces) };
@@ -251,8 +294,6 @@ export const makeChannelBotNoteWriter = (
 
     /** Runs `effect` under the writers' lock, so a notes grant is checked and recorded as one step. */
     const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => gate.withPermits(1)(effect);
-
-    const readNotes = readChannelBotNotesTail(files.notes, NOTES_EDIT_MAX_BYTES);
 
     const change = Effect.fn("channelBotNoteTabEdits.change")(function* (
       note: string,
@@ -324,9 +365,26 @@ export const makeChannelBotNoteWriter = (
       inputId: string,
       readAt: string,
     ) {
-      const open = yield* ledger.listTasksByStatus(OPEN_STATUSES);
-      if (open.some((stored) => stored.task.notesChangeRequested !== undefined))
+      yield* settleFirst;
+      const holders = yield* grantHolders;
+      if (holders.length > 0) {
+        // The grant's hand edit may still remove the line; settleRefused writes it back after.
+        const read = yield* readNotes;
+        const refused =
+          read === null || read.truncated
+            ? undefined
+            : refusalFor(
+                parseChannelBotNoteLines(decode(read.bytes)),
+                request.kind === "change"
+                  ? { note: request.note, next: request.next }
+                  : { note: request.note },
+                inputId,
+                readAt,
+                holders,
+              );
+        if (refused !== undefined) yield* refusals.add(refused);
         return CHANNEL_COPY.noteEditBusy;
+      }
       for (let attempt = 0; attempt < EDIT_ATTEMPTS; attempt++) {
         const read = yield* readNotes;
         if (read?.truncated === true) return CHANNEL_COPY.noteFileTooLarge;
@@ -377,7 +435,14 @@ export const makeChannelBotNoteWriter = (
       return answer;
     });
 
-    return { save, saveIf, exclusive, tabEdit, grantOpen };
+    return {
+      save,
+      saveIf,
+      exclusive,
+      tabEdit,
+      grantOpen,
+      settleRefused: gate.withPermits(1)(settleRefused),
+    };
   });
 
 /**

@@ -258,6 +258,101 @@ describe("Memory tab note edits", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect(
+    "a refused forget's line comes back once, after every grant open at the refusal ends",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
+        yield* fs.makeDirectory(files.dir, { recursive: true });
+        const kept = line("Staging is staging-02.", "b");
+        yield* fs.writeFileString(
+          files.notes,
+          NOTES_HEADER + line(fridays, "a") + "\n" + kept + "\n",
+        );
+        let open = true;
+        const tidy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+          listTasksByStatus: () =>
+            Effect.succeed(
+              open
+                ? [
+                    {
+                      task: { taskId: "tidy", notesChangeRequested: "tidy my notes" },
+                    } as unknown as ChannelLedger.ChannelStoredTask,
+                  ]
+                : [],
+            ),
+        };
+        const writer = yield* makeChannelBotNoteWriter(fs, files, tidy);
+        const ask = (message: string, inputId: string) =>
+          Effect.map(
+            writer.tabEdit(
+              { intent: "message", text: message },
+              inputId,
+              "2026-11-07T10:00:00Z",
+              Effect.succeed(person()),
+            ),
+            (answer) => answer?.text,
+          );
+        assert.strictEqual(
+          yield* ask(goatBotForgetNoteMessage(fridays), "forget"),
+          CHANNEL_COPY.noteEditBusy,
+        );
+        assert.strictEqual(
+          yield* ask(
+            goatBotChangeNoteMessage("Staging is staging-02.", "Staging is staging-03."),
+            "change",
+          ),
+          CHANNEL_COPY.noteEditBusy,
+        );
+        // The tidy removes the refused note and applies the refused change by hand.
+        const tidied = NOTES_HEADER + "- 2026-11-07: Staging is staging-03.\n";
+        yield* fs.writeFileString(files.notes, tidied);
+        assert.strictEqual(yield* writer.settleRefused, 0);
+        assert.strictEqual(yield* fs.readFileString(files.notes), tidied);
+        open = false;
+        assert.strictEqual(yield* writer.settleRefused, 2);
+        const restored = yield* fs.readFileString(files.notes);
+        assert.include(restored, line(fridays, "a"));
+        assert.include(restored, line("Staging is staging-02.", "b", "Staging is staging-03."));
+        assert.strictEqual(yield* writer.settleRefused, 0);
+        assert.strictEqual(yield* fs.readFileString(files.notes), restored);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("a refused note the grant left in place is not written again", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      const text = NOTES_HEADER + line(fridays, "a") + "\n";
+      yield* fs.writeFileString(files.notes, text);
+      let open = true;
+      const tidy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+        listTasksByStatus: () =>
+          Effect.succeed(
+            open
+              ? [
+                  {
+                    task: { taskId: "tidy", notesChangeRequested: "tidy my notes" },
+                  } as unknown as ChannelLedger.ChannelStoredTask,
+                ]
+              : [],
+          ),
+      };
+      const writer = yield* makeChannelBotNoteWriter(fs, files, tidy);
+      yield* writer.tabEdit(
+        { intent: "message", text: goatBotForgetNoteMessage(fridays) },
+        "forget",
+        "2026-11-07T10:00:00Z",
+        Effect.succeed(person()),
+      );
+      open = false;
+      assert.strictEqual(yield* writer.settleRefused, 0);
+      assert.strictEqual(yield* fs.readFileString(files.notes), text);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("a forget leaves the file untouched when it changes before the rename, twice", () => {
     let writes = 0;
     return Effect.gen(function* () {
