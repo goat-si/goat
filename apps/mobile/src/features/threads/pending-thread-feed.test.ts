@@ -132,4 +132,19 @@ describe("pending timeline messages", () => {
       "waiting",
     ]);
   });
+
+  it("keeps an acknowledged message pending until the thread reaches its receipt, even when the message is already projected", () => {
+    // message.updated reaches projection.messages one batch before the turn item the feed draws.
+    const sent = { ...pending("sent"), sequence: 100 };
+    // A rolled-back message the thread has caught up to stays hidden.
+    const rolledBack = { ...pending("rolled-back"), sequence: 90 };
+    const shown = selectPendingAcknowledgedMessages([sent, rolledBack], {
+      threadKey: "env:thread",
+      queuedMessages: [],
+      sequence: 98,
+      projectedMessages: [{ id: sent.messageId }, { id: rolledBack.messageId }],
+    });
+    expect(shown).toEqual([sent]);
+    expect(appendPendingThreadMessages([], [], shown).map((entry) => entry.id)).toEqual(["sent"]);
+  });
 });
