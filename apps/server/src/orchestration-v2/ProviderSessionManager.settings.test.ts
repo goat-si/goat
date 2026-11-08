@@ -1,0 +1,403 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, it } from "@effect/vitest";
+import {
+  EnvironmentId,
+  type ModelSelection,
+  type OrchestrationV2AppThread,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ProviderSessionId,
+  ThreadId,
+} from "@goat/contracts";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import { HttpServer } from "effect/http";
+import * as Layer from "effect/Layer";
+import * as NetAddress from "effect/net/NetAddress";
+import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import { TestClock } from "effect/testing";
+
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as CommandOutputHub from "./CommandOutputHub.ts";
+import * as EventSink from "./EventSink.ts";
+import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
+import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import {
+  layerTestEventSink,
+  layerTestStores,
+} from "./ProviderSessionManager.persistence.testkit.ts";
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+
+const driver = ProviderDriverKind.make("codex");
+const instanceId = ProviderInstanceId.make("codex");
+const modelSelection = { instanceId, model: "gpt-5.4" } satisfies ModelSelection;
+const runtimePolicy = {
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  cwd: process.cwd(),
+} satisfies ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+const threadA = ThreadId.make("thread-settings-a");
+const threadB = ThreadId.make("thread-settings-b");
+/** A retiring process stops within one probe after its work ends; idle sessions wait 30 minutes. */
+const retireProbe = "5 seconds";
+
+interface Fixture {
+  readonly opens: Ref.Ref<number>;
+  readonly closed: Queue.Queue<void>;
+  /** What the provider instance looks like now; a settings edit changes the key. */
+  readonly instance: { sessionConfigKey: string; present: boolean };
+  readonly changes: PubSub.PubSub<void>;
+  readonly turnStarted: Deferred.Deferred<void>;
+  readonly endTurn: Deferred.Deferred<void>;
+}
+
+const makeFixture = Effect.gen(function* () {
+  const fixture: Fixture = {
+    opens: yield* Ref.make(0),
+    closed: yield* Queue.unbounded<void>(),
+    instance: { sessionConfigKey: "settings-1", present: true },
+    changes: yield* PubSub.unbounded<void>(),
+    turnStarted: yield* Deferred.make<void>(),
+    endTurn: yield* Deferred.make<void>(),
+  };
+  return fixture;
+});
+
+const unused = (detail: string) =>
+  Effect.fail(new ProviderAdapter.ProviderAdapterProtocolError({ driver, detail }));
+
+const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Service"] => ({
+  instanceId,
+  driver,
+  get sessionConfigKey() {
+    return fixture.instance.sessionConfigKey;
+  },
+  getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+  planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
+  openSession: (input) =>
+    Effect.gen(function* () {
+      yield* Ref.update(fixture.opens, (count) => count + 1);
+      yield* Effect.addFinalizer(() => Queue.offer(fixture.closed, undefined));
+      const now = yield* DateTime.now;
+      return {
+        instanceId,
+        driver,
+        providerSessionId: input.providerSessionId,
+        providerSession: {
+          id: input.providerSessionId,
+          driver,
+          providerInstanceId: instanceId,
+          status: "ready",
+          cwd: process.cwd(),
+          model: modelSelection.model,
+          capabilities: CodexProviderCapabilitiesV2,
+          createdAt: now,
+          updatedAt: now,
+          lastError: null,
+        },
+        events: Stream.never,
+        backgroundTasksEndWithProcess: true,
+        ensureThread: () => unused("ensureThread"),
+        resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
+        // The turn runs until the test ends it; ending it fails the start, which settles it.
+        startTurn: () =>
+          Deferred.succeed(fixture.turnStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(fixture.endTurn)),
+            Effect.andThen(unused("turn ended")),
+          ),
+        steerTurn: () => Effect.void,
+        interruptTurn: () => Effect.void,
+        respondToRuntimeRequest: () => Effect.void,
+        readThreadSnapshot: () => unused("readThreadSnapshot"),
+        rollbackThread: () => unused("rollbackThread"),
+        forkThread: () => unused("forkThread"),
+      } satisfies ProviderAdapter.ProviderAdapterV2SessionRuntime;
+    }),
+});
+
+const mcpRegistry = Layer.effect(
+  McpSessionRegistry.McpSessionRegistry,
+  McpSessionRegistry.__testing.make({}),
+).pipe(
+  Layer.provide(
+    Layer.succeed(
+      HttpServer.HttpServer,
+      HttpServer.HttpServer.of({
+        address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 43124),
+        serve: (() => Effect.void) as HttpServer.HttpServer["Service"]["serve"],
+      }),
+    ),
+  ),
+  Layer.provide(
+    Layer.mock(ServerEnvironment.ServerEnvironment)({
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("session-settings-test")),
+    }),
+  ),
+  Layer.provide(NodeServices.layer),
+);
+
+const layer = (fixture: Fixture) => {
+  const instances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+    // @effect-diagnostics-next-line effectSucceedWithVoid:off - Optional instances require undefined rather than void.
+    getInstance: () => Effect.succeed(undefined),
+    subscribeChanges: PubSub.subscribe(fixture.changes),
+  });
+  const adapter = makeAdapter(fixture);
+  const adapters = Layer.succeed(
+    ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+    ProviderAdapterRegistry.ProviderAdapterRegistryV2.of({
+      get: (id) =>
+        fixture.instance.present
+          ? Effect.succeed(adapter)
+          : Effect.fail(
+              new ProviderAdapterRegistry.ProviderAdapterRegistryLookupError({ instanceId: id }),
+            ),
+      list: () => Effect.succeed([instanceId]),
+    }),
+  );
+  const ingestor = ProviderEventIngestor.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        instances,
+        layerTestEventSink,
+        IdAllocator.layer,
+        layerTestStores,
+        ThreadCommandExecutor.layer,
+        Layer.mock(GitVcsDriver.GitVcsDriver)({ resolveBranchName: () => Effect.succeed(null) }),
+      ),
+    ),
+  );
+  return Layer.mergeAll(
+    layerTestEventSink,
+    IdAllocator.layer,
+    layerTestStores,
+    ProviderSessionManager.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          adapters,
+          instances,
+          McpProviderSessions.layer,
+          AdapterInfrastructure.layerMemoryAdmission,
+          CommandOutputHub.layer.pipe(
+            Layer.provide(Layer.merge(layerTestEventSink, layerTestStores)),
+          ),
+          layerTestEventSink,
+          IdAllocator.layer,
+          ingestor,
+          mcpRegistry,
+          layerTestStores,
+        ),
+      ),
+    ),
+  ).pipe(Layer.provide(NodeServices.layer));
+};
+
+const appThread = (
+  threadId: ThreadId,
+  projectId: OrchestrationV2AppThread["projectId"],
+  now: DateTime.Utc,
+) =>
+  ({
+    createdBy: "user",
+    creationSource: "web",
+    id: threadId,
+    projectId,
+    title: "Settings",
+    providerInstanceId: instanceId,
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: null,
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+    forkedFrom: null,
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    lastVisitedAt: null,
+    deletedAt: null,
+  }) satisfies OrchestrationV2AppThread;
+
+/** Two threads on the instance's shared Codex session, as GOAT places them by default. */
+const sharedSession = Effect.gen(function* () {
+  const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+  const eventSink = yield* EventSink.EventSinkV2;
+  const idAllocator = yield* IdAllocator.IdAllocatorV2;
+  const now = yield* DateTime.now;
+  const projectId = yield* idAllocator.allocate.project({ fixtureName: "session-settings" });
+  const threads = {
+    [threadA]: appThread(threadA, projectId, now),
+    [threadB]: appThread(threadB, projectId, now),
+  };
+  for (const thread of Object.values(threads))
+    yield* eventSink.write({
+      events: [
+        {
+          id: yield* idAllocator.allocate.event({ threadId: thread.id }),
+          type: "thread.created",
+          threadId: thread.id,
+          occurredAt: now,
+          payload: thread,
+        },
+      ],
+    });
+  const providerSessionId: ProviderSessionId = idAllocator.derive.providerSession({
+    providerInstanceId: instanceId,
+  });
+  const open = (threadId: ThreadId) =>
+    manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+  const runTurn = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const runtime = yield* open(threadId);
+      const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+      return yield* runtime.startTurn({
+        appThread: threads[threadId]!,
+        threadId,
+        runId,
+        runOrdinal: 1,
+        providerTurnOrdinal: 1,
+        attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+        rootNodeId: idAllocator.derive.rootNode({ runId }),
+        providerThread: {
+          id: idAllocator.derive.providerThread({ driver, nativeThreadId: `native-${threadId}` }),
+          driver,
+          providerInstanceId: instanceId,
+          providerSessionId,
+          appThreadId: threadId,
+          ownerNodeId: null,
+          nativeThreadRef: { driver, nativeId: `native-${threadId}`, strength: "strong" },
+          nativeConversationHeadRef: null,
+          status: "idle",
+          firstRunOrdinal: null,
+          lastRunOrdinal: null,
+          handoffIds: [],
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+        message: {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
+          text: "turn",
+          attachments: [],
+        },
+        modelSelection,
+        runtimePolicy,
+      });
+    });
+  return { manager, providerSessionId, open, runTurn };
+});
+
+const editSettings = (fixture: Fixture, patch: Partial<Fixture["instance"]>) =>
+  Effect.sync(() => Object.assign(fixture.instance, patch)).pipe(
+    Effect.andThen(PubSub.publish(fixture.changes, undefined)),
+  );
+
+it.effect("a new thread after a settings edit starts a new Codex process", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { open } = yield* sharedSession;
+      yield* open(threadA);
+      fixture.instance.sessionConfigKey = "settings-2";
+      yield* open(threadB);
+      assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+      assert.strictEqual(yield* Queue.size(fixture.closed), 1);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect("turning the provider off stops its idle process", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { manager, open, providerSessionId } = yield* sharedSession;
+      yield* open(threadA);
+      yield* editSettings(fixture, { sessionConfigKey: "settings-disabled" });
+      yield* Queue.take(fixture.closed);
+      assert.isFalse(yield* manager.isLive(providerSessionId));
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect("deleting the provider instance stops its idle process", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { manager, open, providerSessionId } = yield* sharedSession;
+      yield* open(threadA);
+      yield* editSettings(fixture, { present: false });
+      yield* Queue.take(fixture.closed);
+      assert.isFalse(yield* manager.isLive(providerSessionId));
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect(
+  "a running turn finishes on the old process, which then stops; new turns wait for it",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture;
+      yield* Effect.gen(function* () {
+        const { manager, open, runTurn, providerSessionId } = yield* sharedSession;
+        const turn = yield* runTurn(threadA).pipe(Effect.exit, Effect.forkChild);
+        yield* Deferred.await(fixture.turnStarted);
+        yield* editSettings(fixture, { sessionConfigKey: "settings-2" });
+
+        const refused = yield* open(threadB).pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(refused));
+        assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), "settings changed");
+        // The thread whose turn is still running keeps reaching it.
+        yield* open(threadA);
+        assert.isTrue(yield* manager.isLive(providerSessionId));
+        assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+
+        yield* Deferred.succeed(fixture.endTurn, undefined);
+        yield* Fiber.join(turn);
+        yield* TestClock.adjust(retireProbe);
+        yield* Queue.take(fixture.closed);
+        yield* open(threadB);
+        assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+      }).pipe(Effect.provide(layer(fixture)));
+    }),
+);
+
+it.effect("turning the provider back on with the same settings keeps its process", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { manager, open, runTurn, providerSessionId } = yield* sharedSession;
+      const turn = yield* runTurn(threadA).pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(fixture.turnStarted);
+      fixture.instance.sessionConfigKey = "settings-disabled";
+      assert.isTrue(Exit.isFailure(yield* open(threadB).pipe(Effect.exit)));
+      fixture.instance.sessionConfigKey = "settings-1";
+      yield* open(threadB);
+
+      yield* Deferred.succeed(fixture.endTurn, undefined);
+      yield* Fiber.join(turn);
+      yield* TestClock.adjust(retireProbe);
+      assert.isTrue(yield* manager.isLive(providerSessionId));
+      assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
