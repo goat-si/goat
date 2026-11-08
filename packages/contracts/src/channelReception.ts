@@ -266,8 +266,22 @@ export const ChannelReceptionAction = Schema.Union([
     options: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
     /** The question picks a project; the server words it from the projects it would offer. */
     about: Schema.optional(Schema.Literal("project")),
+    /**
+     * The person's words in the current input asking to change, forget or tidy standing notes.
+     * The server keeps the mark only when those words occur in that input, and says why when
+     * the sender may not edit the notes.
+     */
+    notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
   }),
-  Schema.Struct({ type: Schema.Literal("report_only") }),
+  Schema.Struct({
+    type: Schema.Literal("report_only"),
+    /**
+     * The person's words in the current input asking to change, forget or tidy standing notes.
+     * The server keeps the mark only when those words occur in that input, and says why when
+     * the sender may not edit the notes.
+     */
+    notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
+  }),
   /** A routine found nothing that needs the person: the input settles without a reply. */
   Schema.Struct({ type: Schema.Literal("no_update") }),
 ]);

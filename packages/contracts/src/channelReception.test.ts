@@ -80,6 +80,24 @@ describe("reception results", () => {
     ).toThrow();
   });
 
+  it("keeps a notes-change mark on a plain reply and a clarifying question", () => {
+    const mark = "forget that I deploy on Fridays";
+    for (const action of [
+      { type: "report_only" as const, notesChangeRequested: mark },
+      { type: "clarify" as const, question: "Which note?", notesChangeRequested: mark },
+    ]) {
+      expect(decode({ replyText: "Okay.", action })).toEqual({ replyText: "Okay.", action });
+    }
+    expect(decodeAction({ type: "report_only" })).not.toHaveProperty("notesChangeRequested");
+    expect(decodeAction({ type: "clarify", question: "Which note?" })).not.toHaveProperty(
+      "notesChangeRequested",
+    );
+    expect(() => decodeAction({ type: "report_only", notesChangeRequested: " " })).toThrow();
+    expect(() =>
+      decodeAction({ type: "clarify", question: "Which note?", notesChangeRequested: " " }),
+    ).toThrow();
+  });
+
   it("requires a task and a nonempty destination for a move", () => {
     for (const action of [
       { type: "move_task", taskId: "task-1" },
