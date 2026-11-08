@@ -65,6 +65,10 @@ export const bindingIdFor = (conversationId: ChannelConversationId, replyAddress
 export const taskIdFor = (inputId: ChannelInputId, ordinal: number) =>
   stableId("channel-task", [inputId, String(ordinal)]) as ChannelTaskId;
 
+/** Agents sometimes copy a task id without its prefix; the digest alone still names the task. */
+export const channelTaskIdFromAgent = (taskId: ChannelTaskId): ChannelTaskId =>
+  taskId.includes(":") ? taskId : (("channel-task:" + taskId) as ChannelTaskId);
+
 export const taskEventIdFor = (taskId: ChannelTaskId, version: number) =>
   stableId("channel-task-event", [taskId, String(version)]) as ChannelTaskEventId;
 

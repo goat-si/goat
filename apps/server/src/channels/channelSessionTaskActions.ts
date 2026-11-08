@@ -19,6 +19,7 @@ import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import {
   answerForwardIdsFor,
+  channelTaskIdFromAgent,
   taskEventIdFor,
   toolForwardKeyFor,
   toolSteerIdsFor,
@@ -46,6 +47,10 @@ export class ChannelSessionTaskActions extends Context.Service<
 
 const fail = (reason: "forbidden" | "not_found" | "invalid_input") =>
   new ChannelGatewayError({ reason });
+const withFullTaskId = <I extends Common>(input: I): I => ({
+  ...input,
+  taskId: channelTaskIdFromAgent(input.taskId),
+});
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -117,7 +122,8 @@ const make = Effect.gen(function* () {
   });
   return ChannelSessionTaskActions.of({
     checkCaller,
-    followUp: Effect.fn("ChannelSessionTaskActions.followUp")(function* (input) {
+    followUp: Effect.fn("ChannelSessionTaskActions.followUp")(function* (agentInput) {
+      const input = withFullTaskId(agentInput);
       const { target, requester, sender } = yield* authorize(input);
       const key = toolForwardKeyFor(input.caller.runId, input.taskId, input.clientRequestId);
       const existing = yield* findEvent(input.taskId, "task.followup.received", "forwardKey", key);
@@ -168,7 +174,7 @@ const make = Effect.gen(function* () {
         );
     }),
     stop: Effect.fn("ChannelSessionTaskActions.stop")(function* (input) {
-      const { target, requester } = yield* authorize(input);
+      const { target, requester } = yield* authorize(withFullTaskId(input));
       if (!["received", "dispatching", "running", "waiting_input"].includes(target.task.status))
         return null;
       const bot = yield* ledger.getBotById(target.ownerId, target.botId);
@@ -186,7 +192,8 @@ const make = Effect.gen(function* () {
       yield* ledger.applyTaskEvent({ write: prepared.write, deliveries: prepared.deliveries });
       return prepared.event;
     }),
-    answer: Effect.fn("ChannelSessionTaskActions.answer")(function* (input) {
+    answer: Effect.fn("ChannelSessionTaskActions.answer")(function* (agentInput) {
+      const input = withFullTaskId(agentInput);
       const { target, sender } = yield* authorize(input);
       const existing = yield* findEvent(
         input.taskId,

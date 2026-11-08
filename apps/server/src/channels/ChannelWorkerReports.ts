@@ -61,7 +61,12 @@ import {
 } from "./channelLaunchedResults.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliverNoticeAnswers, noticeMessageIds, resultRunsOf } from "./channelNoticeAnswers.ts";
-import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
+import {
+  channelTaskIdFromAgent,
+  deliveryIdFor,
+  questionIdFor,
+  workerLaunchIdsFor,
+} from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
@@ -859,7 +864,7 @@ const make = Effect.gen(function* () {
 
   const report: ChannelWorkerReports["Service"]["report"] = (input, callerThreadId) =>
     Effect.gen(function* () {
-      const stored = yield* ledger.getTask(input.taskId);
+      const stored = yield* ledger.getTask(channelTaskIdFromAgent(input.taskId));
       const worker = stored?.task.worker;
       if (
         stored === undefined ||
