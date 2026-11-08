@@ -22,7 +22,7 @@ export class ProviderRestartRequiredError extends Schema.TaggedError<ProviderRes
   override get message(): string {
     const work =
       this.runningTurns === 0
-        ? "an active goal or subagent"
+        ? "an active goal, a subagent or a pending approval"
         : `${this.runningTurns} running turn${this.runningTurns === 1 ? "" : "s"}`;
     return `This provider's settings changed. GOAT restarts it with the new settings once the work still running on its current process finishes (${work}). Stop that work to restart now, then try again.`;
   }

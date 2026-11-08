@@ -1424,17 +1424,21 @@ export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapter
     ),
   );
 
+  const binaryPath = expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory);
   const settings = {
     ...config,
     enabled,
-    binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
+    binaryPath,
     homePath: homeLayout.effectiveHomePath ?? "",
   } satisfies CodexSettings;
+  const processEnvironment = yield* mergeProviderInstanceEnvironment(environment, hostEnvironment);
 
   return yield* makeCodexAdapterV2({
     instanceId,
     settings,
-    environment: yield* mergeProviderInstanceEnvironment(environment, hostEnvironment),
+    environment: processEnvironment,
+    // Before a shadow home replaces homePath, so the shared CODEX_HOME still counts.
+    sessionConfigKey: codexSessionConfigKey({ ...config, enabled, binaryPath }, processEnvironment),
     clientFactory,
     crypto,
     fileSystem,
@@ -1465,6 +1469,7 @@ export interface CodexAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly sessionConfigKey?: string;
   readonly clientFactory: CodexAppServerClientFactoryShape;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
   readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
@@ -1533,7 +1538,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CODEX_PROVIDER,
-    sessionConfigKey: codexSessionConfigKey(adapterOptions.settings, adapterOptions.environment),
+    sessionConfigKey:
+      adapterOptions.sessionConfigKey ??
+      codexSessionConfigKey(adapterOptions.settings, adapterOptions.environment),
     getCapabilities: Effect.fn("CodexAdapterV2.getCapabilities")(function () {
       return Effect.succeed(CodexProviderCapabilitiesV2);
     }),

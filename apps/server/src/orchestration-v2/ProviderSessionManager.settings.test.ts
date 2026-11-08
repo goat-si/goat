@@ -417,7 +417,10 @@ it.effect("an active goal keeps the old process until it ends", () =>
       fixture.liveWork.held = true;
       fixture.instance.sessionConfigKey = "settings-2";
       const refused = yield* open(threadB).pipe(Effect.exit);
-      assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), "active goal");
+      assert.include(
+        String(Exit.isFailure(refused) ? refused.cause : ""),
+        "active goal, a subagent or a pending approval",
+      );
       yield* TestClock.adjust(retireProbe);
       assert.isTrue(yield* manager.isLive(providerSessionId));
 
