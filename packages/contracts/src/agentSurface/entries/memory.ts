@@ -299,9 +299,11 @@ export const memoryEntries = {
     guide:
       "For outside MCP clients a person granted settings:write and memory:read, in a session allowed to write; a GOAT thread's own credential never carries settings:write, so an agent in a thread asks the person to repair memory in Settings. Read memory.hub_diagnostics to inspect the current holds.",
     effect: "write",
-    capability: "settings.write",
+    capability: "none",
+    capabilityReason:
+      "A live settings:write client session authorizes this memory administration write.",
     hostRoutable: false,
-    requires: "either",
+    requires: "client",
     dryRun: "unsupported",
     humanSteps: [],
     idempotencyReason:
@@ -318,9 +320,11 @@ export const memoryEntries = {
     guide:
       "For outside MCP clients a person granted settings:write and memory:read, in a session allowed to write; a GOAT thread's own credential never carries settings:write, so an agent in a thread asks the person to retry reports in Settings. Read memory.history to inspect reports.",
     effect: "write",
-    capability: "settings.write",
+    capability: "none",
+    capabilityReason:
+      "A live settings:write client session authorizes this memory administration write.",
     hostRoutable: false,
-    requires: "either",
+    requires: "client",
     dryRun: "unsupported",
     humanSteps: [],
     idempotencyReason:
@@ -335,11 +339,13 @@ export const memoryEntries = {
     summary: "Disable the memory hub using settings:write and a versioned compare-and-swap.",
     description: "Disable memory sharing on this device.",
     guide:
-      "Needs settings:write and a session allowed to write. The update compares the supplied settings version before changing it. The response contains only disabled settings and their version, with no credential.",
+      "Needs settings:write and a session allowed to write. A GOAT thread's own credential never carries settings:write, so an agent in a thread asks the person to change memory settings in Settings. The update compares the supplied settings version before changing it. The response contains only disabled settings and their version, with no credential.",
     effect: "destructive",
-    capability: "settings.write",
+    capability: "none",
+    capabilityReason:
+      "A live settings:write client session authorizes this memory administration write.",
     hostRoutable: false,
-    requires: "either",
+    requires: "client",
     dryRun: "unsupported",
     humanSteps: [],
     idempotencyReason:
@@ -373,11 +379,13 @@ export const memoryEntries = {
     description:
       "Change memory generation, model, or sharing settings. Enabling sync makes this device the hub; disabling sync turns sharing off.",
     guide:
-      "Needs settings:write and a session allowed to write. A device enrolled as a member cannot enable hub sync; it can disable sync and can still change generation or model settings.",
+      "Needs settings:write and a session allowed to write. A GOAT thread's own credential never carries settings:write, so an agent in a thread asks the person to change memory settings in Settings. A device enrolled as a member cannot enable hub sync; it can disable sync and can still change generation or model settings.",
     effect: "write",
-    capability: "settings.write",
+    capability: "none",
+    capabilityReason:
+      "A live settings:write client session authorizes this memory administration write.",
     hostRoutable: false,
-    requires: "either",
+    requires: "client",
     dryRun: "unsupported",
     humanSteps: [],
     idempotencyReason:
