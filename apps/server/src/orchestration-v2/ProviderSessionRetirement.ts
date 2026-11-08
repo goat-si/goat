@@ -107,17 +107,19 @@ export const make = <
       ProviderInstanceRegistry.ProviderInstanceRegistry,
     );
     if (Option.isNone(instances)) return;
-    const subscription = yield* instances.value.subscribeChanges.pipe(Scope.provide(scope));
     const retireAll = Effect.gen(function* () {
       for (const entry of (yield* Ref.get(input.sessions)).values()) {
         const providerSessionId = entry.runtime.providerSessionId;
         yield* input.withOpenLock(providerSessionId, retireIfStale(providerSessionId));
       }
     });
-    yield* PubSub.take(subscription).pipe(
-      Effect.andThen(retireAll),
-      Effect.forever,
-      Effect.forkIn(scope),
+    // Subscribes before the layer finishes unless subscribing suspends; open retires what it meets.
+    yield* instances.value.subscribeChanges.pipe(
+      Effect.flatMap((subscription) =>
+        PubSub.take(subscription).pipe(Effect.andThen(retireAll), Effect.forever),
+      ),
+      Scope.provide(scope),
+      Effect.forkIn(scope, { startImmediately: true }),
     );
   });
 
