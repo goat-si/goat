@@ -2,6 +2,7 @@ import {
   CommandId,
   NonNegativeInt,
   OrchestratorMcpFailure,
+  OrchestratorMcpHost,
   ProviderSessionId,
   RunId,
   ThreadId,
@@ -80,7 +81,9 @@ export const ThreadLifecycleToolkit = Toolkit.make(
   Tool.make(remove.name, {
     ...common,
     description: remove.description,
-    parameters: withClientRequestId(Schema.Struct({ threadId: target })),
+    parameters: withClientRequestId(
+      Schema.Struct({ threadId: target, host: Schema.optional(OrchestratorMcpHost) }),
+    ),
     success: accepted,
   }).annotateMerge(agentSurfaceAnnotations(remove)),
   Tool.make(detach.name, {
@@ -112,7 +115,10 @@ export const ThreadLifecycleToolkit = Toolkit.make(
   Tool.make(threadReceipt.name, {
     ...common,
     description: threadReceipt.description,
-    parameters: receiptInput,
+    parameters: Schema.Struct({
+      ...receiptInput.fields,
+      host: Schema.optional(OrchestratorMcpHost),
+    }),
     success: receiptResult,
   }).annotateMerge(agentSurfaceAnnotations(threadReceipt)),
   Tool.make(sessionReceipt.name, {

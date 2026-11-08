@@ -17,6 +17,7 @@ type UnsettledRow = {
   readonly client_request_id: string;
   readonly receipt_id: string;
   readonly grant_json: string;
+  readonly host: string | null;
 };
 type CommandReceiptRow = {
   readonly command_id: string;
@@ -124,6 +125,8 @@ const settleUnsettledRow = Effect.fn("ToolAdmissionSettlement.settleRow")(functi
     WHERE receipt_id = ${row.receipt_id} AND state != 'completed'`;
 
   if (LIFECYCLE_PATHS.has(row.path)) {
+    // A host delete has no local command receipt. Deleting the reservation would make goat_eval rerun it.
+    if (row.host !== null) return;
     const commandId = CommandId.make(`mcp:lifecycle:${row.receipt_id}`);
     const [receipt] = yield* sql<CommandReceiptRow>`
       SELECT command_id, aggregate_id, result_sequence, status, error
@@ -255,7 +258,7 @@ export const settleForReconcile = Effect.fn("ToolAdmissionSettlement.settleForRe
         readonly state: "running" | "completed" | "unknown";
         readonly boot_id: string;
       }
-    >`SELECT path, client_request_id, receipt_id, grant_json, state, boot_id
+    >`SELECT path, client_request_id, receipt_id, grant_json, host, state, boot_id
       FROM mcp_request_reservations
       WHERE environment_id = ${input.environmentId} AND principal = ${input.principal}
         AND path IN ${sql.in(paths)}
