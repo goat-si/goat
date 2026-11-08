@@ -709,7 +709,7 @@ it("does not register a locally saved SSH device without hub write permission", 
   expect(state.toast.mock.calls.map(([value]) => value.type)).toEqual(["success"]);
 });
 effectIt.effect(
-  "shows local add progress until terminal and drops a neutral result without a banner or toast",
+  "closes the dialog on Connect, shows add progress in the list row and drops a superseded add silently",
   () =>
     Effect.gen(function* () {
       const gate = makeSshProvisionGate();
@@ -743,41 +743,30 @@ effectIt.effect(
         await act(async () => button("Connect", dialog).click());
       });
       const input = yield* Deferred.await(gate.entered);
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull()),
+      );
       const report = input.onPreparationProgress!;
       yield* actEffect(report(phase));
-      expect(dialog.textContent).toContain(
+      expect(container.textContent).toContain(
         "Installing GOAT runtime. First setup can take a few minutes",
       );
-      expect(dialog.textContent?.match(/Installing GOAT runtime/g)).toHaveLength(1);
+      expect(container.textContent?.match(/Installing GOAT runtime/g)).toHaveLength(1);
       yield* actEffect(report({ ...phase, phase: null, outcome: "superseded" }));
-      expect(dialog.textContent).not.toContain("Installing GOAT");
+      expect(container.textContent).not.toContain("Installing GOAT");
       yield* actEffect(
         Deferred.succeed(gate.release, {
           _tag: "Failure",
           cause: Cause.fail(new Error("SSH preparation superseded by a newer connection intent.")),
         }),
       );
-      expect(dialog.querySelector('[role="alert"]')).toBeNull();
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(container.textContent).not.toContain(target.alias)),
+      );
+      expect(container.querySelector('[role="alert"]')).toBeNull();
       expect(state.toast).not.toHaveBeenCalled();
       yield* actEffect(report(phase));
-      expect(dialog.textContent).not.toContain("Installing GOAT");
-      yield* Effect.promise(() =>
-        act(async () =>
-          dialog.dispatchEvent(
-            new KeyboardEvent("keydown", {
-              key: "Escape",
-              code: "Escape",
-              bubbles: true,
-              cancelable: true,
-            }),
-          ),
-        ),
-      );
-      yield* Effect.promise(() =>
-        vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull()),
-      );
-      yield* actEffect(report(phase));
-      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(container.textContent).not.toContain("Installing GOAT");
     }),
 );
 
@@ -991,7 +980,7 @@ it.each([
   },
 );
 
-effectIt.effect("ignores local Add reports and a failed completion after unmount", () =>
+effectIt.effect("keeps an add running after unmount and lists its failure until dismissed", () =>
   Effect.gen(function* () {
     const gate = makeSshProvisionGate();
     yield* Effect.forkChild(gate.worker);
@@ -1031,6 +1020,15 @@ effectIt.effect("ignores local Add reports and a failed completion after unmount
     });
     expect(container.textContent).toBe("");
     expect(state.toast).not.toHaveBeenCalled();
+    yield* Effect.promise(async () => {
+      await act(async () => {
+        root.render(<ConnectionEnvironmentsSection title="Connections" searchable={false} />);
+      });
+      await vi.waitFor(() => expect(container.textContent).toContain("late failure"));
+      expect(button("Retry", container)).toBeTruthy();
+      await act(async () => button("Dismiss", container).click());
+      expect(container.textContent).not.toContain("late failure");
+    });
   }),
 );
 
