@@ -590,10 +590,16 @@ const make = Effect.gen(function* () {
         const card =
           latest.task.requester.originKind !== "mcp" &&
           newApprovals(latest.task.observed?.needsYou, observed.needsYou).length > 0;
-        const wrote = yield* commitWorkerObserved(ledger, latest, observed, owner, card, [
-          ...runtimeRequests,
-          ...childRequests,
-        ]);
+        const requests = [...runtimeRequests, ...childRequests];
+        const wrote = yield* commitWorkerObserved(
+          ledger,
+          latest,
+          observed,
+          owner,
+          card,
+          requests,
+          threads,
+        );
         if (wrote === undefined) return latest !== stored;
         const reread = yield* ledger.getTask(task.taskId);
         if (reread === undefined) return true;

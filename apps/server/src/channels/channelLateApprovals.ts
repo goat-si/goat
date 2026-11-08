@@ -95,7 +95,11 @@ const approvalResultDeliveries = (
   });
 };
 
-/** Writes a worker observation and, in the same commit, any approval the thread just resolved. */
+/**
+ * Writes a worker observation and, in the same commit, any approval the thread just resolved. A
+ * shown approval whose thread this pass did not read (its turn ended, so its child work is no
+ * longer live) is read here so its decision is not lost.
+ */
 export const commitWorkerObserved = Effect.fn("channelLateApprovals.commitObserved")(function* (
   ledger: ChannelLedger.ChannelLedger["Service"],
   stored: ChannelLedger.ChannelStoredTask,
@@ -103,8 +107,28 @@ export const commitWorkerObserved = Effect.fn("channelLateApprovals.commitObserv
   owner: string,
   narrate: boolean,
   requests: ReadonlyArray<RequestSnapshot>,
+  threads: ThreadManagement.ThreadManagementService["Service"],
 ) {
-  const deliveries = approvalResultDeliveries(stored.task, requests);
+  const known = new Set<string>(requests.map((request) => request.id));
+  const unread = new Set(
+    (stored.task.observed?.needsYou ?? []).flatMap((need) =>
+      need.approval === undefined ||
+      need.approval.host !== undefined ||
+      known.has(need.approval.requestId)
+        ? []
+        : [need.approval.threadId],
+    ),
+  );
+  const reread = yield* Effect.forEach(
+    unread,
+    (threadId) =>
+      threads.getThreadRecords(threadId, ["runtimeRequests"]).pipe(
+        Effect.map((records) => records.runtimeRequests),
+        Effect.orElseSucceed((): ReadonlyArray<RequestSnapshot> => []),
+      ),
+    { concurrency: 1 },
+  );
+  const deliveries = approvalResultDeliveries(stored.task, [...requests, ...reread.flat()]);
   return yield* commitTransition(
     ledger,
     stored,
@@ -247,6 +271,7 @@ export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile"
         owner,
         narrate,
         requests,
+        deps.threads,
       );
       if (wrote !== undefined) changed += 1;
     }

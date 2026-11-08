@@ -10,6 +10,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ChildStore from "./channelChildWorkStore.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -405,6 +406,9 @@ describe("GOAT Bot hears about a launched thread's approvals after its task ende
             respondedBy: { type: "user" },
           },
         ]);
+        // The thread's turn ended with the decision, so its child work is no longer live.
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_runtime_state SET value_json = json_set(value_json, '$.state', 'completed') WHERE key >= 'child-work:' AND key < 'child-work;'`;
         yield* reports.reconcile(runtime.ownerToken);
         yield* reports.reconcile(runtime.ownerToken);
         yield* runtime.drain;
