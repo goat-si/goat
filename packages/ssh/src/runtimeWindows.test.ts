@@ -8,6 +8,8 @@ import {
   type RuntimeSessionRequest,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import { cliArchiveFileName } from "@goat/shared/cliRelease";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { vi } from "vite-plus/test";
 
@@ -274,4 +276,30 @@ it.effect.each([
     if (detail) expect(launched.selectedRuntime.updateBlocked).toContain(detail);
     else expect(launched.selectedRuntime.updateBlocked).toBeUndefined();
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a native install still locked after its retries tells the user what to exclude", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-native-locked-" });
+    yield* fs.writeFile(
+      `${directory}/${cliArchiveFileName("0.0.45", "win32-x64")}`,
+      new Uint8Array([1, 2, 3]),
+    );
+    setup([
+      { stdout: JSON.stringify({ selection: null, live: false }) },
+      { exitCode: 1, stderr: "GOAT_NATIVE_ERROR=runtime-locked\r\n" },
+    ]);
+    const error = yield* prepareWindowsRuntime(
+      target,
+      {},
+      {
+        archiveVersion: "0.0.45",
+        archiveDirectory: directory,
+      },
+    ).pipe(Effect.flip);
+    expect(error.message).toContain("antivirus/real-time scan");
+    expect(error.message).toContain("%USERPROFILE%\\.goat\\runtime");
+    expect(framed(ssh.calls[1]?.stdin).op).toBe("install");
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );

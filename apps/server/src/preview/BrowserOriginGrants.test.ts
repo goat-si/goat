@@ -364,3 +364,79 @@ it.effect("restarts the driver when it will not confirm a narrower manifest", ()
     assert.deepEqual(yield* service.claimsFor(threadId), []);
   }),
 );
+
+it.effect("the server judges claimed replies, including replies that carry no URL (#2523)", () =>
+  Effect.gen(function* () {
+    let blocked: ReadonlyArray<string> = [];
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      blockedHostsNow: () => blocked,
+      publish: () => Effect.void,
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab-1",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const { agentResult } = yield* service.claim({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://ok.test",
+      windowTitle: "Browser",
+    });
+    if (agentResult.status !== "attached") return assert.fail("expected an attached claim");
+    const { claimId, claimGeneration } = agentResult.claim;
+    const judge = (urls: ReadonlyArray<string>, generation = claimGeneration) =>
+      service.judgeReply(threadId, claimId, generation, urls, false);
+    assert.deepEqual(yield* judge([]), { deliver: true });
+    assert.deepEqual(yield* judge(["https://ok.test/page"]), { deliver: true });
+    assert.deepEqual(yield* judge(["https://other.test/"]), {
+      deliver: false,
+      end: "origin_changed",
+    });
+    assert.deepEqual(yield* judge([], claimGeneration + 1), { deliver: false });
+    blocked = ["ok.test"];
+    assert.deepEqual(yield* judge([]), { deliver: false, end: "blocked_url" });
+  }),
+);
+
+it.effect("blocking one granted origin leaves the thread's other claims replying (#2523)", () =>
+  Effect.gen(function* () {
+    let blocked: ReadonlyArray<string> = [];
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      blockedHostsNow: () => blocked,
+      publish: () => Effect.void,
+      bind: (input) =>
+        Effect.succeed({
+          targetId: `target-${input.windowId}`,
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    for (const [windowId, origin] of [
+      [7, "https://a.test"],
+      [8, "https://b.test"],
+    ] as const)
+      yield* service.claim({ threadId, pid: 42, windowId, origin, windowTitle: "Browser" });
+    blocked = ["a.test"];
+    yield* service.blockedHostsChanged(blocked);
+    const [kept] = yield* service.claimsFor(threadId);
+    if (kept === undefined) return assert.fail("expected the b.test claim to stay");
+    const judge = (urls: ReadonlyArray<string>) =>
+      service.judgeReply(threadId, kept.claimId, kept.claimGeneration, urls, false);
+    assert.deepEqual(yield* judge([]), { deliver: true });
+    assert.deepEqual(yield* judge(["https://b.test/page"]), { deliver: true });
+    assert.deepEqual(yield* judge(["https://a.test/page"]), { deliver: false, end: "blocked_url" });
+  }),
+);

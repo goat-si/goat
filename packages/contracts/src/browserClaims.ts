@@ -61,6 +61,15 @@ export const ComputerUseLeaseBrowserClaimEnded = Schema.Struct({
   }),
 });
 
+export const ComputerUseLeaseBrowserClaimReply = Schema.Struct({
+  type: Schema.Literal("browserClaimReply"),
+  claimId: TrimmedNonEmptyString,
+  claimGeneration: Schema.Int.check(Schema.isGreaterThan(0)),
+  urls: Schema.Array(Schema.String.check(Schema.isMaxLength(8192))).check(Schema.isMaxLength(16)),
+  outside: Schema.optionalKey(Schema.Literal(true)),
+});
+export type ComputerUseLeaseBrowserClaimReply = typeof ComputerUseLeaseBrowserClaimReply.Type;
+
 export const BrowserClaimEndReason = Schema.Literals([
   "revoked",
   "stopped",

@@ -64,6 +64,10 @@ Use `vp run dev` for server and web, or `vp run dev:desktop` for the Electron cl
 `dev:server` and `dev:web` start those processes separately.
 See the [mobile README](../../apps/mobile/README.md) for native builds and Metro.
 
+An agent runs these in a terminal session its shell tool keeps open. A `nohup … &` job started
+by a tool command stays in that command's process group and dies with it, usually before the
+runner writes its first line, which looks like a dev server that exits at once with an empty log.
+
 Flags go directly after the task name, for example `vp run dev --home-dir /tmp/goat-dev`.
 Add `--browser` to open a browser automatically.
 
