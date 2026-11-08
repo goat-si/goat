@@ -3,6 +3,7 @@ import {
   NodeId,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
+  ChannelQuestionId,
   RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
@@ -319,14 +320,15 @@ describe("GOAT Bot approval cards", () => {
         const [card] = (yield* botMessages).messages.filter(
           (message) => message.channel?.kind === "question",
         );
-        assert.strictEqual(card?.channel?.questionId, request.id);
-        assert.ok((yield* latestCard)?.openQuestionIds?.includes(request.id));
+        const questionId = ChannelQuestionId.make(request.id);
+        assert.strictEqual(card?.channel?.questionId, questionId);
+        assert.ok((yield* latestCard)?.openQuestionIds?.includes(questionId));
 
         yield* gateway.ingest(goatInput("Approve A1", "qid-answer"), rpcContext);
         yield* runtime.drain;
         yield* reports.reconcile(runtime.ownerToken);
         yield* runtime.drain;
-        assert.ok(!(yield* latestCard)?.openQuestionIds?.includes(request.id));
+        assert.ok(!(yield* latestCard)?.openQuestionIds?.includes(questionId));
       }).pipe(Effect.provide(harness.layer));
     },
   );

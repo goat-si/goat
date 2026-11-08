@@ -76,6 +76,7 @@ import {
   completionHoldCount,
   isThreadMissing,
   newApprovals,
+  hasNewLocalQuestion,
   needsYouFromRuntimeRequests,
   scanSubagents,
   observeWorker,
@@ -585,11 +586,10 @@ const make = Effect.gen(function* () {
         usageLimitResetAt: limit?.resetAt,
       });
       if (!channelWorkerObservationEquals(latest.task.observed, observed)) {
-        // A new approval becomes an approve/deny card for a person; an MCP requester is an agent,
-        // and agents never answer approvals.
         const card =
           latest.task.requester.originKind !== "mcp" &&
-          newApprovals(latest.task.observed?.needsYou, observed.needsYou).length > 0;
+          (newApprovals(latest.task.observed?.needsYou, observed.needsYou).length > 0 ||
+            hasNewLocalQuestion(latest.task.observed?.needsYou, observed.needsYou));
         const requests = [...runtimeRequests, ...childRequests];
         const wrote = yield* commitWorkerObserved(
           ledger,

@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   ChannelChildWorkId,
   type ChannelTaskNeedsYou,
+  ChannelQuestionId,
   NodeId,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
@@ -566,7 +567,7 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
         (message) => message.channel?.kind === "question",
       );
       assert.strictEqual(cards.length, 1);
-      assert.strictEqual(cards[0]?.channel?.questionId, pending.id);
+      assert.strictEqual(cards[0]?.channel?.questionId, ChannelQuestionId.make(pending.id));
       assert.strictEqual(cards[0]?.channel?.taskId, task.taskId);
       assert.deepStrictEqual(cards[0]?.channel?.options, ["Keep it", "Clear it"]);
       assert.include(cards[0]?.text ?? "", "Which cache should the build use?");
@@ -637,7 +638,7 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
       );
       assert.strictEqual(
         (yield* botMessages).messages.filter(
-          (message) => message.channel?.questionId === pending.id,
+          (message) => message.channel?.questionId === ChannelQuestionId.make(pending.id),
         ).length,
         0,
       );

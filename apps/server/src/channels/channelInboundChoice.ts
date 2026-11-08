@@ -1,11 +1,13 @@
 import type { ChannelInboundMessage, ChannelConversationId, ChannelTask } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as ChannelLedger from "./ChannelLedger.ts";
+import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import {
   approvalChoiceLabels,
   openApprovalCards,
   parseApprovalReply,
 } from "./channelApprovalCards.ts";
+import { nativeQuestionChoice } from "./channelNativeQuestionCards.ts";
 import {
   approvalCodeOrder,
   choiceAt,
@@ -15,7 +17,10 @@ import {
   type DeliveredChoices,
 } from "./channelDecisionChoices.ts";
 
-export const makeInboundChoices = (ledger: ChannelLedger.ChannelLedger["Service"]) => {
+export const makeInboundChoices = (
+  ledger: ChannelLedger.ChannelLedger["Service"],
+  threads?: ThreadManagement.ThreadManagementService["Service"],
+) => {
   /**
    * The numbered list a Slack or iMessage reply of "2" refers to: the latest open approval
    * card or question in this conversation. Cards that were never sent have no code and are
@@ -110,8 +115,9 @@ export const makeInboundChoices = (ledger: ChannelLedger.ChannelLedger["Service"
 
   /**
    * A choice pressed in a task's own view of the GOAT app, for a question nobody runs to forward
-   * it to (no worker): it answers that task's one matching question. Who may answer is checked
-   * where the answer is recorded.
+   * it to (no worker): it answers that task's one matching question. An approval button or a
+   * native-question option matches first, including while the task is still running. Who may
+   * answer is checked where the answer is recorded.
    */
   const taskViewChoice = Effect.fn("channel.taskViewChoice")(function* (
     stored: ChannelLedger.ChannelStoredInput,
@@ -123,11 +129,31 @@ export const makeInboundChoices = (ledger: ChannelLedger.ChannelLedger["Service"
     if (
       target === undefined ||
       target.ownerId !== stored.ownerId ||
-      target.task.conversationId !== stored.snapshot.conversationId ||
-      target.task.status !== "waiting_input" ||
-      target.task.worker !== undefined
+      target.task.conversationId !== stored.snapshot.conversationId
     )
       return undefined;
+    const trimmed = message.text.trim();
+    for (const card of openApprovalCards([target.task])) {
+      const found = yield* ledger.approvalCodeForRequest(card.approval.requestId);
+      if (found === undefined) continue;
+      const labels = approvalChoiceLabels(found.code);
+      if (labels[0] === trimmed || labels[1] === trimmed) {
+        return { type: "approval-label" as const, text: trimmed };
+      }
+    }
+    const hasNativeQuestion = (target.task.observed?.needsYou ?? []).some(
+      (need) => need.question !== undefined && need.question.host === undefined,
+    );
+    if (hasNativeQuestion) {
+      const native =
+        threads === undefined
+          ? undefined
+          : yield* nativeQuestionChoice(target.task, message.text, threads);
+      if (native !== undefined) return native;
+    }
+    if (target.task.status !== "waiting_input" || target.task.worker !== undefined) {
+      return undefined;
+    }
     const matched = singleQuestionChoice(
       message.text,
       target.task.openQuestions.map((question) => ({

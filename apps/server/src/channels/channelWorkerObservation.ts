@@ -61,14 +61,18 @@ export const needsYouFromRuntimeRequests = <
       const kind = needsYouKindOf(request.kind);
       if (kind === undefined) return [];
       const since = DateTime.formatIso(request.createdAt);
-      return kind === "approval" && threadOf !== undefined
-        ? [{ kind, since, approval: { requestId: request.id, threadId: threadOf(request) } }]
-        : [{ kind, since }];
+      const ref =
+        threadOf === undefined ? undefined : { requestId: request.id, threadId: threadOf(request) };
+      if (ref !== undefined && kind === "approval") return [{ kind, since, approval: ref }];
+      if (ref !== undefined && kind === "question") return [{ kind, since, question: ref }];
+      return [{ kind, since }];
     })
     .toSorted((left, right) =>
       left.since === right.since
         ? left.kind.localeCompare(right.kind) ||
-          (left.approval?.requestId ?? "").localeCompare(right.approval?.requestId ?? "")
+          (left.approval?.requestId ?? left.question?.requestId ?? "").localeCompare(
+            right.approval?.requestId ?? right.question?.requestId ?? "",
+          )
         : left.since < right.since
           ? -1
           : 1,
@@ -82,7 +86,13 @@ export const withApprovalHost = (
   host === ""
     ? needsYou
     : needsYou.map((need) =>
-        need.approval === undefined ? need : { ...need, approval: { ...need.approval, host } },
+        need.approval === undefined && need.question === undefined
+          ? need
+          : {
+              ...need,
+              ...(need.approval === undefined ? {} : { approval: { ...need.approval, host } }),
+              ...(need.question === undefined ? {} : { question: { ...need.question, host } }),
+            },
       );
 
 /** Approvals in `next` that `previous` did not list: each gets one card. */
@@ -93,6 +103,26 @@ export const newApprovals = (
   const known = new Set((previous ?? []).flatMap((need) => need.approval?.requestId ?? []));
   return next.flatMap((need) =>
     need.approval === undefined || known.has(need.approval.requestId) ? [] : [need.approval],
+  );
+};
+
+/** A local native question in next that previous did not list. A host question stays on the chip. */
+export const hasNewLocalQuestion = (
+  previous: ReadonlyArray<ChannelTaskNeedsYou> | undefined,
+  next: ReadonlyArray<ChannelTaskNeedsYou>,
+): boolean => {
+  const known = new Set(
+    (previous ?? []).flatMap((need) =>
+      need.question === undefined || need.question.host !== undefined
+        ? []
+        : [need.question.requestId],
+    ),
+  );
+  return next.some(
+    (need) =>
+      need.question !== undefined &&
+      need.question.host === undefined &&
+      !known.has(need.question.requestId),
   );
 };
 
