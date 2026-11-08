@@ -88,6 +88,11 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
   const acquireServer = mutex.withPermit(
     Effect.gen(function* () {
       if (state.closed) {
+        // A session reconnecting its event stream borrows again before releasing the old borrow.
+        if (state.server !== null && state.borrowers > 0 && (yield* state.server.isRunning)) {
+          state.borrowers += 1;
+          return state.server;
+        }
         return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
           operation: "startOpenCodeServerProcess",
           detail:
