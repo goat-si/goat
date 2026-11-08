@@ -187,4 +187,61 @@ describe("undelivered replies", () => {
       );
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect("an expired Slack receipt is shown as maybe not delivered", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const started = Date.parse("2026-10-12T00:00:00.000Z");
+      yield* TestClock.setTime(started);
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* runtime.drain;
+      const input = yield* gateway.ingest(slackInput("status", "undelivered-expire"), slackContext);
+      const now = DateTime.formatIso(yield* DateTime.now);
+      const reply = "Still checking.";
+      const causeKey = "reply:" + input.inputId;
+      const deliveryId = deliveryIdFor(causeKey);
+      yield* ledger.enqueueDeliveries(
+        [
+          {
+            deliveryId,
+            causeKey,
+            inputId: input.inputId,
+            message: {
+              deliveryId,
+              destination: slackInput("status", "undelivered-expire").replyAddress,
+              kind: "receipt",
+              text: reply,
+              inReplyToInputId: input.inputId,
+            },
+          },
+        ],
+        now,
+      );
+      const claimed = yield* ledger.claimDueDeliveries({
+        owner: runtime.ownerToken,
+        now,
+        limit: 1,
+        receiptsOnly: true,
+      });
+      assert.strictEqual(claimed[0]?.deliveryId, deliveryId);
+      yield* TestClock.setTime(started + 61_000);
+      const later = DateTime.formatIso(yield* DateTime.now);
+      yield* ledger.expireReceipts({ owner: runtime.ownerToken, now: later });
+      assert.strictEqual(yield* ledger.getDeliveryState(deliveryId), "ambiguous");
+      yield* runtime.drain;
+      const copies = yield* assistantCopies("This reply may not have reached Slack");
+      assert.strictEqual(copies.length, 1);
+      assert.strictEqual(copies[0]?.text, "This reply may not have reached Slack:\n\n" + reply);
+      assert.isFalse(copies[0]?.text.includes("GOAT stopped"));
+      yield* runtime.drain;
+      assert.strictEqual(
+        (yield* assistantCopies("This reply may not have reached Slack")).length,
+        1,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
 });
