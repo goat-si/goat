@@ -959,6 +959,7 @@ const make = Effect.gen(function* () {
                   originKind: "goat",
                   kind: "inbound",
                   inputId,
+                  clientMessageId: message.externalMessageId,
                   readAt: stored.snapshot.readAt ?? readAt,
                 },
               },
