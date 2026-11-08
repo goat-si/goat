@@ -16,6 +16,8 @@ export class SshCommandError extends Data.TaggedError("SshCommandError")<{
   readonly stderr: string;
   readonly stdout?: string;
   readonly cause?: unknown;
+  /** Set on a timed-out remote script: how long after the timeout it may still run remotely. */
+  readonly remoteSettleMs?: number;
 }> {}
 
 export class SshLaunchError extends Data.TaggedError("SshLaunchError")<{

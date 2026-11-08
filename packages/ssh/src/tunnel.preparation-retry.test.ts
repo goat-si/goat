@@ -1,8 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as TestClock from "effect/testing/TestClock";
 
+import { remoteDeadlineSettleMs } from "./remoteDeadline.ts";
+import { REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS } from "./remoteRuntime.ts";
 import * as SshTunnel from "./tunnel.ts";
 import { uploadTarget } from "./tunnel.fixture.ts";
 import { fixture, stopped, successfulStatus } from "./tunnel.runtime-status.fixture.ts";
@@ -22,8 +25,11 @@ describe("SSH preparation retry", () => {
         const failed = yield* manager.status(uploadTarget);
         assert.notEqual(failed.status?.state, "preparing");
 
-        // The first backoff is at most two seconds; nobody calls ensure or presses Retry.
-        yield* TestClock.adjust("2 seconds");
+        // A packet timeout can end a running session, so the retry waits until a launch script
+        // it lost must have ended; nobody calls ensure or presses Retry.
+        yield* TestClock.adjust(
+          Duration.millis(remoteDeadlineSettleMs(REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS)),
+        );
         yield* f.launchStarted(2);
         // Joining the automatic attempt's flight observes its outcome without starting another.
         yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });

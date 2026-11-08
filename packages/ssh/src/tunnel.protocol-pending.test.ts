@@ -140,6 +140,35 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
+    it.live("an older runtime that never answers its activity probe is not attached as ready", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: "1.2.2",
+          drain: true,
+          ...current,
+          candidateSignals: { ...current, drain: true },
+        });
+        yield* f.fs.writeFileString(`${f.test}/activity`, "unknown");
+        const before = yield* f.snapshot;
+        const silent = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+        });
+        if (Result.isFailure(silent)) throw silent.failure;
+        // Its HTTP root answering proves nothing about the API the app needs next.
+        assert.equal(silent.success.status, "pending");
+        assert.equal(silent.success.pending?.reason, "unknown");
+        assert.deepEqual(yield* f.snapshot, before);
+        yield* f.fs.writeFileString(`${f.test}/activity`, "busy");
+        const busy = yield* f.run("launch", false, { refreshOwnedRuntimeOnFirstConnection: true });
+        if (Result.isFailure(busy)) throw busy.failure;
+        assert.equal(busy.success.status, "ready");
+        assert.equal(busy.success.pending?.reason, "busy");
+        assert.deepEqual(yield* f.snapshot, before);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
     it.live.each(["busy", "unknown"] as const)(
       "preliminary idle followed by final %s preserves every live file",
       (final) =>

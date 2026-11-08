@@ -29,10 +29,16 @@ if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
     [ -d /proc/self ] || return 1
     if [ -d "/proc/$1" ]; then echo present; else echo absent; fi
   }
+  WIN_INFO_PID=; WIN_INFO=
   windows_process_info() {
+    if [ -n "$WIN_INFO_PID" ] && [ "$WIN_INFO_PID" = "$1" ]; then printf '%s\n' "$WIN_INFO"; return 0; fi
     win_info="$(GOAT_PROCESS_ID="$1" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_PROCESS_INFO_POWERSHELL)}' </dev/null 2>/dev/null)" || return 1
     printf '%s\n' "$win_info" | tr -d '\r'
   }
+  # Each PowerShell start costs about a second: one verification reads the owner, start and
+  # command from a single query, and its wrapper clears the snapshot when it returns.
+  server_snapshot() { WIN_INFO_PID=; WIN_INFO="$(windows_process_info "$1")" || return 1; WIN_INFO_PID="$1"; }
+  server_snapshot_clear() { WIN_INFO_PID=; WIN_INFO=; }
   server_alive() {
     MSYS2_ARG_CONV_EXCL='*' tasklist.exe /FI "PID eq $1" /NH /FO CSV 2>/dev/null | grep -q "^\"[^\"]*\",\"$1\","
   }
@@ -102,6 +108,8 @@ else
     case "$(ps -o stat= -p "$1" 2>/dev/null || true)" in *Z*) return 1 ;; esac
   }
   server_kill() { kill "$1" 2>/dev/null; }
+  server_snapshot() { :; }
+  server_snapshot_clear() { :; }
   server_uid() { ps -o uid= -p "$1" 2>/dev/null; }
   server_start() { process_start "$1"; }
   server_command() { ps -o command= -p "$1" 2>/dev/null; }
@@ -221,6 +229,10 @@ adopt_managed_orphan() {
 # process is exactly the archive serve this host installed, run by this user, the canonical
 # identity replaces it (the old file is kept as identity.unverified); anything else stays refused.
 owned_identity_repairable() {
+  if owned_identity_repairable_now; then repair_check=0; else repair_check=1; fi
+  server_snapshot_clear; return "$repair_check"
+}
+owned_identity_repairable_now() {
   [ "\${OWNING_LAUNCH:-0}" = 1 ] && [ "\${LEGACY_PENDING:-0}" != 1 ] || return 1
   [ "$LIVE_STATUS" = live ] && [ "$LIVE_OWNED" = 1 ] && valid_version "$LIVE_VERSION" || return 1
   [ -f "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ] || return 1
@@ -228,6 +240,7 @@ owned_identity_repairable() {
   [ -d "$repair_dir" ] && [ ! -L "$repair_dir" ] && [ -x "$repair_dir/goat" ] && [ ! -L "$repair_dir/goat" ] &&
     [ "$(cat "$repair_dir/.install-complete" 2>/dev/null)" = "$LIVE_VERSION" ] || return 1
   repair_identity="$repair_dir/goat serve --host 127.0.0.1 --port $LIVE_PORT --base-dir $DEFAULT_SERVER_HOME"
+  server_snapshot "$LIVE_PID" || return 1
   repair_uid="$(server_uid "$LIVE_PID")" || return 1
   [ "$(printf '%s\n' "$repair_uid" | awk 'NF==1 { print $1 }')" = "$(id -u)" ] || return 1
   [ "$(server_command "$LIVE_PID")" = "$repair_identity" ] || return 1
@@ -461,7 +474,7 @@ cleanup_runner_next() {
   fi
   release_recovery_lock
   release_replacement_lock
-  rm -f "$RUNNER_CANDIDATE_FILE" "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_CANDIDATE_FILE.restore"
+  rm -f "$RUNNER_CANDIDATE_FILE" "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_CANDIDATE_FILE.restore" "$RUNNER_CANDIDATE_FILE.facts"
   rm -f "$STATE_DIR/run-goat.next.$$" || :
   [ -z "$LEGACY_IDENTITY_LINK" ] || rm -f "$LEGACY_IDENTITY_LINK"
   [ -z "$RETAINED_SNAPSHOT_FILE" ] || rm -f "$RETAINED_SNAPSHOT_FILE"
@@ -479,6 +492,8 @@ trap 'runner_exit=$?; cleanup_runner_next; exit "$runner_exit"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# A leftover memo of an earlier process with this PID is emptied before use.
+FACT_MEMO="$RUNNER_CANDIDATE_FILE.facts"; fact_memo_drop
 @@GOAT_CAPTURE_RUNNING_RUNNER@@
 if [ "$REQUIRE_INSTALLED" = 1 ] && [ -n "$SELECTED_VERSION" ]; then
   selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
@@ -507,7 +522,7 @@ if [ "$PRESERVE_SELECTED_RUNNER" = 1 ] &&
    [ "$(runner_sha256 "$RUNNER_NEXT")" != "$EXPECTED_RETAINED_SHA256" ]; then
   printf 'Retained GOAT runner changed while copying; reconnect.\\n' >&2; exit 1
 fi
-cp "$RUNNER_NEXT" "$RUNNER_CANDIDATE_FILE.pin"
+pin_runner "$RUNNER_NEXT"
 if ! RUNNER_VERSION_OUTPUT="$(exec_fact version "$RUNNER_NEXT" --version)"; then
   printf 'Cannot validate %s; existing runner and server were preserved.\\n' "$REQUESTED_RUNNER" >&2; exit 1
 fi
@@ -559,6 +574,9 @@ emit_pending() {
   esac
   # Reuse is independently proven using the retained runner, never the incompatible candidate.
   pending_attachment_safe || emit_pending_only
+  # A server that did not answer its activity probe may not answer the app either; its HTTP
+  # root alone does not prove it ready. Only a server without drain support was never asked.
+  [ "$reason" != unknown ] || [ "$pending_detail" = drain-unavailable ] || emit_pending_only
   if [ "$reason" = contended ] && [ "$NEEDS_OWNED_UPGRADE" = 0 ] && [ ! -f "$RETAINED_SNAPSHOT_FILE" ]; then
     capture_running_runner || emit_pending_only
   fi
@@ -617,7 +635,7 @@ if [ "$OWNING_LAUNCH" = 1 ]; then
     cp "$RUNNER_FILE" "$RUNNER_NEXT"
     [ "$(runner_sha256 "$RUNNER_NEXT")" = "$fresh_sha" ] && [ "$(runner_sha256 "$RUNNER_FILE")" = "$fresh_sha" ] || ownership_unverified
     [ "$("$RUNNER_NEXT" --version 2>/dev/null || true)" = "goat v$LIVE_VERSION" ] || ownership_unverified
-    cp "$RUNNER_NEXT" "$RUNNER_CANDIDATE_FILE.pin"
+    pin_runner "$RUNNER_NEXT"
     SELECTED_VERSION="$LIVE_VERSION"; REQUIRE_INSTALLED=1
     EXPECTED_LIVE_RUNNER_SHA256="$fresh_sha"
     [ "$PRESERVE_SELECTED_RUNNER" = 0 ] || EXPECTED_RETAINED_SHA256="$fresh_sha"
@@ -640,7 +658,7 @@ else
       secondary_sha="$(runner_sha256 "$RUNNER_FILE")" || exit 1
       cp "$RUNNER_FILE" "$RUNNER_NEXT"
       [ "$(runner_sha256 "$RUNNER_NEXT")" = "$secondary_sha" ] && [ "$(runner_sha256 "$RUNNER_FILE")" = "$secondary_sha" ] || exit 1
-      cp "$RUNNER_NEXT" "$RUNNER_CANDIDATE_FILE.pin"
+      pin_runner "$RUNNER_NEXT"
       CHECK_RUNNER="$RUNNER_CANDIDATE_FILE.pin"
       check_candidate_protocol
       check_live_protocol
@@ -703,7 +721,12 @@ read_legacy_value() {
   awk 'NR==1 { value=$0 } END { if (NR!=1) exit 1; print value }' "$1"
 }
 verify_legacy_process() {
+  if verify_legacy_process_now "$@"; then legacy_check=0; else legacy_check=1; fi
+  server_snapshot_clear; return "$legacy_check"
+}
+verify_legacy_process_now() {
   legacy_files_regular || return 1
+  server_snapshot "$1" || return 1
   legacy_uid="$(server_uid "$1")" || return 1
   legacy_uid="$(printf '%s\n' "$legacy_uid" | awk 'NF==1 { print $1 }')"
   [ "$legacy_uid" = "$(id -u)" ] || return 1
@@ -794,10 +817,15 @@ read_refresh_activity() {
 // PID existence and protocol metadata are not authority to signal a process.
 // Both termination paths must corroborate the complete invocation we launch.
 export const REMOTE_OWNED_IDENTITY_SCRIPT = `verify_owned_identity() {
+  if verify_owned_identity_now "$@"; then owned_check=0; else owned_check=1; fi
+  server_snapshot_clear; return "$owned_check"
+}
+verify_owned_identity_now() {
   owned_pid="$1"; owned_port="$2"
   valid_positive "$owned_pid" && valid_positive "$owned_port" && valid_port "$owned_port" || return 1
   [ "$(cat "$MANAGED_FILE" 2>/dev/null || true)" = managed ] || return 1
   [ -f "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ] || return 1
+  server_snapshot "$owned_pid" || return 1
   owned_uid="$(server_uid "$owned_pid")" || return 1
   [ "$(printf '%s\\n' "$owned_uid" | awk 'NF==1 { print $1 }')" = "$(id -u)" ] || return 1
   owned_identity="$(cat "$STATE_DIR/identity" 2>/dev/null)" || return 1

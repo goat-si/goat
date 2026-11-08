@@ -16,7 +16,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
 import { sshHostsRefusal } from "./hostAccess.ts";
-import { isRemoteShellScript, withRemoteDeadline } from "./remoteDeadline.ts";
+import {
+  isRemoteShellScript,
+  remoteDeadlineSettleMs,
+  withRemoteDeadline,
+} from "./remoteDeadline.ts";
 
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
 const SSH_COMMAND_SHUTDOWN_TIMEOUT_MS = 2_000;
@@ -429,6 +433,17 @@ function stdinStream(
   );
 }
 
+/**
+ * Once ssh is running, a request may reach the host, or a master that forwards it, before the
+ * client prints or reads anything about it. A remote script whose client then timed out, lost the
+ * connection or lost its output may keep running until its watchdog's deadline. Only a local spawn
+ * failure proves none started. (Exit 255 can also be the script's own; then the wait is longer.)
+ */
+const remoteScriptSettle = (input: RunSshCommandOptions, spawned: boolean) =>
+  spawned && typeof input.stdin === "string" && isRemoteShellScript(input.remoteCommandArgs)
+    ? { remoteSettleMs: remoteDeadlineSettleMs(input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS) }
+    : {};
+
 const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(function* (
   target: DesktopSshEnvironmentTarget,
   input: RunSshCommandOptions,
@@ -437,6 +452,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     authenticating: boolean;
     authenticated: boolean;
     proxyPending: boolean;
+    spawned: boolean;
     stderr: string;
   },
 ): Effect.fn.Return<
@@ -520,6 +536,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     );
 
   const onHostAnswered = yield* SshHostAnswered;
+  progress.spawned = true;
   let reportedAnswer = false;
   const diagnosticTail = makeByteTail(SSH_STDERR_MAX_BYTES);
   const cost = yield* SshReconnectCost;
@@ -590,6 +607,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
           stderr: "",
           message:
             cause instanceof Error ? cause.message : `Failed to run SSH command for ${hostSpec}.`,
+          ...remoteScriptSettle(input, true),
           cause,
         }),
     ),
@@ -616,6 +634,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
           stderr,
           fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
         }),
+      ...(exitCode === 255 ? remoteScriptSettle(input, true) : {}),
     });
   }
 
@@ -634,7 +653,13 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
   SshCommandError | SshInvalidTargetError,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > {
-  const progress = { authenticating: false, authenticated: false, proxyPending: false, stderr: "" };
+  const progress = {
+    authenticating: false,
+    authenticated: false,
+    proxyPending: false,
+    spawned: false,
+    stderr: "",
+  };
   return yield* Effect.scopedWith((commandScope) =>
     runSshCommandInScope(target, input, commandScope, progress),
   ).pipe(
@@ -671,6 +696,7 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
               exitCode: null,
               stderr: progress.stderr,
               message: progress.stderr.trim() ? `${message}\n${progress.stderr.trim()}` : message,
+              ...remoteScriptSettle(input, progress.spawned),
             });
           }),
       }),

@@ -1,3 +1,10 @@
+// Validator checks run shells synchronously; the Effect spawner adds nothing to them.
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
@@ -8,6 +15,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";
 import { ChildProcessSpawner } from "effect/process";
 import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
+import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
 import { installArchivePsDouble, uploadTarget } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 import { prepareRemoteRuntime } from "./tunnel.ts";
@@ -80,6 +88,53 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         yield* launch(f);
         // Probe, candidate checks and every live recheck reuse the recorded answers.
         assert.deepEqual(yield* recordableAsks(f), first);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    LAUNCHES_TIMEOUT_MS,
+  );
+
+  it.live(
+    "a warm pairing on an unchanged runtime starts few helper commands",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* liveFixture;
+        yield* f.shiftHostClock(60);
+        yield* launch(f);
+        const pairing = yield* f.run("pairing");
+        if (Result.isFailure(pairing)) throw pairing.failure;
+        // Under MSYS each command start costs about 50 ms; count them for one warm pairing.
+        const bin = `${f.test}/counted`;
+        yield* f.fs.makeDirectory(bin, { recursive: true });
+        const counted = ["grep", "sed", "stat", "sha256sum", "shasum", "ps", "awk", "cat", "date"];
+        for (const name of counted) {
+          // Each shim drops its own directory, so later shims (clock, identity) still apply.
+          yield* f.fs.writeFileString(
+            `${bin}/${name}`,
+            `#!/bin/sh\necho ${name} >> "$HOME/.test/counted.log"\nPATH="\${PATH#*:}" exec ${name} "$@"\n`,
+          );
+          yield* f.fs.chmod(`${bin}/${name}`, 0o755);
+        }
+        f.setRemotePath(
+          `${bin}:${f.home}/.test/clock:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`,
+        );
+        const warm = yield* f.run("pairing");
+        if (Result.isFailure(warm)) throw warm.failure;
+        const log = yield* f.fs.readFileString(`${f.home}/.test/counted.log`);
+        const counts: Record<string, number> = {};
+        for (const name of log.trim().split("\n")) counts[name] = (counts[name] ?? 0) + 1;
+        // Measured at 9109d68047: awk 0, cat 49, date 19, grep 56, ps 12, sed 35, shasum 15, stat 38.
+        // Each remembered pinned-runner key costs a stat of the runner, which proves it unchanged.
+        const bounds: Record<string, number> = {
+          awk: 20,
+          cat: 18,
+          date: 9,
+          grep: 0,
+          ps: 12,
+          sed: 1,
+          stat: 21,
+        };
+        for (const [name, bound] of Object.entries(bounds))
+          assert.isAtMost(counts[name] ?? 0, bound, name);
+        assert.isAtMost((counts.shasum ?? 0) + (counts.sha256sum ?? 0), 14, "sha256");
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
@@ -495,4 +550,299 @@ sleep() {
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
+});
+
+// The validators run for every token a host reports; under MSYS each external command costs about
+// 50 ms, so they stay shell builtins and accept exactly the SemVer and safe-integer grammar.
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote token validators", () => {
+  const semver =
+    /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/u;
+  const uint = (token: string) =>
+    /^(0|[1-9][0-9]*)$/u.test(token) && token.length <= 16 && BigInt(token) <= 9007199254740991n;
+  const versions = [
+    "1.2.3",
+    "0.0.0",
+    "10.20.30",
+    "01.2.3",
+    "1.02.3",
+    "1.2.03",
+    "1.2",
+    "1.2.3.4",
+    "",
+    "v1.2.3",
+    "1.2.3-0",
+    "1.2.3-00",
+    "1.2.3-01",
+    "1.2.3-0a",
+    "1.2.3-a0",
+    "1.2.3-rc.1",
+    "1.2.3-rc.01",
+    "1.2.3-rc-1",
+    "1.2.3--",
+    "1.2.3-",
+    "1.2.3-.a",
+    "1.2.3-a.",
+    "1.2.3-a..b",
+    "1.2.3+build",
+    "1.2.3+build.001",
+    "1.2.3+",
+    "1.2.3+a+b",
+    "1.2.3-a+b",
+    "1.2.3-a+b+c",
+    "1.2.3+a.",
+    "-1.2.3",
+    "0.1.6-nightly.20261108.346",
+    "1.2.3-preview.20260911.10",
+    "1.2.3-\u00e9",
+    "1.2.3-a_b",
+    "1.2.3 ",
+    " 1.2.3",
+    "1.2.3\nfoo",
+    "1.2.3-*",
+    "1.2.3-a b",
+    "1.2.3-[a]",
+  ];
+  const integers = [
+    "0",
+    "1",
+    "00",
+    "01",
+    "10",
+    "65535",
+    "65536",
+    "-1",
+    "+1",
+    "1.0",
+    "",
+    " 1",
+    "1 ",
+    "a",
+    "9007199254740991",
+    "9007199254740992",
+    "9007199254740990",
+    "8999999999999999",
+    "9007199300000000",
+    "9007199254740999",
+    "1000000000000000",
+    "10000000000000000",
+    "99999999999999999",
+    "\u0663",
+    "1\n2",
+  ];
+  const quote = (token: string) => "'" + token.replaceAll("'", "'\\''") + "'";
+  it.each(
+    ["dash", "bash"].flatMap((shell) => ["C", "C.UTF-8"].map((locale) => ({ shell, locale }))),
+  )(
+    "accept exactly the SemVer and safe-integer grammar without external commands ($shell, $locale)",
+    ({ shell, locale }) => {
+      const body = [
+        ...versions.map((token) => "valid_version " + quote(token) + " && echo 1 || echo 0"),
+        ...integers.map((token) => "valid_uint " + quote(token) + " && echo 1 || echo 0"),
+        ...integers.map((token) => "valid_port " + quote(token) + " && echo 1 || echo 0"),
+      ].join("\n");
+      // An empty PATH proves the validators start no external command.
+      const result = NodeChildProcess.spawnSync(
+        shell,
+        ["-c", REMOTE_PROTOCOL_TOKEN_SCRIPT + "\nPATH=/nonexistent\n" + body],
+        { encoding: "utf8", env: { ...process.env, LC_ALL: locale } },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(result.stdout.trim().split("\n"), [
+        ...versions.map((token) => (semver.test(token) ? "1" : "0")),
+        ...integers.map((token) => (uint(token) ? "1" : "0")),
+        ...integers.map((token) => (uint(token) && Number(token) <= 65535 ? "1" : "0")),
+      ]);
+    },
+  );
+});
+
+// The facts helpers replaced commands that cost about 50 ms each under MSYS; each must answer
+// exactly as the command it replaced, and remembered keys must never outlive a write they see.
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers", () => {
+  const scripts = REMOTE_RUNNER_HINT_SCRIPT + "\n" + REMOTE_PROTOCOL_TOKEN_SCRIPT;
+  const quote = (token: string) => "'" + token.replaceAll("'", "'\\''") + "'";
+  const runIn = (shell: string, body: string, env: Record<string, string> = {}) => {
+    const result = NodeChildProcess.spawnSync(shell, ["-c", "set -eu\n" + scripts + "\n" + body], {
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+
+  it.each(["dash", "bash"])("match the commands they replace (%s)", (shell) => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-fact-helpers-"));
+    try {
+      const files: Record<string, string> = {
+        both: "T3_ARCHIVE_VERSION='0.9.0'\nGOAT_ARCHIVE_VERSION='1.2.3'\n",
+        legacy: "T3_ARCHIVE_VERSION='0.9.0'\n",
+        unquoted: "GOAT_ARCHIVE_VERSION=1.2.3\nT3_ARCHIVE_VERSION='0.9.0'\n",
+        duplicate: "GOAT_ARCHIVE_VERSION='1.2.3'\nGOAT_ARCHIVE_VERSION='1.2.4'\n",
+        inner:
+          "GOAT_ARCHIVE_VERSION='a'b'\n  GOAT_ARCHIVE_VERSION='x'\nGOAT_ARCHIVE_VERSION=''\nGOAT_ARCHIVE_VERSION='\n",
+        prefix: "GOAT_ARCHIVE_VERSIONX='1'\nT3_ARCHIVE_VERSION='0.9.0'",
+        empty: "",
+        record: '{\n  "pid": 4242,\n  "port" : 3773,\n  "origin": "http://127.0.0.1:3773"\n}\n\n',
+        oneLine: '{"pid":12,"port":"x","port":  77}',
+        repeated: '{"pid": 1, "child": {"pid": "z"}, "port": 9}',
+        crlf: '{"pid":5,\r\n"port":6}\r\n',
+        noNewline: "123",
+        trailing: "123\n\n\n",
+        inside: "1\n\n2\n",
+      };
+      for (const [name, text] of Object.entries(files))
+        NodeFS.writeFileSync(NodePath.join(dir, name), text);
+      const paths = [...Object.keys(files), "missing"].map((name) =>
+        quote(NodePath.join(dir, name)),
+      );
+      const oldHint =
+        'old_hint() { if grep -q "^$2=" "$1"; then k="$2"; else k="$3"; fi; sed -n "s/^$k=\'\\(.*\\)\'$/\\1/p" "$1"; }';
+      const body = [
+        oldHint,
+        'same() { if [ "$2" = "$3" ]; then echo "$1 ok"; else printf "%s DIFF old=[%s] new=[%s]\\n" "$1" "$2" "$3"; fi; }',
+        "for f in " + paths.join(" ") + "; do",
+        '  same hint "$(old_hint "$f" GOAT_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)" "$(read_runner_hint "$f" GOAT_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)"',
+        '  fact_slurp "$f" || :; same cat "$(cat "$f" 2>/dev/null || true)" "$FACT_TEXT"',
+        '  if [ -f "$f" ]; then',
+        '    old_record="$(tr \'\\n\' \' \' <"$f")"; fact_read_record "$f"',
+        '    same record "$old_record" "$FACT_TEXT"',
+        "    for name in pid port; do",
+        '      old_value="$(printf \'%s\\n\' "$old_record" | sed -n "s/.*\\"$name\\"[[:space:]]*:[[:space:]]*\\\\([0-9][0-9]*\\\\).*/\\\\1/p")"',
+        '      fact_json_uint "\\"$name\\"" "$old_record"; same json "$old_value" "$FACT_TEXT"',
+        "    done",
+        "  fi",
+        "done",
+      ].join("\n");
+      const verdicts = runIn(shell, body).trim().split("\n");
+      assert.isAbove(verdicts.length, 40);
+      assert.deepEqual(
+        verdicts.filter((line) => !line.endsWith(" ok")),
+        [],
+      );
+
+      // What stat and the digest tools print passes the same checks as the old regular expressions.
+      const bin = NodePath.join(dir, "bin");
+      NodeFS.mkdirSync(bin);
+      for (const name of ["stat", "shasum", "sha256sum"])
+        NodeFS.writeFileSync(
+          NodePath.join(bin, name),
+          '#!/bin/sh\nprintf "%s\\n" "$GOAT_TEST_OUT"\n',
+          {
+            mode: 0o755,
+          },
+        );
+      const oldChecks = [
+        'old_sig() { v="$(stat -f \'%d:%i:%z:%m:%c\' "$1" 2>/dev/null)" || v="$(stat -c \'%d:%i:%s:%Y:%Z\' "$1" 2>/dev/null)" || return 1',
+        "  printf '%s\\n' \"$v\" | LC_ALL=C grep -Eq '^[0-9]+(:[0-9]+){4}$' || return 1; printf '%s' \"$v\"; }",
+        'old_digest() { d="$(sha256sum "$1")" || return 1; d="$' + '{d%% *}"',
+        "  printf '%s\\n' \"$d\" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || return 1; printf '%s' \"$d\"; }",
+      ].join("\n");
+      const outputs = [
+        "1:2:3:4:5",
+        "10:2:3:4:5:6",
+        "1:2:3:4",
+        ":2:3:4:5",
+        "1::3:4:5",
+        "1:2:3:4:",
+        "1:2:3:4:5x",
+        "a:2:3:4:5",
+        "",
+        "a".repeat(64) + "  -",
+        "A".repeat(64) + "  -",
+        "a".repeat(63) + "  -",
+        "a".repeat(65),
+        "g" + "a".repeat(63),
+        "\\" + "a".repeat(64) + "  -",
+      ];
+      const target = quote(NodePath.join(dir, "empty"));
+      for (const output of outputs) {
+        const out = runIn(
+          shell,
+          oldChecks +
+            "\nfor check in sig digest; do" +
+            "\n  old=FAIL; new=FAIL" +
+            '\n  if [ $check = sig ]; then o="$(old_sig ' +
+            target +
+            ')" && old="$o"; n="$(file_sig ' +
+            target +
+            ')" && new="$n"' +
+            '\n  else o="$(old_digest ' +
+            target +
+            ')" && old="$o"; n="$(runner_sha256 ' +
+            target +
+            ')" && new="$n"; fi' +
+            '\n  printf \'%s|%s|%s\\n\' "$check" "$old" "$new"' +
+            "\ndone",
+          { PATH: bin + ":" + (process.env.PATH ?? ""), GOAT_TEST_OUT: output },
+        );
+        for (const line of out.trim().split("\n")) {
+          const [check, oldValue, newValue] = line.split("|");
+          assert.equal(newValue, oldValue, check + " for " + JSON.stringify(output));
+        }
+      }
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it.each(["dash", "bash"])("remember exec keys only until a write they must see (%s)", (shell) => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-fact-memo-"));
+    try {
+      const versions = NodePath.join(dir, ".goat/runtime/goat/versions/1.2.3");
+      NodeFS.mkdirSync(versions, { recursive: true });
+      NodeFS.writeFileSync(NodePath.join(versions, "goat"), "#!/bin/sh\n", { mode: 0o755 });
+      NodeFS.writeFileSync(NodePath.join(versions, ".install-complete"), "1.2.3\n");
+      NodeFS.writeFileSync(NodePath.join(dir, "a"), "GOAT_ARCHIVE_VERSION='1.2.3'\n# a\n");
+      NodeFS.writeFileSync(NodePath.join(dir, "b"), "GOAT_ARCHIVE_VERSION='1.2.3'\n# bb\n");
+      const bin = NodePath.join(dir, "bin");
+      NodeFS.mkdirSync(bin);
+      // Executables younger than 2 s are never keyed; this clock is far ahead of them.
+      NodeFS.writeFileSync(NodePath.join(bin, "date"), "#!/bin/sh\necho 4102444800\n", {
+        mode: 0o755,
+      });
+      for (const name of ["shasum", "sha256sum"])
+        NodeFS.writeFileSync(
+          NodePath.join(bin, name),
+          '#!/bin/sh\necho digest >> "$HOME/digests"\nPATH="$' +
+            '{PATH#*:}" exec ' +
+            name +
+            ' "$@"\n',
+          { mode: 0o755 },
+        );
+      const key = 'exec_fact_key "$RUNNER_CANDIDATE_FILE.pin" && printf "%s\\n" "$FACT_KEY"';
+      const out = runIn(
+        shell,
+        [
+          'RUNNER_CANDIDATE_FILE="$HOME/next"; FACT_MEMO="$HOME/next.facts"; fact_memo_drop',
+          'digests() { cat "$HOME/digests" 2>/dev/null | wc -l | tr -d " "; }',
+          'pin_runner "$HOME/a"',
+          'first="$(' + key + ')"; after_first="$(digests)"',
+          // A later subshell reads the pinned runner's key without hashing it again.
+          'again="$(' + key + ')"; after_again="$(digests)"',
+          'pin_runner "$HOME/b"',
+          'rewritten="$(' + key + ')"',
+          // A write that bypasses pin_runner is seen through the runner's own signature.
+          'cp "$HOME/a" "$HOME/next.pin"',
+          'overwritten="$(' + key + ')"',
+          // A reinstalled executable is seen through a remembered key.
+          'printf "#!/bin/sh\\n# reinstalled\\n" > "$HOME/.goat/runtime/goat/versions/1.2.3/goat"',
+          'reinstalled="$(' + key + ')"',
+          'printf "%s\\n" "$first" "$again" "$rewritten" "$overwritten" "$reinstalled" "$after_first" "$after_again"',
+          // A memo that cannot be emptied is not used again.
+          'FACT_MEMO="$HOME"; pin_runner "$HOME/a"; printf "memo=%s\\n" "$FACT_MEMO"',
+        ].join("\n"),
+        { HOME: dir, PATH: bin + ":" + (process.env.PATH ?? "") },
+      );
+      const [first, again, rewritten, overwritten, reinstalled, afterFirst, afterAgain, memoLine] =
+        out.trim().split("\n");
+      assert.include(first, "versions/1.2.3/goat ");
+      assert.equal(again, first);
+      assert.equal(afterAgain, afterFirst);
+      assert.notEqual(rewritten, first);
+      assert.equal(overwritten, first);
+      assert.notEqual(reinstalled, overwritten);
+      assert.equal(memoLine, "memo=");
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

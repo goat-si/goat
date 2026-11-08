@@ -3,12 +3,14 @@ import { assert, describe } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { parseSshResolveOutput, runSshCommand, SshHostAnswered } from "./command.ts";
 import { SshCommandError } from "./errors.ts";
+import { remoteDeadlineSettleMs } from "./remoteDeadline.ts";
 import { sshPreparationFailure } from "../../client-runtime/src/connection/sshFailure.ts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -546,6 +548,126 @@ process.stderr.write('reader waiting');`,
         }
       }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer())));
     },
+  );
+  it.effect(
+    "a remote script the client gave up on reports how long it can outlive the client",
+    () =>
+      Effect.gen(function* () {
+        const target = {
+          alias: "devbox",
+          hostname: "devbox.example.com",
+          username: "alex",
+          port: 2222,
+        };
+        const timeOut = (
+          options: Parameters<typeof runSshCommand>[1],
+          diagnostics = 'Authenticated to fixture using "publickey".\n',
+        ) =>
+          Effect.gen(function* () {
+            const stderrRead = yield* Deferred.make<void>();
+            const spawner = lazyChildProcessSpawner(() =>
+              Effect.succeed({
+                ...makeNeverFinishingProcess(),
+                stderr: Stream.make(encoder.encode(diagnostics)).pipe(
+                  Stream.ensuring(Deferred.succeed(stderrRead, undefined)),
+                ),
+              }),
+            );
+            const fiber = yield* Effect.forkChild(
+              Effect.result(runSshCommand(target, { timeoutMs: 75_000, ...options })).pipe(
+                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              ),
+            );
+            yield* Deferred.await(stderrRead);
+            yield* TestClock.adjust(Duration.seconds(75));
+            const result = yield* Fiber.join(fiber);
+            assert.isTrue(Result.isFailure(result) && result.failure instanceof SshCommandError);
+            return Result.isFailure(result) && result.failure instanceof SshCommandError
+              ? result.failure.remoteSettleMs
+              : undefined;
+          });
+        // The watchdog starts with the script, which can start as late as the client gives up.
+        assert.equal(
+          yield* timeOut({ remoteCommandArgs: ["sh", "-l", "-s"], stdin: "sleep 100\n" }),
+          remoteDeadlineSettleMs(75_000),
+        );
+        assert.isUndefined(yield* timeOut({ remoteCommandArgs: ["goat", "--version"] }));
+        // A multiplexed session can start before the client prints or reads anything about it.
+        assert.equal(
+          yield* timeOut(
+            {
+              preHostArgs: ["-S", "/tmp/goat-test-master.sock"],
+              remoteCommandArgs: ["sh", "-s"],
+              stdin: "sleep 100\n",
+            },
+            "",
+          ),
+          remoteDeadlineSettleMs(75_000),
+        );
+        const settleOf = (process: ReturnType<typeof makeFailedProcess> | "spawn-failed") =>
+          Effect.flip(
+            runSshCommand(target, {
+              remoteCommandArgs: ["sh", "-s"],
+              stdin: "true\n",
+              timeoutMs: 75_000,
+            }).pipe(
+              Effect.provideService(
+                ChildProcessSpawner.ChildProcessSpawner,
+                lazyChildProcessSpawner(() =>
+                  process === "spawn-failed"
+                    ? Effect.fail(
+                        PlatformError.systemError({
+                          _tag: "NotFound",
+                          module: "ChildProcess",
+                          method: "spawn",
+                          description: "ssh not found",
+                        }),
+                      )
+                    : Effect.succeed(process),
+                ),
+              ),
+            ),
+          ).pipe(
+            Effect.map((error) =>
+              error instanceof SshCommandError ? error.remoteSettleMs : undefined,
+            ),
+          );
+        // Once ssh runs, no report it prints proves that no session started, not even one that
+        // reads like a failed connect.
+        for (const stderr of [
+          'Authenticated to fixture using "publickey".\nConnection reset\n',
+          "ssh: connect to host devbox.example.com port 2222: Connection timed out\n",
+          "Connection to devbox.example.com port 2222 timed out\n",
+        ])
+          assert.equal(
+            yield* settleOf(makeFailedProcess({ stdout: "", stderr, exitCode: 255 })),
+            remoteDeadlineSettleMs(75_000),
+          );
+        // Output lost after ssh started leaves the script as unknown as a dropped connection.
+        assert.equal(
+          yield* settleOf(
+            ChildProcessSpawner.makeHandle({
+              ...makeFailedProcess({ stdout: "", exitCode: 0 }),
+              stdout: Stream.fail(
+                PlatformError.systemError({
+                  _tag: "Unknown",
+                  module: "Stream",
+                  method: "read",
+                  description: "stdout read failed",
+                }),
+              ),
+            }),
+          ),
+          remoteDeadlineSettleMs(75_000),
+        );
+        // Only an ssh that never started proves no script did.
+        assert.isUndefined(yield* settleOf("spawn-failed"));
+        // A status other than 255 is the remote shell's own; it relays it only after the script,
+        // its job and its watchdog have ended, so nothing is left to wait for.
+        assert.isUndefined(
+          yield* settleOf(makeFailedProcess({ stdout: "", stderr: "", exitCode: 7 })),
+        );
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer()))),
   );
 });
 

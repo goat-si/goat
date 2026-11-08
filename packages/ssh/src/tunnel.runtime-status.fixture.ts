@@ -62,6 +62,7 @@ export const fixture = (
   let readinessGate:
     | { readonly entered: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
     | undefined;
+  let probeGate: typeof readinessGate;
   const httpClient = HttpClient.make((request) =>
     Effect.gen(function* () {
       const path = new URL(request.url).pathname;
@@ -113,6 +114,12 @@ export const fixture = (
       if (command.args.includes("goat-runtime-cleanup")) return makeSuccessfulProcess("");
       if (script.includes("ready=false") && !isRemoteLaunch(command.args)) {
         calls.probes++;
+        const gate = probeGate;
+        if (gate !== undefined) {
+          probeGate = undefined;
+          yield* Deferred.succeed(gate.entered, undefined);
+          yield* Deferred.await(gate.release);
+        }
         calls.strict = ["StrictHostKeyChecking=yes", "UpdateHostKeys=no", "BatchMode=yes"].every(
           (arg) => command.args.includes(arg),
         );
@@ -193,6 +200,10 @@ export const fixture = (
     },
     gateReadiness: (gate: NonNullable<typeof readinessGate>) => {
       readinessGate = gate;
+    },
+    /** Holds the next runtime probe until the gate is released. */
+    gateProbe: (gate: NonNullable<typeof readinessGate>) => {
+      probeGate = gate;
     },
     layer: Layer.mergeAll(
       NodeServices.layer,

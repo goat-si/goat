@@ -40,6 +40,10 @@ export function preparationRetryDelayMs(attempt: number, random: number) {
   return Math.round(ceiling / 2 + (ceiling / 2) * random);
 }
 
+/** A timed-out remote script may still hold the host's replacement lock until its deadline. */
+const remoteSettleMs = (error: unknown) =>
+  error instanceof SshCommandError ? (error.remoteSettleMs ?? 0) : 0;
+
 interface RetryLoop {
   readonly generation: number | undefined;
   fiber?: Fiber.Fiber<void>;
@@ -63,9 +67,18 @@ export function makePreparationRetries<E, R>(options: {
       return loop?.fiber === undefined ? Effect.void : Fiber.interrupt(loop.fiber);
     });
   const run = Effect.fn("ssh/preparationRetry.run")(
-    function* (key: string, loop: RetryLoop, target: DesktopSshEnvironmentTarget) {
+    function* (
+      key: string,
+      loop: RetryLoop,
+      target: DesktopSshEnvironmentTarget,
+      failure: unknown,
+    ) {
+      let latest = failure;
       for (let count = 0; ; count++) {
-        const delayMs = preparationRetryDelayMs(count, yield* Random.next);
+        const delayMs = Math.max(
+          preparationRetryDelayMs(count, yield* Random.next),
+          remoteSettleMs(latest),
+        );
         yield* Effect.logInfo("ssh.preparation.retry.scheduled", {
           key,
           attempt: count + 1,
@@ -79,6 +92,7 @@ export function makePreparationRetries<E, R>(options: {
         if (Exit.isSuccess(exit) || !options.wanted(key, loop.generation)) return;
         const error = Cause.findErrorOption(exit.cause);
         if (Option.isNone(error) || !isTransientPreparationFailure(error.value)) return;
+        latest = error.value;
       }
     },
     (effect, key, loop) =>
@@ -104,7 +118,7 @@ export function makePreparationRetries<E, R>(options: {
     if (!isTransientPreparationFailure(error) || !options.wanted(key, generation)) return;
     const loop: RetryLoop = { generation };
     loops.set(key, loop);
-    loop.fiber = yield* Effect.forkIn(run(key, loop, target), options.scope);
+    loop.fiber = yield* Effect.forkIn(run(key, loop, target, error), options.scope);
   });
   /** Refusal copy for a ready-only caller while the host reconnects on its own. */
   const refusal = (key: string, host: string) =>

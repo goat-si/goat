@@ -87,4 +87,60 @@ describe("SSH preparation retry policy", () => {
         yield* Scope.close(scope, Exit.void);
       }),
   );
+  it.effect("waits out a lost script's remote deadline before each retry", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      let attempts = 0;
+      const lingering = new SshCommandError({
+        message: "Connection reset by 10.0.0.2 port 22",
+        command: ["ssh"],
+        exitCode: 255,
+        stderr: "Connection reset by 10.0.0.2 port 22",
+        remoteSettleMs: 87_000,
+      });
+      const retries = makePreparationRetries({
+        scope,
+        wanted: () => true,
+        attempt: () =>
+          Effect.suspend(() => {
+            attempts++;
+            return attempts === 1 ? Effect.fail(lingering) : Effect.void;
+          }),
+      });
+      yield* retries.failed("devbox", 1, lingering, uploadTarget);
+      // Until its watchdog hangs it up, the old script can hold the host's replacement lock.
+      yield* TestClock.adjust("86 seconds");
+      assert.equal(attempts, 0);
+      yield* TestClock.adjust("1 second");
+      assert.equal(attempts, 1);
+      // That retry lost its connection the same way, so the next one waits again.
+      yield* TestClock.adjust("86 seconds");
+      assert.equal(attempts, 1);
+      yield* TestClock.adjust("1 second");
+      assert.equal(attempts, 2);
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
+  it.effect("never starts another attempt after one was interrupted", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      let attempts = 0;
+      const retries = makePreparationRetries({
+        scope,
+        wanted: () => true,
+        attempt: () =>
+          Effect.suspend(() => {
+            attempts++;
+            return Effect.interrupt;
+          }),
+      });
+      yield* retries.failed("devbox", 1, timedOut, uploadTarget);
+      yield* TestClock.adjust("2 seconds");
+      assert.equal(attempts, 1);
+      // An interrupted request carries no typed failure to retry.
+      yield* TestClock.adjust("10 minutes");
+      assert.equal(attempts, 1);
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
 });
