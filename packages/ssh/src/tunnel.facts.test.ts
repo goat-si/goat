@@ -114,21 +114,37 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
       ];
       for (const name of counted) {
         // Each shim drops its own directory, so later shims (clock, identity) still apply.
+        // awk also records its program, so a failed bound names the calls it counted.
         yield* f.fs.writeFileString(
           `${bin}/${name}`,
-          `#!/bin/sh\necho ${name} >> "$HOME/.test/counted.log"\nPATH="\${PATH#*:}" exec ${name} "$@"\n`,
+          name === "awk"
+            ? `#!/bin/sh\nprintf 'awk %s\\n' "$(printf '%s' "$*" | tr '\\n' ' ' | cut -c1-60)" >> "$HOME/.test/counted.log"\nPATH="\${PATH#*:}" exec awk "$@"\n`
+            : `#!/bin/sh\necho ${name} >> "$HOME/.test/counted.log"\nPATH="\${PATH#*:}" exec ${name} "$@"\n`,
         );
         yield* f.fs.chmod(`${bin}/${name}`, 0o755);
       }
       f.setRemotePath(
         `${bin}:${f.home}/.test/clock:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`,
       );
+      const awkPrograms = new Map<Record<string, number>, string[]>();
       const counts = Effect.gen(function* () {
         const log = yield* f.fs.readFileString(`${f.home}/.test/counted.log`);
         yield* f.fs.writeFileString(`${f.home}/.test/counted.log`, "");
         const seen: Record<string, number> = {};
-        for (const name of log.trim().split("\n").filter(Boolean))
+        const lines = log.trim().split("\n").filter(Boolean);
+        for (const line of lines) {
+          const name = line.split(" ")[0] ?? line;
           seen[name] = (seen[name] ?? 0) + 1;
+        }
+        const programs = lines
+          .filter((line) => line.startsWith("awk "))
+          .map((line) => line.slice(4));
+        // One awk per ownership verification, liveness check or lock-owner check: how many follows
+        // the path a script takes and lock timing, not the keys and hints these bounds are about.
+        const perCheck = ["NF==1 { print $1 }", "{ print $1 }", "-v p="];
+        const bounded = programs.filter((program) => !perCheck.some((p) => program.startsWith(p)));
+        seen.awk = bounded.length;
+        awkPrograms.set(seen, bounded);
         const events = yield* f.fs.readFileString(`${f.test}/events`);
         yield* f.fs.writeFileString(`${f.test}/events`, "");
         seen.goat = events.split("\n").filter((line) => line.includes('"type":"exec"')).length;
@@ -192,7 +208,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
           launchCounts,
           {
             goat: 1,
-            awk: 7,
+            awk: 0,
             cat: 2,
             date: 17,
             uname: 6,
@@ -205,10 +221,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         ],
         stop: [
           stopCounts,
-          // Each liveness check of a live server runs sed and awk, and the wait loop checks the
+          // Each liveness check of a live server runs sed and ps, and the wait loop checks the
           // stopping server a timing-dependent number of times, so those are not bounded here.
           {
             goat: 1,
+            awk: 0,
             cat: 2,
             date: 0,
             uname: 2,
@@ -220,7 +237,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
       } as const;
       for (const [script, [seen, limits]] of Object.entries(bounds))
         for (const [name, bound] of Object.entries(limits))
-          assert.isAtMost(seen[name] ?? 0, bound, script + " " + name);
+          assert.isAtMost(
+            seen[name] ?? 0,
+            bound,
+            `${script} ${name}${name === "awk" ? `: ${(awkPrograms.get(seen) ?? []).join(" | ")}` : ""}`,
+          );
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
