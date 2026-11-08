@@ -218,19 +218,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     yield* leases.attached(input.threadId),
     (control) => run !== undefined && control.runId === run.id,
   );
-  const record = yield* leases.currentControl(input.threadId);
-  const ended = Option.isSome(record) && record.value.ended !== undefined;
-  const current =
-    !strict && !ended && run !== undefined && run.rootNodeId !== null
-      ? Option.map(
-          yield* leases.everyAppControl(
-            input.threadId,
-            !usesScreenLikePerson(origin, view.projection.thread.runtimeMode),
-            { runId: run.id, nonPerson: origin._tag === "unattended" },
-          ),
-          (control) => ({ controlId: control.controlId, runId: run.id, everyApp: true }),
-        )
-      : attached;
+  const current = attached;
   // The remote-origin terminal block is a strict guard too.
   if (
     strict &&
@@ -249,6 +237,59 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         unknownApps: terminals,
         message: `Full access from a non-person origin cannot control ${terminals.join(", ")}. Ask the person to perform this step.`,
       } satisfies ComputerUseRequestResult;
+  }
+  if (!strict) {
+    if (!run || run.rootNodeId === null)
+      return {
+        kind: "refused",
+        reason: "unsupported",
+        message: "Ask from a running turn of this thread.",
+      } satisfies ComputerUseRequestResult;
+    const interrupted: ComputerUseRequestResult = {
+      kind: "refused",
+      reason: "interrupted",
+      message:
+        "This turn's computer use was stopped, paused, replaced or lost its screen admission. Do not act on the screen in this turn; a later turn is admitted automatically while Strict input guards are off.",
+    };
+    const record = yield* leases.currentControl(input.threadId);
+    const sameRun = Option.isSome(record) && record.value.runId === run.id;
+    const before = sameRun
+      ? yield* leases.controlState(input.threadId, record.value.controlId)
+      : undefined;
+    const stopped =
+      before?._tag === "ended" && (before.reason === "stopped" || before.reason === "stopped_all");
+    const blocked = sameRun && (record.value.idle === true || before?._tag === "paused" || stopped);
+    const automatic =
+      Option.isSome(attached) && attached.value.everyApp
+        ? attached
+        : blocked
+          ? Option.none()
+          : Option.map(
+              yield* leases.everyAppControl(
+                input.threadId,
+                !usesScreenLikePerson(origin, view.projection.thread.runtimeMode),
+                { runId: run.id, nonPerson: origin._tag === "unattended" },
+              ),
+              (control) => ({ controlId: control.controlId, runId: run.id, everyApp: true }),
+            );
+    if (Option.isNone(automatic)) return interrupted;
+    const state = yield* leases.controlState(input.threadId, automatic.value.controlId);
+    if (
+      state._tag !== "active" ||
+      state.idle === true ||
+      (foreground && !(yield* leases.foregroundAvailable(input.threadId, input.request.purpose)))
+    )
+      return interrupted;
+    if (wanted !== undefined)
+      yield* leases.nameApps(input.threadId, automatic.value.controlId, wanted);
+    return {
+      kind: "available",
+      message: foreground
+        ? "Strict input guards are off: this turn can bring apps forward and take keyboard or pointer focus without approval. Tell the person first that the screen may briefly be taken and returned."
+        : wanted === undefined
+          ? "Strict input guards are off: this turn can act on every app without approval."
+          : `Strict input guards are off: this turn can act on every app without approval. A manifest refresh was requested for ${wanted.join(", ")}. Wait a few seconds, then retry the call. If it is still refused with bounded_resource_outside_manifest, make sure the app is running and call computer_use.request again with its app id. If it remains unavailable, report the refusal.`,
+    } satisfies ComputerUseRequestResult;
   }
   const own = yield* leases.active(input.threadId);
   // A live admission answers the request only when it already covers what is asked.
@@ -360,23 +401,15 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   ) {
     if (wanted !== undefined)
       yield* leases.nameApps(input.threadId, current.value.controlId, wanted);
-    const admission = strict ? "This thread runs in full access" : "Strict input guards are off";
     return {
       kind: "available",
       message: foreground
-        ? `${admission}: this turn can bring apps forward and take keyboard or pointer focus without approval. Tell the person first that the screen may briefly be taken and returned.`
+        ? "This thread runs in full access: this turn can bring apps forward and take keyboard or pointer focus without approval. Tell the person first that the screen may briefly be taken and returned."
         : wanted === undefined
-          ? `${admission}: this turn can act on every app without approval.`
-          : `${admission}: this turn can act on every app without approval. A manifest refresh was requested for ${wanted.join(", ")}. Wait a few seconds, then retry the call. If it is still refused with bounded_resource_outside_manifest, make sure the app is running and call computer_use.request again with its app id. If it remains unavailable, report the refusal.`,
+          ? "This thread runs in full access: this turn can act on every app without approval."
+          : `This thread runs in full access: this turn can act on every app without approval. A manifest refresh was requested for ${wanted.join(", ")}. Wait a few seconds, then retry the call. If it is still refused with bounded_resource_outside_manifest, make sure the app is running and call computer_use.request again with its app id. If it remains unavailable, report the refusal.`,
     } satisfies ComputerUseRequestResult;
   }
-  if (!strict)
-    return {
-      kind: "refused",
-      reason: "interrupted",
-      message:
-        "This turn's computer use was stopped, paused, replaced or lost its screen admission. Do not act on the screen in this turn; a later turn is admitted automatically while Strict input guards are off.",
-    } satisfies ComputerUseRequestResult;
   const handoff = yield* handoffs.create(createInput);
   // A repeated request returns the pending handoff with its original expiry.
   const approvedUntil = DateTime.formatIso(handoff.expiresAt ?? expiresAt);

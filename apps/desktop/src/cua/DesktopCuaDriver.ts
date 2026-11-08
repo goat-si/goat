@@ -322,12 +322,18 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     });
     // A Stop of the start being handled cancels its listing.
     const listApplications = helperListing(engine, requests.signal());
+    const includeProtected =
+      scope === "agents" &&
+      !(yield* Effect.tryPromise(() =>
+        native.strictInputGuards(environment.serverSettingsPath),
+      ).pipe(Effect.orElseSucceed(() => true)));
     const manifestInput = {
       binaryPath: enginePath(engine),
       scope,
       hostBundleIds: hostBundleIds(engine),
       directory: environment.path.join(environment.stateDir, "cua-driver"),
       platform: environment.platform,
+      includeProtected,
       // The helper verifies its driver before running it, so it lists the apps too; running
       // the driver here would execute it unchecked, under GOAT's identity (#1241).
       ...(listApplications === undefined ? {} : { listApplications }),

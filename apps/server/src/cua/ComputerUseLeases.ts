@@ -353,13 +353,9 @@ const make = Effect.gen(function* () {
   let manifestGeneration = 0;
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
   const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-  const fullAccessAdmitted = makeFullAccessAdmitted(
-    sql,
-    Option.isSome(serverSettings)
-      ? serverSettings.value.getSettings.pipe(Effect.map((current) => current.cuaStrictInputGuards))
-      : Effect.succeed(true),
-  );
+  const fullAccessAdmitted = makeFullAccessAdmitted(sql);
   const controls = new Map<ThreadId, ControlRecord>();
+  const controlSettings = new Map<string, ServerSettings.ServerSettingsService["Service"]>();
   const controlOwners = new Map<string, ThreadId>();
   const authorityListeners = new Set<
     (change: {
@@ -460,6 +456,7 @@ const make = Effect.gen(function* () {
             ...(runId === undefined ? {} : { runId }),
           };
           controls.set(threadId, reused);
+          if (Option.isSome(settings)) controlSettings.set(reused.controlId, settings.value);
           const moved =
             DateTime.toEpochMillis(reused.expiresAt) !== DateTime.toEpochMillis(existing.expiresAt);
           const notice =
@@ -480,6 +477,7 @@ const make = Effect.gen(function* () {
           identityEpoch: 0,
         };
         if (existing !== undefined) {
+          controlSettings.delete(existing.controlId);
           controlOwners.set(existing.controlId, threadId);
           if (controlOwners.size > RECENT_CONTROL_LIMIT) {
             const oldest = controlOwners.keys().next();
@@ -491,6 +489,7 @@ const make = Effect.gen(function* () {
           stoppedCards.replaced(existing);
         }
         controls.set(threadId, next);
+        if (Option.isSome(settings)) controlSettings.set(next.controlId, settings.value);
         foreground.bindPending(
           threadId,
           next.controlId,
@@ -541,7 +540,15 @@ const make = Effect.gen(function* () {
     if (record.ended !== undefined) return { _tag: "ended", reason: record.ended };
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
-    if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId))) {
+    const controlSetting = controlSettings.get(controlId);
+    const snapshot =
+      controlSetting !== undefined
+        ? yield* controlSetting.getSettings.pipe(Effect.option)
+        : Option.isSome(serverSettings)
+          ? yield* serverSettings.value.getSettings.pipe(Effect.option)
+          : Option.none();
+    const strict = Option.isNone(snapshot) || snapshot.value.cuaStrictInputGuards;
+    if (record.everyApp !== undefined && strict && !(yield* fullAccessAdmitted(threadId))) {
       if (end(threadId, "revoked", DateTime.toEpochMillis(now), controlId)) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
@@ -627,6 +634,7 @@ const make = Effect.gen(function* () {
       return false;
     foreground.revokeThread(threadId);
     if (record === undefined || record.ended !== undefined) return false;
+    controlSettings.delete(record.controlId);
     controls.set(threadId, { ...record, ended: reason });
     reservations.forgetClosed(threadId, record.controlId);
     reservations.markStopped(threadId, record.controlId, now);

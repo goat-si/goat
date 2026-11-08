@@ -760,6 +760,25 @@ describe("DesktopCuaDriver manifest preparation", () => {
     expect(NodeFS.readFileSync(path, "utf8")).toContain("com.apple.TextEdit");
   });
 
+  it("passes strict-off protected apps to the shared manifest", async ({ onTestFinished }) => {
+    const driver = trap(onTestFinished);
+    const path = await prepareDesktopManifest({
+      binaryPath: driver.binaryPath,
+      scope: "agents",
+      hostBundleIds: ["si.goat.desktop"],
+      directory: driver.directory,
+      platform: "darwin",
+      includeProtected: true,
+      listApplications: async () => [
+        { bundle_id: "com.1password.1password", name: "1Password" },
+        { bundle_id: "si.goat.desktop", name: "GOAT" },
+      ],
+    });
+    const manifest = NodeFS.readFileSync(path, "utf8");
+    expect(manifest).toContain("com.1password.1password");
+    expect(manifest).not.toContain("si.goat.desktop");
+  });
+
   it("writes the grant check's manifest without listing anything", async ({ onTestFinished }) => {
     const driver = trap(onTestFinished);
     await prepareDesktopManifest({

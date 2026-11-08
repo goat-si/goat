@@ -22,14 +22,10 @@ export const everyAppKind = (input: {
   return input.unattended ? "unattended" : "person";
 };
 
-/** Strict-off or full access keeps the control admitted. A failed read ends it. */
-export const makeFullAccessAdmitted = <E>(
-  sql: SqlClient.SqlClient,
-  strictInputGuards: Effect.Effect<boolean, E>,
-) =>
+/** Whether the thread is still in full access. A failed read admits nothing, so the control ends. */
+export const makeFullAccessAdmitted = (sql: SqlClient.SqlClient) =>
   Effect.fn("ComputerUseLeases.fullAccessAdmitted")(
     function* (threadId: ThreadId) {
-      if (!(yield* strictInputGuards)) return true;
       const rows = yield* sql<{ readonly runtime_mode: string }>`
         SELECT runtime_mode FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
       `;

@@ -41,8 +41,8 @@ They cannot use the clipboard, install anything, change computer use's settings,
 or close apps. To let agents use an app you installed later, turn computer use
 off and on again.
 
-With **Strict input guards** on, GOAT blocks its own windows, password managers,
-System Settings, login and security prompts, and Screen Time. Full access
+GOAT's own windows are always blocked. With **Strict input guards** on, GOAT
+also blocks password managers, System Settings, login and security prompts, and Screen Time. Full access
 started by a bot, channel, schedule, webhook, or another environment cannot
 control Terminal or iTerm. An organization can block more apps by adding their
 bundle IDs to `cuaDeniedApps` in the environment's `userdata/settings.json`,
@@ -275,8 +275,8 @@ To keep the tools without the skill, turn off **Computer Use skill** under
 
 GOAT Bot, work started from Slack or iMessage, scheduled and webhook tasks, and
 threads any of them start use every app and foreground input without asking
-when they run in full access mode, and need approval otherwise. When such a
-thread needs approval, GOAT asks in that
+while **Strict input guards** are off. With them on, only full-access work keeps
+that automatic admission; other work needs approval. When such a thread needs approval, GOAT asks in that
 thread. The request names the thread, this computer, what the agent wants to do,
 and until when. Someone allowed to change this environment's settings approves
 it in a GOAT app; a reply in a chat channel does not count.
@@ -300,8 +300,8 @@ GOAT stops the agent's computer use right away, even in the middle of an action
 sequence: the step already under way finishes, and nothing after it runs.
 
 If such work sends a message to a thread you are running, it does not join your
-turn; it waits and runs as that thread's next turn, without computer use unless
-that thread is approved or runs in full access mode.
+turn; it waits and runs as that thread's next turn. With **Strict input guards**
+on, it gets computer use only when that thread is approved or runs in full access mode.
 
 ## macOS permissions
 
