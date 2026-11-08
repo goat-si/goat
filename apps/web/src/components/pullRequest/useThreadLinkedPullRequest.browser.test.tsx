@@ -29,8 +29,7 @@ vi.mock(import("../../state/entities"), async (original) => ({
               "environment",
               {
                 environment: {
-                  capabilities:
-                    state.server === "current" ? { forkBranchPullRequests: true } : {},
+                  capabilities: state.server === "current" ? { forkBranchPullRequests: true } : {},
                 },
               },
             ],
