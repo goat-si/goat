@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -66,11 +67,15 @@ function layerMockSpawner(statusJson: string | (() => string) = "{}", onSpawn?: 
   );
 }
 
-function layerEnvironmentFor(baseDir: string, env: Record<string, string | undefined> = {}) {
+function layerEnvironmentFor(
+  baseDir: string,
+  env: Record<string, string | undefined> = {},
+  platform: NodeJS.Platform = "darwin",
+) {
   return DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
     homeDirectory: baseDir,
-    platform: "darwin",
+    platform,
     processArch: "x64",
     appVersion: "1.2.3",
     appPath: "/repo",
@@ -90,9 +95,10 @@ function layer(input: {
   readonly env?: Record<string, string | undefined>;
   readonly spawnerLayer?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
   readonly desktopSettingsLayer?: Layer.Layer<DesktopAppSettings.DesktopAppSettings>;
+  readonly platform?: NodeJS.Platform;
 }) {
   const env = { GOAT_HOME: input.baseDir, ...input.env };
-  const layerEnvironment = layerEnvironmentFor(input.baseDir, env);
+  const layerEnvironment = layerEnvironmentFor(input.baseDir, env, input.platform);
   const layerNetwork = Layer.succeed(DesktopNetworkInterfaces.DesktopNetworkInterfaces, {
     read: Effect.succeed(input.networkInterfaces ?? emptyNetworkInterfaces),
   });
@@ -122,13 +128,14 @@ const withHarness = <A, E, R>(
   env: Record<string, string | undefined> = {},
   spawnerLayer?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>,
   desktopSettingsLayer?: Layer.Layer<DesktopAppSettings.DesktopAppSettings>,
+  platform?: NodeJS.Platform,
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const baseDir = yield* fileSystem.makeTempDirectoryScoped({
       prefix: "goat-desktop-server-exposure-test-",
     });
-    return yield* effect.pipe(
+    const provided = effect.pipe(
       Effect.provide(
         layer({
           baseDir,
@@ -136,9 +143,13 @@ const withHarness = <A, E, R>(
           env,
           ...(spawnerLayer ? { spawnerLayer } : {}),
           ...(desktopSettingsLayer ? { desktopSettingsLayer } : {}),
+          ...(platform === undefined ? {} : { platform }),
         }),
       ),
     );
+    return yield* platform === undefined
+      ? provided
+      : provided.pipe(Effect.provideService(HostProcess.Platform, platform));
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
 
 describe("DesktopServerExposure", () => {
@@ -469,6 +480,52 @@ describe("DesktopServerExposure", () => {
         GOAT_DESKTOP_LAN_HOST: "100.90.1.2",
         GOAT_DESKTOP_HTTPS_ENDPOINTS: "https://public.example.test",
       },
+    ),
+  );
+
+  it.effect("refuses a Windows-reserved Tailscale HTTPS port without saving it", () =>
+    withHarness(
+      emptyNetworkInterfaces,
+      Effect.gen(function* () {
+        const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* settings.load;
+        yield* serverExposure.configureFromSettings({ port: 4173 });
+
+        const error = yield* serverExposure
+          .setTailscaleServeEnabled({ enabled: true, port: 46743 })
+          .pipe(Effect.flip);
+        assert.equal(
+          error.message,
+          "Windows reserves TCP ports 46648\u201346747, so Tailscale HTTPS cannot use port 46743. Choose another port, such as 46748.",
+        );
+        const saved = yield* settings.load;
+        assert.equal(saved.tailscaleServeEnabled, false);
+        assert.equal(saved.tailscaleServePort, 443);
+
+        const changed = yield* serverExposure.setTailscaleServeEnabled({
+          enabled: true,
+          port: 46748,
+        });
+        assert.equal(changed.state.tailscaleServeEnabled, true);
+        assert.equal(changed.state.tailscaleServePort, 46748);
+      }),
+      {},
+      layerMockSpawner(`
+
+Protocol tcp Port Exclusion Ranges
+
+Start Port    End Port
+----------    --------
+      5357        5357
+     46648       46747
+     50000       50059     *
+
+* - Administered port exclusions.
+
+`),
+      undefined,
+      "win32",
     ),
   );
 });
