@@ -680,3 +680,47 @@ it.effect("a Windows device whose GOAT lacks goat_hub_child_connection runs no o
     expect(scripts.every((script) => script.startsWith("uname"))).toBe(true);
   }),
 );
+
+it.effect.each([
+  { stderr: "Error: Link management request failed (403)\n", forbidden: true },
+  { stderr: "Error: Link management request failed (500)\n", forbidden: false },
+  { stderr: "Error: home_unreachable\n", forbidden: false },
+])("only OpenCodex's 403 marks a Home ocx call forbidden: $stderr", ({ stderr, forbidden }) =>
+  Effect.gen(function* () {
+    const ocx = yield* HubOcx.pipe(
+      Effect.provide(
+        hubOcxLayer.pipe(
+          Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+          Layer.provide(
+            Layer.mock(ProcessRunner.ProcessRunner)({
+              run: () =>
+                Effect.succeed({
+                  stdout: "",
+                  stderr,
+                  code: ChildProcessSpawner.ExitCode(1),
+                  timedOut: false,
+                  stdoutTruncated: false,
+                  stderrTruncated: false,
+                  stdoutInvalidUtf8: false,
+                  stderrInvalidUtf8: false,
+                }),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(Inventory.OpenCodexInventory)({
+              read: Effect.succeed({
+                ...fleetSnapshot("home"),
+                binaries: [{ path: "/usr/local/bin/ocx", version: "2.98.0" }],
+              }),
+            }),
+          ),
+          Layer.provide(Layer.mock(Dispatch.SshRemoteDispatch)({})),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
+    const output = yield* ocx.home(["link", "status", "--json"], 1_000);
+    expect(output.code).toBe(1);
+    expect(output.forbidden === true).toBe(forbidden);
+  }),
+);

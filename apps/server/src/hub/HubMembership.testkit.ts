@@ -98,6 +98,8 @@ export interface Fixture {
   readonly addExit?: { readonly code: number; readonly phase: string };
   /** OpenCodex pins this GOAT build carries; a test-only Windows row turns Windows on. */
   readonly releases?: OpenCodexReleaseCatalog;
+  /** Home `ocx link status` fails; "forbidden" is OpenCodex's 403 in Hub mode (opencodex#8184). */
+  readonly linkStatus?: "forbidden" | "failed";
 }
 
 export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
@@ -109,13 +111,20 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
   const home = (args: ReadonlyArray<string>): Effect.Effect<OcxOutput, HubOcxError> => {
     calls.push(`home ${args.join(" ")}`);
     const [group, command, alias] = args;
-    if (group === "link" && command === "status")
+    if (group === "link" && command === "status") {
+      if (fixture.linkStatus !== undefined)
+        return Effect.succeed({
+          code: 1,
+          stdout: "",
+          ...(fixture.linkStatus === "forbidden" ? { forbidden: true as const } : {}),
+        });
       return Effect.succeed(
         json({
           role: "home",
           links: [...links].map(([name, id]) => ({ id, alias: name, tunnelPort: 42255 })),
         }),
       );
+    }
     if (command === "probe")
       return Effect.succeed(json({ alias, fingerprint: offered, keyType: "ssh-ed25519" }));
     if (command === "add") {

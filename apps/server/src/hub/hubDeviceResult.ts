@@ -55,3 +55,14 @@ export const hubDeviceResult = (
             next: { after: "approval", call: "goat_hub_device_repair" },
           };
 };
+export const phaseMessage = (phase: string | undefined) =>
+  phase === "remote_platform_unsupported"
+    ? "OpenCodex could not execute Remote Link on this device. Update OpenCodex on Home and check PowerShell on a Windows Child, then retry."
+    : phase === undefined
+      ? "OpenCodex refused the command."
+      : `OpenCodex stopped at ${phase}.`;
+
+export const linkStatusUnreadable = (forbidden: boolean) =>
+  forbidden
+    ? "This machine's OpenCodex answered ocx link status with a link-management 403. OpenCodex does this in Hub mode when the public listener is not loopback (lidge-jun/opencodex#8184); on such a Hub, join devices with transport hub-client."
+    : "This machine's OpenCodex link status is unavailable.";
