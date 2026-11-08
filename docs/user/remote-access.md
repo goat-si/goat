@@ -183,6 +183,11 @@ ran what.
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale
 HTTPS** in **Settings → Connections**. Turn it off there to remove that route.
 
+The desktop app, and `goat serve --tailscale-serve`, re-apply that HTTPS port
+each time they start and keep trying until Tailscale is running, so the address
+stays the same across restarts. A mapping left by `goat pair --tailscale` on
+another port stays until you remove it with `tailscale serve --https=<port> off`.
+
 To start a command-line server with Tailscale HTTPS:
 
 ```bash

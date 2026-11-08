@@ -64,4 +64,18 @@ describe("remoteUnavailableMessage", () => {
       "GOAT on lidge did not answer: certificate has expired",
     );
   });
+
+  it("names the linked URL and how to link it again when nothing is listening", () => {
+    const refused = fetchFailed(coded("ECONNREFUSED"));
+    expect(
+      remoteUnavailableMessage("mac-studio", refused, {
+        url: "https://mac-studio.tailnet.ts.net",
+      }),
+    ).toBe(
+      'Nothing is listening at https://mac-studio.tailnet.ts.net for GOAT on mac-studio. If GOAT there is running, its address changed, for example a different Tailscale HTTPS port; create a pairing link on that machine and link it again with goat_call {path:"host_link.create"}.',
+    );
+    expect(remoteUnavailableMessage("mac-studio", refused)).toBe(
+      'GOAT on mac-studio is not accepting connections; it may be stopped or restarting. goat_call {path:"ssh.host_status"} shows whether its runtime is up.',
+    );
+  });
 });
