@@ -48,25 +48,38 @@ export function withRemoteDeadline(
   return `trap ':' HUP
 (
   trap '' HUP
-  goat_deadline_sleep=
-  trap 'kill "$goat_deadline_sleep" 2>/dev/null; wait "$goat_deadline_sleep" 2>/dev/null; exit 0' TERM
-  goat_deadline_left=${seconds}
-  while [ "$goat_deadline_left" -gt 0 ]; do
+  goat_deadline_sleep=; goat_deadline_stop=
+  # The script ended: stop the running tick and leave. KILL, since a TERM landing between a tick's
+  # fork and exec is lost; a stop before a tick is named is acted on once it is.
+  trap 'if [ -n "$goat_deadline_sleep" ]; then kill -KILL "$goat_deadline_sleep" 2>/dev/null; wait "$goat_deadline_sleep" 2>/dev/null; exit 0; fi; goat_deadline_stop=1' TERM
+  goat_deadline_tick() {
+    [ -z "$goat_deadline_stop" ] || exit 0
     ${sleep} ${CHECK_SECONDS} &
     goat_deadline_sleep=$!
+    if [ -n "$goat_deadline_stop" ]; then kill -KILL "$goat_deadline_sleep" 2>/dev/null; wait "$goat_deadline_sleep" 2>/dev/null; exit 0; fi
     wait "$goat_deadline_sleep"
+    goat_deadline_sleep=
+  }
+  goat_deadline_left=${seconds}
+  while [ "$goat_deadline_left" -gt 0 ]; do
+    goat_deadline_tick
     kill -0 $$ 2>/dev/null || exit 0
     goat_deadline_left=$((goat_deadline_left - ${CHECK_SECONDS}))
   done
   if [ "$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" = "$$" ]; then kill -HUP 0
   else
-    # Freeze each child before reading its children, so none forks or orphans one unseen.
+    # Freeze each child before reading its children, so none forks or orphans one unseen. Git Bash
+    # has no pgrep; its ps lists PID PPID ..., with a status letter in front of some rows.
+    goat_deadline_children() {
+      if command -v pgrep >/dev/null 2>&1; then pgrep -P "$1" 2>/dev/null || true
+      else ps 2>/dev/null | awk -v p="$1" 'NR > 1 { if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 } if ($2 == p) print $1 }'; fi
+    }
     goat_deadline_self="$(exec sh -c 'echo "$PPID"')"
     goat_deadline_tree=
-    for goat_deadline_child in $(pgrep -P $$ 2>/dev/null || true); do
+    for goat_deadline_child in $(goat_deadline_children $$); do
       [ "$goat_deadline_child" != "$goat_deadline_self" ] || continue
       kill -STOP "$goat_deadline_child" 2>/dev/null
-      goat_deadline_tree="$goat_deadline_tree $goat_deadline_child $(pgrep -P "$goat_deadline_child" 2>/dev/null || true)"
+      goat_deadline_tree="$goat_deadline_tree $goat_deadline_child $(goat_deadline_children "$goat_deadline_child")"
     done
     for goat_deadline_child in $goat_deadline_tree; do kill -HUP "$goat_deadline_child" 2>/dev/null; done
     for goat_deadline_child in $goat_deadline_tree; do kill -CONT "$goat_deadline_child" 2>/dev/null; done
@@ -77,9 +90,7 @@ export function withRemoteDeadline(
       # grace, end what is left of its tree.
       goat_deadline_left=${WINDOWS_HANGUP_GRACE_SECONDS}
       while [ "$goat_deadline_left" -gt 0 ] && kill -0 $$ 2>/dev/null; do
-        ${sleep} ${CHECK_SECONDS} &
-        goat_deadline_sleep=$!
-        wait "$goat_deadline_sleep"
+        goat_deadline_tick
         goat_deadline_left=$((goat_deadline_left - ${CHECK_SECONDS}))
       done
       if kill -0 $$ 2>/dev/null && goat_deadline_winpid="$(cat "/proc/$$/winpid" 2>/dev/null)"; then
