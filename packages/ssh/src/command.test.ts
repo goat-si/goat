@@ -3,6 +3,7 @@ import { assert, describe } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -558,15 +559,18 @@ process.stderr.write('reader waiting');`,
           username: "alex",
           port: 2222,
         };
-        const timeOut = (options: Parameters<typeof runSshCommand>[1]) =>
+        const timeOut = (
+          options: Parameters<typeof runSshCommand>[1],
+          diagnostics = 'Authenticated to fixture using "publickey".\n',
+        ) =>
           Effect.gen(function* () {
             const stderrRead = yield* Deferred.make<void>();
             const spawner = lazyChildProcessSpawner(() =>
               Effect.succeed({
                 ...makeNeverFinishingProcess(),
-                stderr: Stream.make(
-                  encoder.encode('Authenticated to fixture using "publickey".\n'),
-                ).pipe(Stream.ensuring(Deferred.succeed(stderrRead, undefined))),
+                stderr: Stream.make(encoder.encode(diagnostics)).pipe(
+                  Stream.ensuring(Deferred.succeed(stderrRead, undefined)),
+                ),
               }),
             );
             const fiber = yield* Effect.forkChild(
@@ -588,7 +592,19 @@ process.stderr.write('reader waiting');`,
           remoteDeadlineSettleMs(75_000),
         );
         assert.isUndefined(yield* timeOut({ remoteCommandArgs: ["goat", "--version"] }));
-        const drop = (stderr: string) =>
+        // A multiplexed session can start before the client prints or reads anything about it.
+        assert.equal(
+          yield* timeOut(
+            {
+              preHostArgs: ["-S", "/tmp/goat-test-master.sock"],
+              remoteCommandArgs: ["sh", "-s"],
+              stdin: "sleep 100\n",
+            },
+            "",
+          ),
+          remoteDeadlineSettleMs(75_000),
+        );
+        const settleOf = (process: ReturnType<typeof makeFailedProcess> | "spawn-failed") =>
           Effect.flip(
             runSshCommand(target, {
               remoteCommandArgs: ["sh", "-s"],
@@ -598,7 +614,16 @@ process.stderr.write('reader waiting');`,
               Effect.provideService(
                 ChildProcessSpawner.ChildProcessSpawner,
                 lazyChildProcessSpawner(() =>
-                  Effect.succeed(makeFailedProcess({ stdout: "", stderr, exitCode: 255 })),
+                  process === "spawn-failed"
+                    ? Effect.fail(
+                        PlatformError.systemError({
+                          _tag: "NotFound",
+                          module: "ChildProcess",
+                          method: "spawn",
+                          description: "ssh not found",
+                        }),
+                      )
+                    : Effect.succeed(process),
                 ),
               ),
             ),
@@ -607,13 +632,36 @@ process.stderr.write('reader waiting');`,
               error instanceof SshCommandError ? error.remoteSettleMs : undefined,
             ),
           );
-        // A connection dropped after authentication leaves the script running the same way.
+        // Once ssh runs, no report it prints proves that no session started, not even one that
+        // reads like a failed connect.
+        for (const stderr of [
+          'Authenticated to fixture using "publickey".\nConnection reset\n',
+          "ssh: connect to host devbox.example.com port 2222: Connection timed out\n",
+          "Connection to devbox.example.com port 2222 timed out\n",
+        ])
+          assert.equal(
+            yield* settleOf(makeFailedProcess({ stdout: "", stderr, exitCode: 255 })),
+            remoteDeadlineSettleMs(75_000),
+          );
+        // Output lost after ssh started leaves the script as unknown as a dropped connection.
         assert.equal(
-          yield* drop('Authenticated to fixture using "publickey".\nConnection reset\n'),
+          yield* settleOf(
+            ChildProcessSpawner.makeHandle({
+              ...makeFailedProcess({ stdout: "", exitCode: 0 }),
+              stdout: Stream.fail(
+                PlatformError.systemError({
+                  _tag: "Unknown",
+                  module: "Stream",
+                  method: "read",
+                  description: "stdout read failed",
+                }),
+              ),
+            }),
+          ),
           remoteDeadlineSettleMs(75_000),
         );
-        // Without authentication ssh never asked for a session, so no script outlives it.
-        assert.isUndefined(yield* drop("Connection to devbox.example.com port 2222 timed out\n"));
+        // Only an ssh that never started proves no script did.
+        assert.isUndefined(yield* settleOf("spawn-failed"));
       }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer()))),
   );
 });

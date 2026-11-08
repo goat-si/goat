@@ -121,4 +121,26 @@ describe("SSH preparation retry policy", () => {
       yield* Scope.close(scope, Exit.void);
     }),
   );
+  it.effect("never starts another attempt after one was interrupted", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      let attempts = 0;
+      const retries = makePreparationRetries({
+        scope,
+        wanted: () => true,
+        attempt: () =>
+          Effect.suspend(() => {
+            attempts++;
+            return Effect.interrupt;
+          }),
+      });
+      yield* retries.failed("devbox", 1, timedOut, uploadTarget);
+      yield* TestClock.adjust("2 seconds");
+      assert.equal(attempts, 1);
+      // An interrupted request carries no typed failure to retry.
+      yield* TestClock.adjust("10 minutes");
+      assert.equal(attempts, 1);
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
 });
