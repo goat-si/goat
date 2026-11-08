@@ -23,6 +23,7 @@ export interface UndeliveredSourceRow {
   readonly kind: string;
   readonly destination_kind: string;
   readonly message_json: string;
+  readonly last_error_code: string | null;
 }
 
 const present = (value: string | null | undefined) =>
@@ -30,11 +31,18 @@ const present = (value: string | null | undefined) =>
 
 const placeName = (kind: string) => (kind === "imessage" ? "iMessage" : "Slack");
 
-const copyText = (outcome: "failed" | "ambiguous", place: string, text: string) => {
+const copyText = (
+  outcome: "failed" | "ambiguous",
+  place: string,
+  text: string,
+  lastErrorCode: string | null,
+) => {
   const lead =
     outcome === "failed"
       ? `This reply didn't reach ${place}:`
-      : `This reply may not have reached ${place} (GOAT stopped while sending it):`;
+      : lastErrorCode === "interrupted"
+        ? `This reply may not have reached ${place} (GOAT stopped while sending it):`
+        : `This reply may not have reached ${place}:`;
   return `${lead}\n\n${text}`;
 };
 
@@ -101,7 +109,7 @@ const writeCopy = Effect.fn("channelUndeliveredReplies.write")(function* (
       threadId: bot.bot.threadId,
     },
     kind: "failure",
-    text: copyText(outcome, placeName(row.destination_kind), message.text),
+    text: copyText(outcome, placeName(row.destination_kind), message.text, row.last_error_code),
     replyTo,
   });
   yield* sql`
