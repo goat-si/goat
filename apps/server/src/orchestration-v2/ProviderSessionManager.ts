@@ -21,7 +21,6 @@ import {
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
-  OrchestrationV2RuntimeRequest,
   ProviderInstanceId,
   type ProviderInteractionMode,
   ProviderSessionId,
@@ -79,6 +78,13 @@ import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { makeScopeCloser, type ReopenLatch } from "./ProviderSessionScopeClose.ts";
+import * as Retirement from "./ProviderSessionRetirement.ts";
+import {
+  providerThreadLoadKey,
+  releasedRuntimeRequestStatusFor,
+  releaseStatusFor,
+  sessionKey,
+} from "./ProviderSessionKeys.ts";
 import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
 import { instanceUrlOpener } from "../urlOpener/UrlOpenerShim.ts";
 
@@ -296,6 +302,8 @@ interface LiveSessionEntry {
   /** Scope revocation to recorded credential ids so superseded sessions cannot revoke replacements opened before detach. */
   readonly mcpCredentialIdByThread: ReadonlyMap<ThreadId, string>;
   readonly supportsMultipleProviderThreads: boolean;
+  readonly sessionConfigKey: string | undefined;
+  readonly retiring: boolean;
   readonly runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime;
   readonly exposedRuntime: ProviderAdapter.ProviderAdapterV2SessionRuntime;
   readonly eventSubscribers: Ref.Ref<
@@ -331,47 +339,6 @@ export interface ProviderSessionManagerV2LayerOptions {
   readonly configureMcp?: boolean;
   /** Test barrier after activity/removal updates, before awaiting idle-fiber interruption. */
   readonly beforeIdleFiberInterrupt?: Effect.Effect<void>;
-}
-
-function releaseStatusFor(
-  reason: ProviderSessionReleaseReason,
-): OrchestrationV2ProviderSession["status"] {
-  return reason === "runtime_error" ? "error" : "stopped";
-}
-
-function releasedRuntimeRequestStatusFor(
-  reason: ProviderSessionReleaseReason,
-): OrchestrationV2RuntimeRequest["status"] {
-  return reason === "manual_shutdown" || reason === "server_shutdown" ? "cancelled" : "expired";
-}
-
-function sessionKey(providerSessionId: ProviderSessionId): string {
-  return String(providerSessionId);
-}
-
-function providerThreadRuntimeKey(
-  providerThread: Parameters<
-    ProviderAdapter.ProviderAdapterV2SessionRuntime["resumeThread"]
-  >[0]["providerThread"],
-): string {
-  const nativeThreadRef = providerThread.nativeThreadRef;
-  return nativeThreadRef === null
-    ? String(providerThread.id)
-    : `${nativeThreadRef.driver}:${nativeThreadRef.nativeId}`;
-}
-
-function providerThreadLoadKey(input: {
-  readonly providerThread: Parameters<
-    ProviderAdapter.ProviderAdapterV2SessionRuntime["resumeThread"]
-  >[0]["providerThread"];
-  readonly modelSelection?: ModelSelection;
-  readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-}): string {
-  return JSON.stringify({
-    providerThread: providerThreadRuntimeKey(input.providerThread),
-    modelSelection: input.modelSelection ?? null,
-    runtimePolicy: input.runtimePolicy ?? null,
-  });
 }
 
 export const layerWithOptions = (
@@ -1493,7 +1460,7 @@ export const layerWithOptions = (
                 );
           const now = yield* Clock.currentTimeMillis;
           const pinnedSinceMs = entry.pinnedSinceMs ?? now;
-          const pastPinCeiling = now - pinnedSinceMs >= maxIdlePinMs;
+          const pastPinCeiling = entry.retiring || now - pinnedSinceMs >= maxIdlePinMs;
           // Live work holds past the ceiling; a probe that cannot answer counts as held.
           const held =
             (!hasPendingWork || pastPinCeiling) &&
@@ -1527,7 +1494,9 @@ export const layerWithOptions = (
                 { providerSessionId: input.providerSessionId, pinnedForMs: now - pinnedSinceMs },
               );
               // Recheck on this fiber; scheduleIdleReleaseInternal would interrupt it and self-deadlock.
-              yield* Effect.sleep(Duration.millis(idleTimeoutMs));
+              yield* Effect.sleep(
+                Duration.millis(entry.retiring ? Retirement.RETIRE_PROBE_MS : idleTimeoutMs),
+              );
               return yield* releaseIfStillIdle(input);
             }
             yield* Effect.logWarning("orchestration-v2.driver-session.idle-release-pin-expired", {
@@ -1539,6 +1508,7 @@ export const layerWithOptions = (
           yield* releaseEntry({
             providerSessionId: input.providerSessionId,
             reason: "idle_timeout",
+            ...(entry.retiring ? { detail: Retirement.RETIRED_DETAIL } : {}),
             cancelIdleFiber: false,
             onlyIfIdleGeneration: input.generation,
           }).pipe(
@@ -1584,7 +1554,8 @@ export const layerWithOptions = (
 
         yield* cancelIdleFiber(entry.idleFiber);
         const generation = entry.idleGeneration + 1;
-        const idleFiber = yield* Effect.sleep(Duration.millis(idleTimeoutMs)).pipe(
+        const delay = entry.retiring ? Retirement.RETIRE_PROBE_MS : idleTimeoutMs;
+        const idleFiber = yield* Effect.sleep(Duration.millis(delay)).pipe(
           Effect.andThen(releaseIfStillIdle({ providerSessionId, generation })),
           Effect.forkIn(layerScope),
         );
@@ -1608,6 +1579,20 @@ export const layerWithOptions = (
 
       const scheduleIdleRelease = (providerSessionId: ProviderSessionId) =>
         withActivityError(providerSessionId, scheduleIdleReleaseInternal(providerSessionId));
+      const retirement = Retirement.make({
+        sessions,
+        adapters: registry,
+        release: (providerSessionId) =>
+          releaseEntry({
+            providerSessionId,
+            reason: "idle_timeout",
+            detail: Retirement.RETIRED_DETAIL,
+            keepIfBusyOtherThan: [],
+          }),
+        reschedule: scheduleIdleReleaseInternal,
+        withOpenLock: sessionOpen.withLock,
+      });
+      yield* retirement.follow(layerScope);
 
       const touchActivity = (
         providerSessionId: ProviderSessionId,
@@ -2623,10 +2608,22 @@ export const layerWithOptions = (
                   }
                 }
                 const key = sessionKey(input.providerSessionId);
-                const settled = yield* awaitReopen(
+                const settle = awaitReopen(
                   key,
                   Ref.get(sessions).pipe(Effect.map((current) => current.get(key))),
                 );
+                let settled = yield* settle;
+                const stale = Option.getOrUndefined(settled);
+                if (stale !== undefined) {
+                  const retired = yield* retirement.retireIfStale(input.providerSessionId);
+                  if (retired === "released") settled = yield* settle;
+                  else if (retired === "retiring" && !stale.busyTurnByThread.has(input.threadId))
+                    return yield* new ProviderSessionOpenError({
+                      instanceId: input.modelSelection.instanceId,
+                      providerSessionId: input.providerSessionId,
+                      cause: Retirement.restartRequired(stale.busyTurns.size),
+                    });
+                }
                 if (Option.isNone(settled))
                   return yield* new ProviderSessionOpenError({
                     instanceId: input.modelSelection.instanceId,
@@ -2778,6 +2775,8 @@ export const layerWithOptions = (
                     supportsMultipleProviderThreads:
                       runtime.providerSession.capabilities.sessions
                         .supportsMultipleProviderThreadsPerSession,
+                    sessionConfigKey: adapter.sessionConfigKey,
+                    retiring: false,
                     runtime,
                     exposedRuntime,
                     eventSubscribers,

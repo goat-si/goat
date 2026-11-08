@@ -1,0 +1,120 @@
+import type { ProviderInstanceId, ProviderSessionId } from "@goat/contracts";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+
+/** How often a retiring session rechecks its work; it stops within one probe after the work ends. */
+export const RETIRE_PROBE_MS = 5_000;
+export const RETIRED_DETAIL = "The provider's settings changed; its process restarts with them.";
+
+/** Why a turn cannot start on a process that still runs work under the previous settings. */
+export const restartRequired = (runningTurns: number) =>
+  `This provider's settings changed. GOAT restarts it with the new settings once the work still running on its current process finishes (${
+    runningTurns === 0
+      ? "an active goal or subagent"
+      : `${runningTurns} running turn${runningTurns === 1 ? "" : "s"}`
+  }). Stop that work to restart now, then try again.`;
+
+export interface RetirableSession {
+  /** The opening adapter's settings key; sessions of adapters without one never retire. */
+  readonly sessionConfigKey: string | undefined;
+  readonly retiring: boolean;
+  readonly busyTurns: ReadonlySet<string>;
+  readonly runtime: Pick<
+    ProviderAdapter.ProviderAdapterV2SessionRuntime,
+    "instanceId" | "providerSessionId" | "holdsLiveWork"
+  >;
+}
+
+export type Retirement = "current" | "released" | "retiring";
+
+/**
+ * Retires sessions opened under provider settings that have since changed: a session with nothing
+ * running is released, one still running work is marked so it stops within a probe after the work
+ * ends, and turns that would add work to it are refused by the caller.
+ */
+export const make = <Entry extends RetirableSession>(input: {
+  readonly sessions: Ref.Ref<Map<string, Entry>>;
+  readonly adapters: {
+    readonly get: (
+      instanceId: ProviderInstanceId,
+    ) => Effect.Effect<{ readonly sessionConfigKey?: string | undefined }, unknown>;
+  };
+  /** Releases unless a turn is busy on the session. */
+  readonly release: (providerSessionId: ProviderSessionId) => Effect.Effect<void, unknown>;
+  readonly reschedule: (providerSessionId: ProviderSessionId) => Effect.Effect<void, unknown>;
+  readonly withOpenLock: <A, E, R>(
+    providerSessionId: ProviderSessionId,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
+}) => {
+  const logged = (providerSessionId: ProviderSessionId) =>
+    Effect.catchCause((cause) =>
+      Effect.logWarning("orchestration-v2.driver-session.retire-failed", {
+        providerSessionId,
+        cause,
+      }),
+    );
+  const setRetiring = (key: string, retiring: boolean) =>
+    Ref.update(input.sessions, (current) => {
+      const latest = current.get(key);
+      if (latest === undefined) return current;
+      return new Map(current).set(key, { ...latest, retiring });
+    });
+
+  /** The caller holds the session's open lock. */
+  const retireIfStale = Effect.fn("ProviderSessionRetirement.retireIfStale")(function* (
+    providerSessionId: ProviderSessionId,
+  ) {
+    const key = String(providerSessionId);
+    const entry = (yield* Ref.get(input.sessions)).get(key);
+    if (entry === undefined) return "released" as Retirement;
+    if (entry.sessionConfigKey === undefined) return "current";
+    const current = yield* input.adapters.get(entry.runtime.instanceId).pipe(Effect.option);
+    const stale =
+      Option.isNone(current) || current.value.sessionConfigKey !== entry.sessionConfigKey;
+    if (stale !== entry.retiring) {
+      yield* setRetiring(key, stale);
+      // Clearing goes back to the normal idle wait; setting starts the probe.
+      yield* input.reschedule(providerSessionId).pipe(logged(providerSessionId));
+    }
+    if (!stale) return "current";
+    if (entry.busyTurns.size > 0) return "retiring";
+    const held =
+      entry.runtime.holdsLiveWork !== undefined &&
+      (yield* entry.runtime
+        .holdsLiveWork({ pastPinCeiling: true })
+        .pipe(Effect.catchCause(() => Effect.succeed(true))));
+    if (held) return "retiring";
+    yield* input.release(providerSessionId).pipe(logged(providerSessionId));
+    return (yield* Ref.get(input.sessions)).has(key) ? "retiring" : "released";
+  });
+
+  /** Rechecks every live session whenever provider instances change. */
+  const follow = Effect.fn("ProviderSessionRetirement.follow")(function* (scope: Scope.Scope) {
+    // Absent only in test assemblies; open still retires stale sessions it meets.
+    const instances = yield* Effect.serviceOption(
+      ProviderInstanceRegistry.ProviderInstanceRegistry,
+    );
+    if (Option.isNone(instances)) return;
+    const subscription = yield* instances.value.subscribeChanges.pipe(Scope.provide(scope));
+    const retireAll = Effect.gen(function* () {
+      for (const entry of (yield* Ref.get(input.sessions)).values()) {
+        const providerSessionId = entry.runtime.providerSessionId;
+        yield* input.withOpenLock(providerSessionId, retireIfStale(providerSessionId));
+      }
+    });
+    yield* PubSub.take(subscription).pipe(
+      Effect.andThen(retireAll),
+      Effect.forever,
+      Effect.forkIn(scope),
+    );
+  });
+
+  return { retireIfStale, follow };
+};
