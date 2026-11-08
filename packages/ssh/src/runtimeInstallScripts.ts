@@ -58,7 +58,7 @@ export const REMOTE_RUNTIME_PUBLISH_SCRIPT = `  GOAT_PUBLISH_ATTEMPTS=1
   until GOAT_PUBLISH_ERROR="$({ rm -rf "$GOAT_RUNTIME_DIR" && [ ! -e "$GOAT_RUNTIME_DIR" ] && [ ! -L "$GOAT_RUNTIME_DIR" ] && mv "$GOAT_STAGING" "$GOAT_RUNTIME_DIR"; } 2>&1)"; do
     if [ "$GOAT_PUBLISH_ATTEMPT" -ge "$GOAT_PUBLISH_ATTEMPTS" ]; then
       printf '%s\\n' "\${GOAT_PUBLISH_ERROR:-Could not remove the previous GOAT runtime at $GOAT_RUNTIME_DIR.}" >&2
-      [ "$GOAT_PLATFORM" != win32 ] || printf 'Windows kept a file in the new GOAT runtime open for about %s seconds. Antivirus scanning the new goat.exe is the usual cause: exclude %s from real-time scanning, then try again.\\n' "$GOAT_PUBLISH_ATTEMPTS" '%USERPROFILE%\\.goat\\runtime' >&2
+      [ "$GOAT_PLATFORM" != win32 ] || [ -e "$GOAT_RUNTIME_DIR" ] || printf 'Windows kept a file in the new GOAT runtime open for about %s seconds. Antivirus scanning the new goat.exe is the usual cause: exclude %s from real-time scanning, then try again.\\n' "$GOAT_PUBLISH_ATTEMPTS" '%USERPROFILE%\\.goat\\runtime' >&2
       exit 1
     fi
     sleep 1

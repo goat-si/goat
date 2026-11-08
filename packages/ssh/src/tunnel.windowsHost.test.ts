@@ -507,6 +507,8 @@ exec '${realBinary("mv")}' "$@"`;
       });
       assert.equal(result.status, 1);
       assert.notInclude((yield* lines("mv-calls")).join("\n"), ".staging-");
+      assert.include(result.stderr, "Could not remove the previous GOAT runtime");
+      assert.notInclude(result.stderr, "real-time scanning");
       assert.notInclude((yield* fs.readDirectory(runtimeDir)).join("\n"), ".staging-");
       assert.lengthOf(yield* lines("sleeps"), REMOTE_RUNTIME_PUBLISH_ATTEMPTS - 1);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
