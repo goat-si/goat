@@ -32,6 +32,16 @@ Running `codex login` does not change a managed ChatGPT connection. In
 **Settings → Providers**, add a Codex instance, choose **Configure manually**,
 and complete the wizard. Then select that instance from the thread’s model picker.
 
+## Change an instance's settings
+
+Changing a Codex instance's binary path, launch arguments, environment,
+CODEX_HOME or shadow home path, route or Home authentication, or turning the
+instance off, restarts its Codex process. GOAT restarts it at once when nothing
+is running on it. Otherwise running turns, goals and subagents finish on the
+current process first, and until they do a new turn on that instance stops with
+a message; stop that work to restart sooner. Editing custom models does not
+restart Codex.
+
 ## Use OpenCodex Home
 
 OpenCodex Home keeps your provider accounts on one machine and relays model
@@ -86,8 +96,8 @@ for the result; approval alone does not mean the route works or the Child is
 Ready. If the request expired or the instance changed while you reviewed it,
 ask the agent to request approval again.
 
-End this instance's active sessions and turns before changing its route or
-Home authentication.
+Changing the route or Home authentication restarts the instance's Codex process;
+see [Change an instance's settings](#change-an-instances-settings).
 
 [Claude Code](./providers-claude.md#use-opencodex-home),
 [OpenCode](./providers-opencode.md#use-opencodex-home), and

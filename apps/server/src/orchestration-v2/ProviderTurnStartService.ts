@@ -1,3 +1,4 @@
+import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
 export { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
 import { isRegisteredAttach, nativeForkTurns } from "./providerTurnStartHelpers.ts";
@@ -799,7 +800,9 @@ export const layer: Layer.Layer<
           "cause" in failure &&
           isProviderAdapterOpenSessionError(failure.cause) &&
           failure.cause.requiresSignIn === true;
-        if (input.willRetry === true && !requiresSignIn) return yield* failure;
+        // Retrying cannot clear a refusal that waits for running work to finish.
+        if (input.willRetry === true && !requiresSignIn && restartRequiredIn(failure) === undefined)
+          return yield* failure;
         yield* settleStartFailure({
           signal: "provider-session-open-failure",
           title: "Provider session failed to open",
