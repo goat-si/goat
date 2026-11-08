@@ -130,4 +130,68 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
       }
     },
   );
+  it.each(
+    ["dash", "bash"].flatMap((shell) =>
+      [true, false].map((trapsHangup) => ({ shell, trapsHangup })),
+    ),
+  )(
+    "on Windows hangs up first and force-ends the tree only when the script outlives the grace ($shell, traps hang-up: $trapsHangup)",
+    async ({ shell, trapsHangup }) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+      try {
+        const bin = NodePath.join(dir, "bin");
+        NodeFS.mkdirSync(bin);
+        for (const fifo of ["gate", "block", "never"])
+          NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
+        const shims: Record<string, string> = {
+          uname: "echo MINGW64_NT-10.0-26200",
+          cat: 'case "$1" in /proc/*/winpid) echo 4242 ;; *) exec /bin/cat "$@" ;; esac',
+          // Records the forced end and, standing in for it, releases the script.
+          "taskkill.exe":
+            'echo "$*" >> "$GOAT_TEST_DIR/taskkill"\nprintf x > "$GOAT_TEST_DIR/block"',
+          // Tick 1 waits until the script is stuck; the deadline's other ticks pass at once. Grace
+          // ticks never pass for a script that ends on hang-up, so only its exit can end them.
+          sleep: [
+            'n=$(($(/bin/cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
+            'if [ "$n" = 1 ]; then exec /bin/cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
+            'if [ "$n" -gt 3 ] && [ "$GOAT_TEST_GRACE" = hold ]; then exec /bin/cat "$GOAT_TEST_DIR/never"; fi',
+          ].join("\n"),
+        };
+        for (const [name, body] of Object.entries(shims))
+          NodeFS.writeFileSync(NodePath.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+        const body = [
+          trapsHangup ? "trap 'exit 129' HUP" : "trap '' HUP",
+          "trap 'echo cleaned > \"$1/cleaned\"' EXIT",
+          'printf go > "$1/gate"',
+          '/bin/cat "$1/block" >/dev/null',
+        ].join("\n");
+        const code = await new Promise<number | null>((resolve, reject) => {
+          const child = NodeChildProcess.spawn(shell, ["-s", "--", dir], {
+            env: {
+              ...process.env,
+              PATH: `${bin}:${process.env.PATH ?? ""}`,
+              GOAT_TEST_DIR: dir,
+              GOAT_TEST_GRACE: trapsHangup ? "hold" : "pass",
+            },
+            stdio: ["pipe", "ignore", "inherit"],
+          });
+          child.once("error", reject);
+          child.once("close", (exit, signal) => resolve(exit ?? (signal === null ? null : 128)));
+          child.stdin.end(withRemoteDeadline(body, 1_000, NodePath.join(bin, "sleep")));
+        });
+        expect(NodeFS.readFileSync(NodePath.join(dir, "cleaned"), "utf8")).toBe("cleaned\n");
+        if (trapsHangup) {
+          expect(code).toBe(129);
+          // The script released its locks itself; nothing forced it.
+          expect(NodeFS.existsSync(NodePath.join(dir, "taskkill"))).toBe(false);
+        } else {
+          expect(NodeFS.readFileSync(NodePath.join(dir, "taskkill"), "utf8")).toBe(
+            "/PID 4242 /T /F\n",
+          );
+        }
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });

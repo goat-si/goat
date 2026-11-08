@@ -7,6 +7,7 @@ const GRACE_SECONDS = 5;
 const CHECK_SECONDS = 2;
 // sshd starts the shell for a request the client sent before it gave up; this covers that delay.
 const START_SLACK_SECONDS = 5;
+const WINDOWS_HANGUP_GRACE_SECONDS = 10;
 
 /** `sh [-l] -s [-- args]`: the script arrives on stdin. Uploads (`sh -c`) stream data instead. */
 export function isRemoteShellScript(args: ReadonlyArray<string> | undefined) {
@@ -22,7 +23,14 @@ export function isRemoteShellScript(args: ReadonlyArray<string> | undefined) {
  * recovery stay what makes overlap safe.
  */
 export function remoteDeadlineSettleMs(timeoutMs: number) {
-  return (Math.ceil(timeoutMs / 1000) + GRACE_SECONDS + CHECK_SECONDS + START_SLACK_SECONDS) * 1000;
+  return (
+    (Math.ceil(timeoutMs / 1000) +
+      GRACE_SECONDS +
+      CHECK_SECONDS +
+      START_SLACK_SECONDS +
+      WINDOWS_HANGUP_GRACE_SECONDS) *
+    1000
+  );
 }
 
 /**
@@ -50,25 +58,34 @@ export function withRemoteDeadline(
     kill -0 $$ 2>/dev/null || exit 0
     goat_deadline_left=$((goat_deadline_left - ${CHECK_SECONDS}))
   done
+  if [ "$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" = "$$" ]; then kill -HUP 0
+  else
+    # Freeze each child before reading its children, so none forks or orphans one unseen.
+    goat_deadline_self="$(exec sh -c 'echo "$PPID"')"
+    goat_deadline_tree=
+    for goat_deadline_child in $(pgrep -P $$ 2>/dev/null || true); do
+      [ "$goat_deadline_child" != "$goat_deadline_self" ] || continue
+      kill -STOP "$goat_deadline_child" 2>/dev/null
+      goat_deadline_tree="$goat_deadline_tree $goat_deadline_child $(pgrep -P "$goat_deadline_child" 2>/dev/null || true)"
+    done
+    for goat_deadline_child in $goat_deadline_tree; do kill -HUP "$goat_deadline_child" 2>/dev/null; done
+    for goat_deadline_child in $goat_deadline_tree; do kill -CONT "$goat_deadline_child" 2>/dev/null; done
+  fi
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
-      # Native goat.exe children are Windows processes; end the script's whole tree.
-      if goat_deadline_winpid="$(cat "/proc/$$/winpid" 2>/dev/null)"; then
+      # Native goat.exe children can ignore the hang-up. After the script's own cleanup had its
+      # grace, end what is left of its tree.
+      goat_deadline_left=${WINDOWS_HANGUP_GRACE_SECONDS}
+      while [ "$goat_deadline_left" -gt 0 ] && kill -0 $$ 2>/dev/null; do
+        ${sleep} ${CHECK_SECONDS} &
+        goat_deadline_sleep=$!
+        wait "$goat_deadline_sleep"
+        goat_deadline_left=$((goat_deadline_left - ${CHECK_SECONDS}))
+      done
+      if kill -0 $$ 2>/dev/null && goat_deadline_winpid="$(cat "/proc/$$/winpid" 2>/dev/null)"; then
         MSYS2_ARG_CONV_EXCL='*' taskkill.exe /PID "$goat_deadline_winpid" /T /F >/dev/null 2>&1
       fi ;;
   esac
-  if [ "$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" = "$$" ]; then kill -HUP 0
-  else
-    # Read the tree before anything exits: the script subshell and its children, which a
-    # trapping shell waits for.
-    goat_deadline_children="$(pgrep -P $$ 2>/dev/null || true)"
-    goat_deadline_tree="$goat_deadline_children"
-    for goat_deadline_child in $goat_deadline_children; do
-      goat_deadline_tree="$goat_deadline_tree $(pgrep -P "$goat_deadline_child" 2>/dev/null || true)"
-    done
-    kill -HUP $$ 2>/dev/null
-    for goat_deadline_child in $goat_deadline_tree; do kill -HUP "$goat_deadline_child" 2>/dev/null; done
-  fi
 ) >/dev/null 2>&1 </dev/null &
 goat_deadline_watchdog=$!
 (
