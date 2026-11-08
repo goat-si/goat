@@ -2,6 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
 import {
+  AcpRegistryListSessionsInput,
+  AcpRegistryListSessionsResult,
   AcpRegistryManagedBinaryUninstallInput,
   AcpRegistryManagedBinaryUninstallResult,
   officialAcpRegistryIconUrlForAgentId,
@@ -10,6 +12,16 @@ import {
 
 const decodeUninstallInput = Schema.decodeUnknownSync(AcpRegistryManagedBinaryUninstallInput);
 const decodeUninstallResult = Schema.decodeUnknownSync(AcpRegistryManagedBinaryUninstallResult);
+const decodeListInput = Schema.decodeUnknownSync(AcpRegistryListSessionsInput);
+const decodeListResult = Schema.decodeUnknownSync(AcpRegistryListSessionsResult);
+const listIdentity = { instanceId: "acp-fixture", projectId: "project-fixture" };
+const listResult = {
+  sessions: [],
+  nextCursor: null,
+  canLoad: true,
+  canResume: false,
+  canDelete: false,
+};
 
 describe("ACP Registry contracts", () => {
   it("accepts only official Registry icon URLs and safe agent IDs", () => {
@@ -43,5 +55,23 @@ describe("ACP Registry contracts", () => {
       removed: false,
     });
     expect(() => decodeUninstallInput({ agentId: "../example-agent" })).toThrow();
+  });
+
+  it("accepts a continuation token and keeps it absent rather than null", () => {
+    const token = "a".repeat(16);
+    expect(decodeListInput({ ...listIdentity, continuation: token }).continuation).toBe(token);
+    expect(decodeListInput(listIdentity).continuation).toBeUndefined();
+    expect(decodeListResult({ ...listResult, continuation: "B".repeat(64) }).continuation).toBe(
+      "B".repeat(64),
+    );
+    expect(decodeListResult(listResult).continuation).toBeUndefined();
+  });
+
+  it("rejects malformed continuation tokens", () => {
+    expect(() => decodeListInput({ ...listIdentity, continuation: "a".repeat(15) })).toThrow();
+    expect(() => decodeListInput({ ...listIdentity, continuation: "a".repeat(65) })).toThrow();
+    expect(() => decodeListInput({ ...listIdentity, continuation: "bad token-value!!" })).toThrow();
+    expect(() => decodeListInput({ ...listIdentity, continuation: null })).toThrow();
+    expect(() => decodeListResult({ ...listResult, continuation: "has space" })).toThrow();
   });
 });

@@ -19,11 +19,13 @@ export function GoatBotNewBotDialog({
   canSubmit,
   onCreated,
   onClose,
+  mainName = "GOAT Bot",
 }: {
   readonly environmentId: EnvironmentId;
   readonly canSubmit: boolean;
   readonly onCreated: (bot: BotProfile) => void;
   readonly onClose: () => void;
+  readonly mainName?: string;
 }) {
   const [clientRequestId] = useState(randomUUID);
   const [model, setModel] = useState<ModelSelection | null>(null);
@@ -50,7 +52,12 @@ export function GoatBotNewBotDialog({
         return null;
       }}
     >
-      <NewBotModel environmentId={environmentId} model={model} onChange={setModel} />
+      <NewBotModel
+        environmentId={environmentId}
+        model={model}
+        onChange={setModel}
+        mainName={mainName}
+      />
     </GoatBotProfileDialog>
   );
 }
@@ -59,10 +66,12 @@ function NewBotModel({
   environmentId,
   model,
   onChange,
+  mainName,
 }: {
   readonly environmentId: EnvironmentId;
   readonly model: ModelSelection | null;
   readonly onChange: (model: ModelSelection) => void;
+  readonly mainName: string;
 }) {
   const { selection, entries, options } = useGoatBotModel(environmentId);
   const shown = model ?? selection;
@@ -87,7 +96,7 @@ function NewBotModel({
           }
         />
         {model === null ? (
-          <span className="text-xs text-muted-foreground">Same as GOAT Bot</span>
+          <span className="text-xs text-muted-foreground">Same as {mainName}</span>
         ) : null}
       </div>
     </div>

@@ -3,6 +3,7 @@ import {
   goatBotActivity,
   goatBotStampParts,
   goatBotReceiptLabel,
+  goatBotRejectionText,
   type GoatBotActivity,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
@@ -264,7 +265,7 @@ export function GoatBotTimeline({
                     </div>
                     {delivery.state === "failed" ? (
                       <div className="mt-1 flex items-center gap-2 text-xs leading-4 font-medium text-destructive-foreground">
-                        <span>{delivery.rejectionReason ?? "Not Delivered"}</span>
+                        <span>{goatBotRejectionText(delivery.rejectionReason, botName)}</span>
                         {onDiscard ? (
                           <button type="button" onClick={() => onDiscard(delivery.clientKey)}>
                             Discard

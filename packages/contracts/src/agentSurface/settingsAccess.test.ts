@@ -82,4 +82,19 @@ describe("settings access", () => {
     ]);
     for (const path of paths) expect(entryAt(path)?.listing, path).toBeUndefined();
   });
+
+  it("keeps memory administration writes for outside MCP clients", () => {
+    for (const path of [
+      "memory.settings_update",
+      "memory.hub_disable",
+      "memory.hub_reconcile",
+      "memory.report_attempts_reset",
+    ] as const) {
+      const entry = entryAt(path);
+      expect({ requires: entry?.requires, capability: entry?.capability }, path).toEqual({
+        requires: "client",
+        capability: "none",
+      });
+    }
+  });
 });

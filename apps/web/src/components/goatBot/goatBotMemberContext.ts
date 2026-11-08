@@ -19,6 +19,11 @@ export function useGoatBotName(): string {
   return goatBotName(member ?? main);
 }
 
+/** The main bot's name, for text about the main bot even inside a member's chat. */
+export function useGoatBotMainName(): string {
+  return goatBotName(useContext(GoatBotMainProfileContext));
+}
+
 /** The open chat's bot avatar: the member's, else the main bot's; null draws the face. */
 export function useGoatBotAvatar(): string | null {
   const member = useContext(GoatBotMemberContext);

@@ -1,11 +1,14 @@
 name: goat-ci
 
-# goat fork CI; every upstream workflow is disabled. Every job runs on GitHub-hosted runners:
-# ubuntu-24.04, and windows-2025 for test-windows (#1385). The EPYC self-hosted pool (goat-epyc-01..24)
-# lived on a client's machine and was retired; the steps below still branch on RUNNER_ENVIRONMENT so
-# a self-hosted pool can return without rewriting them. goat-ci skips fork pull requests for now.
-# The pre-push guard pins the runs-on values. A step that needs sudo relies on the hosted VM being
-# discarded after the job.
+# goat fork CI; every upstream workflow is disabled. The short hosted matrix tasks run on
+# GitHub-hosted ubuntu-24.04, and test-windows on windows-2025 (#1385). On a manual run or a
+# same-repository pull request, the heavy linux tasks and the gate jobs (goat-scope,
+# goat-screenshot-gate, goat-ci-result) go to the lidge pool: ephemeral runners that a scaler
+# creates on one self-hosted Ryzen 9950X3D box for trusted runs only, so a starved hosted queue
+# cannot hold back a run's start or verdict. The gate jobs need only Node and git. The repository
+# variable LIDGE_RUNNERS=on enables it; off or unset sends those jobs to ubuntu-24.04. goat-ci skips
+# fork pull requests for now. The pre-push guard pins the runs-on values. A step that needs sudo
+# relies on the hosted VM being discarded after the job.
 #
 # A pull request, draft or ready, gets a quick run: the goat-scope job reads the diff
 # (.github/scripts/goat-ci-scope.cjs) and hands ci check, typecheck, and test-changed, the test files
@@ -66,7 +69,7 @@ jobs:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-scope' || 'goat-ci (event ignored)' }}
     # Fork pull requests do not run goat-ci yet; a maintainer runs it on a copy of the branch.
     if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-24.04' }}
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.scope.outputs.matrix }}
@@ -109,7 +112,7 @@ jobs:
   ci:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && format('goat-{0}', matrix.title) || 'goat-ci (event ignored)' }}
     needs: scope
-    runs-on: ${{ matrix.runner == 'windows' && 'windows-2025' || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.runner == 'windows' && 'windows-2025' || (matrix.runner == 'linux' && vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-24.04' }}
     timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || matrix.task == 'test-windows' && 30 || 60 }}
     strategy:
       fail-fast: false
@@ -139,9 +142,9 @@ jobs:
           cache: ${{ runner.environment == 'github-hosted' }}
           run-install: true
 
-      # The retired EPYC runners' .env gave each runner its own HOME, so Vite+, Node, pnpm, Electron and
-      # Playwright caches persisted without two concurrent jobs sharing them. They ran Ubuntu 26.04,
-      # which Playwright 1.60 does not recognize, so they installed and launched its 24.04 build.
+      # Each lidge runner gets its own HOME, so Vite+, Node, pnpm, Electron and Playwright caches are
+      # never shared by two concurrent jobs. The box runs Ubuntu 26.04, which Playwright 1.60 does
+      # not recognize, so it installs and launches the 24.04 build.
       # The self-hosted branch is inert on hosted runners.
       # Steps the Windows job runs set shell: bash (Git Bash there), since its default is PowerShell.
       - name: Toolchain
@@ -484,7 +487,7 @@ jobs:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-screenshot-gate' || 'goat-ci (event ignored)' }}
     # It reads the pull request, so a manual run has nothing to inspect.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-24.04' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -552,7 +555,7 @@ jobs:
     needs: [scope, ci, screenshot-gate, connect-auth-postgres]
     # Runs when a task failed too, so the failure lands on this check; a superseded run stays cancelled.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Require every selected task

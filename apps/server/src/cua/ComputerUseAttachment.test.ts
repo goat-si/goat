@@ -174,7 +174,10 @@ const input = (
 });
 
 const allowFullAccess = (allow: boolean) =>
-  ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: allow });
+  ServerSettings.ServerSettingsService.layerTest({
+    cuaFullAccessAutoAdmit: allow,
+    cuaStrictInputGuards: true,
+  });
 
 const decide = (
   driver: ReturnType<typeof fakeDriver>,
@@ -447,6 +450,32 @@ describe("computerUseAttachment", () => {
         assert.deepEqual(leases.everyApp, [
           origin._tag === "unattended" && origin.reason !== "launched_remotely",
         ]);
+        assert.deepEqual(leases.nonPerson, [origin._tag === "unattended"]);
+        assert.deepEqual(leases.minted, []);
+      }),
+  );
+
+  it.effect.each(everyOrigin)(
+    "strict-off admits a run outside full access started by $label without approval",
+    ({ origin }) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const leases = fakeLeases({});
+        const attached = yield* decide(driver, {
+          origin,
+          runtimeMode: "approval-required",
+          runId: RunId.make("run:default-allow"),
+          leases: leases.leases,
+        }).pipe(
+          Effect.provide(
+            ServerSettings.ServerSettingsService.layerTest({ cuaStrictInputGuards: false }),
+          ),
+        );
+        assert.equal(
+          attached._tag === "proxied" ? attached.control.controlId : attached._tag,
+          "control:every-app",
+        );
+        assert.deepEqual(leases.everyApp, [origin._tag === "unattended"]);
         assert.deepEqual(leases.nonPerson, [origin._tag === "unattended"]);
         assert.deepEqual(leases.minted, []);
       }),

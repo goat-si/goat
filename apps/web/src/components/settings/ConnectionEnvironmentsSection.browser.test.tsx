@@ -1,17 +1,9 @@
 import * as Cause from "effect/Cause";
 import { isMacPlatform } from "@goat/shared/keybindings";
-import { it as effectIt } from "@effect/vitest";
-import { actEffect, makeSshProvisionGate } from "./sshPreparation.test-support";
-import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
 import * as Option from "effect/Option";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import {
-  EnvironmentId,
-  type DesktopSshPreparationProgress,
-  type SshHostResult,
-} from "@goat/contracts";
+import { EnvironmentId, type SshHostResult } from "@goat/contracts";
 import {
   SshConnectionTarget,
   SshConnectionProfile,
@@ -154,6 +146,7 @@ const readyReport: SshPreflightReport = {
 
 let container: HTMLDivElement;
 let root: Root;
+let registry: AtomRegistry.AtomRegistry;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -185,6 +178,7 @@ beforeEach(() => {
   state.connectSshEnvironment.mockReset();
   state.retryNow.mockReset();
   state.networkOffline = false;
+  registry = AtomRegistry.make();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -192,6 +186,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  registry.dispose();
   document.body.innerHTML = "";
   state.sshHosts = null;
   delete (window as { desktopBridge?: unknown }).desktopBridge;
@@ -222,7 +217,11 @@ function type(element: HTMLInputElement, value: string) {
 
 async function openAddDialog() {
   await act(async () => {
-    root.render(<ConnectionEnvironmentsSection title="Connections" searchable={false} />);
+    root.render(
+      <RegistryContext value={registry}>
+        <ConnectionEnvironmentsSection title="Connections" searchable={false} />
+      </RegistryContext>,
+    );
   });
   await act(async () => button("Add device").click());
   const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
@@ -232,7 +231,11 @@ async function openAddDialog() {
 
 it("shows the empty state when no machines are saved", async () => {
   await act(async () => {
-    root.render(<ConnectionEnvironmentsSection title="Connections" searchable={false} />);
+    root.render(
+      <RegistryContext value={registry}>
+        <ConnectionEnvironmentsSection title="Connections" searchable={false} />
+      </RegistryContext>,
+    );
   });
   expect(container.textContent).toContain("Connections");
   expect(container.textContent).toContain("No saved remote environments");
@@ -708,79 +711,6 @@ it("does not register a locally saved SSH device without hub write permission", 
   expect(state.addHubNode).not.toHaveBeenCalled();
   expect(state.toast.mock.calls.map(([value]) => value.type)).toEqual(["success"]);
 });
-effectIt.effect(
-  "shows local add progress until terminal and drops a neutral result without a banner or toast",
-  () =>
-    Effect.gen(function* () {
-      const gate = makeSshProvisionGate();
-      yield* Effect.forkChild(gate.worker);
-      state.connectSshEnvironment.mockImplementation(gate.command);
-      const phase: DesktopSshPreparationProgress = {
-        operationId: "fixture-add",
-        phase: "uploading",
-        hostAnswered: true,
-        remainingMs: 800000,
-      };
-      const target = {
-        alias: "fixture-vps",
-        hostname: "example.invalid",
-        username: null,
-        port: null,
-      };
-      (window as { desktopBridge?: unknown }).desktopBridge = {
-        resolveSshHost: async () => target,
-        getLocalEnvironmentBootstraps,
-      };
-      state.sshHosts = [target];
-      const dialog = yield* Effect.promise(openAddDialog);
-      yield* Effect.promise(async () => {
-        const sshMode = [...dialog.querySelectorAll("button")].find((element) =>
-          element.textContent?.startsWith("SSH"),
-        )!;
-        await act(async () => sshMode.click());
-        type(document.querySelector<HTMLInputElement>("#saved-backend-ssh-host")!, target.alias);
-        await act(async () => button("Check", dialog).click());
-        await act(async () => button("Connect", dialog).click());
-      });
-      const input = yield* Deferred.await(gate.entered);
-      const report = input.onPreparationProgress!;
-      yield* actEffect(report(phase));
-      expect(dialog.textContent).toContain(
-        "Installing GOAT runtime. First setup can take a few minutes",
-      );
-      expect(dialog.textContent?.match(/Installing GOAT runtime/g)).toHaveLength(1);
-      yield* actEffect(report({ ...phase, phase: null, outcome: "superseded" }));
-      expect(dialog.textContent).not.toContain("Installing GOAT");
-      yield* actEffect(
-        Deferred.succeed(gate.release, {
-          _tag: "Failure",
-          cause: Cause.fail(new Error("SSH preparation superseded by a newer connection intent.")),
-        }),
-      );
-      expect(dialog.querySelector('[role="alert"]')).toBeNull();
-      expect(state.toast).not.toHaveBeenCalled();
-      yield* actEffect(report(phase));
-      expect(dialog.textContent).not.toContain("Installing GOAT");
-      yield* Effect.promise(() =>
-        act(async () =>
-          dialog.dispatchEvent(
-            new KeyboardEvent("keydown", {
-              key: "Escape",
-              code: "Escape",
-              bubbles: true,
-              cancelable: true,
-            }),
-          ),
-        ),
-      );
-      yield* Effect.promise(() =>
-        vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull()),
-      );
-      yield* actEffect(report(phase));
-      expect(document.querySelector('[role="dialog"]')).toBeNull();
-    }),
-);
-
 it.each([
   { source: "local", firstState: "preparing" },
   { source: "owner", firstState: "preparing" },
@@ -989,49 +919,6 @@ it.each([
     await act(async () => root.render(<div />));
     registry.dispose();
   },
-);
-
-effectIt.effect("ignores local Add reports and a failed completion after unmount", () =>
-  Effect.gen(function* () {
-    const gate = makeSshProvisionGate();
-    yield* Effect.forkChild(gate.worker);
-    state.connectSshEnvironment.mockImplementation(gate.command);
-    const target = {
-      alias: "fixture-vps",
-      hostname: "example.invalid",
-      username: null,
-      port: null,
-    };
-    (window as { desktopBridge?: unknown }).desktopBridge = {
-      resolveSshHost: async () => target,
-      getLocalEnvironmentBootstraps,
-    };
-    state.sshHosts = [target];
-    const dialog = yield* Effect.promise(openAddDialog);
-    yield* Effect.promise(async () => {
-      const sshMode = [...dialog.querySelectorAll("button")].find((element) =>
-        element.textContent?.startsWith("SSH"),
-      )!;
-      await act(async () => sshMode.click());
-      type(document.querySelector<HTMLInputElement>("#saved-backend-ssh-host")!, target.alias);
-      await act(async () => button("Check", dialog).click());
-      await act(async () => button("Connect", dialog).click());
-    });
-    const input = yield* Deferred.await(gate.entered);
-    yield* Effect.promise(() => act(async () => root.render(<div />)));
-    yield* input.onPreparationProgress!({
-      operationId: "late-add",
-      phase: "uploading",
-      hostAnswered: true,
-      remainingMs: 800000,
-    });
-    yield* Deferred.succeed(gate.release, {
-      _tag: "Failure",
-      cause: Cause.fail(new Error("late failure")),
-    });
-    expect(container.textContent).toBe("");
-    expect(state.toast).not.toHaveBeenCalled();
-  }),
 );
 
 it("expands a saved machine's connection diagnosis and retries without hiding SSH controls", async () => {

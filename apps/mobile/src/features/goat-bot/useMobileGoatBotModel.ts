@@ -70,7 +70,8 @@ export function useMobileGoatBotModelMenu() {
       const patch = goatBotModelMenuPatch(model.state, id);
       if (patch === null || !model.allowed) return;
       void model.save(patch).then((saved) => {
-        if (!saved) Alert.alert("Couldn't change GOAT Bot's model", "Try again in a moment.");
+        if (!saved)
+          Alert.alert(`Couldn't change ${goatBotName(main)}'s model`, "Try again in a moment.");
       });
     },
   };
