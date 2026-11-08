@@ -618,6 +618,52 @@ describe("notes a refused tab request named", () => {
         state.stopPending = false;
         assert.strictEqual(yield* writer.settleRefused, 0);
         assert.notInclude(yield* read, fridays);
+        // The re-run after the restart finds the note gone and clears what its first run claimed.
+        assert.strictEqual(
+          yield* ask(goatBotForgetNoteMessage(fridays), "again"),
+          CHANNEL_COPY.noteNotFound,
+        );
+        assert.deepStrictEqual(yield* refusals.list, []);
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("a change that finds the refused note already gone keeps the refusal", () =>
+    Effect.gen(function* () {
+      const { state, writer, ask, read, write } = yield* guarded(
+        NOTES_HEADER + line(fridays, "a") + "\n",
+      );
+      yield* ask(goatBotForgetNoteMessage(fridays), "refused");
+      // The cancelled tidy, still running, removes the line GOAT refused to forget.
+      yield* write(NOTES_HEADER);
+      state.open = false;
+      state.stopPending = true;
+      assert.strictEqual(
+        yield* ask(goatBotChangeNoteMessage(fridays, "I deploy on Mondays."), "change"),
+        CHANNEL_COPY.noteNotFound,
+      );
+      state.stopPending = false;
+      assert.strictEqual(yield* writer.settleRefused, 1);
+      assert.include(yield* read, line(fridays, "a"));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("a forget that fails before its rename keeps the refusal", () =>
+    Effect.gen(function* () {
+      const { state, writer, ask, read, write } = yield* guarded(
+        NOTES_HEADER + line(fridays, "a") + "\n",
+        undefined,
+        { beforeCompare: Effect.die("the server stopped") },
+      );
+      yield* ask(goatBotForgetNoteMessage(fridays), "refused");
+      state.open = false;
+      state.stopPending = true;
+      yield* Effect.exit(ask(goatBotForgetNoteMessage(fridays), "again"));
+      assert.include(yield* read, fridays);
+      // The cancelled tidy, still running, then removes the line.
+      yield* write(NOTES_HEADER);
+      state.stopPending = false;
+      assert.strictEqual(yield* writer.settleRefused, 1);
+      assert.include(yield* read, line(fridays, "a"));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
