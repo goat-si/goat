@@ -66,7 +66,7 @@ it.effect("keeps preparing a worktree when its cancellation watch fails once", (
           Effect.as({ commitSha: "remote-main-sha", remoteRefName: "origin/main" }),
         ),
       launchEvents: (real) => (input) =>
-        input.eventType === "run.updated" && watchFailures-- > 0
+        input?.eventType === "run.updated" && watchFailures-- > 0
           ? Stream.fromEffect(Deferred.await(failWatch)).pipe(
               Stream.flatMap(() =>
                 Stream.fail(new Orchestrator.OrchestratorDomainEventStreamError({})),
