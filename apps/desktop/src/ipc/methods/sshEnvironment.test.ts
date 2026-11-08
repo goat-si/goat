@@ -93,7 +93,7 @@ const unusedSshService = {
 } satisfies DesktopSshEnvironment.DesktopSshEnvironment["Service"];
 
 describe("SSH runtime IPC", () => {
-  it.effect("sends a cloneable ticket result the renderer can decode (#2341)", () => {
+  it.effect("sends a cloneable ticket result the renderer must decode (#2341, #2496)", () => {
     const expiresAt = "2026-11-03T12:00:00.000Z";
     const layer = layerHttpClient((request) =>
       Effect.succeed(jsonResponse(request, { ticket: "test-ticket", expiresAt })),
@@ -103,11 +103,12 @@ describe("SSH runtime IPC", () => {
         httpBaseUrl: "http://127.0.0.1:3201/",
         bearerToken: "test-bearer",
       });
-      const received = structuredClone(encoded);
-      const expected = { ticket: "test-ticket", expiresAt } satisfies Awaited<
+      const received = structuredClone(encoded) as Awaited<
         ReturnType<DesktopBridge["issueSshWebSocketTicket"]>
       >;
-      assert.deepEqual(received, expected);
+      // @ts-expect-error A raw read would leave the ticket a loggable string; decode it first.
+      void received.ticket;
+      assert.deepEqual(received, { ticket: "test-ticket", expiresAt });
       const decoded = yield* decodeWebSocketTicket(received);
       assert.isTrue(Redacted.isRedacted(decoded.ticket));
       assert.equal(Redacted.value(decoded.ticket), "test-ticket");
