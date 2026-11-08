@@ -3,6 +3,35 @@ import { REMOTE_PROTOCOL_TOKEN_SCRIPT } from "./runtimeFactsScripts.ts";
 import { REMOTE_REPLACEMENT_LOCK_SCRIPT } from "./runtimeOwnershipScripts.ts";
 import { SshLaunchError } from "./errors.ts";
 
+/** Windows runtime publication retries sharing violations from on-access scans of the new goat.exe. */
+export const REMOTE_RUNTIME_PUBLISH_SCRIPT = String.raw`goat_runtime_fs() (
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) ;;
+    *) "$@"; exit $? ;;
+  esac
+  for delay in 0 1 2 4 8 10 10 10; do
+    [ "$delay" = 0 ] || sleep "$delay"
+    # mv into an existing directory nests the stage inside it; the install lock keeps GOAT out.
+    if [ "$1" = mv ] && { [ -e "$3" ] || [ -L "$3" ]; }; then
+      printf 'Cannot publish %s: %s already exists.\n' "$2" "$3" >&2; exit 1
+    fi
+    if output="$(LC_ALL=C "$@" 2>&1)"; then
+      [ -z "$output" ] || printf '%s\n' "$output"
+      exit 0
+    else
+      status=$?
+    fi
+    case "$output" in
+      *'Permission denied'* | *'Device or resource busy'* | *'Access is denied'*) ;;
+      *) printf '%s\n' "$output" >&2; exit "$status" ;;
+    esac
+  done
+  printf '%s\n' "$output" >&2
+  printf '%s\n' 'An antivirus/real-time scan may be locking the new goat.exe. Consider excluding %USERPROFILE%\.goat\runtime, then retry.' >&2
+  exit "$status"
+)
+`;
+
 /**
  * Installers are transient copies of the runner with its fetch block swapped out, so the
  * managed run-t3.sh bytes (and the retained-runner identity built on them) never change.

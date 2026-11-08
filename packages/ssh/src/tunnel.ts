@@ -96,7 +96,7 @@ import {
   type SshRuntimeProgressCallback,
 } from "./remoteRuntime.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
-import { remoteUploadCommand } from "./runtimeInstallScripts.ts";
+import { REMOTE_RUNTIME_PUBLISH_SCRIPT, remoteUploadCommand } from "./runtimeInstallScripts.ts";
 import { runtimePreparationError } from "./runtimePreparationErrors.ts";
 import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
 import { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
@@ -599,7 +599,7 @@ ensure_remote_node_path() {
 
 const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
 set -eu
-@@GOAT_NODE_ENV_SCRIPT@@
+${REMOTE_RUNTIME_PUBLISH_SCRIPT}@@GOAT_NODE_ENV_SCRIPT@@
 GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
 # Older clients inspect these literal declarations without evaluating the runner.
 ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY}=@@GOAT_NODE_SCRIPT_PATH@@
@@ -662,9 +662,9 @@ if ! goat_runtime_ready; then
     if [ -n "$GOAT_LOCK_CANDIDATE" ]; then
       rm -rf "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK/\${GOAT_LOCK_CANDIDATE##*/}"
     fi
-    if [ -n "$GOAT_STAGING" ]; then rm -rf "$GOAT_STAGING"; fi
+    if [ -n "$GOAT_STAGING" ]; then goat_runtime_fs rm -rf "$GOAT_STAGING"; fi
   }
-  trap 'goat_lock_cleanup' 0
+  trap 'goat_exit=$?; goat_lock_cleanup || true; exit "$goat_exit"' 0
   trap 'exit 1' 1 2 3 15
   goat_reclaim_lock() (
     if ! cd "$GOAT_LOCK" 2>/dev/null; then
@@ -773,8 +773,8 @@ if ! goat_runtime_ready; then
   esac
   printf '%s %s %s %s\\n' "$GOAT_ARCHIVE_VERSION" "$GOAT_EXPECTED" "$GOAT_EXECUTABLE_SHA256" "$GOAT_RECORD_SOURCE" > "$GOAT_STAGING/.install-record"
   printf '%s\\n' "$GOAT_ARCHIVE_VERSION" > "$GOAT_STAGING/.install-complete"
-  rm -rf "$GOAT_RUNTIME_DIR"
-  mv "$GOAT_STAGING" "$GOAT_RUNTIME_DIR"
+  goat_runtime_fs rm -rf "$GOAT_RUNTIME_DIR"
+  goat_runtime_fs mv "$GOAT_STAGING" "$GOAT_RUNTIME_DIR"
 fi
 if [ -n "\${GOAT_LOCK:-}" ]; then
   goat_lock_cleanup
