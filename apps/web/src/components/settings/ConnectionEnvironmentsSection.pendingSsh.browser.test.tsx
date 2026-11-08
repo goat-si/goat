@@ -170,10 +170,16 @@ function setup() {
     },
   };
   const registry = AtomRegistry.make();
+  const bridge = stubGlobal("desktopBridge", {
+    resolveSshHost: vi.fn(),
+    getLocalEnvironmentBootstraps,
+  });
   return {
     registry,
-    bridge: stubGlobal("desktopBridge", { resolveSshHost: vi.fn(), getLocalEnvironmentBootstraps }),
-    [Symbol.dispose]: () => registry.dispose(),
+    [Symbol.dispose]: () => {
+      bridge[Symbol.dispose]();
+      registry.dispose();
+    },
   };
 }
 
