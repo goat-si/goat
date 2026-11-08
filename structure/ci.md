@@ -7,7 +7,7 @@ nightlies after a manual goat-ci run on `dev` and promotes soaked nightlies to s
 holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate`, `result`, `republish`,
 `refresh-republished` and `connect-auth-postgres`, the pinned
 `ubuntu-24.04` image (or, for the `ci` matrix, `windows-2025` and the trusted-run lidge
-expression), the `push`, `pull_request`, and
+matrix expression, and for the gate jobs the trusted-run lidge gate expression), the `push`, `pull_request`, and
 `workflow_dispatch` triggers, and an allowlist of actions.
 A new check is therefore a matrix task of `ci`. Any other new workflow, a
 `pull_request_target` trigger, or `actions/github-script` does not pass the guard.
@@ -28,8 +28,12 @@ for `test-windows`, `hosted` for the short Node-only tasks in `HOSTED_TASKS` (`c
 and the small package suites), and `linux` for the heavy tasks (`test`, `test-packages`,
 `test-changed`, `test-ssh`, `test-desktop`, `test-memory-growth`, `build` and the server shards).
 `hosted` entries always take `ubuntu-24.04`, so short tasks never queue behind the pool, and
-`linux` entries take the lidge pool when it is enabled. `goat-scope`, `goat-screenshot-gate` and
-`goat-ci-result` run on `ubuntu-24.04`, and the guard pins every `runs-on` value.
+`linux` entries take the lidge pool when it is enabled. The gate jobs `goat-scope`,
+`goat-screenshot-gate` and `goat-ci-result` take the pool on the same terms (kill switch and
+trust test, `ubuntu-24.04` otherwise), because a starved hosted queue left `goat-scope` waiting
+for minutes and no lidge task could start before it. They need only Node and git. `republish`
+waits on the real run and `refresh-republished` writes to Actions, so both stay on `ubuntu-24.04`
+with `connect-auth-postgres`, and the guard pins every `runs-on` value.
 
 goat-ci skips pull requests from forks for now, so a fork's pull request gets no `goat-ci-result`.
 To check one, a maintainer pushes its head to a branch in goat-si/goat and runs goat-ci there.

@@ -13,7 +13,8 @@ const nightlyPath = ".github/workflows/goat-nightly.yml";
 const connectHostedPath = ".github/workflows/connect-hosted.yml";
 const marketingPagesPath = ".github/workflows/marketing-pages.yml";
 const disabled = new Set((NodeProcess.env.GOAT_DISABLED_WORKFLOWS ?? "").split("\n"));
-// goat-ci jobs run on a pinned GitHub-hosted image or, for the ci matrix, the lidge pool.
+// goat-ci jobs run on a pinned GitHub-hosted image or, for the ci matrix and the gate jobs, the
+// lidge pool.
 const goatCiHostedRunner = "ubuntu-24.04";
 // The Windows entry takes the pinned hosted Windows image and every other entry the Linux one.
 const goatCiHostedMatrixRunner = `matrix.runner == 'windows' && 'windows-2025' || '${goatCiHostedRunner}'`;
@@ -21,6 +22,11 @@ const goatCiHostedMatrixRunner = `matrix.runner == 'windows' && 'windows-2025' |
 // request stays hosted. The trust test is the expression itself, so it is pinned whole.
 const goatCiLidgeMatrixRunner =
   "matrix.runner == 'windows' && 'windows-2025' || (matrix.runner == 'linux' && vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"lidge\"]') || 'ubuntu-24.04'";
+// The gate jobs take lidge on the same terms, so a starved hosted queue cannot hold back a run.
+// republish waits on the real run and refresh-republished writes to Actions; both stay hosted.
+const goatCiLidgeGateRunner =
+  "vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"lidge\"]') || 'ubuntu-24.04'";
+const goatCiGateJobs = new Set(["scope", "screenshot-gate", "result"]);
 // goat-scope picks the matrix, ci runs it, goat-ci-result aggregates, republish repeats the real
 // goat-ci-result for an ignored event, and refresh-republished re-runs that ignored run after a
 // re-run of the real one (#1691). It alone may write to Actions.
@@ -191,7 +197,13 @@ function validateWorkflow(source, yaml) {
       typeof runners === "string" &&
       runners.trim().startsWith("${{") &&
       normalizeExpression(runners) === expected;
-    if (name !== "ci") {
+    if (goatCiGateJobs.has(name)) {
+      if (runners !== goatCiHostedRunner && !isExpression(goatCiLidgeGateRunner)) {
+        return refuse(
+          `jobs.${name}.runs-on must be ${goatCiHostedRunner} or the trusted-run lidge gate expression`,
+        );
+      }
+    } else if (name !== "ci") {
       if (runners !== goatCiHostedRunner) {
         return refuse(`jobs.${name}.runs-on must be ${goatCiHostedRunner}`);
       }

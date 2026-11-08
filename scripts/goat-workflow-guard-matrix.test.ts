@@ -4,9 +4,12 @@ import {
   baseJob,
   fixture,
   killSwitch,
+  lidgeGateRunner,
   lidgeRunner,
   removeFixtures,
+  refreshWorkflow,
   runnerLabels,
+  screenshotWorkflow,
   trustPredicate,
   workflow,
 } from "./lib/goat-workflow-guard-fixture.ts";
@@ -18,6 +21,19 @@ const ciRefusal =
 
 function push(runsOn: unknown) {
   const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": runsOn }) });
+  return f.hook(f.record(f.sha));
+}
+
+function pushJob(name: string, runsOn: unknown) {
+  const f = fixture({
+    workflow:
+      name === "screenshot-gate"
+        ? screenshotWorkflow({ "runs-on": runsOn })
+        : JSON.stringify({
+            on: { pull_request: null },
+            jobs: { ci: baseJob, [name]: { ...baseJob, "runs-on": runsOn } },
+          }),
+  });
   return f.hook(f.record(f.sha));
 }
 
@@ -65,15 +81,72 @@ describe("goat pre-push guard: per-entry matrix runner", () => {
     expect(refused.stderr).toContain(ciRefusal);
   });
 
-  it.each(["scope", "result", "republish"])("keeps jobs.%s off the lidge expression", (name) => {
-    const f = fixture({
-      workflow: JSON.stringify({
-        on: { pull_request: null },
-        jobs: { ci: baseJob, [name]: { ...baseJob, "runs-on": lidgeRunner } },
-      }),
-    });
+  it.each(["scope", "result"])("keeps the matrix expression off jobs.%s", (name) => {
+    const refused = pushJob(name, lidgeRunner);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain(
+      `jobs.${name}.runs-on must be ubuntu-24.04 or the trusted-run lidge gate expression`,
+    );
+  });
+});
+
+describe("goat pre-push guard: gate job runner", () => {
+  it.each(["scope", "screenshot-gate", "result"])(
+    "allows jobs.%s on lidge behind the kill switch and the trust test",
+    (name) => {
+      expect(pushJob(name, lidgeGateRunner).status).toBe(0);
+    },
+  );
+
+  it.each([
+    [
+      "without the trust test, sending fork pull requests to lidge",
+      lidgeGateRunner.replace(` && ${trustPredicate}`, ""),
+    ],
+    ["without the kill switch", lidgeGateRunner.replace(`${killSwitch} && `, "")],
+    [
+      "trusting any pull request",
+      lidgeGateRunner.replace(
+        "github.event.pull_request.head.repo.full_name == github.repository",
+        "github.event_name == 'pull_request'",
+      ),
+    ],
+    [
+      "a kill switch that defaults on",
+      lidgeGateRunner.replace(killSwitch, "vars.LIDGE_RUNNERS != 'off'"),
+    ],
+    ["a moving hosted fallback", lidgeGateRunner.replace("'ubuntu-24.04'", "'ubuntu-latest'")],
+    ["without its expression wrapper", lidgeGateRunner.slice(4, -3)],
+    ["the static lidge labels", ["self-hosted", "linux", "x64", "lidge"]],
+  ])("refuses a gate job %s", (_name, runsOn) => {
+    for (const name of ["scope", "screenshot-gate", "result"]) {
+      const refused = pushJob(name, runsOn);
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain(
+        `jobs.${name}.runs-on must be ubuntu-24.04 or the trusted-run lidge gate expression`,
+      );
+    }
+  });
+
+  it.each([
+    ["republish", "jobs.republish.runs-on must be ubuntu-24.04"],
+    ["connect-auth-postgres", "PostgreSQL fixtures must run only on the disposable hosted runner"],
+  ])("keeps jobs.%s on the hosted image", (name, message) => {
+    const refused = pushJob(name, lidgeGateRunner);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain(message);
+  });
+
+  it("keeps refresh-republished, the Actions writer, on the hosted image", () => {
+    const f = fixture({ workflow: refreshWorkflow({ "runs-on": lidgeGateRunner }) });
     const refused = f.hook(f.record(f.sha));
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(`jobs.${name}.runs-on must be ubuntu-24.04`);
+    expect(refused.stderr).toContain("jobs.refresh-republished must run on ubuntu-24.04");
+  });
+
+  it("keeps the gate expression off the ci matrix", () => {
+    const refused = push(lidgeGateRunner);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain(ciRefusal);
   });
 });
