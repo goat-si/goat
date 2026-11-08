@@ -178,24 +178,25 @@ const make = Effect.gen(function* () {
       if (started._tag === "Ready") {
         return yield* finishList(instance.driverKind, input.instanceId, started.page);
       }
-      const page = yield* manager
+      const committed = yield* manager
         .listSessions({ cwd: project.workspaceRoot, cursor: started.cursor })
-        .pipe(Effect.tapError(() => continuations.abort(key, started.generation)));
-      const committed = yield* continuations
-        .commit(key, started.generation, page)
-        .pipe(Effect.tapError(() => continuations.abort(key, started.generation)));
+        .pipe(
+          Effect.flatMap((page) => continuations.commit(key, started.generation, page)),
+          Effect.ensuring(continuations.abort(key, started.generation)),
+        );
       return yield* finishList(instance.driverKind, input.instanceId, committed);
     }
     const generation = yield* continuations.claim(key);
-    const page = yield* manager
+    // abort only drops this claim's pending placeholder, so it is a no-op after a commit.
+    const committed = yield* manager
       .listSessions({
         cwd: project.workspaceRoot,
         ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
       })
-      .pipe(Effect.tapError(() => continuations.abort(key, generation)));
-    const committed = yield* continuations
-      .commit(key, generation, page)
-      .pipe(Effect.tapError(() => continuations.abort(key, generation)));
+      .pipe(
+        Effect.flatMap((page) => continuations.commit(key, generation, page)),
+        Effect.ensuring(continuations.abort(key, generation)),
+      );
     return yield* finishList(instance.driverKind, input.instanceId, committed);
   });
 
