@@ -1323,7 +1323,9 @@ export function codexThreadRuntimeParams(input: {
     config: {
       ...CODEX_THREAD_CONFIG,
       ...(isGoatBotSessionThreadId(input.threadId ?? mcpSession?.threadId ?? "")
-        ? // The owner's hooks would steer a bot turn into running their own tools.
+        ? // The owner's hooks would steer a bot turn into running their own tools. Only this
+          // Codex session drops them: threads it launches, Claude sessions and text already in a
+          // session keep theirs, which the personal data rule in the brief covers.
           { "features.default_mode_request_user_input": false, "features.hooks": false }
         : {}),
       ...codexThreadMcpEnvironment(mcpSession),
