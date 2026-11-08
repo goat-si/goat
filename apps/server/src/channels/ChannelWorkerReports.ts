@@ -67,7 +67,7 @@ import {
   questionIdFor,
   workerLaunchIdsFor,
 } from "./channelIds.ts";
-import { settleCompletedRun } from "./channelRunOutcome.ts";
+import { failedAfterAsking, settleCompletedRun } from "./channelRunOutcome.ts";
 import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
@@ -623,9 +623,11 @@ const make = Effect.gen(function* () {
       // has not seen it, so it cannot be the last word.
       if (yield* ledger.hasPendingForward(task.taskId)) return latest !== stored;
       // A worker that asked a question and stopped waits for the answer; one whose run failed or
-      // was stopped while waiting has ended the task all the same.
+      // was stopped while waiting, or that reported a failure after asking, has ended the task.
       const waitingForAnswer =
-        latest.task.status === "waiting_input" && current.status === "completed";
+        latest.task.status === "waiting_input" &&
+        current.status === "completed" &&
+        !failedAfterAsking(latest.task, result);
       if (
         waitingForAnswer ||
         (latest.task.status !== "running" && latest.task.status !== "waiting_input")

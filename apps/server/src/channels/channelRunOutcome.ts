@@ -91,3 +91,21 @@ export const settleCompletedRun = (input: {
     }
   }
 };
+
+/** Whether a worker that asked a question then reported failing or stopping, after every question. */
+export const failedAfterAsking = (
+  task: Pick<ChannelTask, "openQuestions">,
+  result:
+    | {
+        readonly outcome: ThreadResultOutcome | null;
+        readonly reportedAt?: string | null | undefined;
+      }
+    | undefined,
+): boolean => {
+  const reportedAt = result?.reportedAt ?? null;
+  return (
+    reportedAt !== null &&
+    (result?.outcome === "failed" || result?.outcome === "cancelled") &&
+    task.openQuestions.every(({ askedAt }) => Date.parse(askedAt) <= Date.parse(reportedAt))
+  );
+};

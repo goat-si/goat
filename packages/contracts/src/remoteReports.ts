@@ -115,6 +115,8 @@ export type RemoteRunHolds = typeof RemoteRunHolds.Type;
 export const RemoteReportedOutcome = Schema.Struct({
   outcome: ThreadResultOutcome,
   summary: Schema.optional(Summary),
+  /** When the worker reported, so the origin can tell it from a question asked later. An older GOAT omits it. */
+  reportedAt: Schema.optional(IsoDateTime),
 });
 export type RemoteReportedOutcome = typeof RemoteReportedOutcome.Type;
 export const RemoteObservedRun = Schema.Struct({
