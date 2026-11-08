@@ -857,6 +857,18 @@ fi`;
 
 // Retained archives have a port-only wait-ready helper. Inspect the kernel's socket owner
 // in the launch shell instead, without adding helper arguments or starts on reconnect.
+const WINDOWS_AWAIT_LISTENER_POWERSHELL = String.raw`$ErrorActionPreference = 'Stop'
+$id = [int]$env:GOAT_PROCESS_ID
+$port = [int]$env:GOAT_LISTEN_PORT
+$deadline = [DateTime]::UtcNow.AddSeconds([int]$env:GOAT_WAIT_SECONDS)
+while ([DateTime]::UtcNow -lt $deadline) {
+  if (-not (Get-Process -Id $id -ErrorAction SilentlyContinue)) { exit 1 }
+  $connections = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+  if ($connections | Where-Object { $_.OwningProcess -eq $id -and $_.LocalAddress -eq '127.0.0.1' }) { exit 0 }
+  Start-Sleep -Milliseconds 100
+}
+exit 1`;
+
 export const REMOTE_LAUNCH_LISTENER_SCRIPT = String.raw`# macOS login shells often omit /usr/sbin, which is where lsof lives, and archive
 # launches never call ensure_remote_node_path. Resolve lsof without that PATH.
 ensure_listener_path() {
@@ -903,10 +915,20 @@ server_owns_listener() (
     "$lsof_bin" -nP -a -p "$1" -iTCP@127.0.0.1:"$2" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$1"
   fi
 )
+# Windows: each PowerShell start costs about 1.5 s, so one waits for server $1 to own the listener on
+# port $2, checking as often as the loop below, until it exits or $3 seconds pass.
+server_awaits_listener() {
+  GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" GOAT_WAIT_SECONDS="$3" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
+}
 wait_launched_listener() {
   listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
-  while server_alive "$REMOTE_PID" && [ "$(date +%s)" -lt "$listen_deadline" ]; do
-    server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0
+  while server_alive "$REMOTE_PID" && listen_left=$(( listen_deadline - $(date +%s) )) &&
+    [ "$listen_left" -gt 0 ]; do
+    if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
+      server_awaits_listener "$REMOTE_PID" "$REMOTE_PORT" "$listen_left" && return 0
+    else
+      server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0
+    fi
     sleep 0.1
   done
   return 1

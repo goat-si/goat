@@ -41,6 +41,7 @@ import {
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT } from "./runtimeFactsScripts.ts";
 import {
   REMOTE_HOST_PROCESS_SCRIPT,
+  REMOTE_LAUNCH_LISTENER_SCRIPT,
   REMOTE_LEGACY_IDENTITY_SCRIPT,
   REMOTE_OWNED_IDENTITY_SCRIPT,
 } from "./runtimeOwnershipScripts.ts";
@@ -374,6 +375,75 @@ describe("Windows SSH host", () => {
       assert.deepEqual((yield* calls()).slice(3), ["9999"]);
       assert.equal(run(`verify_legacy_process 4242 '${identity}' && echo legacy`), "legacy\n");
       assert.deepEqual((yield* calls()).slice(4), ["4242"]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("waits for a launched server's listener inside one PowerShell start", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-listener-" });
+      const bin = `${root}/bin`;
+      yield* fs.makeDirectory(bin);
+      // PowerShell records each start. Asked to wait, it answers as its own loop would; asked once,
+      // it sees the listener only from its third poll, as a server that takes a while to bind.
+      // tasklist lists the server while $TEST_ROOT/alive exists; the clock moves on at each read.
+      for (const [name, body] of Object.entries({
+        uname: WINDOWS_DOUBLES.uname,
+        "powershell.exe": String.raw`echo "${"${"}GOAT_WAIT_SECONDS:-poll}" >>"$TEST_ROOT/powershell-calls"
+[ -e "$TEST_ROOT/listening" ] || exit 1
+[ -n "${"${"}GOAT_WAIT_SECONDS:-}" ] && exit 0
+[ "$(wc -l <"$TEST_ROOT/powershell-calls")" -ge 3 ]`,
+        "tasklist.exe": `[ -e "$TEST_ROOT/alive" ] && echo '"goat.exe","4242","Services","0","1 K"'`,
+        date: 'n="$(cat "$TEST_ROOT/clock")"; echo "$((n + 1))" >"$TEST_ROOT/clock"; echo "$n"',
+        sleep: ":",
+      })) {
+        yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
+        yield* fs.chmod(`${bin}/${name}`, 0o755);
+      }
+      const run = (state: { listening: boolean; alive: boolean }) =>
+        Effect.gen(function* () {
+          for (const [name, present] of Object.entries(state)) {
+            if (present) yield* fs.writeFileString(`${root}/${name}`, "");
+            else yield* fs.remove(`${root}/${name}`, { force: true });
+          }
+          yield* fs.writeFileString(`${root}/clock`, "1000\n");
+          yield* fs.writeFileString(`${root}/powershell-calls`, "");
+          const result = NodeChildProcess.spawnSync(
+            remoteShell,
+            [
+              "-c",
+              [
+                REMOTE_HOST_PROCESS_SCRIPT,
+                REMOTE_LAUNCH_LISTENER_SCRIPT.replaceAll("@@GOAT_READY_TIMEOUT_MS@@", "5000"),
+                "REMOTE_PID=4242; REMOTE_PORT=3773",
+                "if wait_launched_listener; then echo ready; else echo gone; fi",
+              ].join("\n"),
+            ],
+            {
+              encoding: "utf8",
+              env: { ...process.env, TEST_ROOT: root, PATH: `${bin}:${process.env.PATH ?? ""}` },
+            },
+          );
+          assert.equal(result.status, 0, result.stderr);
+          const calls = (yield* fs.readFileString(`${root}/powershell-calls`))
+            .trim()
+            .split("\n")
+            .filter(Boolean);
+          return { out: result.stdout.trim(), calls };
+        });
+      // One start waits for the listener, with the seconds left before the deadline.
+      assert.deepEqual(yield* run({ listening: true, alive: true }), {
+        out: "ready",
+        calls: ["4"],
+      });
+      // A listener that never comes still ends at the deadline: each start waits only the seconds
+      // left (this clock moves a second per read).
+      assert.deepEqual(yield* run({ listening: false, alive: true }), {
+        out: "gone",
+        calls: ["4", "3", "2", "1"],
+      });
+      // A server that exits is not waited for.
+      assert.deepEqual(yield* run({ listening: true, alive: false }), { out: "gone", calls: [] });
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
