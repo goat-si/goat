@@ -143,6 +143,10 @@ ran what.</p>
 <h3 id="tailscale-https">Tailscale HTTPS</h3>
 <p>Join both devices to the same tailnet. In the desktop app, enable <strong>Tailscale
 HTTPS</strong> in <strong>Settings → Connections</strong>. Turn it off there to remove that route.</p>
+<p>On Windows, Hyper-V and WSL can reserve blocks of ports. GOAT refuses a reserved
+Tailscale HTTPS port and suggests a free one. <strong>Settings → Connections</strong> says when
+the port is reserved, rather than that Tailscale is down. To see the reserved
+ranges, run <code>netsh int ipv4 show excludedportrange protocol=tcp</code>.</p>
 <p>The desktop app, and <code>goat serve --tailscale-serve</code>, re-apply that HTTPS port
 each time they start and keep trying until Tailscale is running, so the address
 stays the same across restarts. A mapping left by <code>goat pair --tailscale</code> on
