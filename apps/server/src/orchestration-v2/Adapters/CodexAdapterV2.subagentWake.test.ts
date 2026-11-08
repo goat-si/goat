@@ -76,6 +76,10 @@ describe("CodexAdapterV2 native subagent wakes", () => {
         assert.lengthOf(harness.continuationRequests, 1);
         assert.include(harness.continuationRequests[0]?.detail, "NATIVE_CHILD_16900_DONE");
         assert.equal(harness.continuationRequests[0]?.delivery, "message_text");
+        assert.equal(
+          harness.continuationRequests[0]?.notification?.aboutRunId,
+          "run-attempt-codex-late-child",
+        );
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
