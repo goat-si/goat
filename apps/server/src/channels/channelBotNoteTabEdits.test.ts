@@ -14,9 +14,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import { SqlError, classifySqliteError } from "effect/sql/SqlError";
 
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import { NOTES_HEADER } from "./channelBotNoteLines.ts";
+import { memoryRefusedNotes, type RefusedNotes } from "./channelBotNoteRefusals.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { makeChannelBotNoteWriter, type NoteWriterHooks } from "./channelBotNoteTabEdits.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
@@ -37,7 +39,11 @@ const person = (overrides: Partial<ChannelRequester> = {}): ChannelRequester => 
   ...overrides,
 });
 
-const noOpenTasks: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+const noOpenTasks: Pick<
+  ChannelLedger.ChannelLedger["Service"],
+  "listTasksByStatus" | "hasPendingForward"
+> = {
+  hasPendingForward: () => Effect.succeed(false),
   listTasksByStatus: () => Effect.succeed([]),
 };
 
@@ -169,7 +175,11 @@ describe("Memory tab note edits", () => {
       yield* fs.makeDirectory(files.dir, { recursive: true });
       const text = NOTES_HEADER + line(fridays, "a") + "\n";
       yield* fs.writeFileString(files.notes, text);
-      const busy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+      const busy: Pick<
+        ChannelLedger.ChannelLedger["Service"],
+        "listTasksByStatus" | "hasPendingForward"
+      > = {
+        hasPendingForward: () => Effect.succeed(false),
         listTasksByStatus: () =>
           Effect.succeed([
             { task: { notesChangeRequested: "tidy my notes" } } as ChannelLedger.ChannelStoredTask,
@@ -196,7 +206,11 @@ describe("Memory tab note edits", () => {
         yield* fs.makeDirectory(files.dir, { recursive: true });
         const text = NOTES_HEADER + line("Staging is staging-02.", "input-2") + "\n";
         yield* fs.writeFileString(files.notes, text);
-        const busy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+        const busy: Pick<
+          ChannelLedger.ChannelLedger["Service"],
+          "listTasksByStatus" | "hasPendingForward"
+        > = {
+          hasPendingForward: () => Effect.succeed(false),
           listTasksByStatus: () =>
             Effect.succeed([
               {
@@ -235,7 +249,11 @@ describe("Memory tab note edits", () => {
           return real.writeFileString(path, data, options);
         },
       };
-      const busy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+      const busy: Pick<
+        ChannelLedger.ChannelLedger["Service"],
+        "listTasksByStatus" | "hasPendingForward"
+      > = {
+        hasPendingForward: () => Effect.succeed(false),
         listTasksByStatus: () =>
           Effect.succeed([
             { task: { notesChangeRequested: "tidy my notes" } } as ChannelLedger.ChannelStoredTask,
@@ -271,7 +289,11 @@ describe("Memory tab note edits", () => {
           NOTES_HEADER + line(fridays, "a") + "\n" + kept + "\n",
         );
         let open = true;
-        const tidy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+        const tidy: Pick<
+          ChannelLedger.ChannelLedger["Service"],
+          "listTasksByStatus" | "hasPendingForward"
+        > = {
+          hasPendingForward: () => Effect.succeed(false),
           listTasksByStatus: () =>
             Effect.succeed(
               open
@@ -328,7 +350,11 @@ describe("Memory tab note edits", () => {
       const text = NOTES_HEADER + line(fridays, "a") + "\n";
       yield* fs.writeFileString(files.notes, text);
       let open = true;
-      const tidy: Pick<ChannelLedger.ChannelLedger["Service"], "listTasksByStatus"> = {
+      const tidy: Pick<
+        ChannelLedger.ChannelLedger["Service"],
+        "listTasksByStatus" | "hasPendingForward"
+      > = {
+        hasPendingForward: () => Effect.succeed(false),
         listTasksByStatus: () =>
           Effect.succeed(
             open
@@ -484,5 +510,120 @@ describe("Memory tab note edits", () => {
       );
       assert.strictEqual((yield* read).length, text.length);
     }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+});
+
+describe("notes a refused tab request named", () => {
+  /** A notes file and a writer whose one grant holder and its stop can be ended by the test. */
+  const guarded = (text: string, refusals?: RefusedNotes) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const files = channelBotFilesFor(yield* Path.Path, yield* fs.makeTempDirectoryScoped());
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      yield* fs.writeFileString(files.notes, text);
+      const state = { open: true, stopPending: false };
+      const ledger: Pick<
+        ChannelLedger.ChannelLedger["Service"],
+        "listTasksByStatus" | "hasPendingForward"
+      > = {
+        listTasksByStatus: () =>
+          Effect.succeed(
+            state.open
+              ? [
+                  {
+                    task: { taskId: "tidy", notesChangeRequested: "tidy my notes" },
+                  } as unknown as ChannelLedger.ChannelStoredTask,
+                ]
+              : [],
+          ),
+        hasPendingForward: () => Effect.succeed(state.stopPending),
+      };
+      const writer = yield* makeChannelBotNoteWriter(fs, files, ledger, {}, refusals);
+      const ask = (message: string, inputId: string) =>
+        Effect.map(
+          writer.tabEdit(
+            { intent: "message", text: message },
+            inputId,
+            "2026-11-07T10:00:00Z",
+            Effect.succeed(person()),
+          ),
+          (answer) => answer?.text,
+        );
+      const read = fs.readFileString(files.notes);
+      const write = (next: string) => fs.writeFileString(files.notes, next);
+      return { state, writer, ask, read, write };
+    });
+
+  it.effect(
+    "waits for a cancelled task's stop to reach its worker before writing a note back",
+    () =>
+      Effect.gen(function* () {
+        const { state, writer, ask, read, write } = yield* guarded(
+          NOTES_HEADER + line(fridays, "a") + "\n",
+        );
+        yield* ask(goatBotForgetNoteMessage(fridays), "forget");
+        yield* write(NOTES_HEADER);
+        // Cancelled, but the stop has not reached the worker, which may still edit.
+        state.open = false;
+        state.stopPending = true;
+        assert.strictEqual(yield* writer.settleRefused, 0);
+        assert.strictEqual(yield* read, NOTES_HEADER);
+        state.stopPending = false;
+        assert.strictEqual(yield* writer.settleRefused, 1);
+        assert.include(yield* read, line(fridays, "a"));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("a later forget the person makes is not undone by an earlier refusal", () =>
+    Effect.gen(function* () {
+      const { state, writer, ask, read } = yield* guarded(NOTES_HEADER + line(fridays, "a") + "\n");
+      yield* ask(goatBotForgetNoteMessage(fridays), "refused");
+      state.open = false;
+      state.stopPending = true;
+      assert.strictEqual(
+        yield* ask(goatBotForgetNoteMessage(fridays), "again"),
+        CHANNEL_COPY.noteForgotten,
+      );
+      state.stopPending = false;
+      assert.strictEqual(yield* writer.settleRefused, 0);
+      assert.notInclude(yield* read, fridays);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("two refusals that named one note bring it back once", () =>
+    Effect.gen(function* () {
+      const { state, writer, ask, read, write } = yield* guarded(
+        NOTES_HEADER + line(fridays, "a") + "\n",
+      );
+      yield* ask(goatBotForgetNoteMessage(fridays), "first");
+      yield* ask(goatBotForgetNoteMessage(fridays), "second");
+      yield* write(NOTES_HEADER);
+      state.open = false;
+      assert.strictEqual(yield* writer.settleRefused, 1);
+      assert.strictEqual(yield* read, NOTES_HEADER + line(fridays, "a") + "\n");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("no write goes ahead while the refusals cannot be settled", () =>
+    Effect.gen(function* () {
+      const broken: RefusedNotes = {
+        ...memoryRefusedNotes(),
+        list: Effect.fail(
+          new SqlError({ reason: classifySqliteError(new Error("database is locked")) }),
+        ),
+      };
+      const text = NOTES_HEADER + line(fridays, "a") + "\n";
+      const { state, writer, ask, read } = yield* guarded(text, broken);
+      state.open = false;
+      assert.strictEqual(
+        yield* ask(goatBotForgetNoteMessage(fridays), "forget"),
+        CHANNEL_COPY.noteEditFailed,
+      );
+      assert.strictEqual(
+        yield* writer.save("Staging is staging-02.", "2026-11-07", "save"),
+        CHANNEL_COPY.noteNotSaved,
+      );
+      assert.strictEqual(yield* read, text);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
