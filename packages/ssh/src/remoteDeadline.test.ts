@@ -305,71 +305,79 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
       NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
-  it("on Git Bash hangs up the script without reading a process list", async () => {
-    const shell = "bash";
-    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
-    try {
-      const bin = NodePath.join(dir, "bin");
-      NodeFS.mkdirSync(bin);
-      for (const fifo of ["gate", "block"])
-        NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
-      // Git Bash has no pgrep and a ps without -o. A PID read from a process list can be reused
-      // before it is signalled, so neither may be asked.
-      const shims: Record<string, string> = {
-        uname: "echo MINGW64_NT-10.0-26200",
-        cat: 'case "$1" in /proc/*/winpid) echo 4242 ;; *) exec /bin/cat "$@" ;; esac',
-        pgrep: 'echo "pgrep $*" >> "$GOAT_TEST_DIR/listed"; exit 1',
-        ps: [
-          'echo "ps $*" >> "$GOAT_TEST_DIR/listed"',
-          'if [ "$#" -gt 0 ]; then echo "ps: unknown option -- o" >&2; exit 1; fi',
-          'echo "      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND"',
-          "/bin/ps -e -o pid=,ppid=,pgid= | while read -r pid ppid pgid; do",
-          '  flag=" "; [ $((pid % 2)) = 1 ] && flag=I',
-          '  printf "%s %7d %7d %7d %10d %5s %11d %8s %s\\n" "$flag" "$pid" "$ppid" "$pgid" 99 pty0 197609 12:00:00 /usr/bin/sh',
-          "done",
-        ].join("\n"),
-        "taskkill.exe": 'echo "$*" >> "$GOAT_TEST_DIR/taskkill"',
-        // Tick 1 waits until the script is stuck and the deadline's other ticks pass at once. The
-        // first grace tick lets a script that never got the hang-up finish on its own.
-        sleep: [
-          'n=$(($(/bin/cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
-          'if [ "$n" = 1 ]; then exec /bin/cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
-          'if [ "$n" = 4 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
-          'if [ "$n" -gt 3 ]; then ' + HOLD + "; fi",
-        ].join("\n"),
-      };
-      for (const [name, body] of Object.entries(shims))
-        NodeFS.writeFileSync(NodePath.join(bin, name), "#!/bin/sh\n" + body + "\n", {
-          mode: 0o755,
-        });
-      for (const entry of (process.env.PATH ?? "").split(":")) {
-        if (entry === "") continue;
-        for (const name of NodeFS.existsSync(entry) ? NodeFS.readdirSync(entry) : []) {
-          if (name === "pgrep" || NodeFS.existsSync(NodePath.join(bin, name))) continue;
-          NodeFS.symlinkSync(NodePath.join(entry, name), NodePath.join(bin, name));
+  // Git Bash has /proc; without it the probe would read this test's Windows-shaped ps.
+  it.skipIf(!NodeFS.existsSync("/proc/self/stat"))(
+    "on Git Bash hangs up the script without reading a process list",
+    async () => {
+      const shell = "bash";
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+      try {
+        const bin = NodePath.join(dir, "bin");
+        NodeFS.mkdirSync(bin);
+        for (const fifo of ["gate", "block"])
+          NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
+        // Git Bash has no pgrep and a ps without -o. A PID read from a process list can be reused
+        // before it is signalled, so neither may be asked.
+        const shims: Record<string, string> = {
+          uname: "echo MINGW64_NT-10.0-26200",
+          cat: 'case "$1" in /proc/*/winpid) echo 4242 ;; *) exec /bin/cat "$@" ;; esac',
+          pgrep: 'echo "pgrep $*" >> "$GOAT_TEST_DIR/listed"; exit 1',
+          ps: [
+            'echo "ps $*" >> "$GOAT_TEST_DIR/listed"',
+            'if [ "$#" -gt 0 ]; then echo "ps: unknown option -- o" >&2; exit 1; fi',
+            'echo "      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND"',
+            "/bin/ps -e -o pid=,ppid=,pgid= | while read -r pid ppid pgid; do",
+            '  flag=" "; [ $((pid % 2)) = 1 ] && flag=I',
+            '  printf "%s %7d %7d %7d %10d %5s %11d %8s %s\\n" "$flag" "$pid" "$ppid" "$pgid" 99 pty0 197609 12:00:00 /usr/bin/sh',
+            "done",
+          ].join("\n"),
+          "taskkill.exe": 'echo "$*" >> "$GOAT_TEST_DIR/taskkill"',
+          // Tick 1 waits until the script is stuck and the deadline's other ticks pass at once. The
+          // first grace tick lets a script that never got the hang-up finish on its own.
+          sleep: [
+            'n=$(($(/bin/cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
+            'if [ "$n" = 1 ]; then exec /bin/cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
+            'if [ "$n" = 4 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
+            'if [ "$n" -gt 3 ]; then ' + HOLD + "; fi",
+          ].join("\n"),
+        };
+        for (const [name, body] of Object.entries(shims))
+          NodeFS.writeFileSync(NodePath.join(bin, name), "#!/bin/sh\n" + body + "\n", {
+            mode: 0o755,
+          });
+        for (const entry of (process.env.PATH ?? "").split(":")) {
+          if (entry === "") continue;
+          for (const name of NodeFS.existsSync(entry) ? NodeFS.readdirSync(entry) : []) {
+            if (
+              name === "pgrep" ||
+              NodeFS.lstatSync(NodePath.join(bin, name), { throwIfNoEntry: false })
+            )
+              continue;
+            NodeFS.symlinkSync(NodePath.join(entry, name), NodePath.join(bin, name));
+          }
         }
+        const body = [
+          "trap 'exit 129' HUP",
+          "trap 'echo cleaned > \"$1/cleaned\"' EXIT",
+          'printf go > "$1/gate"',
+          '/bin/cat "$1/block" >/dev/null',
+        ].join("\n");
+        const { code } = await runShell(
+          withRemoteDeadline(body, 1_000, NodePath.join(bin, "sleep")),
+          [dir],
+          { PATH: bin, GOAT_TEST_DIR: dir },
+          { shell },
+        );
+        // Ended by the hang-up, after its own cleanup, without a forced end.
+        expect(code).toBe(129);
+        expect(NodeFS.readFileSync(NodePath.join(dir, "cleaned"), "utf8")).toBe("cleaned\n");
+        expect(NodeFS.existsSync(NodePath.join(dir, "taskkill"))).toBe(false);
+        expect(NodeFS.existsSync(NodePath.join(dir, "listed"))).toBe(false);
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
       }
-      const body = [
-        "trap 'exit 129' HUP",
-        "trap 'echo cleaned > \"$1/cleaned\"' EXIT",
-        'printf go > "$1/gate"',
-        '/bin/cat "$1/block" >/dev/null',
-      ].join("\n");
-      const { code } = await runShell(
-        withRemoteDeadline(body, 1_000, NodePath.join(bin, "sleep")),
-        [dir],
-        { PATH: bin, GOAT_TEST_DIR: dir },
-        { shell },
-      );
-      // Ended by the hang-up, after its own cleanup, without a forced end.
-      expect(code).toBe(129);
-      expect(NodeFS.readFileSync(NodePath.join(dir, "cleaned"), "utf8")).toBe("cleaned\n");
-      expect(NodeFS.existsSync(NodePath.join(dir, "taskkill"))).toBe(false);
-      expect(NodeFS.existsSync(NodePath.join(dir, "listed"))).toBe(false);
-    } finally {
-      NodeFS.rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
   it
     .skipIf(!NodeFS.existsSync("/proc/self/stat"))
     .each(
@@ -465,7 +473,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
         for (const entry of (process.env.PATH ?? "").split(":")) {
           if (entry === "") continue;
           for (const name of NodeFS.existsSync(entry) ? NodeFS.readdirSync(entry) : []) {
-            if (name === "ps" || NodeFS.existsSync(NodePath.join(bin, name))) continue;
+            if (
+              name === "ps" ||
+              NodeFS.lstatSync(NodePath.join(bin, name), { throwIfNoEntry: false })
+            )
+              continue;
             NodeFS.symlinkSync(NodePath.join(entry, name), NodePath.join(bin, name));
           }
         }
@@ -498,7 +510,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
         for (const entry of (process.env.PATH ?? "").split(":")) {
           if (entry === "") continue;
           for (const name of NodeFS.existsSync(entry) ? NodeFS.readdirSync(entry) : []) {
-            if (name === "ps" || NodeFS.existsSync(NodePath.join(bin, name))) continue;
+            if (
+              name === "ps" ||
+              NodeFS.lstatSync(NodePath.join(bin, name), { throwIfNoEntry: false })
+            )
+              continue;
             NodeFS.symlinkSync(NodePath.join(entry, name), NodePath.join(bin, name));
           }
         }
