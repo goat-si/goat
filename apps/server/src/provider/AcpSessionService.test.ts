@@ -522,11 +522,11 @@ it.effect("concurrent lists for more projects than the hold cap never drop rows 
 );
 
 it.effect.each([
-  { rows: 3, shown: 3, truncated: undefined },
-  { rows: 257, shown: 256, truncated: true },
+  { rows: 3, shown: 3, truncated: undefined, nextCursor: "stale-next" },
+  { rows: 257, shown: 256, truncated: true, nextCursor: null },
 ])(
-  "a list that loses to a newer one keeps its provider cursor ($rows rows)",
-  ({ rows, shown, truncated }) =>
+  "a list that loses to a newer one keeps its cursor only when it sliced nothing ($rows rows)",
+  ({ rows, shown, truncated, nextCursor }) =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0);
       const deleted = yield* Ref.make<ReadonlyArray<string>>([]);
@@ -563,7 +563,7 @@ it.effect.each([
         const stale = yield* Fiber.join(staleFiber);
         expect(stale.sessions).toHaveLength(shown);
         expect(stale.continuation).toBeUndefined();
-        expect(stale.nextCursor).toBe("stale-next");
+        expect(stale.nextCursor).toBe(nextCursor);
         expect(stale.truncated).toBe(truncated);
       }).pipe(Effect.provide(dependencies));
     }),
