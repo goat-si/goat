@@ -592,11 +592,11 @@ describe("GOAT Bot reads an approval from a thread launched on another machine",
       yield* runtime.drain;
       const task = yield* onlyTask;
       yield* admitSsh(task, "late", "completed");
-      yield* insertThreadDispatch("late", sshObservation);
       harness.world.setStatus(task.worker!.threadId, 1, "completed", "Started the notes thread.");
       yield* runtime.drain;
       assert.strictEqual((yield* onlyTask).status, "completed");
       const cardsBefore = yield* cards;
+      yield* insertThreadDispatch("late", sshObservation);
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
       const finished = yield* onlyTask;
@@ -620,9 +620,9 @@ describe("GOAT Bot reads an approval from a thread launched on another machine",
       yield* runtime.drain;
       const task = yield* onlyTask;
       yield* admitSsh(task, "gone", "completed");
-      yield* insertThreadDispatch("gone", sshObservation);
       harness.world.setStatus(task.worker!.threadId, 1, "completed", "Started the notes thread.");
       yield* runtime.drain;
+      yield* insertThreadDispatch("gone", sshObservation);
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
       const sql = yield* SqlClient.SqlClient;
@@ -656,9 +656,9 @@ describe("GOAT Bot reads an approval from a thread launched on another machine",
       yield* runtime.drain;
       const task = yield* onlyTask;
       yield* admitSsh(task, "keep", "completed");
-      yield* insertThreadDispatch("keep", sshObservation);
       harness.world.setStatus(task.worker!.threadId, 1, "completed", "Started the notes thread.");
       yield* runtime.drain;
+      yield* insertThreadDispatch("keep", sshObservation);
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
       const shown = (yield* onlyTask).observed?.needsYou;

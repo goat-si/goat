@@ -24,6 +24,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { replyDelivery } from "./channelReplyDelivery.ts";
+import { launchObservationNeeds } from "./channelRemoteChildNeeds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   isThreadMissing,
@@ -105,11 +106,46 @@ const approvalResultDeliveries = (
   });
 };
 
+const remoteApprovalLeft = (title: string, host: string) =>
+  "The approval on " +
+  host +
+  " is no longer waiting in the coding thread. " +
+  title +
+  " continues if it was approved.";
+
+/** The origin cannot see a remote decision, so a departed host approval is not called approved or denied. */
+const departedHostApprovals = (
+  task: ChannelTask,
+  next: ReadonlyArray<ChannelTaskNeedsYou>,
+): ReadonlyArray<ChannelLedger.ChannelOutboxInsert> => {
+  if (task.requester.originKind === "mcp") return [];
+  const still = new Set(next.flatMap((need) => need.approval?.requestId ?? []));
+  return (task.observed?.needsYou ?? []).flatMap((need) => {
+    const host = need.approval?.host;
+    const requestId = need.approval?.requestId;
+    if (need.kind !== "approval" || host === undefined || requestId === undefined) return [];
+    if (still.has(requestId)) return [];
+    return [
+      replyDelivery({
+        causeKey: "approval-result:" + requestId,
+        destination: task.originAddress,
+        kind: "receipt",
+        text: remoteApprovalLeft(task.title, host),
+        task,
+        ...(task.originAddress.kind === "slack"
+          ? { mentionActorId: task.requester.externalActorId }
+          : {}),
+      }),
+    ];
+  });
+};
+
 /**
  * Writes a worker observation and, in the same commit, any approval the thread just resolved. A
  * shown approval whose thread this pass did not read (its turn ended, so its child work is no
  * longer live) is read here so its decision is not lost.
  */
+
 export const commitWorkerObserved = Effect.fn("channelLateApprovals.commitObserved")(function* (
   ledger: ChannelLedger.ChannelLedger["Service"],
   stored: ChannelLedger.ChannelStoredTask,
@@ -156,7 +192,14 @@ export const commitWorkerObserved = Effect.fn("channelLateApprovals.commitObserv
   const next: ChannelWorkerObservation =
     kept.length === 0 ? observed : { ...observed, needsYou: [...observed.needsYou, ...kept] };
   if (channelWorkerObservationEquals(stored.task.observed, next)) return "unchanged" as const;
-  const deliveries = approvalResultDeliveries(stored.task, [...requests, ...seen]);
+  const decided = approvalResultDeliveries(stored.task, [...requests, ...seen]);
+  const decidedKeys = new Set(decided.map((delivery) => delivery.causeKey));
+  const deliveries = [
+    ...decided,
+    ...departedHostApprovals(stored.task, next.needsYou).filter(
+      (delivery) => !decidedKeys.has(delivery.causeKey),
+    ),
+  ];
   return yield* commitTransition(
     ledger,
     stored,
@@ -188,8 +231,8 @@ const storedObservation = (
 };
 
 /**
- * Finished tasks whose current generation launched a local coding thread. Tasks already showing an
- * approval go first, so a decision is not stuck behind newer tasks that have nothing waiting.
+ * Finished tasks whose current generation launched a coding thread, on this machine or another.
+ * Tasks already showing an approval go first, so a decision is not stuck behind newer work.
  */
 const lateRows = (sql: SqlClient.SqlClient, since: string) =>
   sql<LateRow>`
@@ -208,10 +251,19 @@ const lateRows = (sql: SqlClient.SqlClient, since: string) =>
             AND (task.updated_at >= ${since} OR EXISTS (
               SELECT 1 FROM json_each(task.task_json, '$.observed.needsYou')
               WHERE json_extract(value, '$.kind') = 'approval'))
-            AND json_extract(child.value_json, '$.surface') = 'thread_launch'
+            AND (
+              (
+                json_extract(child.value_json, '$.surface') = 'thread_launch'
+                AND json_extract(child.value_json, '$.destination.threadId') IS NOT NULL
+                AND json_extract(child.value_json, '$.destination.host') IS NULL
+              )
+              OR (
+                json_extract(child.value_json, '$.surface') IN ('ssh_thread_launch', 'delegate_remote')
+                AND json_extract(child.value_json, '$.destination.correlationId') IS NOT NULL
+                AND json_extract(child.value_json, '$.destination.host') IS NOT NULL
+              )
+            )
             AND json_extract(child.value_json, '$.generation') = task.generation
-            AND json_extract(child.value_json, '$.destination.threadId') IS NOT NULL
-            AND json_extract(child.value_json, '$.destination.host') IS NULL
           GROUP BY task.task_id
           ORDER BY CASE WHEN EXISTS (
               SELECT 1 FROM json_each(task.task_json, '$.observed.needsYou')
@@ -219,10 +271,19 @@ const lateRows = (sql: SqlClient.SqlClient, since: string) =>
             ) THEN 0 ELSE 1 END, task.updated_at DESC
           LIMIT ${LATE_APPROVAL_PER_PASS}
         )
-        AND json_extract(c.value_json, '$.surface') = 'thread_launch'
+        AND (
+          (
+            json_extract(c.value_json, '$.surface') = 'thread_launch'
+            AND json_extract(c.value_json, '$.destination.threadId') IS NOT NULL
+            AND json_extract(c.value_json, '$.destination.host') IS NULL
+          )
+          OR (
+            json_extract(c.value_json, '$.surface') IN ('ssh_thread_launch', 'delegate_remote')
+            AND json_extract(c.value_json, '$.destination.correlationId') IS NOT NULL
+            AND json_extract(c.value_json, '$.destination.host') IS NOT NULL
+          )
+        )
         AND json_extract(c.value_json, '$.generation') = t.generation
-        AND json_extract(c.value_json, '$.destination.threadId') IS NOT NULL
-        AND json_extract(c.value_json, '$.destination.host') IS NULL
       `;
 
 /** How many finished tasks learned about a launched thread's approvals this pass. */
@@ -240,7 +301,11 @@ export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile"
     const rows = yield* lateRows(deps.sql, since);
     const groups = new Map<
       string,
-      { readonly stored: ChannelLedger.ChannelStoredTask; readonly threadIds: Array<ThreadId> }
+      {
+        readonly stored: ChannelLedger.ChannelStoredTask;
+        readonly threadIds: Array<ThreadId>;
+        readonly remote: Array<{ readonly correlationId: string; readonly host: string }>;
+      }
     >();
     for (const row of rows) {
       const decodedTask = decodeTask(row.task_json);
@@ -248,9 +313,22 @@ export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile"
       if (Option.isNone(decodedTask) || Option.isNone(decodedChild)) continue;
       const task = decodedTask.value;
       const child = decodedChild.value;
-      const threadId = child.destination?.threadId;
-      if (threadId === undefined || child.destination?.host !== undefined) continue;
-      if (child.surface !== "thread_launch" || child.generation !== task.generation) continue;
+      const destination = child.destination;
+      const remote =
+        (child.surface === "ssh_thread_launch" || child.surface === "delegate_remote") &&
+        child.generation === task.generation &&
+        destination?.correlationId !== undefined &&
+        destination.host !== undefined
+          ? { correlationId: destination.correlationId, host: destination.host }
+          : undefined;
+      const threadId =
+        child.surface === "thread_launch" &&
+        child.generation === task.generation &&
+        destination?.threadId !== undefined &&
+        destination.host === undefined
+          ? destination.threadId
+          : undefined;
+      if (remote === undefined && threadId === undefined) continue;
       const existing = groups.get(task.taskId);
       if (existing === undefined) {
         groups.set(task.taskId, {
@@ -261,15 +339,22 @@ export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile"
             pendingAnswerMessageId: row.pending_answer_message_id ?? undefined,
             completionHold: row.completion_hold ?? undefined,
           },
-          threadIds: [threadId],
+          threadIds: threadId === undefined ? [] : [threadId],
+          remote: remote === undefined ? [] : [remote],
         });
-      } else if (!existing.threadIds.includes(threadId)) {
-        existing.threadIds.push(threadId);
+      } else {
+        if (threadId !== undefined && !existing.threadIds.includes(threadId))
+          existing.threadIds.push(threadId);
+        if (
+          remote !== undefined &&
+          !existing.remote.some((item) => item.correlationId === remote.correlationId)
+        )
+          existing.remote.push(remote);
       }
     }
 
     let changed = 0;
-    for (const { stored, threadIds } of groups.values()) {
+    for (const { stored, threadIds, remote } of groups.values()) {
       const requests: Array<OrchestrationV2RuntimeRequest & { readonly threadId: ThreadId }> = [];
       let unreadable = false;
       for (const threadId of threadIds) {
@@ -284,9 +369,17 @@ export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile"
       }
       // A failed read must not clear an approval the pass could not see.
       if (unreadable) continue;
-      const approvals = needsYouFromRuntimeRequests(requests, (request) => request.threadId).filter(
-        (need) => need.kind === "approval",
+      const remoteNeeds = yield* launchObservationNeeds(
+        deps.sql,
+        remote,
+        stored.task.observed?.needsYou,
       );
+      const approvals = [
+        ...needsYouFromRuntimeRequests(requests, (request) => request.threadId).filter(
+          (need) => need.kind === "approval",
+        ),
+        ...remoteNeeds,
+      ];
       const observed = storedObservation(stored.task, approvals);
       if (channelWorkerObservationEquals(stored.task.observed, observed)) continue;
       const narrate =
