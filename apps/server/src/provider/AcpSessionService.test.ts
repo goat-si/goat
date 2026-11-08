@@ -55,8 +55,11 @@ it.effect("preserves incomplete listings, imports once, and protects imported se
                 importedThreadId: null,
               },
             ],
-            nextCursor: null,
-            truncated: true,
+            rawCursor: null,
+            droppedSessions: true,
+            directoriesCut: false,
+            overflow: false,
+            cursorDropped: false,
             canLoad: true,
             canResume: false,
             canDelete: true,
@@ -146,6 +149,11 @@ it.effect("preserves incomplete listings, imports once, and protects imported se
 );
 
 const continuationInstanceId = ProviderInstanceId.make("acp-hold");
+
+const heldContinuation = (token: string | undefined) => {
+  if (token === undefined) throw new Error("Expected a continuation token");
+  return token;
+};
 const continuationProjectId = ProjectId.make("project-hold");
 
 const heldSession = (sessionId: string) => ({
@@ -254,7 +262,7 @@ it.effect("returns held session 257 from continuation without another provider c
       const second = yield* service.list({
         instanceId: continuationInstanceId,
         projectId: continuationProjectId,
-        continuation: first.continuation,
+        continuation: heldContinuation(first.continuation),
       });
       expect(second.sessions.map((session) => session.sessionId)).toEqual(["native-257"]);
       expect(second.nextCursor).toBe("after-page");
@@ -264,7 +272,7 @@ it.effect("returns held session 257 from continuation without another provider c
         service.list({
           instanceId: continuationInstanceId,
           projectId: continuationProjectId,
-          continuation: first.continuation,
+          continuation: heldContinuation(first.continuation),
         }),
       );
       expect(Result.isFailure(replay) && replay.failure.reason).toBe("continuation_unavailable");
@@ -319,7 +327,7 @@ it.effect("rejects an unknown, mismatched, or expired continuation without a pro
         service.list({
           instanceId: continuationInstanceId,
           projectId: continuationProjectId,
-          continuation: held.continuation,
+          continuation: heldContinuation(held.continuation),
         }),
       );
       expect(Result.isFailure(expired) && expired.failure.reason).toBe("continuation_unavailable");
@@ -358,7 +366,7 @@ it.effect("scrubs a deleted session id from the held page and keeps the token", 
       const second = yield* service.list({
         instanceId: continuationInstanceId,
         projectId: continuationProjectId,
-        continuation: first.continuation,
+        continuation: heldContinuation(first.continuation),
       });
       expect(second.sessions.map((session) => session.sessionId)).toEqual([]);
       expect(second.nextCursor).toBeNull();
@@ -397,7 +405,7 @@ it.effect("calls the provider with the exact 2049-character cursor held for cont
       const second = yield* service.list({
         instanceId: continuationInstanceId,
         projectId: continuationProjectId,
-        continuation: first.continuation,
+        continuation: heldContinuation(first.continuation),
       });
       expect(second.sessions.map((session) => session.sessionId)).toEqual(["from-cursor"]);
       expect(yield* Ref.get(calls)).toEqual([undefined, cursor]);
@@ -452,7 +460,7 @@ it.effect("does not let an older provider page replace a newer hold", () =>
       const next = yield* service.list({
         instanceId: continuationInstanceId,
         projectId: continuationProjectId,
-        continuation: fresh.continuation,
+        continuation: heldContinuation(fresh.continuation),
       });
       expect(next.sessions.map((session) => session.sessionId)).toEqual(["fresh-257"]);
       expect(yield* Ref.get(calls)).toBe(2);

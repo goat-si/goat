@@ -369,7 +369,9 @@ describe("ACP Registry probe", () => {
       expect(listed).toMatchObject({
         canLoad: true,
         canResume: true,
-        nextCursor: null,
+        rawCursor: null,
+        droppedSessions: false,
+        cursorDropped: false,
         sessions: [
           {
             sessionId: "mock-session-1",
@@ -378,7 +380,6 @@ describe("ACP Registry probe", () => {
           },
         ],
       });
-      expect(listed.truncated).toBeUndefined();
       yield* logoutAcpRegistry(input);
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
@@ -419,8 +420,8 @@ describe("ACP Registry probe", () => {
       return Effect.gen(function* () {
         const listed = yield* listAcpRegistrySessions(input);
         expect(listed.sessions.map((session) => session.sessionId)).toEqual(["mock-session-2"]);
-        expect(listed.truncated).toBe(true);
-        expect(listed.nextCursor).toBeNull();
+        expect(listed.droppedSessions).toBe(true);
+        expect(listed.rawCursor).toBeNull();
       }).pipe(
         Effect.provideService(
           AcpRegistrySupport.AcpRegistryCatalog,
@@ -435,7 +436,7 @@ describe("ACP Registry probe", () => {
   it.effect.each([
     ["dirs-over-32", true],
     ["dir-whitespace", true],
-    ["dirs-kept", undefined],
+    ["dirs-kept", false],
   ] as const)(
     "marks a page incomplete only when %s cuts a session's directories",
     ([scenario, cut]) => {
@@ -448,7 +449,7 @@ describe("ACP Registry probe", () => {
       return Effect.gen(function* () {
         const listed = yield* listAcpRegistrySessions(input);
         expect(listed.sessions).toHaveLength(1);
-        expect(listed.truncated).toBe(cut);
+        expect(listed.directoriesCut).toBe(cut);
       }).pipe(
         Effect.provideService(
           AcpRegistrySupport.AcpRegistryCatalog,
@@ -522,8 +523,9 @@ describe("ACP Registry probe", () => {
     return Effect.gen(function* () {
       const listed = yield* listAcpRegistrySessions(input);
       expect(listed.sessions).toHaveLength(1);
-      expect(listed.nextCursor).toBe("next-page");
-      expect(listed.truncated).toBeUndefined();
+      expect(listed.rawCursor).toBe("next-page");
+      expect(listed.cursorDropped).toBe(false);
+      expect(listed.droppedSessions).toBe(false);
     }).pipe(
       Effect.provideService(
         AcpRegistrySupport.AcpRegistryCatalog,
@@ -543,11 +545,22 @@ describe("ACP Registry probe", () => {
     };
     return Effect.gen(function* () {
       const page = yield* listAcpRegistrySessions(input);
+      expect(page.droppedSessions).toBe(true);
       const registered = mcpCatalog.pipe(
         Layer.provide(
           Layer.mergeAll(
             dependencies,
-            Layer.mock(AcpSessionService.AcpSessionService)({ list: () => Effect.succeed(page) }),
+            Layer.mock(AcpSessionService.AcpSessionService)({
+              list: () =>
+                Effect.succeed({
+                  sessions: page.sessions,
+                  truncated: true,
+                  nextCursor: null,
+                  canLoad: page.canLoad,
+                  canResume: page.canResume,
+                  canDelete: page.canDelete,
+                }),
+            }),
           ),
         ),
         Layer.provideMerge(Sqlite.layerMemory),

@@ -1,4 +1,5 @@
 import {
+  AcpRegistryOperationError,
   AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
@@ -17,6 +18,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@goat/client-runtime/state/runtime";
+import * as Schema from "effect/Schema";
 import { useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
@@ -33,6 +35,8 @@ interface AcpSessionProject {
   readonly title: string;
   readonly workspaceRoot: string;
 }
+
+const isAcpRegistryOperationError = Schema.is(AcpRegistryOperationError);
 
 function reportFailure(title: string, result: AtomCommandResult<unknown, unknown>) {
   if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
@@ -82,6 +86,9 @@ export function AcpSessionManagementSection(props: {
   const [projectId, setProjectId] = useState<ProjectId | null>(props.projects[0]?.id ?? null);
   const [sessions, setSessions] = useState<ReadonlyArray<AcpRegistrySession>>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [continuation, setContinuation] = useState<string | null>(null);
+  const [truncatedNotice, setTruncatedNotice] = useState(false);
+  const [expiredNotice, setExpiredNotice] = useState(false);
   const [loading, setLoading] = useState(false);
   const [importingSessionId, setImportingSessionId] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
@@ -128,23 +135,49 @@ export function AcpSessionManagementSection(props: {
 
   if (!canList && !canLogout && !canConfigureProviders) return null;
 
-  const loadSessions = async (cursor?: string) => {
+  const clearSessionList = () => {
+    setSessions([]);
+    setNextCursor(null);
+    setContinuation(null);
+    setTruncatedNotice(false);
+    setExpiredNotice(false);
+  };
+
+  const loadSessions = async (page?: {
+    readonly cursor?: string;
+    readonly continuation?: string;
+  }) => {
     if (projectId === null || loading) return;
+    const paging = page?.continuation !== undefined || page?.cursor !== undefined;
+    if (!paging) clearSessionList();
     setLoading(true);
     const result = await listSessions({
       environmentId: props.environmentId,
       input: {
         instanceId: props.instanceId,
         projectId,
-        ...(cursor === undefined ? {} : { cursor }),
+        ...(page?.continuation !== undefined
+          ? { continuation: page.continuation }
+          : page?.cursor !== undefined
+            ? { cursor: page.cursor }
+            : {}),
       },
     });
     setLoading(false);
     if (result._tag === "Success") {
       setSessions((current) =>
-        cursor === undefined ? result.value.sessions : [...current, ...result.value.sessions],
+        paging ? [...current, ...result.value.sessions] : result.value.sessions,
       );
       setNextCursor(result.value.nextCursor);
+      setContinuation(result.value.continuation ?? null);
+      if (result.value.truncated === true) setTruncatedNotice(true);
+      setExpiredNotice(false);
+      return;
+    }
+    const failure = squashAtomCommandFailure(result);
+    if (isAcpRegistryOperationError(failure) && failure.reason === "continuation_unavailable") {
+      setContinuation(null);
+      setExpiredNotice(true);
       return;
     }
     reportFailure("Could not list ACP sessions", result);
@@ -312,8 +345,7 @@ export function AcpSessionManagementSection(props: {
     });
     setLoggingOut(false);
     if (result._tag === "Success") {
-      setSessions([]);
-      setNextCursor(null);
+      clearSessionList();
       toastManager.add({ type: "success", title: "Logged out of ACP agent" });
       return;
     }
@@ -351,8 +383,7 @@ export function AcpSessionManagementSection(props: {
                   onValueChange={(value) => {
                     if (value === null) return;
                     setProjectId(value as ProjectId);
-                    setSessions([]);
-                    setNextCursor(null);
+                    clearSessionList();
                     setProviders([]);
                     setProviderDrafts({});
                   }}
@@ -384,7 +415,12 @@ export function AcpSessionManagementSection(props: {
           </div>
         }
       >
-        {canList && (sessions.length > 0 || nextCursor !== null) ? (
+        {canList &&
+        (sessions.length > 0 ||
+          nextCursor !== null ||
+          continuation !== null ||
+          truncatedNotice ||
+          expiredNotice) ? (
           <>
             {sessions.length > 0 ? (
               <div className="divide-y divide-border/60 border-y border-border/60">
@@ -441,17 +477,30 @@ export function AcpSessionManagementSection(props: {
               </div>
             ) : null}
 
-            {nextCursor !== null ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="ghost-muted"
-                className="w-fit"
-                disabled={!canRead || loading}
-                onClick={() => void loadSessions(nextCursor)}
-              >
-                {loading ? "Loading" : "Load more"}
-              </Button>
+            {truncatedNotice ? (
+              <p className="text-xs text-muted-foreground">Some sessions could not be shown.</p>
+            ) : null}
+            {expiredNotice ? (
+              <p className="text-xs text-muted-foreground">
+                This session list expired. Refresh to list sessions again.
+              </p>
+            ) : null}
+
+            {continuation !== null || nextCursor !== null ? (
+              <div className="w-fit">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost-muted"
+                  disabled={!canRead || loading}
+                  onClick={() => {
+                    if (continuation !== null) void loadSessions({ continuation });
+                    else if (nextCursor !== null) void loadSessions({ cursor: nextCursor });
+                  }}
+                >
+                  {loading ? "Loading" : "Load more"}
+                </Button>
+              </div>
             ) : null}
           </>
         ) : null}
@@ -486,6 +535,7 @@ export function AcpSessionManagementSection(props: {
               onValueChange={(value) => {
                 if (value === null) return;
                 setProjectId(value as ProjectId);
+                clearSessionList();
                 setProviders([]);
                 setProviderDrafts({});
               }}
