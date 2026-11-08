@@ -384,14 +384,19 @@ describe("Windows SSH host", () => {
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-listener-" });
       const bin = `${root}/bin`;
       yield* fs.makeDirectory(bin);
-      // PowerShell records each start. Asked to wait, it answers as its own loop would; asked once,
-      // it sees the listener only from its third poll, as a server that takes a while to bind.
-      // tasklist lists the server while $TEST_ROOT/alive exists; the clock moves on at each read.
+      // PowerShell records each start. Given a deadline, it answers as its own loop would; asked
+      // once, it sees the listener only from its third poll, as a server that binds late. A late
+      // answer moves the clock past the deadline; a vanishing server exits as it answers. tasklist
+      // lists the server while $TEST_ROOT/alive exists; the clock moves a second per read.
       for (const [name, body] of Object.entries({
         uname: WINDOWS_DOUBLES.uname,
-        "powershell.exe": String.raw`echo "${"${"}GOAT_WAIT_SECONDS:-poll}" >>"$TEST_ROOT/powershell-calls"
+        "powershell.exe": String.raw`echo "${"${"}GOAT_WAIT_UNTIL_MS:-poll}" >>"$TEST_ROOT/powershell-calls"
 [ -e "$TEST_ROOT/listening" ] || exit 1
-[ -n "${"${"}GOAT_WAIT_SECONDS:-}" ] && exit 0
+if [ -n "${"${"}GOAT_WAIT_UNTIL_MS:-}" ]; then
+  if [ -e "$TEST_ROOT/late" ]; then echo 2000 >"$TEST_ROOT/clock"; fi
+  if [ -e "$TEST_ROOT/vanish" ]; then rm -f "$TEST_ROOT/alive"; fi
+  exit 0
+fi
 [ "$(wc -l <"$TEST_ROOT/powershell-calls")" -ge 3 ]`,
         "tasklist.exe": `[ -e "$TEST_ROOT/alive" ] && echo '"goat.exe","4242","Services","0","1 K"'`,
         date: 'n="$(cat "$TEST_ROOT/clock")"; echo "$((n + 1))" >"$TEST_ROOT/clock"; echo "$n"',
@@ -400,10 +405,15 @@ describe("Windows SSH host", () => {
         yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
         yield* fs.chmod(`${bin}/${name}`, 0o755);
       }
-      const run = (state: { listening: boolean; alive: boolean }) =>
+      const run = (state: {
+        listening: boolean;
+        alive: boolean;
+        late?: boolean;
+        vanish?: boolean;
+      }) =>
         Effect.gen(function* () {
-          for (const [name, present] of Object.entries(state)) {
-            if (present) yield* fs.writeFileString(`${root}/${name}`, "");
+          for (const name of ["listening", "alive", "late", "vanish"] as const) {
+            if (state[name]) yield* fs.writeFileString(`${root}/${name}`, "");
             else yield* fs.remove(`${root}/${name}`, { force: true });
           }
           yield* fs.writeFileString(`${root}/clock`, "1000\n");
@@ -431,16 +441,24 @@ describe("Windows SSH host", () => {
             .filter(Boolean);
           return { out: result.stdout.trim(), calls };
         });
-      // One start waits for the listener, with the seconds left before the deadline.
+      // One start waits for the listener until the launch's own deadline (1005 s, in ms).
       assert.deepEqual(yield* run({ listening: true, alive: true }), {
         out: "ready",
-        calls: ["4"],
+        calls: ["1005000"],
       });
-      // A listener that never comes still ends at the deadline: each start waits only the seconds
-      // left (this clock moves a second per read).
+      // A listener that never comes still ends at that deadline.
       assert.deepEqual(yield* run({ listening: false, alive: true }), {
         out: "gone",
-        calls: ["4", "3", "2", "1"],
+        calls: ["1005000", "1005000", "1005000", "1005000"],
+      });
+      // An answer after the deadline, or from a server that has exited, is not ready.
+      assert.deepEqual(yield* run({ listening: true, alive: true, late: true }), {
+        out: "gone",
+        calls: ["1005000"],
+      });
+      assert.deepEqual(yield* run({ listening: true, alive: true, vanish: true }), {
+        out: "gone",
+        calls: ["1005000"],
       });
       // A server that exits is not waited for.
       assert.deepEqual(yield* run({ listening: true, alive: false }), { out: "gone", calls: [] });

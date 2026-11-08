@@ -860,8 +860,8 @@ fi`;
 const WINDOWS_AWAIT_LISTENER_POWERSHELL = String.raw`$ErrorActionPreference = 'Stop'
 $id = [int]$env:GOAT_PROCESS_ID
 $port = [int]$env:GOAT_LISTEN_PORT
-$deadline = [DateTime]::UtcNow.AddSeconds([int]$env:GOAT_WAIT_SECONDS)
-while ([DateTime]::UtcNow -lt $deadline) {
+$until = [long]$env:GOAT_WAIT_UNTIL_MS
+while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $until) {
   if (-not (Get-Process -Id $id -ErrorAction SilentlyContinue)) { exit 1 }
   $connections = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
   if ($connections | Where-Object { $_.OwningProcess -eq $id -and $_.LocalAddress -eq '127.0.0.1' }) { exit 0 }
@@ -916,16 +916,17 @@ server_owns_listener() (
   fi
 )
 # Windows: each PowerShell start costs about 1.5 s, so one waits for server $1 to own the listener on
-# port $2, checking as often as the loop below, until it exits or $3 seconds pass.
+# port $2, checking as often as the loop below, until it exits or the epoch second $3 arrives.
 server_awaits_listener() {
-  GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" GOAT_WAIT_SECONDS="$3" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
+  GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" GOAT_WAIT_UNTIL_MS="${"${"}3}000" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
 }
 wait_launched_listener() {
   listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
-  while server_alive "$REMOTE_PID" && listen_left=$(( listen_deadline - $(date +%s) )) &&
-    [ "$listen_left" -gt 0 ]; do
+  while server_alive "$REMOTE_PID" && [ "$(date +%s)" -lt "$listen_deadline" ]; do
     if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
-      server_awaits_listener "$REMOTE_PID" "$REMOTE_PORT" "$listen_left" && return 0
+      # PowerShell starts late and answers late: ready only before the deadline, from a live server.
+      server_awaits_listener "$REMOTE_PID" "$REMOTE_PORT" "$listen_deadline" &&
+        [ "$(date +%s)" -lt "$listen_deadline" ] && server_alive "$REMOTE_PID" && return 0
     else
       server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0
     fi
