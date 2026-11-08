@@ -77,6 +77,8 @@ import {
   isThreadMissing,
   newApprovals,
   hasNewLocalQuestion,
+  launchedRequestRead,
+  launchedThreadRequests,
   needsYouFromRuntimeRequests,
   scanSubagents,
   observeWorker,
@@ -274,9 +276,9 @@ const make = Effect.gen(function* () {
     });
 
   /**
-   * Pending requests in the coding threads this generation launched that still run: a question
-   * there waits on the person like the worker's own. Remote child work is not read here. A failed
-   * read returns "unknown" so the pass keeps what it observed before; a deleted thread asks nothing.
+   * Pending requests in coding threads this generation launched. A completed run still contributes
+   * a waiting question, not an approval. A failed read returns "unknown" so the pass keeps what
+   * it observed; a deleted thread asks nothing.
    */
   const childWorkRequests = (
     records: ReadonlyArray<ChannelChildWork> | "unknown",
@@ -285,18 +287,14 @@ const make = Effect.gen(function* () {
     records === "unknown"
       ? Effect.succeed("unknown" as const)
       : Effect.forEach(
-          records.flatMap((record) =>
-            record.generation === generation &&
-            record.surface === "thread_launch" &&
-            CHILD_WORK_HOLD_STATES.has(record.state) &&
-            record.destination?.threadId !== undefined
-              ? [record.destination.threadId]
-              : [],
-          ),
-          (threadId) =>
-            threads.getThreadRecords(threadId, ["runtimeRequests"]).pipe(
+          records.flatMap((record) => {
+            const read = launchedRequestRead(record, generation);
+            return read === undefined ? [] : [read];
+          }),
+          (read) =>
+            threads.getThreadRecords(read.threadId, ["runtimeRequests"]).pipe(
               Effect.map((records) =>
-                records.runtimeRequests.map((request) => ({ ...request, threadId })),
+                launchedThreadRequests(records.runtimeRequests, read.threadId, read.questionsOnly),
               ),
               Effect.catchIf(isThreadMissing, () => Effect.succeed([])),
             ),

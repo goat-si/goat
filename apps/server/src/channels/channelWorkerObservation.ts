@@ -13,6 +13,7 @@ import type {
   ChannelTaskNeedsYouKind,
   ChannelTaskPullRequest,
   ChannelWorkerObservation,
+  ChannelChildWork,
   ThreadResult,
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
@@ -370,3 +371,44 @@ export const subagentRequests = <E, R>(
   never,
   R
 > => scanSubagents(subagents, read).pipe(Effect.map((scan) => scan.requests));
+
+const ACTIVE_LAUNCH_STATES: ReadonlySet<ChannelChildWork["state"]> = new Set([
+  "launched",
+  "bound",
+  "unknown",
+]);
+
+export interface LaunchedRequestRead {
+  readonly threadId: ThreadId;
+  /** A finished run can still be waiting on a question. Its approvals are read after the task ends. */
+  readonly questionsOnly: boolean;
+}
+
+/** This generation's local thread_launch, or nothing. A completed launch is questions only. */
+export const launchedRequestRead = (
+  record: ChannelChildWork,
+  generation: number,
+): LaunchedRequestRead | undefined => {
+  const threadId = record.destination?.threadId;
+  if (
+    record.generation !== generation ||
+    record.surface !== "thread_launch" ||
+    threadId === undefined
+  ) {
+    return undefined;
+  }
+  if (record.state === "completed") return { threadId, questionsOnly: true };
+  if (ACTIVE_LAUNCH_STATES.has(record.state)) return { threadId, questionsOnly: false };
+  return undefined;
+};
+
+export const launchedThreadRequests = (
+  requests: ReadonlyArray<OrchestrationV2RuntimeRequest>,
+  threadId: ThreadId,
+  questionsOnly: boolean,
+): ReadonlyArray<OrchestrationV2RuntimeRequest & { readonly threadId: ThreadId }> =>
+  requests.flatMap((request) =>
+    questionsOnly && request.kind !== "user_input" && request.kind !== "mcp-elicitation"
+      ? []
+      : [{ ...request, threadId }],
+  );
