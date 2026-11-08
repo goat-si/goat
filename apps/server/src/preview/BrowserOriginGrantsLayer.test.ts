@@ -600,3 +600,90 @@ it.effect("a committed blocked-host publication ends the claim without a setting
     yield* Deferred.succeed(release, undefined);
   }).pipe(Effect.scoped),
 );
+
+it.effect(
+  "a committed publication blocks a new claim and the next manifest without a settings event",
+  () =>
+    Effect.gen(function* () {
+      const base = Context.get(
+        yield* Layer.build(ServerSettings.layerTest()),
+        ServerSettings.ServerSettingsService,
+      );
+      const initial = yield* base.getSettings;
+      const policy = yield* makeCuaCommittedPolicy;
+      yield* policy.publish(initial, Option.none());
+      const published: Array<ReadonlyArray<string>> = [];
+      const hash = "a".repeat(64);
+      const settings = {
+        ...base,
+        committedPolicy: policy.read,
+        subscribeChanges: Effect.succeed(Stream.empty),
+      };
+      const context = yield* Layer.build(
+        Grants.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(ServerSettings.ServerSettingsService, settings),
+              Layer.mock(ServerEnvironment.ServerEnvironment)({
+                getDescriptor: Effect.succeed(
+                  decodeDescriptor({
+                    environmentId: EnvironmentId.make("environment:test"),
+                    label: "Test",
+                    platform: { os: "linux", arch: "x64" },
+                    serverVersion: "test",
+                    capabilities: { repositoryIdentity: true },
+                  }),
+                ),
+              }),
+              Layer.succeed(BrowserClaimManifest, {
+                publish: (union) =>
+                  Effect.sync(() => {
+                    published.push(union.origins);
+                    return hash;
+                  }),
+                readConfig: Effect.succeed({
+                  capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+                }),
+                install: () => Effect.void,
+              }),
+              Layer.succeed(BrowserClaimBind, {
+                bind: (request) =>
+                  Effect.succeed({
+                    targetId: "target-" + String(request.windowId),
+                    tabId: "tab-" + String(request.windowId),
+                    title: "Site",
+                    url: request.origin,
+                    driverGeneration: 1,
+                  }),
+              }),
+            ),
+          ),
+        ),
+      );
+      const service = Context.get(context, Grants.BrowserOriginGrants);
+      yield* service.setDriverCapability(true);
+      const threadId = ThreadId.make("thread:blocked");
+      const claimFor = (windowId: number, origin: string) =>
+        service.claim({ threadId, pid: 42, windowId, origin, windowTitle: "Browser" });
+      const kept = yield* claimFor(7, "https://b.test");
+      const blocked = yield* claimFor(8, "https://a.test");
+      if (kept.agentResult.status !== "attached" || blocked.agentResult.status !== "attached")
+        return assert.fail("expected attached claims");
+      yield* policy.publish({ ...initial, blockedBrowserHosts: ["a.test"] }, Option.none());
+      yield* Effect.yieldNow;
+      const requested = yield* service.request({
+        threadId,
+        pid: 42,
+        windowId: 9,
+        origin: "https://a.test",
+        windowTitle: "Browser",
+      });
+      const answered =
+        requested.status === "pending" ? yield* service.answer(requested.claimId, true) : requested;
+      const refusal = "agentResult" in answered ? answered.agentResult : answered;
+      assert.equal(refusal.status, "refused");
+      if (refusal.status === "refused") assert.equal(refusal.code, "blocked_url");
+      assert.deepEqual(published.at(-1), ["https://b.test"]);
+      assert.lengthOf((yield* service.snapshotFor(threadId)).claims, 1);
+    }).pipe(Effect.scoped),
+);

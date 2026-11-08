@@ -28,8 +28,10 @@ const make = Effect.gen(function* () {
   const service = yield* makeBrowserOriginGrants({
     environmentId,
     blockedHostsNow: () => {
-      if (settings.committedPolicy === undefined) return undefined;
-      const policy = runSync(settings.committedPolicy);
+      const handle = settings.committedPolicy;
+      if (handle?.hostsNow) return handle.hostsNow();
+      if (handle === undefined) return undefined;
+      const policy = runSync(handle);
       return policy._tag === "committed" && Array.isArray(policy.blockedBrowserHosts)
         ? policy.blockedBrowserHosts
         : undefined;

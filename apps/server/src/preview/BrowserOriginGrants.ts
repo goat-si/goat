@@ -112,9 +112,15 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   deps: Dependencies,
 ) {
   const lock = yield* Semaphore.make(1);
+  const listedHosts = (fallback: ReadonlyArray<string>) =>
+    deps.blockedHostsNow
+      ? Effect.succeed(deps.blockedHostsNow())
+      : (deps.blockedHosts ?? Effect.succeed(fallback)).pipe(
+          Effect.map((hosts): ReadonlyArray<string> | undefined => hosts),
+        );
   const blockedUrl = (url: string) =>
-    (deps.blockedHosts ?? Effect.succeed([])).pipe(
-      Effect.map((hosts) => isBlockedBrowserUrl(url, hosts)),
+    listedHosts([]).pipe(
+      Effect.map((hosts) => hosts === undefined || isBlockedBrowserUrl(url, hosts)),
       Effect.orElseSucceed(() => true),
     );
   const writeLock = yield* Semaphore.make(1);
@@ -147,11 +153,14 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const write = (narrowing: boolean) =>
     writeLock.withPermits(1)(
       Effect.gen(function* () {
-        const hosts = yield* deps.blockedHosts ?? Effect.succeed([]);
+        const hosts = yield* listedHosts([]);
         const current = union();
         const value = {
           ...current,
-          origins: current.origins.filter((origin) => !isBlockedBrowserUrl(origin, hosts)),
+          origins:
+            hosts === undefined
+              ? []
+              : current.origins.filter((origin) => !isBlockedBrowserUrl(origin, hosts)),
         };
         if (
           narrowing &&
@@ -768,9 +777,14 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       expected === undefined &&
       authorizeClaimBind(authority, name, args, bindingValues(threadId))
     ) {
-      const hosts = yield* (deps.blockedHosts ?? Effect.succeed(fallbackHosts)).pipe(Effect.option);
+      const hosts = yield* listedHosts(fallbackHosts).pipe(Effect.option);
       const binding = authorizeClaimBind(authority, name, args, bindingValues(threadId));
-      if (Option.isNone(hosts) || !binding || isBlockedBrowserUrl(binding.origin, hosts.value))
+      if (
+        Option.isNone(hosts) ||
+        hosts.value === undefined ||
+        !binding ||
+        isBlockedBrowserUrl(binding.origin, hosts.value)
+      )
         return { status: "blocked" as const };
       return {
         status: "admit" as const,
@@ -779,10 +793,9 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     }
     return yield* lock.withPermits(1)(
       Effect.gen(function* () {
-        const hosts = yield* (deps.blockedHosts ?? Effect.succeed(fallbackHosts)).pipe(
-          Effect.option,
-        );
-        if (Option.isNone(hosts)) return { status: "blocked" as const };
+        const hosts = yield* listedHosts(fallbackHosts).pipe(Effect.option);
+        if (Option.isNone(hosts) || hosts.value === undefined)
+          return { status: "blocked" as const };
         if (expected && !claims.has(expected.claimId))
           return {
             status:
@@ -845,8 +858,8 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     expected: { readonly claimId: string; readonly origin: string },
     authority?: "claimBind",
   ) {
-    const hosts = yield* (deps.blockedHosts ?? Effect.succeed(fallbackHosts)).pipe(Effect.option);
-    if (Option.isNone(hosts)) return { status: "blocked" as const };
+    const hosts = yield* listedHosts(fallbackHosts).pipe(Effect.option);
+    if (Option.isNone(hosts) || hosts.value === undefined) return { status: "blocked" as const };
     const binding = authorizeClaimBind(authority, name, args, bindingValues(threadId));
     if (!binding || binding.claimId !== expected.claimId || binding.origin !== expected.origin)
       return { status: "outside" as const };
