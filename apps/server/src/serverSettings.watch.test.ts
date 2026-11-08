@@ -458,3 +458,99 @@ it.effect("computer use policy follows external edits at watcher revalidation", 
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
+
+// The inline secret makes a cold read migrate; holding the first secret write suspends that migration.
+const heldMigrationLayer = () => {
+  const entered = Deferred.makeUnsafe<void>();
+  const release = Deferred.makeUnsafe<void>();
+  let holdNextSecretWrite = true;
+  const secrets = Layer.effect(
+    ServerSecretStore.ServerSecretStore,
+    Effect.map(ServerSecretStore.ServerSecretStore, (store) => ({
+      ...store,
+      set: (name: string, value: Uint8Array) =>
+        Effect.gen(function* () {
+          if (holdNextSecretWrite) {
+            holdNextSecretWrite = false;
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+          }
+          yield* store.set(name, value);
+        }),
+    })),
+  ).pipe(Layer.provide(ServerSecretStore.layer));
+  const layer = ServerSettingsModule.layer.pipe(
+    Layer.provide(secrets),
+    Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
+    Layer.provideMerge(
+      Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "goat-settings-migration-" })),
+    ),
+  );
+  return { entered, release, layer };
+};
+
+const legacySettings = JSON.stringify({
+  enableCua: true,
+  completionWebhook: { secret: "inline-test-secret" },
+});
+const restrictedSettings = { enableCua: false, blockedBrowserHosts: ["blocked.example"] };
+
+it.effect("a cold-cache settings migration keeps an external edit made while it ran", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const held = heldMigrationLayer();
+    yield* Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const config = yield* ServerConfig.ServerConfig;
+      yield* fs.writeFileString(config.settingsPath, legacySettings);
+      const reader = yield* service.getSettings.pipe(Effect.forkChild);
+      yield* Deferred.await(held.entered);
+      yield* fs.writeFileString(config.settingsPath, JSON.stringify(restrictedSettings));
+      yield* Deferred.succeed(held.release, undefined);
+      const read = yield* Fiber.join(reader);
+      assert.deepStrictEqual(
+        JSON.parse(yield* fs.readFileString(config.settingsPath)),
+        restrictedSettings,
+      );
+      assert.strictEqual(read.enableCua, false);
+      assert.deepStrictEqual(read.blockedBrowserHosts, ["blocked.example"]);
+    }).pipe(Effect.provide(held.layer));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a settings update made during a cold-cache migration keeps its restriction", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const held = heldMigrationLayer();
+    yield* Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const config = yield* ServerConfig.ServerConfig;
+      yield* fs.writeFileString(config.settingsPath, legacySettings);
+      const reader = yield* service.getSettings.pipe(Effect.forkChild);
+      yield* Deferred.await(held.entered);
+      const writer = yield* service.updateSettings(restrictedSettings).pipe(Effect.forkChild);
+      yield* Deferred.succeed(held.release, undefined);
+      yield* Fiber.join(reader);
+      yield* Fiber.join(writer);
+      const onDisk = JSON.parse(yield* fs.readFileString(config.settingsPath));
+      assert.notStrictEqual(onDisk.enableCua, true);
+      assert.deepStrictEqual(onDisk.blockedBrowserHosts, ["blocked.example"]);
+      assert.deepStrictEqual(
+        yield* service.committedPolicy ?? Effect.die("missing committed policy"),
+        { _tag: "committed", enableCua: false, blockedBrowserHosts: ["blocked.example"] },
+      );
+      assert.deepStrictEqual(yield* service.blockedBrowserHostsSnapshot, ["blocked.example"]);
+      const settings = yield* service.getSettings;
+      assert.strictEqual(settings.enableCua, false);
+      assert.deepStrictEqual(settings.blockedBrowserHosts, ["blocked.example"]);
+    }).pipe(Effect.provide(held.layer));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("memory hub administration reads a cold settings cache under its own lock", () =>
+  Effect.gen(function* () {
+    const admin = yield* ServerSettingsModule.MemoryHubAdminSettings;
+    const view = yield* admin.withLock(admin.read);
+    assert.strictEqual(view.settings.mode, "disabled");
+  }).pipe(Effect.provide(layerServerSettings()), Effect.provide(NodeServices.layer)),
+);
