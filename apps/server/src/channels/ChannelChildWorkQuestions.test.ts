@@ -9,8 +9,10 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ChildStore from "./channelChildWorkStore.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -496,6 +498,22 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
       const finished = yield* onlyTask;
       assert.strictEqual(finished.status, "completed");
       assert.deepStrictEqual(finished.observed?.needsYou, shown);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("records the worker run as waiting while an ended thread's approval waits", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const startedAt = DateTime.makeUnsafe("2026-10-12T00:00:00.000Z");
+      yield* TestClock.setTime(DateTime.toEpochMillis(startedAt));
+      const { runtime, reports } = yield* shownThenEnded(harness, "kept-waiting");
+      const task = yield* onlyTask;
+      harness.world.activityAt.set(task.worker!.threadId, startedAt);
+      yield* TestClock.adjust(Duration.millis(ChannelWorkerReports.STALLED_AFTER_MS + 1));
+      yield* reports.reconcile(runtime.ownerToken);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const [run] = yield* ledger.listWorkerRuns([task.taskId]);
+      assert.strictEqual(run?.status, "waiting");
     }).pipe(Effect.provide(harness.layer));
   });
 });

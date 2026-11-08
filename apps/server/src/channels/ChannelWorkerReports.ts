@@ -616,7 +616,7 @@ const make = Effect.gen(function* () {
         latest.task,
         runs,
         launched?.ordinal ?? bound?.ordinal ?? 0,
-        observed.needsYou.length > 0,
+        (latest.task.observed?.needsYou.length ?? 0) > 0,
         records.value.thread.updatedAt,
       );
 
