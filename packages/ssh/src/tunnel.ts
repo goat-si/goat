@@ -96,7 +96,7 @@ import {
   type SshRuntimeProgressCallback,
 } from "./remoteRuntime.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
-import { remoteUploadCommand } from "./runtimeInstallScripts.ts";
+import { REMOTE_RUNTIME_PUBLISH_SCRIPT, remoteUploadCommand } from "./runtimeInstallScripts.ts";
 import { runtimePreparationError } from "./runtimePreparationErrors.ts";
 import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
 import { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
@@ -773,8 +773,7 @@ if ! goat_runtime_ready; then
   esac
   printf '%s %s %s %s\\n' "$GOAT_ARCHIVE_VERSION" "$GOAT_EXPECTED" "$GOAT_EXECUTABLE_SHA256" "$GOAT_RECORD_SOURCE" > "$GOAT_STAGING/.install-record"
   printf '%s\\n' "$GOAT_ARCHIVE_VERSION" > "$GOAT_STAGING/.install-complete"
-  rm -rf "$GOAT_RUNTIME_DIR"
-  mv "$GOAT_STAGING" "$GOAT_RUNTIME_DIR"
+${REMOTE_RUNTIME_PUBLISH_SCRIPT}
 fi
 if [ -n "\${GOAT_LOCK:-}" ]; then
   goat_lock_cleanup

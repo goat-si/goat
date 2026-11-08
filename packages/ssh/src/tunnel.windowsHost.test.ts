@@ -13,6 +13,7 @@ import * as NetService from "@goat/shared/Net";
 import { WINDOWS_DETACHED_SPAWN_POWERSHELL } from "@goat/shared/windowsHostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as PlatformError from "effect/PlatformError";
 import * as Crypto from "effect/Crypto";
 import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
@@ -38,6 +39,7 @@ import {
   remoteUploadCommand,
   SshEnvironmentManager,
 } from "./tunnel.ts";
+import { REMOTE_RUNTIME_PUBLISH_ATTEMPTS } from "./remoteRuntime.ts";
 import { REMOTE_HOST_PROCESS_SCRIPT } from "./runtimeOwnershipScripts.ts";
 
 // Stand-ins for the Git Bash host: uname reports MINGW, PowerShell answers for two
@@ -340,80 +342,174 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
     assert.equal(posix.archiveLength, archive.byteLength);
   });
 
+  // Git Bash host with wget and a System32 tar.exe double. PATH is a copy of the real one; tests
+  // put their doubles in a directory ahead of it and exec the real binaries by absolute path.
+  const installOnGitBash = (input: {
+    readonly doubles?: (paths: {
+      readonly root: string;
+      readonly runtimeDir: string;
+    }) => Record<string, string>;
+    readonly prepare?: (
+      runtimeDir: string,
+    ) => Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem>;
+  }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const crypto = yield* Crypto.Crypto;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-install-" });
+      const home = `${root}/home`;
+      const bin = `${root}/bin`;
+      const sys32 = `${root}/System32`;
+      const stage = `${root}/stage/goat-${ARCHIVE.archiveVersion}-win32-x64`;
+      const release = `${root}/release`;
+      const runtimeDir = `${home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}`;
+      for (const dir of [home, bin, sys32, stage, release]) {
+        yield* fs.makeDirectory(dir, { recursive: true });
+      }
+      yield* fs.writeFileString(
+        `${stage}/goat`,
+        `#!/bin/sh\nif [ "$1" = --version ]; then echo 'goat v${ARCHIVE.archiveVersion}'; else exit 2; fi\n`,
+      );
+      yield* fs.chmod(`${stage}/goat`, 0o755);
+      const zipPath = `${release}/goat-${ARCHIVE.archiveVersion}-win32-x64.zip`;
+      NodeChildProcess.execFileSync("tar", [
+        "-czf",
+        zipPath,
+        "-C",
+        `${root}/stage`,
+        `goat-${ARCHIVE.archiveVersion}-win32-x64`,
+      ]);
+      const sha = Hex.encode(yield* crypto.digest("SHA-256", yield* fs.readFile(zipPath)));
+      yield* fs.writeFileString(
+        `${release}/SHA256SUMS`,
+        `${sha} *goat-${ARCHIVE.archiveVersion}-win32-x64.zip\n`,
+      );
+      yield* fs.writeFileString(
+        `${bin}/uname`,
+        `#!/bin/sh\nif [ "$1" = -s ]; then echo MINGW64_NT-10.0-26200; else echo x86_64; fi\n`,
+      );
+      yield* fs.writeFileString(
+        `${bin}/cygpath`,
+        `#!/bin/sh\nif [ "$1" = -S ]; then echo '${sys32}'; else printf '%s\\n' "$2"; fi\n`,
+      );
+      yield* fs.writeFileString(`${sys32}/tar.exe`, `#!/bin/sh\nexec tar -xzf "$2" -C "$4" "$5"\n`);
+      yield* fs.writeFileString(
+        `${bin}/wget`,
+        `#!/bin/sh\nif [ "$1" = --help ]; then echo --retry-on-http-error; exit 0; fi\nurl=""; out=""\nwhile [ $# -gt 0 ]; do\n  case "$1" in -O) out="$2"; shift 2 ;; http*) url="$1"; shift ;; *) shift ;; esac\ndone\ncp "${release}/$(basename "$url")" "$out"\n`,
+      );
+      for (const file of [`${bin}/uname`, `${bin}/cygpath`, `${sys32}/tar.exe`, `${bin}/wget`]) {
+        yield* fs.chmod(file, 0o755);
+      }
+      for (const dir of (process.env.PATH ?? "").split(":")) {
+        if (!dir) continue;
+        const entries = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
+        for (const entry of entries) {
+          if (entry === "curl" || entry === "wget" || entry === "uname" || entry === "cygpath")
+            continue;
+          yield* fs.symlink(`${dir}/${entry}`, `${bin}/${entry}`).pipe(Effect.ignore);
+        }
+      }
+      const doubles = input.doubles?.({ root, runtimeDir }) ?? {};
+      const front = `${root}/doubles`;
+      yield* fs.makeDirectory(front);
+      for (const [name, body] of Object.entries(doubles)) {
+        yield* fs.writeFileString(`${front}/${name}`, `#!/bin/sh\n${body}\n`);
+        yield* fs.chmod(`${front}/${name}`, 0o755);
+      }
+      if (input.prepare) yield* input.prepare(runtimeDir);
+      const result = NodeChildProcess.spawnSync(remoteShell, ["-s"], {
+        input: buildRemoteHostDownloadScript(ARCHIVE),
+        encoding: "utf8",
+        env: { ...process.env, HOME: home, PATH: `${front}:${bin}` },
+      });
+      const lines = (name: string) =>
+        fs.readFileString(`${root}/${name}`).pipe(
+          Effect.map((text) => text.split("\n").filter(Boolean)),
+          Effect.orElseSucceed((): string[] => []),
+        );
+      return { fs, result, sha, runtimeDir, lines };
+    });
+
+  const realBinary = (name: string) =>
+    NodeChildProcess.execFileSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8" }).trim();
+  const instantSleep = (root: string) => `echo "$1" >> '${root}/sleeps'`;
+  // Windows refuses to rename a directory while antivirus holds the new goat.exe open.
+  const lockedStagingMv = (root: string, failures: number) =>
+    `case "\${1##*/}" in .staging-*)
+  n="$(cat '${root}/mv-failures' 2>/dev/null || echo 0)"
+  if [ "$n" -lt ${failures} ]; then
+    echo "$((n + 1))" > '${root}/mv-failures'
+    echo "mv: cannot move '$1' to '$2': Permission denied" >&2
+    exit 1
+  fi ;;
+esac
+exec '${realBinary("mv")}' "$@"`;
+
   it.effect(
     "installs the win32-x64 zip archive on a Windows Git Bash host with wget and System32 tar.exe",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const crypto = yield* Crypto.Crypto;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-install-" });
-        const home = `${root}/home`;
-        const bin = `${root}/bin`;
-        const sys32 = `${root}/System32`;
-        const stage = `${root}/stage/goat-${ARCHIVE.archiveVersion}-win32-x64`;
-        const release = `${root}/release`;
-        for (const dir of [home, bin, sys32, stage, release]) {
-          yield* fs.makeDirectory(dir, { recursive: true });
-        }
-        yield* fs.writeFileString(
-          `${stage}/goat`,
-          `#!/bin/sh\nif [ "$1" = --version ]; then echo 'goat v${ARCHIVE.archiveVersion}'; else exit 2; fi\n`,
-        );
-        yield* fs.chmod(`${stage}/goat`, 0o755);
-        const zipPath = `${release}/goat-${ARCHIVE.archiveVersion}-win32-x64.zip`;
-        NodeChildProcess.execFileSync("tar", [
-          "-czf",
-          zipPath,
-          "-C",
-          `${root}/stage`,
-          `goat-${ARCHIVE.archiveVersion}-win32-x64`,
-        ]);
-        const sha = Hex.encode(yield* crypto.digest("SHA-256", yield* fs.readFile(zipPath)));
-        yield* fs.writeFileString(
-          `${release}/SHA256SUMS`,
-          `${sha} *goat-${ARCHIVE.archiveVersion}-win32-x64.zip\n`,
-        );
-        yield* fs.writeFileString(
-          `${bin}/uname`,
-          `#!/bin/sh\nif [ "$1" = -s ]; then echo MINGW64_NT-10.0-26200; else echo x86_64; fi\n`,
-        );
-        yield* fs.writeFileString(
-          `${bin}/cygpath`,
-          `#!/bin/sh\nif [ "$1" = -S ]; then echo '${sys32}'; else printf '%s\\n' "$2"; fi\n`,
-        );
-        yield* fs.writeFileString(
-          `${sys32}/tar.exe`,
-          `#!/bin/sh\nexec tar -xzf "$2" -C "$4" "$5"\n`,
-        );
-        yield* fs.writeFileString(
-          `${bin}/wget`,
-          `#!/bin/sh\nif [ "$1" = --help ]; then echo --retry-on-http-error; exit 0; fi\nurl=""; out=""\nwhile [ $# -gt 0 ]; do\n  case "$1" in -O) out="$2"; shift 2 ;; http*) url="$1"; shift ;; *) shift ;; esac\ndone\ncp "${release}/$(basename "$url")" "$out"\n`,
-        );
-        for (const file of [`${bin}/uname`, `${bin}/cygpath`, `${sys32}/tar.exe`, `${bin}/wget`]) {
-          yield* fs.chmod(file, 0o755);
-        }
-        for (const dir of (process.env.PATH ?? "").split(":")) {
-          if (!dir) continue;
-          const entries = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-          for (const entry of entries) {
-            if (entry === "curl" || entry === "wget" || entry === "uname" || entry === "cygpath")
-              continue;
-            yield* fs.symlink(`${dir}/${entry}`, `${bin}/${entry}`).pipe(Effect.ignore);
-          }
-        }
-        const result = NodeChildProcess.spawnSync(remoteShell, ["-s"], {
-          input: buildRemoteHostDownloadScript(ARCHIVE),
-          encoding: "utf8",
-          env: { ...process.env, HOME: home, PATH: bin },
-        });
+        const { fs, result, sha, runtimeDir } = yield* installOnGitBash({});
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stdout, `goat v${ARCHIVE.archiveVersion}\n`);
-        const record = yield* fs.readFileString(
-          `${home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}/.install-record`,
-        );
+        const record = yield* fs.readFileString(`${runtimeDir}/.install-record`);
         assert.include(record.trim(), `${ARCHIVE.archiveVersion} ${sha} `);
         assert.isTrue(record.trim().endsWith(" https"));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("retries the runtime publish while Windows briefly locks the new goat.exe", () =>
+    Effect.gen(function* () {
+      const { fs, result, runtimeDir, lines } = yield* installOnGitBash({
+        doubles: ({ root }) => ({ mv: lockedStagingMv(root, 2), sleep: instantSleep(root) }),
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, `goat v${ARCHIVE.archiveVersion}\n`);
+      assert.equal(
+        (yield* fs.readFileString(`${runtimeDir}/.install-complete`)).trim(),
+        ARCHIVE.archiveVersion,
+      );
+      assert.deepEqual(yield* lines("sleeps"), ["1", "1"]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("fails with an antivirus hint once the publish lock outlasts the retry bound", () =>
+    Effect.gen(function* () {
+      const { fs, result, runtimeDir, lines } = yield* installOnGitBash({
+        doubles: ({ root }) => ({ mv: lockedStagingMv(root, 1000), sleep: instantSleep(root) }),
+      });
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, "");
+      assert.include(result.stderr, "Permission denied");
+      assert.include(
+        result.stderr,
+        String.raw`exclude %USERPROFILE%\.goat\runtime from real-time scanning`,
+      );
+      assert.lengthOf(yield* lines("sleeps"), REMOTE_RUNTIME_PUBLISH_ATTEMPTS - 1);
+      assert.isFalse(yield* fs.exists(runtimeDir));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("never moves staging into a runtime directory that rm could not remove", () =>
+    Effect.gen(function* () {
+      const { fs, result, runtimeDir, lines } = yield* installOnGitBash({
+        doubles: ({ root, runtimeDir }) => ({
+          rm: `for arg do [ "$arg" = '${runtimeDir}' ] && exit 0; done\nexec '${realBinary("rm")}' "$@"`,
+          mv: `echo "$1" >> '${root}/mv-calls'\nexec '${realBinary("mv")}' "$@"`,
+          sleep: instantSleep(root),
+        }),
+        prepare: (runtimeDir) =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            yield* fs.makeDirectory(runtimeDir, { recursive: true });
+            yield* fs.writeFileString(`${runtimeDir}/stale`, "locked\n");
+          }),
+      });
+      assert.equal(result.status, 1);
+      assert.notInclude((yield* lines("mv-calls")).join("\n"), ".staging-");
+      assert.notInclude((yield* fs.readDirectory(runtimeDir)).join("\n"), ".staging-");
+      assert.lengthOf(yield* lines("sleeps"), REMOTE_RUNTIME_PUBLISH_ATTEMPTS - 1);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect(

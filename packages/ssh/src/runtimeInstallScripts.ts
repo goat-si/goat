@@ -1,4 +1,8 @@
-import { applyScriptPlaceholders, shellSingleQuote } from "./remoteRuntime.ts";
+import {
+  applyScriptPlaceholders,
+  REMOTE_RUNTIME_PUBLISH_ATTEMPTS,
+  shellSingleQuote,
+} from "./remoteRuntime.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT } from "./runtimeFactsScripts.ts";
 import { REMOTE_REPLACEMENT_LOCK_SCRIPT } from "./runtimeOwnershipScripts.ts";
 import { SshLaunchError } from "./errors.ts";
@@ -45,6 +49,21 @@ export const REMOTE_HOST_FETCH_FUNCTION = `  goat_host_fetch() {
     return 1
   }
 `;
+
+// Windows refuses to rename a directory while a file in it is open, and antivirus often holds a
+// freshly extracted goat.exe for seconds. mv moves into an existing directory, so it waits for rm.
+export const REMOTE_RUNTIME_PUBLISH_SCRIPT = `  GOAT_PUBLISH_ATTEMPTS=1
+  [ "$GOAT_PLATFORM" != win32 ] || GOAT_PUBLISH_ATTEMPTS=${REMOTE_RUNTIME_PUBLISH_ATTEMPTS}
+  GOAT_PUBLISH_ATTEMPT=1
+  until GOAT_PUBLISH_ERROR="$({ rm -rf "$GOAT_RUNTIME_DIR" && [ ! -e "$GOAT_RUNTIME_DIR" ] && [ ! -L "$GOAT_RUNTIME_DIR" ] && mv "$GOAT_STAGING" "$GOAT_RUNTIME_DIR"; } 2>&1)"; do
+    if [ "$GOAT_PUBLISH_ATTEMPT" -ge "$GOAT_PUBLISH_ATTEMPTS" ]; then
+      printf '%s\\n' "\${GOAT_PUBLISH_ERROR:-Could not remove the previous GOAT runtime at $GOAT_RUNTIME_DIR.}" >&2
+      [ "$GOAT_PLATFORM" != win32 ] || printf 'Windows kept a file in the new GOAT runtime open for about %s seconds. Antivirus scanning the new goat.exe is the usual cause: exclude %s from real-time scanning, then try again.\\n' "$GOAT_PUBLISH_ATTEMPTS" '%USERPROFILE%\\.goat\\runtime' >&2
+      exit 1
+    fi
+    sleep 1
+    GOAT_PUBLISH_ATTEMPT=$((GOAT_PUBLISH_ATTEMPT + 1))
+  done`;
 
 /**
  * The SSH invocation that runs the upload script with the archive on stdin. Windows OpenSSH

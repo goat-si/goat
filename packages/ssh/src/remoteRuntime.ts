@@ -29,6 +29,8 @@ export const REMOTE_ARCHIVE_CHECKSUMS_SECONDS = 30;
 export const REMOTE_ARCHIVE_DOWNLOAD_SECONDS = 240;
 export const REMOTE_ARCHIVE_LOCK_WAIT_SECONDS = 360;
 export const REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS = 900_000;
+// One second apart, Windows publish retries use about half of a waiter's remaining slack.
+export const REMOTE_RUNTIME_PUBLISH_ATTEMPTS = 30;
 
 export interface RemoteGoatRunnerOptions {
   readonly nodeScriptPath?: string | null;
