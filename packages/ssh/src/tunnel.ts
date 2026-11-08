@@ -1166,11 +1166,11 @@ if [ "$REMOTE_MANAGED" = managed ] && [ -n "$REMOTE_PID" ]; then
     STOP_WAIT_ATTEMPTS=@@GOAT_STOP_WAIT_ATTEMPTS@@
     STOP_WAIT_INTERVAL=@@GOAT_STOP_WAIT_INTERVAL@@
     WAIT_COUNT=0
-    while server_alive "$REMOTE_PID" && [ "$WAIT_COUNT" -lt "$STOP_WAIT_ATTEMPTS" ]; do
+    while STOP_ALIVE=0; server_alive "$REMOTE_PID" && STOP_ALIVE=1 && [ "$WAIT_COUNT" -lt "$STOP_WAIT_ATTEMPTS" ]; do
       WAIT_COUNT=$((WAIT_COUNT + 1))
       sleep "$STOP_WAIT_INTERVAL"
     done
-    if server_alive "$REMOTE_PID"; then
+    if [ "$STOP_ALIVE" = 1 ]; then
       printf 'Remote GOAT server with PID %s did not stop within @@GOAT_STOP_WAIT_LABEL@@. Its ownership files were kept.\\n' "$REMOTE_PID" >&2
       exit 1
     fi
