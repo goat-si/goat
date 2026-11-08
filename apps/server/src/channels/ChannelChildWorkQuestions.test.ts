@@ -484,4 +484,18 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
       assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect("lets the task finish while an ended thread's approval still waits", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { runtime, reports, shown } = yield* shownThenEnded(harness, "finish-waiting");
+      const task = yield* onlyTask;
+      harness.world.setStatus(task.worker!.threadId, 1, "completed", "Started the build.");
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const finished = yield* onlyTask;
+      assert.strictEqual(finished.status, "completed");
+      assert.deepStrictEqual(finished.observed?.needsYou, shown);
+    }).pipe(Effect.provide(harness.layer));
+  });
 });

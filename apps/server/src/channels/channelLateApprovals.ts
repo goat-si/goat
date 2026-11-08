@@ -155,7 +155,7 @@ export const commitWorkerObserved = Effect.fn("channelLateApprovals.commitObserv
   );
   const next: ChannelWorkerObservation =
     kept.length === 0 ? observed : { ...observed, needsYou: [...observed.needsYou, ...kept] };
-  if (channelWorkerObservationEquals(stored.task.observed, next)) return undefined;
+  if (channelWorkerObservationEquals(stored.task.observed, next)) return "unchanged" as const;
   const deliveries = approvalResultDeliveries(stored.task, [...requests, ...seen]);
   return yield* commitTransition(
     ledger,
@@ -301,7 +301,7 @@ export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile"
         requests,
         deps.threads,
       );
-      if (wrote !== undefined) changed += 1;
+      if (wrote !== undefined && wrote !== "unchanged") changed += 1;
     }
     return changed;
   },

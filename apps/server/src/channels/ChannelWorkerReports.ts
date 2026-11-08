@@ -601,9 +601,9 @@ const make = Effect.gen(function* () {
           threads,
         );
         if (wrote === undefined) return latest !== stored;
-        const reread = yield* ledger.getTask(task.taskId);
+        const reread = wrote === "unchanged" ? latest : yield* ledger.getTask(task.taskId);
         if (reread === undefined) return true;
-        if (reread.task.version !== wrote.version) return true;
+        if (wrote !== "unchanged" && reread.task.version !== wrote.version) return true;
         latest = reread;
       }
 
