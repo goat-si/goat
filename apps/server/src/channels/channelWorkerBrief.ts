@@ -190,7 +190,7 @@ export const turnInstruction = (
     "You are GOAT Bot handling this message yourself. Your final message is your answer to the person: write it in the language of their request, not your default language, outcome first and as long as the content needs.",
     "Look things up directly: read and search files, read GOAT Bot's notes (" +
       files.notes +
-      "), use GOAT memory, and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads. " +
+      "), use GOAT memory, and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads. When a read says a host may no longer be the GOAT that ran the work, do not read that host or start work there. " +
       NOTES_REPLACED_RULE,
     ...(matched === ""
       ? []
