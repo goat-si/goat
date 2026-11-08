@@ -13,6 +13,7 @@ import Animated, {
   Easing,
   FadeIn,
   FadeOut,
+  LayoutAnimationConfig,
   ReduceMotion,
   type SharedValue,
   useAnimatedStyle,
@@ -304,64 +305,75 @@ export function FloatingWorkingControl(props: {
       entering={NATIVE_LIQUID_GLASS_SUPPORTED || reducedMotion ? undefined : CONTROL_ENTERING}
       exiting={NATIVE_LIQUID_GLASS_SUPPORTED || reducedMotion ? undefined : CONTROL_EXITING}
     >
+      {/* A capsule leaving with the turn must not linger behind the lone circle that replaces it. */}
       {hasCapsule && NATIVE_LIQUID_GLASS_SUPPORTED ? (
-        <UniwindGlassContainer
-          spacing={GLASS_MERGE_SPACING}
-          pointerEvents="box-none"
-          className="flex-row items-center gap-4"
-        >
-          <AnimatedGlassView
-            colorScheme={props.colorScheme}
-            glassEffectStyle="regular"
-            isInteractive={capsuleInteractive}
-            pointerEvents={capsuleInteractive ? "box-none" : "none"}
-            className="h-[44px] items-center justify-center overflow-hidden rounded-full"
-            style={capsuleStyle}
+        <LayoutAnimationConfig skipExiting>
+          <UniwindGlassContainer
+            spacing={GLASS_MERGE_SPACING}
+            pointerEvents="box-none"
+            className="flex-row items-center gap-4"
           >
-            {capsuleContent}
-          </AnimatedGlassView>
+            <AnimatedGlassView
+              colorScheme={props.colorScheme}
+              glassEffectStyle="regular"
+              isInteractive={capsuleInteractive}
+              pointerEvents={capsuleInteractive ? "box-none" : "none"}
+              className="h-[44px] items-center justify-center overflow-hidden rounded-full"
+              style={capsuleStyle}
+            >
+              {capsuleContent}
+            </AnimatedGlassView>
 
-          <AnimatedGlassView
-            colorScheme={props.colorScheme}
-            glassEffectStyle={{ style: props.showScrollToEnd ? "regular" : "none", animate: true }}
-            isInteractive
-            pointerEvents={props.showScrollToEnd ? "auto" : "none"}
-            accessibilityElementsHidden={!props.showScrollToEnd}
-            importantForAccessibility={props.showScrollToEnd ? "auto" : "no-hide-descendants"}
-            className="h-[44px] w-[44px] items-center justify-center overflow-hidden rounded-full"
-            style={arrowTransformStyle}
-          >
-            <Animated.View style={arrowContentStyle}>
-              <ScrollToEndButton disabled={!props.showScrollToEnd} onPress={props.onScrollToEnd} />
-            </Animated.View>
-          </AnimatedGlassView>
-        </UniwindGlassContainer>
+            <AnimatedGlassView
+              colorScheme={props.colorScheme}
+              glassEffectStyle={{
+                style: props.showScrollToEnd ? "regular" : "none",
+                animate: true,
+              }}
+              isInteractive
+              pointerEvents={props.showScrollToEnd ? "auto" : "none"}
+              accessibilityElementsHidden={!props.showScrollToEnd}
+              importantForAccessibility={props.showScrollToEnd ? "auto" : "no-hide-descendants"}
+              className="h-[44px] w-[44px] items-center justify-center overflow-hidden rounded-full"
+              style={arrowTransformStyle}
+            >
+              <Animated.View style={arrowContentStyle}>
+                <ScrollToEndButton
+                  disabled={!props.showScrollToEnd}
+                  onPress={props.onScrollToEnd}
+                />
+              </Animated.View>
+            </AnimatedGlassView>
+          </UniwindGlassContainer>
+        </LayoutAnimationConfig>
       ) : hasCapsule ? (
-        <View pointerEvents="box-none" className="flex-row items-center gap-4">
-          <Animated.View
-            pointerEvents={capsuleInteractive ? "box-none" : "none"}
-            className="h-[44px] items-center justify-center overflow-hidden rounded-full border border-border bg-glass-fallback shadow-md shadow-black/10"
-            style={capsuleStyle}
-          >
-            {capsuleContent}
-          </Animated.View>
+        <LayoutAnimationConfig skipExiting>
+          <View pointerEvents="box-none" className="flex-row items-center gap-4">
+            <Animated.View
+              pointerEvents={capsuleInteractive ? "box-none" : "none"}
+              className="h-[44px] items-center justify-center overflow-hidden rounded-full border border-border bg-glass-fallback shadow-md shadow-black/10"
+              style={capsuleStyle}
+            >
+              {capsuleContent}
+            </Animated.View>
 
-          <Animated.View
-            pointerEvents={props.showScrollToEnd ? "auto" : "none"}
-            accessibilityElementsHidden={!props.showScrollToEnd}
-            importantForAccessibility={props.showScrollToEnd ? "auto" : "no-hide-descendants"}
-            style={[arrowTransformStyle, arrowContentStyle]}
-          >
-            <ControlPill
-              accessibilityLabel="Scroll to end"
-              activateOnPressIn
-              className="h-[44px] w-[44px] border border-border bg-glass-fallback shadow-md shadow-black/10"
-              disabled={!props.showScrollToEnd}
-              icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
-              onPress={props.onScrollToEnd}
-            />
-          </Animated.View>
-        </View>
+            <Animated.View
+              pointerEvents={props.showScrollToEnd ? "auto" : "none"}
+              accessibilityElementsHidden={!props.showScrollToEnd}
+              importantForAccessibility={props.showScrollToEnd ? "auto" : "no-hide-descendants"}
+              style={[arrowTransformStyle, arrowContentStyle]}
+            >
+              <ControlPill
+                accessibilityLabel="Scroll to end"
+                activateOnPressIn
+                className="h-[44px] w-[44px] border border-border bg-glass-fallback shadow-md shadow-black/10"
+                disabled={!props.showScrollToEnd}
+                icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
+                onPress={props.onScrollToEnd}
+              />
+            </Animated.View>
+          </View>
+        </LayoutAnimationConfig>
       ) : NATIVE_LIQUID_GLASS_SUPPORTED ? (
         <UniwindGlassView
           colorScheme={props.colorScheme}
