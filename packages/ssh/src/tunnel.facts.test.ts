@@ -148,7 +148,14 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         // and the per-check bounds below match each awk to the check that ran it.
         yield* f.fs.writeFileString(
           `${bin}/${name}`,
-          `#!/bin/sh\nprintf '${name} %s\\n' "$(printf '%s' "$*" | tr '\\n' ' ' | cut -c1-60)" >> "$HOME/.test/counted.log"\nPATH="\${PATH#*:}" exec ${name} "$@"\n`,
+          [
+            "#!/bin/sh",
+            // A command the runner starts is tagged with the runner's PID: /bin/ps is not counted.
+            'case "$(/bin/ps -o args= -p "$PPID" 2>/dev/null)" in */run-t3*) by="runner:$PPID " ;; *) by= ;; esac',
+            `printf '%s${name} %s\\n' "$by" "$(printf '%s' "$*" | tr '\\n' ' ' | cut -c1-200)" >> "$HOME/.test/counted.log"`,
+            `PATH="\${PATH#*:}" exec ${name} "$@"`,
+            "",
+          ].join("\n"),
         );
         yield* f.fs.chmod(`${bin}/${name}`, 0o755);
       }
@@ -157,11 +164,23 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
       );
       const awkPrograms = new Map<Record<string, number>, string[]>();
       const checksOf = new Map<Record<string, number>, [string, number, number][]>();
+      // Every command each script started, with its first arguments, for a failed bound to show.
+      const logOf = new Map<Record<string, number>, string>();
+      const runsOf = new Map<Record<string, number>, string[][]>();
       const counts = Effect.gen(function* () {
         const log = yield* f.fs.readFileString(`${f.home}/.test/counted.log`);
         yield* f.fs.writeFileString(`${f.home}/.test/counted.log`, "");
         const seen: Record<string, number> = {};
-        const lines = log.trim().split("\n").filter(Boolean);
+        const all = log.trim().split("\n").filter(Boolean);
+        // The runner's own commands are counted per run; a script may start it any number of times.
+        const runs = new Map<string, string[]>();
+        const lines: string[] = [];
+        for (const line of all) {
+          const run = /^runner:(\d+) (.*)$/.exec(line);
+          if (run?.[1] === undefined || run[2] === undefined) lines.push(line);
+          else runs.set(run[1], [...(runs.get(run[1]) ?? []), run[2]]);
+        }
+        runsOf.set(seen, [...runs.values()]);
         for (const line of lines) {
           const name = line.split(" ")[0] ?? line;
           seen[name] = (seen[name] ?? 0) + 1;
@@ -186,6 +205,13 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         yield* f.fs.writeFileString(`${f.test}/events`, "");
         seen.goat = events.split("\n").filter((line) => line.includes('"type":"exec"')).length;
         seen.sha256 = (seen.shasum ?? 0) + (seen.sha256sum ?? 0);
+        const goatStarts = events
+          .split("\n")
+          .filter((line) => line.includes('"type":"exec"'))
+          .map(
+            (line) => "goat " + ((JSON.parse(line) as { args?: string[] }).args ?? []).join(" "),
+          );
+        logOf.set(seen, [...all, ...goatStarts].join("\n"));
         return seen;
       });
       yield* f.fs.writeFileString(`${f.test}/events`, "");
@@ -210,13 +236,14 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
       // goat starts only for the pairing itself, readiness and the activity check. Measured on
       // eefc2a1f: pairing awk 20, cat 18, date 9, uname 9; probe cat 7, uname 7; launch awk 43,
       // cat 81, date 17, uname 17; stop cat 17, uname 3.
+      // These count each script's own commands; what the runner starts is bounded per run below.
       const bounds = {
         pairing: [
           pairingCounts,
           {
             goat: 1,
             awk: 0,
-            cat: 2,
+            cat: 0,
             date: 9,
             uname: 3,
             grep: 0,
@@ -246,7 +273,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
           {
             goat: 1,
             awk: 0,
-            cat: 2,
+            cat: 0,
             date: 17,
             uname: 6,
             grep: 0,
@@ -263,7 +290,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
           {
             goat: 1,
             awk: 0,
-            cat: 2,
+            cat: 0,
             date: 0,
             uname: 2,
             grep: 0,
@@ -277,11 +304,26 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
           assert.isAtMost(
             seen[name] ?? 0,
             bound,
-            `${script} ${name}${name === "awk" ? `: ${(awkPrograms.get(seen) ?? []).join(" | ")}` : ""}`,
+            `${script} ${name}${name === "awk" ? `: ${(awkPrograms.get(seen) ?? []).join(" | ")}` : ""}\n${logOf.get(seen) ?? ""}`,
           );
       for (const [script, [seen]] of Object.entries(bounds))
         for (const [check, awk, reads] of checksOf.get(seen) ?? [])
-          assert.isAtMost(awk, reads, `${script} ${check}: awk calls per read`);
+          assert.isAtMost(
+            awk,
+            reads,
+            `${script} ${check}: awk calls per read\n${logOf.get(seen) ?? ""}`,
+          );
+      // A runner that finds its runtime installed reads the install marker twice, then execs goat.
+      for (const [script, [seen]] of Object.entries(bounds))
+        for (const run of runsOf.get(seen) ?? []) {
+          const message = `${script} runner run\n${logOf.get(seen) ?? ""}`;
+          assert.isAtMost(run.length, 2, message);
+          assert.deepEqual(
+            run.filter((line) => !/^cat \S+\/\.install-complete$/u.test(line)),
+            [],
+            message,
+          );
+        }
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
