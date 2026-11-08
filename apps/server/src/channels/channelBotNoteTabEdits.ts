@@ -40,6 +40,7 @@ import {
   memoryRefusedNotes,
   refusalFor,
   restoredLines,
+  type RefusedNote,
   type RefusedNotes,
 } from "./channelBotNoteRefusals.ts";
 
@@ -53,6 +54,13 @@ const OPEN_STATUSES: ReadonlyArray<ChannelTaskStatus> = [
   "running",
   "waiting_input",
 ];
+// Answers that mean the person's change or forget reached the notes file.
+const APPLIED: ReadonlySet<string> = new Set([
+  CHANNEL_COPY.noteChanged,
+  CHANNEL_COPY.noteForgotten,
+  CHANNEL_COPY.noteCameBack,
+  CHANNEL_COPY.noteUnverified,
+]);
 
 /**
  * Whether a task that held a notes grant can no longer edit by hand: its stop has reached the
@@ -211,7 +219,7 @@ export const makeChannelBotNoteWriter = (
      * once its task is no longer open and holderEnded says its worker can no longer edit.
      */
     const settleRefused = Effect.gen(function* () {
-      const pending = yield* refusals.list;
+      const pending = (yield* refusals.list).filter((entry) => entry.claimedBy === undefined);
       if (pending.length === 0) return 0;
       const open = new Set<string>(yield* grantHolders);
       const live = new Set<string>();
@@ -238,15 +246,42 @@ export const makeChannelBotNoteWriter = (
     // Settled before any other write, and that write fails when this does: a refusal left over
     // could otherwise undo the write later.
     const settleFirst = settleRefused;
-    /** The person's own later change or forget of a note outranks a refusal that named it. */
-    const dropRefusalsFor = (note: string) =>
+    /**
+     * The person's own later change or forget of a note outranks a refusal that named it. The
+     * refusals are claimed for that input before the edit and removed once it changed the note, so
+     * no crash between the edit and the removal leaves one that settling would act on.
+     */
+    const claimRefusalsFor = (note: string, inputId: string) =>
+      Effect.flatMap(refusals.list, (pending) => {
+        const named = pending.filter((entry) => entry.note === note || entry.claimedBy === inputId);
+        return Effect.as(
+          Effect.forEach(named, (entry) => refusals.add({ ...entry, claimedBy: inputId }), {
+            discard: true,
+          }),
+          named,
+        );
+      });
+    const release = (entries: ReadonlyArray<RefusedNote>) =>
+      Effect.forEach(entries, ({ claimedBy: _claimedBy, ...entry }) => refusals.add(entry), {
+        discard: true,
+      });
+    /** A re-run that no longer reaches the edit lets go of what its first run claimed. */
+    const releaseClaimsOf = (inputId: string) =>
       Effect.flatMap(refusals.list, (pending) =>
-        Effect.forEach(
-          pending.filter((entry) => entry.note === note),
-          (entry) => refusals.remove(entry.inputId),
-          { discard: true },
-        ),
+        release(pending.filter((entry) => entry.claimedBy === inputId)),
       );
+    /**
+     * After an edit that failed partway: released only while the note is still in force, so the
+     * edit cannot have removed it. Otherwise the claim stays for the input's re-run to settle.
+     */
+    const releaseIfInForce = (entries: ReadonlyArray<RefusedNote>, note: string) =>
+      Effect.flatMap(readNotes, (read) => {
+        if (read === null || read.truncated) return Effect.void;
+        const inForce = parseChannelBotNoteLines(decode(read.bytes)).some(
+          (line) => line.replacedBy === undefined && line.text === note,
+        );
+        return inForce ? release(entries) : Effect.void;
+      });
     /**
      * A restart re-runs an input whose note was saved before a refusal could apply. Its first
      * answer, read from the file and never written again: a task holding a grant may be editing it.
@@ -414,11 +449,21 @@ export const makeChannelBotNoteWriter = (
                 holders,
               );
         if (refused !== undefined) yield* refusals.add(refused);
+        yield* releaseClaimsOf(inputId);
         return CHANNEL_COPY.noteEditBusy;
       }
-      // Dropped before the edit, so a crash after it cannot leave a refusal to undo the edit.
-      yield* dropRefusalsFor(request.note);
-      return yield* edit(request, inputId, readAt);
+      // Released when the edit did not change the note. A forget that finds the note gone
+      // already has what the person asked for.
+      const claimed = yield* claimRefusalsFor(request.note, inputId);
+      const answer = yield* edit(request, inputId, readAt).pipe(
+        Effect.onError(() => Effect.ignore(releaseIfInForce(claimed, request.note))),
+      );
+      const kept =
+        APPLIED.has(answer) || (request.kind === "forget" && answer === CHANNEL_COPY.noteNotFound);
+      yield* kept
+        ? Effect.forEach(claimed, (entry) => refusals.remove(entry.inputId), { discard: true })
+        : release(claimed);
+      return answer;
     });
 
     const edit = Effect.fn("channelBotNoteTabEdits.edit")(function* (

@@ -16,8 +16,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import { sqlRefusedNotes } from "./channelBotNoteRefusals.ts";
 import { makeChannelBotNoteWriter } from "./channelBotNoteTabEdits.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
-import { workerLaunchIdsFor } from "./channelIds.ts";
-import { ENDED_RUN_STATUSES, isThreadMissing } from "./channelWorkerObservation.ts";
+import { makeWorkerLive } from "./channelWorkerLive.ts";
 
 export class ChannelBotNoteWriter extends Context.Service<
   ChannelBotNoteWriter,
@@ -30,19 +29,14 @@ export const layer = Layer.effect(
     const files = channelBotFilesFor(yield* Path.Path, (yield* ServerConfig.ServerConfig).stateDir);
     const ledger = yield* ChannelLedger.ChannelLedger;
     const threads = yield* ThreadManagement.ThreadManagementService;
-    // A stop that reached the worker is not yet a stopped worker: its runs must have ended too.
-    // A session turn shares its thread, so another request's run there also waits.
+    const workerLive = makeWorkerLive(threads, "ChannelBotNoteWriter.workerLive");
+    // A stop that reached the worker is not yet a stopped worker: it waits for what a retry waits
+    // for. A session turn shares its thread, so another request's work there also waits.
     const holderEnded = Effect.fn("ChannelBotNoteWriter.holderEnded")(function* (taskId: string) {
       const id = ChannelTaskId.make(taskId);
       if (yield* ledger.hasPendingForward(id)) return false;
       const stored = yield* ledger.getTask(id);
-      if (stored === undefined || stored.task.target === undefined) return true;
-      const threadId =
-        stored.task.worker?.threadId ??
-        workerLaunchIdsFor(stored.task.taskId, stored.task.generation).threadId;
-      const read = yield* threads.getThreadRecords(threadId, ["runs"]).pipe(Effect.result);
-      if (read._tag === "Failure") return isThreadMissing(read.failure);
-      return read.success.runs.every((run) => ENDED_RUN_STATUSES.has(run.status));
+      return stored === undefined || !(yield* workerLive(stored.task));
     });
     return yield* makeChannelBotNoteWriter(
       yield* FileSystem.FileSystem,

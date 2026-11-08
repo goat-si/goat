@@ -24,6 +24,11 @@ export const RefusedNote = Schema.Struct({
   source: Schema.String,
   /** Tasks whose notes grant was open at the refusal. */
   holders: Schema.Array(Schema.String),
+  /**
+   * The person's own later change or forget of this note, while it runs. Settling skips a claimed
+   * refusal: that input's run, or its re-run after a restart, removes or releases it.
+   */
+  claimedBy: Schema.optional(Schema.String),
 });
 export type RefusedNote = typeof RefusedNote.Type;
 
