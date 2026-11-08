@@ -76,6 +76,9 @@ export const makeClaudeWakeReports = Effect.fn("ClaudeWakeReports.make")(functio
   return { recordWakeReport, startUserTurnForWakeReports, takeWakeReports, clearWakeReports };
 });
 
+/** Tasks that never notify keep their stamp; the oldest go past this many. */
+const MAX_STAMPED_TASKS = 256;
+
 export const remember = (
   wakeRunByTaskId: Ref.Ref<Map<string, RunId>>,
   taskId: string,
@@ -85,7 +88,12 @@ export const remember = (
   return Ref.update(wakeRunByTaskId, (current) => {
     if (current.get(taskId) === runId) return current;
     const updated = new Map(current);
+    updated.delete(taskId);
     updated.set(taskId, runId);
+    for (const oldest of updated.keys()) {
+      if (updated.size <= MAX_STAMPED_TASKS) break;
+      updated.delete(oldest);
+    }
     return updated;
   });
 };
