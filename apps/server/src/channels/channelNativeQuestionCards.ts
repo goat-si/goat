@@ -1,6 +1,7 @@
 /**
- * Cards for a native question a coding thread asked. One question with options is buttons; any
- * other local question is one untagged line. A question on another machine stays on the chip.
+ * Cards for a native question a coding thread asked. In the GOAT app, one question with options
+ * is buttons. Slack, iMessage, and any other shape get one untagged line pointing at the work
+ * thread. A question on another machine stays on the chip.
  *
  * @module channelNativeQuestionCards
  */
@@ -99,7 +100,7 @@ export const nativeQuestionDeliveries = Effect.fn("channel.nativeQuestionCards")
     if (question === undefined || question.host !== undefined) continue;
     const card = yield* choiceFor(question, threads);
     const mentionActorId = mentionFor(task.originAddress, task.requester.externalActorId);
-    if (card === undefined) {
+    if (card === undefined || task.originAddress.kind !== "goat") {
       deliveries.push(
         replyDelivery({
           causeKey: "native-question-line:" + question.requestId,
@@ -119,7 +120,7 @@ export const nativeQuestionDeliveries = Effect.fn("channel.nativeQuestionCards")
         causeKey: "native-question:" + question.requestId,
         destination: task.originAddress,
         kind: "question",
-        text: task.title + ": " + card.question,
+        text: task.kind === "turn" ? card.question : task.title + ": " + card.question,
         task,
         mentionActorId,
         options: card.options.map((option) => option.label),

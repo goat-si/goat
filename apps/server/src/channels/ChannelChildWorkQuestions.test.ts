@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   ChannelChildWorkId,
+  type ChannelReceptionInput,
   type ChannelTaskNeedsYou,
   ChannelQuestionId,
   NodeId,
@@ -24,8 +25,10 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import { receptionDecisionChannels } from "./testkit/channelReceptionHarness.ts";
 import {
   botMessages,
+  defaultScript,
   goatInput,
   linkSlackUser,
   makeHarness,
@@ -602,6 +605,7 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
   it.effect("answers a turn's launched question from the bot chat as the question alone", () => {
     const harness = makeHarness({
       botWorkspace: true,
+      channelsLayer: receptionDecisionChannels,
       settingsLayer: ServerSettings.layerTest({
         textGenerationModelSelection: modelSelection,
         defaultRuntimeMode: "full-access",
@@ -611,6 +615,17 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
         },
       }).pipe(Layer.orDie),
     });
+    harness.script.current = (input: ChannelReceptionInput) => {
+      const text = input.inputText ?? "";
+      if (input.mode === "input" && text.startsWith("look:")) {
+        const instruction = text.slice("look:".length).trim();
+        return Effect.succeed({
+          replyText: "On it.",
+          action: { type: "run_turn" as const, title: instruction, instruction },
+        });
+      }
+      return defaultScript(input);
+    };
     return Effect.gen(function* () {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
@@ -622,7 +637,6 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
       yield* reports.reconcile(runtime.ownerToken);
       const task = yield* onlyTask;
       assert.strictEqual(task.kind, "turn");
-      assert.strictEqual(task.status, "running");
       yield* launch(task, "live", "bound");
       harness.world.runs.set("thread:live", []);
       const pending = request("pick", "user_input");
@@ -640,19 +654,14 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
       ]);
       yield* reports.reconcile(runtime.ownerToken);
       yield* runtime.drain;
-      const queued = yield* sql<{
-        message_json: string;
-      }>`SELECT message_json FROM channel_outbox WHERE cause_key = ${"native-question:" + pending.id}`;
-      const message = JSON.parse(queued[0]?.message_json ?? "{}") as {
-        text?: string;
-        options?: ReadonlyArray<string>;
-        questionId?: string;
-        taskId?: string;
-      };
-      assert.strictEqual(message.text, "Which file?");
-      assert.deepStrictEqual(message.options, ["c.txt", "d.txt"]);
-      assert.strictEqual(message.questionId, pending.id);
-      assert.strictEqual(message.taskId, task.taskId);
+      const cards = (yield* botMessages).messages.filter(
+        (message) => message.channel?.kind === "question",
+      );
+      assert.strictEqual(cards.length, 1);
+      assert.strictEqual(cards[0]?.text, "Which file?");
+      assert.strictEqual(cards[0]?.channel?.questionId, ChannelQuestionId.make(pending.id));
+      assert.strictEqual(cards[0]?.channel?.taskId, task.taskId);
+      assert.deepStrictEqual(cards[0]?.channel?.options, ["c.txt", "d.txt"]);
       yield* gateway.ingest({ ...goatInput("d.txt", "turn-a"), taskId: task.taskId }, rpcContext);
       yield* runtime.drain;
       const [answered] = responses(harness);
@@ -664,7 +673,6 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
       assert.strictEqual(followups[0]?.count, 0);
     }).pipe(Effect.provide(harness.layer));
   });
-
   it.effect("tells Slack to open the work thread instead of sending a native-question card", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

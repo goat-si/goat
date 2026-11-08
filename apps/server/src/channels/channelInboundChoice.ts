@@ -7,7 +7,7 @@ import {
   openApprovalCards,
   parseApprovalReply,
 } from "./channelApprovalCards.ts";
-import { nativeQuestionChoice } from "./channelNativeQuestionCards.ts";
+import { nativeQuestionChoice, type NativeQuestionChoice } from "./channelNativeQuestionCards.ts";
 import {
   approvalCodeOrder,
   choiceAt,
@@ -71,6 +71,9 @@ export const makeInboundChoices = (
     ]);
   });
 
+  /** A native-question button exists only in the GOAT app. Slack and iMessage cannot answer one. */
+  const answersNativeQuestion = (kind: ChannelInboundMessage["kind"]) => kind === "goat";
+
   /**
    * A choice answered before the model runs. A number on Slack or iMessage selects the latest
    * open list. A label equal to the only open question's option answers that question. An
@@ -110,7 +113,19 @@ export const makeInboundChoices = (
       })),
     );
     const matched = singleQuestionChoice(message.text, questions);
-    return matched === undefined ? undefined : { type: "question" as const, ...matched };
+    if (matched !== undefined) return { type: "question" as const, ...matched };
+    if (!answersNativeQuestion(message.kind) || threads === undefined) return undefined;
+    const natives: Array<NativeQuestionChoice> = [];
+    for (const task of tasks) {
+      const local = (task.observed?.needsYou ?? []).some(
+        (need) => need.question !== undefined && need.question.host === undefined,
+      );
+      if (!local) continue;
+      const found = yield* nativeQuestionChoice(task, message.text, threads);
+      if (found !== undefined) natives.push(found);
+    }
+    const [only, ...rest] = natives;
+    return rest.length === 0 ? only : undefined;
   });
 
   /**
@@ -145,6 +160,7 @@ export const makeInboundChoices = (
       (need) => need.question !== undefined && need.question.host === undefined,
     );
     if (hasNativeQuestion) {
+      if (!answersNativeQuestion(message.kind)) return undefined;
       const native =
         threads === undefined
           ? undefined

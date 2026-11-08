@@ -13,7 +13,8 @@ import * as DateTime from "effect/DateTime";
  * reasoning, plans and the rest of a coding run stay in the worker thread.
  *
  * The types here are display models with finished labels. Channel metadata
- * reaches them through readers, so this module never mirrors wire contracts.
+ * reaches them through readers. A turn is not a card, but its chip still says
+ * which questions are open.
  */
 
 export type GoatBotBotTone = "reply" | "status" | "result" | "question" | "failure";
@@ -227,6 +228,27 @@ export const GOAT_BOT_READING_LIMIT_MS = 90_000;
 const GOAT_BOT_STAMP_GAP_MS = 60 * 60 * 1000;
 const NO_OPTIONS: ReadonlyArray<string> = [];
 
+interface GoatBotQuestionState {
+  readonly revision: number;
+  readonly askInChat?: boolean;
+  readonly openQuestionIds?: ReadonlyArray<string>;
+}
+
+const questionStateFromChip = (
+  item: NotificationItem,
+): { readonly key: string; readonly state: GoatBotQuestionState } | null => {
+  const chip = item.ledgerTask;
+  if (chip === undefined) return null;
+  return {
+    key: chip.taskId,
+    state: {
+      revision: chip.taskVersion,
+      ...(chip.askInChat === true ? { askInChat: true } : {}),
+      ...(chip.openQuestionIds === undefined ? {} : { openQuestionIds: chip.openQuestionIds }),
+    },
+  };
+};
+
 type ContentRow = Exclude<GoatBotRow, { kind: "day" }>;
 type UngroupedRow =
   | Omit<Extract<ContentRow, { kind: "user" }>, "firstInGroup" | "groupPosition" | "showReceipt">
@@ -292,25 +314,40 @@ export function buildGoatBotTimeline(input: {
   const knownTasks = new Set(input.knownTaskIds ?? []);
   // Each task's newest card, read before the messages so it also governs messages above it.
   const newestCards = new Map<string, GoatBotTaskCard>();
+  const newestQuestionChips = new Map<string, GoatBotQuestionState>();
   for (const { item } of input.visibleTurnItems) {
     if (item.type !== "notification") continue;
+    const fromChip = questionStateFromChip(item);
+    if (fromChip !== null) {
+      const newestChip = newestQuestionChips.get(fromChip.key);
+      if (newestChip === undefined || fromChip.state.revision > newestChip.revision) {
+        newestQuestionChips.set(fromChip.key, fromChip.state);
+      }
+    }
     const card = input.readers.taskCard(item);
     if (card === null) continue;
     knownTasks.add(card.key);
     const newest = newestCards.get(card.key);
     if (newest === undefined || card.revision > newest.revision) newestCards.set(card.key, card);
   }
+  const questionState = (taskId: string | null | undefined) => {
+    if (taskId == null) return undefined;
+    const card = newestCards.get(taskId);
+    const chip = newestQuestionChips.get(taskId);
+    if (card !== undefined && (chip === undefined || card.revision >= chip.revision)) return card;
+    return chip;
+  };
   const includesMessage = (taskId: string | null | undefined, hasOptions = false) =>
     input.taskId === undefined ||
     (input.taskId === null
       ? taskId == null ||
         !knownTasks.has(taskId) ||
-        newestCards.get(taskId)?.askInChat === true ||
+        questionState(taskId)?.askInChat === true ||
         hasOptions
       : taskId === input.taskId);
   /** Whether a question's buttons still apply, when its task's card says; null when it cannot. */
   const questionOpen = (taskId: string | null | undefined, questionId: string | undefined) => {
-    const open = taskId == null ? undefined : newestCards.get(taskId)?.openQuestionIds;
+    const open = questionState(taskId)?.openQuestionIds;
     return questionId === undefined || open === undefined ? null : open.includes(questionId);
   };
   const cardDecidesOptions = new Set<string>();
@@ -437,7 +474,7 @@ export function buildGoatBotTimeline(input: {
           (entry.taskId ?? null) === input.taskId ||
           (input.taskId === null &&
             entry.taskId !== undefined &&
-            (newestCards.get(entry.taskId)?.askInChat === true ||
+            (questionState(entry.taskId)?.askInChat === true ||
               tasksWithOpenQuestion.has(entry.taskId)))) &&
         !committedRequestKeys.has(entry.clientKey) &&
         (entry.requestKey === null || !committedRequestKeys.has(entry.requestKey)),
