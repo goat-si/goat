@@ -20,7 +20,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { NOTES_HEADER, parseChannelBotNoteLines } from "./channelBotNoteLines.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
-import { CHANNEL_COPY } from "./channelCopy.ts";
+import { CHANNEL_COPY, noteKeptNotice } from "./channelCopy.ts";
 import { inputIdFor, taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
@@ -566,6 +566,51 @@ describe("Memory tab requests with the default session routing", () => {
       assert.lengthOf(harness.world.launches, 1);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "a tidy that removes a note whose forget it was refused puts it back and says so",
+    () => {
+      const { harness, layer } = sessionHarness((text) =>
+        text.startsWith("Please tidy")
+          ? {
+              replyText: "Tidying your notes now.",
+              action: {
+                type: "run_turn",
+                title: "Tidy notes",
+                instruction: "Tidy the notes file.",
+                notesChangeRequested: "Please tidy my notes",
+              },
+            }
+          : {},
+      );
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const kept = line(fridays, "earlier");
+        const files = yield* writeNotes(NOTES_HEADER + kept + "\n");
+        yield* routing("reception");
+        yield* send("Please tidy my notes", "tidy");
+        yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
+        assert.include(yield* replies, CHANNEL_COPY.noteEditBusy);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const tidy = (yield* ledger.listTasks({ ownerId, limit: 50 })).tasks.find(
+          (task) => task.notesChangeRequested !== undefined,
+        )!;
+        // The tidy turn carries out the refused forget by hand, then finishes.
+        yield* (yield* FileSystem.FileSystem).writeFileString(files.notes, NOTES_HEADER);
+        const worker = (yield* ledger.getTask(tidy.taskId))!.task.worker!;
+        harness.world.setStatus(
+          worker.threadId,
+          1,
+          "completed",
+          "Tidied, and forgot the Fridays note.",
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        assert.strictEqual((yield* ledger.getTask(tidy.taskId))!.task.status, "completed");
+        assert.strictEqual(yield* readNotes, NOTES_HEADER + kept + "\n");
+        assert.include(yield* replies, noteKeptNotice(fridays));
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });
 
 describe("corrections the model reports", () => {

@@ -41,7 +41,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import * as ServerConfig from "./config.ts";
-import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveAsset } from "./assets/AssetAccess.ts";
+import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveVerifiedAsset } from "./assets/AssetAccess.ts";
 import { sourceControlMediaResponse } from "./assets/sourceControlMediaResponse.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
@@ -51,7 +51,6 @@ import {
 } from "./assets/AttachmentUpload.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { base64UrlDecodeUtf8 } from "./auth/utils.ts";
 import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
 import {
   annotateEnvironmentRequest,
@@ -170,20 +169,6 @@ function assetByteRange(header: string, size: bigint) {
     bytesToRead: end - start + 1n,
     contentRange: `bytes ${start}-${end}/${size}`,
   };
-}
-
-const decodeAssetExpiry = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ expiresAt: Schema.Finite })),
-);
-
-/** Read only after resolveAsset has authenticated this exact token. */
-function verifiedAssetExpiry(token: string) {
-  try {
-    return Option.getOrUndefined(decodeAssetExpiry(base64UrlDecodeUtf8(token.split(".")[0]!)))
-      ?.expiresAt;
-  } catch {
-    return undefined;
-  }
 }
 
 function assetNotModified(
@@ -573,13 +558,14 @@ export const layerAssetRoute = HttpRouter.add(
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
 
-    const asset = yield* resolveAsset(
+    const verified = yield* resolveVerifiedAsset(
       suffix.slice(0, separatorIndex),
       suffix.slice(separatorIndex + 1),
     );
-    if (!asset) {
+    if (!verified) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
+    const { asset } = verified;
     if (asset.kind === "bytes") {
       return HttpServerResponse.uint8Array(asset.bytes, {
         contentType: asset.mimeType,
@@ -604,9 +590,8 @@ export const layerAssetRoute = HttpRouter.add(
         ),
       );
     }
-    const expiresAt = verifiedAssetExpiry(suffix.slice(0, separatorIndex));
     return yield* assetFileResponse(
-      { ...asset, ...(expiresAt !== undefined ? { expiresAt } : {}) },
+      { ...asset, expiresAt: verified.expiresAt },
       request.method === "GET" ? request.headers.range : undefined,
       request.headers["if-range"],
       request.method === "HEAD" ? "HEAD" : "GET",

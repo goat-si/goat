@@ -1187,11 +1187,8 @@ describe("AssetAccess", () => {
           expect("renderIntent" in asset ? asset.renderIntent : undefined).toBe(
             extension === "html" && disposition === "inline" ? "mcp-app" : undefined,
           );
-          const token = suffix.slice(0, separator);
-          const [payload, signature] = token.split(".");
-          const claims = JSON.parse(Buffer.from(payload!, "base64url").toString("utf8"));
-          claims.renderIntent = claims.renderIntent ? undefined : "mcp-app";
-          const tampered = `${Buffer.from(JSON.stringify(claims)).toString("base64url")}.${signature}`;
+          const [payload, signature] = suffix.slice(0, separator).split(".");
+          const tampered = `s1${payload![2] === "A" ? "B" : "A"}${payload!.slice(3)}.${signature}`;
           expect(yield* resolveAsset(tampered, suffix.slice(separator + 1))).toBeNull();
         }
       }
