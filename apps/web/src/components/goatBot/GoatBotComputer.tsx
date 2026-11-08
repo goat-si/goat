@@ -8,11 +8,12 @@ import { useEffect } from "react";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
 import { Button } from "../ui/button";
-import { useGoatBotMember } from "./goatBotMemberContext";
+import { useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 
 /** The machines GOAT Bot's running work uses, from its task list. */
 export function GoatBotComputer({ environmentId }: { environmentId: EnvironmentId }) {
   const member = useGoatBotMember();
+  const botName = useGoatBotName();
   const tasks = useEnvironmentQuery(
     channelEnvironment.listTasks({
       environmentId,
@@ -31,7 +32,7 @@ export function GoatBotComputer({ environmentId }: { environmentId: EnvironmentI
   if (tasks.failure !== null)
     return (
       <div className="space-y-2">
-        <p>Couldn't load GOAT Bot's machines.</p>
+        <p>Couldn't load {botName}'s machines.</p>
         <Button size="xs" variant="outline" onClick={refresh}>
           Try again
         </Button>
@@ -44,7 +45,7 @@ export function GoatBotComputer({ environmentId }: { environmentId: EnvironmentI
       <div className="space-y-1">
         <p>No work is running right now.</p>
         <p className="text-xs text-muted-foreground">
-          Machines GOAT Bot works on will appear here.
+          Machines {botName} works on will appear here.
         </p>
       </div>
     );
@@ -52,7 +53,7 @@ export function GoatBotComputer({ environmentId }: { environmentId: EnvironmentI
     <div className="space-y-4">
       {groups.map((group) => (
         <section key={group.host ?? ""}>
-          <h3 className="font-semibold">{group.host ?? "GOAT Bot's computer"}</h3>
+          <h3 className="font-semibold">{group.host ?? `${botName}'s computer`}</h3>
           <ul className="mt-1 space-y-1">
             {group.tasks.map((task) => (
               <li key={task.taskId}>

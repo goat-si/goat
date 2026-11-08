@@ -15,8 +15,10 @@ export function MobileBotComputer(props: {
   readonly connected: boolean;
   /** A member bot's sheet lists only its own work. */
   readonly botId: BotId | null;
+  readonly botName?: string;
 }) {
   const { environmentId, connected, botId } = props;
+  const botName = props.botName ?? "GOAT Bot";
   const readable = environmentId !== null && connected;
   const tasks = useEnvironmentQuery(
     readable
@@ -38,13 +40,13 @@ export function MobileBotComputer(props: {
   if (!connected)
     return (
       <Text className="text-foreground-muted">
-        Machines are unavailable while GOAT Bot is offline.
+        Machines are unavailable while {botName} is offline.
       </Text>
     );
   if (tasks.cause !== null)
     return (
       <View className="gap-1">
-        <Text className="text-danger-foreground">Couldn't load GOAT Bot's machines.</Text>
+        <Text className="text-danger-foreground">Couldn't load {botName}'s machines.</Text>
         <Pressable
           accessibilityRole="button"
           onPress={refresh}
@@ -60,7 +62,7 @@ export function MobileBotComputer(props: {
     return (
       <View className="gap-1">
         <Text className="text-foreground">No work is running right now.</Text>
-        <Text className="text-foreground-muted">Machines GOAT Bot works on will appear here.</Text>
+        <Text className="text-foreground-muted">Machines {botName} works on will appear here.</Text>
       </View>
     );
   return (
@@ -68,7 +70,7 @@ export function MobileBotComputer(props: {
       {groups.map((group) => (
         <View key={group.host ?? ""} className="gap-1">
           <Text className="font-semibold text-foreground">
-            {group.host ?? "GOAT Bot's computer"}
+            {group.host ?? `${botName}'s computer`}
           </Text>
           {group.tasks.map((task) => (
             <View key={task.taskId}>

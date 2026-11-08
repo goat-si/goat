@@ -163,6 +163,7 @@ export interface DesktopCuaDriverDependencies {
     readonly hostBundleIds: ReadonlyArray<string>;
     readonly directory: string;
     readonly platform: NodeJS.Platform;
+    readonly includeProtected?: boolean;
     /** Lists apps through the helper, so the driver never runs outside its seal check. */
     readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   }) => Promise<string>;

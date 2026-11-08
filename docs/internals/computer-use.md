@@ -450,7 +450,10 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 
 ## Safety
 
-- **Approvals.** Outside full access, an agent asks with `computer_use.request` for the apps it
+- **Approvals.** With Strict input guards off (the default), every valid `computer_use.request`
+  takes an every-app control with foreground authority and no approval handoff, regardless of
+  runtime mode or origin; neither full access nor `cuaAllowedApps` is required. With them on,
+  an agent outside full access asks with `computer_use.request` for the apps it
   names, or for the whole screen, and for a span of 5 to 120 minutes, 30 by default
   (`ComputerUseRequestInput` in `packages/contracts/src/cua.ts`). The request is an approval
   handoff on the `computer_use.grant` path, answered by a person with `settings:write` in an
@@ -458,8 +461,9 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   runtime mode skips these approvals whoever or whatever started it
   ([ADR-0023](../../structure/decisions/ADR-0023-goat-computer-use-app.md), D16); everything else
   on this page still applies to it. The capability manifest
-  (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it excludes the GOAT host, the
-  helper itself, the driver's app and credential stores, and it now adds the helper's bundle id.
+  (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it always excludes the GOAT
+  host, the helper itself and the driver's app; Strict input guards also exclude credential
+  stores and the other protected apps.
   It lists the apps open when the driver starts. When an approval, or a full access
   `computer_use.request`, names an app it lacks, the desktop lists the open apps again and
   rewrites it with the same exclusions, so every app opened since then joins, not only the one
@@ -477,10 +481,11 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   and no list of approved apps in Settings. A person ends one early with "End computer use" on
   its card, Stop, or turning computer use off, and after its expiry the thread asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
-  foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
-  ceiling outside full access. In full access every run uses every app and takes the foreground
-  without asking, whatever started it (`implyFocus` in `ComputerUseLeases.ts`; owner decision,
-  Jun, 2026-10-28). Unattended full access work still holds the screen one thread at a time,
+  foreground delivery is allowed. Strict-off uses the every-app control in every runtime mode;
+  with Strict input guards on, unattended origins keep ADR-0022's admission lease outside full
+  access. Full access and strict-off runs take the foreground without asking, whatever started
+  them (`implyFocus` in `ComputerUseLeases.ts`). Unattended every-app work still holds the screen
+  one thread at a time,
   because two such threads would mix their input. A thread launched from another environment, and
   turns it launches or sends here (`launched_remotely`), work beside other threads like a
   person's (`usesScreenLikePerson` in `ComputerUseOrigin.ts`). This host cannot read the turn

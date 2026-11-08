@@ -105,6 +105,10 @@ interface HarnessOptions {
   readonly missingPaths?: ReadonlySet<string>;
   /** How this machine writes a folder path; identity unless given. */
   readonly nativePath?: (path: string) => string;
+  /** Replaces the event stream the launch service reads; the harness's own layer keeps the real one. */
+  readonly launchEvents?: (
+    real: ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"],
+  ) => ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"];
 }
 
 export function makeHarness(options: HarnessOptions = {}) {
@@ -229,7 +233,7 @@ export function makeHarness(options: HarnessOptions = {}) {
       Layer.mergeAll(
         layerRegistry,
         layerExternalServices,
-        prepared === undefined
+        prepared === undefined && options.launchEvents === undefined
           ? layerThreadManagement
           : Layer.effect(
               ThreadManagement.ThreadManagementService,
@@ -237,12 +241,15 @@ export function makeHarness(options: HarnessOptions = {}) {
                 const service = yield* ThreadManagement.ThreadManagementService;
                 return ThreadManagement.ThreadManagementService.of({
                   ...service,
+                  streamStoredEventsFrom:
+                    options.launchEvents?.(service.streamStoredEventsFrom) ??
+                    service.streamStoredEventsFrom,
                   dispatch: (command) =>
                     service
                       .dispatch(command)
                       .pipe(
                         Effect.tap(() =>
-                          command.type === "prepared-run.release"
+                          prepared !== undefined && command.type === "prepared-run.release"
                             ? Deferred.succeed(prepared, undefined)
                             : Effect.void,
                         ),

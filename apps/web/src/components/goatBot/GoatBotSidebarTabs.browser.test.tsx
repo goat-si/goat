@@ -204,7 +204,7 @@ it("labels task status and explains an empty bot roster", async () => {
   await expect.element(screen.getByRole("img", { name: "Needs your input" })).toBeInTheDocument();
   const saved = rows.splice(0);
   await screen.rerender(<GoatBotSidebarTabs />);
-  await expect.element(screen.getByText("Work GOAT Bot starts will appear here.")).toBeVisible();
+  await expect.element(screen.getByText("Work Helper starts will appear here.")).toBeVisible();
   rows.push(...saved);
 });
 

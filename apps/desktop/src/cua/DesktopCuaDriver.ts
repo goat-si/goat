@@ -322,12 +322,17 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     });
     // A Stop of the start being handled cancels its listing.
     const listApplications = helperListing(engine, requests.signal());
+    const strictInputGuards = Effect.tryPromise(() =>
+      native.strictInputGuards(environment.serverSettingsPath),
+    ).pipe(Effect.orElseSucceed(() => true));
+    const includeProtected = scope === "agents" && !(yield* strictInputGuards);
     const manifestInput = {
       binaryPath: enginePath(engine),
       scope,
       hostBundleIds: hostBundleIds(engine),
       directory: environment.path.join(environment.stateDir, "cua-driver"),
       platform: environment.platform,
+      includeProtected,
       // The helper verifies its driver before running it, so it lists the apps too; running
       // the driver here would execute it unchecked, under GOAT's identity (#1241).
       ...(listApplications === undefined ? {} : { listApplications }),
@@ -387,16 +392,21 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       direct: engine.kind === "helper" && environment.platform === "darwin",
       refreshManifest: (apps) =>
         scope === "agents"
-          ? refreshDesktopManifest({
-              apps,
-              path: manifestPath,
-              read: native.readManifest,
-              prepare: () =>
-                native.prepareManifest({
-                  ...manifestInput,
-                  ...(refreshListing === undefined ? {} : { listApplications: refreshListing }),
+          ? strictInputGuards.pipe(
+              Effect.flatMap((strict) =>
+                refreshDesktopManifest({
+                  apps,
+                  path: manifestPath,
+                  read: native.readManifest,
+                  prepare: () =>
+                    native.prepareManifest({
+                      ...manifestInput,
+                      includeProtected: !strict,
+                      ...(refreshListing === undefined ? {} : { listApplications: refreshListing }),
+                    }),
                 }),
-            })
+              ),
+            )
           : Effect.succeed(false),
     };
     owned = entry;

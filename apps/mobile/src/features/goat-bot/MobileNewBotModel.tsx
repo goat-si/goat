@@ -9,6 +9,7 @@ export function MobileNewBotModel(props: {
   readonly environmentId: EnvironmentId;
   readonly model: ModelSelection | null;
   readonly onChange: (model: ModelSelection | null) => void;
+  readonly mainName?: string;
 }) {
   const config = useEnvironmentServerConfig(props.environmentId);
   if (!config) return null;
@@ -17,7 +18,12 @@ export function MobileNewBotModel(props: {
     providers: config.providers,
   });
   const options = [
-    { key: "same", label: "Same as GOAT Bot", subtitle: state.summaryLabel, selection: null },
+    {
+      key: "same",
+      label: `Same as ${props.mainName ?? "GOAT Bot"}`,
+      subtitle: state.summaryLabel,
+      selection: null,
+    },
     ...state.choices.map((choice) => ({
       key: choice.key,
       label: choice.label,

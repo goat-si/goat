@@ -419,7 +419,13 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.scoped,
       Effect.timeoutOption(REQUEST_TIMEOUT_MS),
-      Effect.map((result) => (result._tag === "Some" ? result.value : ("retry" as const))),
+      Effect.flatMap((result): Effect.Effect<Attempt> =>
+        result._tag === "Some"
+          ? Effect.succeed(result.value)
+          : Effect.logWarning("completion webhook: post timed out", { id: report.id }).pipe(
+              Effect.as("retry" as const),
+            ),
+      ),
       Effect.catch((cause) =>
         Effect.logWarning("completion webhook: post failed", { id: report.id, cause }).pipe(
           Effect.as("retry" as const),

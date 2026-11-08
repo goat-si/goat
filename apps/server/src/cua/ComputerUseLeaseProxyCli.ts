@@ -15,6 +15,7 @@ import * as NodeStream from "node:stream";
 import {
   CuaDriverMcpConfiguration,
   type ComputerUseLeaseReport,
+  type ComputerUseLeaseBrowserClaimReply,
   type ComputerUseCallReservation,
   ComputerUseLeaseUpdate,
   ComputerUseLeaseThreadUpdate,
@@ -719,6 +720,10 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     yield* following.pipe(Effect.ignoreCause, Effect.ensuring(closeQueues), Effect.forkScoped);
     const common = {
       onBrowserClaimReport: send,
+      judgeBrowserClaimReply: (body: ComputerUseLeaseBrowserClaimReply) =>
+        Effect.promise(() => report(url, authorization, body)).pipe(
+          Effect.orElseSucceed(() => false),
+        ),
       primitiveCancelled: (requestId: string) => cancelledPrimitives.has(requestId),
       subscribePrimitiveCancels: (listener: (requestId: string) => void) => {
         cancelListeners.add(listener);

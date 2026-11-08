@@ -18,6 +18,7 @@ import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
+import { useGoatBotName } from "./goatBotMemberContext";
 import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
 
 const TEXT_TYPES = new Set(["application/json", "text/markdown", "text/csv"]);
@@ -39,23 +40,25 @@ async function readBotLibraryFile(
   relativePath: string,
   readChunk: (input: ChannelReadBotArtifactInput) => Promise<ChannelReadBotArtifactResult>,
   signal: AbortSignal,
+  botName: string,
 ): Promise<ReadResult> {
   try {
     const result = await readWholeBotArtifact(relativePath, readChunk, signal);
     if (signal.aborted) return { kind: "aborted" };
     if (result.status !== "ok") {
-      const message = botArtifactOpenMessage(botArtifactName(relativePath), result);
+      const message = botArtifactOpenMessage(botArtifactName(relativePath), result, botName);
       return { kind: "message", message };
     }
     return { kind: "file", bytes: result.bytes, mimeType: result.mimeType };
   } catch (error) {
     if (signal.aborted) return { kind: "aborted" };
-    return { kind: "message", message: botArtifactsFailure(error).message };
+    return { kind: "message", message: botArtifactsFailure(error, botName).message };
   }
 }
 
 /** Files GOAT Bot's workers saved; opening one reads it chunk by chunk from the home server. */
 export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId }) {
+  const botName = useGoatBotName();
   const supported =
     useServerConfigs().get(environmentId)?.environment.capabilities.goatBotLibrary === true;
   const files = useEnvironmentQuery(
@@ -98,7 +101,7 @@ export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId
     const name = botArtifactName(file.relativePath);
     setOpening(file.relativePath);
     setMessages((current) => withoutKey(current, file.relativePath));
-    const result = await readBotLibraryFile(file.relativePath, readChunk, signal);
+    const result = await readBotLibraryFile(file.relativePath, readChunk, signal, botName);
     if (result.kind === "aborted" || signal.aborted) return;
     setOpening(null);
     if (result.kind === "message") {
@@ -123,7 +126,7 @@ export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   };
   if (!supported) return <p>Files need a newer GOAT server.</p>;
-  const failure = files.failure === null ? null : botArtifactsFailure(files.failure);
+  const failure = files.failure === null ? null : botArtifactsFailure(files.failure, botName);
   if (failure !== null)
     return (
       <div className="space-y-2">
@@ -136,7 +139,7 @@ export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId
       </div>
     );
   if (files.data === null) return <p className="text-muted-foreground">Loading files…</p>;
-  if (files.data.artifacts.length === 0) return <p>Files GOAT Bot saves will appear here.</p>;
+  if (files.data.artifacts.length === 0) return <p>Files {botName} saves will appear here.</p>;
   return (
     <div className="space-y-3">
       {files.data.truncated && (

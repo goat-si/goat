@@ -71,6 +71,7 @@ function healthy(patch: Partial<GoatBotDiagnosticsInput> = {}): GoatBotDiagnosti
     slackLive: null,
     canConfigureSlack: true,
     now: NOW,
+    mainBotName: "GOAT Bot",
     ...patch,
   };
 }
@@ -143,8 +144,12 @@ describe("diagnoseGoatBot", () => {
   it("judges a member by its own model and fixes an inherited one through the main setting", () => {
     const own = healthy({ member: true, model: { ...model, available: false } });
     expect(line(own, "model")).toMatchObject({ tone: "error", action: null });
-    const inherited = healthy({ member: true, model: { ...model, inherited: true } });
-    expect(line(inherited, "model")?.text).toBe("Uses GOAT Bot's current model (GPT-5.4 on Codex)");
+    const inherited = healthy({
+      member: true,
+      model: { ...model, inherited: true },
+      mainBotName: "Goaty",
+    });
+    expect(line(inherited, "model")?.text).toBe("Uses Goaty's current model (GPT-5.4 on Codex)");
     const inheritedBroken = healthy({
       member: true,
       model: { ...model, inherited: true, available: false },
@@ -169,6 +174,33 @@ describe("diagnoseGoatBot", () => {
       action: { kind: "open_task", taskId: "e" },
     });
     expect(diagnoseGoatBot(input).verdict).toBe("attention");
+  });
+
+  it("names a waiting approval separately from an answer", () => {
+    const approval = healthy({
+      rows: [],
+      turnsWaiting: [{ taskId: "turn", kind: "approval" } as never],
+    });
+    expect(line(approval, "work")).toMatchObject({
+      tone: "warn",
+      text: "1 waiting for your approval",
+      action: { kind: "open_chat", label: "Open the chat" },
+    });
+    const mixed = healthy({
+      rows: [],
+      turnsWaiting: [
+        { taskId: "a", kind: "approval" } as never,
+        { taskId: "b", kind: "answer" } as never,
+      ],
+    });
+    expect(line(mixed, "work")?.text).toBe(
+      "1 waiting for your approval · 1 waiting for your answer",
+    );
+    const listed = healthy({
+      rows: [task("turn", "running")],
+      turnsWaiting: [{ taskId: "turn", kind: "approval" } as never],
+    });
+    expect(line(listed, "work")?.text).toBe("1 waiting for your answer");
   });
 
   it("counts a bot turn that waits for an answer, which the task list leaves out", () => {
@@ -411,7 +443,7 @@ describe("goatBotTurnsWaiting", () => {
       notification({ taskId: "turn-c", kind: "turn", status: "completed", taskVersion: 3 }),
       notification({ taskId: "work-a", kind: "work", ...asking }),
     ];
-    expect(goatBotTurnsWaiting(items as never)).toEqual(["turn-a"]);
+    expect(goatBotTurnsWaiting(items as never)).toEqual([{ taskId: "turn-a", kind: "answer" }]);
   });
 
   it("counts a running turn whose launched work waits on the person, until it ends", () => {
@@ -445,7 +477,10 @@ describe("goatBotTurnsWaiting", () => {
         observed: { pullRequests: [], needsYou: [] },
       }),
     ];
-    expect(goatBotTurnsWaiting(items as never)).toEqual(["turn-q", "turn-a"]);
+    expect(goatBotTurnsWaiting(items as never)).toEqual([
+      { taskId: "turn-q", kind: "answer" },
+      { taskId: "turn-a", kind: "approval" },
+    ]);
   });
 
   it("treats an older chip without a kind as a turn when the bot's session ran it", () => {
@@ -457,6 +492,6 @@ describe("goatBotTurnsWaiting", () => {
         worker: { threadId: "goat-bot-session:abc", generation: 1 },
       }),
     ];
-    expect(goatBotTurnsWaiting(items as never)).toEqual(["old-turn"]);
+    expect(goatBotTurnsWaiting(items as never)).toEqual([{ taskId: "old-turn", kind: "answer" }]);
   });
 });

@@ -1,8 +1,10 @@
 import {
   diagnoseGoatBot,
+  goatBotName,
   goatBotModelStatus,
   type GoatBotDiagnosticTone,
   type GoatBotDiagnosticsInput,
+  type GoatBotWaitingTurn,
 } from "@goat/client-runtime/goatBot";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
@@ -49,9 +51,12 @@ export function MobileBotStatusCard(props: {
   } | null;
   readonly rows: GoatBotDiagnosticsInput["rows"];
   readonly refreshRows: () => void;
-  readonly turnsWaiting: ReadonlyArray<string>;
+  readonly turnsWaiting: ReadonlyArray<GoatBotWaitingTurn>;
   readonly onOpenChat: () => void;
   readonly onOpenTask: (taskId: ChannelTaskId) => void;
+  readonly botName?: string;
+  /** The main bot, whose model a member uses until it has one of its own. */
+  readonly main?: Pick<BotProfile, "name"> | null;
 }) {
   const { member } = props;
   const home = useMobileGoatBotHomeSettings();
@@ -103,6 +108,7 @@ export function MobileBotStatusCard(props: {
           homeId.slice(0, 8)),
     moveTarget: home.moveTarget,
     member: member !== null,
+    mainBotName: goatBotName(props.main ?? null),
     model: config
       ? goatBotModelStatus({
           settings: config.settings,
@@ -119,7 +125,10 @@ export function MobileBotStatusCard(props: {
     now,
   });
   return (
-    <View accessibilityLabel="GOAT Bot status" className="gap-2 border-b border-border pb-3">
+    <View
+      accessibilityLabel={`${props.botName ?? "GOAT Bot"} status`}
+      className="gap-2 border-b border-border pb-3"
+    >
       <Text className="font-semibold text-foreground">{diagnostics.title}</Text>
       {diagnostics.lines.map((line) => (
         <View key={line.key} className="flex-row flex-wrap items-center gap-2">

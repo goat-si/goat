@@ -10,9 +10,8 @@ import {
   advice,
   baseJob,
   fixture,
-  gateJob,
   gitExecutable,
-  lightRunner,
+  lidgeRunner,
   refreshPermissions,
   refreshWorkflow,
   removeFixtures,
@@ -20,7 +19,6 @@ import {
   screenshotPermissions,
   screenshotWorkflow,
   sourceRoot,
-  trustedRunner,
   upstreamPath,
   validWorkflow,
   workflow,
@@ -56,77 +54,27 @@ describe("goat pre-push workflow guard", () => {
     expect(f.hook(f.record(f.sha)).status).toBe(0);
   });
 
-  it.each(["ubuntu-24.04", lightRunner])("allows the gate jobs on %s", (runner) => {
-    const gate = { ...gateJob, "runs-on": runner };
-    const f = fixture({
-      workflow: JSON.stringify({
-        on: { pull_request: null },
-        jobs: { scope: gate, ci: { ...baseJob, "runs-on": trustedRunner }, result: gate },
-      }),
-    });
-    expect(f.hook(f.record(f.sha)).status).toBe(0);
-  });
-
-  // A gate job on the matrix's runners waits behind it; the matrix on the light runners would
-  // take the only runners the gates can use.
+  // A gate job runs on the pinned hosted image or the trusted-run lidge gate expression only.
   it.each([
-    ["scope", "the matrix's EPYC expression", trustedRunner],
-    ["result", "the matrix's EPYC labels", runnerLabels],
     [
       "scope",
-      "the light labels without the fork fallback",
+      "the retired epyc-light labels",
       ["self-hosted", "linux", "x64", "goat", "epyc-light"],
     ],
+    ["result", "the retired EPYC labels", runnerLabels],
     ["result", "a moving hosted image", "ubuntu-latest"],
-    [
-      "result",
-      "an edited light expression",
-      lightRunner.replace("'ubuntu-24.04'", "'ubuntu-latest'"),
-    ],
   ])("refuses jobs.%s on %s", (name, _label, runner) => {
     const f = fixture({
       workflow: JSON.stringify({
         on: { pull_request: null },
-        jobs: { ci: baseJob, [name]: { ...gateJob, "runs-on": runner } },
+        jobs: { ci: baseJob, [name]: { ...baseJob, "runs-on": runner } },
       }),
     });
     const refused = f.hook(f.record(f.sha));
     expect(refused.status).toBe(1);
     expect(refused.stderr).toContain(
-      `jobs.${name}.runs-on must be ubuntu-24.04 or the trusted-run epyc-light expression`,
+      `jobs.${name}.runs-on must be ubuntu-24.04 or the trusted-run lidge gate expression`,
     );
-  });
-
-  it.each([
-    ["light expression", lightRunner],
-    ["light labels", ["self-hosted", "linux", "x64", "goat", "epyc-light"]],
-  ])("refuses the ci matrix on the %s", (_label, runner) => {
-    const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": runner }) });
-    const refused = f.hook(f.record(f.sha));
-    expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain("jobs.ci.runs-on must be ubuntu-24.04");
-  });
-
-  it("allows the trusted-run expression that keeps fork pull requests on the hosted image", () => {
-    const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": trustedRunner }) });
-    expect(f.hook(f.record(f.sha)).status).toBe(0);
-  });
-
-  it.each([
-    [
-      "any pull request on EPYC",
-      trustedRunner.replace(
-        "github.event.pull_request.head.repo.full_name == github.repository",
-        "github.event_name == 'pull_request'",
-      ),
-    ],
-    ["a moving hosted fallback", trustedRunner.replace("'ubuntu-24.04'", "'ubuntu-latest'")],
-    ["the expression without its wrapper", trustedRunner.slice(4, -3)],
-  ])("rejects a runs-on expression with %s", (_name, runner) => {
-    const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": runner }) });
-    const result = f.hook(f.record(f.sha));
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("jobs.ci.runs-on must be ubuntu-24.04");
   });
 
   it.each([
@@ -167,7 +115,7 @@ describe("goat pre-push workflow guard", () => {
   });
 
   it.each([
-    ["an EPYC runner", { "runs-on": lightRunner }],
+    ["the lidge expression", { "runs-on": lidgeRunner }],
     ["no Actions write", { permissions: { contents: "read" } }],
     ["an extra write scope", { permissions: { ...refreshPermissions, checks: "write" } }],
     ["contents write", { permissions: { contents: "write", actions: "write" } }],
@@ -224,13 +172,13 @@ describe("goat pre-push workflow guard", () => {
     const result = f.hook(f.record(f.sha), {}, ["origin", "git@github.com:Goat-Si/Goat.git"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toBe(
-      `goat pre-push: ${workflowPath} in refs/heads/test (${f.sha}): jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression; refusing to push\n${advice}\n`,
+      `goat pre-push: ${workflowPath} in refs/heads/test (${f.sha}): jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression; refusing to push\n${advice}\n`,
     );
     expect(f.ghCalls()).toBe(1);
   });
 
   it.each([
-    ["reordered runner labels", workflow({ ...baseJob, "runs-on": runnerLabels.toReversed() })],
+    ["the lidge matrix expression", workflow({ ...baseJob, "runs-on": lidgeRunner })],
     [
       "all allowed actions",
       workflow({
@@ -249,7 +197,7 @@ describe("goat pre-push workflow guard", () => {
     ],
     [
       "bounded aliases",
-      `labels: &labels [self-hosted, linux, x64, goat, epyc]\n${validWorkflow.replace("[self-hosted, linux, x64, goat, epyc]", "*labels")}`,
+      `runner: &runner ubuntu-24.04\n${validWorkflow.replace("runs-on: ubuntu-24.04", "runs-on: *runner")}`,
     ],
   ])("allows %s", (_name, content) => {
     const f = fixture({ workflow: content });
@@ -260,7 +208,7 @@ describe("goat pre-push workflow guard", () => {
   it("skips deletion before a new branch and looks up gh once across several valid tips", () => {
     const f = fixture();
     const first = f.sha;
-    f.write(workflowPath, workflow({ ...baseJob, "runs-on": runnerLabels.toReversed() }));
+    f.write(workflowPath, workflow({ ...baseJob, "runs-on": lidgeRunner }));
     const second = f.commit();
     const result = f.hook(
       f.record(zero, "(delete)", first) +
@@ -349,7 +297,7 @@ describe("goat pre-push workflow guard", () => {
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toBe(
-      `goat pre-push: ${workflowPath} in refs/heads/bad (${unchangedBad}): jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression; refusing to push\n${advice}\n`,
+      `goat pre-push: ${workflowPath} in refs/heads/bad (${unchangedBad}): jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression; refusing to push\n${advice}\n`,
     );
     expect(bad).not.toBe(unchangedBad);
     expect(f.ghCalls()).toBe(1);
@@ -359,15 +307,15 @@ describe("goat pre-push workflow guard", () => {
     [
       "hosted runner",
       workflow({ ...baseJob, "runs-on": "ubuntu-latest" }),
-      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
+      "jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression",
     ],
     [
       "hosted runner with quoted runs-on and tagged on keys",
       validWorkflow
         .replace("on:", "!!str on:")
         .replace("runs-on:", '"runs-on":')
-        .replace("[self-hosted, linux, x64, goat, epyc]", "ubuntu-latest"),
-      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
+        .replace("ubuntu-24.04", "ubuntu-latest"),
+      "jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression",
     ],
     [
       "disallowed trigger with tagged on key",
@@ -452,32 +400,32 @@ describe("goat pre-push workflow guard", () => {
       "jobs.ci.container and jobs.ci.services are forbidden",
     ],
     [
-      "duplicate labels",
-      workflow({ ...baseJob, "runs-on": ["self-hosted", "linux", "x64", "goat", "goat"] }),
-      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
+      "retired EPYC labels",
+      workflow({ ...baseJob, "runs-on": runnerLabels }),
+      "jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression",
     ],
     [
-      "missing labels",
-      workflow({ ...baseJob, "runs-on": runnerLabels.slice(1) }),
-      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
+      "static lidge labels",
+      workflow({ ...baseJob, "runs-on": ["self-hosted", "linux", "x64", "lidge"] }),
+      "jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression",
     ],
     [
-      "extra label",
-      workflow({ ...baseJob, "runs-on": [...runnerLabels, "ubuntu-latest"] }),
-      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
+      "hosted image in a label list",
+      workflow({ ...baseJob, "runs-on": ["ubuntu-24.04"] }),
+      "jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression",
     ],
     [
       "nonliteral label",
       workflow({
         ...baseJob,
-        "runs-on": ["self-hosted", "linux", "x64", "goat", "${{ inputs.runner }}"],
+        "runs-on": ["self-hosted", "linux", "x64", "${{ inputs.runner }}"],
       }),
-      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
+      "jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression",
     ],
     [
-      "nonstring label",
-      workflow({ ...baseJob, "runs-on": ["self-hosted", "linux", "x64", "goat", 42] }),
-      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
+      "nonstring runner",
+      workflow({ ...baseJob, "runs-on": 42 }),
+      "jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression",
     ],
     [
       "empty steps",
@@ -575,7 +523,7 @@ describe("goat pre-push workflow guard", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toBe(
         mode === "hosted runner"
-          ? `goat pre-push: ${workflowPath} in refs/heads/test (${bad}): jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression; refusing to push\n${advice}\n`
+          ? `goat pre-push: ${workflowPath} in refs/heads/test (${bad}): jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression; refusing to push\n${advice}\n`
           : `goat pre-push: ${extraPath} in refs/heads/test is not disabled on goat-si/goat\n${advice}\n`,
       );
       expect(f.ghCalls()).toBe(1);
@@ -644,7 +592,7 @@ exit 1
     );
     expect(rejected.status).not.toBe(0);
     expect(rejected.stderr).toContain(
-      `goat pre-push: ${workflowPath} in HEAD (${bad}): jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression; refusing to push`,
+      `goat pre-push: ${workflowPath} in HEAD (${bad}): jobs.ci.runs-on must be ubuntu-24.04, the hosted matrix expression, or the trusted-run lidge matrix expression; refusing to push`,
     );
     const absent = NodeChildProcess.spawnSync(
       gitExecutable,
