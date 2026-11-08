@@ -481,3 +481,10 @@ it("4c: an answer to a question carries only fresh uploads or the thread's own f
       requiredScope: "hub:proxy",
     });
 });
+
+it("4c: a session without a project makes the node's own scratch project", () => {
+  expect(refuseProxiedCall(full, "projects.ensureScratch", {})).toBeUndefined();
+  expect(refuseProxiedCall(["orchestration:read"], "projects.ensureScratch", {})).toMatchObject({
+    requiredScope: "orchestration:operate",
+  });
+});
