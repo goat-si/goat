@@ -185,9 +185,9 @@ describe("Library copy", () => {
   });
 
   it("says why a file did not open", () => {
-    expect(botArtifactOpenMessage("big.zip", { status: "too_large", size: 1, maxBytes: 1 })).toBe(
-      "big.zip is larger than 20 MB, so GOAT Bot can't send it here.",
-    );
+    expect(
+      botArtifactOpenMessage("big.zip", { status: "too_large", size: 1, maxBytes: 1 }, "Goaty"),
+    ).toBe("big.zip is larger than 20 MB, so Goaty can't send it here.");
     expect(botArtifactOpenMessage("a.txt", { status: "busy" })).toBe(
       "Another file is still opening. Try again in a moment.",
     );
@@ -203,14 +203,15 @@ describe("Library copy", () => {
     expect(
       botArtifactsFailure(
         new EnvironmentAuthorizationError({ message: "no", requiredScope: "filesystem:read" }),
+        "Goaty",
       ),
-    ).toEqual({ message: "This device can't read GOAT Bot's files.", retry: false });
-    expect(botArtifactsFailure(new ChannelGatewayError({ reason: "not_home" }))).toEqual({
-      message: "GOAT Bot's files are on its home computer.",
+    ).toEqual({ message: "This device can't read Goaty's files.", retry: false });
+    expect(botArtifactsFailure(new ChannelGatewayError({ reason: "not_home" }), "Goaty")).toEqual({
+      message: "Goaty's files are on its home computer.",
       retry: false,
     });
-    expect(botArtifactsFailure(new Error("x"))).toEqual({
-      message: "Couldn't load GOAT Bot's files.",
+    expect(botArtifactsFailure(new Error("x"), "Goaty")).toEqual({
+      message: "Couldn't load Goaty's files.",
       retry: true,
     });
   });

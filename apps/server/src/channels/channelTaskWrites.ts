@@ -16,6 +16,7 @@ import {
   type ChannelTaskChip,
   ChannelTaskEvent,
   type ChannelTaskEventId,
+  ChannelQuestionId,
   isGoatBotSessionThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -98,7 +99,15 @@ const chipFor = (task: ChannelTask): ChannelTaskChip => ({
     ? {}
     : { summary: task.resultSummary }),
   openQuestionCount: task.openQuestions.length,
-  openQuestionIds: task.openQuestions.map((question) => question.questionId),
+  openQuestionIds: [
+    ...task.openQuestions.map((question) => question.questionId),
+    ...(task.observed?.needsYou ?? []).flatMap((need) => [
+      ...(need.approval === undefined ? [] : [ChannelQuestionId.make(need.approval.requestId)]),
+      ...(need.question === undefined || need.question.host !== undefined
+        ? []
+        : [ChannelQuestionId.make(need.question.requestId)]),
+    ]),
+  ],
   ...(task.skillProposal === undefined ? {} : { askInChat: true as const }),
   ...(task.completionReport === undefined ? {} : { completionReport: task.completionReport }),
   ...(task.observed === undefined ? {} : { observed: task.observed }),

@@ -1,5 +1,5 @@
 import { GoatBotStatusCard } from "../goatBot/GoatBotStatusCard";
-import { useBotThreads } from "../goatBot/useBotRoster";
+import { useBotRoster, useBotThreads } from "../goatBot/useBotRoster";
 import { useGoatBotHomeSettings } from "../goatBot/useGoatBotHome";
 import { useEnvironment } from "~/state/environments";
 import { SettingsSection } from "./settingsLayout";
@@ -14,6 +14,7 @@ export function GoatBotStatusSettings() {
     presentation.serverConfig?.environment.capabilities.goatBotTaskThreads === true;
   // The same task list the sidebar reads, refreshed when the bot's conversation records work.
   const threads = useBotThreads(environmentId, null);
+  const { groups } = useBotRoster();
   if (!homeSupported) return null;
   return (
     <SettingsSection id="goat-bot-status" title="Status">
@@ -21,6 +22,7 @@ export function GoatBotStatusSettings() {
         className="px-3 py-3 sm:px-4"
         environmentId={environmentId}
         member={null}
+        botName={groups.main?.name ?? "GOAT Bot"}
         turnsWaiting={threads.turnsWaiting}
         rows={
           !listsTasks

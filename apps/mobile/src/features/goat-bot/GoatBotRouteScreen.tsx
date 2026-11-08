@@ -1,4 +1,5 @@
 import { ChannelTaskId } from "@goat/contracts";
+import { goatBotName } from "@goat/client-runtime/goatBot";
 import { useIsFocused, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect } from "react";
 import { Text, View } from "react-native";
@@ -18,7 +19,7 @@ export function GoatBotRouteScreen({
   const preview = useMobileBotPreview();
   const botId = route.params?.botId;
   const { member, main, missing } = useMobileGoatBotMember(botId);
-  const manage = useMobileBotManage(member?.environmentId ?? null);
+  const manage = useMobileBotManage(member?.environmentId ?? null, goatBotName(main));
   const environmentId = botRef?.environmentId;
   const threadId = botRef?.threadId;
   const taskId = route.params?.taskId;

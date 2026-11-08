@@ -31,6 +31,7 @@ export async function openBotLibraryFile(
   environmentId: EnvironmentId,
   relativePath: string,
   signal: AbortSignal,
+  botName = "GOAT Bot",
 ): Promise<BotLibraryOpenResult> {
   const name = botArtifactName(relativePath);
   try {
@@ -50,7 +51,7 @@ export async function openBotLibraryFile(
     );
     if (signal.aborted) return DONE;
     if (result.status !== "ok") {
-      return { kind: "message", message: botArtifactOpenMessage(name, result) };
+      return { kind: "message", message: botArtifactOpenMessage(name, result, botName) };
     }
     const attachment = { name, mimeType: result.mimeType };
     // Loaded on open: its file and crypto modules are native and the tab may never open a file.
@@ -74,7 +75,7 @@ export async function openBotLibraryFile(
     const message =
       error instanceof Error && error.message === SHARE_FAILED
         ? error.message
-        : botArtifactsFailure(error).message;
+        : botArtifactsFailure(error, botName).message;
     return { kind: "message", message };
   }
 }

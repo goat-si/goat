@@ -6,25 +6,34 @@ nightlies after a manual goat-ci run on `dev` and promotes soaked nightlies to s
 `.vite-hooks/goat-workflow-guard.mjs` refuses a push that carries any other enabled workflow, and
 holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate`, `result`, `republish`,
 `refresh-republished` and `connect-auth-postgres`, the pinned
-`ubuntu-24.04` image (or `windows-2025` for the Windows matrix entry), the `push`, `pull_request`, and
+`ubuntu-24.04` image (or, for the `ci` matrix, `windows-2025` and the trusted-run lidge
+matrix expression, and for the gate jobs the trusted-run lidge gate expression), the `push`, `pull_request`, and
 `workflow_dispatch` triggers, and an allowlist of actions.
 A new check is therefore a matrix task of `ci`. Any other new workflow, a
 `pull_request_target` trigger, or `actions/github-script` does not pass the guard.
 
-Every goat-ci job runs on GitHub-hosted runners: `ubuntu-24.04`, and `windows-2025` for the
-`test-windows` matrix entry. The EPYC self-hosted pool (`goat-epyc-01`..`24`, labels `epyc` and
-`epyc-light`) ran on a client's machine and was retired in November 2026. Hosted runners are
-discarded after each job, so steps may install packages through sudo. The steps still branch on
-`RUNNER_ENVIRONMENT`, so a future self-hosted pool needs only new `runs-on` values and guard rules.
-The free plan caps hosted concurrency at about 20 jobs, so a few full runs at once queue.
+The heavy matrix tasks of a trusted run (a manual run or a same-repository pull request) run on the
+lidge pool: one Ryzen 9950X3D box on Ubuntu 26.04 whose scaler creates an ephemeral JIT runner
+(labels `self-hosted`, `linux`, `x64`, `lidge`) only for trusted runs. Each runner's HOME is
+`/opt/actions-runner/$RUNNER_NAME/_home`, which the Toolchain step asserts. The repository variable
+`LIDGE_RUNNERS=on` enables the pool; `off` or unset sends those tasks back to `ubuntu-24.04`.
+Everything else runs on GitHub-hosted runners: `ubuntu-24.04`, and `windows-2025` for the
+`test-windows` entry. The EPYC self-hosted pool was retired in November 2026. Hosted runners are
+discarded after each job, so steps may install packages through sudo; the self-hosted steps branch on
+`RUNNER_ENVIRONMENT` and expect the box to carry those packages. The free plan caps hosted
+concurrency at about 20 jobs, so a few full runs at once queue.
 
 Each `ci` matrix entry carries a `runner` pool from `.github/scripts/goat-ci-scope.cjs`: `windows`
 for `test-windows`, `hosted` for the short Node-only tasks in `HOSTED_TASKS` (`check`, `typecheck`
 and the small package suites), and `linux` for the heavy tasks (`test`, `test-packages`,
 `test-changed`, `test-ssh`, `test-desktop`, `test-memory-growth`, `build` and the server shards).
-`hosted` and `linux` both take `ubuntu-24.04` today; the split marks which work a self-hosted pool
-would take. `goat-scope`, `goat-screenshot-gate` and `goat-ci-result` run on `ubuntu-24.04`, and the
-guard pins every `runs-on` value.
+`hosted` entries always take `ubuntu-24.04`, so short tasks never queue behind the pool, and
+`linux` entries take the lidge pool when it is enabled. The gate jobs `goat-scope`,
+`goat-screenshot-gate` and `goat-ci-result` take the pool on the same terms (kill switch and
+trust test, `ubuntu-24.04` otherwise), because a starved hosted queue left `goat-scope` waiting
+for minutes and no lidge task could start before it. They need only Node and git. `republish`
+waits on the real run and `refresh-republished` writes to Actions, so both stay on `ubuntu-24.04`
+with `connect-auth-postgres`, and the guard pins every `runs-on` value.
 
 goat-ci skips pull requests from forks for now, so a fork's pull request gets no `goat-ci-result`.
 To check one, a maintainer pushes its head to a branch in goat-si/goat and runs goat-ci there.

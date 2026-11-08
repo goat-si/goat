@@ -21,7 +21,12 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "
 import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { GoatBotAvatar, GoatBotMainAvatar, GoatBotSessionAvatar } from "./GoatBotAvatar";
-import { useGoatBotAvatar, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
+import {
+  useGoatBotAvatar,
+  useGoatBotMainName,
+  useGoatBotMember,
+  useGoatBotName,
+} from "./goatBotMemberContext";
 import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
@@ -111,6 +116,7 @@ export function GoatBotChatView({
   const member = useGoatBotMember();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
+  const mainName = useGoatBotMainName();
   const avatar = useGoatBotAvatar();
   const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const bot = availability.kind === "ready" ? availability.bot : null;
@@ -137,7 +143,7 @@ export function GoatBotChatView({
     addFolders: () =>
       toastManager.add({
         type: "error",
-        title: "Folders can't be attached to GOAT Bot. Drop the files instead.",
+        title: `Folders can't be attached to ${title}. Drop the files instead.`,
       }),
   });
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null);
@@ -189,7 +195,7 @@ export function GoatBotChatView({
           <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
             {member ? (
               <span className="text-xs text-muted-foreground">
-                {member.defaultModelSelection?.model ?? "GOAT Bot's model"}
+                {member.defaultModelSelection?.model ?? `${mainName}'s model`}
               </span>
             ) : (
               <GoatBotModelPicker />
@@ -215,10 +221,10 @@ export function GoatBotChatView({
             className="border-b border-border px-4 py-2 text-sm text-muted-foreground"
           >
             {availability.kind === "home_offline"
-              ? offlineHomeCopy(availability)
+              ? offlineHomeCopy(availability, mainName)
               : availability.kind === "offline"
-                ? "GOAT Bot's computer is offline. You can send messages again once it reconnects."
-                : "Connecting to GOAT Bot…"}
+                ? `${mainName}'s computer is offline. You can send messages again once it reconnects.`
+                : `Connecting to ${mainName}…`}
             {/* With no history the notice below carries the same action. */}
             {availability.kind === "home_offline" && homeMove && rows.length > 0 ? (
               <div className="mt-2">
@@ -228,7 +234,7 @@ export function GoatBotChatView({
                   disabled={homeMove.busy}
                   onClick={homeMove.onMove}
                 >
-                  Move GOAT Bot to {homeMove.label}
+                  Move {mainName} to {homeMove.label}
                 </Button>
               </div>
             ) : null}
@@ -318,7 +324,7 @@ export function GoatBotChatView({
         </div>
       </div>
       {bot && panelOpen && !narrow && (
-        <aside aria-label="GOAT Bot work" className="flex w-80 shrink-0 border-l border-border">
+        <aside aria-label={`${title} work`} className="flex w-80 shrink-0 border-l border-border">
           <GoatBotWorkPanel
             environmentId={bot.environmentId}
             threadId={bot.threadId}
@@ -330,7 +336,7 @@ export function GoatBotChatView({
       {bot && narrow && (
         <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
           <SheetPopup>
-            <SheetTitle className="sr-only">GOAT Bot work</SheetTitle>
+            <SheetTitle className="sr-only">{title} work</SheetTitle>
             <GoatBotWorkPanel
               environmentId={bot.environmentId}
               threadId={bot.threadId}
@@ -365,6 +371,7 @@ function GoatBotRemovedNotice({
   readonly onCheckAgain: (() => void) | undefined;
 }) {
   const avatar = useGoatBotAvatar();
+  const botName = useGoatBotName();
   if (memberName !== null) {
     return (
       <Empty className="min-h-0 flex-1">
@@ -416,14 +423,14 @@ function GoatBotRemovedNotice({
       availability.kind === "legacy_active" ||
       availability.kind === "ready");
   const description = canOpenCurrentBot
-    ? "GOAT Bot keeps going in its current chat."
+    ? `${botName} keeps going in its current chat.`
     : removal === "archived"
-      ? "Unarchive it to keep chatting with GOAT Bot here."
+      ? `Unarchive it to keep chatting with ${botName} here.`
       : replacementFailed
-        ? "Couldn't start a new GOAT Bot chat."
+        ? `Couldn't start a new ${botName} chat.`
         : availability.kind === "connecting"
-          ? "GOAT Bot is starting a new chat."
-          : "Reconnect to start a new GOAT Bot chat.";
+          ? `${botName} is starting a new chat.`
+          : `Reconnect to start a new ${botName} chat.`;
   return (
     <Empty className="min-h-0 flex-1">
       <EmptyHeader className="max-w-md">
@@ -491,7 +498,9 @@ function GoatBotNotice({
 }) {
   const member = useGoatBotMember();
   const avatar = useGoatBotAvatar();
-  const copy = noticeCopy(availability);
+  const openName = useGoatBotName();
+  const mainName = useGoatBotMainName();
+  const copy = noticeCopy(availability, mainName, openName);
   // A member introduces itself by its own name and purpose.
   const { title, description, retryLabel } =
     member !== null && availability.kind === "ready"
@@ -511,7 +520,7 @@ function GoatBotNotice({
         disabled={homeMove.busy}
         onClick={homeMove.onMove}
       >
-        Move GOAT Bot to {homeMove.label}
+        Move {mainName} to {homeMove.label}
       </Button>,
     );
   if (retryLabel !== null && onRetryAvailability !== undefined) {
@@ -577,7 +586,11 @@ function GoatBotNotice({
   );
 }
 
-function noticeCopy(availability: GoatBotAvailability): {
+function noticeCopy(
+  availability: GoatBotAvailability,
+  mainName: string,
+  openName: string,
+): {
   title: string;
   description: string;
   retryLabel: string | null;
@@ -585,25 +598,25 @@ function noticeCopy(availability: GoatBotAvailability): {
   switch (availability.kind) {
     case "ready":
       return {
-        title: "GOAT Bot",
+        title: mainName,
         description: "Text it like a person. It answers here and does the work in its own threads.",
         retryLabel: null,
       };
     case "connecting":
       return {
-        title: "Connecting to GOAT Bot…",
+        title: `Connecting to ${mainName}…`,
         description: "This takes a moment.",
         retryLabel: null,
       };
     case "home_offline":
       return {
-        title: "Waiting for GOAT Bot's computer",
-        description: offlineHomeCopy(availability),
+        title: `Waiting for ${mainName}'s computer`,
+        description: offlineHomeCopy(availability, mainName),
         retryLabel: null,
       };
     case "offline":
       return {
-        title: "GOAT Bot's computer is offline",
+        title: `${mainName}'s computer is offline`,
         description: "You can send messages again once it reconnects.",
         retryLabel: null,
       };
@@ -616,8 +629,8 @@ function noticeCopy(availability: GoatBotAvailability): {
       };
     case "error":
       return {
-        title: "Couldn't reach GOAT Bot",
-        description: availability.message,
+        title: `Couldn't reach ${openName}`,
+        description: availability.message ?? `Couldn't reach ${openName}`,
         retryLabel: "Try again",
       };
     case "unsupported":
@@ -629,8 +642,11 @@ function noticeCopy(availability: GoatBotAvailability): {
   }
 }
 
-function offlineHomeCopy(availability: Extract<GoatBotAvailability, { kind: "home_offline" }>) {
+function offlineHomeCopy(
+  availability: Extract<GoatBotAvailability, { kind: "home_offline" }>,
+  mainName: string,
+) {
   return availability.known
-    ? `GOAT Bot runs on ${availability.label}, which isn't connected.`
-    : `GOAT Bot's home (${availability.label}) isn't a computer this app knows.`;
+    ? `${mainName} runs on ${availability.label}, which isn't connected.`
+    : `${mainName}'s home (${availability.label}) isn't a computer this app knows.`;
 }

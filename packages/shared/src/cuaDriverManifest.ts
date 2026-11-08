@@ -212,6 +212,7 @@ export type CuaDriverAdmittedApp = string | CuaDriverExecutableApp;
 export function admittedCuaApplications(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
+  includeProtected = false,
 ): ReadonlyArray<CuaDriverAdmittedApp> {
   const host = new Set(hostBundleIds.map(cuaAppKey));
   const admitted = new Set<string>();
@@ -220,7 +221,7 @@ export function admittedCuaApplications(
     const bundle = app.bundle_id?.trim() ?? "";
     const id = bundle || (app.executable?.trim() ?? "");
     if (!id) continue;
-    if (excludedCuaApplication(app, id, host)) continue;
+    if (excludedCuaApplication(app, id, host, includeProtected)) continue;
     const binary = bundle ? app.bundle_executable?.trim() : undefined;
     if (binary?.startsWith("/") === true && !executables.has(binary))
       executables.set(binary, new Set());
@@ -680,13 +681,15 @@ async function listForHost(input: CuaDriverListingInput) {
 }
 
 export async function prepareCuaDriverCapabilityManifest(
-  input: CuaDriverListingInput & { readonly path: string },
+  input: CuaDriverListingInput & { readonly path: string; readonly includeProtected?: boolean },
 ): Promise<string> {
   const listed = await listForHost(input);
   const apps = input.platform === "darwin" ? await withBundleExecutables(listed.apps) : listed.apps;
   return writeCuaDriverCapabilityManifest(
     input.path,
-    cuaDriverCapabilityManifest({ applications: admittedCuaApplications(apps, listed.host) }),
+    cuaDriverCapabilityManifest({
+      applications: admittedCuaApplications(apps, listed.host, input.includeProtected === true),
+    }),
   );
 }
 

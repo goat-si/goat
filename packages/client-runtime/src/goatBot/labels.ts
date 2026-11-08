@@ -1,5 +1,14 @@
 import type { GoatBotDelivery } from "./rows.ts";
 
+/** A send the server refused. The chat renders it with the bot's current name. */
+export const GOAT_BOT_NOT_ACCEPTED = "not_accepted";
+
+export function goatBotRejectionText(reason: string | undefined, botName: string): string {
+  return reason === GOAT_BOT_NOT_ACCEPTED
+    ? `${botName} did not accept this message`
+    : (reason ?? "Not Delivered");
+}
+
 /** The one status line under the newest sent message. Failed sends have their own UI. */
 export function goatBotReceiptLabel(
   delivery: GoatBotDelivery,

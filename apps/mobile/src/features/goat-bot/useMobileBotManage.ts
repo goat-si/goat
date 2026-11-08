@@ -12,7 +12,7 @@ import { channelEnvironment } from "../../state/channels";
 const NO_PERMISSION = Atom.make(false);
 
 /** Create, edit, hide, delete and restore bots on the GOAT Bot computer, with what to show on failure. */
-export function useMobileBotManage(environmentId: EnvironmentId | null) {
+export function useMobileBotManage(environmentId: EnvironmentId | null, botName = "GOAT Bot") {
   const canCreate = useAtomValue(
     environmentId === null
       ? NO_PERMISSION
@@ -48,7 +48,7 @@ export function useMobileBotManage(environmentId: EnvironmentId | null) {
       model: BotProfile["defaultModelSelection"],
       clientRequestId: string,
     ): Promise<BotProfile | string> => {
-      if (environmentId === null) return "GOAT Bot's computer isn't connected.";
+      if (environmentId === null) return `${botName}'s computer isn't connected.`;
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.createBot, {
         environmentId,
         input: {
@@ -65,7 +65,7 @@ export function useMobileBotManage(environmentId: EnvironmentId | null) {
     },
     /** Resolves to null when saved, else the message to show in the sheet. */
     update: async (bot: BotProfile, changes: Partial<BotProfileValues>) => {
-      if (environmentId === null) return "GOAT Bot's computer isn't connected.";
+      if (environmentId === null) return `${botName}'s computer isn't connected.`;
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.updateBot, {
         environmentId,
         input: { botId: bot.botId, ...changes },

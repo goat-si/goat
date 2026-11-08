@@ -96,6 +96,7 @@ export function GoatBotComposer({
     const { staged, error } = await stageGoatBotFiles(files, {
       existingCount: draftRef.current.length,
       support: attachmentSupport,
+      botName,
     });
     if (signal.aborted) {
       releaseUnownedGoatBotAttachments(staged);

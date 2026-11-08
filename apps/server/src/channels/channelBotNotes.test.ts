@@ -146,7 +146,7 @@ describe("corrections, newest wins", () => {
         "input-2",
         fridays,
       );
-      expect(outcome).toEqual({ correction: "replaced" });
+      expect(outcome).toEqual({ correction: "replaced", wrote: true });
       expect((yield* fs.readFileString(files.notes)).trimEnd().split("\n").at(-1)).toBe(
         '- 2026-11-02: I deploy on Mondays. (asked in input-2) (replaces: "I deploy on Fridays.")',
       );
@@ -175,7 +175,7 @@ describe("corrections, newest wins", () => {
         "input-3",
         fridays,
       );
-      expect(second).toEqual({ correction: "replaced" });
+      expect(second).toEqual({ correction: "replaced", wrote: true });
       expect(yield* readChannelBotNotes(files, "")).toBe(
         '- 2026-11-03: Tuesdays. (asked in input-3) (replaces: "Mondays.")',
       );
@@ -193,7 +193,7 @@ describe("corrections, newest wins", () => {
         "input-2",
         "- 2026-11-01:  I deploy on   Fridays. (asked in input-1)",
       );
-      expect(outcome).toEqual({ correction: "replaced" });
+      expect(outcome).toEqual({ correction: "replaced", wrote: true });
       expect(yield* readChannelBotNotes(files, "")).not.toContain("Fridays. (asked in input-1)\n");
       expect((yield* readChannelBotNotes(files, "")).split("\n")).toHaveLength(1);
     }).pipe(Effect.provide(services)),
@@ -212,7 +212,7 @@ describe("corrections, newest wins", () => {
             "input-2",
             "I deploy on Sundays.",
           ),
-        ).toEqual({ correction: "unmatched" });
+        ).toEqual({ correction: "unmatched", wrote: pass === 0 });
       }
       const text = yield* fs.readFileString(files.notes);
       expect(text.match(/asked in input-2/gu)).toHaveLength(1);

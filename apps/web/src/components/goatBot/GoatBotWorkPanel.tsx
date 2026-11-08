@@ -59,7 +59,7 @@ export function GoatBotWorkPanel({
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         <div className="pr-10">
           {/* Five tabs do not fit the panel at equal widths, so each keeps its label and the row wraps. */}
-          <TabsList aria-label="GOAT Bot work" className="flex-wrap">
+          <TabsList aria-label={`${botName} work`} className="flex-wrap">
             {tabs.map((name) => (
               <TabsTab key={name} value={name} className="flex-none">
                 {name}
@@ -90,7 +90,7 @@ export function GoatBotWorkPanel({
             </p>
           ) : null}
           {tasks.length === 0 ? (
-            <p>No task threads yet. Ask GOAT Bot to start work.</p>
+            <p>No task threads yet. Ask {botName} to start work.</p>
           ) : (
             <div className="space-y-4">
               {([false, true] as const).map((done) => (
