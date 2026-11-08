@@ -13,12 +13,13 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";
-import { ChildProcessSpawner } from "effect/process";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
 import { installArchivePsDouble, uploadTarget } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
-import { prepareRemoteRuntime } from "./tunnel.ts";
+import { buildRemoteStopScript, prepareRemoteRuntime } from "./tunnel.ts";
 
 const current = {
   ssh: SSH_RUNTIME_PROTOCOL_VERSION,
@@ -93,7 +94,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
   );
 
   it.live(
-    "a warm pairing on an unchanged runtime starts few helper commands",
+    "warm pairing, probe, launch and stop start few commands on an unchanged runtime",
     () =>
       Effect.gen(function* () {
         const f = yield* liveFixture;
@@ -101,10 +102,21 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         yield* launch(f);
         const pairing = yield* f.run("pairing");
         if (Result.isFailure(pairing)) throw pairing.failure;
-        // Under MSYS each command start costs about 50 ms; count them for one warm pairing.
+        // Under MSYS each command start costs about 50 ms; count them for each warm script.
         const bin = `${f.test}/counted`;
         yield* f.fs.makeDirectory(bin, { recursive: true });
-        const counted = ["grep", "sed", "stat", "sha256sum", "shasum", "ps", "awk", "cat", "date"];
+        const counted = [
+          "grep",
+          "sed",
+          "stat",
+          "sha256sum",
+          "shasum",
+          "ps",
+          "awk",
+          "cat",
+          "date",
+          "uname",
+        ];
         for (const name of counted) {
           // Each shim drops its own directory, so later shims (clock, identity) still apply.
           yield* f.fs.writeFileString(
@@ -116,25 +128,105 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         f.setRemotePath(
           `${bin}:${f.home}/.test/clock:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`,
         );
+        const counts = Effect.gen(function* () {
+          const log = yield* f.fs.readFileString(`${f.home}/.test/counted.log`);
+          yield* f.fs.writeFileString(`${f.home}/.test/counted.log`, "");
+          const seen: Record<string, number> = {};
+          for (const name of log.trim().split("\n").filter(Boolean))
+            seen[name] = (seen[name] ?? 0) + 1;
+          const events = yield* f.fs.readFileString(`${f.test}/events`);
+          yield* f.fs.writeFileString(`${f.test}/events`, "");
+          seen.goat = events.split("\n").filter((line) => line.includes('"type":"exec"')).length;
+          seen.sha256 = (seen.shasum ?? 0) + (seen.sha256sum ?? 0);
+          return seen;
+        });
+        yield* f.fs.writeFileString(`${f.test}/events`, "");
         const warm = yield* f.run("pairing");
         if (Result.isFailure(warm)) throw warm.failure;
-        const log = yield* f.fs.readFileString(`${f.home}/.test/counted.log`);
-        const counts: Record<string, number> = {};
-        for (const name of log.trim().split("\n")) counts[name] = (counts[name] ?? 0) + 1;
-        // Measured at 9109d68047: awk 0, cat 49, date 19, grep 56, ps 12, sed 35, shasum 15, stat 38.
-        // Each remembered pinned-runner key costs a stat of the runner, which proves it unchanged.
-        const bounds: Record<string, number> = {
-          awk: 20,
-          cat: 18,
-          date: 9,
-          grep: 0,
-          ps: 12,
-          sed: 1,
-          stat: 21,
-        };
-        for (const [name, bound] of Object.entries(bounds))
-          assert.isAtMost(counts[name] ?? 0, bound, name);
-        assert.isAtMost((counts.shasum ?? 0) + (counts.sha256sum ?? 0), 14, "sha256");
+        const pairingCounts = yield* counts;
+        yield* probe(f);
+        const probeCounts = yield* counts;
+        yield* launch(f);
+        const launchCounts = yield* counts;
+        const stop = yield* f.transport.spawn(
+          ChildProcess.make("ssh", ["devbox", "sh", "-s", "--", REMOTE_RUNTIME_STATE_KEY], {
+            stdin: {
+              stream: Stream.make(
+                new TextEncoder().encode(buildRemoteStopScript(REMOTE_RUNTIME_STATE_KEY)),
+              ),
+            },
+          }),
+        );
+        assert.equal(Number(yield* stop.exitCode), 0);
+        const stopCounts = yield* counts;
+        // goat starts only for the pairing itself, readiness and the activity check. Measured on
+        // eefc2a1f: pairing awk 20, cat 18, date 9, uname 9; probe cat 7, uname 7; launch awk 43,
+        // cat 81, date 17, uname 17; stop cat 17, uname 3.
+        const bounds = {
+          pairing: [
+            pairingCounts,
+            {
+              goat: 1,
+              awk: 12,
+              cat: 2,
+              date: 2,
+              uname: 3,
+              grep: 0,
+              sed: 1,
+              ps: 12,
+              stat: 21,
+              sha256: 14,
+            },
+          ],
+          probe: [
+            probeCounts,
+            {
+              goat: 0,
+              awk: 2,
+              cat: 0,
+              date: 1,
+              uname: 2,
+              grep: 0,
+              sed: 1,
+              ps: 4,
+              stat: 10,
+              sha256: 2,
+            },
+          ],
+          launch: [
+            launchCounts,
+            {
+              goat: 1,
+              awk: 28,
+              cat: 2,
+              date: 3,
+              uname: 6,
+              grep: 0,
+              sed: 2,
+              ps: 51,
+              stat: 55,
+              sha256: 40,
+            },
+          ],
+          stop: [
+            stopCounts,
+            {
+              goat: 1,
+              awk: 4,
+              cat: 2,
+              date: 0,
+              uname: 2,
+              grep: 0,
+              sed: 2,
+              ps: 5,
+              stat: 0,
+              sha256: 0,
+            },
+          ],
+        } as const;
+        for (const [script, [seen, limits]] of Object.entries(bounds))
+          for (const [name, bound] of Object.entries(limits))
+            assert.isAtMost(seen[name] ?? 0, bound, script + " " + name);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
