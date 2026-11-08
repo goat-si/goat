@@ -349,10 +349,11 @@ describe("OpenCode native subagent limit", () => {
             })
             .pipe(Effect.exit);
           assert.isTrue(Exit.isSuccess(yield* steer));
+          const base = openCodePermissionRules(harness.policy);
           assert.deepEqual(yield* Queue.take(updated), {
             sessionID: root,
-            permission: [...openCodePermissionRules(harness.policy), DENY],
-            metadata: { goatSubagentDeny: true },
+            permission: [...base, DENY],
+            metadata: { goatPermissionBase: base, goatSubagentDeny: true },
           });
           // The steer's own receipt lets the turn settle.
           yield* push({
@@ -545,7 +546,7 @@ describe("OpenCode native subagent limit", () => {
         const approval = runtimePolicy("approval-required");
         const { config, created, harness, root, sessions, updates } = yield* resumeFixture(
           "resume-empty-fork",
-          { permission: [] },
+          { permission: [], metadata: {} },
         );
         yield* sessions.set(config);
         yield* harness.runtime.ensureThread({
@@ -581,7 +582,7 @@ describe("OpenCode native subagent limit", () => {
         const fullAccess = runtimePolicy("full-access");
         const { config, harness, root, sessions, updates } = yield* resumeFixture(
           "resume-legacy-prefix",
-          { permission: [...openCodePermissionRules(approval), REVIEWER] },
+          { permission: [...openCodePermissionRules(approval), REVIEWER], metadata: {} },
         );
         yield* sessions.set(config);
         yield* harness.runtime.resumeThread({
