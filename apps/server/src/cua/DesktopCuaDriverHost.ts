@@ -92,8 +92,12 @@ export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactor
           .pipe(
             Effect.mapError((cause) => new CuaDriverHostError({ operation: "desktop", cause })),
           );
-        if (!(yield* desktopStopAcknowledged(stopped)))
+        if (!(yield* desktopStopAcknowledged(stopped))) {
+          yield* Effect.logWarning(
+            "The desktop app went away or did not confirm the driver stop; the stop counts as failed",
+          );
           return yield* new CuaDriverHostError({ operation: "stop" });
+        }
       }).pipe(Effect.ensuring(Scope.close(scope, Exit.void)));
       return {
         start,
