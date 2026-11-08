@@ -1,8 +1,8 @@
 /**
- * Whether full access admits a control on every app. Any run whose thread is in full access gets
- * one, whatever started it, and takes the foreground without asking (ADR-0023 D16); the host
- * setting `cuaFullAccessAutoAdmit` decides nothing. The kind keeps what still differs by origin:
- * unattended work holds the screen alone, so two of its threads never mix their input.
+ * Whether a run admits a control on every app. Strict input guards off admits every run; with
+ * them on, full access does (ADR-0023 D16). The host setting `cuaFullAccessAutoAdmit` decides
+ * nothing. The kind keeps what still differs by origin: unattended work holds the screen alone,
+ * so two of its threads never mix their input.
  *
  * @module ComputerUseFullAccess
  */
@@ -22,10 +22,14 @@ export const everyAppKind = (input: {
   return input.unattended ? "unattended" : "person";
 };
 
-/** Whether the thread is still in full access. A failed read admits nothing, so the control ends. */
-export const makeFullAccessAdmitted = (sql: SqlClient.SqlClient) =>
+/** Strict-off or full access keeps the control admitted. A failed read ends it. */
+export const makeFullAccessAdmitted = <E>(
+  sql: SqlClient.SqlClient,
+  strictInputGuards: Effect.Effect<boolean, E>,
+) =>
   Effect.fn("ComputerUseLeases.fullAccessAdmitted")(
     function* (threadId: ThreadId) {
+      if (!(yield* strictInputGuards)) return true;
       const rows = yield* sql<{ readonly runtime_mode: string }>`
         SELECT runtime_mode FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
       `;

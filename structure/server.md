@@ -298,11 +298,12 @@ every driver start checks the screen again. A desktop that stops its driver on i
 `stopped`) is restarting it, such as after new macOS grants, so that stop is not a failure.
 
 Both hosts start the driver in standard mode under the capability manifest from
-`packages/shared/src/cuaDriverManifest.ts`. Turns nobody directs (GOAT Bot, channel tasks,
-scheduled and webhook runs, and what they launch; `ComputerUseOrigin.ts`) get the driver only
-while their thread holds a lease: an approved `computer_use.grant` handoff before its expiry
-(`ComputerUseLeases.ts`), requested with `goat_computer_use_request` (`ComputerUseRequests.ts`).
-A grant may name apps, and interactive turns act only on apps a grant names. Every attached
+`packages/shared/src/cuaDriverManifest.ts`. With Strict input guards off, every origin and
+runtime mode gets an every-app control with foreground authority and no approval handoff. With
+them on, turns nobody directs (GOAT Bot, channel tasks, scheduled and webhook runs, and what
+they launch; `ComputerUseOrigin.ts`) need an approved `computer_use.grant` handoff before its
+expiry outside full access (`ComputerUseLeases.ts`), requested with
+`goat_computer_use_request` (`ComputerUseRequests.ts`). A strict-mode grant may name apps. Every attached
 provider runs the `cua-lease-proxy` subcommand (`ComputerUseLeaseProxy.ts`) instead of
 `cua-driver mcp`, under a per-thread control from `ComputerUseLeases`; it follows the control over
 `/api/computer-use/lease` (`ComputerUseLeaseRoute.ts`), checks each call's app

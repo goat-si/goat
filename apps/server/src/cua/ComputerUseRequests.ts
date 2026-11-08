@@ -1,9 +1,8 @@
 import { coversApps, describeHolder } from "./computerUseGrants.ts";
 /**
- * A thread asking a person for computer use on this host, of the whole screen or of the apps it
- * names. The request is an approval handoff on the computer_use.grant path whose expiry is the
- * end of the admission; a person allowed to change this environment's settings answers it in a
- * GOAT client. Interactive threads ask for apps; unattended ones need an admission at all.
+ * A thread asking for computer use on this host, of the whole screen or of the apps it names.
+ * Strict input guards off admits every app and foreground without a handoff. With them on, the
+ * request is an approval handoff on the computer_use.grant path whose expiry ends the admission.
  *
  * @module ComputerUseRequests
  */
@@ -112,7 +111,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         message: `Computer use cannot control ${blocked.join(", ")}: this organization blocks it. Ask the person to do this step.`,
       } satisfies ComputerUseRequestResult;
   }
-  if (foreground && wanted !== undefined)
+  if (strict && foreground && wanted !== undefined)
     return {
       kind: "refused",
       reason: "unsupported",
@@ -215,10 +214,23 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     { threadId: input.threadId, ...(run === undefined ? {} : { runId: run.id }) },
   );
   // This run's own control, while an agent can act through it.
-  const current = Option.filter(
+  const attached = Option.filter(
     yield* leases.attached(input.threadId),
     (control) => run !== undefined && control.runId === run.id,
   );
+  const record = yield* leases.currentControl(input.threadId);
+  const ended = Option.isSome(record) && record.value.ended !== undefined;
+  const current =
+    !strict && !ended && run !== undefined && run.rootNodeId !== null
+      ? Option.map(
+          yield* leases.everyAppControl(
+            input.threadId,
+            !usesScreenLikePerson(origin, view.projection.thread.runtimeMode),
+            { runId: run.id, nonPerson: origin._tag === "unattended" },
+          ),
+          (control) => ({ controlId: control.controlId, runId: run.id, everyApp: true }),
+        )
+      : attached;
   // The remote-origin terminal block is a strict guard too.
   if (
     strict &&
@@ -348,15 +360,23 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   ) {
     if (wanted !== undefined)
       yield* leases.nameApps(input.threadId, current.value.controlId, wanted);
+    const admission = strict ? "This thread runs in full access" : "Strict input guards are off";
     return {
       kind: "available",
       message: foreground
-        ? "This thread runs in full access: this turn can bring apps forward and take keyboard or pointer focus without approval. Tell the person first that the screen may briefly be taken and returned."
+        ? `${admission}: this turn can bring apps forward and take keyboard or pointer focus without approval. Tell the person first that the screen may briefly be taken and returned.`
         : wanted === undefined
-          ? "This thread runs in full access: this turn can act on every app without approval."
-          : `This thread runs in full access: this turn can act on every app without approval. A manifest refresh was requested for ${wanted.join(", ")}. Wait a few seconds, then retry the call. If it is still refused with bounded_resource_outside_manifest, make sure the app is running and call computer_use.request again with its app id. If it remains unavailable, report the refusal.`,
+          ? `${admission}: this turn can act on every app without approval.`
+          : `${admission}: this turn can act on every app without approval. A manifest refresh was requested for ${wanted.join(", ")}. Wait a few seconds, then retry the call. If it is still refused with bounded_resource_outside_manifest, make sure the app is running and call computer_use.request again with its app id. If it remains unavailable, report the refusal.`,
     } satisfies ComputerUseRequestResult;
   }
+  if (!strict)
+    return {
+      kind: "refused",
+      reason: "interrupted",
+      message:
+        "This turn's computer use was stopped, paused, replaced or lost its screen admission. Do not act on the screen in this turn; a later turn is admitted automatically while Strict input guards are off.",
+    } satisfies ComputerUseRequestResult;
   const handoff = yield* handoffs.create(createInput);
   // A repeated request returns the pending handoff with its original expiry.
   const approvedUntil = DateTime.formatIso(handoff.expiresAt ?? expiresAt);

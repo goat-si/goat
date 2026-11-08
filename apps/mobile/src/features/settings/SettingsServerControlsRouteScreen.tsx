@@ -705,7 +705,7 @@ function ServerSettingsDetail(props: {
                     <SettingsSwitchRow
                       icon="desktopcomputer"
                       label="Computer use"
-                      subtitle="Allow agents to see and use apps on the selected environments' computers. Threads in full access mode use every app without asking; other threads ask you first. A Mac also needs Accessibility and Screen Recording, granted at that Mac. A computer without a usable screen says why it cannot turn on."
+                      subtitle="Allow agents to see and use apps on the selected environments' computers. By default every app and foreground action is allowed without asking, including unattended work. A Mac also needs Accessibility and Screen Recording, granted at that Mac. A computer without a usable screen says why it cannot turn on."
                       value={uniform("enableCua")}
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
@@ -713,7 +713,7 @@ function ServerSettingsDetail(props: {
                     <SettingsSwitchRow
                       icon="desktopcomputer"
                       label="Strict input guards"
-                      subtitle="Off by default. On adds GOAT's own checks before computer input is sent."
+                      subtitle="Off by default: all apps and foreground actions are allowed. On restores approvals, protected and denied app rules, unattended-origin limits, and input checks."
                       value={uniform("cuaStrictInputGuards")}
                       disabled={disabledFor("cuaStrictInputGuards")}
                       onValueChange={(value) => write({ cuaStrictInputGuards: value })}

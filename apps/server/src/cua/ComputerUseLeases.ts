@@ -170,7 +170,7 @@ export class ComputerUseLeases extends Context.Service<
     /**
      * Apps a run with every app or the whole screen named in a request. The host adds them to the
      * driver's manifest, which otherwise holds only the apps open when the driver started, such
-     * as a dev build of GOAT launched by this turn. It still leaves out GOAT and credential stores.
+     * as a dev build of GOAT launched by this turn. Strict input guards decide protected-app exclusions.
      */
     readonly nameApps: (
       threadId: ThreadId,
@@ -352,7 +352,13 @@ const make = Effect.gen(function* () {
   const kick = PubSub.publish(watchKick, undefined).pipe(Effect.asVoid);
   let manifestGeneration = 0;
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
-  const fullAccessAdmitted = makeFullAccessAdmitted(sql);
+  const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const fullAccessAdmitted = makeFullAccessAdmitted(
+    sql,
+    Option.isSome(serverSettings)
+      ? serverSettings.value.getSettings.pipe(Effect.map((current) => current.cuaStrictInputGuards))
+      : Effect.succeed(true),
+  );
   const controls = new Map<ThreadId, ControlRecord>();
   const controlOwners = new Map<string, ThreadId>();
   const authorityListeners = new Set<
