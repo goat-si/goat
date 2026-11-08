@@ -1,9 +1,9 @@
 # Computer use
 
 Computer use lets agents see and use apps on the computer that runs your GOAT
-environment. Agents normally work with windows in the background. Foreground
-input can briefly take your screen; threads you direct in full access mode can
-use it without asking. It is powered by
+environment. By default agents can use every available app and foreground input
+without an approval card, including work that runs unattended. **Strict input
+guards** is the opt-in block mode. It is powered by
 [Cua Driver](https://cua.ai/docs/cua-driver).
 
 Computer use is off until you turn it on, and it works on macOS, Windows, and
@@ -35,23 +35,23 @@ Muse Code do not get computer use, because it controls the computer that runs GO
 ## What agents can use
 
 Agents can see the screen and use the apps that were installed when computer use
-started. They cannot use GOAT's own windows, password managers such as
-Passwords, Keychain Access or 1Password, or the clipboard, and they cannot
-install anything, change computer use's settings, or close apps. To let agents
-use an app you installed later, turn computer use off and on again.
+started. With **Strict input guards** off, this includes password managers,
+System Settings, login and security prompts, Screen Time, Terminal and iTerm.
+They cannot use the clipboard, install anything, change computer use's settings,
+or close apps. To let agents use an app you installed later, turn computer use
+off and on again.
 
-These limits keep agents away from places they never need. They do not stop an
-agent from typing into an app it may use, so give agents work you would let
-them do at that keyboard. With **Strict input guards** off, an agent can still ask
-for password managers and the other protected apps below, and you can approve
-them, but computer use itself still does not control them.
+GOAT's own windows are always blocked. With **Strict input guards** on, GOAT
+also blocks password managers, System Settings, login and security prompts, and Screen Time. Full access
+started by a bot, channel, schedule, webhook, or another environment cannot
+control Terminal or iTerm. An organization can block more apps by adding their
+bundle IDs to `cuaDeniedApps` in the environment's `userdata/settings.json`,
+and input without an identifiable target is refused; only a person can change
+these settings.
 
-Computer use also blocks System Settings, login and security prompts, and Screen
-Time. With **Strict input guards** on, full access started by a bot, channel,
-schedule, webhook, or another environment cannot control Terminal or iTerm, an
-organization can block more apps by adding their bundle IDs to `cuaDeniedApps`
-in the environment's `userdata/settings.json`, and input without an
-identifiable target is refused; only a person can change these settings.
+These restrictions do not replace operating-system permissions or driver and
+target checks. A missing app, unavailable driver, or refused action still
+reports its real error.
 
 ## Ask an agent to work across the browser and apps
 
@@ -150,11 +150,16 @@ other threads that use the same profile. GOAT hides the password in what agents 
 page shows it as typed or in the usual web encodings; a site that changes it some other way can
 still show it, so give passwords only for sites you trust.
 
-## Approving apps
+## App and foreground approvals
 
-Every thread in full access mode uses every app without asking, whatever
-started its turn: you, GOAT Bot, a scheduled or webhook task, Slack, or another
-channel. They also get foreground input without asking. In other modes, the agent asks before it uses an app. The
+With **Strict input guards** off, every thread uses every app and foreground
+input without asking, whatever started its turn: you, GOAT Bot, a scheduled or
+webhook task, Slack, another channel, or another environment. It does not need
+full-access mode or an entry in **Allowed apps**. Its control remains
+time-limited and Stop, pause and expiry still end or suspend it.
+
+With **Strict input guards** on, a thread in full-access mode keeps this
+automatic admission. In other modes, the agent asks before it uses an app. The
 request names the apps and says when approval expires. Approve it in a GOAT app
 and the agent continues in the same turn, using those apps until then. Until
 approved, it can list apps and windows but cannot look inside or type into them.
@@ -183,11 +188,10 @@ answers, or while it is off in **System Settings > Privacy & Security >
 Automation**, the agent stops that action and tells you, naming the app when it
 can.
 
-By default GOAT adds no input checks of its own: agents click by element, key
-or point, bring a window forward when a background click does not land, and keep
-going after a step whose effect they could not confirm. What macOS, Windows,
-Linux or the driver refuses still comes back to the agent, and the limits below
-still apply.
+By default GOAT adds no approval or input checks of its own: agents click by
+element, key or point, bring a window forward when a background click does not
+land, and keep going after a step whose effect they could not confirm. What
+macOS, Windows, Linux or the driver refuses still comes back to the agent.
 
 To have GOAT check input before it is sent, turn on **Strict input guards** under
 **Settings > Integrations > Computer use > Advanced**. With it on, a call that
@@ -200,16 +204,15 @@ stops the steps after it.
 
 **Stop** on a thread stops its computer use at once, even in the middle of an
 action sequence. Pause, takeover and private mode also revoke foreground
-control. After pause or Stop, a full-access thread gets foreground control
+control. After pause or Stop, an automatically admitted thread gets foreground control
 automatically only on its next turn. On a Mac with Input Monitoring allowed for
 GOAT Computer Use, press **Esc** to stop all active computer-use sessions on that Mac.
 
-Full access skips app and foreground approvals. Everything else on this page still
-applies to it: password managers and GOAT's own windows stay off limits, a
-secret field in a browser tab still pauses agents, each action stays within
-what its call may reach, and work that runs on its own still shares the screen
-one thread at a time. **Stop**, **Stop all** and turning computer use off
-end it, and leaving full access ends automatic access at once.
+Full access skips app and foreground approvals even with **Strict input
+guards** on. Strict mode's protected-app and input rules still apply. A secret
+field in a browser tab always pauses agents, each action stays within what its
+call may reach, and unattended work still shares the screen one thread at a
+time. **Stop**, **Stop all** and turning computer use off end it.
 
 Once admitted, agents keep working while you use the keyboard and mouse. Use
 **Stop**, **Stop all**, or **Hand back** when you want to interrupt them; a
@@ -272,8 +275,8 @@ To keep the tools without the skill, turn off **Computer Use skill** under
 
 GOAT Bot, work started from Slack or iMessage, scheduled and webhook tasks, and
 threads any of them start use every app and foreground input without asking
-when they run in full access mode, and need approval otherwise. When such a
-thread needs approval, GOAT asks in that
+while **Strict input guards** are off. With them on, only full-access work keeps
+that automatic admission; other work needs approval. When such a thread needs approval, GOAT asks in that
 thread. The request names the thread, this computer, what the agent wants to do,
 and until when. Someone allowed to change this environment's settings approves
 it in a GOAT app; a reply in a chat channel does not count.
@@ -297,8 +300,8 @@ GOAT stops the agent's computer use right away, even in the middle of an action
 sequence: the step already under way finishes, and nothing after it runs.
 
 If such work sends a message to a thread you are running, it does not join your
-turn; it waits and runs as that thread's next turn, without computer use unless
-that thread is approved or runs in full access mode.
+turn; it waits and runs as that thread's next turn. With **Strict input guards**
+on, it gets computer use only when that thread is approved or runs in full access mode.
 
 ## macOS permissions
 

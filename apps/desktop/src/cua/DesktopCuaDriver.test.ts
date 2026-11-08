@@ -679,6 +679,27 @@ describe("DesktopCuaDriver verification", () => {
 });
 
 describe("DesktopCuaDriver app listing for the agents' manifest", () => {
+  it.effect("re-reads strict input guards on every protected-app manifest refresh", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.listApps([{ bundle_id: "com.1password.1password", name: "1Password" }]);
+        yield* test.setStrictInputGuards(false);
+        yield* test.approveApps(["com.1password.1password"]);
+        assert.include(test.manifest(), "com.1password.1password");
+        yield* test.setStrictInputGuards(true);
+        yield* test.listApps([
+          { bundle_id: "com.1password.1password", name: "1Password" },
+          { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
+        ]);
+        yield* test.approveApps(["com.apple.TextEdit"]);
+        assert.notInclude(test.manifest(), "com.1password.1password");
+      }),
+    ),
+  );
+
   it.effect("refreshes the manifest after the start request finishes", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -758,6 +779,25 @@ describe("DesktopCuaDriver manifest preparation", () => {
     });
     expect(driver.ran()).toBe(false);
     expect(NodeFS.readFileSync(path, "utf8")).toContain("com.apple.TextEdit");
+  });
+
+  it("passes strict-off protected apps to the shared manifest", async ({ onTestFinished }) => {
+    const driver = trap(onTestFinished);
+    const path = await prepareDesktopManifest({
+      binaryPath: driver.binaryPath,
+      scope: "agents",
+      hostBundleIds: ["si.goat.desktop"],
+      directory: driver.directory,
+      platform: "darwin",
+      includeProtected: true,
+      listApplications: async () => [
+        { bundle_id: "com.1password.1password", name: "1Password" },
+        { bundle_id: "si.goat.desktop", name: "GOAT" },
+      ],
+    });
+    const manifest = NodeFS.readFileSync(path, "utf8");
+    expect(manifest).toContain("com.1password.1password");
+    expect(manifest).not.toContain("si.goat.desktop");
   });
 
   it("writes the grant check's manifest without listing anything", async ({ onTestFinished }) => {

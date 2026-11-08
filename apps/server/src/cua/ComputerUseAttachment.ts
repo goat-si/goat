@@ -81,7 +81,7 @@ export interface ComputerUseAttachmentInput {
   readonly threadId: ThreadId;
   readonly driver: ProviderDriverKind | undefined;
   readonly interactionMode: ProviderInteractionMode | undefined;
-  /** The thread's mode; full access skips grants and foreground approval for every run (D16). */
+  /** Full access skips grants in strict mode; strict-off skips them in every mode. */
   readonly runtimeMode?: RuntimeMode | undefined;
   /** The run this session is prepared for; absent outside a turn. */
   readonly runId?: RunId | undefined;
@@ -123,7 +123,9 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   const current = Option.isNone(settings)
     ? undefined
     : yield* settings.value.getSettings.pipe(Effect.orElseSucceed(() => undefined));
-  const everyApp = everyAppKind({ runtimeMode: input.runtimeMode, unattended }) !== undefined;
+  const everyApp =
+    current?.cuaStrictInputGuards === false ||
+    everyAppKind({ runtimeMode: input.runtimeMode, unattended }) !== undefined;
   const leases = input.leases;
   const lease =
     unattended && !everyApp && Option.isSome(leases)
