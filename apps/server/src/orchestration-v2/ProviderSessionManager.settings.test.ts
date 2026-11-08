@@ -64,6 +64,8 @@ interface Fixture {
   readonly changes: PubSub.PubSub<void>;
   readonly turnStarted: Deferred.Deferred<void>;
   readonly endTurn: Deferred.Deferred<void>;
+  /** Work the process holds outside turns, such as an active goal: what it knows, and what Codex confirms. */
+  readonly liveWork: { held: boolean; confirm: Effect.Effect<boolean> };
 }
 
 const makeFixture = Effect.gen(function* () {
@@ -74,7 +76,9 @@ const makeFixture = Effect.gen(function* () {
     changes: yield* PubSub.unbounded<void>(),
     turnStarted: yield* Deferred.make<void>(),
     endTurn: yield* Deferred.make<void>(),
+    liveWork: { held: false, confirm: Effect.void.pipe(Effect.as(false)) },
   };
+  fixture.liveWork.confirm = Effect.sync(() => fixture.liveWork.held);
   return fixture;
 });
 
@@ -112,6 +116,8 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
         },
         events: Stream.never,
         backgroundTasksEndWithProcess: true,
+        holdsLiveWork: ({ pastPinCeiling }) =>
+          pastPinCeiling ? fixture.liveWork.confirm : Effect.succeed(fixture.liveWork.held),
         ensureThread: () => unused("ensureThread"),
         resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
         // The turn runs until the test ends it; ending it fails the start, which settles it.
@@ -396,6 +402,52 @@ it.effect("turning the provider back on with the same settings keeps its process
       yield* Deferred.succeed(fixture.endTurn, undefined);
       yield* Fiber.join(turn);
       yield* TestClock.adjust(retireProbe);
+      assert.isTrue(yield* manager.isLive(providerSessionId));
+      assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect("an active goal keeps the old process until it ends", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* Effect.gen(function* () {
+      const { manager, open, providerSessionId } = yield* sharedSession;
+      yield* open(threadA);
+      fixture.liveWork.held = true;
+      fixture.instance.sessionConfigKey = "settings-2";
+      const refused = yield* open(threadB).pipe(Effect.exit);
+      assert.include(String(Exit.isFailure(refused) ? refused.cause : ""), "active goal");
+      yield* TestClock.adjust(retireProbe);
+      assert.isTrue(yield* manager.isLive(providerSessionId));
+
+      fixture.liveWork.held = false;
+      yield* TestClock.adjust(retireProbe);
+      yield* Queue.take(fixture.closed);
+      yield* open(threadB);
+      assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+    }).pipe(Effect.provide(layer(fixture)));
+  }),
+);
+
+it.effect("restoring the settings does not wait for Codex to confirm a goal", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    const confirming = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const { manager, open, providerSessionId } = yield* sharedSession;
+      yield* open(threadA);
+      fixture.liveWork.held = true;
+      fixture.liveWork.confirm = Deferred.succeed(confirming, undefined).pipe(
+        Effect.andThen(Effect.never),
+      );
+      fixture.instance.sessionConfigKey = "settings-2";
+      assert.isTrue(Exit.isFailure(yield* open(threadB).pipe(Effect.exit)));
+      yield* TestClock.adjust(retireProbe);
+      yield* Deferred.await(confirming);
+
+      fixture.instance.sessionConfigKey = "settings-1";
+      yield* open(threadB);
       assert.isTrue(yield* manager.isLive(providerSessionId));
       assert.strictEqual(yield* Ref.get(fixture.opens), 1);
     }).pipe(Effect.provide(layer(fixture)));

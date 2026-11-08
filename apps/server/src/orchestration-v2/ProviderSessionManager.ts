@@ -1456,7 +1456,7 @@ export const layerWithOptions = (
             probedRuntime.hasPendingBackgroundWork === undefined
               ? false
               : yield* probedRuntime.hasPendingBackgroundWork.pipe(
-                  Effect.catchCause(() => Effect.succeed(false)),
+                  Retirement.unlessInterrupted(false),
                 );
           const now = yield* Clock.currentTimeMillis;
           const pinnedSinceMs = entry.pinnedSinceMs ?? now;
@@ -1467,7 +1467,7 @@ export const layerWithOptions = (
             probedRuntime.holdsLiveWork !== undefined &&
             (yield* probedRuntime
               .holdsLiveWork({ pastPinCeiling })
-              .pipe(Effect.catchCause(() => Effect.succeed(true))));
+              .pipe(Retirement.unlessInterrupted(true)));
           if (hasPendingWork || held) {
             if (!pastPinCeiling || held) {
               const shouldContinuePin = yield* Ref.modify(sessions, (latest) => {
@@ -2613,15 +2613,17 @@ export const layerWithOptions = (
                   Ref.get(sessions).pipe(Effect.map((current) => current.get(key))),
                 );
                 let settled = yield* settle;
-                const stale = Option.getOrUndefined(settled);
-                if (stale !== undefined) {
+                if (Option.getOrUndefined(settled) !== undefined) {
                   const retired = yield* retirement.retireIfStale(input.providerSessionId);
+                  const latest = (yield* Ref.get(sessions)).get(key);
                   if (retired === "released") settled = yield* settle;
-                  else if (retired === "retiring" && !stale.busyTurnByThread.has(input.threadId))
+                  else if (retired === "retiring" && !latest?.busyTurnByThread.has(input.threadId))
                     return yield* new ProviderSessionOpenError({
                       instanceId: input.modelSelection.instanceId,
                       providerSessionId: input.providerSessionId,
-                      cause: Retirement.restartRequired(stale.busyTurns.size),
+                      cause: new Retirement.ProviderRestartRequiredError({
+                        runningTurns: latest?.busyTurns.size ?? 0,
+                      }),
                     });
                 }
                 if (Option.isNone(settled))

@@ -15,7 +15,9 @@ it("settings that reach the Codex process restart it; custom models do not", () 
     { ...settings, enabled: false },
     { ...settings, opencodexBaseUrl: "http://127.0.0.1:9999" },
     { ...settings, launchArgs: "--profile work" },
-  ])
+    { ...settings, modelRoute: settings.modelRoute === "opencodex" ? "default" : "opencodex" },
+    { ...settings, opencodexAuth: settings.opencodexAuth === "none" ? "openai" : "none" },
+  ] satisfies ReadonlyArray<CodexSettings>)
     assert.notStrictEqual(codexSessionConfigKey(changed, environment), key);
   assert.notStrictEqual(
     codexSessionConfigKey(settings, { ...environment, OPENAI_API_KEY: "sk-new" }),

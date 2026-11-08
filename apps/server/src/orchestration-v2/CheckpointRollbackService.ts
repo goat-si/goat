@@ -1,3 +1,4 @@
+import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import {
   CheckpointId,
   CheckpointScopeId,
@@ -77,10 +78,12 @@ const isCheckpointRestoreError = Schema.is(CheckpointRestoreError);
 
 /**
  * The message clients see when a rollback fails. Only a held Git index lock
- * gets its own explanation; other reasons carry internal ids or raw Git
+ * and a provider waiting to restart get their own explanation; other reasons carry internal ids or raw Git
  * output, so they fall back to the generic message.
  */
 export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionError): string {
+  const restartRequired = restartRequiredIn(error.cause);
+  if (restartRequired !== undefined) return restartRequired.message;
   const restoreCause = isCheckpointRestoreError(error.cause) ? error.cause.cause : undefined;
   return isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL
     ? GIT_INDEX_LOCKED_DETAIL
