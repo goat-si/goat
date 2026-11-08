@@ -16,7 +16,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
 import { sshHostsRefusal } from "./hostAccess.ts";
-import { isRemoteShellScript, withRemoteDeadline } from "./remoteDeadline.ts";
+import {
+  isRemoteShellScript,
+  remoteDeadlineSettleMs,
+  withRemoteDeadline,
+} from "./remoteDeadline.ts";
 
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
 const SSH_COMMAND_SHUTDOWN_TIMEOUT_MS = 2_000;
@@ -429,6 +433,15 @@ function stdinStream(
   );
 }
 
+/**
+ * A remote script whose client timed out or lost the connection may keep running until its
+ * watchdog's deadline. (Exit 255 can also be the script's own; then the wait is only longer.)
+ */
+const remoteScriptSettle = (input: RunSshCommandOptions) =>
+  typeof input.stdin === "string" && isRemoteShellScript(input.remoteCommandArgs)
+    ? { remoteSettleMs: remoteDeadlineSettleMs(input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS) }
+    : {};
+
 const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(function* (
   target: DesktopSshEnvironmentTarget,
   input: RunSshCommandOptions,
@@ -616,6 +629,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
           stderr,
           fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
         }),
+      ...(exitCode === 255 ? remoteScriptSettle(input) : {}),
     });
   }
 
@@ -671,6 +685,7 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
               exitCode: null,
               stderr: progress.stderr,
               message: progress.stderr.trim() ? `${message}\n${progress.stderr.trim()}` : message,
+              ...remoteScriptSettle(input),
             });
           }),
       }),

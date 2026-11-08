@@ -69,4 +69,65 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
       NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
+  it("stops its watchdog as soon as the script exits", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+    try {
+      NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "ticking")]);
+      // The watchdog's clock records its PID and keeps ticking far past the test.
+      const clock = NodePath.join(dir, "sleep");
+      NodeFS.writeFileSync(
+        clock,
+        '#!/bin/sh\necho $$ > "$GOAT_TEST_DIR/clock.pid"\nprintf x > "$GOAT_TEST_DIR/ticking"\nexec sleep 30\n',
+        { mode: 0o755 },
+      );
+      const script = withRemoteDeadline('cat "$1/ticking" >/dev/null\nexit 3', 60_000, clock);
+      expect(await runShell(script, [dir], { GOAT_TEST_DIR: dir })).toEqual({
+        code: 3,
+        stdout: "",
+      });
+      // A watchdog left ticking would hold a Windows SSH channel open until its next tick.
+      const clockPid = Number(NodeFS.readFileSync(NodePath.join(dir, "clock.pid"), "utf8"));
+      expect(() => process.kill(clockPid, 0)).toThrow();
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["dash", "bash"])(
+    "keeps the lock owner's shell alive until the script's own hang-up cleanup ends (%s)",
+    async (shell) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+      try {
+        const bin = NodePath.join(dir, "bin");
+        NodeFS.mkdirSync(bin);
+        for (const fifo of ["gate", "block"])
+          NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
+        NodeFS.writeFileSync(
+          NodePath.join(bin, "sleep"),
+          '#!/bin/sh\nif [ -p "$GOAT_TEST_GATE" ]; then cat "$GOAT_TEST_GATE" >/dev/null; rm -f "$GOAT_TEST_GATE"; fi\n',
+          { mode: 0o755 },
+        );
+        // Lock owners record $$; the cleanup must run while that shell still exists.
+        const body = [
+          "trap 'exit 129' HUP",
+          "trap 'if kill -0 $$ 2>/dev/null; then echo owner-alive > \"$1/released\"; fi' EXIT",
+          'printf go > "$1/gate"',
+          'cat "$1/block"',
+        ].join("\n");
+        const result = await new Promise<number | null>((resolve, reject) => {
+          const child = NodeChildProcess.spawn(shell, ["-s", "--", dir], {
+            env: { ...process.env, GOAT_TEST_GATE: NodePath.join(dir, "gate") },
+            stdio: ["pipe", "ignore", "inherit"],
+          });
+          child.once("error", reject);
+          child.once("close", (code, signal) => resolve(code ?? (signal === null ? null : 128)));
+          child.stdin.end(withRemoteDeadline(body, 1_000, NodePath.join(bin, "sleep")));
+        });
+        expect(result).not.toBe(0);
+        expect(NodeFS.readFileSync(NodePath.join(dir, "released"), "utf8")).toBe("owner-alive\n");
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
