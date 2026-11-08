@@ -17,6 +17,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -34,8 +35,8 @@ import {
 const LATE_APPROVAL_DAYS = 7;
 const LATE_APPROVAL_PER_PASS = 20;
 
-const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
-const decodeChild = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelChildWork));
+const decodeTask = Schema.decodeUnknownOption(Schema.fromJsonString(ChannelTask));
+const decodeChild = Schema.decodeUnknownOption(Schema.fromJsonString(ChannelChildWork));
 
 type RequestSnapshot = Pick<
   OrchestrationV2RuntimeRequest,
@@ -152,7 +153,9 @@ const lateRows = (sql: SqlClient.SqlClient, since: string) =>
             ON child.key >= ('child-work:' || task.task_id || ':')
            AND child.key < ('child-work:' || task.task_id || ';')
           WHERE task.status IN ('completed', 'failed')
-            AND task.updated_at >= ${since}
+            AND (task.updated_at >= ${since} OR EXISTS (
+              SELECT 1 FROM json_each(task.task_json, '$.observed.needsYou')
+              WHERE json_extract(value, '$.kind') = 'approval'))
             AND json_extract(child.value_json, '$.surface') = 'thread_launch'
             AND json_extract(child.value_json, '$.generation') = task.generation
             AND json_extract(child.value_json, '$.destination.threadId') IS NOT NULL
@@ -171,77 +174,86 @@ const lateRows = (sql: SqlClient.SqlClient, since: string) =>
       `.pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<LateRow>));
 
 /** How many finished tasks learned about a launched thread's approvals this pass. */
-export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile")(function* (
-  owner: string,
-  deps: {
-    readonly ledger: ChannelLedger.ChannelLedger["Service"];
-    readonly threads: ThreadManagement.ThreadManagementService["Service"];
-    readonly sql: SqlClient.SqlClient;
-  },
-) {
-  const now = yield* DateTime.now;
-  const since = DateTime.formatIso(DateTime.subtract(now, { days: LATE_APPROVAL_DAYS }));
-  const rows = yield* lateRows(deps.sql, since);
-  const groups = new Map<
-    string,
-    { readonly stored: ChannelLedger.ChannelStoredTask; readonly threadIds: Array<ThreadId> }
-  >();
-  for (const row of rows) {
-    const task = decodeTask(row.task_json);
-    const child = decodeChild(row.child_json);
-    const threadId = child.destination?.threadId;
-    if (threadId === undefined || child.destination?.host !== undefined) continue;
-    if (child.surface !== "thread_launch" || child.generation !== task.generation) continue;
-    const existing = groups.get(task.taskId);
-    if (existing === undefined) {
-      groups.set(task.taskId, {
-        stored: {
-          ownerId: row.owner_id,
-          botId: BotId.make(row.bot_id),
-          task,
-          pendingAnswerMessageId: row.pending_answer_message_id ?? undefined,
-          completionHold: row.completion_hold ?? undefined,
-        },
-        threadIds: [threadId],
-      });
-    } else if (!existing.threadIds.includes(threadId)) {
-      existing.threadIds.push(threadId);
-    }
-  }
-
-  let changed = 0;
-  for (const { stored, threadIds } of groups.values()) {
-    const requests: Array<OrchestrationV2RuntimeRequest & { readonly threadId: ThreadId }> = [];
-    let unreadable = false;
-    for (const threadId of threadIds) {
-      const read = yield* deps.threads
-        .getThreadRecords(threadId, ["runtimeRequests"])
-        .pipe(Effect.result);
-      if (read._tag === "Failure") {
-        if (!isThreadMissing(read.failure)) unreadable = true;
-        continue;
+export const reconcileLateApprovals = Effect.fn("channelLateApprovals.reconcile")(
+  function* (
+    owner: string,
+    deps: {
+      readonly ledger: ChannelLedger.ChannelLedger["Service"];
+      readonly threads: ThreadManagement.ThreadManagementService["Service"];
+      readonly sql: SqlClient.SqlClient;
+    },
+  ) {
+    const now = yield* DateTime.now;
+    const since = DateTime.formatIso(DateTime.subtract(now, { days: LATE_APPROVAL_DAYS }));
+    const rows = yield* lateRows(deps.sql, since);
+    const groups = new Map<
+      string,
+      { readonly stored: ChannelLedger.ChannelStoredTask; readonly threadIds: Array<ThreadId> }
+    >();
+    for (const row of rows) {
+      const decodedTask = decodeTask(row.task_json);
+      const decodedChild = decodeChild(row.child_json);
+      if (Option.isNone(decodedTask) || Option.isNone(decodedChild)) continue;
+      const task = decodedTask.value;
+      const child = decodedChild.value;
+      const threadId = child.destination?.threadId;
+      if (threadId === undefined || child.destination?.host !== undefined) continue;
+      if (child.surface !== "thread_launch" || child.generation !== task.generation) continue;
+      const existing = groups.get(task.taskId);
+      if (existing === undefined) {
+        groups.set(task.taskId, {
+          stored: {
+            ownerId: row.owner_id,
+            botId: BotId.make(row.bot_id),
+            task,
+            pendingAnswerMessageId: row.pending_answer_message_id ?? undefined,
+            completionHold: row.completion_hold ?? undefined,
+          },
+          threadIds: [threadId],
+        });
+      } else if (!existing.threadIds.includes(threadId)) {
+        existing.threadIds.push(threadId);
       }
-      for (const request of read.success.runtimeRequests) requests.push({ ...request, threadId });
     }
-    // A failed read must not clear an approval the pass could not see.
-    if (unreadable) continue;
-    const approvals = needsYouFromRuntimeRequests(requests, (request) => request.threadId).filter(
-      (need) => need.kind === "approval",
-    );
-    const observed = storedObservation(stored.task, approvals);
-    if (channelWorkerObservationEquals(stored.task.observed, observed)) continue;
-    const narrate =
-      stored.task.requester.originKind !== "mcp" &&
-      newApprovals(stored.task.observed?.needsYou, approvals).length > 0;
-    const wrote = yield* commitWorkerObserved(
-      deps.ledger,
-      stored,
-      observed,
-      owner,
-      narrate,
-      requests,
-    );
-    if (wrote !== undefined) changed += 1;
-  }
-  return changed;
-});
+
+    let changed = 0;
+    for (const { stored, threadIds } of groups.values()) {
+      const requests: Array<OrchestrationV2RuntimeRequest & { readonly threadId: ThreadId }> = [];
+      let unreadable = false;
+      for (const threadId of threadIds) {
+        const read = yield* deps.threads
+          .getThreadRecords(threadId, ["runtimeRequests"])
+          .pipe(Effect.result);
+        if (read._tag === "Failure") {
+          if (!isThreadMissing(read.failure)) unreadable = true;
+          continue;
+        }
+        for (const request of read.success.runtimeRequests) requests.push({ ...request, threadId });
+      }
+      // A failed read must not clear an approval the pass could not see.
+      if (unreadable) continue;
+      const approvals = needsYouFromRuntimeRequests(requests, (request) => request.threadId).filter(
+        (need) => need.kind === "approval",
+      );
+      const observed = storedObservation(stored.task, approvals);
+      if (channelWorkerObservationEquals(stored.task.observed, observed)) continue;
+      const narrate =
+        stored.task.requester.originKind !== "mcp" &&
+        newApprovals(stored.task.observed?.needsYou, approvals).length > 0;
+      const wrote = yield* commitWorkerObserved(
+        deps.ledger,
+        stored,
+        observed,
+        owner,
+        narrate,
+        requests,
+      );
+      if (wrote !== undefined) changed += 1;
+    }
+    return changed;
+  },
+  // The rest of reconcile has already run; a failed pass is retried on the next one.
+  Effect.catchCause((cause) =>
+    Effect.logWarning("late launched-thread approvals not read", { cause }).pipe(Effect.as(0)),
+  ),
+);
