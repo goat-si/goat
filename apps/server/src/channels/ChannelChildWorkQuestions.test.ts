@@ -602,6 +602,57 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("keeps a completed launch's pending question until the request resolves", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("do: start the build", "done-q"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* launch(task, "live", "completed");
+      harness.world.runs.set("thread:live", []);
+      const pending = request("pick", "user_input");
+      harness.world.runtimeRequests.set("thread:live", [pending]);
+      harness.world.userInputQuestions.set(pending.id, [
+        {
+          id: "file",
+          header: "File",
+          question: "Which file?",
+          options: [
+            { label: "c.txt", description: "C" },
+            { label: "d.txt", description: "D" },
+          ],
+        },
+      ]);
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, [
+        {
+          kind: "question",
+          since,
+          question: {
+            requestId: pending.id,
+            threadId: ThreadId.make("thread:live"),
+          },
+        },
+      ]);
+      yield* runtime.drain;
+      const cards = (yield* botMessages).messages.filter(
+        (message) => message.channel?.questionId === ChannelQuestionId.make(pending.id),
+      );
+      assert.strictEqual(cards.length, 1);
+      assert.deepStrictEqual(cards[0]?.channel?.options, ["c.txt", "d.txt"]);
+      yield* gateway.ingest({ ...goatInput("d.txt", "done-a"), taskId: task.taskId }, rpcContext);
+      yield* runtime.drain;
+      const [answered] = responses(harness);
+      assert.deepStrictEqual(answered?.answers, { file: "d.txt" });
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("answers a turn's launched question from the bot chat as the question alone", () => {
     const harness = makeHarness({
       botWorkspace: true,
