@@ -182,7 +182,8 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
         ...page,
         overflow: page.overflow || droppedRemainder,
       },
-      rawCursor !== null && rawCursor.length <= MAX_NEXT_CURSOR ? rawCursor : null,
+      // The provider cursor points past the whole page, so it is only safe when nothing was sliced.
+      !droppedRemainder && rawCursor !== null ? rawCursor : null,
     );
   };
 
