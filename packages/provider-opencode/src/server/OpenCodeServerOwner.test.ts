@@ -2,8 +2,10 @@ import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vite-plus/test";
 
@@ -84,6 +86,37 @@ it.effect("shares concurrent borrowers and closes after the idle TTL", () =>
         expect(yield* Ref.get(testRuntime.closes)).toBe(1);
       }),
     ).pipe(Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, testRuntime.runtime));
+  }).pipe(Effect.provide(TestClock.layer())),
+);
+
+it.effect("keeps a borrowed server through owner shutdown and stops it when the borrow ends", () =>
+  Effect.gen(function* () {
+    const testRuntime = yield* makeRuntime;
+    const release = yield* Deferred.make<void>();
+    const ownerScope = yield* Scope.make();
+    const owner = yield* OpenCodeServerOwner.make({
+      binaryPath: "opencode",
+      directory: "/project",
+    }).pipe(
+      Scope.provide(ownerScope),
+      Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, testRuntime.runtime),
+    );
+    const borrower = yield* owner
+      .withServer((server) => Deferred.await(release).pipe(Effect.as(server.url)))
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(testRuntime.started);
+
+    yield* Scope.close(ownerScope, Exit.void);
+    expect(yield* Ref.get(testRuntime.closes)).toBe(0);
+    const refused = yield* Effect.exit(owner.withServer((server) => Effect.succeed(server.url)));
+    expect(refused._tag).toBe("Failure");
+    expect(yield* Ref.get(testRuntime.starts)).toBe(1);
+
+    yield* Deferred.succeed(release, undefined);
+    expect(yield* Fiber.join(borrower)).toBe("http://127.0.0.1:1");
+    // No clock adjustment: the stop must not wait for the idle TTL.
+    yield* Deferred.await(testRuntime.closed);
+    expect(yield* Ref.get(testRuntime.closes)).toBe(1);
   }).pipe(Effect.provide(TestClock.layer())),
 );
 
