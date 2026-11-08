@@ -8,6 +8,20 @@ const CHECK_SECONDS = 2;
 // sshd starts the shell for a request the client sent before it gave up; this covers that delay.
 const START_SLACK_SECONDS = 5;
 
+const DEFAULT_SLEEP = "command -p sleep";
+/** Shell bodies for a read tick: `now` sets goat_deadline_t in microseconds or fails; `read` waits up to $1 s. */
+export type ReadTick = { readonly now: string; readonly read: string };
+// EPOCHREALTIME (bash 5) separates seconds from microseconds with the locale's decimal point.
+export const READ_TICK: ReadTick = {
+  now: [
+    '        goat_deadline_t="${EPOCHREALTIME:-}"',
+    '        case "$goat_deadline_t" in *[.,]*) ;; *) return 1 ;; esac',
+    '        goat_deadline_t="${goat_deadline_t%[.,]*}${goat_deadline_t#*[.,]}"',
+    '        case "$goat_deadline_t" in *[!0123456789]*) return 1 ;; esac',
+  ].join("\n"),
+  read: '          read -t "$1" -u 9 goat_deadline_line',
+};
+
 /** `sh [-l] -s [-- args]`: the script arrives on stdin. Uploads (`sh -c`) stream data instead. */
 export function isRemoteShellScript(args: ReadonlyArray<string> | undefined) {
   if (args === undefined || args[0] !== "sh") return false;
@@ -35,9 +49,11 @@ export function withRemoteDeadline(
   script: string,
   timeoutMs: number,
   // `command -p` bypasses PATH, so a script's own sleep shim cannot speed up the deadline.
-  sleep = "command -p sleep",
+  sleep = DEFAULT_SLEEP,
   // Tests point this at a missing file to take /proc away.
   selfStat = "/proc/self/stat",
+  // A caller that brings its own sleep tick keeps it unless it brings read-tick hooks too.
+  ticks: ReadTick | undefined = sleep === DEFAULT_SLEEP ? READ_TICK : undefined,
 ) {
   const seconds = Math.ceil(timeoutMs / 1000) + GRACE_SECONDS;
   return `trap 'goat_deadline_hup=1' HUP
@@ -67,27 +83,59 @@ if ! { true </dev/tty; } 2>/dev/null; then set -m 2>/dev/null || :; fi
     goat_deadline_job="\${goat_deadline_probe% *}"; goat_deadline_group="\${goat_deadline_probe#* }"
     (
       trap '' HUP
-      # Leaving from the trap stops the watchdog even when TERM lands just before a wait begins.
-      # Its tick ends by itself: a shell may already have reaped it, so its PID could name another
-      # process. The tick holds nothing but /dev/null.
-      trap 'exit 0' TERM
-      goat_deadline_me=
+      # Leaving from the trap stops the watchdog even when TERM lands just before a wait begins, and
+      # takes a tick directory still being set up with it. A sleep tick ends by itself: a shell may
+      # already have reaped it, so its PID could name another process. Ticks hold only /dev/null.
+      trap '[ -z "$goat_deadline_dir" ] || rm -rf "$goat_deadline_dir"; exit 0' TERM
+      goat_deadline_me=; goat_deadline_dir=
       # The job's shell signals this PID, so only a parent seen to have changed ends the watchdog;
       # one it cannot see counts as alive.
       goat_deadline_alive() { ! goat_deadline_ids || [ "$goat_deadline_ppid" = "$goat_deadline_job" ]; }
-      goat_deadline_tick() { ${sleep} ${CHECK_SECONDS} & wait $!; }
-      goat_deadline_left=${seconds}
+      # Sets goat_deadline_t to a time in microseconds, or fails.
+      goat_deadline_now() {
+${ticks?.now ?? "        return 1"}
+      }
+      # Windows OpenSSH keeps a channel open while a sleep tick outlives a stopped watchdog, so bash
+      # waits in read on a private FIFO that nothing writes. Each such tick counts the clock's time,
+      # at most what it asked for; other shells and any failed step sleep and count the step.
+      goat_deadline_tick=sleep
+      if [ -n "\${BASH_VERSION:-}" ] && goat_deadline_now; then
+        goat_deadline_last="$goat_deadline_t"
+        if goat_deadline_dir="$(mktemp -d "\${TMPDIR:-/tmp}/goat-tick.XXXXXX" 2>/dev/null)" &&
+          mkfifo "$goat_deadline_dir/tick" 2>/dev/null &&
+          { command exec 9<>"$goat_deadline_dir/tick"; } 2>/dev/null; then goat_deadline_tick=read; fi
+        [ -z "$goat_deadline_dir" ] || rm -rf "$goat_deadline_dir"
+        goat_deadline_dir=
+      fi
+      # Waits up to $1 seconds. A read that ends any way but its timeout leaves the FIFO for sleep.
+      goat_deadline_wait() {
+        if [ "$goat_deadline_tick" = read ]; then
+${ticks?.read ?? "          return 1"}
+          [ "$?" -gt 128 ] && return 0
+          goat_deadline_tick=sleep; exec 9<&-
+        fi
+        ${sleep} "$1" & wait $!
+      }
+      goat_deadline_left=${seconds * 1_000_000}
       while [ "$goat_deadline_left" -gt 0 ]; do
-        goat_deadline_tick
+        goat_deadline_step=$(( (goat_deadline_left + 999999) / 1000000 ))
+        [ "$goat_deadline_step" -le ${CHECK_SECONDS} ] || goat_deadline_step=${CHECK_SECONDS}
+        goat_deadline_spent=$((goat_deadline_step * 1000000)); goat_deadline_was="$goat_deadline_tick"
+        goat_deadline_wait "$goat_deadline_step"
         goat_deadline_alive || exit 0
-        goat_deadline_left=$((goat_deadline_left - ${CHECK_SECONDS}))
+        if [ "$goat_deadline_was" = read ] && [ "$goat_deadline_tick" = read ] && goat_deadline_now; then
+          goat_deadline_d=$((goat_deadline_t - goat_deadline_last)); goat_deadline_last="$goat_deadline_t"
+          [ "$goat_deadline_d" -ge 0 ] || goat_deadline_d=0
+          [ "$goat_deadline_d" -ge "$goat_deadline_spent" ] || goat_deadline_spent="$goat_deadline_d"
+        fi
+        goat_deadline_left=$((goat_deadline_left - goat_deadline_spent))
       done
       # Only a group that is this run's alone: the job's own, or the session shell's when it leads
       # its group, as under sshd. Inside another caller's group nothing is hung up.
       if [ "$goat_deadline_group" = "$goat_deadline_job" ] || [ "$goat_deadline_group" = "$$" ]; then
         kill -HUP 0
       fi
-      while :; do goat_deadline_tick; goat_deadline_alive || exit 0; done
+      while :; do goat_deadline_wait ${CHECK_SECONDS}; goat_deadline_alive || exit 0; done
     ) >/dev/null 2>&1 </dev/null &
     goat_deadline_watchdog=$!
   fi
