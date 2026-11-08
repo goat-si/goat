@@ -41,6 +41,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
@@ -125,8 +126,6 @@ const REMOTE_TICK_MS = 2 * 60_000;
 const REMOTE_ANSWER_MARGIN_MS = 60_000;
 /** Bound on one whole remote step, including SSH setup. */
 const REMOTE_STEP_LIMIT_MS = REMOTE_TICK_MS + 3 * 60_000;
-/** How often dormant watches past their retention are dropped while the server runs. */
-const SWEEP_MS = 60 * 60_000;
 /** How an idle follower waits before its next look; tests step looks with it instead of a clock. */
 export const IdleLookWait = Context.Reference<(ms: number) => Effect.Effect<void>>(
   "goat/mcp/LaunchWatchService/IdleLookWait",
@@ -2024,7 +2023,8 @@ export const make = Effect.gen(function* () {
       Effect.logWarning("launch watches: expired watches not dropped", { cause: error }),
     ),
   );
-  yield* forkParked(Effect.forever(Effect.sleep(SWEEP_MS).pipe(Effect.andThen(sweep))));
+  // Hourly on the clock, so a sweep that runs long does not push every later one back.
+  yield* forkParked(Effect.schedule(sweep, Schedule.cron("0 * * * *", "UTC")));
   yield* forkParked(
     Effect.forever(Effect.sleep(REMOTE_TICK_MS).pipe(Effect.andThen(interruptRetired()))),
   );
