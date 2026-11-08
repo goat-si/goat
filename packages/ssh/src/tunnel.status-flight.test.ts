@@ -75,12 +75,12 @@ describe("concurrent SSH status reads", () => {
     return Effect.gen(function* () {
       const manager = yield* SshTunnel.SshEnvironmentManager;
       const gate = yield* holdProbe(f);
-      const stale = yield* manager.status(aliasOnly).pipe(Effect.forkChild);
+      // One effect value, run before and after: freshness is decided when it runs.
+      const read = manager.status(aliasOnly);
+      const stale = yield* read.pipe(Effect.forkChild);
       yield* Deferred.await(gate.entered);
       yield* manager.disconnectEnvironment(aliasOnly);
-      const fresh = yield* manager
-        .status(aliasOnly)
-        .pipe(Effect.forkChild({ startImmediately: true }));
+      const fresh = yield* read.pipe(Effect.forkChild({ startImmediately: true }));
       yield* Deferred.succeed(gate.release, undefined);
       yield* Fiber.join(stale);
       yield* Fiber.join(fresh);

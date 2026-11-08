@@ -4491,9 +4491,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   // change (disconnect, forget, a new intent) starts a new flight for later callers.
   const statusFlights = makeKeyedSingleFlight<SshHostResult, SshEnvironmentEffectError>();
   const status = (target: DesktopSshEnvironmentTarget) =>
-    statusFlights(
-      JSON.stringify([targetConnectionKey(target), [...generations]]),
-      statusOnce(target),
+    Effect.suspend(() =>
+      statusFlights(
+        JSON.stringify([targetConnectionKey(target), [...generations]]),
+        statusOnce(target),
+      ),
     );
 
   const requireReadyEntry = Effect.fn("ssh/tunnel.requireReadyEntry")(function* (
