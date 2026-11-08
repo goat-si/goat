@@ -380,29 +380,32 @@ it("retries a failed route add against the same machine and offers fingerprint r
   expect(button("Retry", screen.container)).toBeTruthy();
 });
 
-it("stops reading a stale preparing status once an add fails and shows only the failure", async () => {
-  using fixture = setup();
-  await using screen = await render(section(fixture.registry));
-  using _timers = fakeTimers();
-  const gate = provisionGate();
-  await connectFromDialog(await openAddDialog(), target.alias);
-  await gate.entered;
-  state.runtimeReply = {
-    kind: "ok",
-    status: {
-      host: target.alias,
-      state: "preparing",
-      phase: "uploading",
-      runtimeVersion: null,
-      requestedVersion: "0.4.3",
-    },
-  };
-  await gate.settle({ _tag: "Failure", cause: Cause.fail(new Error("Connection reset")) });
-  await vi.waitFor(() => expect(screen.container.textContent).toContain("Connection reset"));
-  const reads = state.statusReads;
-  await act(() => vi.advanceTimersByTimeAsync(5_000));
-  expect(state.statusReads).toBe(reads);
-  expect(screen.container.textContent).not.toMatch(/Installing GOAT|Uploading GOAT|first setup/i);
-  expect(button("Retry", screen.container)).toBeTruthy();
-  expect(button("Dismiss", screen.container)).toBeTruthy();
-});
+it.each(["preparing", "update_waiting"] as const)(
+  "stops reading runtime status once an add fails while the cached status is %s",
+  async (cachedState) => {
+    using fixture = setup();
+    await using screen = await render(section(fixture.registry));
+    using _timers = fakeTimers();
+    const gate = provisionGate();
+    await connectFromDialog(await openAddDialog(), target.alias);
+    await gate.entered;
+    state.runtimeReply = {
+      kind: "ok",
+      status: {
+        host: target.alias,
+        state: cachedState,
+        ...(cachedState === "preparing" ? { phase: "uploading" as const } : {}),
+        runtimeVersion: null,
+        requestedVersion: "0.4.3",
+      },
+    };
+    await gate.settle({ _tag: "Failure", cause: Cause.fail(new Error("Connection reset")) });
+    await vi.waitFor(() => expect(screen.container.textContent).toContain("Connection reset"));
+    const reads = state.statusReads;
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(state.statusReads).toBe(reads);
+    expect(screen.container.textContent).not.toMatch(/Installing GOAT|Uploading GOAT|first setup/i);
+    expect(button("Retry", screen.container)).toBeTruthy();
+    expect(button("Dismiss", screen.container)).toBeTruthy();
+  },
+);
