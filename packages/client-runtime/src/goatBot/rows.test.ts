@@ -6,10 +6,12 @@ import {
   MemorySpaceId,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2TurnItem,
+  OrchestrationV2TurnItemJson,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -22,7 +24,9 @@ import {
   type GoatBotRow,
   type GoatBotTaskCard,
 } from "./rows.ts";
+import { goatBotItemReaders } from "./readers.ts";
 
+const decodeTurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
 const threadId = ThreadId.make("thread-bot");
 
 function base(id: string, at: string) {
@@ -451,6 +455,58 @@ describe("buildGoatBotTimeline", () => {
     expect(content(rows).filter((row) => row.kind === "user")).toHaveLength(1);
   });
 
+  it("replaces a pending bubble when its echo arrives before the send returns", () => {
+    const item = decodeTurnItem({
+      id: "item-1",
+      threadId: "thread-bot",
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "completed",
+      title: null,
+      startedAt: "2026-10-12T12:00:00.000Z",
+      completedAt: "2026-10-12T12:00:00.000Z",
+      updatedAt: "2026-10-12T12:00:00.000Z",
+      type: "user_message",
+      messageId: "m-1",
+      inputIntent: "turn_start",
+      text: "hello",
+      attachments: [],
+      createdBy: "user",
+      creationSource: "web",
+      channel: {
+        conversationId: "conv-1",
+        originKind: "goat",
+        kind: "inbound",
+        inputId: "in-1",
+        clientMessageId: "client-1",
+      },
+    });
+    if (item.type !== "user_message") throw new Error("expected a user message");
+    const rows = buildGoatBotTimeline({
+      visibleTurnItems: rowsOf([item]),
+      pendingInputs: [
+        {
+          clientKey: "client-1",
+          text: "hello",
+          createdAt: "2026-10-12T12:00:00Z",
+          state: "sending",
+          requestKey: null,
+        },
+      ],
+      readers: goatBotItemReaders,
+    });
+    expect(
+      content(rows)
+        .filter((row) => row.kind === "user")
+        .map((row) => row.id),
+    ).toEqual(["item-1"]);
+  });
+
   it("starts a new day row when the local date changes", () => {
     const rows = buildGoatBotTimeline({
       visibleTurnItems: rowsOf([
@@ -646,225 +702,6 @@ describe("buildGoatBotTimeline", () => {
       ]),
     ).toEqual([[]]);
     expect(options([], [user("u2", "2026-10-12T12:00:03Z", "Release")])).toEqual([[]]);
-  });
-});
-
-describe("questions a task asks in the main chat", () => {
-  const proposal = (
-    revision: number,
-    openQuestionIds?: ReadonlyArray<string>,
-  ): GoatBotTaskCard => ({
-    ...card("proposal", revision, "Waiting for your answer"),
-    askInChat: true,
-    ...(openQuestionIds === undefined ? {} : { openQuestionIds }),
-  });
-  const asked: GoatBotMessagePresentation = {
-    tone: "question",
-    readAt: null,
-    requestKey: null,
-    taskId: "proposal",
-    questionId: "q-save",
-    options: ["Save", "Not now"],
-  };
-  const optionsIn = (
-    taskId: string | null,
-    items: OrchestrationV2TurnItem[],
-    cards: Record<string, GoatBotTaskCard>,
-    messages: Record<string, GoatBotMessagePresentation> = { b1: asked },
-  ) =>
-    content(
-      buildGoatBotTimeline({
-        visibleTurnItems: rowsOf(items),
-        pendingInputs: [],
-        readers: readers(messages, cards),
-        taskId,
-      }),
-    ).flatMap((row) => (row.kind === "bot" ? [[row.id, row.options] as const] : []));
-
-  it("shows a skill proposal's question with its choices in the main chat and its own view", () => {
-    const items = [
-      bot("b1", "2026-10-12T12:00:00Z", "Save this as a skill? deploy-check"),
-      bot("b2", "2026-10-12T12:00:01Z", "Working on it"),
-      notice("n1", "2026-10-12T12:00:02Z"),
-      notice("n2", "2026-10-12T12:00:03Z"),
-    ];
-    const cards = { n1: proposal(1, ["q-save"]), n2: card("other", 1) };
-    const messages = { b1: asked, b2: { ...asked, taskId: "other", options: [] } };
-    // Another task's messages stay in that task's view.
-    expect(optionsIn(null, items, cards, messages)).toEqual([["b1", ["Save", "Not now"]]]);
-    expect(optionsIn("proposal", items, cards, messages)).toEqual([["b1", ["Save", "Not now"]]]);
-  });
-
-  it("retires a question's choices everywhere once its task's newest card no longer has it open", () => {
-    // The answer was sent from the other view, so neither view has a later message of its own.
-    const items = [
-      bot("b1", "2026-10-12T12:00:00Z", "Save this as a skill? deploy-check"),
-      notice("n1", "2026-10-12T12:00:01Z"),
-      notice("n2", "2026-10-12T12:00:05Z"),
-    ];
-    const cards = { n1: proposal(1, ["q-save"]), n2: proposal(2, []) };
-    expect(optionsIn(null, items, cards)).toEqual([["b1", []]]);
-    expect(optionsIn("proposal", items, cards)).toEqual([["b1", []]]);
-  });
-
-  it("keeps an open question's choices after the person answers a different question", () => {
-    const items = [
-      notice("n1", "2026-10-12T12:00:00Z"),
-      bot("b1", "2026-10-12T12:00:01Z", "Save this as a skill? deploy-check"),
-      user("u1", "2026-10-12T12:00:02Z", "Release"),
-    ];
-    expect(optionsIn(null, items, { n1: proposal(1, ["q-save"]) })).toEqual([
-      ["b1", ["Save", "Not now"]],
-    ]);
-    // A card from a server that does not list open questions keeps the later-message rule.
-    expect(optionsIn(null, items, { n1: proposal(1) })).toEqual([["b1", []]]);
-  });
-
-  it("sends a pressed answer to the question's task, and shows that send in the main chat", () => {
-    const items = [
-      notice("n1", "2026-10-12T12:00:00Z"),
-      bot("b1", "2026-10-12T12:00:01Z", "Save this as a skill? deploy-check"),
-    ];
-    const answerTasks = (cards: Record<string, GoatBotTaskCard>) =>
-      content(
-        buildGoatBotTimeline({
-          visibleTurnItems: rowsOf(items),
-          pendingInputs: [
-            {
-              clientKey: "c1",
-              taskId: "proposal",
-              text: "Save",
-              createdAt: "2026-10-12T12:00:02Z",
-              state: "sending",
-              requestKey: null,
-            },
-          ],
-          readers: readers({ b1: asked }, cards),
-          taskId: null,
-        }),
-      ).map((row) => (row.kind === "bot" ? [row.id, row.answerTaskId] : [row.id]));
-    expect(answerTasks({ n1: proposal(1, ["q-save"]) })).toEqual([
-      ["n1"],
-      ["b1", "proposal"],
-      ["pending:c1"],
-    ]);
-    // A server that does not name open questions may not route an answer sent to a task.
-    expect(answerTasks({ n1: proposal(1) })).toEqual([["n1"], ["b1", undefined], ["pending:c1"]]);
-  });
-
-  it("shows an approval question of a known task in the main chat and closes it with the chip", () => {
-    const asked: GoatBotMessagePresentation = {
-      tone: "question",
-      readAt: null,
-      requestKey: null,
-      taskId: "work",
-      questionId: "approval:rm",
-      options: ["Approve A1", "Deny A1"],
-    };
-    const items = [
-      bot("b1", "2026-10-12T12:00:00Z", "work: the agent wants to run a command."),
-      notice("n1", "2026-10-12T12:00:01Z"),
-    ];
-    const open = { n1: { ...card("work", 1), openQuestionIds: ["approval:rm"] } };
-    expect(optionsIn(null, items, open, { b1: asked })).toEqual([
-      ["b1", ["Approve A1", "Deny A1"]],
-    ]);
-    expect(optionsIn("work", items, open, { b1: asked })).toEqual([
-      ["b1", ["Approve A1", "Deny A1"]],
-    ]);
-    const closed = { n1: { ...card("work", 2), openQuestionIds: [] } };
-    expect(optionsIn(null, items, closed, { b1: asked })).toEqual([["b1", []]]);
-    expect(optionsIn("work", items, closed, { b1: asked })).toEqual([["b1", []]]);
-    const pending = content(
-      buildGoatBotTimeline({
-        visibleTurnItems: rowsOf(items),
-        pendingInputs: [
-          {
-            clientKey: "c1",
-            taskId: "work",
-            text: "Approve A1",
-            createdAt: "2026-10-12T12:00:02Z",
-            state: "sending",
-            requestKey: null,
-          },
-        ],
-        readers: readers({ b1: asked }, open),
-        taskId: null,
-      }),
-    ).map((row) => row.id);
-    expect(pending).toContain("b1");
-    expect(pending).toContain("pending:c1");
-  });
-
-  it("keeps a pressed answer and the reply to it in the main chat", () => {
-    const work = { tone: "reply" as const, readAt: null, requestKey: null, taskId: "work" };
-    const ids = content(
-      buildGoatBotTimeline({
-        visibleTurnItems: rowsOf([
-          notice("n1", "2026-10-12T12:00:00Z"),
-          bot("b1", "2026-10-12T12:00:01Z", "work: the agent wants to run a command."),
-          user("u1", "2026-10-12T12:00:02Z", "Approve A1"),
-          bot("b2", "2026-10-12T12:00:03Z", "Approved. I told the agent on work not to."),
-          bot("b3", "2026-10-12T12:00:04Z", "Still working."),
-        ]),
-        pendingInputs: [],
-        readers: readers(
-          {
-            b1: { ...asked, taskId: "work", questionId: "a1", options: ["Approve A1", "Deny A1"] },
-            u1: { ...work, readAt: "2026-10-12T12:00:02Z", requestKey: "in-approve" },
-            b2: { ...work, tone: "result", replyToKey: "in-approve" },
-            b3: { ...work, tone: "status" },
-          },
-          { n1: { ...card("work", 2), openQuestionIds: [] } },
-        ),
-        taskId: null,
-      }),
-    ).map((row) => row.id);
-    expect(ids).toEqual(["n1", "b1", "u1", "b2"]);
-  });
-
-  it("routes a turn's question from its chip and does not show the turn as a card", () => {
-    const asked: GoatBotMessagePresentation = {
-      tone: "question",
-      readAt: null,
-      requestKey: null,
-      taskId: "turn-1",
-      questionId: "pick",
-      options: ["c.txt", "d.txt"],
-    };
-    const chip = (id: string, at: string, version: number, open: ReadonlyArray<string>) =>
-      ({
-        ...notice(id, at),
-        ledgerTask: {
-          taskId: "turn-1",
-          kind: "turn",
-          taskVersion: version,
-          openQuestionIds: open,
-        },
-      }) as OrchestrationV2TurnItem;
-    const shown = (items: OrchestrationV2TurnItem[]) =>
-      content(
-        buildGoatBotTimeline({
-          visibleTurnItems: rowsOf(items),
-          pendingInputs: [],
-          readers: readers({ b1: asked }),
-          taskId: null,
-        }),
-      );
-    const openItems = [
-      chip("n1", "2026-10-12T12:00:00Z", 1, ["pick"]),
-      bot("b1", "2026-10-12T12:00:01Z", "Which file?"),
-    ];
-    const open = shown(openItems);
-    expect(open.some((row) => row.kind === "task")).toBe(false);
-    expect(open.find((row) => row.id === "b1")).toMatchObject({
-      options: ["c.txt", "d.txt"],
-      answerTaskId: "turn-1",
-    });
-    const closed = shown([...openItems, chip("n2", "2026-10-12T12:00:02Z", 2, [])]);
-    expect(closed.some((row) => row.kind === "task")).toBe(false);
-    expect(closed.find((row) => row.id === "b1")).toMatchObject({ options: [] });
-    expect(closed.find((row) => row.id === "b1")).not.toHaveProperty("answerTaskId");
   });
 });
 

@@ -86,7 +86,6 @@ import {
 import { droppedNoteNotice } from "./channelBotNoteTabEdits.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import {
-  boundRecall,
   canSeeTask,
   journalFor,
   matchMemoryLines,
@@ -100,9 +99,11 @@ import {
   threadDigest,
 } from "./channelBotRecall.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
-import { makeRemoteThreadRecall } from "./channelRemoteRecall.ts";
+import * as ChannelRemoteRecall from "./channelRemoteRecall.ts";
 import {
   approvalCard,
+  approvalReason,
+  approvalSent,
   type ApprovalReply,
   type OpenApprovalCard,
   openApprovalCards,
@@ -238,7 +239,7 @@ const make = Effect.gen(function* () {
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
   const memoryService = yield* Effect.serviceOption(MemoryService.MemoryService);
   const memorySync = yield* Effect.serviceOption(MemorySyncService.MemorySyncService);
-  const remoteThreadRecall = yield* makeRemoteThreadRecall;
+  const remoteThreadRecall = yield* ChannelRemoteRecall.makeRemoteThreadRecall;
 
   // Facts that do not change while the server runs.
   const linuxName =
@@ -642,46 +643,25 @@ const make = Effect.gen(function* () {
     conversationId: ChannelConversationId,
     connectionId: string,
     inputId: ChannelInputId,
-  ): Effect.Effect<ReadonlyArray<ChannelReceptionReadResult>> =>
+  ): Effect.Effect<
+    ReadonlyArray<ChannelReceptionReadResult & { readonly fallbacks: ReadonlyArray<string> }>
+  > =>
     Effect.forEach(
       reads,
       (read) =>
         runRead(read, viewer, conversationId, connectionId, inputId).pipe(
           Effect.timeoutOption(CHANNEL_READ_TIMEOUT_MS),
-          Effect.map((text) => ({
-            kind: read.kind,
-            query: read.query,
-            text: Option.match(text, {
-              onNone: () => "(took too long to read)",
-              onSome: boundRecall,
-            }),
-          })),
+          Effect.map((value) =>
+            ChannelRemoteRecall.presentRead(read, Option.getOrUndefined(value)),
+          ),
           Effect.catch((cause) =>
             Effect.logWarning("GOAT Bot read failed", { kind: read.kind, cause }).pipe(
-              Effect.as({ kind: read.kind, query: read.query, text: "(could not be read)" }),
+              Effect.as(ChannelRemoteRecall.presentRead(read, "(could not be read)")),
             ),
           ),
         ),
       { concurrency: "unbounded" },
     );
-
-  /** Same words a local answer records, and the provenance a remote respond requires. */
-  const approvalReason = (
-    decision: ApprovalReply["decision"],
-    answerer: ChannelRequester,
-    via: ChannelRequester["originKind"],
-  ) =>
-    (decision === "accept" ? "Approved" : "Denied") +
-    " by " +
-    answerer.displayName +
-    " from GOAT Bot (" +
-    via +
-    ").";
-
-  const approvalSent = (decision: ApprovalReply["decision"], title: string) =>
-    decision === "accept"
-      ? "Approved. " + title + " continues."
-      : "Denied. I told the agent on " + title + " not to.";
 
   /**
    * Answers one approval for a person allowed to answer for the work's requester. A local answer's
@@ -947,6 +927,7 @@ const make = Effect.gen(function* () {
                   originKind: "goat",
                   kind: "inbound",
                   inputId,
+                  clientMessageId: message.externalMessageId,
                   readAt: stored.snapshot.readAt ?? readAt,
                 },
               },
@@ -1022,6 +1003,7 @@ const make = Effect.gen(function* () {
       const hosts = yield* remoteWorkers.knownHosts;
       const bot = (yield* ledger.getBotById(stored.ownerId, stored.botId))?.bot;
       const targets = yield* allowedTargets(bot?.projectId);
+      const recallFallbacks: Array<string> = [];
       const outcome: ReceptionOutcome =
         choice?.type === "question"
           ? {
@@ -1160,6 +1142,7 @@ const make = Effect.gen(function* () {
                   : narrowed
                     ? results.map((result) => ({ ...result, query: "(withheld)" }))
                     : results;
+                recallFallbacks.push(...ChannelRemoteRecall.fallbackReasons(readResults));
                 const journalNow = journalFor(
                   yield* visibleTasks(current, conversationId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
@@ -1264,14 +1247,16 @@ const make = Effect.gen(function* () {
         (decision.remember !== undefined && rememberRefusal === undefined
           ? yield* botNotes.save(decision.remember, readAt, inputId, decision.replacesNote)
           : droppedNoteNotice(rememberRefusal)) ?? droppedNoteNotice(editRefusal);
-
       let replyText = decision.replyText;
       let finalDecision = decision;
+      if (noteNotice === CHANNEL_COPY.noteEditBusy) {
+        replyText = noteNotice;
+        finalDecision = { replyText, action: { type: "report_only" } };
+      }
       let createdTasks: ReturnType<typeof makeCreatedTasks> = [];
       const taskEvents: Array<ChannelLedger.ChannelTaskEventWrite> = [];
       const deliveries: Array<ChannelLedger.ChannelOutboxInsert> = [];
-      const action = decision.action;
-
+      const action = finalDecision.action;
       // A project question is worded by the server from the projects it would offer, so the
       // person sees the same real projects the dispatcher would ask about.
       if (action.type === "clarify" && action.about === "project") {
@@ -1558,7 +1543,8 @@ const make = Effect.gen(function* () {
       }
 
       const relatedTask = createdTasks[0]?.task;
-      if (noteNotice !== undefined) replyText += " " + noteNotice;
+      if (noteNotice !== undefined && replyText !== noteNotice) replyText += " " + noteNotice;
+      replyText = ChannelRemoteRecall.keepFallbacks(replyText, undefined, recallFallbacks);
       deliveries.unshift(
         replyDelivery({
           causeKey: "reply:" + inputId,

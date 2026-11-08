@@ -11,7 +11,7 @@ export function SidebarFilterButton(props: {
 }) {
   return (
     <Pressable
-      className="size-11 cursor-pointer items-center justify-center rounded-full bg-subtle active:opacity-70"
+      className="size-[44px] cursor-pointer items-center justify-center rounded-full bg-subtle active:opacity-70"
       accessibilityLabel={props.accessibilityLabel}
       accessibilityRole="button"
       hitSlop={4}

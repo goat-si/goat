@@ -13,12 +13,28 @@ const state = vi.hoisted(() => ({
   identity: null as RepositoryIdentity | null,
   writes: [] as Array<{ repository: string; number: number; url: string }>,
   persistedState: "closed" as "open" | "closed",
+  server: "current" as "current" | "older" | "unknown",
 }));
 
 vi.mock(import("../../state/entities"), async (original) => ({
   ...(await original()),
   useQuietThreadShell: (() => ({ branchPullRequest: state.branch })) as never,
   useProject: (() => ({ repositoryIdentity: state.identity })) as never,
+  useServerConfigs: (() =>
+    new Map(
+      state.server === "unknown"
+        ? []
+        : [
+            [
+              "environment",
+              {
+                environment: {
+                  capabilities: state.server === "current" ? { forkBranchPullRequests: true } : {},
+                },
+              },
+            ],
+          ],
+    )) as never,
 }));
 vi.mock(import("../../state/use-orchestration-command"), async (original) => ({
   ...(await original()),
@@ -82,6 +98,19 @@ const azure: RepositoryIdentity = {
   },
 };
 
+function setup(input: {
+  identity: RepositoryIdentity;
+  branch: typeof state.branch;
+  server?: typeof state.server;
+  persistedState?: typeof state.persistedState;
+}) {
+  state.identity = input.identity;
+  state.branch = input.branch;
+  state.server = input.server ?? "current";
+  state.persistedState = input.persistedState ?? "closed";
+  state.writes = [];
+}
+
 function Harness({ url }: { url: string }) {
   const { linked } = useThreadLinkedPullRequest({
     serverThreadRef,
@@ -125,15 +154,7 @@ it.each([
 ])(
   "relinks $name using the validated repository selector (#2464)",
   async ({ identity, url, repository }) => {
-    state.identity = identity;
-    state.branch = {
-      projectId,
-      number: 11,
-      url,
-      repository,
-    };
-    state.writes = [];
-    state.persistedState = "closed";
+    setup({ identity, branch: { projectId, number: 11, url, repository } });
     await using screen = await render(<Harness url={url} />);
     await act(async () => {});
     expect(screen.container.textContent).toContain(repository);
@@ -161,25 +182,22 @@ it.each([
       url: "https://github.com/other/project/pull/11",
     },
   },
-])("does not relink an unrelated detected PR with $name (#2464)", async ({ branch }) => {
-  state.identity = github;
-  state.branch = branch;
-  state.writes = [];
-  state.persistedState = "closed";
-  await using screen = await render(<Harness url="https://github.com/other/project/pull/11" />);
-  await act(async () => {});
-  expect(screen.container.textContent).toContain(persisted.repository);
-  expect(state.writes).toEqual([]);
+])("does not relink an unrelated detected PR with $name (#2464, #2522)", async ({ branch }) => {
+  for (const server of ["current", "older"] as const) {
+    setup({ identity: github, branch, server });
+    await using screen = await render(<Harness url="https://github.com/other/project/pull/11" />);
+    await act(async () => {});
+    expect(screen.container.textContent).toContain(persisted.repository);
+    expect(state.writes).toEqual([]);
+  }
 });
 
 it("waits for the matching server reference before relinking (#2464)", async () => {
-  state.identity = github;
-  state.branch = null;
-  state.writes = [];
-  state.persistedState = "closed";
+  setup({ identity: github, branch: null });
   const url = "https://github.com/fork/project/pull/11";
   await using screen = await render(<Harness url={url} />);
   await act(async () => {});
+  expect(screen.container.textContent).toContain(persisted.repository);
   expect(state.writes).toEqual([]);
   state.branch = { projectId, repository: "fork/project", number: 11, url };
   await screen.rerender(<Harness url={url} />);
@@ -187,17 +205,62 @@ it("waits for the matching server reference before relinking (#2464)", async () 
   expect(state.writes).toEqual([{ projectId, repository: "fork/project", number: 11, url }]);
 });
 
-it("leaves an explicitly linked open PR unchanged (#2464)", async () => {
-  state.identity = github;
-  state.branch = {
-    projectId,
-    repository: "fork/project",
-    number: 11,
+it("waits while the server's capabilities are unknown (#2522)", async () => {
+  setup({ identity: github, branch: null, server: "unknown" });
+  await using screen = await render(<Harness url="https://github.com/fork/project/pull/11" />);
+  await act(async () => {});
+  expect(screen.container.textContent).toContain(persisted.repository);
+  expect(state.writes).toEqual([]);
+});
+
+const upstreamLeftover = {
+  projectId,
+  repository: "upstream/project",
+  number: 9,
+  url: "https://github.com/upstream/project/pull/9",
+};
+
+it.each([
+  {
+    name: "GitHub fork without a reference",
+    identity: github,
+    branch: null,
     url: "https://github.com/fork/project/pull/11",
-  };
-  state.writes = [];
-  state.persistedState = "open";
-  await using screen = await render(<Harness url={state.branch.url} />);
+    repository: "fork/project",
+  },
+  {
+    name: "GitHub fork with a leftover upstream reference",
+    identity: github,
+    branch: upstreamLeftover,
+    url: "https://github.com/fork/project/pull/11",
+    repository: "fork/project",
+  },
+  {
+    name: "Azure fork without a reference",
+    identity: azure,
+    branch: null,
+    url: "https://dev.azure.com/acme/forks/_git/forkcode/pullrequest/11",
+    repository: "forkcode",
+  },
+])(
+  "relinks a $name from an older server that drops fork PRs (#2522)",
+  async ({ identity, branch, url, repository }) => {
+    setup({ identity, branch, server: "older" });
+    await using screen = await render(<Harness url={url} />);
+    await act(async () => {});
+    expect(screen.container.textContent).toContain(repository);
+    expect(state.writes).toEqual([{ projectId, repository, number: 11, url }]);
+  },
+);
+
+it("leaves an explicitly linked open PR unchanged (#2464)", async () => {
+  const url = "https://github.com/fork/project/pull/11";
+  setup({
+    identity: github,
+    branch: { projectId, repository: "fork/project", number: 11, url },
+    persistedState: "open",
+  });
+  await using screen = await render(<Harness url={url} />);
   await act(async () => {});
   expect(screen.container.textContent).toContain(persisted.repository);
   expect(state.writes).toEqual([]);

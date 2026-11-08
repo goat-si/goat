@@ -29,7 +29,13 @@ import {
 const watchedRun = (
   runId: RunId,
   ordinal: number,
-  input: { requestedAt?: number; completedAt?: number | null; trigger?: string | undefined } = {},
+  input: {
+    requestedAt?: number;
+    completedAt?: number | null;
+    trigger?: string | undefined;
+    dropped?: boolean;
+    queued?: boolean;
+  } = {},
 ): WatchedRun => {
   const completedAt = input.completedAt === undefined ? ordinal * 10 + 5 : input.completedAt;
   return {
@@ -39,6 +45,8 @@ const watchedRun = (
     requestedAt: input.requestedAt ?? ordinal * 10,
     completedAt,
     trigger: "trigger" in input ? input.trigger : `message:wake:${runId}`,
+    dropped: input.dropped ?? false,
+    queued: input.queued ?? false,
   };
 };
 
@@ -361,6 +369,31 @@ it("leaves sends and echoes to their own watch, yet reports a skipped send its s
   expect(
     ownRun({ ...makeWatch(null), launcherThreadId: null }, `message:launch-watch:${echo}:x`),
   ).toBe(true);
+});
+
+it("leaves out a wake dropped from the queue before it started, and never counts it as going on (#2705)", () => {
+  const [run1, run2, run3, run4, run5] = ["run-1", "run-2", "run-3", "run-4", "run-5"].map((id) =>
+    RunId.make(id),
+  );
+  const watch = settleEnd(addPendingRun(makeWatch(null), run1!, 0), run1!, "end-1", 5);
+  // Pull request wakes queued behind run-1 were dropped once a push made their checks stale.
+  const runs = [
+    watchedRun(run1!, 1, { requestedAt: 0, completedAt: 100 }),
+    watchedRun(run2!, 2, { requestedAt: 10, completedAt: 20, dropped: true }),
+    watchedRun(run3!, 3, { requestedAt: 30, completedAt: 40, dropped: true }),
+    // run-5 was queued while run-4 ran, then dropped before run-4 ended.
+    watchedRun(run4!, 4, { requestedAt: 110, completedAt: 150 }),
+    watchedRun(run5!, 5, { requestedAt: 120, completedAt: 130, dropped: true }),
+  ];
+  const found = discoverRuns(watch, runs, 200);
+  expect(found).toMatchObject({ pendingRuns: [run4], skippedRuns: [run2, run3, run5] });
+  expect(wentOnFrom(found, run4!, runs)).toBe(false);
+  // Gone on only to a wake still queued, run-4 is followed until that wake starts or is dropped.
+  const queued = [...runs.slice(0, 4), watchedRun(run5!, 5, { requestedAt: 120, queued: true })];
+  const waiting = discoverRuns(watch, queued, 200);
+  expect(waiting).toMatchObject({ pendingRuns: [run4, run5], skippedRuns: [run2, run3] });
+  expect(wentOnFrom(waiting, run4!, queued)).toBe("queued");
+  expect(wentOnFrom(waiting, run4!, [...runs.slice(0, 4), watchedRun(run5!, 5)])).toBe(true);
 });
 
 it("starts a watch that never looked from the newest run it knows, else the newest run", () => {

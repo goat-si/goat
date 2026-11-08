@@ -381,7 +381,7 @@ function DeviceOptionsMenu({ items }: { readonly items: ReadonlyArray<AppBarMenu
       <Pressable
         accessibilityLabel="Device options"
         accessibilityRole="button"
-        className="size-11 items-center justify-center rounded-full bg-subtle"
+        className="size-[44px] items-center justify-center rounded-full bg-subtle"
       >
         <SymbolView name="ellipsis" size={18} tintColorClassName="accent-icon" />
       </Pressable>

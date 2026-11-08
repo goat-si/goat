@@ -111,6 +111,8 @@ export const ChannelMessageMeta = Schema.Struct({
   originKind: ChannelKind,
   kind: ChannelMessageKind,
   inputId: Schema.optional(ChannelInputId),
+  /** The sending GOAT app's own key for a message typed there, so it can replace its pending bubble. */
+  clientMessageId: Schema.optional(TrimmedNonEmptyString),
   receptionId: Schema.optional(ChannelReceptionId),
   taskId: Schema.optional(ChannelTaskId),
   inReplyToInputId: Schema.optional(ChannelInputId),

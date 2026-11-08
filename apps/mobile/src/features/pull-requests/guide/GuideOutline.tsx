@@ -51,7 +51,7 @@ export function GuideOutline({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Guide options"
-            className="h-11 w-11 items-center justify-center rounded-full active:bg-grouped-card"
+            className="size-[44px] items-center justify-center rounded-full active:bg-grouped-card"
           >
             <SymbolView name="ellipsis" size={20} tintColorClassName="accent-icon-muted" />
           </Pressable>

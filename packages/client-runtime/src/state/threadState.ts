@@ -38,6 +38,6 @@ export function threadHasCaughtUpTo(
     readonly messages: ReadonlyArray<{ readonly id: string }> | undefined;
   },
 ): boolean {
-  if (write.sequence !== undefined && thread.sequence >= write.sequence) return true;
+  if (write.sequence !== undefined) return thread.sequence >= write.sequence;
   return thread.messages?.some((entry) => entry.id === write.messageId) ?? false;
 }
