@@ -13,29 +13,14 @@ const nightlyPath = ".github/workflows/goat-nightly.yml";
 const connectHostedPath = ".github/workflows/connect-hosted.yml";
 const marketingPagesPath = ".github/workflows/marketing-pages.yml";
 const disabled = new Set((NodeProcess.env.GOAT_DISABLED_WORKFLOWS ?? "").split("\n"));
-const labels = new Set(["self-hosted", "linux", "x64", "goat", "epyc"]);
-// goat-ci jobs run on a pinned GitHub-hosted image or on EPYC, never on a moving label.
+// goat-ci jobs run on a pinned GitHub-hosted image or, for the ci matrix, the lidge pool.
 const goatCiHostedRunner = "ubuntu-24.04";
-// A manual run or a same-repository pull request goes to EPYC and a fork's pull request to the
-// hosted image (#426). The trust test is the expression itself, so it is pinned whole.
-const goatCiTrustedRunner =
-  '(github.event_name == \'workflow_dispatch\' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(\'["self-hosted","linux","x64","goat","epyc"]\') || \'ubuntu-24.04\'';
-// The gate jobs take the epyc-light runners, which carry no epyc label, so they never queue behind
-// the ci matrix. Only those jobs may use them, and they may use nothing else on EPYC.
-const goatCiLightRunner = goatCiTrustedRunner.replace('"epyc"]', '"epyc-light"]');
-// The ci matrix picks a pool per entry; only a trusted run's epyc entries reach EPYC.
-const goatCiMatrixRunner = `matrix.runner == 'epyc' && ${goatCiTrustedRunner}`;
-// The Windows entry takes a pinned hosted image whatever the trust, since it never reaches EPYC.
-const goatCiWindowsMatrixRunner = `matrix.runner == 'windows' && 'windows-2025' || ${goatCiMatrixRunner}`;
-// With the EPYC pool retired, every other entry takes the pinned hosted Linux image.
+// The Windows entry takes the pinned hosted Windows image and every other entry the Linux one.
 const goatCiHostedMatrixRunner = `matrix.runner == 'windows' && 'windows-2025' || '${goatCiHostedRunner}'`;
-const goatCiGateJobs = new Set([
-  "scope",
-  "screenshot-gate",
-  "result",
-  "republish",
-  "refresh-republished",
-]);
+// Only a trusted run's heavy entries reach lidge, and only while LIDGE_RUNNERS is on; a fork's pull
+// request stays hosted. The trust test is the expression itself, so it is pinned whole.
+const goatCiLidgeMatrixRunner =
+  "matrix.runner == 'windows' && 'windows-2025' || (matrix.runner == 'linux' && vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"lidge\"]') || 'ubuntu-24.04'";
 // goat-scope picks the matrix, ci runs it, goat-ci-result aggregates, republish repeats the real
 // goat-ci-result for an ignored event, and refresh-republished re-runs that ignored run after a
 // re-run of the real one (#1691). It alone may write to Actions.
@@ -206,28 +191,17 @@ function validateWorkflow(source, yaml) {
       typeof runners === "string" &&
       runners.trim().startsWith("${{") &&
       normalizeExpression(runners) === expected;
-    if (goatCiGateJobs.has(name)) {
-      if (runners !== goatCiHostedRunner && !isExpression(goatCiLightRunner)) {
-        return refuse(
-          `jobs.${name}.runs-on must be ${goatCiHostedRunner} or the trusted-run epyc-light expression`,
-        );
+    if (name !== "ci") {
+      if (runners !== goatCiHostedRunner) {
+        return refuse(`jobs.${name}.runs-on must be ${goatCiHostedRunner}`);
       }
     } else if (
       runners !== goatCiHostedRunner &&
-      !isExpression(goatCiTrustedRunner) &&
-      !(
-        name === "ci" &&
-        (isExpression(goatCiMatrixRunner) ||
-          isExpression(goatCiWindowsMatrixRunner) ||
-          isExpression(goatCiHostedMatrixRunner))
-      ) &&
-      (!Array.isArray(runners) ||
-        runners.length !== 5 ||
-        new Set(runners).size !== 5 ||
-        runners.some((label) => typeof label !== "string" || !labels.has(label)))
+      !isExpression(goatCiHostedMatrixRunner) &&
+      !isExpression(goatCiLidgeMatrixRunner)
     ) {
       return refuse(
-        `jobs.${name}.runs-on must be ${goatCiHostedRunner}, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression`,
+        `jobs.ci.runs-on must be ${goatCiHostedRunner}, the hosted matrix expression, or the trusted-run lidge matrix expression`,
       );
     }
     if (
