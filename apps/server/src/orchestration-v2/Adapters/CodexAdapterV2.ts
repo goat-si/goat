@@ -1587,6 +1587,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 return yield* homeRoute.value.launchArgs(routeInput);
               }).pipe(toOpenSessionError)
             : [];
+        const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
         const client = yield* clientFactory
           .open({
             instanceId: adapterOptions.instanceId,
@@ -1599,6 +1600,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               undefined,
             ),
             routeArgs,
+            logThreadFor: (nativeThreadId) =>
+              rootProviderThreads.get(nativeThreadId)?.appThreadId ?? undefined,
           })
           .pipe(Effect.flatMap(withCodexRequestDeadlines));
         const restoredCompactions = new Set<string>();
@@ -2027,7 +2030,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // Serialize native completion and interrupt timeout so only one publishes terminal events.
         const turnTerminalizationPermit = yield* Semaphore.make(1);
         const goalsByNativeThread = new Map<string, OrchestrationV2ProviderGoal | null>();
-        const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
         const goalHolds = new Map<string, CodexGoalHold>();
         // The root turns of each goal continuation or retry, keyed by each turn.
         // A Stop or steer that names an earlier turn reaches the newest one, and

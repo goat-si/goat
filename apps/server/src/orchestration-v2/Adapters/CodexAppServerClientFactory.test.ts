@@ -26,6 +26,7 @@ import {
 import {
   CodexAppServerClientFactory,
   layerAppServerClientFactory,
+  makeCodexAppServerProtocolLogger,
 } from "./CodexAppServerClientFactory.ts";
 
 const defaultSettings = Schema.decodeSync(CodexSettings)({});
@@ -410,5 +411,168 @@ it.effect("a preserved process reconnects after its last goal block clears", () 
         .pipe(Effect.scoped, Effect.exit);
     }).pipe(Effect.provide(layer));
     assert.equal(connected, 1);
+  }),
+);
+
+function openRecordedProtocolLogger(input: {
+  readonly threadId: ThreadId;
+  readonly threadFor?: (nativeThreadId: string) => ThreadId | undefined;
+}) {
+  const writes: Array<{ readonly event: unknown; readonly threadId: ThreadId | null }> = [];
+  const nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger = {
+    filePath: "/tmp/events.log",
+    write: (event, threadId) =>
+      Effect.sync(() => {
+        writes.push({ event, threadId });
+      }),
+    close: () => Effect.void,
+  };
+  const protocolLogger = makeCodexAppServerProtocolLogger({
+    nativeEventLogger,
+    threadId: input.threadId,
+    providerSessionId: ProviderSessionId.make("provider-session-shared"),
+    ...(input.threadFor === undefined ? {} : { threadFor: input.threadFor }),
+  });
+  if (protocolLogger === undefined) {
+    throw new Error("expected a protocol logger");
+  }
+  return { writes, protocolLogger };
+}
+
+function recordedNativeThreadId(event: unknown): string | undefined {
+  return typeof event === "object" &&
+    event !== null &&
+    "nativeThreadId" in event &&
+    typeof event.nativeThreadId === "string"
+    ? event.nativeThreadId
+    : undefined;
+}
+
+it.effect("writes each native thread id shape to the GOAT thread that owns it", () =>
+  Effect.gen(function* () {
+    const opener = ThreadId.make("thread-opener");
+    const threadA = ThreadId.make("thread-a");
+    const threadB = ThreadId.make("thread-b");
+    const owners = new Map<string, ThreadId>([
+      ["native-a", threadA],
+      ["native-b", threadB],
+      ["native-result", threadB],
+      ["native-conversation", threadA],
+      ["native-result-id", threadB],
+    ]);
+    const { writes, protocolLogger } = openRecordedProtocolLogger({
+      threadId: opener,
+      threadFor: (nativeThreadId) => owners.get(nativeThreadId),
+    });
+    const frames = [
+      {
+        nativeThreadId: "native-a",
+        threadId: threadA,
+        payload: { method: "thread/event", params: { threadId: "native-a" } },
+      },
+      {
+        nativeThreadId: "native-b",
+        threadId: threadB,
+        payload: { method: "item/completed", params: { thread: { id: "native-b" } } },
+      },
+      {
+        nativeThreadId: "native-result",
+        threadId: threadB,
+        payload: { method: "thread/start", result: { thread: { id: "native-result" } } },
+      },
+      {
+        nativeThreadId: "native-conversation",
+        threadId: threadA,
+        payload: {
+          method: "execCommandApproval",
+          params: { conversationId: "native-conversation" },
+        },
+      },
+      {
+        nativeThreadId: "native-result-id",
+        threadId: threadB,
+        payload: { method: "thread/resume", result: { threadId: "native-result-id" } },
+      },
+      {
+        nativeThreadId: "native-a",
+        threadId: threadA,
+        payload: {
+          method: "thread/event",
+          params: {
+            threadId: "native-a",
+            conversationId: "native-conversation",
+            thread: { id: "native-b" },
+          },
+          result: { thread: { id: "native-result" }, threadId: "native-result-id" },
+        },
+      },
+    ];
+    for (const frame of frames) {
+      yield* protocolLogger({
+        direction: "incoming",
+        stage: "decoded",
+        payload: frame.payload,
+      });
+    }
+    assert.deepEqual(
+      writes.map((write) => ({
+        threadId: write.threadId,
+        nativeThreadId: recordedNativeThreadId(write.event),
+      })),
+      frames.map((frame) => ({
+        threadId: frame.threadId,
+        nativeThreadId: frame.nativeThreadId,
+      })),
+    );
+  }),
+);
+
+it.effect("keeps an unattributed frame on the opener log and names a known native thread", () =>
+  Effect.gen(function* () {
+    const opener = ThreadId.make("thread-opener");
+    const threadA = ThreadId.make("thread-a");
+    const { writes, protocolLogger } = openRecordedProtocolLogger({
+      threadId: opener,
+      threadFor: (nativeThreadId) => (nativeThreadId === "native-a" ? threadA : undefined),
+    });
+    yield* protocolLogger({
+      direction: "incoming",
+      stage: "decoded",
+      payload: { method: "thread/event", params: { threadId: "native-unknown" } },
+    });
+    yield* protocolLogger({
+      direction: "incoming",
+      stage: "decoded",
+      payload: { method: "thread/event", params: { threadId: 12 } },
+    });
+    yield* protocolLogger({
+      direction: "incoming",
+      stage: "decode_failed",
+      payload: { operation: "decode", method: "thread/event" },
+    });
+    assert.deepEqual(
+      writes.map((write) => ({
+        threadId: write.threadId,
+        nativeThreadId: recordedNativeThreadId(write.event),
+      })),
+      [
+        { threadId: opener, nativeThreadId: "native-unknown" },
+        { threadId: opener, nativeThreadId: undefined },
+        { threadId: opener, nativeThreadId: undefined },
+      ],
+    );
+    assert.equal(
+      writes[0] !== undefined &&
+        typeof writes[0].event === "object" &&
+        writes[0].event !== null &&
+        "nativeThreadId" in writes[0].event,
+      true,
+    );
+    for (const write of writes.slice(1)) {
+      assert.equal(
+        typeof write.event === "object" && write.event !== null && "nativeThreadId" in write.event,
+        false,
+      );
+    }
   }),
 );

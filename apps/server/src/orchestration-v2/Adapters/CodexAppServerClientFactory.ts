@@ -49,6 +49,7 @@ export interface CodexAppServerClientFactoryShape {
     readonly routeArgs?: ReadonlyArray<string>;
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
+    readonly logThreadFor?: (nativeThreadId: string) => ThreadId | undefined;
   }) => Effect.Effect<
     CodexClient.CodexAppServerClient["Service"],
     ProviderAdapter.ProviderAdapterOpenSessionError,
@@ -97,6 +98,7 @@ export function makeCodexAppServerProtocolLogger(input: {
   readonly nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger | undefined;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
+  readonly threadFor?: (nativeThreadId: string) => ThreadId | undefined;
 }): CodexClient.CodexAppServerClientOptions["logger"] | undefined {
   const { nativeEventLogger } = input;
   if (nativeEventLogger === undefined) {
@@ -105,6 +107,11 @@ export function makeCodexAppServerProtocolLogger(input: {
 
   return (event) => {
     if (!shouldPersistProviderEvent("native", event)) return Effect.void;
+    const nativeThreadId = nativeThreadIdOf(event);
+    const threadId =
+      nativeThreadId === undefined
+        ? input.threadId
+        : (input.threadFor?.(nativeThreadId) ?? input.threadId);
     return nativeEventLogger
       .write(
         {
@@ -112,12 +119,38 @@ export function makeCodexAppServerProtocolLogger(input: {
           protocol: "codex.app-server",
           kind: "protocol",
           providerSessionId: input.providerSessionId,
+          ...(nativeThreadId === undefined ? {} : { nativeThreadId }),
           event: redactCodexProtocolValue(boundProviderEventForLogging(event)),
         },
-        input.threadId,
+        threadId,
       )
       .pipe(Effect.ignore);
   };
+}
+
+function objectField(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+function threadString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+// Legacy approval requests name the thread as conversationId.
+function nativeThreadIdOf(event: {
+  readonly stage: string;
+  readonly payload: unknown;
+}): string | undefined {
+  if (event.stage !== "decoded") return undefined;
+  const params = objectField(event.payload, "params");
+  const result = objectField(event.payload, "result");
+  return (
+    threadString(objectField(params, "threadId")) ??
+    threadString(objectField(objectField(params, "thread"), "id")) ??
+    threadString(objectField(objectField(result, "thread"), "id")) ??
+    threadString(objectField(params, "conversationId")) ??
+    threadString(objectField(result, "threadId"))
+  );
 }
 
 function redactCodexProtocolValue(value: unknown): unknown {
@@ -241,6 +274,7 @@ export const layerAppServerClientFactory: Layer.Layer<
           nativeEventLogger,
           threadId: input.threadId,
           providerSessionId: input.providerSessionId,
+          ...(input.logThreadFor === undefined ? {} : { threadFor: input.logThreadFor }),
         });
         const clientOptions: CodexClient.CodexAppServerClientOptions =
           protocolLogger === undefined
