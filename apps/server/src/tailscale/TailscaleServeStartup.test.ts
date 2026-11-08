@@ -107,3 +107,24 @@ it.effect("does not turn Serve off when no attempt started", () =>
     expect(yield* Ref.get(disabled)).toEqual([]);
   }),
 );
+
+it.effect("does not apply or disable a Windows-reserved port", () =>
+  Effect.gen(function* () {
+    const ensured = yield* Ref.make(0);
+    const disabled = yield* Ref.make(0);
+    const parked = yield* Deferred.make<void>();
+    const layer = layerTailscaleServeStartupWith({
+      enabled: true,
+      servePort: 46743,
+      parked,
+      awaitActivation: Effect.void,
+      ensure: () => Ref.update(ensured, (count) => count + 1),
+      disable: () => Ref.update(disabled, (count) => count + 1),
+      excludedRange: () => Effect.succeed({ start: 46648, end: 46747, suggestion: 46748 }),
+    }).pipe(Layer.provide(loopback));
+
+    yield* Effect.scoped(Layer.build(layer));
+    expect(yield* Ref.get(ensured)).toBe(0);
+    expect(yield* Ref.get(disabled)).toBe(0);
+  }),
+);
