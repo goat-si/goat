@@ -173,30 +173,38 @@ const make = Effect.gen(function* () {
     const { instance, manager } = yield* acpSessionManager(input.instanceId);
     const key = acpContinuationKey(input.instanceId, input.projectId);
     if (input.continuation !== undefined) {
-      const started = yield* continuations.begin(key, input.continuation);
-      if (started._tag === "Unavailable") return yield* continuationUnavailable();
-      if (started._tag === "Ready") {
-        return yield* finishList(instance.driverKind, input.instanceId, started.page);
-      }
-      const committed = yield* manager
-        .listSessions({ cwd: project.workspaceRoot, cursor: started.cursor })
-        .pipe(
-          Effect.flatMap((page) => continuations.commit(key, started.generation, page)),
-          Effect.ensuring(continuations.abort(key, started.generation)),
-        );
-      return yield* finishList(instance.driverKind, input.instanceId, committed);
-    }
-    const generation = yield* continuations.claim(key);
-    // abort only drops this claim's pending placeholder, so it is a no-op after a commit.
-    const committed = yield* manager
-      .listSessions({
-        cwd: project.workspaceRoot,
-        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-      })
-      .pipe(
-        Effect.flatMap((page) => continuations.commit(key, generation, page)),
-        Effect.ensuring(continuations.abort(key, generation)),
+      const token = input.continuation;
+      // A claim made by begin or claim is released on any exit; after a commit release is a no-op.
+      const page = yield* Effect.acquireUseRelease(
+        continuations.begin(key, token),
+        (started) =>
+          started._tag === "Unavailable"
+            ? Effect.fail(continuationUnavailable())
+            : started._tag === "Ready"
+              ? Effect.succeed(started.page)
+              : manager
+                  .listSessions({ cwd: project.workspaceRoot, cursor: started.cursor })
+                  .pipe(
+                    Effect.flatMap((listed) =>
+                      continuations.commit(key, started.generation, listed),
+                    ),
+                  ),
+        (started) =>
+          started._tag === "Fetch" ? continuations.abort(key, started.generation) : Effect.void,
       );
+      return yield* finishList(instance.driverKind, input.instanceId, page);
+    }
+    const committed = yield* Effect.acquireUseRelease(
+      continuations.claim(key),
+      (generation) =>
+        manager
+          .listSessions({
+            cwd: project.workspaceRoot,
+            ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+          })
+          .pipe(Effect.flatMap((listed) => continuations.commit(key, generation, listed))),
+      (generation) => continuations.abort(key, generation),
+    );
     return yield* finishList(instance.driverKind, input.instanceId, committed);
   });
 

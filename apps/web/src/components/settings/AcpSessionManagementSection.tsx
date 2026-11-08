@@ -147,7 +147,7 @@ export function AcpSessionManagementSection(props: {
     readonly cursor?: string;
     readonly continuation?: string;
   }) => {
-    if (projectId === null || loading) return;
+    if (projectId === null || loading || loggingOut) return;
     const paging = page?.continuation !== undefined || page?.cursor !== undefined;
     if (!paging) clearSessionList();
     setLoading(true);
@@ -337,7 +337,12 @@ export function AcpSessionManagementSection(props: {
   };
 
   const logoutProvider = async () => {
-    if (loggingOut || !readEnvironmentScope(props.environmentId, AuthProvidersManageScope)) return;
+    if (
+      loggingOut ||
+      loading ||
+      !readEnvironmentScope(props.environmentId, AuthProvidersManageScope)
+    )
+      return;
     setLoggingOut(true);
     const result = await logout({
       environmentId: props.environmentId,
@@ -369,7 +374,7 @@ export function AcpSessionManagementSection(props: {
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={props.readOnly || loggingOut}
+                disabled={props.readOnly || loggingOut || loading}
                 onClick={() => void logoutProvider()}
               >
                 {loggingOut ? "Logging out" : "Log out"}
@@ -405,7 +410,7 @@ export function AcpSessionManagementSection(props: {
                   type="button"
                   size="sm"
                   variant="outline"
-                  disabled={!canRead || loading || projectId === null}
+                  disabled={!canRead || loading || loggingOut || projectId === null}
                   onClick={() => void loadSessions()}
                 >
                   {loading ? "Loading" : sessions.length === 0 ? "List sessions" : "Refresh"}
@@ -492,7 +497,7 @@ export function AcpSessionManagementSection(props: {
                   type="button"
                   size="xs"
                   variant="ghost-muted"
-                  disabled={!canRead || loading}
+                  disabled={!canRead || loading || loggingOut}
                   onClick={() => {
                     if (continuation !== null) void loadSessions({ continuation });
                     else if (nextCursor !== null) void loadSessions({ cursor: nextCursor });

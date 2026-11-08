@@ -13,6 +13,7 @@ const MAX_INSTANCE_ENTRIES = 8;
 const MAX_ENTRIES = 32;
 const MAX_TOTAL_BYTES = 8 * 1_048_576;
 const MAX_NEXT_CURSOR = 2_048;
+const MAX_PENDING = 64;
 
 export const acpContinuationKey = (instanceId: string, projectId: string) =>
   `${instanceId}\n${projectId}`;
@@ -41,7 +42,6 @@ interface Flags {
 
 interface Hold extends Flags {
   readonly generation: number;
-  readonly pending: boolean;
   readonly token: string;
   readonly rows: ReadonlyArray<AcpRegistrySession>;
   readonly rawCursor: string | null;
@@ -67,24 +67,6 @@ const isTruncated = (flags: Flags) =>
   flags.droppedSessions || flags.directoriesCut || flags.overflow || flags.cursorDropped;
 
 const instanceOf = (key: string) => key.slice(0, key.indexOf("\n"));
-
-const placeholder = (generation: number, now: number): Hold => ({
-  generation,
-  pending: true,
-  token: "",
-  rows: [],
-  rawCursor: null,
-  droppedSessions: false,
-  directoriesCut: false,
-  overflow: false,
-  cursorDropped: false,
-  canLoad: false,
-  canResume: false,
-  canDelete: false,
-  expiresAt: now + TTL_MS,
-  lastUsed: now,
-  bytes: 0,
-});
 
 const pageOf = (
   sessions: ReadonlyArray<AcpRegistrySession>,
@@ -121,6 +103,21 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
   const crypto = yield* Crypto.Crypto;
   const gate = yield* Semaphore.make(1);
   const holds = new Map<string, Hold>();
+  // In-flight provider calls, newest claim per key; a commit lands only for the claim still listed.
+  const pending = new Map<string, number>();
+  let nextGeneration = 0;
+
+  const claimKey = (key: string) => {
+    nextGeneration += 1;
+    holds.delete(key);
+    pending.delete(key);
+    pending.set(key, nextGeneration);
+    for (const oldest of pending.keys()) {
+      if (pending.size <= MAX_PENDING) break;
+      pending.delete(oldest);
+    }
+    return nextGeneration;
+  };
 
   const mint = Effect.fn("AcpSessionContinuations.token")(function* () {
     return (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).replaceAll("-", "");
@@ -152,7 +149,7 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
     let oldestKey: string | undefined;
     let oldestUsed = Number.POSITIVE_INFINITY;
     for (const [candidate, hold] of holds) {
-      if (candidate === key || hold.pending) continue;
+      if (candidate === key) continue;
       if (hold.lastUsed < oldestUsed) {
         oldestUsed = hold.lastUsed;
         oldestKey = candidate;
@@ -192,11 +189,8 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
   const claim = Effect.fn("AcpSessionContinuations.claim")(function* (key: string) {
     return yield* gate.withPermit(
       Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        evictExpired(now);
-        const generation = (holds.get(key)?.generation ?? 0) + 1;
-        holds.set(key, placeholder(generation, now));
-        return generation;
+        evictExpired(yield* Clock.currentTimeMillis);
+        return claimKey(key);
       }),
     );
   });
@@ -207,8 +201,7 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
   ) {
     yield* gate.withPermit(
       Effect.sync(() => {
-        const current = holds.get(key);
-        if (current?.pending === true && current.generation === generation) holds.delete(key);
+        if (pending.get(key) === generation) pending.delete(key);
       }),
     );
   });
@@ -221,7 +214,8 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
     return yield* gate.withPermit(
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
-        if (holds.get(key)?.generation !== generation) return unsaved(page);
+        if (pending.get(key) !== generation) return unsaved(page);
+        pending.delete(key);
         const rawCursor = page.cursorDropped ? null : page.rawCursor;
         const trimmed = trimHeld(page.sessions.slice(RESPONSE_ROWS));
         const flags: Flags = {
@@ -243,7 +237,6 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
         const token = yield* mint();
         const entry: Hold = {
           generation,
-          pending: false,
           token,
           rows: trimmed.rows,
           rawCursor,
@@ -279,7 +272,7 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
         const now = yield* Clock.currentTimeMillis;
         evictExpired(now);
         const entry = holds.get(key);
-        if (entry === undefined || entry.pending || entry.token !== token) {
+        if (entry === undefined || entry.token !== token) {
           return { _tag: "Unavailable" } satisfies ContinuationBegin;
         }
         if (entry.rows.length === 0 && entry.rawCursor === null) {
@@ -287,9 +280,8 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
           return { _tag: "Ready", page: pageOf([], entry, null) } satisfies ContinuationBegin;
         }
         if (entry.rows.length === 0 && entry.rawCursor !== null) {
-          const generation = entry.generation + 1;
-          holds.set(key, placeholder(generation, now));
-          return { _tag: "Fetch", cursor: entry.rawCursor, generation } satisfies ContinuationBegin;
+          const cursor = entry.rawCursor;
+          return { _tag: "Fetch", cursor, generation: claimKey(key) } satisfies ContinuationBegin;
         }
         const taken = entry.rows.slice(0, RESPONSE_ROWS);
         const rest = entry.rows.slice(RESPONSE_ROWS);
@@ -331,7 +323,7 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
     yield* gate.withPermit(
       Effect.sync(() => {
         const entry = holds.get(key);
-        if (entry === undefined || entry.pending) return;
+        if (entry === undefined) return;
         const rows = entry.rows.filter((session) => session.sessionId !== sessionId);
         if (rows.length === entry.rows.length) return;
         holds.set(key, { ...entry, rows, bytes: payloadBytes(rows, entry.rawCursor) });
