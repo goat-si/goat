@@ -20,6 +20,7 @@ import {
 } from "./permissionRules.ts";
 import { installResumedOpenCodePermission, syncOpenCodeSubagentDeny } from "./permissionSync.ts";
 import { recordString, recordValue } from "./records.ts";
+import { openCodeLiveWork } from "./liveWork.ts";
 export {
   openCodeChildPermissionRules,
   openCodePermissionRequestKind,
@@ -99,6 +100,7 @@ import {
   openCodeToolStatus,
   openCodeToolOutputWithImages,
   openCodeToolStateResult,
+  openCodeToolTitle as toolTitle,
   openCodeToolTurnItem,
 } from "./toolItems.ts";
 import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
@@ -568,12 +570,6 @@ function toolStartedAt(part: ToolPart, now: DateTime.Utc): DateTime.Utc {
 function toolCompletedAt(part: ToolPart, now: DateTime.Utc): DateTime.Utc | null {
   return part.state.status === "completed" || part.state.status === "error"
     ? dateTimeFromEpoch(part.state.time.end, now)
-    : null;
-}
-
-function toolTitle(part: ToolPart): string | null {
-  return part.state.status === "running" || part.state.status === "completed"
-    ? (part.state.title ?? null)
     : null;
 }
 
@@ -2964,6 +2960,14 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           providerSession: sessionEntity,
           events: Stream.fromEffectRepeat(Queue.take(events)),
           hasPendingBackgroundWork: Effect.sync(() => busySessionIds.size > 0),
+          holdsLiveWork: openCodeLiveWork(
+            () => pendingRequests.size > 0,
+            () => busySessionIds,
+            () =>
+              sdkCall("session.status", {}, () => client.session.status()).pipe(
+                Effect.map((response) => unwrapData("session.status", response)),
+              ),
+          ),
           ensureThread: Effect.fn("OpencodeAdapter.ensureThread")(
             function* (threadInput) {
               if (threadInput.existingProviderThread?.nativeThreadRef != null) {
