@@ -39,7 +39,11 @@ import {
   SshEnvironmentManager,
 } from "./tunnel.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT } from "./runtimeFactsScripts.ts";
-import { REMOTE_HOST_PROCESS_SCRIPT } from "./runtimeOwnershipScripts.ts";
+import {
+  REMOTE_HOST_PROCESS_SCRIPT,
+  REMOTE_LEGACY_IDENTITY_SCRIPT,
+  REMOTE_OWNED_IDENTITY_SCRIPT,
+} from "./runtimeOwnershipScripts.ts";
 
 // Stand-ins for the Git Bash host: uname reports MINGW, PowerShell answers for two
 // processes in its CRLF output, cygpath maps C:\ paths, and tasklist knows one PID.
@@ -295,6 +299,82 @@ describe("Windows SSH host", () => {
         ask();
         assert.equal(yield* starts(), 4);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("reads a native server's identity with one PowerShell query per verification", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-identity-" });
+      const bin = `${root}/bin`;
+      const state = `${root}/state`;
+      yield* fs.makeDirectory(bin);
+      yield* fs.makeDirectory(state);
+      for (const [name, body] of Object.entries({
+        ...WINDOWS_DOUBLES,
+        "powershell.exe": `echo "$GOAT_PROCESS_ID" >>"$TEST_ROOT/powershell-calls"\n${WINDOWS_DOUBLES["powershell.exe"]}`,
+      })) {
+        yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
+        yield* fs.chmod(`${bin}/${name}`, 0o755);
+      }
+      const identity =
+        "/c/Users/Jo Doe/.goat/runtime/goat/versions/1.2.3/goat serve --host 127.0.0.1 --port 3773 --base-dir /c/Users/Jo Doe/.goat";
+      for (const [name, value] of [
+        ["identity", identity],
+        ["pid", "4242"],
+        ["port", "3773"],
+        ["managed", "managed"],
+        ["run", "runner"],
+        ["cand.pin", "runner"],
+      ])
+        yield* fs.writeFileString(`${state}/${name}`, `${value}\n`);
+      const calls = () =>
+        fs.readFileString(`${root}/powershell-calls`).pipe(
+          Effect.map((log) => log.trim().split("\n")),
+          Effect.orElseSucceed(() => []),
+        );
+      const run = (body: string) => {
+        const result = NodeChildProcess.spawnSync(
+          remoteShell,
+          [
+            "-c",
+            [
+              REMOTE_PROTOCOL_TOKEN_SCRIPT,
+              REMOTE_HOST_PROCESS_SCRIPT,
+              REMOTE_OWNED_IDENTITY_SCRIPT,
+              REMOTE_LEGACY_IDENTITY_SCRIPT,
+              `STATE_DIR='${state}'; PID_FILE="$STATE_DIR/pid"; PORT_FILE="$STATE_DIR/port"; MANAGED_FILE="$STATE_DIR/managed"`,
+              `RUNNER_FILE="$STATE_DIR/run"; RUNNER_CANDIDATE_FILE="$STATE_DIR/cand"; RUNNER_PUBLISHED=1; LEGACY_PENDING=0`,
+              'DEFAULT_SERVER_HOME="$HOME/.goat"',
+              body,
+            ].join("\n"),
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              HOME: "/c/Users/Jo Doe",
+              TEST_ROOT: root,
+              PATH: `${bin}:${process.env.PATH ?? ""}`,
+            },
+          },
+        );
+        assert.equal(result.status, 0, result.stderr);
+        return result.stdout;
+      };
+
+      assert.equal(run("verify_owned_identity 4242 3773 && echo owned"), "owned\n");
+      assert.deepEqual(yield* calls(), ["4242"]);
+      // A later verification asks again: no answer outlives the check that asked for it.
+      assert.equal(
+        run("verify_owned_identity 4242 3773 && server_uid 4242 >/dev/null && echo again"),
+        "again\n",
+      );
+      assert.deepEqual(yield* calls(), ["4242", "4242", "4242"]);
+      assert.equal(run("verify_owned_identity 9999 3773 || echo refused"), "refused\n");
+      assert.deepEqual((yield* calls()).slice(3), ["9999"]);
+      assert.equal(run(`verify_legacy_process 4242 '${identity}' && echo legacy`), "legacy\n");
+      assert.deepEqual((yield* calls()).slice(4), ["4242"]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect("passes a usable Windows working directory to initial and supervisor launches", () =>
