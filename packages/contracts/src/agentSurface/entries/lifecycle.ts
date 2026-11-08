@@ -66,6 +66,7 @@ export const lifecycleEntries = {
   }),
   "thread.delete": entry({
     ...write,
+    hostRoutable: true,
     resource: "thread",
     verb: "delete",
     name: "goat_thread_delete",
@@ -73,8 +74,11 @@ export const lifecycleEntries = {
     description:
       "Irreversibly delete an inactive thread. Refuses self, nonterminal runs, active subagents and provider-native children. No restore tool. Read thread.lifecycle_receipt to reconcile.",
     guide:
-      'Deletion is irreversible; there is no restore tool. Use thread.organize for reversible archive instead. Refuses the caller\'s own thread, every nonterminal run (including queued/preparing), active background subagents and provider-native read-only children. Existing cleanup applies. Example: goat_call {path: "thread.delete", args: {threadId: "thread:target", clientRequestId: "delete-1"}}.' +
-      retry,
+      'Deletion is irreversible; there is no restore tool. Use thread.organize for reversible archive instead. Refuses the caller\'s own thread, every nonterminal run (including queued/preparing), active background subagents and provider-native read-only children. Existing cleanup applies. Pass host to delete a thread this caller launched on that machine, after that launch has finished reporting. Example: goat_call {path: "thread.delete", args: {threadId: "thread:target", clientRequestId: "delete-1"}}.' +
+      retry.replace(
+        "Calls stay in this environment, including targets in another project.",
+        "Without host, calls stay in this environment, including targets in another project. With host, the delete runs on that machine.",
+      ),
     reconcile: "thread.lifecycle_receipt",
     examples: [
       {
@@ -132,13 +136,16 @@ export const lifecycleEntries = {
   }),
   "thread.lifecycle_receipt": entry({
     ...read,
+    hostRoutable: true,
     resource: "thread",
     verb: "lifecycle_receipt",
     name: "goat_thread_lifecycle_receipt",
     summary: "Read this caller's thread.delete receipt, even after deletion.",
     description:
       "Read a retained thread.delete result, including after deletion. Reading does not require the deleted target. Missing may mean expired.",
-    guide: receiptGuide,
+    guide:
+      receiptGuide +
+      " Pass host to fence an uncertain delete of a thread this caller launched on that machine.",
     examples: [
       {
         title: "Reconcile deletion after the thread disappears",

@@ -5,7 +5,6 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import {
   ChannelWorkerObservation,
-  MemoryTaskGrantCeiling,
   CommandId,
   MessageId,
   NodeId,
@@ -13,15 +12,11 @@ import {
   RuntimeRequestId,
   ThreadId,
   RuntimeMode,
-  RemoteDispatchState,
   RemoteReportDeliveryMode,
   RemoteReportKind,
   RemoteOriginReportsWaitResult,
   OrchestratorMcpFailure,
   OrchestratorMcpThreadSendResult,
-  OrchestrationV2RunStatus,
-  type ChannelWorkerObservation as ChannelWorkerObservationType,
-  type RemoteDispatchView,
   type RemoteRelaySend,
   type RemoteReport,
   type RemoteObservedRun,
@@ -61,27 +56,14 @@ import {
   remoteTaskQuestionNotice,
 } from "./reportFrame.ts";
 import { storeInboxReport } from "./RemoteReportInbox.ts";
+import {
+  RemoteDispatchError,
+  type RemoteDispatchRecord,
+  dispatchView,
+  publicRow,
+} from "./remoteDispatchModel.ts";
+export { RemoteDispatchError, type RemoteDispatchRecord, dispatchView };
 
-export class RemoteDispatchError extends Schema.TaggedError<RemoteDispatchError>()(
-  "RemoteDispatchError",
-  {
-    stage: Schema.Literals([
-      "storage",
-      "decode",
-      "delivery",
-      "unsupported_task",
-      "not_found",
-      "launch",
-      "authorize",
-    ]),
-    reason: Schema.optional(Schema.Literal("duplicate_task")),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return "Remote dispatch operation failed.";
-  }
-}
 type Row = RemoteDispatchRow.RemoteDispatchRow;
 
 const RELAY_REQUEST_OUTCOME_LIMIT = 1_000;
@@ -97,78 +79,6 @@ const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 const MISSING_RUN_GRACE_MS = 300_000;
 /** What the launcher is told about one relayed send, and whether it is woken for it. */
 type RelayOutcome = { readonly wake: boolean; readonly text: string };
-export interface RemoteDispatchRecord {
-  readonly memoryGrantCeiling: MemoryTaskGrantCeiling;
-  readonly correlationId: string;
-  readonly kind: "thread" | "task";
-  readonly originThreadId: ThreadId;
-  readonly host: string;
-  readonly remoteThreadId: string | null;
-  readonly launchedRunId: RunId | null;
-  readonly delivery: typeof RemoteReportDeliveryMode.Type;
-  readonly reportsSupported: boolean;
-  readonly state: typeof RemoteDispatchState.Type;
-  readonly reportCursor: number;
-  readonly knownRunId: RunId | null;
-  readonly knownRunStatus: typeof OrchestrationV2RunStatus.Type | null;
-  readonly latestKind: typeof RemoteReportKind.Type | null;
-  readonly latestSummary: string | null;
-  readonly latestAt: string | null;
-  readonly cancelRequestedAt: string | null;
-  readonly cancelCeiling: RuntimeMode | null;
-  readonly task: { readonly taskId: NodeId; readonly parentRunId: RunId } | null;
-  /** The launched task run's open questions, as last observed. */
-  readonly pendingRequestIds: ReadonlyArray<RuntimeRequestId>;
-  /** The launched task run's last observation, echoed so a wait releases once per change. */
-  readonly observation: ChannelWorkerObservationType | null;
-  readonly lastError: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-const publicRow = (r: Row): RemoteDispatchRecord => ({
-  memoryGrantCeiling: r.memory_grant_ceiling ?? "none",
-  correlationId: r.correlation_id,
-  kind: r.kind,
-  originThreadId: r.origin_thread_id,
-  host: r.host,
-  remoteThreadId: r.remote_thread_id,
-  launchedRunId: r.launched_run_id,
-  delivery: r.delivery,
-  reportsSupported: r.reports_supported === 1,
-  state: r.state,
-  reportCursor: r.report_cursor,
-  knownRunId: r.known_run_id,
-  knownRunStatus: r.known_run_status,
-  latestKind: r.latest_kind,
-  latestSummary: r.latest_summary,
-  latestAt: r.latest_at,
-  cancelRequestedAt: r.cancel_requested_at,
-  cancelCeiling: r.cancel_ceiling,
-  task:
-    r.task_id !== null && r.parent_run_id !== null
-      ? { taskId: r.task_id, parentRunId: r.parent_run_id }
-      : null,
-  pendingRequestIds: r.pending_request_ids ?? [],
-  observation: r.observation ?? null,
-  lastError: r.last_error,
-  createdAt: r.created_at,
-  updatedAt: r.updated_at,
-});
-export const dispatchView = (r: RemoteDispatchRecord): RemoteDispatchView => ({
-  correlationId: r.correlationId,
-  host: r.host,
-  threadId: r.remoteThreadId,
-  kind: r.kind,
-  delivery: r.delivery,
-  state: r.state,
-  reportsSupported: r.reportsSupported,
-  latest:
-    r.latestKind !== null && r.latestSummary !== null && r.latestAt !== null
-      ? { kind: r.latestKind, summary: r.latestSummary, at: r.latestAt }
-      : null,
-  lastError: r.lastError,
-  createdAt: r.createdAt,
-});
 export interface RemoteLaunchInput {
   readonly kind: "thread" | "task";
   readonly originThreadId: ThreadId;
@@ -220,6 +130,23 @@ export class RemoteDispatchCoordinator extends Context.Service<
       threadId: string,
     ) => Effect.Effect<boolean, RemoteDispatchError>;
     readonly resume: (host: string, threadId: string) => Effect.Effect<void, RemoteDispatchError>;
+    readonly claimDelete: (input: {
+      readonly originThreadId: ThreadId;
+      readonly host: string;
+      readonly remoteThreadId: string;
+      readonly requestKey: string;
+    }) => Effect.Effect<
+      | { readonly _tag: "missing" }
+      | { readonly _tag: "reports" }
+      | { readonly _tag: "state"; readonly state: string }
+      | { readonly _tag: "other_key" }
+      | { readonly _tag: "claimed"; readonly correlationId: string; readonly readKey: string },
+      RemoteDispatchError
+    >;
+    readonly clearDelete: (
+      correlationId: string,
+      requestKey: string,
+    ) => Effect.Effect<void, RemoteDispatchError>;
     /**
      * One pass settling lost thread launches with their destinations: a row lost long enough
      * for an in-flight launch to have bound is rebound (running) or fenced (cancelled). The
@@ -231,6 +158,8 @@ export class RemoteDispatchCoordinator extends Context.Service<
 
 const terminal = (status: string) =>
   ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(status);
+const DELETE_DRAIN_NOTE =
+  "A delete is requested; the missing remote thread was not recorded as a failure.";
 const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 const make = Effect.gen(function* () {
   const hold = yield* AutomationHold.AutomationHold;
@@ -264,6 +193,18 @@ const make = Effect.gen(function* () {
   const load = (id: string) =>
     rows(sql`SELECT * FROM remote_dispatches
     WHERE correlation_id = ${id}`).pipe(Effect.map((values) => values[0] ?? null));
+  const deleteIntentHeld = (id: string) =>
+    gate(locks, id, 1).withPermits(1)(
+      Effect.gen(function* () {
+        const noted = yield* db(
+          sql<{ readonly correlation_id: string }>`UPDATE remote_dispatches
+            SET last_error = ${DELETE_DRAIN_NOTE}, updated_at = ${yield* now}
+            WHERE correlation_id = ${id} AND delete_requested_at IS NOT NULL
+            RETURNING correlation_id`,
+        );
+        return noted.length > 0;
+      }),
+    );
   const call = (r: Row, tool: string, args: Readonly<Record<string, unknown>>) =>
     gate(hosts, r.host, 8).withPermits(1)(
       ssh.callHostTool(
@@ -635,6 +576,11 @@ const make = Effect.gen(function* () {
         const r = yield* load(id);
         if (r === null || r.kind !== "thread" || (r.state !== "running" && forced === undefined))
           return;
+        if (forced === "lost" && r.delete_requested_at != null) {
+          yield* db(sql`UPDATE remote_dispatches SET last_error = ${DELETE_DRAIN_NOTE}, updated_at = ${yield* now}
+            WHERE correlation_id = ${id} AND delete_requested_at IS NOT NULL`);
+          return;
+        }
         const at = yield* now;
         const fresh = [...reports]
           .filter((p) => p.sequence > r.report_cursor)
@@ -882,6 +828,7 @@ const make = Effect.gen(function* () {
               error.reason === "remote_refused" &&
               (error.remoteCode === "capability_denied" || error.remoteCode === "thread_not_found");
             if (gone) {
+              if (yield* deleteIntentHeld(id)) return false;
               yield* taskEffect(
                 recordRemoteTaskResult({
                   ...taskRecord(r),
@@ -1146,23 +1093,71 @@ const make = Effect.gen(function* () {
     return requested.success;
   });
   // Typed here because relay calls it and drain reaches relay, which would make it circular.
+  const claimDelete = Effect.fn("RemoteDispatchCoordinator.claimDelete")(function* (input: {
+    readonly originThreadId: ThreadId;
+    readonly host: string;
+    readonly remoteThreadId: string;
+    readonly requestKey: string;
+  }) {
+    const found = yield* rows(sql`SELECT * FROM remote_dispatches
+      WHERE kind = 'thread' AND origin_thread_id = ${input.originThreadId}
+        AND host = ${input.host} AND remote_thread_id = ${input.remoteThreadId}
+      ORDER BY updated_at DESC LIMIT 1`);
+    const first = found[0];
+    if (first === undefined) return { _tag: "missing" as const };
+    return yield* gate(locks, first.correlation_id, 1).withPermits(1)(
+      Effect.gen(function* () {
+        const at = yield* now;
+        const claimed = yield* db(sql<{ readonly read_key: string }>`UPDATE remote_dispatches
+          SET delete_requested_at = ${at}, delete_request_key = ${input.requestKey}, updated_at = ${at}
+          WHERE correlation_id = ${first.correlation_id}
+            AND state IN ('idle','settled','cancelled') AND reports_supported = 1
+            AND (delete_requested_at IS NULL OR delete_request_key = ${input.requestKey})
+          RETURNING read_key`);
+        const row = claimed[0];
+        if (row !== undefined)
+          return {
+            _tag: "claimed" as const,
+            correlationId: first.correlation_id,
+            readKey: row.read_key,
+          };
+        const current = yield* load(first.correlation_id);
+        if (current === null) return { _tag: "missing" as const };
+        if (current.reports_supported !== 1) return { _tag: "reports" as const };
+        if (current.delete_request_key != null && current.delete_request_key !== input.requestKey)
+          return { _tag: "other_key" as const };
+        return { _tag: "state" as const, state: current.state };
+      }),
+    );
+  });
+  const clearDelete = Effect.fn("RemoteDispatchCoordinator.clearDelete")(function* (
+    correlationId: string,
+    requestKey: string,
+  ) {
+    yield* gate(locks, correlationId, 1).withPermits(1)(
+      db(sql`UPDATE remote_dispatches
+        SET delete_requested_at = NULL, delete_request_key = NULL, updated_at = ${yield* now}
+        WHERE correlation_id = ${correlationId} AND delete_request_key = ${requestKey}`),
+    );
+  });
   const resume: RemoteDispatchCoordinator["Service"]["resume"] = Effect.fn(
     "RemoteDispatchCoordinator.resume",
   )(function* (host: string, threadId: string) {
     const matching = yield* rows(sql`SELECT * FROM remote_dispatches WHERE host = ${host}
       AND remote_thread_id = ${threadId} AND kind = 'thread'
       AND reports_supported = 1
-      AND state IN ('idle','settled','cancelled')`);
+      AND state IN ('idle','settled','cancelled') AND delete_requested_at IS NULL`);
     for (const r of matching) {
       // Stop a final observation before resetting the ledger for the new send.
       yield* FiberMap.remove(drains, r.correlation_id);
-      yield* gate(locks, r.correlation_id, 1).withPermits(1)(
-        db(sql`UPDATE remote_dispatches SET
+      const resumed = yield* gate(locks, r.correlation_id, 1).withPermits(1)(
+        db(sql<{ readonly correlation_id: string }>`UPDATE remote_dispatches SET
         state = 'running', cancel_requested_at = NULL, cancel_ceiling = NULL,
         known_run_id = NULL, known_run_status = NULL, updated_at = ${yield* now}
-        WHERE correlation_id = ${r.correlation_id}`),
+        WHERE correlation_id = ${r.correlation_id} AND delete_requested_at IS NULL
+        RETURNING correlation_id`),
       );
-      yield* start(r.correlation_id);
+      if (resumed.length > 0) yield* start(r.correlation_id);
     }
   });
   const recoverUncertainTasks = Effect.gen(function* () {
@@ -1234,6 +1229,8 @@ const make = Effect.gen(function* () {
     launch,
     cancel,
     resume,
+    claimDelete,
+    clearDelete,
     resolveLostLaunches,
     taskOrigin,
     isTaskThread: (host, threadId) =>
