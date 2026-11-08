@@ -55,6 +55,15 @@ describe("partitionOnboardingProjects", () => {
     });
   });
 
+  it("selects older projects when the import window grows", () => {
+    const recent = candidate("/projects/recent");
+    const older = candidate("/projects/older", {
+      lastActiveAt: "2026-07-01T12:00:00.000Z",
+    });
+
+    expect(partitionOnboardingProjects([recent, older], now, 90).recent).toEqual([recent, older]);
+  });
+
   it("keeps non-git folders and thin histories out of the default selection", () => {
     const repo = candidate("/projects/repo");
     const folder = candidate("/projects/folder", { git: null });

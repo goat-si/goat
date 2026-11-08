@@ -1,7 +1,6 @@
 import { useAuth } from "@clerk/react";
 import { useAtomValue } from "@effect/atom-react";
 import type {
-  AgentSessionProjectCandidate,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
@@ -15,13 +14,13 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import {
-  AgentSessionSource,
   AuthTerminalOperateScope,
   CommandId,
   defaultInstanceIdForDriver,
   AuthOrchestrationOperateScope,
   ProviderDriverKind,
   ThreadId,
+  DEFAULT_AGENT_SESSION_WINDOW_DAYS,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import {
@@ -42,13 +41,10 @@ import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { useGoatConnectAuthPrompt } from "../clerk/useGoatConnectAuthPrompt";
 import { completeOnboarding } from "../../onboarding/firstRun";
 import {
-  groupOnboardingProjects,
   partitionOnboardingProjects,
   onboardingProjectKey,
   resolveOnboardingLandingProject,
   resolveOnboardingProjectId,
-  type OnboardingProjectGroup,
-  splitOnboardingProjectPath,
 } from "../../onboarding/projectImport.logic";
 import {
   getOnboardingProviderState,
@@ -89,20 +85,20 @@ import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectLis
 import { presentSavedCloudEnvironmentConnection } from "../cloud/cloudEnvironmentConnectionPresentation";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { WelcomeIdentity } from "./WelcomeIdentity";
+import { ImportCandidateList } from "./ImportCandidateList";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { CommandBlock } from "../CommandBlock";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Input } from "../ui/input";
-import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { ScrollArea } from "../ui/scroll-area";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
 import { WizardPanel, WizardSteps, WizardPopup, WizardHeader } from "./OnboardingWizard";
 import { Dialog } from "../ui/dialog";
 import { toastManager } from "../ui/toast";
 import { cn } from "../../lib/utils";
-import { formatRelativeTime } from "../../timestampFormat";
 
 type WizardStep = "connection" | "agents" | "memory" | "import";
 const NO_ENVIRONMENTS: readonly EnvironmentId[] = [];
@@ -130,6 +126,7 @@ export function WelcomeWizard({
     resumeEnvironmentId ? [resumeEnvironmentId] : [],
   );
   const [importSelection, setImportSelection] = useState<ImportSelection | null>(null);
+  const [importWindowDays, setImportWindowDays] = useState(DEFAULT_AGENT_SESSION_WINDOW_DAYS);
   const [isImporting, setIsImporting] = useState(false);
   const finishingPromiseRef = useRef<Promise<boolean> | null>(null);
   const completionErrorToastIdRef = useRef<ReturnType<typeof toastManager.add> | null>(null);
@@ -155,7 +152,7 @@ export function WelcomeWizard({
   }, [autoSelectedComputers, environments]);
   const selectedIds =
     selection ?? new Set(primaryEnvironment ? [primaryEnvironment.environmentId] : []);
-  const scans = useProjectScans(step === "import" ? setupIds : NO_ENVIRONMENTS);
+  const scans = useProjectScans(step === "import" ? setupIds : NO_ENVIRONMENTS, importWindowDays);
   const isLoadingProjects =
     step === "import" &&
     scans.every((scan) => scan.data === null) &&
@@ -276,6 +273,11 @@ export function WelcomeWizard({
           ) : (
             <ImportStep
               scans={scans}
+              windowDays={importWindowDays}
+              onWindowDaysChange={(days) => {
+                setImportWindowDays(days);
+                setImportSelection(null);
+              }}
               importSelection={importSelection}
               onImportSelectionChange={setImportSelection}
               isImporting={isImporting}
@@ -1205,6 +1207,13 @@ function AgentInstallTerminal({
 
 const IMPORT_PERMISSION_MESSAGE = "This connection cannot import projects or thread history.";
 
+const IMPORT_WINDOW_OPTIONS = [
+  { days: 30, label: "Last 30 days" },
+  { days: 90, label: "Last 90 days" },
+  { days: 365, label: "Last 12 months" },
+  { days: 3650, label: "All time" },
+] as const;
+
 interface ImportSelection {
   // Computers whose projects were listed when the selection changed; later ones get the defaults.
   readonly environmentIds: ReadonlySet<EnvironmentId>;
@@ -1213,6 +1222,8 @@ interface ImportSelection {
 
 function ImportStep({
   scans,
+  windowDays,
+  onWindowDaysChange,
   importSelection,
   onImportSelectionChange,
   isImporting,
@@ -1220,6 +1231,8 @@ function ImportStep({
   onDone,
 }: {
   readonly scans: ReturnType<typeof useProjectScans>;
+  readonly windowDays: number;
+  readonly onWindowDaysChange: (windowDays: number) => void;
   readonly importSelection: ImportSelection | null;
   readonly onImportSelectionChange: (next: ImportSelection) => void;
   readonly isImporting: boolean;
@@ -1259,8 +1272,13 @@ function ImportStep({
         key: onboardingProjectKey(scan.environmentId, candidate.path),
       })),
     ),
+    undefined,
+    windowDays,
   );
   const recentKeys = new Set(recent.map((candidate) => candidate.key));
+  const windowLabel =
+    IMPORT_WINDOW_OPTIONS.find((option) => option.days === windowDays)?.label ??
+    `Last ${windowDays} days`;
   const selected = candidates.filter((candidate) =>
     importSelection?.environmentIds.has(candidate.environmentId)
       ? importSelection.keys.has(candidate.key)
@@ -1404,7 +1422,12 @@ function ImportStep({
       }
       const threadImportResult = await importThreads({
         environmentId,
-        input: { projectId, expectedWorkspaceRoot: candidate.path, includePi: true },
+        input: {
+          projectId,
+          expectedWorkspaceRoot: candidate.path,
+          includePi: true,
+          windowDays,
+        },
       });
       if (
         importGeneration !== importGenerationRef.current ||
@@ -1474,7 +1497,31 @@ function ImportStep({
       description="Import projects and conversations from Claude Code and Codex on your selected computers."
     >
       {candidates.length > 0 ? (
-        <div className="mt-5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+          <span className="text-muted-foreground">Import conversations from</span>
+          <Select
+            value={String(windowDays)}
+            onValueChange={(value) => {
+              const days = Number(value);
+              if (Number.isFinite(days)) onWindowDaysChange(days);
+            }}
+            disabled={isImporting}
+          >
+            <SelectTrigger size="sm" className="w-44" aria-label="Conversation import window">
+              <SelectValue>{windowLabel}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="end" alignItemWithTrigger={false}>
+              {IMPORT_WINDOW_OPTIONS.map((option) => (
+                <SelectItem key={option.days} value={String(option.days)}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </div>
+      ) : null}
+      {candidates.length > 0 ? (
+        <div className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
           <span role="status">
             {selected.length} of {candidates.length} selected
           </span>
@@ -1569,240 +1616,6 @@ function ImportStep({
         </Button>
       </div>
     </StepShell>
-  );
-}
-
-type ImportCandidate = AgentSessionProjectCandidate & {
-  readonly environmentId: EnvironmentId;
-  readonly key: string;
-};
-
-function ImportCandidateList({
-  candidates,
-  selectedKeys,
-  onSelectionChange,
-}: {
-  readonly candidates: ReadonlyArray<ImportCandidate>;
-  readonly selectedKeys: ReadonlySet<string>;
-  readonly onSelectionChange: (next: ReadonlySet<string>) => void;
-}) {
-  const { repositories, other } = groupOnboardingProjects(candidates);
-  const setKeys = (keys: ReadonlyArray<string>, checked: boolean) => {
-    const next = new Set(selectedKeys);
-    for (const key of keys) {
-      if (checked) next.add(key);
-      else next.delete(key);
-    }
-    onSelectionChange(next);
-  };
-  const otherSelected = other.filter((candidate) => selectedKeys.has(candidate.key)).length;
-
-  return (
-    <>
-      {repositories.map((group) => (
-        <ImportRepositoryGroup
-          key={group.key}
-          group={group}
-          selectedKeys={selectedKeys}
-          onToggle={setKeys}
-        />
-      ))}
-      {other.length > 0 ? (
-        <Collapsible>
-          <div className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/40">
-            <Checkbox
-              checked={otherSelected === other.length}
-              indeterminate={otherSelected > 0 && otherSelected < other.length}
-              onCheckedChange={(checked) =>
-                setKeys(
-                  other.map((candidate) => candidate.key),
-                  checked === true,
-                )
-              }
-            />
-            <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-1.5 text-left">
-              <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
-              <span className="truncate text-sm text-muted-foreground">Other folders</span>
-              <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
-                {other.length} {other.length === 1 ? "folder" : "folders"}
-              </span>
-            </CollapsibleTrigger>
-          </div>
-          <CollapsiblePanel>
-            {other.map((candidate) => (
-              <ImportCandidateRow
-                key={candidate.key}
-                candidate={candidate}
-                path={candidate.path}
-                nested
-                checked={selectedKeys.has(candidate.key)}
-                onCheckedChange={(checked) => setKeys([candidate.key], checked)}
-              />
-            ))}
-          </CollapsiblePanel>
-        </Collapsible>
-      ) : null}
-    </>
-  );
-}
-
-function ImportRepositoryGroup({
-  group,
-  selectedKeys,
-  onToggle,
-}: {
-  readonly group: OnboardingProjectGroup<ImportCandidate>;
-  readonly selectedKeys: ReadonlySet<string>;
-  readonly onToggle: (keys: ReadonlyArray<string>, checked: boolean) => void;
-}) {
-  const keys = group.candidates.map((candidate) => candidate.key);
-  const selectedCount = keys.filter((key) => selectedKeys.has(key)).length;
-  const single = group.candidates.length === 1;
-  const only = group.candidates[0];
-  if (single && only !== undefined) {
-    return (
-      <ImportCandidateRow
-        candidate={only}
-        label={group.label}
-        path={only.path}
-        checked={selectedKeys.has(only.key)}
-        onCheckedChange={(checked) => onToggle([only.key], checked)}
-      />
-    );
-  }
-  return (
-    <Collapsible defaultOpen>
-      <div className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/40">
-        <Checkbox
-          checked={selectedCount === keys.length}
-          indeterminate={selectedCount > 0 && selectedCount < keys.length}
-          onCheckedChange={(checked) => onToggle(keys, checked === true)}
-        />
-        <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-1.5 text-left">
-          <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
-          <span className="truncate text-sm font-medium">{group.label}</span>
-          <ImportRowMeta
-            sources={[...new Set(group.candidates.flatMap((c) => c.sources))]}
-            threadCount={group.threadCount}
-            lastActiveAt={group.lastActiveAt}
-          />
-        </CollapsibleTrigger>
-      </div>
-      <CollapsiblePanel>
-        {group.candidates.map((candidate) => (
-          <ImportCandidateRow
-            key={candidate.key}
-            candidate={candidate}
-            path={candidate.path}
-            nested
-            checked={selectedKeys.has(candidate.key)}
-            onCheckedChange={(checked) => onToggle([candidate.key], checked)}
-          />
-        ))}
-      </CollapsiblePanel>
-    </Collapsible>
-  );
-}
-
-function ProjectPathText({
-  path,
-  className,
-}: {
-  readonly path: string;
-  readonly className?: string;
-}) {
-  const { name, parent } = splitOnboardingProjectPath(path);
-  return (
-    <span className={cn("flex min-w-0 items-baseline font-mono", className)}>
-      {parent.length > 0 ? <span className="truncate">{parent}</span> : null}
-      <span className="max-w-full shrink-0 truncate">{name}</span>
-    </span>
-  );
-}
-
-function ImportCandidateRow({
-  candidate,
-  label,
-  path,
-  nested = false,
-  checked,
-  onCheckedChange,
-}: {
-  readonly candidate: ImportCandidate;
-  readonly label?: string;
-  readonly path?: string;
-  readonly nested?: boolean;
-  readonly checked: boolean;
-  readonly onCheckedChange: (checked: boolean) => void;
-}) {
-  return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/40 has-disabled:cursor-default",
-        nested && "pl-8",
-      )}
-    >
-      <Checkbox checked={checked} onCheckedChange={(value) => onCheckedChange(value === true)} />
-      <Tooltip>
-        <TooltipTrigger
-          render={<span className="flex min-w-0 flex-1 items-baseline gap-2 truncate" />}
-        >
-          {label !== undefined ? (
-            <span className="truncate text-sm font-medium">{label}</span>
-          ) : null}
-          {path !== undefined ? (
-            <ProjectPathText
-              path={path}
-              className={label === undefined ? "text-xs" : "text-2xs text-muted-foreground"}
-            />
-          ) : null}
-        </TooltipTrigger>
-        <TooltipPopup variant="code">{candidate.path}</TooltipPopup>
-      </Tooltip>
-      <ImportRowMeta
-        sources={nested ? null : candidate.sources}
-        threadCount={candidate.threadCount}
-        lastActiveAt={candidate.lastActiveAt}
-      />
-    </label>
-  );
-}
-
-const IMPORT_SOURCE_NAMES: Record<AgentSessionSource, string> = {
-  claudeAgent: "Claude Code",
-  codex: "Codex",
-  pi: "Pi",
-};
-
-function ImportRowMeta({
-  sources,
-  threadCount,
-  lastActiveAt,
-}: {
-  readonly sources: ReadonlyArray<AgentSessionSource> | null;
-  readonly threadCount: number;
-  readonly lastActiveAt: string | null;
-}) {
-  const relative = lastActiveAt === null ? null : formatRelativeTime(lastActiveAt);
-  const age = relative === null ? "" : relative.suffix === null ? "now" : relative.value;
-  return (
-    <span className="ml-auto grid shrink-0 grid-cols-[1rem_1rem_1rem_2.5rem_2.25rem] items-center gap-x-1 text-xs text-muted-foreground tabular-nums">
-      {AgentSessionSource.literals.map((source) => (
-        <span key={source} className="flex size-4 items-center justify-center">
-          {sources?.includes(source) ? (
-            <span role="img" aria-label={IMPORT_SOURCE_NAMES[source]}>
-              <ProviderInstanceIcon
-                driverKind={ProviderDriverKind.make(source)}
-                displayName={IMPORT_SOURCE_NAMES[source]}
-                iconClassName="size-3"
-              />
-            </span>
-          ) : null}
-        </span>
-      ))}
-      <span className="text-right">{threadCount}</span>
-      <span className="text-right whitespace-nowrap">{age}</span>
-    </span>
   );
 }
 

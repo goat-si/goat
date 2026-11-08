@@ -20,6 +20,10 @@ type CreateProjectInput = {
   environmentId: EnvironmentId;
   input: { projectId: ProjectId; workspaceRoot: string };
 };
+type ImportThreadsInput = {
+  environmentId: EnvironmentId;
+  input: { windowDays?: number };
+};
 const state = vi.hoisted(() => ({
   selectedEnvironment: "primary",
   addedEnvironments: [] as string[],
@@ -104,9 +108,9 @@ vi.mock(import("../../state/agentSessions"), async (original) => ({
 }));
 vi.mock(import("../../onboarding/useProjectScans"), async (original) => ({
   ...(await original()),
-  useProjectScans: (ids: readonly EnvironmentId[]) =>
+  useProjectScans: (ids: readonly EnvironmentId[], windowDays?: number) =>
     ids.map((environmentId) => {
-      state.scan({ environmentId });
+      state.scan({ environmentId, windowDays });
       return {
         environmentId,
         data: { candidates: state.candidates, truncated: false } as never,
@@ -325,6 +329,26 @@ it("ticks the recent projects of a computer added after the selection changed", 
   await click("Import 2 projects");
   const created = state.createProject.mock.calls as Array<[CreateProjectInput]>;
   expect(created.map(([call]) => call.environmentId)).toEqual([remoteId, remoteId]);
+});
+
+it("imports the conversation window chosen in the projects step", async () => {
+  using _now = setup();
+  await using _screen = await mountImport();
+
+  const trigger = document.querySelector<HTMLElement>('[aria-label="Conversation import window"]');
+  expect(trigger).not.toBeNull();
+  await act(async () => trigger?.click());
+  const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((element) =>
+    element.textContent?.includes("Last 90 days"),
+  );
+  expect(option).toBeDefined();
+  await act(async () => option?.click());
+
+  await click("Import 2 projects");
+  const calls = state.importThreads.mock.calls as Array<[ImportThreadsInput]>;
+  expect(calls).toHaveLength(2);
+  expect(calls.every(([call]) => call.input.windowDays === 90)).toBe(true);
+  expect(state.scan).toHaveBeenCalledWith({ environmentId: primaryId, windowDays: 90 });
 });
 
 it("rechecks after project creation and can retry its history without recreating the project", async () => {
