@@ -637,7 +637,7 @@ it.effect(
       const initial = yield* base.getSettings;
       const policy = yield* makeCuaCommittedPolicy;
       yield* policy.publish(initial, Option.none());
-      const published: Array<ReadonlyArray<string>> = [];
+      const published = yield* Queue.unbounded<ReadonlyArray<string>>();
       const hash = "a".repeat(64);
       const settings = {
         ...base,
@@ -663,7 +663,7 @@ it.effect(
               Layer.succeed(BrowserClaimManifest, {
                 publish: (union) =>
                   Effect.sync(() => {
-                    published.push(union.origins);
+                    Queue.offerUnsafe(published, union.origins);
                     return hash;
                   }),
                 readConfig: Effect.succeed({
@@ -695,7 +695,6 @@ it.effect(
       if (kept.agentResult.status !== "attached" || blocked.agentResult.status !== "attached")
         return assert.fail("expected attached claims");
       yield* policy.publish({ ...initial, blockedBrowserHosts: ["a.test"] }, Option.none());
-      yield* Effect.yieldNow;
       const requested = yield* service.request({
         threadId,
         pid: 42,
@@ -708,7 +707,9 @@ it.effect(
       const refusal = "agentResult" in answered ? answered.agentResult : answered;
       assert.equal(refusal.status, "refused");
       if (refusal.status === "refused") assert.equal(refusal.code, "blocked_url");
-      assert.deepEqual(published.at(-1), ["https://b.test"]);
+      let manifest = yield* Queue.take(published);
+      while (manifest.includes("https://a.test")) manifest = yield* Queue.take(published);
+      assert.deepEqual(manifest, ["https://b.test"]);
       assert.lengthOf((yield* service.snapshotFor(threadId)).claims, 1);
     }).pipe(Effect.scoped),
 );

@@ -850,7 +850,6 @@ it.effect(
             Effect.tap((decision) => Deferred.succeed(admitted, decision.status)),
             Effect.forkChild({ startImmediately: true }),
           );
-        yield* Effect.yieldNow;
         const polled = yield* Deferred.poll(admitted);
         if (Option.isNone(polled)) return assert.fail("admission waited on the manifest write");
         assert.equal(yield* polled.value, "blocked");
