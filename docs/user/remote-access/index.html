@@ -143,6 +143,10 @@ ran what.</p>
 <h3 id="tailscale-https">Tailscale HTTPS</h3>
 <p>Join both devices to the same tailnet. In the desktop app, enable <strong>Tailscale
 HTTPS</strong> in <strong>Settings → Connections</strong>. Turn it off there to remove that route.</p>
+<p>The desktop app, and <code>goat serve --tailscale-serve</code>, re-apply that HTTPS port
+each time they start and keep trying until Tailscale is running, so the address
+stays the same across restarts. A mapping left by <code>goat pair --tailscale</code> on
+another port stays until you remove it with <code>tailscale serve --https=&lt;port&gt; off</code>.</p>
 <p>To start a command-line server with Tailscale HTTPS:</p>
 <pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> serve</span><span style="color:#79B8FF"> --tailscale-serve</span></span></code></pre>
 <p>For an already-running server:</p>
