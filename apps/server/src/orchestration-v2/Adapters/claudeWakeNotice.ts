@@ -27,21 +27,29 @@ export const makeClaudeWakeReports = Effect.fn("ClaudeWakeReports.make")(functio
     reports: new Map(),
   });
   const recordWakeReport = (nativeThreadId: string, taskId: string, report: BackgroundWorkReport) =>
-    Ref.get(wakeRunByTaskId).pipe(
-      Effect.flatMap((runs) => {
-        const runId = runs.get(taskId);
-        return Ref.update(wakeReportsByNativeThread, ({ userTurns, reports }) => ({
-          userTurns,
-          reports: new Map(reports).set(
-            nativeThreadId,
-            new Map(reports.get(nativeThreadId)).set(taskId, {
-              report,
-              turn: userTurns.get(nativeThreadId) ?? 0,
-              ...(runId === undefined ? {} : { runId }),
-            }),
-          ),
-        }));
-      }),
+    // The report keeps the run from here on, so the task's entry goes.
+    Ref.modify(wakeRunByTaskId, (runs) => {
+      if (!runs.has(taskId)) return [undefined, runs] as const;
+      const rest = new Map(runs);
+      rest.delete(taskId);
+      return [runs.get(taskId), rest] as const;
+    }).pipe(
+      Effect.flatMap((taken) =>
+        Ref.update(wakeReportsByNativeThread, ({ userTurns, reports }) => {
+          const runId = taken ?? reports.get(nativeThreadId)?.get(taskId)?.runId;
+          return {
+            userTurns,
+            reports: new Map(reports).set(
+              nativeThreadId,
+              new Map(reports.get(nativeThreadId)).set(taskId, {
+                report,
+                turn: userTurns.get(nativeThreadId) ?? 0,
+                ...(runId === undefined ? {} : { runId }),
+              }),
+            ),
+          };
+        }),
+      ),
     );
   const startUserTurnForWakeReports = (nativeThreadId: string) =>
     Ref.update(wakeReportsByNativeThread, ({ userTurns, reports }) => {
