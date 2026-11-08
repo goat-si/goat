@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import { chromium, type Browser, type BrowserContext } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
@@ -209,15 +210,18 @@ it.effect("an agent link to a blocked host fences the tab", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
-      const requested = yield* Deferred.make<void>();
-      const onRequest = (request: import("playwright-core").Request) => {
-        if (request.isNavigationRequest() && request.url() === `${f.blocked}/blocked`)
-          Deferred.doneUnsafe(requested, Effect.void);
+      // Leaving before the link's navigation commits would let it interrupt the next one.
+      const committed = yield* Deferred.make<void>();
+      const onNavigated = (frame: import("playwright-core").Frame) => {
+        if (frame === f.page.mainFrame() && frame.url() === `${f.blocked}/blocked`)
+          Deferred.doneUnsafe(committed, Effect.void);
       };
-      f.page.on("request", onRequest);
-      yield* Effect.addFinalizer(() => Effect.sync(() => f.page.off("request", onRequest)));
+      f.page.on("framenavigated", onNavigated);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => f.page.off("framenavigated", onNavigated)),
+      );
       yield* f.call(f.tabId, "click", { locator: "#link" }).pipe(Effect.result);
-      yield* Deferred.await(requested);
+      yield* Deferred.await(committed);
       yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
     }),
@@ -615,8 +619,19 @@ it.effect.each([
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
+      const reports = yield* (yield* Manager.PreviewManager).subscribeEvents;
       yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
-      yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
+      yield* Effect.promise(() => f.page.goto(`${f.allowed}/settled`));
+      // The tab reports each load over CDP after reading its title; wait for this load's report
+      // (its own path tells it from the fixture's) so the spies below see only the operation.
+      yield* PubSub.take(reports).pipe(
+        Effect.repeat({
+          until: (event) =>
+            event.type === "navigated" &&
+            event.snapshot.navStatus._tag === "Success" &&
+            event.snapshot.navStatus.url === `${f.allowed}/settled`,
+        }),
+      );
       const probe = yield* Effect.promise(() => f.page.context().newCDPSession(f.page));
       const protocol = vi.spyOn(
         Object.getPrototypeOf(probe) as { send: typeof probe.send },
