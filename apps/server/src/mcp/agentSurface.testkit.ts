@@ -74,6 +74,7 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SourceControlRepositoryService from "../sourceControl/SourceControlRepositoryService.ts";
 import * as ThreadLaunchMcpService from "./ThreadLaunchMcpService.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
+import * as OriginBoundDeleteService from "../remoteReports/OriginBoundDeleteService.ts";
 import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as SshHostSetup from "../sshRemote/SshHostSetup.ts";
@@ -293,6 +294,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(ThreadLaunchMcpService.ThreadLaunchMcpService)({}),
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(RemoteReportService.RemoteReportService)({}),
+  Layer.mock(OriginBoundDeleteService.OriginBoundDeleteService)({}),
   Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
   Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
   Layer.mock(HostHealthMonitor.HostHealthMonitor)({}),

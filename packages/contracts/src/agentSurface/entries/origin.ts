@@ -119,4 +119,75 @@ export const originEntries = {
       openWorldHint: true,
     },
   }),
+  "origin.bound_delete": entry({
+    resource: "origin",
+    verb: "bound_delete",
+    name: "goat_origin_bound_delete",
+    toolkit: "remoteReport",
+    summary: "Delete the thread bound to an origin launch.",
+    description:
+      "Delete the thread bound to this correlation when the read key matches. A request key deletes at most once; a repeat replays that outcome, including after the thread is gone.",
+    guide:
+      "Pass the launch correlation id, its read key, the bound thread id, and a request key. The key authorizes only that thread. Deletion still refuses a nonterminal run, an active subagent, a provider-native child, or a thread above this session mode ceiling, and those refusals are stored so the same key replays them. A mode-limit refusal is not stored. Read origin.bound_delete_receipt to fence a key that must not run.",
+    effect: "destructive",
+    capability: "none",
+    capabilityReason:
+      "The correlation read key authorizes deletion of only the thread that binding names.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The command receipt origin-delete:<correlationId>:<sha256(requestKey)> is the dedup, so a repeat replays that receipt and does not delete again.",
+    examples: [
+      {
+        title: "Delete the thread a lost launch bound",
+        args: {
+          correlationId: "launch-1",
+          readKey: "ab".repeat(32),
+          threadId: "thread:bound",
+          requestKey: "delete-1",
+        },
+      },
+    ],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
+  "origin.bound_delete_receipt": entry({
+    resource: "origin",
+    verb: "bound_delete_receipt",
+    name: "goat_origin_bound_delete_receipt",
+    toolkit: "remoteReport",
+    summary: "Read a bound delete outcome, or fence the key so it cannot run.",
+    description:
+      "Read the bound delete for this request key. When none exists, fence the key so deletion does not run, even if the thread is above this session mode ceiling.",
+    guide:
+      "Pass the same correlation id, read key, thread id, and request key as origin.bound_delete. An existing receipt is returned unchanged. With no receipt, this fences the key: a later delete reports did_not_run and the thread stays. The first of the delete and this fence to commit wins.",
+    effect: "write",
+    capability: "none",
+    capabilityReason: "The correlation read key authorizes reading or fencing its bound delete.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The same command receipt is the dedup: the first of the delete and this fence to commit wins, and a repeat returns that outcome.",
+    examples: [
+      {
+        title: "Fence a bound delete that must not run",
+        args: {
+          correlationId: "launch-1",
+          readKey: "ab".repeat(32),
+          threadId: "thread:bound",
+          requestKey: "delete-1",
+        },
+      },
+    ],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
 } as const;

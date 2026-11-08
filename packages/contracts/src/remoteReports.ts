@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 import {
+  CommandId,
   IsoDateTime,
   NonNegativeInt,
   RunId,
@@ -176,6 +177,39 @@ export const RemoteResolveBindingResult = Schema.Union([
   Schema.TaggedStruct("fenced", {}),
 ]);
 export type RemoteResolveBindingResult = typeof RemoteResolveBindingResult.Type;
+const RequestKey = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
+/**
+ * Delete the thread a launch correlation is bound to. The read key is the
+ * capability; requestKey is the idempotency key, hashed into the command id.
+ */
+export const OriginBoundDeleteInput = Schema.Struct({
+  correlationId: CorrelationId.annotate({
+    description: "The launch correlation id this delete is bound to.",
+  }),
+  readKey: HexKey.annotate({
+    description: "The correlation's read key. It authorizes only the bound thread.",
+  }),
+  threadId: ThreadId.annotate({
+    description: "The destination thread the correlation is bound to.",
+  }),
+  requestKey: RequestKey.annotate({
+    description: "Idempotency key. The same key replays the first delete or fence.",
+  }),
+});
+export type OriginBoundDeleteInput = typeof OriginBoundDeleteInput.Type;
+export const OriginBoundDeleteResult = Schema.Union([
+  Schema.TaggedStruct("accepted", {
+    commandId: CommandId,
+    sequence: NonNegativeInt,
+  }),
+  Schema.TaggedStruct("refused", {
+    message: TrimmedNonEmptyString,
+  }),
+  Schema.TaggedStruct("did_not_run", {
+    message: TrimmedNonEmptyString,
+  }),
+]);
+export type OriginBoundDeleteResult = typeof OriginBoundDeleteResult.Type;
 export const RemoteOriginReportsWaitResult = Schema.Struct({
   threadId: ThreadId,
   reports: Schema.Array(RemoteReport),
