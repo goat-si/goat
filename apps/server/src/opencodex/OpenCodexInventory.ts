@@ -26,8 +26,11 @@ import * as Installation from "./OpenCodexInstallation.ts";
 
 const MAX_BYTES = 256 * 1024;
 const PROBE_TIMEOUT = "2 seconds";
-const COMMAND_TIMEOUT = "3 seconds";
+// OpenCodex loads its bundled JavaScript on every call, about 4 s per call on Cortex-A53 boards.
+const COMMAND_TIMEOUT = "10 seconds";
+const VERSION_BUDGET = "15 seconds";
 const CACHE_TTL = "30 seconds";
+type CommandAnswer = { readonly timedOut: boolean; readonly stdout?: string };
 const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));
 const Role = Schema.Literals(["standalone", "hub", "client"]);
 const Settings = Schema.Struct({
@@ -181,6 +184,7 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => undefined),
   );
 
+  /** `timedOut` when ocx outlasted its bound: its answer is unknown, not absent. */
   const command = Effect.fn("OpenCodexInventory.command")(
     function* (binary: string, args: ReadonlyArray<string>) {
       const output = yield* runner.run({
@@ -191,15 +195,14 @@ const make = Effect.gen(function* () {
         timeout: COMMAND_TIMEOUT,
         maxOutputBytes: MAX_BYTES,
       });
-      return output.code === 0 &&
-        !output.timedOut &&
-        !output.stdoutTruncated &&
-        !output.stdoutInvalidUtf8
-        ? output.stdout
-        : undefined;
+      if (output.timedOut) return { timedOut: true };
+      return output.code === 0 && !output.stdoutTruncated && !output.stdoutInvalidUtf8
+        ? { timedOut: false, stdout: output.stdout }
+        : { timedOut: false };
     },
-    Effect.timeout(COMMAND_TIMEOUT),
-    Effect.orElseSucceed(() => undefined),
+    Effect.timeoutOption(COMMAND_TIMEOUT),
+    Effect.map(Option.getOrElse((): CommandAnswer => ({ timedOut: true }))),
+    Effect.orElseSucceed((): CommandAnswer => ({ timedOut: false })),
   );
 
   const probe = Effect.fn("OpenCodexInventory.probe")(
@@ -269,21 +272,25 @@ const make = Effect.gen(function* () {
 
     const candidates = openCodexCandidates(platform, home, cwd, environment, path);
     const verified = new Map<string, string>();
+    const present = new Set<string>();
+    const answered = new Set<string>();
     yield* Effect.forEach(
       candidates,
       (candidate) =>
         Effect.gen(function* () {
           if (!(yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))))
             return undefined;
-          const output = yield* command(candidate, ["--version"]);
-          const version = output
+          present.add(candidate);
+          const answer = yield* command(candidate, ["--version"]);
+          if (!answer.timedOut) answered.add(candidate);
+          const version = answer.stdout
             ?.trim()
             .match(/^(?:ocx\s+|OpenCodex\s+)?v?(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)$/i)?.[1];
           if (version) verified.set(candidate, version);
         }),
       { concurrency: 4, discard: true },
     ).pipe(
-      Effect.timeout(COMMAND_TIMEOUT),
+      Effect.timeout(VERSION_BUDGET),
       // A hanging PATH shim must not erase an already verified Desktop install.
       Effect.ignore,
     );
@@ -292,7 +299,7 @@ const make = Effect.gen(function* () {
       return version ? [{ path: candidate, version }] : [];
     });
     const binary = binaries[0]?.path;
-    const outputs = binary
+    const answers = binary
       ? yield* Effect.all(
           [
             command(binary, ["status", "--json"]),
@@ -303,6 +310,10 @@ const make = Effect.gen(function* () {
           { concurrency: 4 },
         )
       : [];
+    const outputs = answers.map((answer) => answer.stdout);
+    let slow =
+      answers.some((answer) => answer.timedOut) ||
+      (binaries.length === 0 && [...present].some((candidate) => !answered.has(candidate)));
     const status = outputs[0] === undefined ? undefined : decodeJson(Status, outputs[0]);
     const link = outputs[1] === undefined ? undefined : decodeJson(Link, outputs[1]);
     const connect = outputs[2] === undefined ? undefined : decodeJson(Connect, outputs[2]);
@@ -363,9 +374,11 @@ const make = Effect.gen(function* () {
     if (parity) {
       const observedAt = yield* Clock.currentTimeMillis;
       const modelsResponse = yield* probe(port, "v1/models");
-      const providerText = binary
+      const providerAnswer = binary
         ? yield* command(binary, ["provider", "list", "--json"])
         : undefined;
+      if (providerAnswer?.timedOut) slow = true;
+      const providerText = providerAnswer?.stdout;
       const providers =
         providerText === undefined ? undefined : decodeJson(Providers, providerText);
       // Legacy provider list reports configuration, not activity. On a Child those
@@ -476,6 +489,7 @@ const make = Effect.gen(function* () {
             },
           }
         : {}),
+      ...(slow ? { slow: true as const } : {}),
     } satisfies OpenCodexInventorySnapshot;
   });
 
