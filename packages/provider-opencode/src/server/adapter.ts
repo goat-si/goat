@@ -12,14 +12,13 @@ import type {
 } from "@opencode-ai/sdk/v2";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
-  OPENCODE_GOAT_SUBAGENT_DENY_KEY,
   openCodeChildPermissionRules,
   openCodeOwnsSubagentDeny,
-  openCodePermissionRules,
+  openCodeInstalledPermission,
   openCodePermissionRequestKind,
-  withOpenCodeSubagentDeny,
   type OpenCodePermissionRequestKind,
 } from "./permissionRules.ts";
+import { installResumedOpenCodePermission, syncOpenCodeSubagentDeny } from "./permissionSync.ts";
 import { recordString, recordValue } from "./records.ts";
 export {
   openCodeChildPermissionRules,
@@ -407,6 +406,7 @@ interface OpenCodeThreadState {
   permission: PermissionRuleset;
   metadata: { readonly [key: string]: unknown } | undefined;
   subagentsDenied: boolean;
+  permissionRefreshPending?: boolean;
 }
 
 interface OpenCodeRequestOwner {
@@ -2739,48 +2739,19 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           };
         });
 
-        const syncSubagentRules = Effect.fn("OpenCodeAdapter.syncSubagentRules")(function* (
-          state: OpenCodeThreadState,
-          subagentsOff: boolean,
-        ) {
-          if (state.subagentsDenied !== subagentsOff) {
-            const permission = withOpenCodeSubagentDeny(
-              state.permission,
-              state.subagentsDenied,
-              subagentsOff,
-            );
-            const metadata = { ...state.metadata, [OPENCODE_GOAT_SUBAGENT_DENY_KEY]: subagentsOff };
-            const sessionID = state.nativeSessionId;
-            yield* sdkCall("session.update", { sessionID, permission, metadata }, () =>
-              client.session.update({ sessionID, permission, metadata }),
-            );
-            Object.assign(state, { permission, metadata, subagentsDenied: subagentsOff });
-          }
-          // Children launch subagents too, so a new deny reaches each child session before the prompt.
-          for (const child of threads.values()) {
-            let owner = child.parentSubagent?.parentState;
-            while (owner !== undefined && owner !== state)
-              owner = owner.parentSubagent?.parentState;
-            if (owner === undefined || child.subagentsDenied === subagentsOff) continue;
-            const permission = withOpenCodeSubagentDeny(
-              child.permission,
-              child.subagentsDenied,
-              subagentsOff,
-            );
-            const sessionID = child.nativeSessionId;
-            const update = sdkCall("session.update", { sessionID, permission }, () =>
-              client.session.update({ sessionID, permission }),
-            ).pipe(
-              Effect.tap(() =>
-                Effect.sync(() =>
-                  Object.assign(child, { permission, subagentsDenied: subagentsOff }),
-                ),
-              ),
-            );
-            // A failed relaxation keeps the child denied; the next turn tries again.
-            yield* subagentsOff ? update : update.pipe(Effect.ignore({ log: true }));
-          }
-        });
+        const updatePermission = (
+          sessionID: string,
+          body: {
+            readonly permission: PermissionRuleset;
+            readonly metadata?: { readonly [key: string]: unknown };
+          },
+        ) =>
+          sdkCall("session.update", { sessionID, ...body }, () =>
+            client.session.update({ sessionID, ...body }),
+          );
+
+        const syncSubagentRules = (state: OpenCodeThreadState, subagentsOff: boolean) =>
+          syncOpenCodeSubagentDeny(state, subagentsOff, threads.values(), updatePermission);
 
         // OpenCode runs a command as a subtask without checking `task`: an explicit flag wins, or
         // else a subagent-mode agent makes it one. Anything GOAT cannot read counts as a subtask.
@@ -2829,6 +2800,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           const currentMcp =
             memoryInput === undefined ? undefined : yield* mcpSessions.read(memoryInput.threadId);
           const subagentsOff = (yield* mcpSessions.read(turn.threadId))?.nativeSubagentLimit === 0;
+          if (state.permissionRefreshPending === true) {
+            yield* installResumedOpenCodePermission({
+              state,
+              session: {},
+              runtimePolicy: turn.runtimePolicy,
+              subagentsOff,
+              failure: "raise",
+              update: updatePermission,
+            });
+          }
           yield* syncSubagentRules(state, subagentsOff);
           if (
             command !== undefined &&
@@ -2988,12 +2969,14 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               if (threadInput.existingProviderThread?.nativeThreadRef != null) {
                 return yield* runtimeSession.resumeThread({
                   providerThread: threadInput.existingProviderThread,
+                  runtimePolicy: threadInput.runtimePolicy,
+                  threadId: threadInput.threadId,
                 });
               }
               // OpenCode generates a title only when session.create leaves it unset.
-              const permission = openCodePermissionRules(threadInput.runtimePolicy);
-              const response = yield* sdkCall("session.create", { permission }, () =>
-                client.session.create({ permission }),
+              const installed = openCodeInstalledPermission(threadInput.runtimePolicy);
+              const response = yield* sdkCall("session.create", installed, () =>
+                client.session.create(installed),
               );
               const nativeSession = unwrapData("session.create", response);
               const createdAt = yield* DateTime.now;
@@ -3017,8 +3000,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       status: created.status,
                       updatedAt: created.updatedAt,
                     };
-              registerThread(nativeSession, providerThread, null).permission =
-                nativeSession.permission ?? permission;
+              const createdState = registerThread(nativeSession, providerThread, null);
+              createdState.permission = nativeSession.permission ?? installed.permission;
+              createdState.metadata = { ...installed.metadata, ...nativeSession.metadata };
               return providerThread;
             },
             (effect, threadInput) =>
@@ -3047,7 +3031,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 status: "idle" as const,
                 updatedAt: dateTimeFromEpoch(nativeSession.time.updated, resumedAt),
               };
-              registerThread(nativeSession, providerThread, null);
+              const state = registerThread(nativeSession, providerThread, null);
+              const mcp = yield* mcpSessions.read(threadInput.threadId ?? input.threadId);
+              yield* installResumedOpenCodePermission({
+                state,
+                session: nativeSession,
+                runtimePolicy: threadInput.runtimePolicy,
+                subagentsOff: mcp === undefined ? undefined : mcp.nativeSubagentLimit === 0,
+                failure: "pending",
+                update: updatePermission,
+              });
               return providerThread;
             },
             (effect, threadInput) =>
@@ -3576,11 +3569,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   return yield* protocolError(
                     "OpenCode did not preserve the requested rewind boundary.",
                   );
+                const installed = openCodeInstalledPermission(input.runtimePolicy, fork.metadata);
                 yield* sdkCall("session.update", { sessionID: fork.id }, () =>
-                  client.session.update({
-                    sessionID: fork.id,
-                    permission: openCodePermissionRules(input.runtimePolicy),
-                  }),
+                  client.session.update({ sessionID: fork.id, ...installed }),
                 );
                 retainedThread = {
                   ...rollbackInput.providerThread,
@@ -3588,7 +3579,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 };
                 // The fork's rules were just replaced without GOAT's deny; the next turn restores it.
                 Object.assign(registerThread(fork, retainedThread, state?.appThread ?? null), {
-                  permission: openCodePermissionRules(input.runtimePolicy),
+                  ...installed,
                   subagentsDenied: false,
                 });
               }
@@ -3650,11 +3641,12 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   }),
               );
               const nativeSession = unwrapData("session.fork", response);
-              const permission = openCodePermissionRules(
+              const installed = openCodeInstalledPermission(
                 forkInput.runtimePolicy ?? input.runtimePolicy,
+                nativeSession.metadata,
               );
               yield* sdkCall("session.update", { sessionID: nativeSession.id }, () =>
-                client.session.update({ sessionID: nativeSession.id, permission }),
+                client.session.update({ sessionID: nativeSession.id, ...installed }),
               );
               const forkedAt = yield* DateTime.now;
               const providerThread = makeProviderThread({
@@ -3675,7 +3667,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 now: forkedAt,
               });
               Object.assign(registerThread(nativeSession, providerThread, null), {
-                permission,
+                ...installed,
                 subagentsDenied: false,
               });
               return providerThread;
