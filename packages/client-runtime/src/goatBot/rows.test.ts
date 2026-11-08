@@ -795,6 +795,33 @@ describe("questions a task asks in the main chat", () => {
     expect(pending).toContain("b1");
     expect(pending).toContain("pending:c1");
   });
+
+  it("keeps a pressed answer and the reply to it in the main chat", () => {
+    const work = { tone: "reply" as const, readAt: null, requestKey: null, taskId: "work" };
+    const ids = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          notice("n1", "2026-10-12T12:00:00Z"),
+          bot("b1", "2026-10-12T12:00:01Z", "work: the agent wants to run a command."),
+          user("u1", "2026-10-12T12:00:02Z", "Approve A1"),
+          bot("b2", "2026-10-12T12:00:03Z", "Approved. I told the agent on work not to."),
+          bot("b3", "2026-10-12T12:00:04Z", "Still working."),
+        ]),
+        pendingInputs: [],
+        readers: readers(
+          {
+            b1: { ...asked, taskId: "work", questionId: "a1", options: ["Approve A1", "Deny A1"] },
+            u1: { ...work, readAt: "2026-10-12T12:00:02Z", requestKey: "in-approve" },
+            b2: { ...work, tone: "result", replyToKey: "in-approve" },
+            b3: { ...work, tone: "status" },
+          },
+          { n1: { ...card("work", 2), openQuestionIds: [] } },
+        ),
+        taskId: null,
+      }),
+    ).map((row) => row.id);
+    expect(ids).toEqual(["n1", "b1", "u1", "b2"]);
+  });
 });
 
 describe("goatBotReplyingSince", () => {
