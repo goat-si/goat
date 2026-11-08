@@ -27,3 +27,7 @@ export const makeKeyedSingleFlight = <A, E>() => {
     });
   return share;
 };
+
+/** Names one request under one set of generations; control characters never occur in keys. */
+export const flightKey = (request: string, generations: ReadonlyMap<string, number>) =>
+  [request, ...[...generations].map(([key, at]) => `${key}\u0001${at}`)].join("\u0002");

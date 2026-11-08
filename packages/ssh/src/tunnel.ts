@@ -104,7 +104,7 @@ import * as NativeWindows from "./runtimeWindows.ts";
 import { makeManagedTrust } from "./managedTrust.ts";
 import { makeTargetAdmission, type RequestTicket } from "./targetAdmission.ts";
 import { makePreparationRetries } from "./preparationRetry.ts";
-import { makeKeyedSingleFlight } from "./keyedSingleFlight.ts";
+import { flightKey, makeKeyedSingleFlight } from "./keyedSingleFlight.ts";
 import { makeFailureEnrichment, runtimeFailureResult } from "./sshFailureDiagnostics.ts";
 import {
   makeRemoteSessions,
@@ -4492,10 +4492,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const statusFlights = makeKeyedSingleFlight<SshHostResult, SshEnvironmentEffectError>();
   const status = (target: DesktopSshEnvironmentTarget) =>
     Effect.suspend(() =>
-      statusFlights(
-        JSON.stringify([targetConnectionKey(target), [...generations]]),
-        statusOnce(target),
-      ),
+      statusFlights(flightKey(targetConnectionKey(target), generations), statusOnce(target)),
     );
 
   const requireReadyEntry = Effect.fn("ssh/tunnel.requireReadyEntry")(function* (
