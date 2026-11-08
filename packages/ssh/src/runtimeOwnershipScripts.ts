@@ -474,7 +474,7 @@ cleanup_runner_next() {
   fi
   release_recovery_lock
   release_replacement_lock
-  rm -f "$RUNNER_CANDIDATE_FILE" "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_CANDIDATE_FILE.restore"
+  rm -f "$RUNNER_CANDIDATE_FILE" "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_CANDIDATE_FILE.restore" "$RUNNER_CANDIDATE_FILE.facts"
   rm -f "$STATE_DIR/run-goat.next.$$" || :
   [ -z "$LEGACY_IDENTITY_LINK" ] || rm -f "$LEGACY_IDENTITY_LINK"
   [ -z "$RETAINED_SNAPSHOT_FILE" ] || rm -f "$RETAINED_SNAPSHOT_FILE"
@@ -492,6 +492,8 @@ trap 'runner_exit=$?; cleanup_runner_next; exit "$runner_exit"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# A leftover memo of an earlier process with this PID is emptied before use.
+FACT_MEMO="$RUNNER_CANDIDATE_FILE.facts"; fact_memo_drop
 @@GOAT_CAPTURE_RUNNING_RUNNER@@
 if [ "$REQUIRE_INSTALLED" = 1 ] && [ -n "$SELECTED_VERSION" ]; then
   selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
@@ -520,7 +522,7 @@ if [ "$PRESERVE_SELECTED_RUNNER" = 1 ] &&
    [ "$(runner_sha256 "$RUNNER_NEXT")" != "$EXPECTED_RETAINED_SHA256" ]; then
   printf 'Retained GOAT runner changed while copying; reconnect.\\n' >&2; exit 1
 fi
-cp "$RUNNER_NEXT" "$RUNNER_CANDIDATE_FILE.pin"
+pin_runner "$RUNNER_NEXT"
 if ! RUNNER_VERSION_OUTPUT="$(exec_fact version "$RUNNER_NEXT" --version)"; then
   printf 'Cannot validate %s; existing runner and server were preserved.\\n' "$REQUESTED_RUNNER" >&2; exit 1
 fi
@@ -633,7 +635,7 @@ if [ "$OWNING_LAUNCH" = 1 ]; then
     cp "$RUNNER_FILE" "$RUNNER_NEXT"
     [ "$(runner_sha256 "$RUNNER_NEXT")" = "$fresh_sha" ] && [ "$(runner_sha256 "$RUNNER_FILE")" = "$fresh_sha" ] || ownership_unverified
     [ "$("$RUNNER_NEXT" --version 2>/dev/null || true)" = "goat v$LIVE_VERSION" ] || ownership_unverified
-    cp "$RUNNER_NEXT" "$RUNNER_CANDIDATE_FILE.pin"
+    pin_runner "$RUNNER_NEXT"
     SELECTED_VERSION="$LIVE_VERSION"; REQUIRE_INSTALLED=1
     EXPECTED_LIVE_RUNNER_SHA256="$fresh_sha"
     [ "$PRESERVE_SELECTED_RUNNER" = 0 ] || EXPECTED_RETAINED_SHA256="$fresh_sha"
@@ -656,7 +658,7 @@ else
       secondary_sha="$(runner_sha256 "$RUNNER_FILE")" || exit 1
       cp "$RUNNER_FILE" "$RUNNER_NEXT"
       [ "$(runner_sha256 "$RUNNER_NEXT")" = "$secondary_sha" ] && [ "$(runner_sha256 "$RUNNER_FILE")" = "$secondary_sha" ] || exit 1
-      cp "$RUNNER_NEXT" "$RUNNER_CANDIDATE_FILE.pin"
+      pin_runner "$RUNNER_NEXT"
       CHECK_RUNNER="$RUNNER_CANDIDATE_FILE.pin"
       check_candidate_protocol
       check_live_protocol

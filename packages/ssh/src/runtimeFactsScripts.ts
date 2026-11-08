@@ -11,42 +11,99 @@ import {
 // kept only when its key still holds after the answer. Windows hosts need this most: a goat.exe
 // start there has taken over 5 s, so a probe that asked every time ran past the 60 s SSH timeout.
 // MSYS stat keys executables by NTFS file ID and times. MSYS ps has no -o, so a live server there
-// is keyed by its ps -W row (see fact_process_start).
+// is keyed by its ps -W row (see fact_process_starts).
 const REMOTE_FACTS_SCRIPT = `GOAT_FACTS_DIR="$HOME/.goat/ssh-launch/facts"
-FACT_NAME=; FACT_KEY=
+FACT_NAME=; FACT_KEY=; FACT_TEXT=; FACT_START=; FILE_SIG=; RUNNER_DIGEST=
+# A script that names FACT_MEMO keeps there, for its own subshells, the exec keys of installed
+# executables and of its content-pinned runner; pin_runner clears it.
+FACT_MEMO="\${FACT_MEMO:-}"
 fact_nl='
 '
-file_sig() {
-  [ -f "$1" ] && [ ! -L "$1" ] || return 1
-  # BSD stat first: GNU stat reads -f as a file-system query and rejects the format operand.
-  sig_value="$(stat -f '%d:%i:%z:%m:%c' "$1" 2>/dev/null)" ||
-    sig_value="$(stat -c '%d:%i:%s:%Y:%Z' "$1" 2>/dev/null)" || return 1
-  printf '%s\\n' "$sig_value" | LC_ALL=C grep -Eq '^[0-9]+(:[0-9]+){4}$' || return 1
-  printf '%s' "$sig_value"
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) fact_windows=1; fact_stat=gnu ;;
+  Darwin|*BSD|DragonFly) fact_windows=0; fact_stat=bsd ;;
+  *) fact_windows=0; fact_stat=gnu ;;
+esac
+# Sets FACT_TEXT to file $1 as $(cat "$1") would read it, without starting cat.
+fact_slurp() {
+  FACT_TEXT=; slurp_sep=; slurp_line=
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  while IFS= read -r slurp_line || [ -n "$slurp_line" ]; do
+    FACT_TEXT="$FACT_TEXT$slurp_sep$slurp_line"; slurp_sep="$fact_nl"; slurp_line=
+  done <"$1"
+  while :; do case "$FACT_TEXT" in *"$fact_nl") FACT_TEXT="\${FACT_TEXT%"$fact_nl"}" ;; *) return 0 ;; esac; done
 }
+# Sets FILE_SIG to device:inode:size:mtime:ctime of regular file $1.
+file_sig_set() {
+  FILE_SIG=
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  # GNU stat reads -f as a file-system query and BSD stat has no -c; the host's own goes first.
+  if [ "$fact_stat" = bsd ]; then
+    sig_value="$(stat -f '%d:%i:%z:%m:%c' "$1" 2>/dev/null)" ||
+      sig_value="$(stat -c '%d:%i:%s:%Y:%Z' "$1" 2>/dev/null)" || return 1
+  else
+    sig_value="$(stat -c '%d:%i:%s:%Y:%Z' "$1" 2>/dev/null)" ||
+      sig_value="$(stat -f '%d:%i:%z:%m:%c' "$1" 2>/dev/null)" || return 1
+  fi
+  case "$sig_value" in
+    *[!0123456789:]*|:*|*:|*::*|*:*:*:*:*:*) return 1 ;;
+    *:*:*:*:*) FILE_SIG="$sig_value" ;;
+    *) return 1 ;;
+  esac
+}
+file_sig() { file_sig_set "$1" && printf '%s' "$FILE_SIG"; }
+# A remembered key holds only while its executable keeps the signature and install marker it had.
+fact_memo_get() {
+  [ -n "$FACT_MEMO" ] && [ -f "$FACT_MEMO" ] && [ -r "$FACT_MEMO" ] || return 1
+  while IFS= read -r memo_path && IFS= read -r memo_name && IFS= read -r memo_key &&
+    IFS= read -r memo_exe && IFS= read -r memo_sig; do
+    [ "$memo_path" = "$1" ] || continue
+    file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] || return 1
+    fact_slurp "\${memo_exe%/goat}/.install-complete" && [ "$FACT_TEXT" = "\${memo_name%.*}" ] || return 1
+    FACT_NAME="$memo_name"; FACT_KEY="$memo_key"; return 0
+  done <"$FACT_MEMO"
+  return 1
+}
+fact_memo_put() {
+  [ -n "$FACT_MEMO" ] || return 0
+  case "$1" in
+    "$HOME/.goat/runtime/goat/versions"/*/goat) ;;
+    *) [ "$1" = "\${RUNNER_CANDIDATE_FILE:-}.pin" ] || return 0 ;;
+  esac
+  case "$1$FACT_NAME$FACT_KEY$fact_exe$fact_sig" in *"$fact_nl"*) return 0 ;; esac
+  printf '%s\\n%s\\n%s\\n%s\\n%s\\n' "$1" "$FACT_NAME" "$FACT_KEY" "$fact_exe" "$fact_sig" >>"$FACT_MEMO" 2>/dev/null || :
+}
+# Pins runner bytes $1 for this script; exec keys remembered for an earlier pin no longer apply.
+pin_runner() { cp "$1" "\${RUNNER_CANDIDATE_FILE:?}.pin" || return 1; fact_memo_drop; }
+# Forgets every remembered key; a memo that cannot be emptied is not used again.
+fact_memo_drop() { [ -z "$FACT_MEMO" ] || true >"$FACT_MEMO" 2>/dev/null || FACT_MEMO=; }
 # Sets FACT_NAME and FACT_KEY for running goat as $1: an installed executable, or an archive
 # runner, which execs one. An executable changed less than 2 s ago is not keyed: a second write
 # within the same second would leave its ctime unchanged.
 exec_fact_key() {
   FACT_NAME=; FACT_KEY=
   [ -n "$GOAT_FACTS_DIR" ] && [ -f "$1" ] || return 1
+  fact_memo_get "$1" && return 0
   fact_versions="$HOME/.goat/runtime/goat/versions"
   case "$1" in
     "$fact_versions"/*/goat) fact_exe="$1"; fact_via=exe ;;
     *)
-      command -v read_runner_hint >/dev/null 2>&1 || return 1
-      [ -z "$(read_runner_hint "$1" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} 2>/dev/null)" ] || return 1
-      fact_exe="$fact_versions/$(read_runner_hint "$1" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY} 2>/dev/null)/goat"
-      fact_via="$(runner_sha256 "$1" 2>/dev/null)" || return 1 ;;
+      [ -n "\${runner_hint_awk:-}" ] || return 1
+      [ -z "$(awk -v want=GOAT_NODE_SCRIPT_PATH -v fallback=${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} "$runner_hint_awk" "$1" 2>/dev/null)" ] || return 1
+      fact_exe="$fact_versions/$(awk -v want=GOAT_ARCHIVE_VERSION -v fallback=${LEGACY_SSH_ARCHIVE_VERSION_KEY} "$runner_hint_awk" "$1" 2>/dev/null)/goat"
+      runner_digest "$1" 2>/dev/null || return 1
+      fact_via="$RUNNER_DIGEST" ;;
   esac
   fact_version="\${fact_exe%/goat}"; fact_version="\${fact_version##*/}"
   valid_version "$fact_version" && [ "$fact_exe" = "$fact_versions/$fact_version/goat" ] || return 1
-  fact_sig="$(file_sig "$fact_exe")" || return 1
+  file_sig_set "$fact_exe" || return 1
+  fact_sig="$FILE_SIG"
   [ "$(( $(date +%s) - \${fact_sig##*:} ))" -ge 2 ] || return 1
   # A runner installs a version without its marker instead of running it.
-  [ "$(cat "$fact_versions/$fact_version/.install-complete" 2>/dev/null)" = "$fact_version" ] || return 1
+  fact_slurp "$fact_versions/$fact_version/.install-complete" && [ "$FACT_TEXT" = "$fact_version" ] || return 1
   case "$fact_via" in exe) FACT_NAME="$fact_version.exe" ;; *) FACT_NAME="$fact_version.runner" ;; esac
   FACT_KEY="$fact_exe $fact_sig $fact_via"
+  fact_memo_put "$1"
 }
 prune_removed_facts() (
   [ -n "$GOAT_FACTS_DIR" ] || exit 0
@@ -102,18 +159,41 @@ fact_put() {
     printf '%s\\n%s\\n' "$2" "$3" >"$fact_tmp" && mv -f "$fact_tmp" "$GOAT_FACTS_DIR/$1" || rm -f "$fact_tmp"
   ) 2>/dev/null || true
 }
-# Start identity of process $1. Git Bash and Cygwin ps lists native processes only through -W, by
-# WINPID (column 4 after an optional status letter), with a start shown to the second today and
-# to the day before; the whole row, executable path included, is the key. A server GOAT restarts
-# still misses: it rewrites the runtime record, whose startedAt and instanceId are in the key.
-fact_process_start() {
-  if [ -z "\${fact_windows:-}" ]; then
-    case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) fact_windows=1 ;; *) fact_windows=0 ;; esac
+# Sets FACT_START and FACT_START2 to the start identities of processes $1 and $2 (may be empty),
+# from one listing. Git Bash and Cygwin ps lists native processes only through -W, by WINPID
+# (column 4 after an optional status letter), with a start shown to the second today and to the
+# day before; the whole row, executable path included, is the key. A server GOAT restarts still
+# misses: it rewrites the runtime record, whose startedAt and instanceId are in the key.
+fact_process_starts() {
+  FACT_START=; FACT_START2=
+  if [ "$fact_windows" = 0 ]; then
+    FACT_START="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null)" || FACT_START=
+    [ -z "$2" ] || FACT_START2="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$2" 2>/dev/null)" || FACT_START2=
+    return 0
   fi
-  if [ "$fact_windows" = 0 ]; then LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null; return; fi
-  ps -W 2>/dev/null | awk -v p="$1" '
-    NR > 1 { if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 } if ($4 == p) { $1 = $1; print; found = 1; exit } }
-    END { exit !found }'
+  ps_rows="$(ps -W 2>/dev/null | awk -v a="$1" -v b="$2" '
+    NR > 1 {
+      if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 }
+      if ($4 == a && ra == "") { $1 = $1; ra = $0 }
+      if (b != "" && $4 == b && rb == "") { $1 = $1; rb = $0 }
+    }
+    END { print ra; print rb }')" || return 0
+  FACT_START="\${ps_rows%%"$fact_nl"*}"
+  case "$ps_rows" in *"$fact_nl"*) FACT_START2="\${ps_rows#*"$fact_nl"}" ;; esac
+}
+# Sets FACT_TEXT to the digits after the last JSON name $1 (quoted) in $2 that a colon and a
+# number follow, as sed -n 's/.*NAME[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' finds them.
+fact_json_uint() {
+  FACT_TEXT=; json_rest="$2"
+  while :; do
+    case "$json_rest" in *"$1"*) ;; *) return 0 ;; esac
+    json_tail="\${json_rest##*"$1"}"; json_rest="\${json_rest%"$1"*}"
+    while :; do case "$json_tail" in [[:space:]]*) json_tail="\${json_tail#?}" ;; *) break ;; esac; done
+    case "$json_tail" in :*) json_tail="\${json_tail#:}" ;; *) continue ;; esac
+    while :; do case "$json_tail" in [[:space:]]*) json_tail="\${json_tail#?}" ;; *) break ;; esac; done
+    json_digits="\${json_tail%%[!0123456789]*}"
+    if [ -n "$json_digits" ]; then FACT_TEXT="$json_digits"; return 0; fi
+  done
 }
 # Prints the output of goat run as "$2" "$3"..., recorded as fact $1 of that executable.
 exec_fact() {
@@ -127,22 +207,30 @@ exec_fact() {
   fi
   printf '%s\\n' "$fact_out"
 }
+# Sets FACT_TEXT to file $1 as tr '\\n' ' ' <"$1" prints it: every line ended by a space.
+fact_read_record() {
+  FACT_TEXT=; record_line=
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  while IFS= read -r record_line; do FACT_TEXT="$FACT_TEXT$record_line "; record_line=; done <"$1"
+  FACT_TEXT="$FACT_TEXT$record_line"
+}
 # A live answer from goat $1 depends on its executable, the runtime record $2, the launch port
 # and PID files $3 and $4, and whether the PIDs they name still run the same processes.
 live_fact_key() {
   exec_fact_key "$1" || return 1
   fact_live="$FACT_KEY"; FACT_KEY=
-  [ -f "$2" ] && fact_record="$(tr '\\n' ' ' <"$2")" && [ -n "$fact_record" ] || return 1
-  fact_pid="$(printf '%s\\n' "$fact_record" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')"
+  fact_read_record "$2" && fact_record="$FACT_TEXT" && [ -n "$fact_record" ] || return 1
+  fact_json_uint '"pid"' "$fact_record"; fact_pid="$FACT_TEXT"
   valid_positive "$fact_pid" || return 1
-  fact_record_port="$(printf '%s\\n' "$fact_record" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')"
+  fact_json_uint '"port"' "$fact_record"; fact_record_port="$FACT_TEXT"
   valid_positive "$fact_record_port" || return 1
-  fact_start="$(fact_process_start "$fact_pid")" && [ -n "$fact_start" ] || return 1
-  fact_port="$(cat "$3" 2>/dev/null || true)"; fact_remembered="$(cat "$4" 2>/dev/null || true)"
-  fact_remembered_start=
-  if valid_positive "$fact_remembered"; then
-    fact_remembered_start="$(fact_process_start "$fact_remembered" || true)"
-  fi
+  fact_slurp "$3" || :; fact_port="$FACT_TEXT"
+  fact_slurp "$4" || :; fact_remembered="$FACT_TEXT"
+  fact_remembered_pid=
+  if valid_positive "$fact_remembered"; then fact_remembered_pid="$fact_remembered"; fi
+  fact_process_starts "$fact_pid" "$fact_remembered_pid"
+  fact_start="$FACT_START"; fact_remembered_start="$FACT_START2"
+  [ -n "$fact_start" ] || return 1
   FACT_KEY="$fact_live|$fact_record|$fact_start|$fact_port|$fact_remembered|$fact_remembered_start"
 }
 # True when live PID $1 and port $2 are the record's own: only then does the record's process
@@ -292,20 +380,30 @@ lacks_memory_scopes() {
   fi
   [ "$scope_verdict" = lacks ]
 }
-runner_sha256() {
+# Sets RUNNER_DIGEST to the SHA-256 of file $1.
+runner_digest() {
+  RUNNER_DIGEST=
   if command -v shasum >/dev/null 2>&1; then digest="$(shasum -a 256 "$1")" || return 1
   elif command -v sha256sum >/dev/null 2>&1; then digest="$(sha256sum "$1")" || return 1
   else printf 'Install shasum or sha256sum to verify the retained GOAT runner.\\n' >&2; return 1; fi
   digest="\${digest%% *}"
-  printf '%s\\n' "$digest" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || return 1
-  printf '%s' "$digest"
+  case "$digest" in *[!0123456789abcdef]*) return 1 ;; esac
+  [ "\${#digest}" = 64 ] || return 1
+  RUNNER_DIGEST="$digest"
 }
+runner_sha256() { runner_digest "$1" && printf '%s' "$RUNNER_DIGEST"; }
 ${REMOTE_FACTS_SCRIPT}
 `;
 
 // Retained runners are data: inspect either declaration spelling without sourcing shell code.
-export const REMOTE_RUNNER_HINT_SCRIPT = String.raw`read_runner_hint() {
-  if grep -q "^$2=" "$1"; then hint_key="$2"; else hint_key="$3"; fi
-  sed -n "s/^$hint_key='\(.*\)'$/\1/p" "$1"
-}
+export const REMOTE_RUNNER_HINT_SCRIPT = String.raw`# One awk reads a declaration: key $2 when any line declares it, else key $3; quoted values only.
+runner_hint_awk='
+  function quoted(key) {
+    return index($0, key "=\047") == 1 && length($0) > length(key) + 2 && substr($0, length($0)) == "\047"
+  }
+  index($0, want "=") == 1 { named = 1 }
+  quoted(want) { by_want = by_want substr($0, length(want) + 3, length($0) - length(want) - 3) "\n" }
+  quoted(fallback) { by_fallback = by_fallback substr($0, length(fallback) + 3, length($0) - length(fallback) - 3) "\n" }
+  END { printf "%s", named ? by_want : by_fallback }'
+read_runner_hint() { awk -v want="$2" -v fallback="$3" "$runner_hint_awk" "$1"; }
 `;
