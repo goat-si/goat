@@ -5,6 +5,7 @@ import {
   goatBotActivityTask,
   goatBotItemReaders,
   goatBotReplyingSince,
+  GOAT_BOT_NOT_ACCEPTED,
   initialGoatBotEnsure,
   observeResidentAtom,
   residentAtomValue,
@@ -57,13 +58,6 @@ import {
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
-import {
-  goatBotNameFor,
-  openChatNameFor,
-  openMainBotName,
-  rememberGoatBotNames,
-  rememberOpenChatName,
-} from "./goatBotNames";
 import { useGoatBotEnvironments } from "./goatBotHooks";
 import { registerGoatBotEnvironmentDisposal } from "./goatBotEnvironmentLifecycle";
 
@@ -161,7 +155,7 @@ function newQueue(environmentId: EnvironmentId) {
       if (result.state === "rejected")
         return {
           requestKey: result.inputId,
-          rejected: `${goatBotNameFor(bot.environmentId, bot.threadId)} did not accept this message`,
+          rejected: GOAT_BOT_NOT_ACCEPTED,
         };
       return { requestKey: result.inputId };
     },
@@ -360,9 +354,6 @@ export function useGoatBotSession(
 ) {
   const { enabled, environment, environments, home, port } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
-  if (member !== null) rememberGoatBotNames(member.environmentId, [member]);
-  if (environmentId !== null)
-    rememberOpenChatName(environmentId, member?.name ?? openMainBotName(environmentId));
   const bootstrapped = useEnvironmentShellsBootstrapped(environmentId);
   const session = useSessions((state) =>
     environmentId === null ? undefined : state.sessions.get(environmentId),
@@ -466,10 +457,9 @@ export function useGoatBotSession(
             ? { kind: "legacy_active" }
             : {
                 kind: "failed",
-                message:
-                  error instanceof Error
-                    ? error.message
-                    : `Couldn't reach ${openChatNameFor(environmentId)}`,
+                ...(error instanceof Error && error.message !== ""
+                  ? { message: error.message }
+                  : {}),
               },
         );
       }

@@ -29,7 +29,6 @@ import {
   GoatBotMemberContext,
   useGoatBotName,
 } from "./goatBotMemberContext";
-import { rememberGoatBotNames } from "./goatBotNames";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
@@ -57,8 +56,6 @@ export function GoatBotThreadView({
   readonly main?: BotProfile | null;
 }) {
   const port = useContext(GoatBotChannelContext);
-  if (main !== null) rememberGoatBotNames(main.environmentId, [main]);
-  if (member !== null) rememberGoatBotNames(member.environmentId, [member]);
   return (
     <GoatBotMainProfileContext value={main}>
       <GoatBotMemberContext value={member}>

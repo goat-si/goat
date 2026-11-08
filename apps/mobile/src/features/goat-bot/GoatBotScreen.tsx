@@ -4,6 +4,7 @@ import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   goatBotReceiptLabel,
   goatBotName,
+  goatBotRejectionText,
   goatBotNotesRefreshKey,
   hasGoatBotMarkdown,
   type GoatBotRow,
@@ -287,7 +288,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
               accessibilityLabel={receipt?.accessibleText}
             >
               {delivery.state === "failed"
-                ? (delivery.rejectionReason ?? "Not Delivered")
+                ? goatBotRejectionText(delivery.rejectionReason, props.botName ?? "GOAT Bot")
                 : receipt?.text}
             </Text>
             {delivery.state === "failed" && delivery.rejectionReason === undefined ? (
@@ -415,12 +416,7 @@ export function GoatBotScreen(props: {
 }) {
   const member = props.member ?? null;
   const mainName = goatBotName(props.main ?? null);
-  const session = useMobileGoatBotSession(
-    props.visible,
-    props.taskId ?? null,
-    member,
-    props.main ?? null,
-  );
+  const session = useMobileGoatBotSession(props.visible, props.taskId ?? null, member);
   const title = goatBotName(member ?? props.main ?? null);
   const copy = availabilityCopy(mainName, title);
   const taskId = session.supportsTaskThreads ? props.taskId : undefined;

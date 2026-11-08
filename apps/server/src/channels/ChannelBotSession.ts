@@ -349,13 +349,15 @@ const make = Effect.gen(function* () {
           ),
         );
     yield* writeIntent(row.thread_id, ids.messageId, task, "launch");
-    const named = yield* Effect.option(profiles.identity(stored.ownerId, stored.botId));
+    const profile = yield* Effect.option(
+      ChannelBotProfiles.readProfileRecord(sql, stored.ownerId, stored.botId),
+    );
     const launched = yield* launches
       .launch({
         commandId: ids.commandId,
         threadId: row.thread_id,
         projectId: ProjectId.make(target.projectId),
-        title: Option.isSome(named) ? named.value.name : "GOAT Bot",
+        title: Option.getOrUndefined(profile)?.name ?? "GOAT Bot session",
         generateTitle: false,
         modelSelection: target.modelSelection,
         runtimeMode: lowerRuntimeMode(target.runtimeMode, requester.runtimeModeCeiling),

@@ -630,7 +630,7 @@ function noticeCopy(
     case "error":
       return {
         title: `Couldn't reach ${openName}`,
-        description: availability.message,
+        description: availability.message ?? `Couldn't reach ${openName}`,
         retryLabel: "Try again",
       };
     case "unsupported":
