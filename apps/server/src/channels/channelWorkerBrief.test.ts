@@ -9,6 +9,7 @@ import {
   channelWorkerRules,
   GOAT_BOT_READ_ONLY_RULE,
   GOAT_BOT_SUPERVISOR_RULE,
+  GOAT_BOT_ROUTING_RULE,
   PERSONAL_DATA_RULE,
   REMOTE_MESSAGE_CHARS,
   remoteWorkerMessage,
@@ -200,6 +201,13 @@ describe("channel worker brief", () => {
 
   it("keeps asking coding workers for a short summary for their card", () => {
     assert.include(workerInstruction(task, files), "a short summary");
+  });
+
+  it("tells a bot turn to ask itself when a launched coding thread ends on a question", () => {
+    const sentence =
+      'ends asking the person something instead of finishing, ask it yourself with goat_call {path:"channel.task_report"} (status "waiting_input", your question, and a new eventId) and stop, then pass the answer on to that thread with goat_call {path:"thread.send"}; when you launch one, tell it to ask with its question tool rather than ending its turn on a question.';
+    assert.include(GOAT_BOT_ROUTING_RULE, sentence);
+    assert.include(turnInstruction(task, files, false), sentence);
   });
 
   describe("notes changes from a GOAT Bot turn", () => {

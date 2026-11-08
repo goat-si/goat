@@ -285,3 +285,136 @@ describe("GOAT Bot sees what the coding threads a task launched wait on", () => 
     },
   );
 });
+
+describe("GOAT Bot hears about a launched thread's approvals after its task ended", () => {
+  /** One request, its worker run finished, with a launched coding thread that has ended too. */
+  const finishedWithLaunch = (harness: ReturnType<typeof makeHarness>) =>
+    Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("do: write the release notes", "late1"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* launch(task, "late", "completed");
+      harness.world.runs.set("thread:late", []);
+      harness.world.setStatus(task.worker!.threadId, 1, "completed", "Started the notes thread.");
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).status, "completed");
+      return { runtime, reports };
+    });
+
+  it.effect("shows an approval the launched thread asks for after the task finished", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { runtime, reports } = yield* finishedWithLaunch(harness);
+      const cardsBefore = yield* cards;
+      harness.world.runtimeRequests.set("thread:late", [request("write", "file-change")]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      assert.strictEqual(task.status, "completed");
+      assert.deepStrictEqual(task.observed?.needsYou, [
+        {
+          kind: "approval",
+          since,
+          approval: {
+            requestId: RuntimeRequestId.make("request:write"),
+            threadId: ThreadId.make("thread:late"),
+          },
+        },
+      ]);
+      assert.strictEqual(yield* cards, cardsBefore + 1);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 1);
+      // Another pass with nothing new writes nothing.
+      const version = task.version;
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* onlyTask).version, version);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("tells the chat once when the approval is declined in the launched thread", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { runtime, reports } = yield* finishedWithLaunch(harness);
+      harness.world.runtimeRequests.set("thread:late", [request("write", "file-change")]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      harness.world.runtimeRequests.set("thread:late", [
+        {
+          ...request("write", "file-change"),
+          status: "resolved",
+          decision: "decline",
+          respondedBy: { type: "user" },
+        },
+      ]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const told = (yield* botMessages).messages.filter((message) =>
+        message.text.includes("Denied in the coding thread"),
+      );
+      assert.strictEqual(told.length, 1);
+      assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("does not tell the chat twice about an approval it answered itself", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { runtime, reports } = yield* finishedWithLaunch(harness);
+      harness.world.runtimeRequests.set("thread:late", [request("write", "file-change")]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("deny", "late-deny"), rpcContext);
+      yield* runtime.drain;
+      assert.strictEqual(responses(harness)[0]?.decision, "decline");
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const texts = (yield* botMessages).messages.map((message) => message.text);
+      assert.isTrue(texts.some((text) => text.startsWith("Denied.")));
+      assert.isFalse(texts.some((text) => text.includes("Denied in the coding thread")));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "tells the chat once when a running task's launched thread declines an approval",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* gateway.ingest(goatInput("do: start the build", "run-decline"), rpcContext);
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        yield* launch(task, "live", "bound");
+        harness.world.runs.set("thread:live", []);
+        harness.world.runtimeRequests.set("thread:live", [request("write", "file-change")]);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        harness.world.runtimeRequests.set("thread:live", [
+          {
+            ...request("write", "file-change"),
+            status: "resolved",
+            decision: "decline",
+            respondedBy: { type: "user" },
+          },
+        ]);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        const told = (yield* botMessages).messages.filter((message) =>
+          message.text.includes("Denied in the coding thread"),
+        );
+        assert.strictEqual(told.length, 1);
+        assert.strictEqual((yield* onlyTask).status, "running");
+        assert.deepStrictEqual((yield* onlyTask).observed?.needsYou, []);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+});

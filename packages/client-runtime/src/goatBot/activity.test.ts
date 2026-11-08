@@ -257,6 +257,19 @@ describe("goatBotActivity", () => {
     expect(working(acknowledged(task), worker)?.text).toBe(text);
   });
 
+  it("keeps following a finished task that still needs an approval", () => {
+    const approved = chip("task-1", {
+      status: "completed",
+      observed: { pullRequests: [], needsYou: [{ kind: "approval", since: at(3) }] },
+    });
+    expect(working(acknowledged(approved))?.text).toBe("Waiting for your approval");
+    const asked = chip("task-1", {
+      status: "completed",
+      observed: { pullRequests: [], needsYou: [{ kind: "question", since: at(3) }] },
+    });
+    expect(working(acknowledged(asked))).toBeNull();
+  });
+
   it.each([
     ["the GOAT Bot session", { environmentId: env, threadId: session, runId: runA }],
     ["a dedicated worker", { environmentId: env, threadId: ThreadId.make("worker-task-1") }],
