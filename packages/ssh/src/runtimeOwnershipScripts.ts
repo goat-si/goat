@@ -572,6 +572,9 @@ emit_pending() {
   esac
   # Reuse is independently proven using the retained runner, never the incompatible candidate.
   pending_attachment_safe || emit_pending_only
+  # A server that did not answer its activity probe may not answer the app either; its HTTP
+  # root alone does not prove it ready. Only a server without drain support was never asked.
+  [ "$reason" != unknown ] || [ "$pending_detail" = drain-unavailable ] || emit_pending_only
   if [ "$reason" = contended ] && [ "$NEEDS_OWNED_UPGRADE" = 0 ] && [ ! -f "$RETAINED_SNAPSHOT_FILE" ]; then
     capture_running_runner || emit_pending_only
   fi
