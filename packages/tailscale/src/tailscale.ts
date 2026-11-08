@@ -453,22 +453,63 @@ export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe"
   );
 });
 
-export const probeTailscaleHttpsEndpoint = Effect.fn("tailscale.probeTailscaleHttpsEndpoint")(
+export type TailscaleHttpsEndpointClassification = "ok" | "refused" | "no-answer" | "not-goat";
+
+const isConnectionRefused = (error: unknown): boolean => {
+  const pending: unknown[] = [error];
+  const seen = new Set<object>();
+  let inspected = 0;
+  while (pending.length > 0 && inspected < 8) {
+    const current = pending.shift();
+    if (typeof current !== "object" || current === null || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    inspected += 1;
+    const record = current as {
+      readonly code?: unknown;
+      readonly name?: unknown;
+      readonly cause?: unknown;
+      readonly reason?: { readonly cause?: unknown };
+    };
+    if (record.code === "ECONNREFUSED" || record.name === "ECONNREFUSED") {
+      return true;
+    }
+    pending.push(record.cause, record.reason?.cause);
+  }
+  return false;
+};
+
+export const classifyTailscaleHttpsEndpoint = Effect.fn("tailscale.classifyTailscaleHttpsEndpoint")(
   function* (input: { readonly baseUrl: string; readonly timeout?: Duration.Input }) {
     const client = yield* HttpClient.HttpClient;
-    const response = yield* Effect.gen(function* () {
+    return yield* Effect.gen(function* () {
       const url = new URL(GOAT_ENVIRONMENT_PATH, input.baseUrl);
       const request = HttpClientRequest.get(url.toString());
       const response = yield* client.execute(request);
       return response.status === 404
         ? yield* client.get(new URL(LEGACY_ENVIRONMENT_PATH, input.baseUrl).toString())
         : response;
-    }).pipe(Effect.timeoutOption(input.timeout ?? TAILSCALE_PROBE_TIMEOUT));
-
-    return Option.match(response, {
-      onNone: () => false,
-      onSome: (httpResponse) => httpResponse.status >= 200 && httpResponse.status < 300,
-    });
+    }).pipe(
+      Effect.timeoutOption(input.timeout ?? TAILSCALE_PROBE_TIMEOUT),
+      Effect.match({
+        onFailure: (error) =>
+          isConnectionRefused(error) ? ("refused" as const) : ("no-answer" as const),
+        onSuccess: (response) =>
+          Option.match(response, {
+            onNone: () => "no-answer" as const,
+            onSome: (httpResponse) =>
+              httpResponse.status >= 200 && httpResponse.status < 300
+                ? ("ok" as const)
+                : ("not-goat" as const),
+          }),
+      }),
+    );
   },
-  Effect.orElseSucceed(() => false),
+);
+
+export const probeTailscaleHttpsEndpoint = Effect.fn("tailscale.probeTailscaleHttpsEndpoint")(
+  function* (input: { readonly baseUrl: string; readonly timeout?: Duration.Input }) {
+    return (yield* classifyTailscaleHttpsEndpoint(input)) === "ok";
+  },
 );
