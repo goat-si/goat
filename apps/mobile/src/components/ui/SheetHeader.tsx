@@ -63,7 +63,7 @@ function NativeSheetHeader(props: SheetHeaderProps) {
           {confirmation?.loading ? (
             <Toolbar.Custom>
               <View
-                className="size-11 items-center justify-center"
+                className="size-[44px] items-center justify-center"
                 accessible
                 accessibilityLabel={confirmation.label}
                 accessibilityState={{ busy: true }}
@@ -106,8 +106,8 @@ function InlineConfirmation({
       onPress={confirmation.onPress}
       className={
         confirmDisabled
-          ? "size-11 items-center justify-center rounded-full bg-subtle-strong"
-          : "size-11 items-center justify-center rounded-full bg-prominent-action"
+          ? "size-[44px] items-center justify-center rounded-full bg-subtle-strong"
+          : "size-[44px] items-center justify-center rounded-full bg-prominent-action"
       }
     >
       {confirmation.loading ? (

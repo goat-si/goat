@@ -955,6 +955,7 @@ const make = Effect.gen(function* () {
                   originKind: "goat",
                   kind: "inbound",
                   inputId,
+                  clientMessageId: message.externalMessageId,
                   readAt: stored.snapshot.readAt ?? readAt,
                 },
               },
@@ -1269,14 +1270,16 @@ const make = Effect.gen(function* () {
         (decision.remember !== undefined && rememberRefusal === undefined
           ? yield* botNotes.save(decision.remember, readAt, inputId, decision.replacesNote)
           : droppedNoteNotice(rememberRefusal)) ?? droppedNoteNotice(editRefusal);
-
       let replyText = decision.replyText;
       let finalDecision = decision;
+      if (noteNotice === CHANNEL_COPY.noteEditBusy) {
+        replyText = noteNotice;
+        finalDecision = { replyText, action: { type: "report_only" } };
+      }
       let createdTasks: ReturnType<typeof makeCreatedTasks> = [];
       const taskEvents: Array<ChannelLedger.ChannelTaskEventWrite> = [];
       const deliveries: Array<ChannelLedger.ChannelOutboxInsert> = [];
-      const action = decision.action;
-
+      const action = finalDecision.action;
       // A project question is worded by the server from the projects it would offer, so the
       // person sees the same real projects the dispatcher would ask about.
       if (action.type === "clarify" && action.about === "project") {
@@ -1563,7 +1566,8 @@ const make = Effect.gen(function* () {
       }
 
       const relatedTask = createdTasks[0]?.task;
-      replyText = ChannelRemoteRecall.keepFallbacks(replyText, noteNotice, recallFallbacks);
+      if (noteNotice !== undefined && replyText !== noteNotice) replyText += " " + noteNotice;
+      replyText = ChannelRemoteRecall.keepFallbacks(replyText, undefined, recallFallbacks);
       deliveries.unshift(
         replyDelivery({
           causeKey: "reply:" + inputId,

@@ -79,7 +79,7 @@ describe("channel reception note request conversion", () => {
     });
   });
 
-  it("puts notesChangeRequested only on create_task and omits empty strings", () => {
+  it("puts a trimmed notesChangeRequested on work that edits notes and omits empty strings", () => {
     expect(
       convert({
         action: "create_task",
@@ -124,13 +124,7 @@ describe("channel reception note request conversion", () => {
       replyText: "Okay.",
       action: { type: "create_task", title: "Build", instruction: "Build it." },
     });
-    for (const action of [
-      "report_only",
-      "status",
-      "answer_question",
-      "clarify",
-      "move_task",
-    ] as const) {
+    for (const action of ["status", "answer_question", "move_task"] as const) {
       const result = convert({
         action,
         notesChangeRequested: "forget the Korean note",
@@ -144,6 +138,59 @@ describe("channel reception note request conversion", () => {
       expect(result.action).not.toHaveProperty("notesChangeRequested");
       expect(result).not.toHaveProperty("rememberQuote");
       expect(result).not.toHaveProperty("remember");
+    }
+  });
+
+  it("keeps a trimmed notesChangeRequested on a plain reply and a clarifying question", () => {
+    expect(
+      convert({
+        action: "report_only",
+        notesChangeRequested: " forget that I deploy on Fridays ",
+      }),
+    ).toEqual({
+      replyText: "Okay.",
+      action: {
+        type: "report_only",
+        notesChangeRequested: "forget that I deploy on Fridays",
+      },
+    });
+    expect(
+      convert({
+        action: "clarify",
+        question: "Which note?",
+        options: [],
+        notesChangeRequested: " forget that I deploy on Fridays ",
+      }),
+    ).toEqual({
+      replyText: "Okay.",
+      action: {
+        type: "clarify",
+        question: "Which note?",
+        notesChangeRequested: "forget that I deploy on Fridays",
+      },
+    });
+    expect(
+      convert({
+        action: "clarify",
+        question: "Which project?",
+        options: [],
+        clarifyAbout: "project",
+        notesChangeRequested: "forget that I deploy on Fridays",
+      }).action,
+    ).toEqual({
+      type: "clarify",
+      question: "Which project?",
+      about: "project",
+      notesChangeRequested: "forget that I deploy on Fridays",
+    });
+    for (const action of ["report_only", "clarify"] as const) {
+      expect(
+        convert({
+          action,
+          question: "Which note?",
+          notesChangeRequested: " \n ",
+        }).action,
+      ).not.toHaveProperty("notesChangeRequested");
     }
   });
 });
@@ -203,8 +250,13 @@ describe("channel reception reads", () => {
     expect(prompt).toContain(
       "To forget a note, change several at once, or tidy, reorganise, merge or clean up the notes,",
     );
-    expect(prompt).toContain("To change, forget or tidy notes this way,");
-    expect(prompt).toContain("changes, forgets or tidies notes at the person's request");
+    expect(prompt).toContain(
+      "Whenever the new message asks to change, forget or tidy notes, copy the exact words of that request into notesChangeRequested, whatever action you choose.",
+    );
+    expect(prompt).toContain(
+      "an empty notesChangeRequested unless the new message asks to change, forget or tidy notes.",
+    );
+    expect(prompt).not.toContain("unless a create_task or run_turn changes");
   });
 
   it("tells a renamed bot its name and purpose right after who it is", () => {

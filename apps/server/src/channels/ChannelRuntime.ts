@@ -39,6 +39,7 @@ import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
+import { makeKeptNotes } from "./channelBotNotesKept.ts";
 import { hasUnsettledChannelDelivery } from "./channelDeliveryGate.ts";
 import { deliveryIdFor } from "./channelIds.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -101,6 +102,7 @@ const make = Effect.gen(function* () {
   const imessage = yield* ImessageChannelRuntime.ImessageChannelRuntime;
   const routineIntake = yield* ChannelRoutineIntake.ChannelRoutineIntake;
   const routineInputs = yield* makeRoutineInputs;
+  const keepNotes = yield* makeKeptNotes;
   const owner = "channel-owner:" + NodeCrypto.randomUUID();
   const receptionSlots = yield* Semaphore.make(RECEPTION_CONCURRENCY);
   const inFlight = yield* Ref.make(new Map<ChannelInputId, Fiber.Fiber<void, unknown>>());
@@ -319,6 +321,11 @@ const make = Effect.gen(function* () {
       ),
     );
     started += yield* reports.reconcile(owner);
+    started += yield* keepNotes().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("GOAT Bot kept notes not restored", { cause }).pipe(Effect.as(0)),
+      ),
+    );
     // Observers of workers on other machines run on their own fibers; this only starts missing ones.
     started += yield* remoteWorkers.ensure(owner);
     started += yield* routineStep(routineIntake.settle);

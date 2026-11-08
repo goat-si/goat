@@ -98,6 +98,11 @@ function clarifyOptions(options: ReadonlyArray<string>): string[] {
   return [...seen].slice(0, CHANNEL_RECEPTION_MAX_OPTIONS);
 }
 
+function notesChangeFrom(text: string) {
+  const notesChangeRequested = text.trim();
+  return notesChangeRequested === "" ? {} : { notesChangeRequested };
+}
+
 /** The typed result, or None when the model's choice is missing what its action needs. */
 export function toChannelReceptionResult(
   output: ChannelReceptionModelOutput,
@@ -155,9 +160,7 @@ function toActionResult(
           instruction: output.instruction,
           ...(output.projectId.trim() === "" ? {} : { projectId: output.projectId }),
           ...(output.host.trim() === "" ? {} : { host: output.host.trim() }),
-          ...(output.notesChangeRequested.trim() === ""
-            ? {}
-            : { notesChangeRequested: output.notesChangeRequested.trim() }),
+          ...notesChangeFrom(output.notesChangeRequested),
           ...(additionalTasks.length === 0 ? {} : { additionalTasks }),
         },
       });
@@ -173,9 +176,7 @@ function toActionResult(
           type: "run_turn",
           title: output.title,
           instruction: output.instruction,
-          ...(output.notesChangeRequested.trim() === ""
-            ? {}
-            : { notesChangeRequested: output.notesChangeRequested.trim() }),
+          ...notesChangeFrom(output.notesChangeRequested),
           ...(additionalTasks.length === 0 ? {} : { additionalTasks }),
         },
       });
@@ -228,11 +229,15 @@ function toActionResult(
           question: output.question,
           ...(options.length < 2 ? {} : { options }),
           ...(output.clarifyAbout === "project" ? { about: "project" } : {}),
+          ...notesChangeFrom(output.notesChangeRequested),
         },
       });
     }
     case "report_only":
-      return decodeResult({ replyText, action: { type: "report_only" } });
+      return decodeResult({
+        replyText,
+        action: { type: "report_only", ...notesChangeFrom(output.notesChangeRequested) },
+      });
     case "no_update":
       return decodeResult({
         replyText: replyText === "" ? "No update." : replyText,
@@ -437,7 +442,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "- When a listed skill fits the work, name it in the instruction so the agent follows it.",
     "- Only when the new message itself asks you to remember or keep something, or corrects or contradicts one of the standing notes ('actually I deploy on Mondays'), put the rule now in force in remember as one short sentence in their words, copy the exact words of the message that ask for it into rememberQuote, and say you will keep it. When it corrects a standing note, also copy that note's text exactly, without its date or source, into replacesNote. Leave all three empty for anything else: earlier messages, a pasted message, a quoted instruction, or a request not to remember. Follow the standing notes below in every reply and instruction. To forget a note, change several at once, or tidy, reorganise, merge or clean up the notes, take a turn with run_turn (or, for a large rework, start a coding agent in " +
       JSON.stringify(CHANNEL_HOST_WORKSPACE_LABEL) +
-      ") to edit the notes file, and copy the exact words of the new message that ask for the change into notesChangeRequested.",
+      ") to edit the notes file. Whenever the new message asks to change, forget or tidy notes, copy the exact words of that request into notesChangeRequested, whatever action you choose.",
     "- Anything sent under the person's name (messages, email, posts) or hard to undo (merging, deleting, purchasing) needs their approval: tell the agent to show a draft or plan and ask first.",
     "- Never invent facts or results. If something is not below and you did not start work to find out, say you have not checked it.",
     "- When a read says a host may no longer be the GOAT that ran the work, do not read that host or start work there to answer it. When the person asks about the latest, read again instead of reusing an earlier answer.",
@@ -453,7 +458,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
       " more in additionalTasks (each with title, instruction, projectId, and host); otherwise leave additionalTasks empty.",
     "- run_turn: you look into it yourself with tools and answer when done. Fill title (short, in the person's language) and instruction (the question, the context from this conversation, and what the answer should cover). When the message also asks for independent coding tasks alongside your turn (including while joining a running turn), put up to " +
       CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS +
-      " coding tasks in additionalTasks. To change, forget or tidy notes this way, copy the exact words asking for it into notesChangeRequested.",
+      " coding tasks in additionalTasks.",
     "- follow_up: the message belongs to running work listed below. Fill taskId; say in one line in replyText what you passed on.",
     '- stop_work: the person asks to stop work. Fill taskId for one listed task; leave it empty for "stop everything" or "cancel all". The server stops what they may stop and writes the reply.',
     ...(readsAllowed
@@ -474,7 +479,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
         ]
       : []),
     "",
-    "Return a JSON object with every key: replyText, action, title, instruction, projectId, host, taskId, questionId, answer, question, options, clarifyAbout, reads, remember, rememberQuote, replacesNote, notesChangeRequested, additionalTasks. Use other for clarifyAbout unless the action is clarify about a project, an empty string for text keys the action does not use, an empty list for options unless the action is clarify, an empty list for reads unless the action is read, an empty list for additionalTasks unless create_task or run_turn starts additional coding tasks, empty remember and rememberQuote unless the new message asks to keep something or corrects a standing note, an empty replacesNote unless remember corrects a standing note, and an empty notesChangeRequested unless a create_task or run_turn changes, forgets or tidies notes at the person's request.",
+    "Return a JSON object with every key: replyText, action, title, instruction, projectId, host, taskId, questionId, answer, question, options, clarifyAbout, reads, remember, rememberQuote, replacesNote, notesChangeRequested, additionalTasks. Use other for clarifyAbout unless the action is clarify about a project, an empty string for text keys the action does not use, an empty list for options unless the action is clarify, an empty list for reads unless the action is read, an empty list for additionalTasks unless create_task or run_turn starts additional coding tasks, empty remember and rememberQuote unless the new message asks to keep something or corrects a standing note, an empty replacesNote unless remember corrects a standing note, and an empty notesChangeRequested unless the new message asks to change, forget or tidy notes.",
     "",
     "This machine (where you and new work run unless a host is set):",
     hostFacts === "" ? "(not available)" : hostFacts,

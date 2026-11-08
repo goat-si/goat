@@ -8,9 +8,12 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
+import * as ServerConfig from "../config.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
@@ -19,6 +22,7 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as MemoryService from "../memory/MemoryService.ts";
 import * as MemorySyncService from "../memory/MemorySyncService.ts";
@@ -36,6 +40,25 @@ import {
   slackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
+
+const standingNotes = "# Notes\n- I deploy on Fridays.\n";
+
+const notesPath = Effect.gen(function* () {
+  return channelBotFilesFor(yield* Path.Path, (yield* ServerConfig.ServerConfig).stateDir).notes;
+});
+
+const writeNotes = (text: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const notes = yield* notesPath;
+    yield* fs.makeDirectory(path.dirname(notes), { recursive: true });
+    yield* fs.writeFileString(notes, text);
+  });
+
+const readNotes = Effect.flatMap(notesPath, (notes) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(notes)),
+);
 
 /**
  * Slack people who never linked an account, on a connection that lets the whole workspace in.
@@ -344,6 +367,167 @@ describe("what people without a link may not reach", () => {
       });
       assert.isTrue(tasks.tasks.every((task) => task.notesChangeRequested === undefined));
       assert.isTrue(
+        harness.slackSent.some((send) =>
+          send.message.text.includes(CHANNEL_COPY.noteEditNotAllowed),
+        ),
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("a plain reply that marks a notes change still says why and leaves the notes", () => {
+    const { harness } = scenario();
+    const request = "forget that I deploy on Fridays";
+    harness.script.current = (input) =>
+      input.mode === "input" && input.inputText === request
+        ? Effect.succeed({
+            replyText: "I can't change that.",
+            action: {
+              type: "report_only" as const,
+              notesChangeRequested: request,
+            },
+          })
+        : defaultScript(input);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* writeNotes(standingNotes);
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        slackInput(request, "guest-forget-reply", undefined, "U9"),
+        workspaceContext,
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const tasks = yield* (yield* ChannelLedger.ChannelLedger).listTasks({
+        ownerId: owner.ownerId,
+        limit: 10,
+      });
+      assert.strictEqual(tasks.tasks.length, 0);
+      assert.strictEqual(yield* readNotes, standingNotes);
+      assert.deepStrictEqual(
+        harness.slackSent.map((send) => send.message.text),
+        ["I can't change that. " + CHANNEL_COPY.noteEditNotAllowed],
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("a clarifying question that marks a notes change still says why", () => {
+    const { harness } = scenario();
+    const request = "forget that I deploy on Fridays";
+    harness.script.current = (input) =>
+      input.mode === "input" && input.inputText === request
+        ? Effect.succeed({
+            replyText: "Which Friday note?",
+            action: {
+              type: "clarify" as const,
+              question: "Which Friday note?",
+              notesChangeRequested: request,
+            },
+          })
+        : defaultScript(input);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* writeNotes(standingNotes);
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        slackInput(request, "guest-forget-clarify", undefined, "U9"),
+        workspaceContext,
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      assert.strictEqual(yield* readNotes, standingNotes);
+      assert.deepStrictEqual(
+        harness.slackSent.map((send) => send.message.text),
+        ["Which Friday note? " + CHANNEL_COPY.noteEditNotAllowed],
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("an agent asking to forget a note in a plain reply is told it cannot", () => {
+    const harness = makeHarness();
+    const request = "forget that I deploy on Fridays";
+    harness.script.current = (input) =>
+      input.mode === "input" && input.inputText === request
+        ? Effect.succeed({
+            replyText: "I can't change that.",
+            action: {
+              type: "report_only" as const,
+              notesChangeRequested: request,
+            },
+          })
+        : defaultScript(input);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* writeNotes(standingNotes);
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const receipt = yield* gateway.ingest(
+        {
+          kind: "mcp",
+          connectionId: "mcp",
+          conversationKey: "default",
+          externalMessageId: "forget-1",
+          idempotencyKey: "forget-1",
+          actor: { senderThreadId: ThreadId.make("thread:some-agent") },
+          replyAddress: {
+            kind: "mcp",
+            connectionId: "mcp",
+            requestNamespace: "notes-ns",
+            conversationKey: "default",
+          },
+          text: request,
+          attachments: [],
+          receivedAt: "2026-10-12T00:00:00.000Z",
+          intent: "message",
+        },
+        {
+          ...owner,
+          principalId: "mcp:notes-ns",
+          grantedScopes: ["orchestration:read", "orchestration:operate"],
+          caller: { type: "mcp", requestNamespace: "notes-ns" },
+        },
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const stored = yield* ledger.getInput(receipt.inputId);
+      assert.strictEqual(
+        stored?.snapshot.reply?.text,
+        "I can't change that. " + CHANNEL_COPY.noteEditNotAllowed,
+      );
+      assert.strictEqual(
+        (yield* ledger.listTasks({ ownerId: owner.ownerId, limit: 10 })).tasks.length,
+        0,
+      );
+      assert.strictEqual(yield* readNotes, standingNotes);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("a linked person asking to change notes without starting work", () => {
+  it.effect("a plain reply keeps the reply, starts nothing, and leaves the notes", () => {
+    const { harness } = scenario();
+    const request = "forget that I deploy on Fridays";
+    harness.script.current = (input) =>
+      input.mode === "input" && input.inputText === request
+        ? Effect.succeed({
+            replyText: "I'll leave them.",
+            action: {
+              type: "report_only" as const,
+              notesChangeRequested: request,
+            },
+          })
+        : defaultScript(input);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser("U1");
+      yield* writeNotes(standingNotes);
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        slackInput(request, "linked-forget-reply"),
+        slackContext,
+      );
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const tasks = yield* (yield* ChannelLedger.ChannelLedger).listTasks({
+        ownerId: owner.ownerId,
+        limit: 10,
+      });
+      assert.strictEqual(tasks.tasks.length, 0);
+      assert.strictEqual(yield* readNotes, standingNotes);
+      assert.strictEqual(harness.slackSent.at(-1)?.message.text, "I'll leave them.");
+      assert.isFalse(
         harness.slackSent.some((send) =>
           send.message.text.includes(CHANNEL_COPY.noteEditNotAllowed),
         ),
