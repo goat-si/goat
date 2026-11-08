@@ -52,6 +52,12 @@ const OUTSTANDING: ReadonlySet<ChannelTaskChip["status"]> = new Set([
   "running",
   "waiting_input",
 ]);
+
+/** A finished task stays in view only while a coding thread still needs an approval. */
+const chipStillOutstanding = (chip: ChannelTaskChip) =>
+  OUTSTANDING.has(chip.status) ||
+  ((chip.status === "completed" || chip.status === "failed") &&
+    (chip.observed?.needsYou.some((item) => item.kind === "approval") ?? false));
 const TASK_STATUS_TEXT: Partial<Record<ChannelTaskChip["status"], string>> = {
   received: "Getting ready",
   dispatching: "Starting",
@@ -108,7 +114,7 @@ export function goatBotActivityTask(input: {
   let newest: { readonly chip: ChannelTaskChip; readonly index: number } | null = null;
   for (const [taskId, index] of acknowledged) {
     const chip = chips.get(taskId);
-    if (chip === undefined || !OUTSTANDING.has(chip.status)) continue;
+    if (chip === undefined || !chipStillOutstanding(chip)) continue;
     if (newest === null || index > newest.index) newest = { chip, index };
   }
   if (newest === null) return null;

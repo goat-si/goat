@@ -278,8 +278,12 @@ export function goatBotFaceTasks(items: ReadonlyArray<GoatBotFaceTaskItem>): Goa
   for (const chip of newestChips.values()) {
     const status = chip.status;
     const going = status === "received" || status === "dispatching" || status === "running";
+    const approvalLeft =
+      (status === "completed" || status === "failed") &&
+      chip.observed?.needsYou.some((item) => item.kind === "approval") === true;
     // A running turn whose coding thread asks something waits on the person too.
-    if (status === "waiting_input" || (going && goatBotTaskWaitsOnPerson(chip))) waiting++;
+    if (status === "waiting_input" || approvalLeft || (going && goatBotTaskWaitsOnPerson(chip)))
+      waiting++;
     else if (going) {
       active++;
       const since = Date.parse(chip.createdAt);
