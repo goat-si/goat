@@ -20,6 +20,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
+import { CHANNEL_COPY } from "./channelCopy.ts";
 import { makeSkillProposalAnswers } from "./channelSkillProposals.ts";
 import { mayAnswerTask, skillFileText } from "./channelSkillProposalText.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
@@ -43,6 +44,20 @@ const proposal: ChannelSkillProposal = {
   text: "# Deploy check\n\n1. Open the pipeline.\n2. Compare the released tag.",
 };
 const BODY = "Compare the released tag";
+const askingSession = {
+  ...rpcContext,
+  grantedScopes: [...rpcContext.grantedScopes, "memory:read" as const, "memory:write" as const],
+};
+const otherSession = {
+  ...rpcContext,
+  grantedScopes: ["orchestration:operate" as const],
+  runtimeModeCeiling: "approval-required" as const,
+};
+const teammateSession = {
+  ...askingSession,
+  principalId: "teammate",
+  displayName: "Teammate",
+};
 
 const harnessCapturing = () => {
   const harness = makeHarness();
@@ -617,4 +632,141 @@ describe("GOAT Bot skill proposals", () => {
       assert.isFalse(yield* fs.exists(path.join(yield* skillsDir, "deploy-check.md")));
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect(
+    "saves a skill when the same person answers from another session without GOAT memory and with a lower runtime ceiling",
+    () => {
+      const { harness } = harnessCapturing();
+      return Effect.gen(function* () {
+        yield* finishWith(
+          harness,
+          proposal,
+          Effect.gen(function* () {
+            yield* (yield* ChannelGateway.ChannelGateway).ingest(
+              goatInput("do: check the deploy", "memory-source"),
+              askingSession,
+            );
+            yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+          }).pipe(Effect.orDie),
+        );
+        const asked = (yield* proposalTask)!;
+        const answerer = {
+          ...asked.requester,
+          grantedScopes: ["orchestration:operate" as const],
+          runtimeModeCeiling: "approval-required" as const,
+        };
+        assert.isTrue(mayAnswerTask(answerer, asked, "other-connection"));
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const saved = yield* gateway.ingest(
+          { ...goatInput("Save", "other-session-save"), taskId: asked.taskId },
+          otherSession,
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        assert.strictEqual(
+          (yield* ledger.getInput(saved.inputId))?.snapshot.reply?.text,
+          CHANNEL_COPY.answerForwarded,
+        );
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        assert.isTrue(yield* fs.exists(path.join(yield* skillsDir, "deploy-check.md")));
+        const done = yield* proposalTask;
+        assert.strictEqual(done?.status, "completed");
+        assert.strictEqual(done?.resultSummary, "Saved the skill deploy-check.");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "refuses a teammate's Save, even with full access, using the usual answer refusal and writes nothing",
+    () => {
+      const { harness } = harnessCapturing();
+      return Effect.gen(function* () {
+        yield* finishWith(
+          harness,
+          proposal,
+          Effect.gen(function* () {
+            yield* (yield* ChannelGateway.ChannelGateway).ingest(
+              goatInput("do: check the deploy", "teammate-source"),
+              askingSession,
+            );
+            yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+          }).pipe(Effect.orDie),
+        );
+        const asked = (yield* proposalTask)!;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const saved = yield* gateway.ingest(
+          { ...goatInput("Save", "teammate-full-save"), taskId: asked.taskId },
+          teammateSession,
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        assert.strictEqual(
+          (yield* ledger.getInput(saved.inputId))?.snapshot.reply?.text,
+          CHANNEL_COPY.answerNotAllowed,
+        );
+        assert.strictEqual((yield* proposalTask)?.status, "waiting_input");
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        assert.isFalse(yield* fs.exists(path.join(yield* skillsDir, "deploy-check.md")));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "still refuses an ordinary question from the same person on another connection without GOAT memory",
+    () => {
+      const { harness } = harnessCapturing();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* gateway.ingest(goatInput("do: check the deploy", "ordinary-source"), askingSession);
+        yield* runtime.drain;
+        const [source] = yield* allTasks;
+        assert.isDefined(source?.worker);
+        yield* (yield* ChannelWorkerReports.ChannelWorkerReports).report(
+          {
+            taskId: source!.taskId,
+            eventId: ChannelTaskEventId.make("ordinary-question"),
+            generation: source!.generation,
+            status: "waiting_input",
+            summary: "Which tag?",
+            question: "Which tag should the check compare?",
+          },
+          source!.worker!.threadId,
+        );
+        harness.world.setStatus(source!.worker!.threadId, 1, "completed");
+        yield* runtime.drain;
+        const waiting = (yield* allTasks).find((task) => task.taskId === source!.taskId)!;
+        assert.strictEqual(waiting.status, "waiting_input");
+        assert.isUndefined(waiting.skillProposal);
+        assert.isFalse(
+          mayAnswerTask(
+            { ...waiting.requester, grantedScopes: ["orchestration:operate"] },
+            waiting,
+            "other-connection",
+          ),
+        );
+        const saved = yield* gateway.ingest(
+          {
+            ...goatInput("the released tag", "ordinary-answer"),
+            intent: "answer",
+            taskId: waiting.taskId,
+            questionId: waiting.openQuestions[0]!.questionId,
+          },
+          otherSession,
+        );
+        yield* runtime.drain;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        assert.strictEqual(
+          (yield* ledger.getInput(saved.inputId))?.snapshot.reply?.text,
+          CHANNEL_COPY.answerNotAllowed,
+        );
+        const after = (yield* allTasks).find((task) => task.taskId === source!.taskId)!;
+        assert.strictEqual(after.status, "waiting_input");
+        assert.deepStrictEqual(after.openQuestions, waiting.openQuestions);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
