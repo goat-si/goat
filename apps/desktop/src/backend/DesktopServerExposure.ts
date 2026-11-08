@@ -9,7 +9,14 @@ import {
   type DesktopServerExposureMode,
   type DesktopServerExposureState,
 } from "@goat/contracts";
-import { isTailscaleIpv4Address, readTailscaleStatus } from "@goat/tailscale";
+import {
+  findExcludedRange,
+  isTailscaleIpv4Address,
+  readTailscaleStatus,
+  readWindowsExcludedTcpPortRanges,
+  reservedPortMessage,
+  suggestFreePort,
+} from "@goat/tailscale";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -244,6 +251,20 @@ export class DesktopTailscaleServePersistenceError extends Schema.TaggedError<De
   }
 }
 
+export class DesktopTailscaleServePortReservedError extends Schema.TaggedError<DesktopTailscaleServePortReservedError>()(
+  "DesktopTailscaleServePortReservedError",
+  {
+    port: Schema.Number,
+    start: Schema.Number,
+    end: Schema.Number,
+    suggestion: Schema.NullOr(Schema.Number),
+  },
+) {
+  override get message(): string {
+    return reservedPortMessage(this.port, { start: this.start, end: this.end }, this.suggestion);
+  }
+}
+
 export const DesktopServerExposureSetModeError = Schema.Union([
   DesktopServerExposureNoNetworkAddressError,
   DesktopServerExposureModePersistenceError,
@@ -254,6 +275,7 @@ export const DesktopServerExposureError = Schema.Union([
   DesktopServerExposureNoNetworkAddressError,
   DesktopServerExposureModePersistenceError,
   DesktopTailscaleServePersistenceError,
+  DesktopTailscaleServePortReservedError,
 ]);
 export type DesktopServerExposureError = typeof DesktopServerExposureError.Type;
 
@@ -284,7 +306,10 @@ export class DesktopServerExposure extends Context.Service<
     readonly setTailscaleServeEnabled: (input: {
       readonly enabled: boolean;
       readonly port?: number;
-    }) => Effect.Effect<DesktopServerExposureChange, DesktopTailscaleServePersistenceError>;
+    }) => Effect.Effect<
+      DesktopServerExposureChange,
+      DesktopTailscaleServePersistenceError | DesktopTailscaleServePortReservedError
+    >;
     readonly getAdvertisedEndpoints: Effect.Effect<readonly AdvertisedEndpoint[]>;
   }
 >()("@goat/desktop/backend/DesktopServerExposure") {}
@@ -558,6 +583,22 @@ export const make = Effect.gen(function* () {
         enabled: input.enabled,
         ...(input.port === undefined ? {} : { port: input.port }),
       });
+      if (input.enabled) {
+        const saved = yield* desktopSettings.get;
+        const port = input.port ?? saved.tailscaleServePort;
+        const ranges = yield* readWindowsExcludedTcpPortRanges().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+        );
+        const range = findExcludedRange(port, ranges);
+        if (range !== null) {
+          return yield* new DesktopTailscaleServePortReservedError({
+            port,
+            start: range.start,
+            end: range.end,
+            suggestion: suggestFreePort(port, ranges),
+          });
+        }
+      }
       const result = yield* desktopSettings
         .setTailscaleServe({
           enabled: input.enabled,

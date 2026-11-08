@@ -9,6 +9,7 @@ import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@goat/shared/HostProcess";
 
 import {
+  classifyTailscaleHttpsEndpoint,
   ensureTailscaleServe,
   parseTailscaleExitNode,
   parseTailscaleSshEnabled,
@@ -283,6 +284,43 @@ describe("Tailscale endpoint path compatibility", () => {
       );
       assert.isFalse(result);
       assert.equal(calls, 2);
+    }),
+  );
+
+  it.effect("classifies a refused connection, a plain failure, and another service", () =>
+    Effect.gen(function* () {
+      const refused = yield* classifyTailscaleHttpsEndpoint({
+        baseUrl: "https://host.example",
+      }).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(FetchHttpClient.Fetch, async () => {
+          throw new TypeError("fetch failed", {
+            cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+          });
+        }),
+      );
+      assert.equal(refused, "refused");
+
+      const noAnswer = yield* classifyTailscaleHttpsEndpoint({
+        baseUrl: "https://host.example",
+      }).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(FetchHttpClient.Fetch, async () => {
+          throw new TypeError("fetch failed");
+        }),
+      );
+      assert.equal(noAnswer, "no-answer");
+
+      const notGoat = yield* classifyTailscaleHttpsEndpoint({
+        baseUrl: "https://host.example",
+      }).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(
+          FetchHttpClient.Fetch,
+          async () => new Response(null, { status: 500 }),
+        ),
+      );
+      assert.equal(notGoat, "not-goat");
     }),
   );
 });

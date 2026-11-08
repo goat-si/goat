@@ -11,6 +11,7 @@ import * as DateTime from "effect/DateTime";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { page } from "vite-plus/test/browser";
 
 const state = vi.hoisted(() => ({ createCredential: vi.fn(), permitted: true }));
 vi.mock("~/environments/primary", () => ({
@@ -322,4 +323,24 @@ it("asks before granting hub access and sends it only while the switch is on", a
     scopes: [...AuthStandardClientScopes],
   });
   expect(document.body.textContent).toContain("This QR opens only this computer.");
+});
+
+it("shows a reserved Tailscale HTTPS port instead of saying Tailscale is down", async () => {
+  const reserved =
+    "Windows reserves TCP ports 46648\u201346747, so Tailscale HTTPS cannot use port 46743. Choose another port, such as 46748.";
+  await render({
+    endpoints: [
+      {
+        ...https,
+        status: "unavailable",
+        description: reserved,
+        compatibility: { hostedHttpsApp: "requires-configuration", desktopApp: "compatible" },
+      },
+    ],
+    exposureState: {
+      ...exposure("network-accessible"),
+      tailscaleServeEnabled: true,
+    },
+  });
+  await expect.element(page.getByText(reserved, { exact: true })).toBeVisible();
 });

@@ -2,10 +2,16 @@ import { createAdvertisedEndpoint } from "@goat/shared/advertisedEndpoint";
 import type { AdvertisedEndpoint, AdvertisedEndpointProvider } from "@goat/contracts";
 import {
   buildTailscaleHttpsBaseUrl,
+  classifyTailscaleHttpsEndpoint,
+  DEFAULT_TAILSCALE_SERVE_PORT,
+  findExcludedRange,
   isTailscaleIpv4Address,
   parseTailscaleStatus,
-  probeTailscaleHttpsEndpoint,
   readTailscaleStatus,
+  readWindowsExcludedTcpPortRanges,
+  reservedPortMessage,
+  suggestFreePort,
+  type TailscaleHttpsEndpointClassification,
   type TailscaleStatus,
 } from "@goat/tailscale";
 import * as Effect from "effect/Effect";
@@ -77,8 +83,14 @@ const resolveTailscaleMagicDnsAdvertisedEndpoint = Effect.fn(
   readonly dnsName: string | null;
   readonly serveEnabled: boolean;
   readonly servePort?: number;
-  readonly probe?: (baseUrl: string) => Effect.Effect<boolean, never, HttpClient.HttpClient>;
-}): Effect.fn.Return<Option.Option<AdvertisedEndpoint>, never, HttpClient.HttpClient> {
+  readonly probe?: (
+    baseUrl: string,
+  ) => Effect.Effect<TailscaleHttpsEndpointClassification, never, HttpClient.HttpClient>;
+}): Effect.fn.Return<
+  Option.Option<AdvertisedEndpoint>,
+  never,
+  HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
+> {
   if (!input.dnsName) {
     return Option.none();
   }
@@ -87,12 +99,32 @@ const resolveTailscaleMagicDnsAdvertisedEndpoint = Effect.fn(
     magicDnsName: input.dnsName,
     ...(input.servePort === undefined ? {} : { servePort: input.servePort }),
   });
-  const probe =
-    input.probe?.(httpBaseUrl) ??
-    probeTailscaleHttpsEndpoint({
-      baseUrl: httpBaseUrl,
-    });
-  const isReachable = input.serveEnabled ? yield* probe : false;
+  const servePort = input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT;
+  const classification = input.serveEnabled
+    ? yield* (
+        input.probe?.(httpBaseUrl) ??
+          classifyTailscaleHttpsEndpoint({
+            baseUrl: httpBaseUrl,
+          })
+      )
+    : null;
+  const isReachable = classification === "ok";
+  let description = "MagicDNS hostname. Configure Tailscale Serve for HTTPS access.";
+  if (classification === "ok") {
+    description = "HTTPS endpoint served by Tailscale Serve.";
+  } else if (classification === "refused") {
+    const ranges = yield* readWindowsExcludedTcpPortRanges();
+    const range = findExcludedRange(servePort, ranges);
+    description =
+      range === null
+        ? `Tailscale is running, but nothing answers on HTTPS port ${servePort}. GOAT keeps trying to set it up; if this lasts, choose another port.`
+        : reservedPortMessage(servePort, range, suggestFreePort(servePort, ranges));
+  } else if (classification === "no-answer") {
+    description =
+      "Tailscale HTTPS is on, but Tailscale is not answering. Check that Tailscale is running and signed in on this computer.";
+  } else if (classification === "not-goat") {
+    description = `Another service answers on Tailscale HTTPS port ${servePort}. Choose another port.`;
+  }
 
   return Option.some(
     createAdvertisedEndpoint({
@@ -104,9 +136,7 @@ const resolveTailscaleMagicDnsAdvertisedEndpoint = Effect.fn(
       reachability: "private-network",
       hostedHttpsCompatibility: isReachable ? "compatible" : "requires-configuration",
       status: isReachable ? "available" : "unavailable",
-      description: isReachable
-        ? "HTTPS endpoint served by Tailscale Serve."
-        : "MagicDNS hostname. Configure Tailscale Serve for HTTPS access.",
+      description,
     }),
   );
 });
@@ -123,7 +153,9 @@ export const resolveTailscaleAdvertisedEndpoints = Effect.fn("resolveTailscaleAd
       never,
       ChildProcessSpawner.ChildProcessSpawner
     >;
-    readonly probe?: (baseUrl: string) => Effect.Effect<boolean, never, HttpClient.HttpClient>;
+    readonly probe?: (
+      baseUrl: string,
+    ) => Effect.Effect<TailscaleHttpsEndpointClassification, never, HttpClient.HttpClient>;
   }): Effect.fn.Return<
     readonly AdvertisedEndpoint[],
     never,

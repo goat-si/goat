@@ -1,4 +1,11 @@
-import { disableTailscaleServe, ensureTailscaleServe } from "@goat/tailscale";
+import {
+  disableTailscaleServe,
+  ensureTailscaleServe,
+  findExcludedRange,
+  readWindowsExcludedTcpPortRanges,
+  reservedPortMessage,
+  suggestFreePort,
+} from "@goat/tailscale";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -29,12 +36,25 @@ const serveRetrySchedule = Schedule.exponential("2 seconds").pipe(
   ),
 );
 
-const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <E, R, E2, R2>(input: {
+const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
+  E,
+  R,
+  E2,
+  R2,
+  R3,
+>(input: {
   readonly servePort: number;
   readonly parked: Deferred.Deferred<void>;
   readonly awaitActivation: Effect.Effect<void>;
   readonly ensure: (target: TailscaleServeTarget) => Effect.Effect<void, E, R>;
   readonly disable: (request: { readonly servePort: number }) => Effect.Effect<void, E2, R2>;
+  readonly excludedRange?: (
+    servePort: number,
+  ) => Effect.Effect<
+    { readonly start: number; readonly end: number; readonly suggestion: number | null } | null,
+    never,
+    R3
+  >;
 }) {
   return yield* Effect.acquireRelease(
     Effect.gen(function* () {
@@ -52,6 +72,20 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <E,
         servePort: input.servePort,
         localHost: loopbackUrlHostForAddress(address),
       };
+      const reserved = yield* (input.excludedRange ?? (() => Effect.succeed(null)))(
+        input.servePort,
+      );
+      if (reserved !== null) {
+        yield* Effect.logWarning(
+          `${reservedPortMessage(
+            input.servePort,
+            { start: reserved.start, end: reserved.end },
+            reserved.suggestion,
+          )} Change it in Settings → Connections, or pass --tailscale-serve-port.`,
+          { servePort: input.servePort },
+        );
+        return null;
+      }
       const attempted = yield* Ref.make(false);
       const attempts = yield* Ref.make(0);
       const fiber = yield* Effect.gen(function* () {
@@ -108,10 +142,17 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <E,
   );
 });
 
-export const layerTailscaleServeStartupWith = <E, R, E2, R2>(
+export const layerTailscaleServeStartupWith = <E, R, E2, R2, R3 = never>(
   input: TailscaleServeStartupBase & {
     readonly ensure: (target: TailscaleServeTarget) => Effect.Effect<void, E, R>;
     readonly disable: (request: { readonly servePort: number }) => Effect.Effect<void, E2, R2>;
+    readonly excludedRange?: (
+      servePort: number,
+    ) => Effect.Effect<
+      { readonly start: number; readonly end: number; readonly suggestion: number | null } | null,
+      never,
+      R3
+    >;
   },
 ) => (input.enabled ? Layer.effectDiscard(openTailscaleServe(input)) : Layer.empty);
 
@@ -120,4 +161,17 @@ export const layerTailscaleServeStartup = (input: TailscaleServeStartupBase) =>
     ...input,
     ensure: (target) => ensureTailscaleServe(target),
     disable: (request) => disableTailscaleServe(request),
+    excludedRange: (servePort) =>
+      readWindowsExcludedTcpPortRanges().pipe(
+        Effect.map((ranges) => {
+          const range = findExcludedRange(servePort, ranges);
+          return range === null
+            ? null
+            : {
+                start: range.start,
+                end: range.end,
+                suggestion: suggestFreePort(servePort, ranges),
+              };
+        }),
+      ),
   });

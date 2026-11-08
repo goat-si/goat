@@ -17,7 +17,11 @@ import {
   buildTailscaleHttpsBaseUrl,
   DEFAULT_TAILSCALE_SERVE_PORT,
   ensureTailscaleServe,
+  findExcludedRange,
   readTailscaleStatus,
+  readWindowsExcludedTcpPortRanges,
+  reservedPortMessage,
+  suggestFreePort,
 } from "@goat/tailscale";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -150,6 +154,20 @@ export class ServePortOccupiedError extends Schema.TaggedError<ServePortOccupied
 ) {
   override get message(): string {
     return `HTTPS port ${String(this.servePort)} on the tailnet already serves something that is not a GOAT server. Pass --tailscale-serve-port to publish this one on another port.`;
+  }
+}
+
+export class TailscaleServePortReservedError extends Schema.TaggedError<TailscaleServePortReservedError>()(
+  "TailscaleServePortReservedError",
+  {
+    port: Schema.Number,
+    start: Schema.Number,
+    end: Schema.Number,
+    suggestion: Schema.NullOr(Schema.Number),
+  },
+) {
+  override get message(): string {
+    return `${reservedPortMessage(this.port, { start: this.start, end: this.end }, this.suggestion)} Pass --tailscale-serve-port to use another port.`;
   }
 }
 
@@ -423,6 +441,16 @@ const resolveTailscalePairingBase = Effect.fn("pair.resolveTailscalePairingBase"
     const localTarget = resolveTailscaleLocalTarget(input.target.state);
     if (isDevServerNotProxiableError(localTarget)) {
       return yield* localTarget;
+    }
+    const reservedRanges = yield* readWindowsExcludedTcpPortRanges();
+    const reserved = findExcludedRange(input.servePort, reservedRanges);
+    if (reserved !== null) {
+      return yield* new TailscaleServePortReservedError({
+        port: input.servePort,
+        start: reserved.start,
+        end: reserved.end,
+        suggestion: suggestFreePort(input.servePort, reservedRanges),
+      });
     }
     yield* ensureTailscaleServe({
       localPort: localTarget.localPort,

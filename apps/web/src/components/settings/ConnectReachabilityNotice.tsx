@@ -30,6 +30,16 @@ export type ConnectReachabilityActions = {
   readonly onTurnOnTailscaleHttps: (endpoint: AdvertisedEndpoint) => void;
 };
 
+const TAILSCALE_UNREACHABLE_FALLBACK =
+  "Tailscale HTTPS is on, but Tailscale is not answering. Check that Tailscale is running and signed in on this computer.";
+
+export function tailscaleUnreachableMessage(endpoint: AdvertisedEndpoint | null): string {
+  if (endpoint?.status === "unavailable" && endpoint.description) {
+    return endpoint.description;
+  }
+  return TAILSCALE_UNREACHABLE_FALLBACK;
+}
+
 /** Offers the missing switch where the user is connecting; the confirm it opens restarts GOAT. */
 export function ConnectReachabilityNotice({
   flow,
@@ -52,8 +62,7 @@ export function ConnectReachabilityNotice({
   if (step === "tailscale-unreachable") {
     return (
       <p className="text-sm text-muted-foreground" role="status">
-        Tailscale HTTPS is on, but Tailscale is not answering. Check that Tailscale is running and
-        signed in on this computer.
+        {tailscaleUnreachableMessage(tailscaleHttpsEndpoint)}
       </p>
     );
   }

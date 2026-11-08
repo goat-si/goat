@@ -456,6 +456,86 @@ describe("goat pair", () => {
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("refuses a Windows-reserved Tailscale HTTPS port before publishing it", () =>
+    withDescriptorServer((origin) =>
+      Effect.gen(function* () {
+        const baseDir = makeTempDir("goat-pair-reserved-port-test-");
+        yield* persistServerRuntimeState({
+          path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
+          state: yield* makePersistedServerRuntimeState({
+            config: { host: "127.0.0.1", devUrl: undefined },
+            port: Number(new URL(origin).port),
+          }),
+        });
+        const commands: string[] = [];
+        const netshSample = `
+
+Protocol tcp Port Exclusion Ranges
+
+Start Port    End Port
+----------    --------
+      5357        5357
+     46648       46747
+     50000       50059     *
+
+* - Administered port exclusions.
+
+`;
+        const spawner = ChildProcessSpawner.make((command) => {
+          if (!ChildProcess.isStandardCommand(command)) return Effect.die("unexpected command");
+          commands.push(`${command.command} ${command.args.join(" ")}`);
+          const stdout =
+            command.command === "netsh.exe"
+              ? netshSample
+              : `{"Self":{"DNSName":"pair-test.invalid.","CapMap":{"https":null}}}`;
+          return Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+              isRunning: Effect.succeed(false),
+              kill: () => Effect.void,
+              unref: Effect.succeed(Effect.void),
+              stdin: Sink.drain,
+              stdout: Stream.make(new TextEncoder().encode(stdout)),
+              stderr: Stream.empty,
+              all: Stream.empty,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+            }),
+          );
+        });
+        const fetch = yield* FetchHttpClient.Fetch;
+        const error = yield* provideCliTestLayers(
+          runCli([
+            "pair",
+            "--base-dir",
+            baseDir,
+            "--tailscale",
+            "--tailscale-serve-port",
+            "46743",
+          ]).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provideService(HostProcess.Platform, "win32"),
+            Effect.provideService(FetchHttpClient.Fetch, async (input, init) => {
+              if (String(input).startsWith(origin)) return fetch(input, init);
+              return new Response(null, { status: 503 });
+            }),
+            Effect.flip,
+          ),
+        );
+
+        assert.include(
+          String(error),
+          "Windows reserves TCP ports 46648\u201346747, so Tailscale HTTPS cannot use port 46743. Choose another port, such as 46748. Pass --tailscale-serve-port to use another port.",
+        );
+        assert.equal(
+          commands.some((command) => command.includes(" serve ")),
+          false,
+        );
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
 
 describe("auth scope options", () => {

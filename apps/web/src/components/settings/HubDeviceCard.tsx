@@ -42,6 +42,7 @@ import {
   type ConnectReachabilityActions,
   ConnectReachabilityNotice,
   connectReachabilityStep,
+  tailscaleUnreachableMessage,
 } from "./ConnectReachabilityNotice";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -226,7 +227,7 @@ export function HubDeviceCard({
         tailscaleHttpsEndpoint?.status === "available"
           ? tailscaleHttpsEndpoint.httpBaseUrl
           : serveOn
-            ? "Tailscale HTTPS is on, but Tailscale is not answering."
+            ? tailscaleUnreachableMessage(tailscaleHttpsEndpoint)
             : tailscaleHttpsEndpoint
               ? "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
               : missingTailscaleEndpointDescription(exposureState)
