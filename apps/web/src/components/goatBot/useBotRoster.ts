@@ -7,6 +7,7 @@ import { useThreadVisibleTurnItems } from "~/state/entities";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
+import { rememberGoatBotNames } from "./goatBotNames";
 import { syncGoatBotMemberThreads, useGoatBotEnabled } from "./useGoatBotSession";
 
 /**
@@ -90,6 +91,7 @@ export function useBotRoster() {
       : null,
   );
   const bots = profiles.data?.bots;
+  if (environmentId !== null && bots !== undefined) rememberGoatBotNames(environmentId, bots);
   // oxlint-disable-next-line goat/react-effect-budget -- Keep the environment's send queue to the members the roster lists as active.
   useEffect(() => {
     if (environmentId !== null && supportsMembers && bots !== undefined)

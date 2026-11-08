@@ -3,7 +3,7 @@ import { createModelSelection } from "@goat/shared/model";
 
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { toastManager } from "../ui/toast";
-import { useGoatBotName } from "./goatBotMemberContext";
+import { useGoatBotMainName, useGoatBotName } from "./goatBotMemberContext";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
 import { useGoatBotModel } from "./useGoatBotModel";
 
@@ -23,6 +23,7 @@ function GoatBotHomeModelPicker({ environmentId }: { environmentId: EnvironmentI
   const { activeEntry, selection, separate, entries, options, allowed, save } =
     useGoatBotModel(environmentId);
   const botName = useGoatBotName();
+  const mainName = useGoatBotMainName();
   const modelName =
     activeEntry?.models.find((model) => model.slug === selection.model)?.name ?? selection.model;
   return (
@@ -40,7 +41,7 @@ function GoatBotHomeModelPicker({ environmentId }: { environmentId: EnvironmentI
         void save({ goatBotModelSelection: createModelSelection(instanceId, model) }).then(
           (saved) => {
             if (!saved)
-              toastManager.add({ type: "error", title: "Couldn't change GOAT Bot's model" });
+              toastManager.add({ type: "error", title: `Couldn't change ${mainName}'s model` });
           },
         );
       }}

@@ -19,6 +19,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { GoatBotCheckInForm } from "./GoatBotCheckInForm";
+import { useGoatBotName } from "./goatBotMemberContext";
 
 export function GoatBotRoutines(props: {
   readonly environmentId: EnvironmentId;
@@ -27,6 +28,7 @@ export function GoatBotRoutines(props: {
   readonly error: string | null;
 }) {
   const nowMinute = useNowMinute();
+  const botName = useGoatBotName();
   const rows = botRoutineRows(props.tasks, props.threadId, Date.parse(`${nowMinute}:00.000Z`));
   if (props.error !== null) return <p className="text-destructive">Couldn't load routines.</p>;
   return (
@@ -35,7 +37,7 @@ export function GoatBotRoutines(props: {
         <CheckInOffer environmentId={props.environmentId} threadId={props.threadId} />
       ) : null}
       {rows.length === 0 ? (
-        <p>Ask GOAT Bot in chat to set up a routine.</p>
+        <p>Ask {botName} in chat to set up a routine.</p>
       ) : (
         <ul className="m-0 list-none space-y-1 p-0">
           {rows.map((row) => (
