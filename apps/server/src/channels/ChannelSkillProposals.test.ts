@@ -1,5 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
+  AuthStandardClientScopes,
+  type AuthEnvironmentScope,
   type ChannelReceptionInput,
   type ChannelSkillProposal,
   type ChannelTask,
@@ -16,17 +18,20 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
+import { ownerFromSession } from "./channelOwner.ts";
 import { makeSkillProposalAnswers } from "./channelSkillProposals.ts";
 import { mayAnswerTask, skillFileText } from "./channelSkillProposalText.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   botMessages,
   defaultScript,
+  environmentId,
   goatInput,
   linkSlackUser,
   makeHarness,
@@ -44,20 +49,16 @@ const proposal: ChannelSkillProposal = {
   text: "# Deploy check\n\n1. Open the pipeline.\n2. Compare the released tag.",
 };
 const BODY = "Compare the released tag";
-const askingSession = {
-  ...rpcContext,
-  grantedScopes: [...rpcContext.grantedScopes, "memory:read" as const, "memory:write" as const],
-};
-const otherSession = {
-  ...rpcContext,
-  grantedScopes: ["orchestration:operate" as const],
-  runtimeModeCeiling: "approval-required" as const,
-};
-const teammateSession = {
-  ...askingSession,
-  principalId: "teammate",
-  displayName: "Teammate",
-};
+/** The authenticated GOAT client ownerFromSession builds; the caller is the RPC session around it. */
+const goatSession = (
+  subject: string,
+  scopes: ReadonlyArray<AuthEnvironmentScope> = AuthStandardClientScopes,
+) => ({
+  ...ownerFromSession(environmentId, { subject, scopes }),
+  caller: { type: "rpc" as const },
+});
+const adminSession = goatSession("administrative-bootstrap");
+const standardSession = goatSession("one-time-token");
 
 const harnessCapturing = () => {
   const harness = makeHarness();
@@ -264,23 +265,48 @@ describe("GOAT Bot skill proposals", () => {
     return Effect.all([fromSlack, withSecret, nameTaken], { discard: true });
   });
 
-  it.effect("lets only the requester answer a proposal", () =>
+  it.effect("lets another GOAT session of the same owner answer a proposal", () =>
     Effect.sync(() => {
       const requester = {
         ownerId: "owner",
-        principalId: "owner",
+        principalId: "administrative-bootstrap",
         displayName: "Jun",
         originKind: "goat" as const,
-        runtimeModeCeiling: "approval-required" as const,
-        grantedScopes: ["orchestration:operate" as const],
+        runtimeModeCeiling: "full-access" as const,
+        grantedScopes: [...AuthStandardClientScopes],
       };
       const task = { requester, skillProposal: { ...proposal } } as unknown as ChannelTask;
-      assert.isTrue(mayAnswerTask(requester, task));
-      assert.isFalse(mayAnswerTask({ ...requester, principalId: "teammate" }, task));
+      assert.isTrue(mayAnswerTask(requester, task, "goat"));
+      assert.isTrue(mayAnswerTask({ ...requester, principalId: "one-time-token" }, task, "goat"));
+      assert.isFalse(
+        mayAnswerTask(
+          {
+            ...requester,
+            principalId: "one-time-token",
+            grantedScopes: ["orchestration:read"],
+            runtimeModeCeiling: "approval-required",
+          },
+          task,
+          "goat",
+        ),
+      );
+      assert.isFalse(
+        mayAnswerTask(
+          {
+            ...requester,
+            principalId: "slack-linked",
+            originKind: "slack",
+            externalActorId: "U1",
+          },
+          task,
+          "slack-1",
+        ),
+      );
       assert.isTrue(
         mayAnswerTask(
-          { ...requester, principalId: "teammate" },
+          { ...requester, principalId: "one-time-token" },
           { ...task, skillProposal: undefined },
+          "goat",
         ),
       );
     }),
@@ -576,16 +602,21 @@ describe("GOAT Bot skill proposals", () => {
     },
   );
 
-  it.effect("a teammate's Save in the proposal's task view is refused and saves nothing", () => {
+  it.effect("a GOAT session without orchestration:operate cannot save a proposal", () => {
     const { harness } = harnessCapturing();
     return Effect.gen(function* () {
       yield* finishWith(harness);
       const asked = (yield* proposalTask)!;
-      yield* (yield* ChannelGateway.ChannelGateway).ingest(
-        { ...goatInput("Save", "teammate-save"), taskId: asked.taskId },
-        { ...rpcContext, principalId: "teammate", displayName: "Teammate" },
+      const saved = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        { ...goatInput("Save", "no-operate-save"), taskId: asked.taskId },
+        goatSession("one-time-token", ["orchestration:read"]),
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.strictEqual(
+        (yield* ledger.getInput(saved.inputId))?.snapshot.reply?.text,
+        CHANNEL_COPY.answerNotAllowed,
+      );
       assert.strictEqual((yield* proposalTask)?.status, "waiting_input");
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -634,7 +665,7 @@ describe("GOAT Bot skill proposals", () => {
   });
 
   it.effect(
-    "saves a skill when the same person answers from another session without GOAT memory and with a lower runtime ceiling",
+    "saves a skill when the standard pairing session answers a proposal the administrative session asked",
     () => {
       const { harness } = harnessCapturing();
       return Effect.gen(function* () {
@@ -643,23 +674,20 @@ describe("GOAT Bot skill proposals", () => {
           proposal,
           Effect.gen(function* () {
             yield* (yield* ChannelGateway.ChannelGateway).ingest(
-              goatInput("do: check the deploy", "memory-source"),
-              askingSession,
+              goatInput("do: check the deploy", "admin-source"),
+              adminSession,
             );
             yield* (yield* ChannelRuntime.ChannelRuntime).drain;
           }).pipe(Effect.orDie),
         );
         const asked = (yield* proposalTask)!;
-        const answerer = {
-          ...asked.requester,
-          grantedScopes: ["orchestration:operate" as const],
-          runtimeModeCeiling: "approval-required" as const,
-        };
-        assert.isTrue(mayAnswerTask(answerer, asked, "other-connection"));
+        assert.strictEqual(asked.requester.principalId, "administrative-bootstrap");
+        assert.strictEqual(asked.requester.originKind, "goat");
+        assert.isUndefined(asked.requester.externalActorId);
         const gateway = yield* ChannelGateway.ChannelGateway;
         const saved = yield* gateway.ingest(
-          { ...goatInput("Save", "other-session-save"), taskId: asked.taskId },
-          otherSession,
+          { ...goatInput("Save", "standard-session-save"), taskId: asked.taskId },
+          standardSession,
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
         const ledger = yield* ChannelLedger.ChannelLedger;
@@ -677,51 +705,87 @@ describe("GOAT Bot skill proposals", () => {
     },
   );
 
-  it.effect(
-    "refuses a teammate's Save, even with full access, using the usual answer refusal and writes nothing",
-    () => {
-      const { harness } = harnessCapturing();
-      return Effect.gen(function* () {
-        yield* finishWith(
-          harness,
-          proposal,
-          Effect.gen(function* () {
-            yield* (yield* ChannelGateway.ChannelGateway).ingest(
-              goatInput("do: check the deploy", "teammate-source"),
-              askingSession,
-            );
-            yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-          }).pipe(Effect.orDie),
-        );
-        const asked = (yield* proposalTask)!;
-        const gateway = yield* ChannelGateway.ChannelGateway;
-        const saved = yield* gateway.ingest(
-          { ...goatInput("Save", "teammate-full-save"), taskId: asked.taskId },
-          teammateSession,
-        );
-        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
-        const ledger = yield* ChannelLedger.ChannelLedger;
-        assert.strictEqual(
-          (yield* ledger.getInput(saved.inputId))?.snapshot.reply?.text,
-          CHANNEL_COPY.answerNotAllowed,
-        );
-        assert.strictEqual((yield* proposalTask)?.status, "waiting_input");
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        assert.isFalse(yield* fs.exists(path.join(yield* skillsDir, "deploy-check.md")));
-      }).pipe(Effect.provide(harness.layer));
-    },
-  );
+  it.effect("a Slack-linked person cannot save a proposal asked in the GOAT app", () => {
+    const { harness } = harnessCapturing();
+    return Effect.gen(function* () {
+      yield* finishWith(
+        harness,
+        proposal,
+        Effect.gen(function* () {
+          yield* (yield* ChannelGateway.ChannelGateway).ingest(
+            goatInput("do: check the deploy", "slack-guard-source"),
+            adminSession,
+          );
+          yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        }).pipe(Effect.orDie),
+      );
+      const asked = (yield* proposalTask)!;
+      const slackOwner = ownerFromSession(environmentId, {
+        subject: "slack-linked",
+        scopes: AuthStandardClientScopes,
+      });
+      const identities = yield* ChannelIdentityService.ChannelIdentityService;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const { code } = yield* identities.createLink(
+        { connectionId: "slack-1", runtimeModeCeiling: "full-access" },
+        slackOwner,
+      );
+      yield* gateway.linkIdentity(
+        {
+          connectionId: "slack-1",
+          externalActorId: "U1",
+          code,
+          idempotencyKey: "link-slack-proposal",
+          replyAddress: {
+            kind: "slack",
+            connectionId: "slack-1",
+            teamId: "T1",
+            channelId: "D1",
+            rootTs: "1",
+          },
+        },
+        {
+          ...slackOwner,
+          caller: { type: "transport", kind: "slack", connectionId: "slack-1" },
+        },
+      );
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const identity = yield* ledger.findIdentity({
+        connectionId: "slack-1",
+        externalActorId: "U1",
+      });
+      if (identity === undefined) {
+        return yield* Effect.die(new Error("expected the Slack link to admit U1"));
+      }
+      const answerer = ChannelGateway.effectiveRequester(slackOwner, identity, {
+        originKind: "slack",
+        externalActorId: "U1",
+      });
+      assert.strictEqual(answerer.ownerId, asked.requester.ownerId);
+      assert.notStrictEqual(answerer.principalId, asked.requester.principalId);
+      assert.strictEqual(answerer.originKind, "slack");
+      assert.isFalse(mayAnswerTask(answerer, asked, "slack-1"));
+      yield* gateway.ingest(slackInput("Save", "slack-proposal-save"), {
+        ...slackOwner,
+        caller: { type: "transport", kind: "slack", connectionId: "slack-1" },
+      });
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      assert.strictEqual((yield* proposalTask)?.status, "waiting_input");
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      assert.isFalse(yield* fs.exists(path.join(yield* skillsDir, "deploy-check.md")));
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect(
-    "still refuses an ordinary question from the same person on another connection without GOAT memory",
+    "answers an ordinary question from the other GOAT session when that session holds the same access",
     () => {
       const { harness } = harnessCapturing();
       return Effect.gen(function* () {
         yield* setupBot;
         const gateway = yield* ChannelGateway.ChannelGateway;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
-        yield* gateway.ingest(goatInput("do: check the deploy", "ordinary-source"), askingSession);
+        yield* gateway.ingest(goatInput("do: check the deploy", "ordinary-source"), adminSession);
         yield* runtime.drain;
         const [source] = yield* allTasks;
         assert.isDefined(source?.worker);
@@ -741,13 +805,7 @@ describe("GOAT Bot skill proposals", () => {
         const waiting = (yield* allTasks).find((task) => task.taskId === source!.taskId)!;
         assert.strictEqual(waiting.status, "waiting_input");
         assert.isUndefined(waiting.skillProposal);
-        assert.isFalse(
-          mayAnswerTask(
-            { ...waiting.requester, grantedScopes: ["orchestration:operate"] },
-            waiting,
-            "other-connection",
-          ),
-        );
+        assert.strictEqual(waiting.requester.principalId, "administrative-bootstrap");
         const saved = yield* gateway.ingest(
           {
             ...goatInput("the released tag", "ordinary-answer"),
@@ -755,17 +813,17 @@ describe("GOAT Bot skill proposals", () => {
             taskId: waiting.taskId,
             questionId: waiting.openQuestions[0]!.questionId,
           },
-          otherSession,
+          standardSession,
         );
         yield* runtime.drain;
         const ledger = yield* ChannelLedger.ChannelLedger;
         assert.strictEqual(
           (yield* ledger.getInput(saved.inputId))?.snapshot.reply?.text,
-          CHANNEL_COPY.answerNotAllowed,
+          CHANNEL_COPY.answerForwarded,
         );
         const after = (yield* allTasks).find((task) => task.taskId === source!.taskId)!;
-        assert.strictEqual(after.status, "waiting_input");
-        assert.deepStrictEqual(after.openQuestions, waiting.openQuestions);
+        assert.strictEqual(after.status, "running");
+        assert.deepStrictEqual(after.openQuestions, []);
       }).pipe(Effect.provide(harness.layer));
     },
   );
