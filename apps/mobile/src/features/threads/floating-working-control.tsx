@@ -215,7 +215,7 @@ export function FloatingWorkingControl(props: {
           onPress={extensionStatus.onPress}
           onLayout={(event) => setExtensionWidth(settleWidth(event.nativeEvent.layout.width))}
           style={{ maxWidth: availableLabelWidth * 0.5 }}
-          className="h-11 flex-row items-center px-3 active:opacity-70"
+          className="h-[44px] flex-row items-center px-3 active:opacity-70"
         >
           {hasStatus ? <View className="absolute left-0 h-4 w-px bg-border" /> : null}
           <Text className="shrink font-goat-medium text-xs text-foreground" numberOfLines={1}>
