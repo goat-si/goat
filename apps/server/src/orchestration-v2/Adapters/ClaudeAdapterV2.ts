@@ -4743,6 +4743,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const wakeRunByTaskId = yield* Ref.make(new Map<string, RunId>());
         const { recordWakeReport, startUserTurnForWakeReports, takeWakeReports, clearWakeReports } =
           yield* Wake.makeClaudeWakeReports(wakeRunByTaskId);
+        const backgroundedSubagentTaskIds = yield* Ref.make<ReadonlySet<string>>(new Set());
+        // Nested subagent completions notify their owner and never wake the root.
+        const nestedSubagentTaskIds = yield* Ref.make<ReadonlySet<string>>(new Set());
+        const isNestedSubagentTask = (taskId: string) =>
+          Ref.get(nestedSubagentTaskIds).pipe(Effect.map((ids) => ids.has(taskId)));
 
         // Empty roster levels can precede notifications; retain tasks for wake attribution.
         const lastKnownOpaqueTasks = yield* Ref.make(
