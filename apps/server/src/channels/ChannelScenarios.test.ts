@@ -553,7 +553,6 @@ describe("GOAT bot boundary (scenario 6)", () => {
       );
     }).pipe(Effect.provide(harness.layer));
   });
-
   it.effect(
     "records bot input and replies without any provider run, and refuses coding turns",
     () => {
@@ -562,8 +561,11 @@ describe("GOAT bot boundary (scenario 6)", () => {
         yield* setupBot;
         const gateway = yield* ChannelGateway.ChannelGateway;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
-        const receipt = yield* gateway.ingest(goatInput("hello", "client-1"), rpcContext);
+        const sent = goatInput("hello", "client-1");
+        const receipt = yield* gateway.ingest(sent, rpcContext);
         assert.isDefined(receipt.timelineSequence);
+        const before = (yield* botMessages).messages.find((message) => message.role === "user");
+        assert.strictEqual(before?.channel?.clientMessageId, sent.externalMessageId);
         yield* runtime.drain;
         const records = yield* botMessages;
         assert.deepStrictEqual(records.runs, []);
@@ -577,8 +579,8 @@ describe("GOAT bot boundary (scenario 6)", () => {
         assert.isNull(reply?.runId ?? null);
         // Reception's read time lands on the bot's copy of the user message.
         const input = records.messages.find((message) => message.role === "user");
+        assert.strictEqual(input?.channel?.clientMessageId, sent.externalMessageId);
         assert.isDefined(input?.channel?.readAt);
-
         // A legacy coding-turn dispatch to the bot is refused by the orchestrator.
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const refused = yield* Effect.flip(
@@ -595,7 +597,6 @@ describe("GOAT bot boundary (scenario 6)", () => {
           }),
         );
         assert.strictEqual(refused._tag, "OrchestratorChannelBotThreadError");
-
         // The same legacy dispatch through client intake becomes channel input instead.
         const viaIntake = yield* ThreadMessageIntake.dispatchCommand(
           {
@@ -623,7 +624,6 @@ describe("GOAT bot boundary (scenario 6)", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
-
   it.effect(
     "offers a clarifying question's choices as buttons in the bot and as a list in Slack",
     () => {

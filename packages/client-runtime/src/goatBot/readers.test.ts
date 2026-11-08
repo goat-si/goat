@@ -377,6 +377,20 @@ describe("goatBotItemReaders", () => {
     });
   });
 
+  it("a GOAT app message reads the sending client's key", () => {
+    const item = decodeItem(
+      userJson({
+        conversationId: "conv-1",
+        originKind: "goat",
+        kind: "inbound",
+        inputId: "in-1",
+        clientMessageId: "client-1",
+      }),
+    );
+    if (item.type !== "user_message") throw new Error("expected a user message");
+    expect(goatBotItemReaders.message(item)?.clientKey).toBe("client-1");
+  });
+
   it("treats metadata this build cannot read as a plain message", () => {
     const item = decodeItem(
       userJson({ conversationId: "conv-1", originKind: "goat", kind: "something_new" }),

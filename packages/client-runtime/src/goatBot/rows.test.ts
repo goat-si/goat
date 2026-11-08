@@ -6,10 +6,12 @@ import {
   MemorySpaceId,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2TurnItem,
+  OrchestrationV2TurnItemJson,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -22,7 +24,9 @@ import {
   type GoatBotRow,
   type GoatBotTaskCard,
 } from "./rows.ts";
+import { goatBotItemReaders } from "./readers.ts";
 
+const decodeTurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
 const threadId = ThreadId.make("thread-bot");
 
 function base(id: string, at: string) {
@@ -449,6 +453,58 @@ describe("buildGoatBotTimeline", () => {
       readers: readers({ u1: { tone: "reply", readAt: null, requestKey: "in-1" } }),
     });
     expect(content(rows).filter((row) => row.kind === "user")).toHaveLength(1);
+  });
+
+  it("replaces a pending bubble when its echo arrives before the send returns", () => {
+    const item = decodeTurnItem({
+      id: "item-1",
+      threadId: "thread-bot",
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "completed",
+      title: null,
+      startedAt: "2026-10-12T12:00:00.000Z",
+      completedAt: "2026-10-12T12:00:00.000Z",
+      updatedAt: "2026-10-12T12:00:00.000Z",
+      type: "user_message",
+      messageId: "m-1",
+      inputIntent: "turn_start",
+      text: "hello",
+      attachments: [],
+      createdBy: "user",
+      creationSource: "web",
+      channel: {
+        conversationId: "conv-1",
+        originKind: "goat",
+        kind: "inbound",
+        inputId: "in-1",
+        clientMessageId: "client-1",
+      },
+    });
+    if (item.type !== "user_message") throw new Error("expected a user message");
+    const rows = buildGoatBotTimeline({
+      visibleTurnItems: rowsOf([item]),
+      pendingInputs: [
+        {
+          clientKey: "client-1",
+          text: "hello",
+          createdAt: "2026-10-12T12:00:00Z",
+          state: "sending",
+          requestKey: null,
+        },
+      ],
+      readers: goatBotItemReaders,
+    });
+    expect(
+      content(rows)
+        .filter((row) => row.kind === "user")
+        .map((row) => row.id),
+    ).toEqual(["item-1"]);
   });
 
   it("starts a new day row when the local date changes", () => {
