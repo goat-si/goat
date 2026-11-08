@@ -419,7 +419,7 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.scoped,
       Effect.timeoutOption(REQUEST_TIMEOUT_MS),
-      Effect.flatMap((result) =>
+      Effect.flatMap((result): Effect.Effect<Attempt> =>
         result._tag === "Some"
           ? Effect.succeed(result.value)
           : Effect.logWarning("completion webhook: post timed out", { id: report.id }).pipe(
