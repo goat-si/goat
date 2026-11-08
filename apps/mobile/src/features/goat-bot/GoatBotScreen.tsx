@@ -54,16 +54,18 @@ type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const rowKey = (row: GoatBotRow) => row.id;
 const receiptTime = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(iso));
-const availabilityCopy = {
-  ready: "Answers here, works in its own threads",
-  connecting: "Connecting to GOAT Bot…",
-  home_offline: "GOAT Bot’s computer is offline.",
-  offline: "GOAT Bot's computer is offline. Messages will be available when it reconnects.",
-  unsupported: "Update the server to use GOAT Bot here.",
-  permission: "This connection does not have permission to message GOAT Bot.",
-  legacy_active: "Your global agent is still working. Check again when it finishes.",
-  error: "Couldn't reach GOAT Bot",
-};
+function availabilityCopy(mainName: string, openName: string) {
+  return {
+    ready: "Answers here, works in its own threads",
+    connecting: `Connecting to ${mainName}…`,
+    home_offline: `${mainName}’s computer is offline.`,
+    offline: `${mainName}'s computer is offline. Messages will be available when it reconnects.`,
+    unsupported: "Update the server to use GOAT Bot here.",
+    permission: "This connection does not have permission to message GOAT Bot.",
+    legacy_active: "Your global agent is still working. Check again when it finishes.",
+    error: `Couldn't reach ${openName}`,
+  };
+}
 
 type GoatBotTaskRow = Extract<GoatBotRow, { kind: "task" }>;
 const SUMMARY_LINES = 4;
@@ -412,8 +414,15 @@ export function GoatBotScreen(props: {
   readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
   const member = props.member ?? null;
-  const session = useMobileGoatBotSession(props.visible, props.taskId ?? null, member);
+  const mainName = goatBotName(props.main ?? null);
+  const session = useMobileGoatBotSession(
+    props.visible,
+    props.taskId ?? null,
+    member,
+    props.main ?? null,
+  );
   const title = goatBotName(member ?? props.main ?? null);
+  const copy = availabilityCopy(mainName, title);
   const taskId = session.supportsTaskThreads ? props.taskId : undefined;
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
@@ -590,11 +599,11 @@ export function GoatBotScreen(props: {
           <Text className="text-sm text-foreground-muted">
             {session.availability === "home_offline"
               ? session.homeKnown
-                ? `GOAT Bot runs on ${session.homeLabel}, which isn't connected.`
-                : `GOAT Bot's home (${session.homeLabel}) isn't a computer this app knows.`
+                ? `${mainName} runs on ${session.homeLabel}, which isn't connected.`
+                : `${mainName}'s home (${session.homeLabel}) isn't a computer this app knows.`
               : session.availability === "error"
-                ? (session.error ?? availabilityCopy.error)
-                : availabilityCopy[session.availability]}
+                ? (session.error ?? copy.error)
+                : copy[session.availability]}
           </Text>
           {session.availability === "home_offline" && moveTarget ? (
             <Pressable
@@ -605,7 +614,9 @@ export function GoatBotScreen(props: {
               }}
               className="self-start rounded-lg border border-border px-3 py-2"
             >
-              <Text className="text-sm text-foreground">Move GOAT Bot to {moveTarget.label}</Text>
+              <Text className="text-sm text-foreground">
+                Move {mainName} to {moveTarget.label}
+              </Text>
             </Pressable>
           ) : null}
           {session.availability === "error" || session.availability === "legacy_active" ? (

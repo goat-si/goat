@@ -52,6 +52,7 @@ export function MobileBotStatusCard(props: {
   readonly turnsWaiting: ReadonlyArray<string>;
   readonly onOpenChat: () => void;
   readonly onOpenTask: (taskId: ChannelTaskId) => void;
+  readonly botName?: string;
 }) {
   const { member } = props;
   const home = useMobileGoatBotHomeSettings();
@@ -119,7 +120,10 @@ export function MobileBotStatusCard(props: {
     now,
   });
   return (
-    <View accessibilityLabel="GOAT Bot status" className="gap-2 border-b border-border pb-3">
+    <View
+      accessibilityLabel={`${props.botName ?? "GOAT Bot"} status`}
+      className="gap-2 border-b border-border pb-3"
+    >
       <Text className="font-semibold text-foreground">{diagnostics.title}</Text>
       {diagnostics.lines.map((line) => (
         <View key={line.key} className="flex-row flex-wrap items-center gap-2">

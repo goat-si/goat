@@ -97,6 +97,23 @@ function sendTarget(
 }
 
 const sessions = new Map<EnvironmentId, Session>();
+const botNamesByThread = new Map<string, string>();
+const openChatNames = new Map<string, string>();
+const mobileBotNameKey = (environmentId: string, threadId: string) =>
+  `${environmentId}\0${threadId}`;
+
+function rememberMobileBotName(environmentId: string, threadId: string, name: string): void {
+  botNamesByThread.set(mobileBotNameKey(environmentId, threadId), name);
+}
+
+function mobileBotNameFor(environmentId: string, threadId: string): string {
+  return botNamesByThread.get(mobileBotNameKey(environmentId, threadId)) ?? "GOAT Bot";
+}
+
+function rememberOpenChatName(environmentId: string, name: string): void {
+  openChatNames.set(environmentId, name);
+}
+
 const listeners = new Set<() => void>();
 const EMPTY_PENDING: ReadonlyArray<GoatBotPendingInput> = [];
 const NO_PERMISSION = Atom.make(false);
@@ -312,7 +329,9 @@ function newSession(environmentId: EnvironmentId): Session {
       return {
         requestKey: result.value.inputId,
         ...(result.value.state === "rejected"
-          ? { rejected: "GOAT Bot did not accept this message" }
+          ? {
+              rejected: `${mobileBotNameFor(bot.environmentId, bot.threadId)} did not accept this message`,
+            }
           : {}),
       };
     },
@@ -373,12 +392,18 @@ export function useMobileGoatBotSession(
   visible: boolean,
   requestedTaskId?: ChannelTaskId | null,
   member: BotProfile | null = null,
+  main: BotProfile | null = null,
 ) {
+  if (member !== null)
+    rememberMobileBotName(member.environmentId, member.sessionThreadId, member.name);
+  if (main !== null) rememberMobileBotName(main.environmentId, main.sessionThreadId, main.name);
   const home = useMobileGoatBotHomeMode();
   const environment = home.home.supported
     ? pickGoatBotEnvironment(home.environments, home.botRef)
     : pickMobileGoatBotEnvironment(home.environments, home.botRef);
   const environmentId = environment?.environmentId ?? null;
+  if (environmentId !== null)
+    rememberOpenChatName(environmentId, member?.name ?? main?.name ?? "GOAT Bot");
   const configs = useServerConfigs();
   const capabilities =
     environmentId === null ? undefined : configs.get(environmentId)?.environment.capabilities;
@@ -554,7 +579,10 @@ export function useMobileGoatBotSession(
             ? { kind: "legacy_active" }
             : {
                 kind: "failed",
-                message: error instanceof Error ? error.message : "Couldn't reach GOAT Bot",
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : `Couldn't reach ${openChatNames.get(environmentId ?? "") ?? "GOAT Bot"}`,
               },
           null,
           reason === "not_home",

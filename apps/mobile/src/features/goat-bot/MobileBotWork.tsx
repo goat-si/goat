@@ -77,6 +77,7 @@ export function MobileBotWork(props: {
     : undefined;
   const enabled = selected?.connected === true && capabilities?.goatBotTaskThreads === true;
   const member = props.member ?? null;
+  const botName = props.botName ?? member?.name ?? "GOAT Bot";
   const threads = useEnvironmentQuery(
     environmentId && enabled && (member === null || capabilities?.goatBotMembers === true)
       ? channelEnvironment.listBotThreads({
@@ -155,7 +156,7 @@ export function MobileBotWork(props: {
           </Text>
           {!enabled ? (
             <Text className="text-foreground-muted">
-              Task is unavailable while GOAT Bot is offline or unsupported.
+              Task is unavailable while {botName} is offline or unsupported.
             </Text>
           ) : threads.error ? (
             <Pressable
@@ -228,7 +229,7 @@ export function MobileBotWork(props: {
       ) : (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Open GOAT Bot work"
+          accessibilityLabel={`Open ${botName} work`}
           onPress={() => setOpen(true)}
           className="min-h-[44px] self-end justify-center px-4 py-2"
         >
@@ -261,6 +262,7 @@ export function MobileBotWork(props: {
             <MobileBotStatusCard
               environmentId={environmentId}
               member={member}
+              botName={botName}
               rows={
                 !enabled
                   ? "unavailable"
@@ -311,15 +313,14 @@ export function MobileBotWork(props: {
                   className="min-h-[44px] justify-center"
                 >
                   <Text className="text-foreground">
-                    {goatBotWaitingInChatText(props.botName ?? member?.name ?? "GOAT Bot")}. Open
-                    the chat
+                    {goatBotWaitingInChatText(botName)}. Open the chat
                   </Text>
                 </Pressable>
               ) : null}
               {tab === "Tasks" ? (
                 !enabled ? (
                   <Text className="text-foreground-muted">
-                    Tasks are unavailable while GOAT Bot is offline or unsupported.
+                    Tasks are unavailable while {botName} is offline or unsupported.
                   </Text>
                 ) : threads.error ? (
                   <Pressable
@@ -333,7 +334,7 @@ export function MobileBotWork(props: {
                   <Text className="text-foreground-muted">Loading tasks…</Text>
                 ) : work.inProgress.length + work.done.length === 0 ? (
                   <Text className="text-foreground-muted">
-                    No tasks yet. Ask GOAT Bot to start work.
+                    No tasks yet. Ask {botName} to start work.
                   </Text>
                 ) : (
                   (
@@ -394,12 +395,13 @@ export function MobileBotWork(props: {
                   environmentId={environmentId}
                   botThreadId={home.botRef.threadId}
                   tasks={routines.data.tasks}
+                  botName={botName}
                 />
               ) : null}
               {tab === "Routines" ? (
                 !selected?.connected ? (
                   <Text className="text-foreground-muted">
-                    Routines are unavailable while GOAT Bot is offline.
+                    Routines are unavailable while {botName} is offline.
                   </Text>
                 ) : routines.error ? (
                   <Pressable
@@ -423,7 +425,7 @@ export function MobileBotWork(props: {
                   ))
                 ) : (
                   <Text className="text-foreground-muted">
-                    Ask GOAT Bot in chat to set up a routine.
+                    Ask {botName} in chat to set up a routine.
                   </Text>
                 )
               ) : null}
@@ -433,6 +435,7 @@ export function MobileBotWork(props: {
                   connected={selected?.connected === true}
                   supported={capabilities?.goatBotNotes === true}
                   member={member !== null}
+                  botName={botName}
                   onDraft={
                     props.onDraft
                       ? (text) => {
@@ -448,6 +451,7 @@ export function MobileBotWork(props: {
                 <MobileBotLibrary
                   environmentId={environmentId}
                   connected={selected?.connected === true}
+                  botName={botName}
                   supported={capabilities?.goatBotLibrary === true}
                 />
               ) : null}
@@ -456,6 +460,7 @@ export function MobileBotWork(props: {
                   environmentId={environmentId}
                   connected={selected?.connected === true}
                   botId={member?.botId ?? null}
+                  botName={botName}
                 />
               ) : null}
             </View>

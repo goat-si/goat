@@ -27,6 +27,7 @@ export function MobileBotCheckInForm(props: {
   readonly environmentId: EnvironmentId;
   readonly botThreadId: ThreadId;
   readonly tasks: readonly Pick<ScheduledTask, "id" | "title" | "threadId">[];
+  readonly botName?: string;
 }) {
   const bot = useThreadShell(scopeThreadRef(props.environmentId, props.botThreadId));
   const canCreate = useAtomValue(
@@ -38,6 +39,7 @@ export function MobileBotCheckInForm(props: {
   const [pickingTime, setPickingTime] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const botName = props.botName ?? "GOAT Bot";
   if (!canCreate || findCheckInRoutine(props.tasks, props.botThreadId) !== undefined) return null;
   if (!open) {
     return (
@@ -85,7 +87,7 @@ export function MobileBotCheckInForm(props: {
   return (
     <View className="gap-2 border-b border-border py-2">
       <Text className="text-foreground-muted">
-        GOAT Bot looks over your open work and messages you only when something needs you.
+        {botName} looks over your open work and messages you only when something needs you.
       </Text>
       <Pressable
         accessibilityRole="button"
