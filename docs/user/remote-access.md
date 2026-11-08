@@ -632,8 +632,8 @@ needs SSH, Tailscale access to the node, or a pairing of its own with that machi
 access as they are; revoke a device there to end its access.
 
 Through the hub you can open a node's threads, watch them live, send follow-ups with images or
-files, stop a running turn, answer approval requests, and start a new thread on any node in a
-folder you pick there. Archiving, deleting and other changes to a thread, editing project
+files, stop a running turn, answer approval requests, and start a new thread on any node, in a
+folder you pick there or without a project. Archiving, deleting and other changes to a thread, editing project
 scripts, and creating a folder that does not exist yet stay with the machine's own GOAT. A
 thread started in a new worktree runs that machine's own setup script. A machine that is off or
 asleep stays in the list as **Unreachable**, with its threads as last seen and how old that copy
