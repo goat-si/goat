@@ -26,7 +26,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { Button } from "../ui/button";
-import { goatBotSearch, useGoatBotName } from "./goatBotMemberContext";
+import { goatBotSearch, useGoatBotMainName, useGoatBotName } from "./goatBotMemberContext";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
 
 const NO_PERMISSION = Atom.make(false);
@@ -66,6 +66,7 @@ export function GoatBotStatusCard({
   readonly botName?: string;
 }) {
   const openName = useGoatBotName();
+  const mainBotName = useGoatBotMainName();
   const name = botName ?? openName;
   const home = useGoatBotHomeSettings();
   const homeId = home.resolution.state === "claimed" ? home.resolution.claim.environmentId : null;
@@ -113,6 +114,7 @@ export function GoatBotStatusCard({
           homeId.slice(0, 8)),
     moveTarget: home.moveTarget,
     member: member !== null,
+    mainBotName,
     model:
       settings === null || providers === undefined
         ? null

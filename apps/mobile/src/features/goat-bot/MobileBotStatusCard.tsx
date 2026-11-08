@@ -1,5 +1,6 @@
 import {
   diagnoseGoatBot,
+  goatBotName,
   goatBotModelStatus,
   type GoatBotDiagnosticTone,
   type GoatBotDiagnosticsInput,
@@ -53,6 +54,8 @@ export function MobileBotStatusCard(props: {
   readonly onOpenChat: () => void;
   readonly onOpenTask: (taskId: ChannelTaskId) => void;
   readonly botName?: string;
+  /** The main bot, whose model a member uses until it has one of its own. */
+  readonly main?: Pick<BotProfile, "name"> | null;
 }) {
   const { member } = props;
   const home = useMobileGoatBotHomeSettings();
@@ -104,6 +107,7 @@ export function MobileBotStatusCard(props: {
           homeId.slice(0, 8)),
     moveTarget: home.moveTarget,
     member: member !== null,
+    mainBotName: goatBotName(props.main ?? null),
     model: config
       ? goatBotModelStatus({
           settings: config.settings,

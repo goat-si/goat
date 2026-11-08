@@ -71,6 +71,7 @@ function healthy(patch: Partial<GoatBotDiagnosticsInput> = {}): GoatBotDiagnosti
     slackLive: null,
     canConfigureSlack: true,
     now: NOW,
+    mainBotName: "GOAT Bot",
     ...patch,
   };
 }
@@ -143,8 +144,12 @@ describe("diagnoseGoatBot", () => {
   it("judges a member by its own model and fixes an inherited one through the main setting", () => {
     const own = healthy({ member: true, model: { ...model, available: false } });
     expect(line(own, "model")).toMatchObject({ tone: "error", action: null });
-    const inherited = healthy({ member: true, model: { ...model, inherited: true } });
-    expect(line(inherited, "model")?.text).toBe("Uses GOAT Bot's current model (GPT-5.4 on Codex)");
+    const inherited = healthy({
+      member: true,
+      model: { ...model, inherited: true },
+      mainBotName: "Goaty",
+    });
+    expect(line(inherited, "model")?.text).toBe("Uses Goaty's current model (GPT-5.4 on Codex)");
     const inheritedBroken = healthy({
       member: true,
       model: { ...model, inherited: true, available: false },

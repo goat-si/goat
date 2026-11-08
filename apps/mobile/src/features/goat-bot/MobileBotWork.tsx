@@ -63,6 +63,8 @@ export function MobileBotWork(props: {
   readonly turnsWaiting?: ReadonlyArray<string>;
   /** What the chat calls this bot. */
   readonly botName?: string;
+  /** The main bot, named on a member's inherited model. */
+  readonly main?: Pick<BotProfile, "name"> | null;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
   readonly onDraft?: ((text: string) => void) | undefined;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
@@ -263,6 +265,7 @@ export function MobileBotWork(props: {
               environmentId={environmentId}
               member={member}
               botName={botName}
+              main={props.main ?? null}
               rows={
                 !enabled
                   ? "unavailable"
