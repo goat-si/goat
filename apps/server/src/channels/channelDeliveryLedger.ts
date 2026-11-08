@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelLedger } from "./ChannelLedger.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
+import { copyUndeliveredReply, type UndeliveredSourceRow } from "./channelUndeliveredReplies.ts";
 
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const isLedgerError = Schema.is(ChannelLedgerError);
@@ -128,14 +129,22 @@ export const deliveryLedger = (
               yield* fence(input.owner);
               yield* expire(input.now);
               const outcome = input.outcome;
-              yield* sql`UPDATE channel_outbox SET
+              const updated = yield* sql<UndeliveredSourceRow>`UPDATE channel_outbox SET
         state = ${outcome.type === "retry" ? "pending" : outcome.type},
         next_attempt_at = ${outcome.type === "retry" ? outcome.at : input.now},
         last_error_code = ${outcome.type === "delivered" ? null : outcome.errorCode},
         external_message_id = ${outcome.type === "delivered" ? (outcome.externalMessageId ?? null) : null},
         updated_at = ${input.now}
         WHERE delivery_id = ${input.deliveryId} AND state = 'delivering'
-          AND (${input.attempt ?? null} IS NULL OR attempts = ${input.attempt ?? null})`;
+          AND (${input.attempt ?? null} IS NULL OR attempts = ${input.attempt ?? null})
+        RETURNING delivery_id, input_id, task_id, kind, destination_kind, message_json`;
+              const recorded = updated[0];
+              if (
+                recorded !== undefined &&
+                (outcome.type === "failed" || outcome.type === "ambiguous")
+              ) {
+                yield* copyUndeliveredReply(sql, recorded, outcome.type, input.now);
+              }
             }),
           )
           .pipe(Effect.mapError(mapError("recordDelivery"))),
