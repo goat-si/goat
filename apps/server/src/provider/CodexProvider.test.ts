@@ -329,9 +329,16 @@ it.effect.each([
   { endpoint: "http://127.0.0.1:10100/v1", usable: true },
   { endpoint: undefined, usable: false },
   { endpoint: "https://api.openai.com/v1", usable: false },
+  { endpoint: "https://api.openai.com./v1", usable: false },
+  // An OPENAI_BASE_URL that disagrees with config leaves the endpoint unverified.
+  {
+    endpoint: "http://127.0.0.1:10100/v1",
+    environment: { OPENAI_BASE_URL: "http://127.0.0.1:9999/v1" },
+    usable: false,
+  },
 ])(
   "a logged-out Codex lists models and accepts child tasks only when its endpoint is not OpenAI's: $endpoint",
-  ({ endpoint, usable }) =>
+  ({ endpoint, environment, usable }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const fixture = yield* routeFixture({ role: "home" });
@@ -354,7 +361,7 @@ it.effect.each([
       const snapshot = yield* checkCodexProviderStatus(
         { ...fixture.input.settings, modelRoute: "default", binaryPath: binary },
         undefined,
-        {},
+        environment ?? {},
       );
       const constraints = providerConstraints(
         {

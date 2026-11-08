@@ -57,11 +57,11 @@ function codexAccountEmail(account: CodexSchema.V2GetAccountResponse["account"])
 }
 
 // Codex keeps `requiresOpenaiAuth` for its built-in provider even when `openai_base_url` sends
-// requests elsewhere (OpenCodex), so only an OpenAI endpoint makes the missing login decisive.
+// requests elsewhere (OpenCodex); the missing login stays decisive for OpenAI or unverified endpoints.
 export function routesAwayFromOpenAi(effectiveBaseUrl: string | undefined): boolean {
-  const host = URL.parse(effectiveBaseUrl ?? "")?.hostname;
+  const host = URL.parse(effectiveBaseUrl ?? "")?.hostname.replace(/\.+$/, "");
   return (
-    host !== undefined &&
+    !!host &&
     !["openai.com", "chatgpt.com"].some((domain) => host === domain || host.endsWith(`.${domain}`))
   );
 }
