@@ -182,7 +182,7 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
         ...page,
         overflow: page.overflow || droppedRemainder,
       },
-      null,
+      rawCursor !== null && rawCursor.length <= MAX_NEXT_CURSOR ? rawCursor : null,
     );
   };
 
