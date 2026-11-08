@@ -155,13 +155,15 @@ const prepare = (input: {
     let raceFired = false;
     if (input.raced)
       // The post-install probe is the only probe that runs while this setup holds the version.
-      // Just before it, the other client's server is up (its launch cleared the hold).
+      // Just before it, the other client's server is up: its launch cleared the hold and, as every
+      // launch does before its server answers, wrote the port file.
       f.setBeforeCommand((script) =>
         Effect.gen(function* () {
           if (raceFired || !script.includes('"installedCandidates":[%s]')) return;
           if (!(yield* f.fs.exists(held))) return;
           raceFired = true;
           yield* f.fs.remove(held);
+          yield* f.fs.writeFileString(`${f.state}/port`, "1\n");
           yield* f.fs.writeFileString(
             `${f.test}/live-tokens-${PUBLISHED}`,
             `live ${PUBLISHED} ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} ${process.pid} 1`,
@@ -309,6 +311,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isFalse(yield* f.fs.exists(`${f.home}/.goat/runtime/goat/held/${PUBLISHED}`));
         // The other client's server stops; the data it wrote stays.
         yield* f.fs.remove(`${f.test}/live-tokens-${PUBLISHED}`);
+        yield* f.fs.remove(`${f.state}/port`);
         yield* f.fs.makeDirectory(`${f.home}/.goat/userdata`, { recursive: true });
         yield* f.fs.writeFileString(`${f.home}/.goat/userdata/statev2.sqlite`, "");
         const second = yield* first.again;

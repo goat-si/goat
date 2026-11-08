@@ -254,13 +254,47 @@ live_fact_key() {
 fact_bound() {
   [ "$1" = "$fact_pid" ] && [ "$2" = "$fact_record_port" ]
 }
+# True when none of files $1-$3 exists, even as a dangling link.
+live_none_absent() {
+  for live_none_file in "$1" "$2" "$3"; do
+    [ ! -e "$live_none_file" ] && [ ! -L "$live_none_file" ] || return 1
+  done
+}
+# Prints the no-server answer this script's memo keeps for exec key $1. Its records have an empty
+# path, which no exec key lookup matches.
+live_none_get() {
+  [ -n "$FACT_MEMO" ] && [ -f "$FACT_MEMO" ] && [ -r "$FACT_MEMO" ] || return 1
+  while IFS= read -r memo_path && IFS= read -r memo_name && IFS= read -r memo_key &&
+    IFS= read -r memo_answer && IFS= read -r memo_sig && IFS= read -r memo_path_sig; do
+    [ -z "$memo_path" ] && [ "$memo_name" = live-none ] && [ "$memo_key" = "$1" ] || continue
+    printf '%s\\n' "$memo_answer"; return 0
+  done <"$FACT_MEMO"
+  return 1
+}
 # Live protocol tokens from goat $1 for runtime record $2, port file $3 and PID file $4.
 # Only a live answer from the record's own process is recorded; anything else is asked again.
+# With no record, port or PID file goat can only find no server: that answer is kept for this
+# script under the executable's key, and given again while all three stay absent and the key holds.
 live_fact() {
-  live_fact_key "$1" "$2" "$3" "$4" || FACT_KEY=
-  fact_name="live.$FACT_NAME"; fact_key="$FACT_KEY"
-  if fact_get "$fact_name" "$fact_key"; then return 0; fi
+  live_none_key=; fact_key=
+  if live_none_absent "$2" "$3" "$4"; then
+    if [ -n "$FACT_MEMO" ] && exec_fact_key "$1"; then
+      live_none_key="$FACT_NAME $FACT_KEY"
+      if live_none_get "$live_none_key"; then return 0; fi
+    fi
+  else
+    live_fact_key "$1" "$2" "$3" "$4" || FACT_KEY=
+    fact_name="live.$FACT_NAME"; fact_key="$FACT_KEY"
+    if fact_get "$fact_name" "$fact_key"; then return 0; fi
+  fi
   fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1
+  if [ -n "$live_none_key" ] && (set -f; set -- $fact_out; [ "$1" = none ] && valid_live_tokens "$@") &&
+     live_none_absent "$2" "$3" "$4" && exec_fact_key "$1" && [ "$FACT_NAME $FACT_KEY" = "$live_none_key" ]; then
+    case "$live_none_key$fact_out" in
+      *"$fact_nl"*) ;;
+      *) printf '\\n%s\\n%s\\n%s\\n\\n\\n' live-none "$live_none_key" "$fact_out" >>"$FACT_MEMO" 2>/dev/null || : ;;
+    esac
+  fi
   fact_answer="$(set -f; set -- $fact_out; printf '%s %s' "\${5:-}" "\${6:-}")"
   if [ -n "$fact_key" ] && live_fact_key "$1" "$2" "$3" "$4" && [ "$FACT_KEY" = "$fact_key" ] &&
      fact_valid live "$fact_out" && fact_bound "\${fact_answer% *}" "\${fact_answer#* }"; then

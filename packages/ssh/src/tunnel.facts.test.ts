@@ -73,6 +73,36 @@ const liveFixture = makeProtocolFixture({
 });
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts", () => {
+  it.live("a launch on a host with no server asks goat once per script whether one runs", () =>
+    Effect.gen(function* () {
+      const f = yield* makeProtocolFixture({
+        live: false,
+        kind: "managed",
+        oldVersion: "1.2.2",
+        commitTime: 1_700_000_000,
+        drain: true,
+        ...current,
+      });
+      yield* f.shiftHostClock(60);
+      yield* f.fs.writeFileString(`${f.test}/events`, "");
+      const result = yield* f.run("launch");
+      if (Result.isFailure(result)) throw result.failure;
+      assert.equal(result.success.status, "ready");
+      const answers = (yield* f.fs.readFileString(`${f.test}/events`))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type: string; live?: boolean; status?: string })
+        .filter((event) => event.type === "protocol" && event.live === true)
+        .map((event) => event.status);
+      // The probe and the launch script each ask once: every later check before the server starts
+      // still sees no runtime record, port or PID file. Checks after the start ask again.
+      assert.deepEqual(
+        answers.filter((status) => status === "none"),
+        ["none", "none"],
+      );
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
   it.live(
     "a reconnect to an unchanged runtime starts goat only for readiness",
     () =>

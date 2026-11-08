@@ -277,4 +277,68 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
       NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
+  it.each(["dash", "bash"])(
+    "give a no-server answer again only while no file names a server and the key holds (%s)",
+    (shell) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-live-none-"));
+      try {
+        const versions = NodePath.join(dir, ".goat/runtime/goat/versions/1.2.3");
+        NodeFS.mkdirSync(versions, { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(versions, ".install-complete"), "1.2.3\n");
+        const bin = NodePath.join(dir, "bin");
+        NodeFS.mkdirSync(bin);
+        // Executables younger than 2 s are never keyed; this clock reads $HOME/now.
+        NodeFS.writeFileSync(NodePath.join(bin, "date"), '#!/bin/sh\ncat "$HOME/now"\n', {
+          mode: 0o755,
+        });
+        NodeFS.writeFileSync(NodePath.join(dir, "now"), "4102444800\n");
+        const out = runIn(
+          shell,
+          [
+            'exe="$HOME/.goat/runtime/goat/versions/1.2.3/goat"',
+            // Each executable records the ask and prints $HOME/answer. Every rewrite has another size:
+            // under this clock a same-second, same-size rewrite would keep its signature.
+            'install() { printf "#!/bin/sh\\n# %s\\necho ask >> \\"\\$HOME/asks\\"\\ncat \\"\\$HOME/answer\\"\\n" "$1" > "$exe"; chmod 755 "$exe"; }',
+            'answer() { printf "%s\\n" "$1" > "$HOME/answer"; }',
+            'asks() { if [ -f "$HOME/asks" ]; then wc -l < "$HOME/asks" | tr -d " "; else echo 0; fi; }',
+            'ask() { live_fact "$exe" "$HOME/record" "$HOME/port" "$HOME/pid" > "$HOME/out" 2>/dev/null || :; }',
+            'FACT_MEMO="$HOME/memo"; fact_memo_drop',
+            'install 1; answer "none unknown unknown unknown 0 0"',
+            'ask; ask; printf "kept %s %s\\n" "$(asks)" "$(cat "$HOME/out")"',
+            // Any of the three files, even a dangling link, may name a server: ask.
+            'echo 4242 > "$HOME/port"; ask; rm "$HOME/port"; printf "port %s\\n" "$(asks)"',
+            'ln -s missing "$HOME/pid"; ask; rm "$HOME/pid"; printf "link %s\\n" "$(asks)"',
+            'echo "{}" > "$HOME/record"; ask; rm "$HOME/record"; printf "record %s\\n" "$(asks)"',
+            'ask; printf "absent %s\\n" "$(asks)"',
+            // Another executable is asked itself.
+            'install 22; ask; ask; printf "rewritten %s\\n" "$(asks)"',
+            // Only a well-formed none is kept.
+            'install 333; answer "unknown unknown unknown unknown 0 0"; ask; ask; printf "unknown %s\\n" "$(asks)"',
+            'install 4444; answer "none 0 0"; ask; ask; printf "malformed %s\\n" "$(asks)"',
+            // Without a key (an executable changed less than 2 s ago) nothing is kept.
+            'install 55555; answer "none unknown unknown unknown 0 0"; date +%s > /dev/null',
+            'stat -c %Z "$exe" > "$HOME/now" 2>/dev/null || stat -f %c "$exe" > "$HOME/now"',
+            'ask; ask; printf "unkeyed %s\\n" "$(asks)"',
+            // Without a memo nothing is kept.
+            'echo 4102444800 > "$HOME/now"; FACT_MEMO=; install 666666; ask; ask; printf "nomemo %s\\n" "$(asks)"',
+          ].join("\n"),
+          { HOME: dir, PATH: bin + ":" + (process.env.PATH ?? "") },
+        );
+        assert.deepEqual(out.trim().split("\n"), [
+          "kept 1 none unknown unknown unknown 0 0",
+          "port 2",
+          "link 3",
+          "record 4",
+          "absent 4",
+          "rewritten 5",
+          "unknown 7",
+          "malformed 9",
+          "unkeyed 11",
+          "nomemo 13",
+        ]);
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
