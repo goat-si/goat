@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -9,29 +10,120 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { isRemoteShellScript, withRemoteDeadline } from "./remoteDeadline.ts";
 
+// The shell and everything it starts share fd 3 with the test. A clock tick that must never pass
+// reads it and so blocks until the test closes its end once the shell exits. The run then settles
+// only when every process holding fd 3 has exited, including a tick a stopped watchdog leaves.
+const HOLD = "exec /bin/cat <&3 >/dev/null";
+
+const spawnHeld = (
+  command: string,
+  args: ReadonlyArray<string>,
+  options: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly stdin?: string;
+    // sshd starts a non-terminal session's shell as the leader of its own session.
+    readonly sessionLeader?: boolean | undefined;
+    // Runs once the shell has exited, before what it left behind is released.
+    readonly onExit?: (() => void) | undefined;
+  } = {},
+) =>
+  new Promise<{ readonly code: number | null; readonly stdout: string }>((resolve, reject) => {
+    const child = NodeChildProcess.spawn(command, args, {
+      env: { ...process.env, ...options.env },
+      stdio: ["pipe", "pipe", "inherit", "pipe"],
+      detached: options.sessionLeader === true,
+    });
+    const hold = child.stdio[3];
+    let stdout = "";
+    let code: number | null = null;
+    let failure: unknown;
+    child.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    if (hold instanceof NodeNet.Socket) hold.resume();
+    child.once("error", reject);
+    child.once("exit", (exit, signal) => {
+      code = exit ?? (signal === null ? null : 128);
+      try {
+        options.onExit?.();
+      } catch (error) {
+        failure = error;
+      }
+      if (hold instanceof NodeNet.Socket) hold.end();
+    });
+    child.once("close", () =>
+      failure === undefined ? resolve({ code, stdout }) : reject(failure),
+    );
+    child.stdin?.end(options.stdin ?? "");
+  });
+
 const runShell = (
   script: string,
   args: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv = {},
-  // sshd starts a non-terminal session's shell as the leader of its own session.
-  options: { readonly shell?: string; readonly sessionLeader?: boolean } = {},
+  options: {
+    readonly shell?: string;
+    readonly sessionLeader?: boolean;
+    readonly onExit?: () => void;
+  } = {},
 ) =>
-  new Promise<{ readonly code: number | null; readonly stdout: string }>((resolve, reject) => {
-    const child = NodeChildProcess.spawn(options.shell ?? "sh", ["-s", "--", ...args], {
-      env: { ...process.env, ...env },
-      stdio: ["pipe", "pipe", "inherit"],
-      detached: options.sessionLeader === true,
-    });
-    let stdout = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code, stdout }));
-    child.stdin.end(script);
+  spawnHeld(options.shell ?? "sh", ["-s", "--", ...args], {
+    env,
+    stdin: script,
+    sessionLeader: options.sessionLeader,
+    onExit: options.onExit,
   });
 
-// A clock that never ticks again. A stopped watchdog leaves its tick to end by itself, so it
-// ends once the test removes its directory.
-const HOLD = 'while [ -d "$GOAT_TEST_DIR" ]; do /bin/sleep 0.1; done; exit 0';
+// Each signal records whether its target is the sender's own group, the sender's live child,
+// or anything else, which a PID read earlier could name by the time it is signalled.
+const RECORD_KILLS = [
+  "kill() {",
+  "  for target; do :; done",
+  '  case "$1" in -0) ;; *)',
+  '    IFS= read -r me </proc/self/stat; me="$' + '{me%% *}"',
+  "    parent=",
+  '    if IFS= read -r st <"/proc/$target/stat" 2>/dev/null; then st="$' +
+    '{st##*) }"; st="$' +
+    '{st#* }"; parent="$' +
+    '{st%% *}"; fi',
+  '    case "$target:$parent" in 0:*) echo group ;; *:"$me") echo child ;; *) echo "other $target" ;; esac >> "$GOAT_TEST_DIR/signalled"',
+  "  esac",
+  '  command kill "$@"',
+  "}",
+  "",
+].join("\n");
+
+// The caller leads its group and runs the wrapped shell in it, beside a sibling that a hang-up of
+// the whole group would end.
+const runInCaller = async (
+  dir: string,
+  shell: string,
+  wrapped: string,
+  env: NodeJS.ProcessEnv = {},
+) => {
+  NodeFS.writeFileSync(NodePath.join(dir, "wrapped.sh"), wrapped);
+  NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "keep")]);
+  const caller = [
+    'cat "$1/keep" >/dev/null & echo $! > "$1/sibling.pid"',
+    '"$2" -s -- "$1" < "$1/wrapped.sh" > "$1/out"; echo "$?" > "$1/code"',
+  ].join("\n");
+  let siblingAlive = false;
+  await spawnHeld("sh", ["-c", caller, "sh", dir, shell], {
+    env: { GOAT_TEST_DIR: dir, ...env },
+    sessionLeader: true,
+    onExit: () => {
+      const sibling = Number(NodeFS.readFileSync(NodePath.join(dir, "sibling.pid"), "utf8"));
+      siblingAlive = process.kill(sibling, 0);
+      // Release the surviving sibling so nothing outlives the test.
+      NodeFS.writeFileSync(NodePath.join(dir, "keep"), "");
+    },
+  });
+  const read = (name: string) => NodeFS.readFileSync(NodePath.join(dir, name), "utf8");
+  return { siblingAlive, code: read("code").trim(), out: read("out") };
+};
+// Each line of a recorded signal log.
+const signalled = (dir: string) =>
+  NodeFS.existsSync(NodePath.join(dir, "signalled"))
+    ? NodeFS.readFileSync(NodePath.join(dir, "signalled"), "utf8").trim().split("\n")
+    : [];
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadline wrapper", () => {
   it("wraps only scripts that sh reads from stdin", () => {
@@ -61,7 +153,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
           '#!/bin/sh\nif [ -p "$GOAT_TEST_GATE" ]; then cat "$GOAT_TEST_GATE" >/dev/null; rm -f "$GOAT_TEST_GATE"; fi\n',
           { mode: 0o755 },
         );
+        // The script records its shell's PID, its parent and its process group.
         const body = [
+          '[ ! -r /proc/self/stat ] || { IFS= read -r st </proc/self/stat; echo "$$ $' +
+            '{st##*) }" > "$1/ids"; }',
           'nohup cat "$1/keep" >/dev/null 2>&1 &',
           'echo $! > "$1/kept.pid"',
           'printf go > "$1/gate"',
@@ -69,18 +164,34 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
           "echo unreachable",
         ].join("\n");
         const clock = NodePath.join(bin, "sleep");
+        let keptAlive = false;
         const result = await runShell(
           withRemoteDeadline(body, 1_000, clock),
           [dir],
           { GOAT_TEST_GATE: NodePath.join(dir, "gate") },
-          { shell, sessionLeader: true },
+          {
+            shell,
+            sessionLeader: true,
+            onExit: () => {
+              const kept = Number(NodeFS.readFileSync(NodePath.join(dir, "kept.pid"), "utf8"));
+              keptAlive = process.kill(kept, 0);
+              // Release the surviving reader so nothing outlives the test.
+              NodeFS.writeFileSync(NodePath.join(dir, "keep"), "");
+            },
+          },
         );
         expect(result.stdout).toBe("");
         expect(result.code).not.toBe(0);
-        const kept = Number(NodeFS.readFileSync(NodePath.join(dir, "kept.pid"), "utf8"));
-        expect(() => process.kill(kept, 0)).not.toThrow();
-        // Release the surviving reader so nothing outlives the test.
-        NodeFS.writeFileSync(NodePath.join(dir, "keep"), "");
+        expect(keptAlive).toBe(true);
+        // The hang-up relied on a group of the run's own: dash's shell leads its session, and bash
+        // gives the job a group led by the job's shell.
+        if (NodeFS.existsSync(NodePath.join(dir, "ids"))) {
+          const [outer, , parent, group] = NodeFS.readFileSync(
+            NodePath.join(dir, "ids"),
+            "utf8",
+          ).split(" ");
+          expect(group).toBe(shell === "dash" ? outer : parent);
+        }
       } finally {
         NodeFS.rmSync(dir, { recursive: true, force: true });
       }
@@ -103,7 +214,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
           { mode: 0o755 },
         );
         const script = withRemoteDeadline('cat "$1/ticking" >/dev/null\nexit 3', 60_000, clock);
-        // The shell's output closes although the tick still runs: the tick holds only /dev/null.
         expect(await runShell(script, [dir], { GOAT_TEST_DIR: dir }, { shell })).toEqual({
           code: 3,
           stdout: "",
@@ -138,18 +248,13 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
           'printf go > "$1/gate"',
           'cat "$1/block"',
         ].join("\n");
-        const result = await new Promise<number | null>((resolve, reject) => {
-          const child = NodeChildProcess.spawn(shell, ["-s", "--", dir], {
-            env: { ...process.env, GOAT_TEST_GATE: NodePath.join(dir, "gate") },
-            stdio: ["pipe", "ignore", "inherit"],
-            // As under sshd, the shell leads its session, so a hang-up reaches the script's command.
-            detached: true,
-          });
-          child.once("error", reject);
-          child.once("close", (code, signal) => resolve(code ?? (signal === null ? null : 128)));
-          child.stdin.end(withRemoteDeadline(body, 1_000, NodePath.join(bin, "sleep")));
-        });
-        expect(result).not.toBe(0);
+        const { code } = await runShell(
+          withRemoteDeadline(body, 1_000, NodePath.join(bin, "sleep")),
+          [dir],
+          { GOAT_TEST_GATE: NodePath.join(dir, "gate") },
+          { shell, sessionLeader: true },
+        );
+        expect(code).not.toBe(0);
         expect(NodeFS.readFileSync(NodePath.join(dir, "released"), "utf8")).toBe("owner-alive\n");
       } finally {
         NodeFS.rmSync(dir, { recursive: true, force: true });
@@ -157,69 +262,49 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
     },
   );
   // Git Bash's sh is bash.
-  it.each([true, false].map((trapsHangup) => ({ shell: "bash", trapsHangup })))(
-    "on Windows hangs up first and force-ends the tree only when the script outlives the grace ($shell, traps hang-up: $trapsHangup)",
-    async ({ shell, trapsHangup }) => {
-      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
-      try {
-        const bin = NodePath.join(dir, "bin");
-        NodeFS.mkdirSync(bin);
-        for (const fifo of ["gate", "block"])
-          NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
-        const shims: Record<string, string> = {
-          uname: "echo MINGW64_NT-10.0-26200",
-          cat: 'case "$1" in /proc/*/winpid) echo 4242 ;; *) exec /bin/cat "$@" ;; esac',
-          "taskkill.exe": 'echo "$*" >> "$GOAT_TEST_DIR/taskkill"',
-          // Tick 1 waits until the script is stuck; the deadline's other ticks pass at once. Grace
-          // ticks never pass for a script that ends on hang-up, so only its exit can end them.
-          // Tick 9, the first after the forced end, stands in for it: it releases the script, then
-          // waits like every later tick.
-          sleep: [
-            'n=$(($(/bin/cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
-            'if [ "$n" = 1 ]; then exec /bin/cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
-            'if [ "$n" = 9 ]; then printf x > "$GOAT_TEST_DIR/block"; fi',
-            'if [ "$n" -gt 8 ] || { [ "$n" -gt 3 ] && [ "$GOAT_TEST_GRACE" = hold ]; }; then ' +
-              HOLD +
-              "; fi",
-          ].join("\n"),
-        };
-        for (const [name, body] of Object.entries(shims))
-          NodeFS.writeFileSync(NodePath.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
-        const body = [
-          trapsHangup ? "trap 'exit 129' HUP" : "trap '' HUP",
-          "trap 'echo cleaned > \"$1/cleaned\"' EXIT",
-          'printf go > "$1/gate"',
-          '/bin/cat "$1/block" >/dev/null',
-        ].join("\n");
-        const code = await new Promise<number | null>((resolve, reject) => {
-          const child = NodeChildProcess.spawn(shell, ["-s", "--", dir], {
-            env: {
-              ...process.env,
-              PATH: `${bin}:${process.env.PATH ?? ""}`,
-              GOAT_TEST_DIR: dir,
-              GOAT_TEST_GRACE: trapsHangup ? "hold" : "pass",
-            },
-            stdio: ["pipe", "ignore", "inherit"],
-          });
-          child.once("error", reject);
-          child.once("close", (exit, signal) => resolve(exit ?? (signal === null ? null : 128)));
-          child.stdin.end(withRemoteDeadline(body, 1_000, NodePath.join(bin, "sleep")));
+  it("on Windows hangs up its own group once and never force-ends the tree", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+    try {
+      const bin = NodePath.join(dir, "bin");
+      NodeFS.mkdirSync(bin);
+      for (const fifo of ["gate", "block"])
+        NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
+      // Tick 1 waits until the script is stuck and the deadline's other ticks pass at once. Tick 4
+      // releases the script, which ignored the hang-up as a native goat.exe child can.
+      const shims: Record<string, string> = {
+        uname: "echo MINGW64_NT-10.0-26200",
+        "taskkill.exe": 'echo "$*" >> "$GOAT_TEST_DIR/taskkill"',
+        sleep: [
+          'n=$(($(/bin/cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
+          'if [ "$n" = 1 ]; then exec /bin/cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
+          'if [ "$n" = 4 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
+          'if [ "$n" -gt 3 ]; then ' + HOLD + "; fi",
+        ].join("\n"),
+      };
+      for (const [name, body] of Object.entries(shims))
+        NodeFS.writeFileSync(NodePath.join(bin, name), "#!/bin/sh\n" + body + "\n", {
+          mode: 0o755,
         });
-        expect(NodeFS.readFileSync(NodePath.join(dir, "cleaned"), "utf8")).toBe("cleaned\n");
-        if (trapsHangup) {
-          expect(code).toBe(129);
-          // The script released its locks itself; nothing forced it.
-          expect(NodeFS.existsSync(NodePath.join(dir, "taskkill"))).toBe(false);
-        } else {
-          expect(NodeFS.readFileSync(NodePath.join(dir, "taskkill"), "utf8")).toBe(
-            "/PID 4242 /T /F\n",
-          );
-        }
-      } finally {
-        NodeFS.rmSync(dir, { recursive: true, force: true });
-      }
-    },
-  );
+      const body = [
+        "trap '' HUP",
+        'printf go > "$1/gate"',
+        '/bin/cat "$1/block" >/dev/null',
+        "exit 3",
+      ].join("\n");
+      const result = await runInCaller(
+        dir,
+        "bash",
+        RECORD_KILLS + withRemoteDeadline(body, 1_000, NodePath.join(bin, "sleep")),
+        { PATH: bin + ":" + (process.env.PATH ?? "") },
+      );
+      // One hang-up of the job's own group; the script then ran to its own end.
+      expect(signalled(dir)).toEqual(["group", "child"]);
+      expect(result).toEqual({ siblingAlive: true, code: "3", out: "" });
+      expect(NodeFS.existsSync(NodePath.join(dir, "taskkill"))).toBe(false);
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("on Git Bash hangs up the script without reading a process list", async () => {
     const shell = "bash";
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
@@ -270,15 +355,12 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
         'printf go > "$1/gate"',
         '/bin/cat "$1/block" >/dev/null',
       ].join("\n");
-      const code = await new Promise<number | null>((resolve, reject) => {
-        const child = NodeChildProcess.spawn(shell, ["-s", "--", dir], {
-          env: { ...process.env, PATH: bin, GOAT_TEST_DIR: dir },
-          stdio: ["pipe", "ignore", "inherit"],
-        });
-        child.once("error", reject);
-        child.once("close", (exit, signal) => resolve(exit ?? (signal === null ? null : 128)));
-        child.stdin.end(withRemoteDeadline(body, 1_000, NodePath.join(bin, "sleep")));
-      });
+      const { code } = await runShell(
+        withRemoteDeadline(body, 1_000, NodePath.join(bin, "sleep")),
+        [dir],
+        { PATH: bin, GOAT_TEST_DIR: dir },
+        { shell },
+      );
       // Ended by the hang-up, after its own cleanup, without a forced end.
       expect(code).toBe(129);
       expect(NodeFS.readFileSync(NodePath.join(dir, "cleaned"), "utf8")).toBe("cleaned\n");
@@ -312,26 +394,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
-        // Each signal records whether its target is the sender's own group, the sender's live child,
-        // or anything else, which a PID read earlier could name by the time it is signalled.
-        const recordKills = [
-          "kill() {",
-          "  for target; do :; done",
-          '  case "$1" in -0) ;; *)',
-          '    IFS= read -r me </proc/self/stat; me="$' + '{me%% *}"',
-          "    parent=",
-          '    if IFS= read -r st <"/proc/$target/stat" 2>/dev/null; then st="$' +
-            '{st##*) }"; st="$' +
-            '{st#* }"; parent="$' +
-            '{st%% *}"; fi',
-          '    case "$target:$parent" in 0:*) echo group ;; *:"$me") echo child ;; *) echo "other $target" ;; esac >> "$GOAT_TEST_DIR/signalled"',
-          "  esac",
-          '  command kill "$@"',
-          "}",
-          "",
-        ].join("\n");
         const result = await runShell(
-          recordKills +
+          RECORD_KILLS +
             withRemoteDeadline('cat "$1/go" >/dev/null', deadline ? 1_000 : 60_000, clock),
           [dir],
           { GOAT_TEST_DIR: dir, GOAT_TEST_DEADLINE: String(deadline) },
@@ -353,7 +417,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
     async (shell) => {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
       try {
-        for (const fifo of ["gate", "block", "keep"])
+        for (const fifo of ["gate", "block"])
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
         // Tick 1 waits until the script is stuck and later deadline ticks pass at once. Tick 4 comes
         // only for a script nothing hung up: it releases the script, and later ticks wait.
@@ -369,44 +433,201 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
-        NodeFS.writeFileSync(
-          NodePath.join(dir, "wrapped.sh"),
+        const result = await runInCaller(
+          dir,
+          shell,
           withRemoteDeadline(
             'printf go > "$1/gate"\ncat "$1/block" >/dev/null && echo released',
             1_000,
             clock,
           ),
         );
-        // The caller leads its group and runs the wrapped shell in it, beside a sibling that a
-        // hang-up of the whole group would end.
-        const caller = [
-          'cat "$1/keep" >/dev/null & echo $! > "$1/sibling.pid"',
-          '"$2" -s -- "$1" < "$1/wrapped.sh" > "$1/out"; echo "$?" > "$1/code"',
-        ].join("\n");
-        await new Promise<void>((resolve, reject) => {
-          const child = NodeChildProcess.spawn("sh", ["-c", caller, "sh", dir, shell], {
-            env: { ...process.env, GOAT_TEST_DIR: dir },
-            stdio: ["ignore", "ignore", "inherit"],
-            detached: true,
-          });
-          child.once("error", reject);
-          child.once("close", () => resolve());
-        });
-        const sibling = Number(NodeFS.readFileSync(NodePath.join(dir, "sibling.pid"), "utf8"));
-        expect(() => process.kill(sibling, 0)).not.toThrow();
-        const code = NodeFS.readFileSync(NodePath.join(dir, "code"), "utf8").trim();
-        const out = NodeFS.readFileSync(NodePath.join(dir, "out"), "utf8");
-        if (shell === "bash") {
-          // bash gives the job a group of its own, which the watchdog hangs up.
-          expect(code).toBe("129");
-          expect(out).toBe("");
-        } else {
-          // dash cannot, and signals nothing it would have to name by number.
-          expect(code).toBe("0");
-          expect(out).toBe("released\n");
+        // bash gives the job a group of its own, which the watchdog hangs up. dash cannot, and
+        // signals nothing it would have to name by number.
+        expect(result).toEqual(
+          shell === "bash"
+            ? { siblingAlive: true, code: "129", out: "" }
+            : { siblingAlive: true, code: "0", out: "released\n" },
+        );
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+  it.each(["dash", "bash"])(
+    "starts no watchdog when a probe cannot read the job's process IDs (%s)",
+    async (shell) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+      try {
+        const bin = NodePath.join(dir, "bin");
+        NodeFS.mkdirSync(bin);
+        // No /proc/self/stat (the wrapper reads a missing file instead) and no ps.
+        for (const entry of (process.env.PATH ?? "").split(":")) {
+          if (entry === "") continue;
+          for (const name of NodeFS.existsSync(entry) ? NodeFS.readdirSync(entry) : []) {
+            if (name === "ps" || NodeFS.existsSync(NodePath.join(bin, name))) continue;
+            NodeFS.symlinkSync(NodePath.join(entry, name), NodePath.join(bin, name));
+          }
         }
-        // Release the surviving sibling so nothing outlives the test.
-        NodeFS.writeFileSync(NodePath.join(dir, "keep"), "");
+        const clock = NodePath.join(dir, "sleep");
+        NodeFS.writeFileSync(clock, '#!/bin/sh\necho tick >> "$GOAT_TEST_DIR/ticks"\n', {
+          mode: 0o755,
+        });
+        const result = await runInCaller(
+          dir,
+          shell,
+          RECORD_KILLS + withRemoteDeadline("exit 6", 1_000, clock, NodePath.join(dir, "no-stat")),
+          { PATH: bin },
+        );
+        expect(result).toEqual({ siblingAlive: true, code: "6", out: "" });
+        // No watchdog ticked, and nothing was signalled.
+        expect(NodeFS.existsSync(NodePath.join(dir, "ticks"))).toBe(false);
+        expect(signalled(dir)).toEqual([]);
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+  it.skipIf(!NodeFS.existsSync("/proc/self/stat")).each(["dash", "bash"])(
+    "keeps a watchdog that loses sight of its parent until its shell stops it (%s)",
+    async (shell) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+      try {
+        const bin = NodePath.join(dir, "bin");
+        NodeFS.mkdirSync(bin);
+        for (const entry of (process.env.PATH ?? "").split(":")) {
+          if (entry === "") continue;
+          for (const name of NodeFS.existsSync(entry) ? NodeFS.readdirSync(entry) : []) {
+            if (name === "ps" || NodeFS.existsSync(NodePath.join(bin, name))) continue;
+            NodeFS.symlinkSync(NodePath.join(entry, name), NodePath.join(bin, name));
+          }
+        }
+        for (const fifo of ["gate", "block"])
+          NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
+        // The probe reads /proc/self/stat through a link; tick 1 removes it, so every later look
+        // fails. The deadline passes on ticks 2 and 3, and tick 4 releases the script, which
+        // ignores the hang-up.
+        const stat = NodePath.join(dir, "stat");
+        NodeFS.symlinkSync("/proc/self/stat", stat);
+        const clock = NodePath.join(dir, "sleep");
+        NodeFS.writeFileSync(
+          clock,
+          [
+            "#!/bin/sh",
+            'n=$(($(cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
+            'if [ "$n" = 1 ]; then rm -f "$GOAT_TEST_DIR/stat"; exec cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
+            'if [ "$n" = 4 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
+            'if [ "$n" -gt 4 ]; then ' + HOLD + "; fi",
+          ].join("\n") + "\n",
+          { mode: 0o755 },
+        );
+        const body = [
+          "trap '' HUP",
+          'printf go > "$1/gate"',
+          'cat "$1/block" >/dev/null',
+          "exit 4",
+        ].join("\n");
+        const result = await runInCaller(
+          dir,
+          shell,
+          RECORD_KILLS + withRemoteDeadline(body, 1_000, clock, stat),
+          { PATH: bin },
+        );
+        expect(result).toEqual({ siblingAlive: true, code: "4", out: "" });
+        // It was still a live child when its shell stopped it; only bash's job has a group of its
+        // own to hang up.
+        expect(signalled(dir)).toEqual(shell === "bash" ? ["group", "child"] : ["child"]);
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+  it
+    .skipIf(HostProcess.Platform.defaultValue() !== "linux")
+    .each(
+      ["dash", "bash"].flatMap((shell) =>
+        ["foreground", "background"].map((mode) => ({ shell, mode })),
+      ),
+    )(
+    "finishes under a controlling terminal, keeping its status ($shell, $mode)",
+    async ({ shell, mode }) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+      try {
+        NodeFS.writeFileSync(
+          NodePath.join(dir, "wrapped.sh"),
+          withRemoteDeadline("echo yes\nexit 7", 60_000),
+        );
+        // script gives the run a terminal. In the background, job control would make dash and
+        // bash wait forever to own it.
+        const run =
+          'timeout 30 "$2" -s < "$1/wrapped.sh" > "$1/out" 2>&1; echo "rc=$?" >> "$1/out"';
+        NodeFS.writeFileSync(
+          NodePath.join(dir, "driver.sh"),
+          mode === "background" ? "set -m\n( " + run + " ) &\nwait\n" : run + "\n",
+        );
+        await spawnHeld("script", [
+          "-qec",
+          `bash ${NodePath.join(dir, "driver.sh")} ${dir} ${shell}`,
+          "/dev/null",
+        ]);
+        expect(NodeFS.readFileSync(NodePath.join(dir, "out"), "utf8")).toBe("yes\nrc=7\n");
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+  it.each(["dash", "bash"])(
+    "returns the script's status when a signal ended its watchdog before the script did (%s)",
+    async (shell) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+      try {
+        NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "ticked")]);
+        // The first tick names the watchdog; the script ends it with a signal no trap can catch,
+        // as a TERM that lands before the watchdog's trap would.
+        const clock = NodePath.join(dir, "sleep");
+        NodeFS.writeFileSync(
+          clock,
+          '#!/bin/sh\necho $PPID > "$GOAT_TEST_DIR/watchdog.pid"\nprintf x > "$GOAT_TEST_DIR/ticked"\n' +
+            HOLD +
+            "\n",
+          { mode: 0o755 },
+        );
+        const body = 'cat "$1/ticked" >/dev/null\nkill -KILL "$(cat "$1/watchdog.pid")"\nexit 5';
+        expect(
+          await runShell(
+            withRemoteDeadline(body, 60_000, clock),
+            [dir],
+            { GOAT_TEST_DIR: dir },
+            { shell },
+          ),
+        ).toEqual({ code: 5, stdout: "" });
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+  it.each(["dash", "bash"].flatMap((shell) => ["file", "pipe"].map((stdin) => ({ shell, stdin }))))(
+    "keeps the script's arguments, output and status with stdin from a $stdin ($shell)",
+    ({ shell, stdin }) => {
+      const script = withRemoteDeadline('printf "%s|" "$@"\nexit 7', 60_000);
+      // Git Bash rereads a seekable script after forking; a last line without its newline then
+      // joins the next read.
+      expect(script.endsWith("\n")).toBe(true);
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+      try {
+        const file = NodePath.join(dir, "wrapped.sh");
+        NodeFS.writeFileSync(file, script);
+        const fd = stdin === "file" ? NodeFS.openSync(file, "r") : undefined;
+        try {
+          const run = NodeChildProcess.spawnSync(
+            shell,
+            ["-s", "--", "a b", "c"],
+            fd === undefined ? { input: script } : { stdio: [fd, "pipe", "inherit"] },
+          );
+          expect([run.status, run.stdout.toString()]).toEqual([7, "a b|c|"]);
+        } finally {
+          if (fd !== undefined) NodeFS.closeSync(fd);
+        }
       } finally {
         NodeFS.rmSync(dir, { recursive: true, force: true });
       }
