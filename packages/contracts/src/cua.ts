@@ -20,6 +20,7 @@ import { PreviewSessionNoPicture } from "./previewSession.ts";
 import {
   ComputerUseLeaseBrowserCapability,
   ComputerUseLeaseBrowserClaimEnded,
+  ComputerUseLeaseBrowserClaimReply,
   LeaseBrowserClaim,
   PendingBrowserBind,
 } from "./browserClaims.ts";
@@ -291,6 +292,7 @@ export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeaseDriverEnded,
   ComputerUseLeaseBrowserCapability,
   ComputerUseLeaseBrowserClaimEnded,
+  ComputerUseLeaseBrowserClaimReply,
 ]);
 export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 

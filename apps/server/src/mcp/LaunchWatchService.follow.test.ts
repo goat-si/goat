@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Logger from "effect/Logger";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -757,5 +758,49 @@ describe("LaunchWatchService runs the thread starts itself", () => {
       );
       expect(reportedRuns(world)).toEqual([run1, run2]);
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("LaunchWatchService follower contact failures", () => {
+  it.effect(
+    "logs a remote step that never answers, with its failure count and next retry (#2217)",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const baseDir = yield* tempDir;
+        const hung = yield* Deferred.make<void>();
+        const retried = yield* Deferred.make<void>();
+        world.hostCall = (call) =>
+          call.tool === "goat_thread_wait"
+            ? Deferred.isDone(hung).pipe(
+                Effect.flatMap((again) => Deferred.succeed(again ? retried : hung, undefined)),
+                Effect.andThen(Effect.never),
+              )
+            : Effect.die(new Error("unexpected host call " + call.tool));
+        const warnings: Array<Record<string, unknown>> = [];
+        const logger = Logger.make(({ message }) => {
+          if (
+            Array.isArray(message) &&
+            message[0] === "launch watch: follower contact failed" &&
+            typeof message[1] === "object"
+          ) {
+            warnings.push(message[1] as Record<string, unknown>);
+          }
+        });
+        const watchId = yield* withService(world, baseDir, (service) =>
+          Effect.gen(function* () {
+            yield* watchRemote(service, run1);
+            yield* Deferred.await(hung);
+            // Only the step limit ends the hung wait; the backoff then calls the host again.
+            yield* advanceUntil(Deferred.await(retried));
+            const [watch] = yield* service.list(launcher);
+            expect(watch?.outage?.failures).toBe(1);
+            return watch?.id;
+          }),
+        ).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatchObject({ watchId, failures: 1, host: "box" });
+        expect(world.hostCalls[1]?.at).toBeGreaterThanOrEqual(Number(warnings[0]?.nextRetryAt));
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

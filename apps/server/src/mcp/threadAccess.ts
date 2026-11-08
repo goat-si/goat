@@ -36,18 +36,23 @@ export const reauthorizationFailure = (
 export const dispatchFailure = (
   error: OrchestratorV2Error | ThreadManagement.ThreadManagementProviderInstanceDisabledError,
 ) =>
-  error._tag === "OrchestratorQuestionAlreadyAnsweredError" ||
-  error._tag === "ThreadManagementProviderInstanceDisabledError"
-    ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
-    : (error._tag === "OrchestratorDispatchError" ||
-          error._tag === "OrchestratorCommandRejectedError") &&
-        typeof error.cause === "string" &&
-        error.cause.length > 0
-      ? new OrchestratorMcpFailure({
-          code: "orchestration_error",
-          message: Array.from(error.cause).slice(0, 1000).join(""),
-        })
-      : unavailable();
+  error._tag === "OrchestratorCommandPreviouslyRejectedError"
+    ? new OrchestratorMcpFailure({
+        code: "invalid_request",
+        message: Array.from(error.detail).slice(0, 1000).join(""),
+      })
+    : error._tag === "OrchestratorQuestionAlreadyAnsweredError" ||
+        error._tag === "ThreadManagementProviderInstanceDisabledError"
+      ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
+      : (error._tag === "OrchestratorDispatchError" ||
+            error._tag === "OrchestratorCommandRejectedError") &&
+          typeof error.cause === "string" &&
+          error.cause.length > 0
+        ? new OrchestratorMcpFailure({
+            code: "orchestration_error",
+            message: Array.from(error.cause).slice(0, 1000).join(""),
+          })
+        : unavailable();
 
 export interface CallerLimits {
   readonly runtimeMode: RuntimeMode;

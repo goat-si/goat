@@ -98,6 +98,7 @@ import * as OpenCodexUpdateHost from "../hub/OpenCodexUpdateHost.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
+import * as OriginBoundDeleteService from "../remoteReports/OriginBoundDeleteService.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import {
   type AgentThread,
@@ -1253,7 +1254,7 @@ export const layer = Layer.mergeAll(
   layerListingChanges,
 ).pipe(
   // The caller shares launch watchers; one report service wakes their origin collectors.
-  Layer.provide(RemoteReportService.layer),
+  Layer.provide(Layer.mergeAll(RemoteReportService.layer, OriginBoundDeleteService.layer)),
   // Run results for the report tool and the thread read and wait tools.
   Layer.provide(ThreadResultService.layer),
   // Every registration's goatclaw and session receipt gates, and the handlers that check profiles.

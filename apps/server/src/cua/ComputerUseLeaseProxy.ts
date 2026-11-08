@@ -117,7 +117,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let foreground: ReadonlyArray<Contracts.ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
   const flags = makeLeaseFlags();
-  const claims = makeProxyBrowserClaims(options.onBrowserClaimReport);
+  const claims = makeProxyBrowserClaims(
+    options.onBrowserClaimReport,
+    options.judgeBrowserClaimReply,
+  );
   const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
@@ -320,7 +323,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           options.onCancelledRequestSettled?.(key);
           return;
         }
-        if (claims.outside(message.result, request.browserClaim))
+        if (yield* claims.withhold(message.result, request.browserClaim))
           return yield* claims.refuseReply(request, key, outstanding, gone, release);
         const session = message.result?.structuredContent?.session;
         if (request.method === "tools/call" && typeof session === "string") sessions.add(session);
@@ -337,9 +340,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             if (admitted === undefined) return;
             delivered = admitted;
           }
-          // Every answered call updates the overlay, a display refusal as failed, while the call
-          // is still outstanding: a stop or pause during the draw answers it, and the check below
-          // drops this reply.
           const failed =
             message.error !== undefined ||
             message.result?.isError === true ||

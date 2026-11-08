@@ -7,6 +7,9 @@ import * as Schema from "effect/Schema";
 import { HandoffReview } from "../chat/HandoffReview";
 import { desktopOwnsSshHostConfig } from "~/connection/platform";
 import { SshRuntimeSettingsRow } from "./SshRuntimeSettingsRow";
+import { PendingSshAddRow } from "./PendingSshAddRow";
+import { type PendingSshAdd, pendingSshAddsAtom, startPendingSshAdd } from "./pendingSshAdds";
+import { runSshAdd } from "./runSshAdd";
 import { useConnectionRowLiveState } from "./useConnectionRowLiveState";
 import { SshPreflightChecklist } from "./SshPreflightChecklist";
 import {
@@ -21,11 +24,9 @@ import {
   formatDesktopSshConnectionError,
   parsePairingUrlFields,
   parseRemotePairingFields,
-  isSshConnectionSuperseded,
   savedConnectionPresentation,
   savedConnectionSshRoute,
 } from "./ConnectionsSettings.logic";
-import * as Effect from "effect/Effect";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { SessionPermissions } from "./SessionPermissions";
 import {
@@ -37,9 +38,9 @@ import {
   RouteIcon,
   TerminalIcon,
 } from "~/components/solar";
-import { useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
-import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useContext, useEffect, useRef, useState } from "react";
 import {
   SshHostAlias,
   SshHostProbeError,
@@ -49,7 +50,6 @@ import {
   AuthEnvironmentMaintainScope,
   type DesktopDiscoveredSshHost,
   type DesktopSshEnvironmentTarget,
-  type DesktopSshPreparationProgress,
   type EnvironmentId,
   resolveEnvironmentMachineKind,
 } from "@goat/contracts";
@@ -639,17 +639,19 @@ function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnable
 function CloudRemoteEnvironmentRows({
   primaryEnvironmentId,
   savedEnvironments,
+  hasPendingAdds,
 }: {
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly savedEnvironments: ReadonlyArray<EnvironmentPresentation>;
+  readonly hasPendingAdds: boolean;
 }) {
   return hasCloudPublicConfig() ? (
     <CloudEnvironmentConnectRows
       primaryEnvironmentId={primaryEnvironmentId}
       savedEnvironments={savedEnvironments}
-      empty={<EmptyRemoteEnvironments />}
+      empty={hasPendingAdds ? null : <EmptyRemoteEnvironments />}
     />
-  ) : savedEnvironments.length === 0 ? (
+  ) : savedEnvironments.length === 0 && !hasPendingAdds ? (
     <EmptyRemoteEnvironments cloudEnabled={false} />
   ) : null;
 }
@@ -763,23 +765,9 @@ export function ConnectionEnvironmentsSection({
   } | null>(null);
   const [isCheckingSsh, setIsCheckingSsh] = useState(false);
   const [sshProbe, setSshProbe] = useState<SshHostProbeResult | null>(null);
-  const [pendingSshTarget, setPendingSshTarget] = useState<DesktopSshEnvironmentTarget | null>(
-    null,
-  );
   const sshAddInFlight = useRef(false);
-  const sshConnectInFlight = useRef(false);
-  const sshSubmission = useRef(0);
-  const [sshPreparation, setSshPreparation] = useState<{
-    readonly submissionId: number;
-    readonly targetKey: string;
-    readonly progress: DesktopSshPreparationProgress;
-  } | null>(null);
-  useEffect(
-    () => () => {
-      sshSubmission.current += 1;
-    },
-    [],
-  );
+  const atomRegistry = useContext(RegistryContext);
+  const pendingSshAdds = useAtomValue(pendingSshAddsAtom);
   const sshReviewGeneration = useRef(0);
   const [pendingForget, setPendingForget] = useState<EnvironmentPresentation | null>(null);
   const [removeForgottenConnection, setRemoveForgottenConnection] = useState(false);
@@ -872,78 +860,68 @@ export function ConnectionEnvironmentsSection({
   const hasSshHostSuggestionContent =
     desktopBridge !== undefined &&
     (isLoadingDiscoveredSshHosts || unsavedDiscoveredSshHosts.length > 0);
-  // Shared by manual SSH submission and discovered-host selection.
-  const connectSavedBackendSshTarget = async (target: DesktopSshEnvironmentTarget) => {
-    if (sshConnectInFlight.current) return;
+  // Shared by manual SSH submission and discovered-host selection. The add then runs in its
+  // Connections row, so the dialog closes at once instead of waiting through install and pairing.
+  const connectSavedBackendSshTarget = (target: DesktopSshEnvironmentTarget) => {
+    if (primaryEnvironmentId === null) return;
     if (
       target.alias.startsWith("goat-") &&
-      (primaryEnvironmentId === null ||
-        !readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope))
+      !readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope)
     ) {
       setSavedBackendError(
         "This device can't set up hosts on this environment. Ask its owner for full access.",
       );
       return;
     }
-    sshConnectInFlight.current = true;
-    const submissionId = ++sshSubmission.current;
-    const targetKey = sshRuntimeTargetKey({ environmentId: primaryEnvironmentId!, target });
-    setSshPreparation(null);
-    setPendingSshTarget(target);
-    setIsAddingSavedBackend(true);
-    setSavedBackendError(null);
-    const result = await connectSshEnvironment({
+    const route = routeTarget;
+    const environmentId = primaryEnvironmentId;
+    const started = startPendingSshAdd(atomRegistry, {
+      key: sshRuntimeTargetKey({ environmentId, target }),
+      environmentId,
       target,
-      label: "",
-      onPreparationProgress: (progress) =>
-        Effect.sync(() => {
-          if (sshSubmission.current === submissionId && sshConnectInFlight.current)
-            setSshPreparation({ submissionId, targetKey, progress });
+      label: route?.label ?? target.alias,
+      routeEnvironmentId: route?.environmentId ?? null,
+      run: (report) =>
+        runSshAdd(connectSshEnvironment, {
+          environmentId,
+          target,
+          expectedEnvironmentId: route?.environmentId ?? null,
+          report,
         }),
-      ...(target.alias.startsWith("goat-") ? { keyOnly: true } : {}),
-      ...(routeTarget ? { expectedEnvironmentId: routeTarget.environmentId } : {}),
+      onConnected: () => {
+        void registerSavedHubNode(target, route?.label ?? target.alias);
+        toastManager.add({
+          type: "success",
+          title: route ? "Route added" : "Environment connected",
+          description: route
+            ? `${route.label} can now be reached over SSH ${target.alias}.`
+            : `${target.alias} is ready over an SSH-managed tunnel.`,
+        });
+      },
     });
-    if (sshSubmission.current !== submissionId) return;
-    setSshPreparation(null);
-    sshConnectInFlight.current = false;
-    setIsAddingSavedBackend(false);
-    if (result._tag === "Failure") {
-      if (
-        isAtomCommandInterrupted(result) ||
-        isSshConnectionSuperseded(squashAtomCommandFailure(result))
-      ) {
-        setPendingSshTarget(null);
-        return;
-      }
-      const message = formatDesktopSshConnectionError(squashAtomCommandFailure(result));
-      const current =
-        primaryEnvironmentId === null
-          ? null
-          : await sshRuntime.refresh.run(appAtomRegistry, {
-              environmentId: primaryEnvironmentId,
-              target,
-            });
-      if (sshSubmission.current !== submissionId) return;
+    if (started === null) {
       setSavedBackendError(
-        current?._tag === "Success" && current.value?.status?.state === "ready"
-          ? `GOAT is ready on ${target.alias}, but the connection couldn't be saved. ${message}`
-          : message,
+        `GOAT is already adding ${target.alias}. Its progress is in the Connections list.`,
       );
       return;
     }
-
-    void registerSavedHubNode(target, routeTarget?.label ?? target.alias);
-    sshConnectInFlight.current = false;
     invalidateSshPreflight();
     addForm.reset();
     setAddBackendDialogOpen(false);
-    toastManager.add({
-      type: "success",
-      title: routeTarget ? "Route added" : "Environment connected",
-      description: routeTarget
-        ? `${routeTarget.label} can now be reached over SSH ${target.alias}.`
-        : `${target.alias} is ready over an SSH-managed tunnel.`,
-    });
+  };
+  const reviewPendingSshTrust = (add: PendingSshAdd) => {
+    const route =
+      savedEnvironments.find(
+        (environment) => environment.environmentId === add.routeEnvironmentId,
+      ) ?? null;
+    const configAlias = add.target.alias !== add.target.hostname;
+    invalidateSshPreflight();
+    setRouteTarget(route);
+    setSavedBackendMode("ssh");
+    setSavedBackendSshHost(add.target.alias);
+    setSavedBackendSshUsername(configAlias ? "" : (add.target.username ?? ""));
+    setSavedBackendSshPort(configAlias || add.target.port === null ? "" : String(add.target.port));
+    setAddBackendDialogOpen(true);
   };
 
   const invalidateSshPreflight = () => {
@@ -953,7 +931,6 @@ export function ConnectionEnvironmentsSection({
     setSshProbe(null);
     setIsCheckingSsh(false);
     setIsAddingSavedBackend(false);
-    setPendingSshTarget(null);
     setSavedBackendError(null);
   };
 
@@ -994,7 +971,7 @@ export function ConnectionEnvironmentsSection({
   };
 
   const checkSavedBackendSshTarget = async (target: DesktopSshEnvironmentTarget) => {
-    if (sshAddInFlight.current || sshConnectInFlight.current) return;
+    if (sshAddInFlight.current) return;
     if (!ownsSshConfig || primaryEnvironmentId === null) {
       setSavedBackendError("Add new SSH hosts from the machine that runs this environment.");
       return;
@@ -1007,7 +984,6 @@ export function ConnectionEnvironmentsSection({
     sshAddInFlight.current = true;
     setIsCheckingSsh(true);
     setSshPreflight(null);
-    setPendingSshTarget(null);
     setSavedBackendError(null);
     const result = await preflightSshHost({
       environmentId: primaryEnvironmentId,
@@ -1136,8 +1112,7 @@ export function ConnectionEnvironmentsSection({
       )
         return;
       const flow = sshPreflightFlow(sshPreflight?.report ?? null);
-      if (flow === "connect" && sshPreflight)
-        await connectSavedBackendSshTarget(sshPreflight.target);
+      if (flow === "connect" && sshPreflight) connectSavedBackendSshTarget(sshPreflight.target);
       else if (flow === "check") await checkSavedBackendSshFields();
       return;
     }
@@ -1548,9 +1523,6 @@ export function ConnectionEnvironmentsSection({
             value={savedBackendSshHost}
             onValueChange={(value, eventDetails) => {
               invalidateSshPreflight();
-              sshSubmission.current += 1;
-              setSshPreparation(null);
-              setPendingSshTarget(null);
               setSavedBackendSshHost(value);
               if (eventDetails.reason !== "item-press") return;
 
@@ -1620,9 +1592,6 @@ export function ConnectionEnvironmentsSection({
               aria-describedby={configuredSshAlias ? "saved-backend-ssh-config-hint" : undefined}
               onChange={(event) => {
                 invalidateSshPreflight();
-                sshSubmission.current += 1;
-                setSshPreparation(null);
-                setPendingSshTarget(null);
                 setSavedBackendSshUsername(event.target.value);
               }}
               onKeyDown={handleSavedBackendSshFieldKeyDown}
@@ -1645,9 +1614,6 @@ export function ConnectionEnvironmentsSection({
               aria-describedby={configuredSshAlias ? "saved-backend-ssh-config-hint" : undefined}
               onChange={(event) => {
                 invalidateSshPreflight();
-                sshSubmission.current += 1;
-                setSshPreparation(null);
-                setPendingSshTarget(null);
                 setSavedBackendSshPort(event.target.value);
               }}
               onKeyDown={handleSavedBackendSshFieldKeyDown}
@@ -1696,21 +1662,6 @@ export function ConnectionEnvironmentsSection({
             />
           </div>
         ) : null}
-        {pendingSshTarget && primaryEnvironmentId !== null ? (
-          <SshRuntimeSettingsRow
-            environmentId={primaryEnvironmentId}
-            target={pendingSshTarget}
-            enabled={addBackendDialogOpen}
-            pendingAdd
-            {...(sshPreparation?.targetKey ===
-            sshRuntimeTargetKey({ environmentId: primaryEnvironmentId, target: pendingSshTarget })
-              ? { preparationProgress: sshPreparation.progress }
-              : {})}
-            connecting={isAddingSavedBackend}
-            originLabel={primaryEnvironment?.label ?? "this machine"}
-            {...(isAddingSavedBackend ? {} : { onRetry: () => void checkSavedBackendSshFields() })}
-          />
-        ) : null}
         {savedBackendError || discoveredSshHostsError ? (
           <Alert variant="error">
             <AlertDescription>{savedBackendError ?? discoveredSshHostsError}</AlertDescription>
@@ -1747,8 +1698,6 @@ export function ConnectionEnvironmentsSection({
                 if (!open) {
                   if (sshProbe !== null) void answerSshTrust(false);
                   invalidateSshPreflight();
-                  sshSubmission.current += 1;
-                  setSshPreparation(null);
                   addForm.reset();
                   highlightedSshHostRef.current = undefined;
                 }
@@ -1850,9 +1799,25 @@ export function ConnectionEnvironmentsSection({
             }}
           />
         ))}
+        {pendingSshAdds.map((add) => (
+          <PendingSshAddRow
+            key={add.key}
+            add={add}
+            originLabel={primaryEnvironment?.label ?? "this machine"}
+            onReviewTrust={
+              add.routeEnvironmentId === null ||
+              savedEnvironments.some(
+                (environment) => environment.environmentId === add.routeEnvironmentId,
+              )
+                ? () => reviewPendingSshTrust(add)
+                : undefined
+            }
+          />
+        ))}
         <CloudRemoteEnvironmentRows
           primaryEnvironmentId={primaryEnvironmentId}
           savedEnvironments={savedEnvironments}
+          hasPendingAdds={pendingSshAdds.length > 0}
         />
       </SettingsSection>
       {hasCloudPublicConfig() ? (

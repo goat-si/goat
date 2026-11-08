@@ -3,6 +3,47 @@ import { REMOTE_PROTOCOL_TOKEN_SCRIPT } from "./runtimeFactsScripts.ts";
 import { REMOTE_REPLACEMENT_LOCK_SCRIPT } from "./runtimeOwnershipScripts.ts";
 import { SshLaunchError } from "./errors.ts";
 
+/** Windows runtime publication retries sharing violations from on-access scans of the new goat.exe. */
+export const REMOTE_RUNTIME_PUBLISH_SCRIPT = String.raw`goat_runtime_fs() (
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) ;;
+    *) "$@"; exit $? ;;
+  esac
+  # mv nests a stage in an existing directory; GNU -T renames onto an empty one, refuses the rest.
+  if [ "$1" = mv ]; then set -- mv -T "$2" "$3"; fi
+  for delay in 0 1 2 4 8 10 10 10; do
+    [ "$delay" = 0 ] || sleep "$delay"
+    if [ "$2" = -T ] && { [ -e "$4" ] || [ -L "$4" ]; }; then
+      printf 'Cannot publish %s: %s already exists.\n' "$3" "$4" >&2; exit 1
+    fi
+    if output="$(LC_ALL=C "$@" 2>&1)"; then
+      [ -z "$output" ] || printf '%s\n' "$output"
+      exit 0
+    else
+      status=$?
+    fi
+    case "$output" in
+      *'Permission denied'* | *'Device or resource busy'* | *'Access is denied'*) ;;
+      *) printf '%s\n' "$output" >&2; exit "$status" ;;
+    esac
+  done
+  printf '%s\n' "$output" >&2
+  printf '%s\n' 'An antivirus/real-time scan may be locking the new goat.exe. Consider excluding %USERPROFILE%\.goat\runtime, then retry.' >&2
+  exit "$status"
+)
+goat_runtime_publish() {
+  # Another installer may have completed this version during extraction on Windows; keep it.
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+      if [ -x "$2/goat" ] && [ "$(cat "$2/.install-complete" 2>/dev/null)" = "$3" ]; then
+        rm -rf "$1" 2>/dev/null || :; return 0
+      fi ;;
+  esac
+  goat_runtime_fs rm -rf "$2"
+  goat_runtime_fs mv "$1" "$2"
+}
+`;
+
 /**
  * Installers are transient copies of the runner with its fetch block swapped out, so the
  * managed run-t3.sh bytes (and the retained-runner identity built on them) never change.

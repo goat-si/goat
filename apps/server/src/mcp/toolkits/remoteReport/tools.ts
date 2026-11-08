@@ -10,9 +10,12 @@ import {
   RemoteOriginReportsWaitResult,
   RemoteResolveBindingInput,
   RemoteResolveBindingResult,
+  OriginBoundDeleteInput,
+  OriginBoundDeleteResult,
 } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 import * as RemoteReportService from "../../../remoteReports/RemoteReportService.ts";
+import * as OriginBoundDeleteService from "../../../remoteReports/OriginBoundDeleteService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -49,9 +52,27 @@ const ResolveBindingTool = Tool.make(agentSurfaceRegistry["origin.resolve_bindin
   parameters: RemoteResolveBindingInput,
   success: RemoteResolveBindingResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.resolve_binding"]));
+const boundDelete = {
+  ...shared,
+  dependencies: [...shared.dependencies, OriginBoundDeleteService.OriginBoundDeleteService],
+};
+const BoundDeleteTool = Tool.make(agentSurfaceRegistry["origin.bound_delete"].name, {
+  ...boundDelete,
+  description: agentSurfaceRegistry["origin.bound_delete"].description,
+  parameters: OriginBoundDeleteInput,
+  success: OriginBoundDeleteResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.bound_delete"]));
+const BoundDeleteReceiptTool = Tool.make(agentSurfaceRegistry["origin.bound_delete_receipt"].name, {
+  ...boundDelete,
+  description: agentSurfaceRegistry["origin.bound_delete_receipt"].description,
+  parameters: OriginBoundDeleteInput,
+  success: OriginBoundDeleteResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.bound_delete_receipt"]));
 export const RemoteReportToolkit = Toolkit.make(
   ReportTool,
   ReceiptTool,
   WaitTool,
   ResolveBindingTool,
+  BoundDeleteTool,
+  BoundDeleteReceiptTool,
 );

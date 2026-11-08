@@ -250,6 +250,24 @@ const makeReportLayer = (serverScope?: Scope.Scope) =>
       const report = yield* request.text.pipe(Effect.flatMap(decodeReport), Effect.option);
       if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
       const value = report.value;
+      if ("type" in value && value.type === "browserClaimReply") {
+        const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+        if (Option.isNone(grants)) return HttpServerResponse.empty({ status: 503 });
+        const verdict = yield* grants.value.judgeReply(
+          threadId,
+          value.claimId,
+          value.claimGeneration,
+          value.urls,
+          value.outside === true,
+        );
+        if (!verdict.deliver && verdict.end !== undefined) {
+          const reason = verdict.end;
+          yield* grants.value
+            .end(threadId, value.claimId, value.claimGeneration, reason)
+            .pipe(Effect.forkDetach, Effect.asVoid);
+        }
+        return HttpServerResponse.empty({ status: verdict.deliver ? 204 : 409 });
+      }
       if ("browserClaimsSupported" in value || "browserClaimEnded" in value) {
         const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
         if (Option.isNone(grants)) return HttpServerResponse.empty({ status: 503 });

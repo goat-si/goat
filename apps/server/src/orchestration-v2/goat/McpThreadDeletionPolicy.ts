@@ -8,14 +8,19 @@ import * as Effect from "effect/Effect";
 
 /** Only MCP lifecycle deletion opts into this policy; client deletion keeps its semantics. */
 export class McpThreadDeletionPolicy extends Context.Reference<
-  { readonly callerThreadId?: ThreadId } | undefined
+  { readonly callerThreadId?: ThreadId; readonly fence?: boolean } | undefined
 >("goat/orchestration-v2/McpThreadDeletionPolicy", { defaultValue: () => undefined }) {}
+
+/** Stored on the command receipt. A replay of this sentence means the fence won. */
+export const fencedDeleteRefusal =
+  "This delete did not run: the origin fenced the request before deletion.";
 
 export const deletionRefusal = Effect.fn("McpThreadDeletionPolicy.check")(function* (
   projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "subagents">,
 ) {
   const policy = yield* McpThreadDeletionPolicy;
   if (policy === undefined) return;
+  if (policy.fence === true) return fencedDeleteRefusal;
   if (projection.thread.id === policy.callerThreadId)
     return "An agent cannot delete its own thread.";
   if (isProviderNativeSubagentThread(projection.thread))

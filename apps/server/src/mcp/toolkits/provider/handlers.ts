@@ -126,14 +126,15 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
             }),
         ),
       );
-      if (result.truncated === true) {
+      const { continuation, ...listed } = result;
+      if (result.truncated === true || continuation !== undefined) {
         return yield* new OrchestratorMcpFailure({
           code: "orchestration_error",
           message:
             "GOAT could not list this ACP agent's sessions completely. A person can manage sessions in Settings.",
         });
       }
-      return result;
+      return listed;
     }),
   ),
   goat_provider_host_matrix: McpToolAccess.readsOrReachesHost(

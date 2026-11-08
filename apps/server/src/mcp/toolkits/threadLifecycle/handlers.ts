@@ -29,7 +29,7 @@ export const layer = McpToolAccess.toLayer(ThreadLifecycleToolkit, {
   ),
   goat_thread_delete: McpToolAccess.destructive(
     McpToolAccess.writesThreads(
-      (input) => [input.threadId],
+      (input) => (input.host === undefined ? [input.threadId] : []),
       (input) =>
         Effect.gen(function* () {
           const service = yield* Lifecycle.ThreadLifecycleMcpService;
@@ -65,11 +65,17 @@ export const layer = McpToolAccess.toLayer(ThreadLifecycleToolkit, {
       );
     }),
   ),
-  goat_thread_lifecycle_receipt: McpToolAccess.reads((input) =>
-    Effect.gen(function* () {
-      const service = yield* Lifecycle.ThreadLifecycleMcpService;
-      return yield* service.receipt(yield* Invocation.McpInvocationContext, "thread.delete", input);
-    }),
+  goat_thread_lifecycle_receipt: McpToolAccess.readsOrReachesHost(
+    (input) => input.host !== undefined,
+    (input) =>
+      Effect.gen(function* () {
+        const service = yield* Lifecycle.ThreadLifecycleMcpService;
+        return yield* service.receipt(
+          yield* Invocation.McpInvocationContext,
+          "thread.delete",
+          input,
+        );
+      }),
   ),
   goat_provider_session_receipt: McpToolAccess.reads((input) =>
     Effect.gen(function* () {

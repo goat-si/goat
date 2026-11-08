@@ -17,6 +17,7 @@ import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as RemoteReportService from "../../../remoteReports/RemoteReportService.ts";
+import * as OriginBoundDelete from "../../../remoteReports/OriginBoundDeleteService.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -141,6 +142,7 @@ const reportFixture = () => {
       }),
   });
   const served = McpHttpServer.toolkitRegistration(RemoteReportToolkit, layer).pipe(
+    Layer.provide(OriginBoundDelete.layer),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(
       Layer.mergeAll(

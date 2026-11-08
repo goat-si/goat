@@ -29,6 +29,7 @@ import {
   reauthorizationFailure,
   unavailable,
 } from "./threadAccess.ts";
+import * as OriginRoutedDelete from "../remoteReports/OriginRoutedDelete.ts";
 
 type Target = { readonly threadId?: ThreadId | undefined };
 type Accepted = {
@@ -56,7 +57,7 @@ export class ThreadLifecycleMcpService extends Context.Service<
     ) => Effect.Effect<Accepted, OrchestratorMcpFailure>;
     readonly delete: (
       scope: McpInvocationContext.McpInvocationScope,
-      input: { readonly threadId: ThreadId },
+      input: { readonly threadId: ThreadId; readonly host?: string | undefined },
     ) => Effect.Effect<Accepted, OrchestratorMcpFailure>;
     readonly detach: (
       scope: McpInvocationContext.McpInvocationScope,
@@ -65,7 +66,7 @@ export class ThreadLifecycleMcpService extends Context.Service<
     readonly receipt: (
       scope: McpInvocationContext.McpInvocationScope,
       operation: Operation,
-      input: { readonly clientRequestId: string },
+      input: { readonly clientRequestId: string; readonly host?: string | undefined },
     ) => Effect.Effect<Receipt, OrchestratorMcpFailure>;
   }
 >()("goat/mcp/ThreadLifecycleMcpService") {}
@@ -74,6 +75,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const receipts = yield* ToolAdmission.makeReceiptReader();
+  const routed = yield* OriginRoutedDelete.OriginRoutedDelete;
   const check = Effect.fn("ThreadLifecycleMcpService.authorize")(function* (
     scope: McpInvocationContext.McpInvocationScope,
   ) {
@@ -178,8 +180,13 @@ const make = Effect.gen(function* () {
   const receipt = Effect.fn("ThreadLifecycleMcpService.receipt")(function* (
     scope: McpInvocationContext.McpInvocationScope,
     operation: Operation,
-    input: { readonly clientRequestId: string },
+    input: { readonly clientRequestId: string; readonly host?: string | undefined },
   ) {
+    if (operation === "thread.delete" && input.host !== undefined)
+      return yield* routed.receipt(scope, {
+        clientRequestId: input.clientRequestId,
+        host: input.host,
+      });
     const context = yield* check(scope);
     const record = yield* receipts(operation, input.clientRequestId).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
@@ -201,7 +208,9 @@ const make = Effect.gen(function* () {
       dispatch(scope, "queued_run.start", input),
     ),
     delete: Effect.fn("ThreadLifecycleMcpService.delete")((scope, input) =>
-      dispatch(scope, "thread.delete", input),
+      input.host === undefined
+        ? dispatch(scope, "thread.delete", input)
+        : routed.delete(scope, { threadId: input.threadId, host: input.host }),
     ),
     detach: Effect.fn("ThreadLifecycleMcpService.detach")((scope, input) =>
       dispatch(scope, "provider_session.detach", input),
@@ -209,4 +218,6 @@ const make = Effect.gen(function* () {
     receipt,
   });
 });
-export const layer = Layer.effect(ThreadLifecycleMcpService, make);
+export const layer = Layer.effect(ThreadLifecycleMcpService, make).pipe(
+  Layer.provide(OriginRoutedDelete.layer),
+);
