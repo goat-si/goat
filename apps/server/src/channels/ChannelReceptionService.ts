@@ -103,6 +103,8 @@ import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import { makeRemoteThreadRecall } from "./channelRemoteRecall.ts";
 import {
   approvalCard,
+  approvalReason,
+  approvalSent,
   type ApprovalReply,
   type OpenApprovalCard,
   openApprovalCards,
@@ -681,24 +683,6 @@ const make = Effect.gen(function* () {
       Effect.map(Option.getOrUndefined),
       Effect.orElseSucceed(() => undefined),
     );
-
-  /** Same words a local answer records, and the provenance a remote respond requires. */
-  const approvalReason = (
-    decision: ApprovalReply["decision"],
-    answerer: ChannelRequester,
-    via: ChannelRequester["originKind"],
-  ) =>
-    (decision === "accept" ? "Approved" : "Denied") +
-    " by " +
-    answerer.displayName +
-    " from GOAT Bot (" +
-    via +
-    ").";
-
-  const approvalSent = (decision: ApprovalReply["decision"], title: string) =>
-    decision === "accept"
-      ? "Approved. " + title + " continues."
-      : "Denied. I told the agent on " + title + " not to.";
 
   /**
    * Answers one approval for a person allowed to answer for the work's requester. A local answer's
