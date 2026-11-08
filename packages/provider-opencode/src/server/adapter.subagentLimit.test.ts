@@ -35,7 +35,10 @@ const limitHarness = Effect.fn("limitHarness")(function* (
     permission: ReadonlyArray<Rule>;
     metadata?: Record<string, unknown>;
   },
-  options: { readonly childUpdateFails?: () => boolean } = {},
+  options: {
+    readonly childUpdateFails?: () => boolean;
+    readonly forkMetadata?: Record<string, unknown>;
+  } = {},
 ) {
   const sessions = yield* McpProviderSessions.McpProviderSessions;
   const nativeEvents = asyncEventStream();
@@ -69,7 +72,12 @@ const limitHarness = Effect.fn("limitHarness")(function* (
         },
       }),
       fork: async () => ({
-        data: { id: `${root}-fork`, time: { created: 2, updated: 2 }, permission: [] },
+        data: {
+          id: `${root}-fork`,
+          time: { created: 2, updated: 2 },
+          permission: [],
+          ...(options.forkMetadata === undefined ? {} : { metadata: options.forkMetadata }),
+        },
       }),
       update: async (input: Update) => {
         if (input.sessionID !== root && options.childUpdateFails?.() === true)
@@ -190,6 +198,54 @@ describe("OpenCode native subagent limit", () => {
         { sessionID, permission: [...rules, DENY] },
         { sessionID },
       ]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("keeps the metadata a fork copied from its parent when installing GOAT rules", () =>
+    Effect.gen(function* () {
+      const { harness, root, sessions, config, updates } = yield* limitHarness(
+        "fork-metadata",
+        (permission) => ({ permission }),
+        { forkMetadata: { owner: "user" } },
+      );
+      const targetPolicy = runtimePolicy("approval-required", { cwd: "/workspace" });
+      const fork = yield* harness.runtime.forkThread({
+        sourceProviderThread: harness.providerThread,
+        targetThreadId: ThreadId.make("fork-target"),
+        runtimePolicy: targetPolicy,
+      });
+      yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
+      yield* harness.startTurn("work", fork);
+      const sessionID = `${root}-fork`;
+      // OpenCode replaces the whole metadata bag on update, so every write carries the copied keys.
+      assert.deepEqual(
+        updates.filter((update) => update.sessionID === sessionID).map((u) => u.metadata?.owner),
+        ["user", "user"],
+      );
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("keeps GOAT's deny on resume when the subagent limit is unknown (#2477)", () =>
+    Effect.gen(function* () {
+      const policy = runtimePolicy("approval-required");
+      const base = openCodePermissionRules(policy);
+      const { harness, updates } = yield* resumeFixture("resume-unknown-limit", {
+        permission: [...base, REVIEWER, DENY],
+        metadata: { goatPermissionBase: base, goatSubagentDeny: true },
+      });
+      yield* harness.runtime.resumeThread({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        runtimePolicy: policy,
+      });
+      // No MCP session: the limit is unknown, so the owned deny stays and nothing is rewritten.
+      assert.deepEqual(updates, []);
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
