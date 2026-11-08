@@ -59,6 +59,7 @@ function receiptFrames(
             config: {
               ...entry.frame.params.config,
               "features.default_mode_request_user_input": false,
+              "features.hooks": false,
             },
           },
         },
