@@ -9,6 +9,7 @@
  * @module channelApprovalCards
  */
 import type {
+  ChannelRequester,
   ChannelTask,
   ChannelTaskApprovalRef,
   OrchestrationV2RuntimeRequest,
@@ -84,6 +85,24 @@ export const approvalChoiceLabels = (code: string): readonly [string, string] =>
   "Approve " + code,
   "Deny " + code,
 ];
+
+/** Same words a local answer records, and the provenance a remote respond requires. */
+export const approvalReason = (
+  decision: ApprovalReply["decision"],
+  answerer: ChannelRequester,
+  via: ChannelRequester["originKind"],
+) =>
+  (decision === "accept" ? "Approved" : "Denied") +
+  " by " +
+  answerer.displayName +
+  " from GOAT Bot (" +
+  via +
+  ").";
+
+export const approvalSent = (decision: ApprovalReply["decision"], title: string) =>
+  decision === "accept"
+    ? "Approved. " + title + " continues."
+    : "Denied. I told the agent on " + title + " not to.";
 
 /** The card's words and buttons; the buttons carry the card's code. */
 export const approvalCard = (input: {
