@@ -49,6 +49,8 @@ export const RemoteDispatchRow = Schema.Struct({
   observation: Schema.optional(Schema.NullOr(Schema.fromJsonString(ChannelWorkerObservation))),
   relay_send: Schema.Number,
   relay_attempted: Schema.Number,
+  delete_requested_at: Schema.optional(Schema.NullOr(IsoDateTime)),
+  delete_request_key: Schema.optional(Schema.NullOr(Schema.String)),
   last_error: Schema.NullOr(Schema.String),
   created_at: IsoDateTime,
   updated_at: IsoDateTime,

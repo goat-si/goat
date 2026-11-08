@@ -24,6 +24,7 @@ import Migration0068 from "../persistence/Migrations/086_RemoteReportRelay.ts";
 import Migration0073 from "../persistence/Migrations/091_MemoryTaskGrantCeiling.ts";
 import Migration0089 from "../persistence/Migrations/104_RemoteDispatchObservation.ts";
 import Migration0101 from "../persistence/Migrations/113_RemoteReportInboxRunId.ts";
+import Migration0137 from "../persistence/Migrations/137_RemoteDispatchDeleteIntent.ts";
 import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -66,6 +67,7 @@ export const fixture = Effect.gen(function* () {
     yield* migration;
   yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
   for (const migration of [Migration0073, Migration0089, Migration0101]) yield* migration;
+  yield* Migration0137;
   const calls = yield* Queue.unbounded<{
     call: Ssh.SshHostToolCall;
     ceiling: RuntimeMode;
@@ -82,6 +84,7 @@ export const fixture = Effect.gen(function* () {
   const failedImports = yield* Queue.unbounded<void>();
   const failedDeliveries = yield* Queue.unbounded<void>();
   const lost = yield* Queue.unbounded<void>();
+  const deleteKept = yield* Queue.unbounded<void>();
   const attemptedCommands: OrchestrationV2ServerCommand[] = [];
   const recordedTasks: OrchestrationV2Subagent[] = [];
   const unavailableProjections = new Set<ThreadId>();
@@ -117,6 +120,12 @@ export const fixture = Effect.gen(function* () {
         args[0].join("").includes("WHERE kind = 'task' AND origin_thread_id =")
       )
         return statement.pipe(Effect.tap(() => Queue.offer(duplicateRead, undefined)));
+      if (
+        Array.isArray(args[0]) &&
+        args[0].join("").includes("last_error") &&
+        args[0].join("").includes("delete_requested_at IS NOT NULL")
+      )
+        return statement.pipe(Effect.tap(() => Queue.offer(deleteKept, undefined)));
       return Array.isArray(args[0]) &&
         args[0].join("").includes("SET state = ") &&
         args.includes("Origin thread is unavailable.")
@@ -263,6 +272,7 @@ export const fixture = Effect.gen(function* () {
       launchError = value;
     },
     lost,
+    deleteKept,
     attemptedCommands,
     refusedReviews,
     recordedTasks,
