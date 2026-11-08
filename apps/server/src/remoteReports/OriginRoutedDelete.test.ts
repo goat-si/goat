@@ -505,6 +505,40 @@ it.effect("a host lifecycle receipt fences did_not_run so goat_eval sees a repla
   }),
 );
 
+it.effect("a failed host receipt read leaves delete intent and the reservation unknown", () =>
+  Effect.gen(function* () {
+    const gate = yield* harness;
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const caller = yield* createCaller();
+      const scope = threadScope(caller);
+      yield* insertDispatch(sql, caller, "cancelled");
+      yield* Queue.offer(gate.replies, Effect.fail(sshError("ssh_failed", "dropped")));
+      yield* call(
+        "goat_thread_delete",
+        { threadId: remoteId, host: "box", clientRequestId: "lost-1" },
+        scope,
+      );
+      yield* Queue.take(gate.seen);
+      yield* Queue.offer(
+        gate.replies,
+        Effect.fail(
+          sshError("remote_refused", "The target thread was not found.", "thread_not_found"),
+        ),
+      );
+      yield* call(
+        "goat_thread_lifecycle_receipt",
+        { clientRequestId: "lost-1", host: "box" },
+        scope,
+      );
+      yield* Queue.take(gate.seen);
+      // The lost delete may have committed there, so only a stored outcome may clear intent.
+      expect((yield* intentOf(sql))[0]?.delete_requested_at).not.toBeNull();
+      expect((yield* reservationOf(sql, "lost-1"))[0]?.state).toBe("unknown");
+    }).pipe((effect) => withOrigin(effect, gate));
+  }),
+);
+
 it.effect("does not settle a host-scoped lifecycle reservation from the local receipt", () =>
   Effect.gen(function* () {
     const gate = yield* harness;
