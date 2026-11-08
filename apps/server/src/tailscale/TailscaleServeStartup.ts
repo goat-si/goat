@@ -1,5 +1,4 @@
 import { disableTailscaleServe, ensureTailscaleServe } from "@goat/tailscale";
-import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -109,55 +108,16 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <E,
   );
 });
 
-export function layerTailscaleServeStartup(
-  input: TailscaleServeStartupBase,
-): Layer.Layer<never, never, HttpServer.HttpServer | ChildProcessSpawner.ChildProcessSpawner>;
-export function layerTailscaleServeStartup<E, R, E2, R2>(
+export const layerTailscaleServeStartupWith = <E, R, E2, R2>(
   input: TailscaleServeStartupBase & {
     readonly ensure: (target: TailscaleServeTarget) => Effect.Effect<void, E, R>;
     readonly disable: (request: { readonly servePort: number }) => Effect.Effect<void, E2, R2>;
   },
-): Layer.Layer<never, never, HttpServer.HttpServer | R | R2>;
-export function layerTailscaleServeStartup<E, R, E2, R2>(
-  input: TailscaleServeStartupBase & {
-    readonly ensure?: (target: TailscaleServeTarget) => Effect.Effect<void, E, R>;
-    readonly disable?: (request: { readonly servePort: number }) => Effect.Effect<void, E2, R2>;
-  },
-) {
-  if (!input.enabled) return Layer.empty;
-  const startup = {
-    servePort: input.servePort,
-    parked: input.parked,
-    awaitActivation: input.awaitActivation,
-  };
-  if (input.ensure !== undefined && input.disable !== undefined) {
-    return Layer.effectDiscard(
-      openTailscaleServe({ ...startup, ensure: input.ensure, disable: input.disable }),
-    );
-  }
-  if (input.ensure !== undefined) {
-    return Layer.effectDiscard(
-      openTailscaleServe({
-        ...startup,
-        ensure: input.ensure,
-        disable: (request) => disableTailscaleServe(request),
-      }),
-    );
-  }
-  if (input.disable !== undefined) {
-    return Layer.effectDiscard(
-      openTailscaleServe({
-        ...startup,
-        ensure: (target) => ensureTailscaleServe(target),
-        disable: input.disable,
-      }),
-    );
-  }
-  return Layer.effectDiscard(
-    openTailscaleServe({
-      ...startup,
-      ensure: (target) => ensureTailscaleServe(target),
-      disable: (request) => disableTailscaleServe(request),
-    }),
-  );
-}
+) => (input.enabled ? Layer.effectDiscard(openTailscaleServe(input)) : Layer.empty);
+
+export const layerTailscaleServeStartup = (input: TailscaleServeStartupBase) =>
+  layerTailscaleServeStartupWith({
+    ...input,
+    ensure: (target) => ensureTailscaleServe(target),
+    disable: (request) => disableTailscaleServe(request),
+  });

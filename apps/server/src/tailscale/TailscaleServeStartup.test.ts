@@ -9,7 +9,10 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
-import { layerTailscaleServeStartup, type TailscaleServeTarget } from "./TailscaleServeStartup.ts";
+import {
+  layerTailscaleServeStartupWith,
+  type TailscaleServeTarget,
+} from "./TailscaleServeStartup.ts";
 
 const httpServer = (address: NetAddress.SocketAddress) =>
   Layer.succeed(
@@ -34,7 +37,7 @@ it.effect("re-applies the saved port after a failed start", () =>
       const left = yield* Ref.getAndUpdate(failuresLeft, (count) => (count > 0 ? count - 1 : 0));
       if (left > 0) return yield* Effect.fail("tailscaled not ready");
     });
-    const layer = layerTailscaleServeStartup({
+    const layer = layerTailscaleServeStartupWith({
       enabled: true,
       servePort: 47743,
       parked,
@@ -64,7 +67,7 @@ it.effect("turns the saved port off after a successful apply", () =>
     ) {
       yield* Deferred.succeed(applied, target.servePort);
     });
-    const layer = layerTailscaleServeStartup({
+    const layer = layerTailscaleServeStartupWith({
       enabled: true,
       servePort: 47743,
       parked,
@@ -89,7 +92,7 @@ it.effect("does not turn Serve off when no attempt started", () =>
     const disabled = yield* Ref.make<ReadonlyArray<number>>([]);
     const ensured = yield* Ref.make(0);
     const parked = yield* Deferred.make<void>();
-    const layer = layerTailscaleServeStartup({
+    const layer = layerTailscaleServeStartupWith({
       enabled: true,
       servePort: 47743,
       parked,
