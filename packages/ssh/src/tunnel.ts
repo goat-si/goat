@@ -116,6 +116,7 @@ import {
 import {
   REMOTE_RUNTIME_CLEANUP_SCRIPT,
   REMOTE_RUNTIME_FACT_WARMUP_SCRIPT,
+  REMOTE_WINDOWS_RUNTIME_SWEEP_SCRIPT,
 } from "./runtimeMaintenanceScripts.ts";
 import {
   KEEP_EXISTING_RUNNER_INSTALL,
@@ -1756,7 +1757,7 @@ ${REMOTE_RUNNER_HINT_SCRIPT}
 ${REMOTE_REPLACEMENT_LOCK_SCRIPT}
 trap 'release_recovery_lock; release_replacement_lock' EXIT
 trap 'exit 1' HUP INT TERM
-if [ "$GOAT_HOST_WINDOWS" = 1 ]; then exit 0; fi
+${REMOTE_WINDOWS_RUNTIME_SWEEP_SCRIPT}
 if [ -e "$LOCK" ] || [ -L "$LOCK" ] || ! acquire_replacement_lock; then
   printf 'ssh.runtime.cleanup.skipped replacement lock held\\n' >&2
   exit 0

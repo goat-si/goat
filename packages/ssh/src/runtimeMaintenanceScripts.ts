@@ -194,3 +194,33 @@ $cwd"
 }
 (cleanup_runtime_versions) || { printf 'ssh.runtime.cleanup.skipped inspection, lock, or cleanup failed\n' >&2 || true; }
 `;
+
+// Windows cannot prove a version unused without /proc or lsof, so its cleanup removes only the
+// stages a failed or still-scanned shell install left behind, then ends the round trip. Native
+// installs stage as .native-*. A shell install takes its version lock before creating its stage,
+// so stages are listed first: with no lock afterwards, each listed stage is abandoned.
+export const REMOTE_WINDOWS_RUNTIME_SWEEP_SCRIPT = String.raw`sweep_runtime_stages() {
+  for parent in "$HOME" "$HOME/.goat" "$HOME/.goat/runtime" "$HOME/.goat/runtime/goat" "$HOME/.goat/runtime/goat/versions"; do
+    [ -d "$parent" ] && [ ! -L "$parent" ] || return 0
+  done
+  versions="$HOME/.goat/runtime/goat/versions"
+  set -- "$versions"/.staging-*
+  installing=0
+  for lock in "$versions"/.*.install.lock; do
+    if [ -e "$lock" ] || [ -L "$lock" ]; then installing=1; fi
+  done
+  for stage in "$@"; do
+    [ -d "$stage" ] && [ ! -L "$stage" ] || continue
+    # A held or stale lock may be a running install; its stage is never an hour old.
+    if [ "$installing" = 1 ]; then
+      [ -n "$(find "$stage" -maxdepth 0 -mmin +60 2>/dev/null)" ] || continue
+    fi
+    if rm -rf "$stage" 2>/dev/null; then
+      printf 'ssh.runtime.cleanup.removed leftover=%s\n' "${"${stage##*/}"}" >&2
+    else
+      printf 'ssh.runtime.cleanup.kept leftover=%s still open, retried on a later cleanup\n' "${"${stage##*/}"}" >&2
+    fi
+  done
+}
+if [ "$GOAT_HOST_WINDOWS" = 1 ]; then sweep_runtime_stages || true; exit 0; fi
+`;

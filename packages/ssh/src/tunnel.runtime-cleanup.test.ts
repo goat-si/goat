@@ -11,7 +11,10 @@ import * as Effect from "effect/Effect";
 import { ChildProcessSpawner } from "effect/process";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
-import { REMOTE_RUNTIME_CLEANUP_SCRIPT } from "./runtimeMaintenanceScripts.ts";
+import {
+  REMOTE_RUNTIME_CLEANUP_SCRIPT,
+  REMOTE_WINDOWS_RUNTIME_SWEEP_SCRIPT,
+} from "./runtimeMaintenanceScripts.ts";
 import { launchOrReuseRemoteServer } from "./tunnel.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 import { remoteShell, uploadTarget } from "./tunnel.fixture.ts";
@@ -285,3 +288,61 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime cl
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "Windows runtime stage sweep",
+  () => {
+    const sweep = (setup: (versions: string, bin: string) => void) => {
+      const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-win-sweep-"));
+      homes.push(home);
+      const versions = NodePath.join(home, ".goat/runtime/goat/versions");
+      const bin = NodePath.join(home, "bin");
+      NodeFS.mkdirSync(versions, { recursive: true });
+      NodeFS.mkdirSync(bin);
+      for (const name of [".staging-old", ".staging-new", ".native-run", "1.0.0"])
+        NodeFS.mkdirSync(NodePath.join(versions, name, "sub"), { recursive: true });
+      NodeFS.utimesSync(NodePath.join(versions, ".staging-old"), 1_700_000_000, 1_700_000_000);
+      setup(versions, bin);
+      const r = NodeChildProcess.spawnSync(remoteShell, ["-s"], {
+        input: `set -eu
+GOAT_HOST_WINDOWS=1
+${REMOTE_WINDOWS_RUNTIME_SWEEP_SCRIPT}
+echo windows-round-trip-continued
+`,
+        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+        encoding: "utf8",
+      });
+      const left = NodeFS.readdirSync(versions).toSorted();
+      return { r, left };
+    };
+
+    it("removes every stage no install holds and keeps native stages and versions", () => {
+      const { r, left } = sweep(() => {});
+      assert.equal(r.status, 0, r.stderr);
+      assert.notInclude(r.stdout, "windows-round-trip-continued");
+      assert.deepEqual(left, [".native-run", "1.0.0"]);
+      assert.include(r.stderr, "ssh.runtime.cleanup.removed leftover=.staging-new");
+    });
+
+    it("keeps a stage whose goat.exe is still open and finishes the round trip", () => {
+      const { r, left } = sweep((_versions, bin) =>
+        NodeFS.writeFileSync(
+          NodePath.join(bin, "rm"),
+          '#!/bin/sh\ncase "$*" in *staging-old*) exit 1 ;; esac\nexec /bin/rm "$@"\n',
+          { mode: 0o700 },
+        ),
+      );
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual(left, [".native-run", ".staging-old", "1.0.0"]);
+      assert.include(r.stderr, "ssh.runtime.cleanup.kept leftover=.staging-old still open");
+    });
+
+    it("while an install lock exists, removes only stages older than an hour", () => {
+      const { r, left } = sweep((versions) =>
+        NodeFS.mkdirSync(NodePath.join(versions, ".1.0.1.install.lock")),
+      );
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual(left, [".1.0.1.install.lock", ".native-run", ".staging-new", "1.0.0"]);
+    });
+  },
+);
