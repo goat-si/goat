@@ -23,7 +23,7 @@ import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
-import { makeClaudeWakeReports } from "./claudeWakeNotice.ts";
+import * as Wake from "./claudeWakeNotice.ts";
 import {
   CLAUDE_MEMORY_READ_TOOLS,
   CLAUDE_MEMORY_SOURCE_TOOL,
@@ -240,10 +240,7 @@ import {
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
 } from "@goat/provider-core/server/adapterDriver";
-import {
-  type BackgroundWorkReport,
-  backgroundWorkNotification,
-} from "@goat/provider-core/server/notification";
+import { type BackgroundWorkReport } from "@goat/provider-core/server/notification";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import {
   makeSubagentChildThread,
@@ -4743,8 +4740,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             { readonly messages: ReadonlyArray<SDKMessage>; readonly detail: string | null }
           >(),
         );
+        const wakeRunByTaskId = yield* Ref.make(new Map<string, RunId>());
         const { recordWakeReport, startUserTurnForWakeReports, takeWakeReports, clearWakeReports } =
-          yield* makeClaudeWakeReports();
+          yield* Wake.makeClaudeWakeReports(wakeRunByTaskId);
 
         // Empty roster levels can precede notifications; retain tasks for wake attribution.
         const lastKnownOpaqueTasks = yield* Ref.make(
@@ -7960,9 +7958,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
           const detail =
             (yield* Ref.get(wakeBuffers)).get(wakeInput.nativeThreadId)?.detail ?? null;
-          const reports = yield* takeWakeReports(wakeInput.nativeThreadId);
-          const notification = backgroundWorkNotification(
-            [...(reports?.values() ?? [])].map((entry) => entry.report),
+          const notification = Wake.claudeWakeNotification(
+            yield* takeWakeReports(wakeInput.nativeThreadId),
           );
           yield* Effect.logInfo("orchestration-v2.claude-wake-turn-detected", {
             providerSessionId: input.providerSessionId,
@@ -8786,6 +8783,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           if (message.type === "system" && message.subtype === "task_started") {
+            const wakeRunId =
+              findToolCall(context, message.tool_use_id ?? "")?.runId ?? context.input.runId;
+            yield* Wake.remember(wakeRunByTaskId, message.task_id, wakeRunId);
             if (isClaudeNonSubagentTask(message)) {
               const tailedCall =
                 message.tool_use_id === undefined
