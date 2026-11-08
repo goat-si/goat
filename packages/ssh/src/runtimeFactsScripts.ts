@@ -19,16 +19,6 @@ FACT_NAME=; FACT_KEY=; FACT_TEXT=; FACT_START=; FILE_SIG=; RUNNER_DIGEST=
 FACT_MEMO="\${FACT_MEMO:-}"
 fact_nl='
 '
-# A time no later than now: scripts that key many answers read it once before their subshells
-# start, and it is read again only when it would refuse, since an older time refuses more.
-# True when at least $2 seconds have passed since time $1.
-FACT_CLOCK=
-fact_clock_start() { FACT_CLOCK="$(date +%s 2>/dev/null)" || FACT_CLOCK=; }
-fact_clock_at_least() {
-  [ "$(( \${FACT_CLOCK:-0} - $1 ))" -ge "$2" ] && return 0
-  FACT_CLOCK="$(date +%s)" || { FACT_CLOCK=; return 1; }
-  [ "$(( FACT_CLOCK - $1 ))" -ge "$2" ]
-}
 # Later blocks read the system name from here instead of starting uname again.
 fact_uname="$(uname -s 2>/dev/null)" || fact_uname=
 case "$fact_uname" in
@@ -90,7 +80,7 @@ fact_memo_put() {
     *)
       [ "$1" = "\${RUNNER_CANDIDATE_FILE:-}.pin" ] || return 0
       # A later write in the second the runner last changed could leave its signature unchanged.
-      file_sig_set "$1" && fact_clock_at_least "\${FILE_SIG##*:}" 1 || return 0
+      file_sig_set "$1" && [ "\${FILE_SIG##*:}" -lt "$fact_now" ] || return 0
       memo_path_sig="$FILE_SIG" ;;
   esac
   case "$1$FACT_NAME$FACT_KEY$fact_exe$fact_sig$memo_path_sig" in *"$fact_nl"*) return 0 ;; esac
@@ -122,7 +112,8 @@ exec_fact_key() {
   valid_version "$fact_version" && [ "$fact_exe" = "$fact_versions/$fact_version/goat" ] || return 1
   file_sig_set "$fact_exe" || return 1
   fact_sig="$FILE_SIG"
-  fact_clock_at_least "\${fact_sig##*:}" 2 || return 1
+  fact_now="$(date +%s)"
+  [ "$(( fact_now - \${fact_sig##*:} ))" -ge 2 ] || return 1
   # A runner installs a version without its marker instead of running it.
   fact_slurp "$fact_versions/$fact_version/.install-complete" && [ "$FACT_TEXT" = "$fact_version" ] || return 1
   case "$fact_via" in exe) FACT_NAME="$fact_version.exe" ;; *) FACT_NAME="$fact_version.runner" ;; esac

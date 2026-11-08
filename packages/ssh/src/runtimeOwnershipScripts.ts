@@ -492,7 +492,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 # A leftover memo of an earlier process with this PID is emptied before use.
-FACT_MEMO="$RUNNER_CANDIDATE_FILE.facts"; fact_memo_drop; fact_clock_start
+FACT_MEMO="$RUNNER_CANDIDATE_FILE.facts"; fact_memo_drop
 @@GOAT_CAPTURE_RUNNING_RUNNER@@
 if [ "$REQUIRE_INSTALLED" = 1 ] && [ -n "$SELECTED_VERSION" ]; then
   selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
