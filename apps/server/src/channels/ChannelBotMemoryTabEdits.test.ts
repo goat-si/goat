@@ -254,6 +254,51 @@ describe("Memory tab requests to change or forget a note", () => {
       assert.include(yield* replies, CHANNEL_COPY.noteEditBusy);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "a note whose forget was refused while a tidy could edit it is still there after the tidy",
+    () => {
+      const { layer } = harnessFor((text) =>
+        text.startsWith("Please tidy")
+          ? {
+              replyText: "Tidying your notes now.",
+              action: {
+                type: "run_turn",
+                title: "Tidy notes",
+                instruction: "Tidy the notes file.",
+                notesChangeRequested: "Please tidy my notes",
+              },
+            }
+          : {},
+      );
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const kept = line(fridays, "earlier");
+        yield* writeNotes(
+          NOTES_HEADER + kept + "\n" + line("Staging is staging-02.", "other") + "\n",
+        );
+        yield* send("Please tidy my notes", "tidy");
+        yield* send(goatBotForgetNoteMessage(fridays), "tab-forget");
+        assert.include(yield* replies, CHANNEL_COPY.noteEditBusy);
+        // The tidy edits by hand and also carries out the forget GOAT refused.
+        yield* writeNotes(NOTES_HEADER + line("Staging is staging-02.", "other") + "\n");
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const tidy = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks.find(
+          (task) => task.notesChangeRequested !== undefined,
+        )!;
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(tidy.taskId))!,
+          { type: "task.cancelled", payload: { reason: "Stopped." } },
+          { owner: (yield* ChannelRuntime.ChannelRuntime).ownerToken },
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        const after = yield* readNotes;
+        assert.include(after, kept);
+        assert.include(after, "Staging is staging-02.");
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });
 
 // The default routing hands most messages to the bot's session; the tab's sentences stay here.
