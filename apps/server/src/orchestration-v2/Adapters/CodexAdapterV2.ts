@@ -6556,14 +6556,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     detail: CodexSubagents.detail(task),
                     // The detail is the whole wake; Codex buffers no output for it.
                     delivery: "message_text",
-                    notification: backgroundWorkNotification([
-                      {
-                        kind: "subagent",
-                        label: CodexSubagents.label(task),
-                        outcome: input.status,
-                        childThreadId: input.context.subagent.childThreadId,
-                      },
-                    ]),
+                    notification: {
+                      ...backgroundWorkNotification([
+                        {
+                          kind: "subagent",
+                          label: CodexSubagents.label(task),
+                          outcome: input.status,
+                          childThreadId: input.context.subagent.childThreadId,
+                        },
+                      ]),
+                      ...(parent.projectionRunId === null
+                        ? {}
+                        : { aboutRunId: parent.projectionRunId }),
+                    },
                   });
                 }
               }
