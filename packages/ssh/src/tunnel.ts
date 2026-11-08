@@ -602,10 +602,13 @@ ensure_remote_node_path() {
 
 const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
 set -eu
-${REMOTE_RUNTIME_PUBLISH_SCRIPT}@@GOAT_NODE_ENV_SCRIPT@@
 GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
 # Older clients inspect these literal declarations without evaluating the runner.
 ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY}=@@GOAT_NODE_SCRIPT_PATH@@
+GOAT_ARCHIVE_VERSION=@@GOAT_ARCHIVE_VERSION@@
+${LEGACY_SSH_ARCHIVE_VERSION_KEY}=@@GOAT_ARCHIVE_VERSION@@
+# End of the declarations GOAT reads without running this runner.
+${REMOTE_RUNTIME_PUBLISH_SCRIPT}@@GOAT_NODE_ENV_SCRIPT@@
 if [ -n "$GOAT_NODE_SCRIPT_PATH" ]; then
   # Dev mode: a source checkout on the remote. This is the only path that
   # needs Node, so Node discovery runs here and nowhere else.
@@ -616,8 +619,6 @@ if [ -n "$GOAT_NODE_SCRIPT_PATH" ]; then
   fi
   exec node "$GOAT_NODE_SCRIPT_PATH" "$@"
 fi
-GOAT_ARCHIVE_VERSION=@@GOAT_ARCHIVE_VERSION@@
-${LEGACY_SSH_ARCHIVE_VERSION_KEY}=@@GOAT_ARCHIVE_VERSION@@
 if [ -z "$GOAT_ARCHIVE_VERSION" ]; then
   printf 'No GOAT release version was provided for the remote runtime.\\n' >&2
   exit 1

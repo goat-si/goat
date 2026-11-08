@@ -411,31 +411,66 @@ ${REMOTE_FACTS_SCRIPT}
 `;
 
 // Retained runners are data: inspect either declaration spelling without sourcing shell code.
-export const REMOTE_RUNNER_HINT_SCRIPT = String.raw`# A declaration is key $2 when any line declares it, else key $3; quoted values only. The shell
-# reads it with builtins and sets RUNNER_HINT, as $(...) would keep it: under MSYS a fork costs
-# about 50 ms. The comparison test pins it against the grep and sed reader it replaced.
+// Runners built from now on end their declarations with this line (see runner_hint_set).
+export const RUNNER_HINT_END = "# End of the declarations GOAT reads without running this runner.";
+
+export const REMOTE_RUNNER_HINT_SCRIPT = String.raw`# Key $2 counts when any line declares it, else key $3; quoted values only. Builtins only: an
+# MSYS fork costs about 50 ms. The comparison test pins this against the grep and sed reader.
 hint_nl='
 '
+hint_end='${RUNNER_HINT_END}'
+# Adds line $1 to the declarations of keys $2/$3 and, with five arguments, $4/$5.
+hint_take() {
+  case "$1" in "$2="*) hint_named=1 ;; esac
+  case "$1" in "$2='"*"'") hint_value="${"${"}1#"$2='"}"; hint_want="$hint_want${"${"}hint_value%"'"}$hint_nl" ;; esac
+  case "$1" in "$3='"*"'") hint_value="${"${"}1#"$3='"}"; hint_back="$hint_back${"${"}hint_value%"'"}$hint_nl" ;; esac
+  if [ "$#" -ge 5 ]; then
+    case "$1" in "$4="*) hint_named2=1 ;; esac
+    case "$1" in "$4='"*"'") hint_value="${"${"}1#"$4='"}"; hint_want2="$hint_want2${"${"}hint_value%"'"}$hint_nl" ;; esac
+    case "$1" in "$5='"*"'") hint_value="${"${"}1#"$5='"}"; hint_back2="$hint_back2${"${"}hint_value%"'"}$hint_nl" ;; esac
+  fi
+}
+# Sets RUNNER_HINT for key $2 (else $3) and, when $4 is given, RUNNER_HINT2 for key $4 (else $5),
+# as $(...) would keep them, from every line of runner $1. bash reads the file in one call and,
+# when no line after the end-of-declarations line starts with a key, parses only the lines
+# before it, which give the same answer; other shells and files with NUL bytes read each line.
 runner_hint_set() {
-  RUNNER_HINT=; hint_named=; hint_want=; hint_back=; hint_line=
+  RUNNER_HINT=; RUNNER_HINT2=; hint_line=
+  hint_named=; hint_want=; hint_back=; hint_named2=; hint_want2=; hint_back2=
   [ -f "$1" ] && [ -r "$1" ] || return 1
-  while IFS= read -r hint_line || [ -n "$hint_line" ]; do
-    case "$hint_line" in "$2="*) hint_named=1 ;; esac
-    case "$hint_line" in "$2='"*"'") hint_value="${"${"}hint_line#"$2='"}"; hint_want="$hint_want${"${"}hint_value%"'"}$hint_nl" ;; esac
-    case "$hint_line" in "$3='"*"'") hint_value="${"${"}hint_line#"$3='"}"; hint_back="$hint_back${"${"}hint_value%"'"}$hint_nl" ;; esac
-    hint_line=
-  done <"$1"
+  hint_file="$1"; shift
+  if [ -n "${"${"}BASH_VERSION:-}" ] && ! IFS= read -r -d '' hint_all <"$hint_file" 2>/dev/null; then
+    hint_rest="$hint_all"; hint_cut="$hint_nl$hint_end$hint_nl"; hint_all="$hint_nl$hint_all$hint_nl"
+    case "$hint_all" in
+      *"$hint_cut"*)
+        case "$hint_nl${"${"}hint_all#*"$hint_cut"}" in
+          *"$hint_nl$1="* | *"$hint_nl$2="* | *"$hint_nl${"${"}3:-$1}="* | *"$hint_nl${"${"}4:-$1}="*) ;;
+          *) hint_rest="${"${"}hint_all%%"$hint_cut"*}"; hint_rest="${"${"}hint_rest#"$hint_nl"}" ;;
+        esac ;;
+    esac
+    while [ -n "$hint_rest" ]; do
+      hint_line="${"${"}hint_rest%%"$hint_nl"*}"
+      case "$hint_rest" in *"$hint_nl"*) hint_rest="${"${"}hint_rest#*"$hint_nl"}" ;; *) hint_rest= ;; esac
+      hint_take "$hint_line" "$@"
+    done
+  else
+    while IFS= read -r hint_line || [ -n "$hint_line" ]; do
+      hint_take "$hint_line" "$@"; hint_line=
+    done <"$hint_file"
+  fi
   if [ -n "$hint_named" ]; then RUNNER_HINT="$hint_want"; else RUNNER_HINT="$hint_back"; fi
-  while :; do case "$RUNNER_HINT" in *"$hint_nl") RUNNER_HINT="${"${"}RUNNER_HINT%"$hint_nl"}" ;; *) return 0 ;; esac; done
+  if [ -n "$hint_named2" ]; then RUNNER_HINT2="$hint_want2"; else RUNNER_HINT2="$hint_back2"; fi
+  while :; do case "$RUNNER_HINT" in *"$hint_nl") RUNNER_HINT="${"${"}RUNNER_HINT%"$hint_nl"}" ;; *) break ;; esac; done
+  while :; do case "$RUNNER_HINT2" in *"$hint_nl") RUNNER_HINT2="${"${"}RUNNER_HINT2%"$hint_nl"}" ;; *) return 0 ;; esac; done
 }
 read_runner_hint() { runner_hint_set "$1" "$2" "$3" || return 1; printf '%s' "$RUNNER_HINT"; }
 # Sets RUNNER_NODE_DECLARED (1 or empty) and RUNNER_ARCHIVE_VERSION, the two declarations an
 # exec key reads.
 runner_key_hints() {
   RUNNER_NODE_DECLARED=; RUNNER_ARCHIVE_VERSION=
-  runner_hint_set "$1" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} || return 0
+  runner_hint_set "$1" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY} ||
+    return 0
   [ -z "$RUNNER_HINT" ] || RUNNER_NODE_DECLARED=1
-  runner_hint_set "$1" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY} || :
-  RUNNER_ARCHIVE_VERSION="$RUNNER_HINT"
+  RUNNER_ARCHIVE_VERSION="$RUNNER_HINT2"
 }
 `;
