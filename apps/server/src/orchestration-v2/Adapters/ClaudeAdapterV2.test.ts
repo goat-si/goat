@@ -2641,6 +2641,40 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
   const makeWakeHarness = makeWakeHarnessWithOptions();
 
+  it.effect("names the starting run on a background wake", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-about"),
+            text: "Run the build in the background.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, wakeTaskStarted);
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "first turn terminal",
+        );
+        yield* harness.offerAndWait(wakeNotification);
+        yield* Queue.offer(harness.sdkMessages, wakeAssistant);
+        yield* harness.awaitUntil(
+          () => harness.continuationRequests.length === 1,
+          "continuation request",
+        );
+        assert.equal(
+          harness.continuationRequests[0]?.notification?.aboutRunId,
+          "run-attempt-claude-wake-about",
+        );
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+
   it.effect("settles a continuation whose wake turn a user turn absorbed", () =>
     Effect.scoped(
       Effect.gen(function* () {
