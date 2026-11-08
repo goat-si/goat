@@ -315,6 +315,8 @@ export function buildGoatBotTimeline(input: {
   };
   const cardDecidesOptions = new Set<string>();
   const tasksWithOpenQuestion = new Set<string>();
+  const shownQuestionOptions = new Map<string, Set<string>>();
+  const answeredRequestKeys = new Set<string>();
   const committed: UngroupedRow[] = [];
   const committedRequestKeys = new Set<string>();
   const inputTexts = new Map<string, string>();
@@ -331,7 +333,15 @@ export function buildGoatBotTimeline(input: {
         inputTexts.set(presentation.requestKey, item.text);
       }
       if (presentation?.clientKey) committedRequestKeys.add(presentation.clientKey);
-      if (!includesMessage(presentation?.taskId)) continue;
+      // The option they pressed stays beside the question, including after its buttons close.
+      const answersShownQuestion =
+        input.taskId === null &&
+        presentation?.taskId != null &&
+        shownQuestionOptions.get(presentation.taskId)?.has(item.text) === true;
+      if (!includesMessage(presentation?.taskId) && !answersShownQuestion) continue;
+      if (answersShownQuestion && presentation?.requestKey != null) {
+        answeredRequestKeys.add(presentation.requestKey);
+      }
       previousInputKey = presentation?.requestKey ?? null;
       committed.push({
         kind: "user",
@@ -351,10 +361,19 @@ export function buildGoatBotTimeline(input: {
       if (item.text.trim().length === 0) continue;
       const presentation = input.readers.message(item);
       const hasOptions = (presentation?.options?.length ?? 0) > 0;
-      if (!includesMessage(presentation?.taskId, hasOptions)) continue;
+      const repliesToAnswer =
+        input.taskId === null &&
+        presentation?.replyToKey != null &&
+        answeredRequestKeys.has(presentation.replyToKey);
+      if (!includesMessage(presentation?.taskId, hasOptions) && !repliesToAnswer) continue;
       const tone = presentation?.tone ?? "reply";
       const open = questionOpen(presentation?.taskId, presentation?.questionId);
       if (open !== null) cardDecidesOptions.add(item.id);
+      if (input.taskId === null && hasOptions && presentation?.taskId != null) {
+        const options = shownQuestionOptions.get(presentation.taskId) ?? new Set<string>();
+        for (const option of presentation.options ?? []) options.add(option);
+        shownQuestionOptions.set(presentation.taskId, options);
+      }
       if (hasOptions && open !== false && presentation?.taskId != null) {
         tasksWithOpenQuestion.add(presentation.taskId);
       }
