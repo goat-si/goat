@@ -90,13 +90,21 @@ const make = Effect.gen(function* () {
       left.length === right.length &&
       left.every((host, index) => host === right[index]));
   if (policy?.changes !== undefined) {
-    const feed = policy.changes;
-    yield* feed.pipe(
-      Stream.changesWith(sameHosts),
+    // Every publication is acknowledged once applied, unchanged ones too, or the bounded history
+    // overflows and fails closed. A failed apply stays unacknowledged, so its hosts stay pending.
+    let applied: { readonly hosts: ReadonlyArray<string> | undefined } | undefined;
+    const acknowledge = Effect.sync(() => policy.acknowledge?.());
+    yield* policy.changes.pipe(
       Stream.runForEach((hosts) =>
-        service
-          .blockedHostsChanged(hosts)
-          .pipe(Effect.tap(() => Effect.sync(() => policy.acknowledge?.()))),
+        applied !== undefined && sameHosts(applied.hosts, hosts)
+          ? acknowledge
+          : service.blockedHostsChanged(hosts).pipe(
+              Effect.andThen(Effect.sync(() => (applied = { hosts }))),
+              Effect.andThen(acknowledge),
+              Effect.catchCause((cause) =>
+                Effect.logError("Could not apply the committed blocked browser hosts", { cause }),
+              ),
+            ),
       ),
       Effect.forkScoped({ startImmediately: true }),
     );

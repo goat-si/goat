@@ -511,28 +511,25 @@ it.effect("a settings change ends blocked claims and pending requests without a 
   }).pipe(Effect.scoped),
 );
 
-it.effect("a committed blocked-host publication ends the claim without a settings event", () =>
+const buildPolicyGrants = (
+  committedPolicy: ServerSettings.ServerSettingsService["Service"]["committedPolicy"],
+  publish: (union: { readonly origins: ReadonlyArray<string> }) => Effect.Effect<string>,
+) =>
   Effect.gen(function* () {
     const base = Context.get(
       yield* Layer.build(ServerSettings.layerTest()),
       ServerSettings.ServerSettingsService,
     );
-    const initial = yield* base.getSettings;
-    const policy = yield* makeCuaCommittedPolicy;
-    yield* policy.publish(initial, Option.none());
-    const entered = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
     const hash = "a".repeat(64);
-    const settings = {
-      ...base,
-      committedPolicy: policy.read,
-      subscribeChanges: Effect.succeed(Stream.empty),
-    };
     const context = yield* Layer.build(
       Grants.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
-            Layer.succeed(ServerSettings.ServerSettingsService, settings),
+            Layer.succeed(ServerSettings.ServerSettingsService, {
+              ...base,
+              committedPolicy,
+              subscribeChanges: Effect.succeed(Stream.empty),
+            }),
             Layer.mock(ServerEnvironment.ServerEnvironment)({
               getDescriptor: Effect.succeed(
                 decodeDescriptor({
@@ -545,13 +542,7 @@ it.effect("a committed blocked-host publication ends the claim without a setting
               ),
             }),
             Layer.succeed(BrowserClaimManifest, {
-              publish: (union) =>
-                union.origins.length === 0
-                  ? Deferred.succeed(entered, undefined).pipe(
-                      Effect.andThen(Deferred.await(release)),
-                      Effect.as(hash),
-                    )
-                  : Effect.succeed(hash),
+              publish,
               readConfig: Effect.succeed({
                 capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
               }),
@@ -581,26 +572,60 @@ it.effect("a committed blocked-host publication ends the claim without a setting
       origin: "https://example.test",
       windowTitle: "Browser",
     });
-    if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
-    yield* policy.publish({ ...initial, blockedBrowserHosts: ["example.test"] }, Option.none());
-    yield* Effect.yieldNow;
-    if (!(yield* Deferred.isDone(entered))) {
-      assert.equal(
-        yield* service.endReason(threadId, answer.agentResult.claim.claimId),
-        "blocked_url",
-      );
-      return;
-    }
-    assert.equal(
-      yield* service.endReason(threadId, answer.agentResult.claim.claimId),
-      "blocked_url",
+    if (answer.agentResult.status !== "attached") return yield* Effect.die("expected attached");
+    return { service, threadId, claimId: answer.agentResult.claim.claimId };
+  });
+
+it.effect("a committed blocked-host publication ends the claim without a settings event", () =>
+  Effect.gen(function* () {
+    const policy = yield* makeCuaCommittedPolicy;
+    const release = yield* Deferred.make<void>();
+    const initial = yield* Context.get(
+      yield* Layer.build(ServerSettings.layerTest()),
+      ServerSettings.ServerSettingsService,
+    ).getSettings;
+    yield* policy.publish(initial, Option.none());
+    const { service, threadId, claimId } = yield* buildPolicyGrants(policy.read, (union) =>
+      union.origins.length === 0
+        ? Deferred.await(release).pipe(Effect.as("a".repeat(64)))
+        : Effect.succeed("a".repeat(64)),
     );
+    yield* policy.publish({ ...initial, blockedBrowserHosts: ["example.test"] }, Option.none());
+    // The claim ends while the narrowing manifest write is still held.
+    const reason = yield* service.changes.pipe(
+      Stream.mapEffect(() => service.endReason(threadId, claimId)),
+      Stream.filter((value) => value !== undefined),
+      Stream.runHead,
+    );
+    assert.deepEqual(reason, Option.some("blocked_url"));
     assert.deepEqual((yield* service.snapshotFor(threadId)).claims, []);
-    assert.isFalse(yield* Deferred.isDone(release));
     yield* Deferred.succeed(release, undefined);
   }).pipe(Effect.scoped),
 );
 
+it.effect("unchanged committed publications are acknowledged and leave the claim live", () =>
+  Effect.gen(function* () {
+    const feed = yield* Queue.unbounded<ReadonlyArray<string> | undefined>();
+    const acknowledged = yield* Queue.unbounded<void>();
+    const committedPolicy = Object.assign(
+      Effect.succeed({ _tag: "committed" as const, enableCua: true, blockedBrowserHosts: [] }),
+      {
+        changes: Stream.fromQueue(feed),
+        hostsNow: () => [],
+        acknowledge: () => void Queue.offerUnsafe(acknowledged, undefined),
+      },
+    );
+    const { service, threadId, claimId } = yield* buildPolicyGrants(committedPolicy, () =>
+      Effect.succeed("a".repeat(64)),
+    );
+    for (let index = 0; index < 3; index++) {
+      Queue.offerUnsafe(feed, []);
+      yield* Queue.take(acknowledged);
+    }
+    assert.equal(yield* service.endReason(threadId, claimId), undefined);
+    assert.equal((yield* service.snapshotFor(threadId)).claims.length, 1);
+  }).pipe(Effect.scoped),
+);
 it.effect(
   "a committed publication blocks a new claim and the next manifest without a settings event",
   () =>
