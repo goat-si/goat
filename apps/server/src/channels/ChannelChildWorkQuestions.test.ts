@@ -4,6 +4,7 @@ import {
   type ChannelTaskNeedsYou,
   ChannelQuestionId,
   NodeId,
+  ProviderInstanceId,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
   RuntimeRequestId,
@@ -12,9 +13,11 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChildStore from "./channelChildWorkStore.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
@@ -26,6 +29,7 @@ import {
   goatInput,
   linkSlackUser,
   makeHarness,
+  modelSelection,
   onlyTask,
   owner,
   ownerId,
@@ -595,6 +599,124 @@ describe("GOAT Bot keeps a launched thread's approval until the thread says what
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("answers a turn's launched question from the bot chat as the question alone", () => {
+    const harness = makeHarness({
+      botWorkspace: true,
+      settingsLayer: ServerSettings.layerTest({
+        textGenerationModelSelection: modelSelection,
+        defaultRuntimeMode: "full-access",
+        goatBotModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-6-luna",
+        },
+      }).pipe(Layer.orDie),
+    });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const sql = yield* SqlClient.SqlClient;
+      yield* gateway.ingest(goatInput("look: which file should I change?", "turn-q"), rpcContext);
+      yield* runtime.drain;
+      yield* reports.reconcile(runtime.ownerToken);
+      const task = yield* onlyTask;
+      assert.strictEqual(task.kind, "turn");
+      assert.strictEqual(task.status, "running");
+      yield* launch(task, "live", "bound");
+      harness.world.runs.set("thread:live", []);
+      const pending = request("pick", "user_input");
+      harness.world.runtimeRequests.set("thread:live", [pending]);
+      harness.world.userInputQuestions.set(pending.id, [
+        {
+          id: "file",
+          header: "File",
+          question: "Which file?",
+          options: [
+            { label: "c.txt", description: "C" },
+            { label: "d.txt", description: "D" },
+          ],
+        },
+      ]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const queued = yield* sql<{
+        message_json: string;
+      }>`SELECT message_json FROM channel_outbox WHERE cause_key = ${"native-question:" + pending.id}`;
+      const message = JSON.parse(queued[0]?.message_json ?? "{}") as {
+        text?: string;
+        options?: ReadonlyArray<string>;
+        questionId?: string;
+        taskId?: string;
+      };
+      assert.strictEqual(message.text, "Which file?");
+      assert.deepStrictEqual(message.options, ["c.txt", "d.txt"]);
+      assert.strictEqual(message.questionId, pending.id);
+      assert.strictEqual(message.taskId, task.taskId);
+      yield* gateway.ingest({ ...goatInput("d.txt", "turn-a"), taskId: task.taskId }, rpcContext);
+      yield* runtime.drain;
+      const [answered] = responses(harness);
+      assert.deepStrictEqual(answered?.answers, { file: "d.txt" });
+      assert.strictEqual(answered?.decision, undefined);
+      const followups = yield* sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM channel_task_events WHERE task_id = ${task.taskId} AND type = 'task.followup.received'`;
+      assert.strictEqual(followups[0]?.count, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("tells Slack to open the work thread instead of sending a native-question card", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(slackInput("do: start the build", "sq1"), slackContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* launch(task, "live", "bound");
+      harness.world.runs.set("thread:live", []);
+      const pending = request("slack", "user_input");
+      harness.world.runtimeRequests.set("thread:live", [pending]);
+      harness.world.userInputQuestions.set(pending.id, [
+        {
+          id: "file",
+          header: "File",
+          question: "Which file?",
+          options: [
+            { label: "c.txt", description: "C" },
+            { label: "d.txt", description: "D" },
+          ],
+        },
+      ]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const asking = harness.slackSent.filter((send) =>
+        send.message.text.includes("is asking something in its coding thread"),
+      );
+      assert.strictEqual(asking.length, 1);
+      assert.strictEqual(
+        asking[0]?.message.text,
+        task.title + " is asking something in its coding thread. Open the work thread to answer.",
+      );
+      assert.strictEqual(asking[0]?.message.options, undefined);
+      assert.strictEqual(asking[0]?.message.questionId, undefined);
+      assert.strictEqual(asking[0]?.message.taskId, undefined);
+      assert.strictEqual(
+        harness.slackSent.some(
+          (send) => send.message.questionId === ChannelQuestionId.make(pending.id),
+        ),
+        false,
+      );
+      yield* gateway.ingest(slackInput("c.txt", "sq2"), slackContext);
+      yield* runtime.drain;
+      assert.strictEqual(responses(harness).length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
   it.effect("sends one untagged line when a launched thread asks more than one question", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

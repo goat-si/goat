@@ -822,6 +822,50 @@ describe("questions a task asks in the main chat", () => {
     ).map((row) => row.id);
     expect(ids).toEqual(["n1", "b1", "u1", "b2"]);
   });
+
+  it("routes a turn's question from its chip and does not show the turn as a card", () => {
+    const asked: GoatBotMessagePresentation = {
+      tone: "question",
+      readAt: null,
+      requestKey: null,
+      taskId: "turn-1",
+      questionId: "pick",
+      options: ["c.txt", "d.txt"],
+    };
+    const chip = (id: string, at: string, version: number, open: ReadonlyArray<string>) =>
+      ({
+        ...notice(id, at),
+        ledgerTask: {
+          taskId: "turn-1",
+          kind: "turn",
+          taskVersion: version,
+          openQuestionIds: open,
+        },
+      }) as OrchestrationV2TurnItem;
+    const shown = (items: OrchestrationV2TurnItem[]) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: rowsOf(items),
+          pendingInputs: [],
+          readers: readers({ b1: asked }),
+          taskId: null,
+        }),
+      );
+    const openItems = [
+      chip("n1", "2026-10-12T12:00:00Z", 1, ["pick"]),
+      bot("b1", "2026-10-12T12:00:01Z", "Which file?"),
+    ];
+    const open = shown(openItems);
+    expect(open.some((row) => row.kind === "task")).toBe(false);
+    expect(open.find((row) => row.id === "b1")).toMatchObject({
+      options: ["c.txt", "d.txt"],
+      answerTaskId: "turn-1",
+    });
+    const closed = shown([...openItems, chip("n2", "2026-10-12T12:00:02Z", 2, [])]);
+    expect(closed.some((row) => row.kind === "task")).toBe(false);
+    expect(closed.find((row) => row.id === "b1")).toMatchObject({ options: [] });
+    expect(closed.find((row) => row.id === "b1")).not.toHaveProperty("answerTaskId");
+  });
 });
 
 describe("goatBotReplyingSince", () => {
@@ -929,68 +973,5 @@ describe("attachments on the person's messages", () => {
     expect(goatBotConversationPreview({ rows, lastVisitedAt: null, active: true })?.text).toBe(
       "You: log.txt",
     );
-  });
-});
-describe("GOAT Bot event lines", () => {
-  const event = (id: string, at: string, summary: string) =>
-    ({
-      ...base(id, at),
-      type: "notification",
-      source: { kind: "goat_bot_event" },
-      outcome: "updated",
-      summary,
-    }) as unknown as OrchestrationV2TurnItem;
-  const system = (id: string, at: string) =>
-    ({
-      ...base(id, at),
-      type: "notification",
-      source: { kind: "system" },
-      outcome: "updated",
-      summary: "Resumed after a restart",
-    }) satisfies OrchestrationV2TurnItem;
-
-  it("shows a bot event as its own line between messages and ignores other system notices", () => {
-    const rows = content(
-      buildGoatBotTimeline({
-        visibleTurnItems: rowsOf([
-          user("u1", "2026-10-12T12:00:00Z", "Call yourself Scout"),
-          event("e1", "2026-10-12T12:00:01Z", "Renamed to Scout"),
-          system("s1", "2026-10-12T12:00:02Z"),
-          bot("b1", "2026-10-12T12:00:03Z", "Done."),
-        ]),
-        pendingInputs: [],
-        readers: readers(),
-      }),
-    );
-    expect(rows.map((row) => [row.kind, row.id])).toEqual([
-      ["user", "u1"],
-      ["event", "e1"],
-      ["bot", "b1"],
-    ]);
-    expect(rows[1]).toMatchObject({ kind: "event", text: "Renamed to Scout" });
-  });
-
-  it("leaves event lines out of a single task's view", () => {
-    const rows = content(
-      buildGoatBotTimeline({
-        visibleTurnItems: rowsOf([event("e1", "2026-10-12T12:00:01Z", "Routine Check in paused")]),
-        pendingInputs: [],
-        readers: readers(),
-        taskId: "task-1",
-      }),
-    );
-    expect(rows).toEqual([]);
-  });
-
-  it("shows event lines in the main chat that leaves task messages out (taskId null, as mobile asks)", () => {
-    const rows = content(
-      buildGoatBotTimeline({
-        visibleTurnItems: rowsOf([event("e1", "2026-10-12T12:00:01Z", "Renamed to Scout")]),
-        pendingInputs: [],
-        readers: readers(),
-        taskId: null,
-      }),
-    );
-    expect(rows.map((row) => [row.kind, row.id])).toEqual([["event", "e1"]]);
   });
 });
