@@ -348,6 +348,82 @@ describe("GOAT Bot reads a work thread on another machine", () => {
       assert.strictEqual(reply, "From the reports. " + reason);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect("does not append a thread digest line that only quotes the unverified ending", () => {
+    const remote = fakeHost();
+    const harness = makeHarness({ sshRemote: remote.layer });
+    const results = scriptPayrollQuestion(harness);
+    const quoted =
+      "GOAT: earlier, box may no longer be the GOAT that ran it; this is from its reports.";
+    return Effect.gen(function* () {
+      const { gateway, runtime } = yield* payrollRanOnDevbox(harness, remote.state);
+      remote.state.answer = () =>
+        Effect.succeed(threadRead([...payrollMessages, message("assistant_message", quoted, 4)]));
+      yield* gateway.ingest(goatInput("what did the payroll thread say?", "r-quoted"), rpcContext);
+      yield* runtime.drain;
+      assert.include(results[0]?.[0]?.text ?? "", quoted);
+      const reply = (yield* botMessages).messages
+        .map((message) => message.text)
+        .find((text) => text.includes("Here it is."));
+      assert.strictEqual(reply, "Here it is.");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("delivers the unverified reason when the task digest is longer than the read", () => {
+    const remote = fakeHost();
+    const harness = makeHarness({ sshRemote: remote.layer });
+    const results = scriptPayrollQuestion(harness);
+    const reason = "devbox may no longer be the GOAT that ran it";
+    return Effect.gen(function* () {
+      const { gateway, runtime } = yield* payrollRanOnDevbox(harness, remote.state);
+      const sql = yield* SqlClient.SqlClient;
+      const longTitle = "Payroll " + "y".repeat(RECALL_RESULT_CHARS);
+      yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', ${longTitle})`;
+      remote.state.answeredBy = EnvironmentId.make("environment:swapped");
+      yield* gateway.ingest(goatInput("what did the payroll thread say?", "r-long"), rpcContext);
+      yield* runtime.drain;
+      assert.notInclude(results[0]?.[0]?.text ?? "", reason);
+      const reply = (yield* botMessages).messages
+        .map((message) => message.text)
+        .find((text) => text.includes("Here it is."));
+      assert.include(reply ?? "", reason);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "delivers this host's unverified reason when the reply already names another host with the same ending",
+    () => {
+      const remote = fakeHost();
+      const harness = makeHarness({ sshRemote: remote.layer });
+      const reason = "box may no longer be the GOAT that ran it";
+      const other = "devbox may no longer be the GOAT that ran it";
+      harness.script.current = (input) => {
+        if (!(input.inputText ?? "").includes("payroll thread")) return defaultScript(input);
+        if (input.readsAllowed === true) {
+          return Effect.succeed({
+            replyText: "",
+            action: { type: "read", reads: [{ kind: "thread", query: "payroll" }] },
+          });
+        }
+        return Effect.succeed({ replyText: other, action: { type: "report_only" } });
+      };
+      return Effect.gen(function* () {
+        const { gateway, runtime } = yield* payrollRanOnDevbox(harness, remote.state);
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.host', 'box', '$.worker.host', 'box')`;
+        remote.state.answeredBy = EnvironmentId.make("environment:swapped");
+        yield* gateway.ingest(
+          goatInput("what did the payroll thread say?", "r-other-host"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const reply = (yield* botMessages).messages
+          .map((message) => message.text)
+          .find((text) => text.includes(other));
+        assert.strictEqual(reply, other + " " + reason);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
 
 const workerEnvironment = EnvironmentId.make("environment:devbox");
@@ -454,7 +530,7 @@ const recallOn = (
     Effect.map(({ result, record }) => {
       assert.strictEqual(result._tag, "Success");
       return {
-        text: result._tag === "Success" ? result.success : "",
+        text: result._tag === "Success" ? result.success.text : "",
         threadReads: record.toolCalls.filter((tool) => tool === "goat_thread_read").length,
         record,
       };

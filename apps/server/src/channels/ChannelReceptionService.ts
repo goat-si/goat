@@ -86,7 +86,6 @@ import {
 import { droppedNoteNotice } from "./channelBotNoteTabEdits.ts";
 import { ChannelBotNoteWriter } from "./channelBotNoteWriter.ts";
 import {
-  boundRecall,
   canSeeTask,
   journalFor,
   matchMemoryLines,
@@ -637,23 +636,20 @@ const make = Effect.gen(function* () {
     conversationId: ChannelConversationId,
     connectionId: string,
     inputId: ChannelInputId,
-  ): Effect.Effect<ReadonlyArray<ChannelReceptionReadResult>> =>
+  ): Effect.Effect<
+    ReadonlyArray<ChannelReceptionReadResult & { readonly fallbacks: ReadonlyArray<string> }>
+  > =>
     Effect.forEach(
       reads,
       (read) =>
         runRead(read, viewer, conversationId, connectionId, inputId).pipe(
           Effect.timeoutOption(CHANNEL_READ_TIMEOUT_MS),
-          Effect.map((text) => ({
-            kind: read.kind,
-            query: read.query,
-            text: Option.match(text, {
-              onNone: () => "(took too long to read)",
-              onSome: boundRecall,
-            }),
-          })),
+          Effect.map((value) =>
+            ChannelRemoteRecall.presentRead(read, Option.getOrUndefined(value)),
+          ),
           Effect.catch((cause) =>
             Effect.logWarning("GOAT Bot read failed", { kind: read.kind, cause }).pipe(
-              Effect.as({ kind: read.kind, query: read.query, text: "(could not be read)" }),
+              Effect.as(ChannelRemoteRecall.presentRead(read, "(could not be read)")),
             ),
           ),
         ),

@@ -15,6 +15,7 @@ import {
   RECALL_MESSAGE_CHARS,
   RECALL_RESULT_CHARS,
   RECALL_THREAD_MESSAGES,
+  boundRecall,
   taskDigest,
   threadDigest,
 } from "./channelBotRecall.ts";
@@ -69,23 +70,29 @@ const missLine = (host: string, miss: Miss) => {
 
 const REPORTS_SUFFIX = "; this is from its reports.";
 
-const deliveredFallback = (sentence: string) =>
-  (sentence.startsWith("Its thread on ") && sentence.endsWith(" did not answer in time")) ||
-  sentence.endsWith(" may no longer be the GOAT that ran it");
+export interface RemoteRecall {
+  readonly text: string;
+  readonly fallbacks: ReadonlyArray<string>;
+}
+
+const missRecall = (digest: string, host: string, miss: Miss): RemoteRecall => {
+  const sentence = missLine(host, miss);
+  return {
+    text: digest + "\n" + sentence + REPORTS_SUFFIX,
+    fallbacks: miss === "timeout" || miss === "unverified" ? [sentence] : [],
+  };
+};
+
+const sentencesOf = (text: string) =>
+  text
+    .split(/\n/u)
+    .flatMap((line) => line.split(/(?<=[.!?])\s+/u))
+    .map((sentence) => sentence.trim().replace(/[.!?]+$/u, ""))
+    .filter((sentence) => sentence !== "");
 
 export const fallbackReasons = (
-  results: ReadonlyArray<{ readonly text: string }>,
-): ReadonlyArray<string> => {
-  const reasons: Array<string> = [];
-  for (const result of results) {
-    for (const line of result.text.split("\n")) {
-      if (!line.endsWith(REPORTS_SUFFIX)) continue;
-      const sentence = line.slice(0, -REPORTS_SUFFIX.length);
-      if (deliveredFallback(sentence)) reasons.push(sentence);
-    }
-  }
-  return reasons;
-};
+  results: ReadonlyArray<{ readonly fallbacks: ReadonlyArray<string> }>,
+): ReadonlyArray<string> => results.flatMap((result) => result.fallbacks);
 
 export const keepFallbacks = (
   reply: string,
@@ -93,10 +100,31 @@ export const keepFallbacks = (
   reasons: ReadonlyArray<string>,
 ) => {
   let text = noteNotice === undefined ? reply : reply + " " + noteNotice;
+  const seen = new Set(sentencesOf(text));
   for (const reason of reasons) {
-    if (!text.includes(reason)) text = text.length === 0 ? reason : text + " " + reason;
+    const sentence = reason.trim().replace(/[.!?]+$/u, "");
+    if (sentence === "" || seen.has(sentence)) continue;
+    text = text.length === 0 ? reason : text + " " + reason;
+    seen.add(sentence);
   }
   return text;
+};
+
+/** Bound text keeps its start, so the miss sentences travel beside it. */
+export const presentRead = <Kind extends string>(
+  read: { readonly kind: Kind; readonly query: string },
+  value: string | RemoteRecall | undefined,
+) => {
+  const body =
+    typeof value === "string" || value === undefined
+      ? { text: value ?? "(took too long to read)", fallbacks: [] as ReadonlyArray<string> }
+      : value;
+  return {
+    kind: read.kind,
+    query: read.query,
+    text: boundRecall(body.text),
+    fallbacks: body.fallbacks,
+  };
 };
 
 type Link = Option.Option<LinkedHosts.LinkedHostCredential>;
@@ -184,7 +212,7 @@ export const makeRemoteThreadRecall = Effect.gen(function* () {
         host: worker.host,
         reason: read,
       });
-      return digest + "\n" + missLine(worker.host, read) + "; this is from its reports.";
+      return missRecall(digest, worker.host, read);
     }
     const messages = read.items.slice(-REMOTE_RECALL_ITEMS).flatMap((item) =>
       (item.type === "user_message" || item.type === "assistant_message") && item.text !== null
@@ -197,14 +225,16 @@ export const makeRemoteThreadRecall = Effect.gen(function* () {
           ]
         : [],
     );
-    return (
-      digest +
-      "\n" +
-      threadDigest(
-        read.thread.title || task.title,
-        messages,
-        RECALL_RESULT_CHARS - digest.length - 1,
-      )
-    );
+    return {
+      text:
+        digest +
+        "\n" +
+        threadDigest(
+          read.thread.title || task.title,
+          messages,
+          RECALL_RESULT_CHARS - digest.length - 1,
+        ),
+      fallbacks: [],
+    };
   });
 });
