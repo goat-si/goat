@@ -41,21 +41,30 @@ const Settings = Schema.Struct({
     Schema.Struct({ model: Schema.String, reasoningEffort: Schema.NullOr(Schema.String) }),
   ),
 });
-const SettingsRecord = Schema.Struct({
-  linkId: Schema.String,
-  fetchedAt: Schema.DateTimeUtcFromString,
-  document: Schema.Struct({
-    version: Schema.Literal(1),
-    home: Schema.Struct({
-      name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255)),
-      version: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
-    }),
-    settings: Settings,
+const SettingsDocument = Schema.Struct({
+  version: Schema.Literal(1),
+  home: Schema.Struct({
+    name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255)),
+    version: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
   }),
+  settings: Settings,
 });
-const decodeSettingsRecord = Schema.decodeUnknownOption(Schema.fromJsonString(SettingsRecord), {
-  onExcessProperty: "error",
-});
+// OpenCodex adds bookkeeping such as appliedAt to the record; only the version-1 document feeds
+// the digest, so it stays strict. Parse options cannot be scoped to a nested struct.
+const decodeRecord = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      linkId: Schema.String,
+      fetchedAt: Schema.DateTimeUtcFromString,
+      document: Schema.Unknown,
+    }),
+  ),
+);
+const decodeDocument = Schema.decodeUnknownOption(SettingsDocument, { onExcessProperty: "error" });
+const decodeSettingsRecord = (text: string) =>
+  Option.flatMap(decodeRecord(text), (record) =>
+    Option.map(decodeDocument(record.document), (document) => ({ ...record, document })),
+  );
 const Config = Schema.Struct({
   port: Schema.optional(Port),
   runtimeRole: Schema.optional(Role),

@@ -791,3 +791,20 @@ it.effect("an ocx that never answers is slow, not missing", () =>
     });
   }),
 );
+
+it.effect("parity reads a settings record that carries OpenCodex's appliedAt", () =>
+  Effect.gen(function* () {
+    const read = (record: unknown) =>
+      setup({
+        fixture: fleet["mac-studio"],
+        files: { "/fixture/.opencodex/link/home-codex-settings.json": JSON.stringify(record) },
+      }).pipe(Effect.flatMap(({ inventory }) => inventory.readParity));
+    const plain = yield* read(parityFixture.settingsRecord);
+    const applied = yield* read({
+      ...parityFixture.settingsRecord,
+      appliedAt: "2026-11-03T23:10:26.422Z",
+    });
+    expect(applied.parityEvidence?.settingsDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(applied.parityEvidence?.settingsDigest).toBe(plain.parityEvidence?.settingsDigest);
+  }),
+);
