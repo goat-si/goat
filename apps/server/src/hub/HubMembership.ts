@@ -6,7 +6,6 @@ import {
   type HubDeviceOperationResult,
   type HubDeviceStep,
   type HubDeviceTransport,
-  type HubParityCheckId,
   type HubParityResult,
   hasCloudMachineAliasPrefix,
 } from "@goat/contracts";
@@ -35,8 +34,13 @@ import {
   type OcxOutput,
 } from "./HubOcx.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
-import { hubDeviceResult as result } from "./hubDeviceResult.ts";
+import {
+  hubDeviceResult as result,
+  linkStatusUnreadable,
+  phaseMessage,
+} from "./hubDeviceResult.ts";
 import { joinPreflight } from "./hubJoinPreflight.ts";
+import { failing, finalState, LADDER } from "./hubLadder.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // OpenCodex's own enrollment deadline is 360 seconds; leave room for its cleanup.
@@ -46,16 +50,6 @@ const CONNECT_TIMEOUT_MS = 300_000;
 const HOME_TIMEOUT_MS = 60_000;
 const DEVICE_TIMEOUT_MS = 120_000;
 type Action = HubDeviceOperationResult["action"];
-type Rung = "sync" | "restart" | "reconnect";
-/** Ladder order and the checks each rung addresses (§1.4). */
-const LADDER: ReadonlyArray<{
-  readonly step: Rung;
-  readonly checks: ReadonlyArray<HubParityCheckId>;
-}> = [
-  { step: "sync", checks: ["P6", "P7"] },
-  { step: "restart", checks: ["P5"] },
-  { step: "reconnect", checks: ["P2", "P3"] },
-];
 
 const invalid = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
@@ -100,13 +94,6 @@ export const decisionBinding = (
   alias: string,
   key?: string,
 ) => `goat-hub-binding: ${action} ${alias}${key === undefined ? "" : ` ${key}`}`;
-const phaseMessage = (phase: string | undefined) =>
-  phase === "remote_platform_unsupported"
-    ? "OpenCodex could not execute Remote Link on this device. Update OpenCodex on Home and check PowerShell on a Windows Child, then retry."
-    : phase === undefined
-      ? "OpenCodex refused the command."
-      : `OpenCodex stopped at ${phase}.`;
-
 export class HubMembership extends Context.Service<
   HubMembership,
   {
@@ -205,10 +192,14 @@ const make = Effect.gen(function* () {
     };
   });
 
-  const homeLinks = Effect.fn("HubMembership.homeLinks")(function* () {
+  const readHomeLinks = Effect.fn("HubMembership.readHomeLinks")(function* () {
     const output = yield* ocx.home(["link", "status", "--json"], HOME_TIMEOUT_MS);
-    return output.code === 0 ? decodeJson(LinkStatus, output.stdout) : undefined;
+    return {
+      status: output.code === 0 ? decodeJson(LinkStatus, output.stdout) : undefined,
+      forbidden: output.forbidden === true,
+    };
   });
+  const homeLinks = () => readHomeLinks().pipe(Effect.map(({ status }) => status));
 
   const probe = Effect.fn("HubMembership.probe")(function* (alias: string) {
     const output = yield* ocx.home(["link", "probe", alias, "--json"], HOME_TIMEOUT_MS);
@@ -218,9 +209,6 @@ const make = Effect.gen(function* () {
       : { ok: false as const, phase: output.phase };
   });
 
-  const failing = (result: HubParityResult) => result.failingCheckIds.length > 0;
-  const finalState = (result: HubParityResult): HubDeviceOperationResult["state"] =>
-    !failing(result) ? "child" : result.verdict === "broken" ? "failed" : "degraded";
   const unreachable = (error: HubOcxError) => ({
     outcome: "failed" as const,
     detail: error.message,
@@ -425,8 +413,12 @@ const make = Effect.gen(function* () {
     return gone;
   });
 
-  const homeUnavailable = (action: Action, alias: string, steps: ReadonlyArray<HubDeviceStep>) =>
-    result(action, alias, "failed", "This machine's OpenCodex link status is unavailable.", steps);
+  const homeUnavailable = (
+    action: Action,
+    alias: string,
+    steps: ReadonlyArray<HubDeviceStep>,
+    forbidden: boolean,
+  ) => result(action, alias, "failed", linkStatusUnreadable(forbidden), steps);
 
   /** False when the caller's standing permission no longer holds; an unreadable one does not. */
   const permitted = (caller: Pick<Caller, "gate">) =>
@@ -447,6 +439,14 @@ const make = Effect.gen(function* () {
   const deviceConnection = Effect.fn("HubMembership.deviceConnection")(function* (alias: string) {
     const output = yield* ocx.device(alias, ["connect", "status", "--json"], DEVICE_TIMEOUT_MS);
     return output.code === 0 ? decodeJson(Connection, output.stdout) : undefined;
+  });
+
+  /** A Hub client needs no link record, so an unreadable link status does not stop it. */
+  const hubClientKey = Effect.fn("HubMembership.hubClientKey")(function* (alias: string) {
+    const connection = yield* deviceConnection(alias);
+    return connection?.state === "connected" && connection.transport !== "link"
+      ? connection.apiKeyId
+      : undefined;
   });
 
   /** Asks an owner unless the caller is one; returns a result only when the call must stop. */
@@ -589,9 +589,9 @@ const make = Effect.gen(function* () {
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
       if (!(yield* permitted(caller))) return yield* withdrawn(caller, alias, steps);
-      const status = yield* homeLinks();
-      if (status === undefined) return homeUnavailable("join", alias, steps);
-      if (status.role === "child")
+      // A Hub answers link status with 403 (opencodex#8184); only Remote Link needs it.
+      const { status, forbidden } = yield* readHomeLinks();
+      if (status?.role === "child")
         return result(
           "join",
           alias,
@@ -599,7 +599,7 @@ const make = Effect.gen(function* () {
           "This machine is a Child and cannot be a Home.",
           steps,
         );
-      if (status.links.some((entry) => entry.alias === alias)) {
+      if (status?.links.some((entry) => entry.alias === alias)) {
         const verified = yield* parity.verify(alias, scope);
         return result(
           "join",
@@ -623,6 +623,7 @@ const make = Effect.gen(function* () {
         return result("join", alias, "failed", preflight.detail, steps, { transport });
       if (transport === "hub-client")
         return yield* joinHubClient(scope, caller, alias, input.decisionId, steps);
+      if (status === undefined) return homeUnavailable("join", alias, steps, forbidden);
       if (!(yield* ocx.directAlias(alias)))
         return result(
           "join",
@@ -723,13 +724,16 @@ const make = Effect.gen(function* () {
     const caller = yield* authorize(scope, alias, person);
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
-      const status = yield* homeLinks();
-      if (status === undefined) return homeUnavailable("leave", alias, steps);
-      const record = status.links.find((entry) => entry.alias === alias);
+      const { status, forbidden } = yield* readHomeLinks();
+      const record = status?.links.find((entry) => entry.alias === alias);
       let member: Member;
       if (record !== undefined)
         member = { kind: "remote-link", id: record.id, tunnelPort: record.tunnelPort };
-      else {
+      else if (status === undefined) {
+        const key = yield* hubClientKey(alias);
+        if (key === undefined) return homeUnavailable("leave", alias, steps, forbidden);
+        member = { kind: "hub-client", id: key };
+      } else {
         const connection = yield* deviceConnection(alias);
         if (
           connection?.state !== "connected" ||
@@ -823,9 +827,10 @@ const make = Effect.gen(function* () {
     const caller = yield* authorize(scope, alias, person);
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
-      const status = yield* homeLinks();
-      if (status === undefined) return homeUnavailable("repair", alias, steps);
-      const record = status.links.find((entry) => entry.alias === alias);
+      const { status, forbidden } = yield* readHomeLinks();
+      if (status === undefined && (yield* hubClientKey(alias)) === undefined)
+        return homeUnavailable("repair", alias, steps, forbidden);
+      const record = status?.links.find((entry) => entry.alias === alias);
       if (input.decisionId !== undefined) {
         // Step 4, re-link, only after a person approved it for the same host key.
         if (record === undefined) return yield* invalid(`${alias} has no link to re-create.`);

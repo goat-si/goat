@@ -56,6 +56,8 @@ export interface OcxOutput {
   readonly stdout: string;
   /** OpenCodex's machine-readable failure code from stderr, never free text. */
   readonly phase?: string;
+  /** OpenCodex's management API answered 403, as `ocx link status` does on a Hub (opencodex#8184). */
+  readonly forbidden?: true;
   /** The role the device's own GOAT read after a connection change it ran. */
   readonly deviceRole?: "standalone" | "hub" | "client" | "unknown";
 }
@@ -349,10 +351,12 @@ const make = Effect.gen(function* () {
       ),
     );
     const phase = phaseOf(output.stderr);
+    const forbidden = /\brequest failed \(403\)/u.test(output.stderr);
     return {
       code: output.timedOut ? 124 : (output.code ?? 1),
       stdout: output.stdoutTruncated ? "" : output.stdout,
       ...(phase === undefined ? {} : { phase }),
+      ...(forbidden ? { forbidden: true as const } : {}),
     } satisfies OcxOutput;
   });
 
