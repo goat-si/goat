@@ -11,6 +11,8 @@ import {
   goatBotActivityTask,
   goatBotTurnsWaiting,
   goatBotReplyingSince,
+  goatBotEnsureFailure,
+  GoatBotUnreachable,
   GOAT_BOT_NOT_ACCEPTED,
   initialGoatBotEnsure,
   observeResidentAtom,
@@ -26,7 +28,11 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { goatBotIngestInput } from "@goat/client-runtime/state/channels";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  runAtomCommand,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
 import type {
   BotProfile,
   ChannelBotRef,
@@ -546,7 +552,10 @@ export function useMobileGoatBotSession(
           environmentId,
           input: {},
         });
-        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        if (result._tag === "Failure") {
+          if (isAtomCommandInterrupted(result)) throw new GoatBotUnreachable();
+          throw squashAtomCommandFailure(result);
+        }
         settle({ kind: "confirmed", bot: result.value }, result.value);
       } catch (error) {
         const reason =
@@ -557,9 +566,7 @@ export function useMobileGoatBotSession(
             ? { kind: "legacy_active" }
             : {
                 kind: "failed",
-                ...(error instanceof Error && error.message !== ""
-                  ? { message: error.message }
-                  : {}),
+                ...goatBotEnsureFailure(error),
               },
           null,
           reason === "not_home",

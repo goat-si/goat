@@ -17,6 +17,18 @@ export type GoatBotEnsureResult =
   | { readonly kind: "legacy_active" }
   | { readonly kind: "failed"; readonly message?: string };
 
+/** The connection dropped. The chat names the bot; this error has nothing to show. */
+export class GoatBotUnreachable extends Error {
+  readonly _tag = "GoatBotUnreachable";
+}
+
+/** A failed ensure's stored text, or nothing when the chat should name the bot itself. */
+export function goatBotEnsureFailure(error: unknown): { readonly message?: string } {
+  if (error instanceof GoatBotUnreachable || !(error instanceof Error) || error.message === "")
+    return {};
+  return { message: error.message };
+}
+
 export const initialGoatBotEnsure: GoatBotEnsureMachine = {
   generation: null,
   token: 0,

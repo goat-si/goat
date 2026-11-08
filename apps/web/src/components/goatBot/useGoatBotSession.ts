@@ -5,6 +5,7 @@ import {
   goatBotActivityTask,
   goatBotItemReaders,
   goatBotReplyingSince,
+  goatBotEnsureFailure,
   GOAT_BOT_NOT_ACCEPTED,
   initialGoatBotEnsure,
   observeResidentAtom,
@@ -457,9 +458,7 @@ export function useGoatBotSession(
             ? { kind: "legacy_active" }
             : {
                 kind: "failed",
-                ...(error instanceof Error && error.message !== ""
-                  ? { message: error.message }
-                  : {}),
+                ...goatBotEnsureFailure(error),
               },
         );
       }
