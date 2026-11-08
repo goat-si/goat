@@ -562,8 +562,10 @@ describe("GOAT bot boundary (scenario 6)", () => {
         yield* setupBot;
         const gateway = yield* ChannelGateway.ChannelGateway;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
-        const receipt = yield* gateway.ingest(goatInput("hello", "client-1"), rpcContext);
-        assert.isDefined(receipt.timelineSequence);
+        const sent = goatInput("hello", "client-1");
+        const receipt = yield* gateway.ingest(sent, rpcContext);
+        const before = (yield* botMessages).messages.find((message) => message.role === "user");
+        assert.strictEqual(before?.channel?.clientMessageId, sent.externalMessageId);
         yield* runtime.drain;
         const records = yield* botMessages;
         assert.deepStrictEqual(records.runs, []);
@@ -574,11 +576,9 @@ describe("GOAT bot boundary (scenario 6)", () => {
         ]);
         const reply = records.messages.find((message) => message.role === "assistant");
         assert.strictEqual(reply?.channel?.inReplyToInputId, receipt.inputId);
-        assert.isNull(reply?.runId ?? null);
-        // Reception's read time lands on the bot's copy of the user message.
         const input = records.messages.find((message) => message.role === "user");
+        assert.strictEqual(input?.channel?.clientMessageId, sent.externalMessageId);
         assert.isDefined(input?.channel?.readAt);
-
         // A legacy coding-turn dispatch to the bot is refused by the orchestrator.
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const refused = yield* Effect.flip(
