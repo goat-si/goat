@@ -12,7 +12,7 @@ function FallbackHeaderButton(props: {
 }) {
   return (
     <Pressable
-      className="size-11 items-center justify-center rounded-full bg-subtle active:opacity-70"
+      className="size-[44px] items-center justify-center rounded-full bg-subtle active:opacity-70"
       accessibilityLabel={props.accessibilityLabel}
       accessibilityRole="button"
       hitSlop={4}

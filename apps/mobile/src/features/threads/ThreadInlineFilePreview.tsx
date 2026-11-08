@@ -190,7 +190,7 @@ function InlineAudio(props: PreviewProps & { readonly resolveUri: () => Promise<
           }
           accessibilityState={{ busy }}
           onPress={toggle}
-          className="h-11 w-11 items-center justify-center rounded-lg bg-subtle"
+          className="size-[44px] items-center justify-center rounded-lg bg-subtle"
         >
           <SymbolView
             name={playing ? "pause" : "play"}
