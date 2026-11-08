@@ -292,57 +292,81 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime cl
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "Windows runtime stage sweep",
   () => {
-    const sweep = (setup: (versions: string, bin: string) => void) => {
+    const sweepFixture = () => {
       const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-win-sweep-"));
       homes.push(home);
       const versions = NodePath.join(home, ".goat/runtime/goat/versions");
       const bin = NodePath.join(home, "bin");
       NodeFS.mkdirSync(versions, { recursive: true });
       NodeFS.mkdirSync(bin);
-      for (const name of [".staging-old", ".staging-new", ".native-run", "1.0.0"])
+      for (const name of [".staging-a", ".staging-b", ".native-run", "1.0.0"])
         NodeFS.mkdirSync(NodePath.join(versions, name, "sub"), { recursive: true });
-      NodeFS.utimesSync(NodePath.join(versions, ".staging-old"), 1_700_000_000, 1_700_000_000);
-      setup(versions, bin);
-      const r = NodeChildProcess.spawnSync(remoteShell, ["-s"], {
-        input: `set -eu
+      const run = () => {
+        const r = NodeChildProcess.spawnSync(remoteShell, ["-s"], {
+          input: `set -eu
 GOAT_HOST_WINDOWS=1
 ${REMOTE_WINDOWS_RUNTIME_SWEEP_SCRIPT}
 echo windows-round-trip-continued
 `,
-        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
-        encoding: "utf8",
-      });
-      const left = NodeFS.readdirSync(versions).toSorted();
-      return { r, left };
+          env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+          encoding: "utf8",
+        });
+        return { r, left: NodeFS.readdirSync(versions).toSorted() };
+      };
+      return { home, versions, bin, run };
     };
 
     it("removes every stage no install holds and keeps native stages and versions", () => {
-      const { r, left } = sweep(() => {});
+      const { r, left } = sweepFixture().run();
       assert.equal(r.status, 0, r.stderr);
       assert.notInclude(r.stdout, "windows-round-trip-continued");
       assert.deepEqual(left, [".native-run", "1.0.0"]);
-      assert.include(r.stderr, "ssh.runtime.cleanup.removed leftover=.staging-new");
+      assert.include(r.stderr, "ssh.runtime.cleanup.removed leftover=.staging-b");
     });
 
-    it("keeps a stage whose goat.exe is still open and finishes the round trip", () => {
-      const { r, left } = sweep((_versions, bin) =>
-        NodeFS.writeFileSync(
-          NodePath.join(bin, "rm"),
-          '#!/bin/sh\ncase "$*" in *staging-old*) exit 1 ;; esac\nexec /bin/rm "$@"\n',
-          { mode: 0o700 },
-        ),
+    it("keeps a stage whose goat.exe is still open, finishes the round trip, and removes it on a later cleanup", () => {
+      const f = sweepFixture();
+      const rm = NodePath.join(f.bin, "rm");
+      NodeFS.writeFileSync(
+        rm,
+        '#!/bin/sh\ncase "$*" in *staging-a*) exit 1 ;; esac\nexec /bin/rm "$@"\n',
+        {
+          mode: 0o700,
+        },
       );
-      assert.equal(r.status, 0, r.stderr);
-      assert.deepEqual(left, [".native-run", ".staging-old", "1.0.0"]);
-      assert.include(r.stderr, "ssh.runtime.cleanup.kept leftover=.staging-old still open");
+      const first = f.run();
+      assert.equal(first.r.status, 0, first.r.stderr);
+      assert.deepEqual(first.left, [".native-run", ".staging-a", "1.0.0"]);
+      assert.include(first.r.stderr, "ssh.runtime.cleanup.kept leftover=.staging-a still open");
+      NodeFS.rmSync(rm);
+      const later = f.run();
+      assert.equal(later.r.status, 0, later.r.stderr);
+      assert.deepEqual(later.left, [".native-run", "1.0.0"]);
     });
 
-    it("while an install lock exists, removes only stages older than an hour", () => {
-      const { r, left } = sweep((versions) =>
-        NodeFS.mkdirSync(NodePath.join(versions, ".1.0.1.install.lock")),
-      );
+    it("removes no stage, however old, while any install lock exists", () => {
+      const f = sweepFixture();
+      NodeFS.utimesSync(NodePath.join(f.versions, ".staging-a"), 1_700_000_000, 1_700_000_000);
+      NodeFS.mkdirSync(NodePath.join(f.versions, ".1.0.1.install.lock"));
+      const { r, left } = f.run();
       assert.equal(r.status, 0, r.stderr);
-      assert.deepEqual(left, [".1.0.1.install.lock", ".native-run", ".staging-new", "1.0.0"]);
+      assert.deepEqual(left, [
+        ".1.0.1.install.lock",
+        ".native-run",
+        ".staging-a",
+        ".staging-b",
+        "1.0.0",
+      ]);
+    });
+
+    it("removes nothing when a runtime parent directory is a symlink", () => {
+      const f = sweepFixture();
+      const real = NodePath.join(f.home, "real-goat");
+      NodeFS.renameSync(NodePath.join(f.home, ".goat"), real);
+      NodeFS.symlinkSync(real, NodePath.join(f.home, ".goat"));
+      const { r, left } = f.run();
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual(left, [".native-run", ".staging-a", ".staging-b", "1.0.0"]);
     });
   },
 );
