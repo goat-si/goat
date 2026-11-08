@@ -46,6 +46,15 @@ fail, check the URL, credentials, and OpenCode version, then refresh provider st
 After a lost connection, send another prompt to reconnect to the same OpenCode
 session.
 
+## Change an instance's settings
+
+Changing any of an OpenCode instance's settings, or turning it off, restarts the
+OpenCode server GOAT runs for it. GOAT restarts it at once when nothing is
+running there. Otherwise running turns, subagents and pending approvals finish on
+the current server first, and until they do a new turn on that instance stops
+with a message; stop that work to restart sooner. With an external server, GOAT
+reconnects with the new URL and password and leaves the server itself running.
+
 ## Use OpenCodex Home
 
 A OpenCode instance can send its model requests through your

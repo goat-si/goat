@@ -25,6 +25,8 @@ type Update = {
   metadata?: Record<string, unknown>;
 };
 const DENY = { permission: "task", pattern: "*", action: "deny" };
+const REVIEWER = { permission: "task", pattern: "reviewer", action: "allow" };
+const USER_READ = { permission: "read", pattern: "*", action: "allow" };
 
 /** A thread whose OpenCode session opens with `opened`, and a turn that runs to idle. */
 const limitHarness = Effect.fn("limitHarness")(function* (
@@ -33,7 +35,10 @@ const limitHarness = Effect.fn("limitHarness")(function* (
     permission: ReadonlyArray<Rule>;
     metadata?: Record<string, unknown>;
   },
-  options: { readonly childUpdateFails?: () => boolean } = {},
+  options: {
+    readonly childUpdateFails?: () => boolean;
+    readonly forkMetadata?: Record<string, unknown>;
+  } = {},
 ) {
   const sessions = yield* McpProviderSessions.McpProviderSessions;
   const nativeEvents = asyncEventStream();
@@ -67,7 +72,12 @@ const limitHarness = Effect.fn("limitHarness")(function* (
         },
       }),
       fork: async () => ({
-        data: { id: `${root}-fork`, time: { created: 2, updated: 2 }, permission: [] },
+        data: {
+          id: `${root}-fork`,
+          time: { created: 2, updated: 2 },
+          permission: [],
+          ...(options.forkMetadata === undefined ? {} : { metadata: options.forkMetadata }),
+        },
       }),
       update: async (input: Update) => {
         if (input.sessionID !== root && options.childUpdateFails?.() === true)
@@ -119,6 +129,53 @@ const limitHarness = Effect.fn("limitHarness")(function* (
   return { calls, harness, payloads, push, root, sessions, config, status, turn, updated, updates };
 });
 
+const resumeFixture = Effect.fn("resumeFixture")(function* (
+  suffix: string,
+  native: { permission?: ReadonlyArray<Rule>; metadata?: Record<string, unknown> },
+  options: { readonly refuseUpdate?: () => boolean } = {},
+) {
+  const sessions = yield* McpProviderSessions.McpProviderSessions;
+  const nativeEvents = asyncEventStream();
+  const updates: Array<Update> = [];
+  const prompts: Array<string> = [];
+  const created = { count: 0 };
+  const root = `${suffix}-root`;
+  const harness = yield* makeOpenCodeRuntimeHarness(suffix, root, {
+    event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+    session: {
+      create: async () => {
+        created.count += 1;
+        return { data: { id: root, time: { created: 1, updated: 1 } } };
+      },
+      get: async (input: { sessionID: string }) => ({
+        data: { id: input.sessionID, time: { created: 1, updated: 2 }, ...native },
+      }),
+      update: async (input: Update) => {
+        updates.push(input);
+        if (options.refuseUpdate?.() === true) throw new Error("session update refused");
+        return { data: { id: input.sessionID, time: { created: 1, updated: 3 } } };
+      },
+      promptAsync: async (input: { sessionID: string }) => {
+        prompts.push(input.sessionID);
+        return { data: true };
+      },
+      abort: async () => ({ data: true }),
+      children: async () => ({ data: [] }),
+      messages: async () => ({ data: [] }),
+    },
+  });
+  const config = {
+    environmentId: EnvironmentId.make("fixture"),
+    threadId: harness.threadId,
+    providerSessionId: `session-opencode-${suffix}`,
+    providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
+    endpoint: "http://fixture.invalid/mcp",
+    authorizationHeader: "Bearer resume-fixture",
+    browserToolsAvailable: false,
+  };
+  return { config, created, harness, prompts, root, sessions, updates };
+});
+
 describe("OpenCode native subagent limit", () => {
   it.effect("installs GOAT rules on a fork before its first prompt (#2239)", () =>
     Effect.gen(function* () {
@@ -141,6 +198,54 @@ describe("OpenCode native subagent limit", () => {
         { sessionID, permission: [...rules, DENY] },
         { sessionID },
       ]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("keeps the metadata a fork copied from its parent when installing GOAT rules", () =>
+    Effect.gen(function* () {
+      const { harness, root, sessions, config, updates } = yield* limitHarness(
+        "fork-metadata",
+        (permission) => ({ permission }),
+        { forkMetadata: { owner: "user" } },
+      );
+      const targetPolicy = runtimePolicy("approval-required", { cwd: "/workspace" });
+      const fork = yield* harness.runtime.forkThread({
+        sourceProviderThread: harness.providerThread,
+        targetThreadId: ThreadId.make("fork-target"),
+        runtimePolicy: targetPolicy,
+      });
+      yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
+      yield* harness.startTurn("work", fork);
+      const sessionID = `${root}-fork`;
+      // OpenCode replaces the whole metadata bag on update, so every write carries the copied keys.
+      assert.deepEqual(
+        updates.filter((update) => update.sessionID === sessionID).map((u) => u.metadata?.owner),
+        ["user", "user"],
+      );
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("keeps GOAT's deny on resume when the subagent limit is unknown (#2477)", () =>
+    Effect.gen(function* () {
+      const policy = runtimePolicy("approval-required");
+      const base = openCodePermissionRules(policy);
+      const { harness, updates } = yield* resumeFixture("resume-unknown-limit", {
+        permission: [...base, REVIEWER, DENY],
+        metadata: { goatPermissionBase: base, goatSubagentDeny: true },
+      });
+      yield* harness.runtime.resumeThread({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        runtimePolicy: policy,
+      });
+      // No MCP session: the limit is unknown, so the owned deny stays and nothing is rewritten.
+      assert.deepEqual(updates, []);
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
@@ -300,10 +405,11 @@ describe("OpenCode native subagent limit", () => {
             })
             .pipe(Effect.exit);
           assert.isTrue(Exit.isSuccess(yield* steer));
+          const base = openCodePermissionRules(harness.policy);
           assert.deepEqual(yield* Queue.take(updated), {
             sessionID: root,
-            permission: [...openCodePermissionRules(harness.policy), DENY],
-            metadata: { goatSubagentDeny: true },
+            permission: [...base, DENY],
+            metadata: { goatPermissionBase: base, goatSubagentDeny: true },
           });
           // The steer's own receipt lets the turn settle.
           yield* push({
@@ -407,5 +513,184 @@ describe("OpenCode native subagent limit", () => {
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
     ),
+  );
+
+  it.effect(
+    "refreshes a stale full-access base on resume and keeps the session's own rules (#2477)",
+    () =>
+      Effect.gen(function* () {
+        const fullAccess = runtimePolicy("full-access");
+        const approval = runtimePolicy("approval-required");
+        const stale = [...openCodePermissionRules(fullAccess), REVIEWER, DENY];
+        const { config, created, harness, root, sessions, updates } = yield* resumeFixture(
+          "resume-stale-base",
+          { permission: stale, metadata: { goatSubagentDeny: true } },
+        );
+        yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
+        yield* harness.runtime.resumeThread({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          runtimePolicy: approval,
+        });
+        const base = openCodePermissionRules(approval);
+        assert.equal(created.count, 1);
+        assert.deepEqual(updates, [
+          {
+            sessionID: root,
+            permission: [...base, REVIEWER, DENY],
+            metadata: { goatSubagentDeny: true, goatPermissionBase: base },
+          },
+        ]);
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect(
+    "keeps the resumed session when the permission refresh fails and retries it before the next prompt (#2477)",
+    () =>
+      Effect.gen(function* () {
+        const fullAccess = runtimePolicy("full-access");
+        const approval = runtimePolicy("approval-required");
+        const stale = [...openCodePermissionRules(fullAccess), REVIEWER, DENY];
+        const { config, created, harness, prompts, root, sessions, updates } = yield* resumeFixture(
+          "resume-update-fails",
+          { permission: stale, metadata: { goatSubagentDeny: true } },
+          { refuseUpdate: () => true },
+        );
+        yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
+        const resumed = yield* harness.runtime.resumeThread({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          runtimePolicy: approval,
+        });
+        assert.equal(created.count, 1);
+        const failed = yield* Effect.exit(harness.startTurn("work", resumed, approval));
+        assert.isTrue(Exit.isFailure(failed));
+        assert.equal(prompts.length, 0);
+        assert.equal(created.count, 1);
+        const base = openCodePermissionRules(approval);
+        assert.deepEqual(
+          updates.map((update) => update.permission),
+          [
+            [...base, REVIEWER, DENY],
+            [...base, REVIEWER, DENY],
+          ],
+        );
+        assert.deepEqual(
+          updates.map((update) => update.metadata),
+          [
+            { goatSubagentDeny: true, goatPermissionBase: base },
+            { goatSubagentDeny: true, goatPermissionBase: base },
+          ],
+        );
+        assert.equal(
+          updates.every((update) => update.sessionID === root),
+          true,
+        );
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect(
+    "installs GOAT's base when resuming a pre-#2239 fork with an empty permission list (#2477)",
+    () =>
+      Effect.gen(function* () {
+        const approval = runtimePolicy("approval-required");
+        const { config, created, harness, root, sessions, updates } = yield* resumeFixture(
+          "resume-empty-fork",
+          { permission: [], metadata: {} },
+        );
+        yield* sessions.set(config);
+        yield* harness.runtime.ensureThread({
+          threadId: harness.threadId,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("opencode-resume-empty-fork"),
+            model: "anthropic/claude-sonnet",
+            options: [],
+          },
+          runtimePolicy: approval,
+          existingProviderThread: harness.providerThread,
+        });
+        const base = openCodePermissionRules(approval);
+        assert.equal(created.count, 1);
+        assert.deepEqual(updates, [
+          {
+            sessionID: root,
+            permission: base,
+            metadata: { goatPermissionBase: base, goatSubagentDeny: false },
+          },
+        ]);
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect(
+    "strips a legacy GOAT prefix from a different policy and keeps the user's rules (#2477)",
+    () =>
+      Effect.gen(function* () {
+        const approval = runtimePolicy("approval-required");
+        const fullAccess = runtimePolicy("full-access");
+        const { config, harness, root, sessions, updates } = yield* resumeFixture(
+          "resume-legacy-prefix",
+          { permission: [...openCodePermissionRules(approval), REVIEWER], metadata: {} },
+        );
+        yield* sessions.set(config);
+        yield* harness.runtime.resumeThread({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          runtimePolicy: fullAccess,
+        });
+        const base = openCodePermissionRules(fullAccess);
+        assert.deepEqual(updates, [
+          {
+            sessionID: root,
+            permission: [...base, REVIEWER],
+            metadata: { goatPermissionBase: base, goatSubagentDeny: false },
+          },
+        ]);
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect(
+    "strips the recorded goatPermissionBase and keeps a following rule GOAT could have written (#2477)",
+    () =>
+      Effect.gen(function* () {
+        const fullAccess = runtimePolicy("full-access");
+        const approval = runtimePolicy("approval-required");
+        const recorded = openCodePermissionRules(fullAccess);
+        const { config, harness, root, sessions, updates } = yield* resumeFixture(
+          "resume-recorded-base",
+          {
+            permission: [...recorded, USER_READ, REVIEWER, DENY],
+            metadata: { goatPermissionBase: recorded, goatSubagentDeny: true },
+          },
+        );
+        yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
+        yield* harness.runtime.resumeThread({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          runtimePolicy: approval,
+        });
+        const base = openCodePermissionRules(approval);
+        assert.deepEqual(updates, [
+          {
+            sessionID: root,
+            permission: [...base, USER_READ, REVIEWER, DENY],
+            metadata: { goatSubagentDeny: true, goatPermissionBase: base },
+          },
+        ]);
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
   );
 });

@@ -15,6 +15,8 @@ interface OpenCodeServerOwnerState {
   serverScope: Scope.Closeable | null;
   borrowers: number;
   idleCloseFiber: Fiber.Fiber<void, never> | null;
+  /** Set when the owner's scope closes; a server still borrowed then stops when its last borrow ends. */
+  closed: boolean;
 }
 
 export class OpenCodeServerOwner extends Context.Service<
@@ -43,6 +45,7 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
     serverScope: null,
     borrowers: 0,
     idleCloseFiber: null,
+    closed: false,
   };
 
   const cancelIdleClose = Effect.fn("OpenCodeServerOwner.cancelIdleClose")(function* () {
@@ -84,6 +87,18 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
 
   const acquireServer = mutex.withPermit(
     Effect.gen(function* () {
+      if (state.closed) {
+        // A session reconnecting its event stream borrows again before releasing the old borrow.
+        if (state.server !== null && state.borrowers > 0 && (yield* state.server.isRunning)) {
+          state.borrowers += 1;
+          return state.server;
+        }
+        return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
+          operation: "startOpenCodeServerProcess",
+          detail:
+            "The OpenCode provider was reconfigured; its server restarts with the new settings.",
+        });
+      }
       yield* cancelIdleClose();
       if (state.server !== null) {
         if (yield* state.server.isRunning) {
@@ -137,6 +152,10 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
         if (state.borrowers > 0) {
           return;
         }
+        if (state.closed) {
+          yield* closeServer(server);
+          return;
+        }
         yield* cancelIdleClose();
         state.idleCloseFiber = yield* Effect.sleep(OPENCODE_SERVER_IDLE_TTL).pipe(
           Effect.andThen(
@@ -158,9 +177,10 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
   yield* Effect.addFinalizer(() =>
     mutex.withPermit(
       Effect.gen(function* () {
+        state.closed = true;
         yield* cancelIdleClose();
-        state.borrowers = 0;
-        yield* closeServer();
+        // Borrowers keep the server for work already running on it; the last release stops it.
+        if (state.borrowers === 0) yield* closeServer();
       }),
     ),
   );

@@ -1617,7 +1617,7 @@ export function createServerEnvironmentAtoms<R, E>(
       concurrency: {
         mode: "singleFlight",
         key: ({ environmentId, input }) =>
-          `${environmentId}:${input.instanceId}:${input.projectId}:${input.cursor ?? "first"}`,
+          `${environmentId}:${input.instanceId}:${input.projectId}:${input.continuation ?? input.cursor ?? "first"}`,
       },
     }),
     importAcpRegistrySession: createEnvironmentRpcCommand(runtime, {

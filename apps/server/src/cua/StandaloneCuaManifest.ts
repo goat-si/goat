@@ -78,14 +78,19 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
   // without one the listing sees no windows, so apps without a desktop entry never get admitted.
   const prepare = Effect.fn("StandaloneCuaManifest.prepare")(
     (binaryPath: string, display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>) =>
-      Effect.tryPromise(() =>
-        prepareCuaDriverCapabilityManifest({
-          binaryPath,
-          platform,
-          environment: cuaDriverSessionListingEnvironment(environment, display, platform),
-          hostBundleIds: [hostBundleId],
-          path: manifestPath,
-        }),
+      includeProtected.pipe(
+        Effect.flatMap((protectedApps) =>
+          Effect.tryPromise(() =>
+            prepareCuaDriverCapabilityManifest({
+              binaryPath,
+              platform,
+              environment: cuaDriverSessionListingEnvironment(environment, display, platform),
+              hostBundleIds: [hostBundleId],
+              includeProtected: protectedApps,
+              path: manifestPath,
+            }),
+          ),
+        ),
       ),
   );
   const refresh = Effect.fn("StandaloneCuaManifest.refresh")(function* (

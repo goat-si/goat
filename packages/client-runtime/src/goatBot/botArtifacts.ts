@@ -102,10 +102,11 @@ export function botArtifactSizeLabel(bytes: number): string {
 export function botArtifactOpenMessage(
   name: string,
   result: Exclude<BotArtifactRead, { status: "ok" }>,
+  botName = "GOAT Bot",
 ): string {
   switch (result.status) {
     case "too_large":
-      return `${name} is larger than 20 MB, so GOAT Bot can't send it here.`;
+      return `${name} is larger than 20 MB, so ${botName} can't send it here.`;
     case "busy":
       return "Another file is still opening. Try again in a moment.";
     case "changed":
@@ -119,9 +120,12 @@ const tagOf = (error: unknown) =>
   typeof error === "object" && error !== null && "_tag" in error ? error._tag : undefined;
 
 /** Why the Library cannot load, and whether trying again can help. */
-export function botArtifactsFailure(error: unknown): { message: string; retry: boolean } {
+export function botArtifactsFailure(
+  error: unknown,
+  botName = "GOAT Bot",
+): { message: string; retry: boolean } {
   if (tagOf(error) === "EnvironmentAuthorizationError")
-    return { message: "This device can't read GOAT Bot's files.", retry: false };
+    return { message: `This device can't read ${botName}'s files.`, retry: false };
   if (
     tagOf(error) === "ChannelGatewayError" &&
     typeof error === "object" &&
@@ -129,8 +133,8 @@ export function botArtifactsFailure(error: unknown): { message: string; retry: b
     "reason" in error &&
     error.reason === "not_home"
   )
-    return { message: "GOAT Bot's files are on its home computer.", retry: false };
-  return { message: "Couldn't load GOAT Bot's files.", retry: true };
+    return { message: `${botName}'s files are on its home computer.`, retry: false };
+  return { message: `Couldn't load ${botName}'s files.`, retry: true };
 }
 
 export const BOT_RUNNING_TASK_STATUSES = [

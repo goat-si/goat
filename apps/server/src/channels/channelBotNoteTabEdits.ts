@@ -109,6 +109,8 @@ export interface NoteWriterHooks {
   readonly beforeCompare?: Effect.Effect<void>;
   /** Runs right after the rename, before the file is read again to check it. */
   readonly afterRename?: Effect.Effect<void>;
+  /** Runs after a save, change, or forget that changed the notes file. A failure here is ignored. */
+  readonly onWrote?: (inputId: string) => Effect.Effect<void>;
 }
 
 /** A note GOAT kept after refusing to forget it while other work held a notes grant. */
@@ -217,15 +219,25 @@ export const makeChannelBotNoteWriter = (
       );
     const append = (note: string, readAt: string, inputId: string, replaces?: string) =>
       appendChannelBotNote(fs, files, note, readAt, inputId, replaces).pipe(
-        Effect.map(({ correction }) =>
-          correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
-        ),
+        Effect.map(({ correction, wrote }) => ({
+          notice: correction === "unmatched" ? CHANNEL_COPY.noteCorrectionUnmatched : undefined,
+          wrote,
+        })),
         Effect.catch((cause) =>
           Effect.logWarning("GOAT Bot note was not saved", { cause }).pipe(
-            Effect.as(CHANNEL_COPY.noteNotSaved),
+            Effect.as({ notice: CHANNEL_COPY.noteNotSaved, wrote: false }),
           ),
         ),
       );
+    const reportWrote = (inputId: string) => {
+      const report = hooks.onWrote;
+      if (report === undefined) return Effect.void;
+      return report(inputId).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("GOAT Bot memory update line was not queued", { cause }),
+        ),
+      );
+    };
 
     /**
      * Saves notes one at a time, so a correction sees the note the one before it saved. Each save
@@ -240,7 +252,9 @@ export const makeChannelBotNoteWriter = (
             const prior = yield* savedBefore(inputId, replaces);
             return prior === undefined ? CHANNEL_COPY.noteEditBusy : prior.notice;
           }
-          return yield* append(note, readAt, inputId, replaces);
+          const saved = yield* append(note, readAt, inputId, replaces);
+          if (saved.wrote) yield* reportWrote(inputId);
+          return saved.notice;
         }),
       );
 
@@ -260,7 +274,9 @@ export const makeChannelBotNoteWriter = (
         Effect.gen(function* () {
           const refused = yield* guard;
           if (refused !== undefined) return (yield* savedBefore(inputId, replaces)) ?? { refused };
-          return { notice: yield* append(note, readAt, inputId, replaces) };
+          const saved = yield* append(note, readAt, inputId, replaces);
+          if (saved.wrote) yield* reportWrote(inputId);
+          return { notice: saved.notice };
         }),
       );
 
@@ -380,6 +396,7 @@ export const makeChannelBotNoteWriter = (
       yield* fs.writeFileString(files.notes, appendPrefix(exists, text) + line + "\n", {
         flag: "a",
       });
+      yield* reportWrote(inputId);
       return CHANNEL_COPY.noteChanged;
     });
 
@@ -388,6 +405,7 @@ export const makeChannelBotNoteWriter = (
     const forget = Effect.fn("channelBotNoteTabEdits.forget")(function* (
       note: string,
       original: Uint8Array,
+      inputId: string,
     ) {
       const decoded = yield* Effect.try({
         try: () => strictDecoder.decode(original),
@@ -418,11 +436,15 @@ export const makeChannelBotNoteWriter = (
       if (!replaced) return undefined;
       yield* hooks.afterRename ?? Effect.void;
       const check = yield* readNotes.pipe(Effect.option);
-      if (check._tag === "None" || check.value === null || check.value.truncated)
+      if (check._tag === "None" || check.value === null || check.value.truncated) {
+        yield* reportWrote(inputId);
         return CHANNEL_COPY.noteUnverified;
-      return stillThere(decode(check.value.bytes), next.removedTexts)
+      }
+      const answer = stillThere(decode(check.value.bytes), next.removedTexts)
         ? CHANNEL_COPY.noteCameBack
         : CHANNEL_COPY.noteForgotten;
+      if (!sameBytes(check.value.bytes, original)) yield* reportWrote(inputId);
+      return answer;
     });
 
     const apply = Effect.fn("channelBotNoteTabEdits.apply")(function* (
@@ -450,7 +472,7 @@ export const makeChannelBotNoteWriter = (
             inputId,
             readAt,
           );
-        const answer = yield* forget(request.note, original);
+        const answer = yield* forget(request.note, original, inputId);
         if (answer !== undefined) return answer;
       }
       return CHANNEL_COPY.noteEditFailed;

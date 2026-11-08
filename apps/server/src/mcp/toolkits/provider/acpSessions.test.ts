@@ -154,3 +154,55 @@ it.effect("refuses an incomplete provider page through the served MCP path", () 
     }).pipe(Effect.provide(registered));
   }),
 );
+
+it.effect("refuses a continuation page that is not truncated and returns no sessions", () =>
+  Effect.gen(function* () {
+    const service = Layer.mock(AcpSessionService.AcpSessionService)({
+      list: () =>
+        Effect.succeed({
+          sessions: [
+            {
+              sessionId: "native-257",
+              cwd: "/fixture",
+              additionalDirectories: [],
+              title: null,
+              updatedAt: null,
+              importedThreadId: null,
+            },
+          ],
+          continuation: "a".repeat(16),
+          nextCursor: null,
+          canLoad: true,
+          canResume: false,
+          canDelete: false,
+        }),
+    });
+    const registered = catalog.pipe(
+      Layer.provide(Layer.mergeAll(dependencies, service)),
+      Layer.provideMerge(Sqlite.layerMemory),
+      Layer.provideMerge(McpServer.McpServer.layer),
+    );
+    yield* Effect.gen(function* () {
+      const direct = yield* McpServer.McpServer.pipe(
+        Effect.flatMap((server) =>
+          server.callTool({
+            name: "goat_acp_session_list",
+            arguments: { instanceId: input.instanceId, projectId: input.projectId },
+          }),
+        ),
+        Effect.provideService(McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+      expect(direct.isError).toBe(true);
+      const body = direct.content.find((part) => part.type === "text");
+      expect(body?.type).toBe("text");
+      if (body?.type !== "text") return yield* Effect.die("Missing MCP error");
+      expect(JSON.parse(body.text)).toMatchObject({
+        code: "orchestration_error",
+        message: expect.stringContaining("could not list this ACP agent's sessions completely"),
+      });
+      expect(body.text).toContain("Settings");
+      expect(direct.structuredContent ?? {}).not.toHaveProperty("sessions");
+    }).pipe(Effect.provide(registered));
+  }),
+);

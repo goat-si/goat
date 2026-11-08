@@ -11,6 +11,12 @@
   manifest, unattended origins, admission lease, transport kill boundary and display probe in
   ADR-0022 still stand.
 - Design: [computer-use.md](../../docs/internals/computer-use.md)
+- Amended 2026-11-08 (maintainer request): Strict input guards off is the default allow-all
+  admission mode. Every runtime mode and origin, including unattended work, receives every-app
+  and foreground authority without an approval card or `cuaAllowedApps`. Turning Strict input
+  guards on restores the app and foreground approvals, protected and denied app rules, and
+  unattended-origin restrictions below. OS permissions, driver availability, real target errors,
+  Stop, pause, expiry and browser secret-field protections still apply.
 - Amended 2026-10-25, D7 (owner decision, Jun, 2026-10-25; kept in
   [#1550](https://github.com/goat-si/goat/pull/1550) at `6eb17f5764`): a person's keyboard and
   pointer input no longer pauses an agent with approved control, unattended attachment requires
@@ -213,12 +219,14 @@
     user stopped, the user intervened, the screen locked, a missing or pending permission, an app
     not approved, a blocked URL, an incompatible client, or a named policy.
   - **Readiness and approvals.** Readiness is four answers shown separately: OS grant, an
-    authenticated helper, a real capture and tree, and tools available to the model. Apps are
-    approved from a card for a span the agent asks for, 5 to 120 minutes, and each call on an
-    app's windows is checked against the approved apps before it runs. No approval is standing: a person ends one
-    early from its card, and after it expires the thread asks again (owner decision, Jun,
-    2026-10-27; an "Always allow" choice with a Settings list was considered and not built).
-    A run in full-access runtime mode needs no per-app approval, whether a person, an automation,
+    authenticated helper, a real capture and tree, and tools available to the model. With Strict
+    input guards off, every run uses every app and foreground without a card, whatever its
+    runtime mode or origin. With them on, apps outside full access are approved from a card for a
+    span the agent asks for, 5 to 120 minutes, and each call on an app's windows is checked
+    against the approved apps before it runs. A person ends one early from its card, and after it
+    expires the thread asks again; standing conversation and environment choices can skip later
+    cards but still create time-bounded admissions. A run in full-access runtime mode needs no
+    per-app approval, whether a person, an automation,
     a schedule, a webhook, Slack or another channel started it, because choosing full access for a
     thread already gives that trust (D16). The "Full access without approval" switch is gone from
     Settings and settings search on web and mobile; the `cuaFullAccessAutoAdmit` field stays in
@@ -227,11 +235,9 @@
     What differs by origin stays: unattended work holds the screen one thread at a time, except a
     full access turn launched from another environment, which works beside other threads
     (amended 2026-10-28). The
-    password-manager exclusions, pause, Stop and stop all, each
-    call's scope, and the screen-sharing, reservation and foreground checks apply to every run;
-    the physical kill switch is not implemented yet (#1505). Runs in other runtime modes keep the
-    approval flow. Owner decision (Jun, 2026-10-25), implemented in #1649 after #1617; it replaces
-    #1396's off-by-default setting.
+    Strict-mode password-manager exclusions, pause, Stop and stop all, each call's scope, and the
+    screen-sharing and reservation checks apply to every run; the physical kill switch is not
+    implemented yet (#1505). Strict-on runs in other runtime modes keep the approval flow.
   - **One preview surface.** Native computer use and built-in browser use share one preview session
     contract (owner `agent`, `human` or `private`; status; target; lease; last frame) with the same
     controls (take over, hand back, request handoff, stop, stop all), status chips and private mode
@@ -267,8 +273,8 @@
     handling, and troubleshooting for stale entries and the wrong app. GOAT never runs
     `tccutil reset` or edits the TCC database. Windows and Linux follow the same steps. Requested
     by Jun on 2026-10-24 (lead decision D14).
-  - **Safety.** Per-app approvals (except full-access runs, D16) and a time-bounded control
-    lease. Unattended origins keep the
+  - **Safety.** Default every-app admission, or strict-mode per-app approvals outside full
+    access, and a time-bounded control lease. Strict-on unattended origins keep the
     ADR-0022 driver ceiling. Interactive turns also run through the GOAT proxy, so a per-thread
     Stop and the global kill switch end the transport at once. An agent with approved control
     keeps working while a person uses the same desktop; the person's keyboard and pointer input

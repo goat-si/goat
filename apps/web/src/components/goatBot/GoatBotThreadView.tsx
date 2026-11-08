@@ -24,10 +24,14 @@ import { GoatBotActivityContext } from "./GoatBotTimeline";
 import { resolveGoatBotRemoval, type GoatBotRemoval } from "@goat/client-runtime/goatBot";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
-import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
+import {
+  GoatBotMainProfileContext,
+  GoatBotMemberContext,
+  useGoatBotName,
+} from "./goatBotMemberContext";
+import { useGoatBotSession } from "./useGoatBotSession";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
-import { useGoatBotSession } from "./useGoatBotSession";
 import { refreshGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 import { restoreTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
@@ -101,6 +105,7 @@ function GoatBotThreadSession({
     refreshGoatBotWaitingCount(environmentId, chipRevision);
   }, [environmentId, chipRevision]);
   const legacyAgentRoute = useLegacyGlobalAgentRoute();
+  const botName = useGoatBotName();
   // Archive, deletion and replacement checks below are the main bot's; a member's state is its profile.
   const confirmedHere =
     member === null &&
@@ -175,7 +180,7 @@ function GoatBotThreadSession({
                   if (result._tag === "Failure") {
                     toastManager.add({
                       type: "error",
-                      title: "Couldn't unarchive GOAT Bot",
+                      title: `Couldn't unarchive ${botName}`,
                       description: "It may have been deleted. Check again in a moment.",
                     });
                   }

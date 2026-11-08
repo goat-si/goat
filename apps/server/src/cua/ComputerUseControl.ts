@@ -4,6 +4,7 @@ import type {
   ComputerUseControlEnd,
   ComputerUseForegroundGrant,
   ComputerUsePauseReason,
+  RunId,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -38,6 +39,7 @@ export interface ComputerUseControl {
 
 export interface ComputerUseControlSnapshot extends ComputerUseControl {
   readonly ended?: ComputerUseControlEnd;
+  readonly runId?: RunId;
 }
 
 /** A grant read for an older control must not change the replacement's remembered scope. */

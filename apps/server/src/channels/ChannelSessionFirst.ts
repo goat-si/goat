@@ -64,12 +64,12 @@ const mapError = (cause: unknown) =>
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
-  const choices = makeInboundChoices(ledger);
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  const choices = makeInboundChoices(ledger, threads);
   const sessions = yield* ChannelBotSession.ChannelBotSession;
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
   const notes = yield* ChannelBotNoteWriter;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
-  const threads = yield* ThreadManagement.ThreadManagementService;
   const settings = yield* ServerSettings.ServerSettingsService;
   const home = yield* ChannelBotHome.ChannelBotHome;
   const wake = yield* ChannelWake.ChannelWake;

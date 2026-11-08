@@ -3,11 +3,13 @@ import {
   NodeId,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
+  ChannelQuestionId,
   RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import { CHANNEL_COPY } from "./channelCopy.ts";
@@ -20,6 +22,7 @@ import {
   botMessages,
   goatInput,
   linkSlackUser,
+  latestCard,
   makeHarness,
   onlyTask,
   ownerId,
@@ -295,6 +298,70 @@ describe("GOAT Bot approval cards", () => {
       yield* runtime.drain;
       assert.strictEqual(responses(harness).length, 0);
       assert.strictEqual((yield* assistantTexts).at(-1), "Okay.");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "tags an approval card with its request and lists that id on the chip until it is decided",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* gateway.ingest(goatInput("do: clean the build cache", "qid"), rpcContext);
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        const request = approval("rm");
+        harness.world.runtimeRequests.set(task.worker!.threadId, [request]);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        const [card] = (yield* botMessages).messages.filter(
+          (message) => message.channel?.kind === "question",
+        );
+        const questionId = ChannelQuestionId.make(request.id);
+        assert.strictEqual(card?.channel?.questionId, questionId);
+        assert.ok((yield* latestCard)?.openQuestionIds?.includes(questionId));
+
+        yield* gateway.ingest(goatInput("Approve A1", "qid-answer"), rpcContext);
+        yield* runtime.drain;
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        assert.ok(!(yield* latestCard)?.openQuestionIds?.includes(questionId));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("answers Approve A1 pressed with the task id instead of forwarding it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const sql = yield* SqlClient.SqlClient;
+      yield* gateway.ingest(goatInput("do: clean the build cache", "route"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      const request = approval("rm");
+      harness.world.runtimeRequests.set(task.worker!.threadId, [request]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+
+      yield* gateway.ingest(
+        { ...goatInput("Approve A1", "route-answer"), taskId: task.taskId },
+        rpcContext,
+      );
+      yield* runtime.drain;
+      const [answered] = responses(harness);
+      assert.strictEqual(answered?.threadId, task.worker!.threadId);
+      assert.strictEqual(answered?.requestId, request.id);
+      assert.strictEqual(answered?.decision, "accept");
+      const followups = yield* sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM channel_task_events WHERE task_id = ${task.taskId} AND type = 'task.followup.received'`;
+      assert.strictEqual(followups[0]?.count, 0);
     }).pipe(Effect.provide(harness.layer));
   });
 });

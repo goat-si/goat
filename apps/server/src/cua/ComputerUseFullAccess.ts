@@ -1,8 +1,8 @@
 /**
- * Whether full access admits a control on every app. Any run whose thread is in full access gets
- * one, whatever started it, and takes the foreground without asking (ADR-0023 D16); the host
- * setting `cuaFullAccessAutoAdmit` decides nothing. The kind keeps what still differs by origin:
- * unattended work holds the screen alone, so two of its threads never mix their input.
+ * Whether a run admits a control on every app. Strict input guards off admits every run; with
+ * them on, full access does (ADR-0023 D16). The host setting `cuaFullAccessAutoAdmit` decides
+ * nothing. The kind keeps what still differs by origin: unattended work holds the screen alone,
+ * so two of its threads never mix their input.
  *
  * @module ComputerUseFullAccess
  */

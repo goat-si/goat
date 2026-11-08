@@ -315,7 +315,7 @@ it.effect.each([Option.some(["com.example.Editor"]), Option.none<ReadonlyArray<s
     ),
 );
 
-it.effect("without strict input guards denied and protected apps go to the usual approval", () =>
+it.effect("without strict input guards denied and protected apps are admitted", () =>
   withHarness(({ orchestrator }) =>
     withRequests(
       orchestrator,
@@ -323,6 +323,7 @@ it.effect("without strict input guards denied and protected apps go to the usual
       ({ request }) =>
         Effect.gen(function* () {
           yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaStrictInputGuards: false,
             cuaDeniedApps: ["com.example.Editor"],
           });
           for (const app of [
@@ -330,9 +331,10 @@ it.effect("without strict input guards denied and protected apps go to the usual
             "com.1password.1password",
             "Mac Configuration",
           ]) {
-            // A person still approves; GOAT adds no refusal of its own.
-            assert.equal((yield* request({ apps: [app] })).kind, "needs_human");
+            assert.equal((yield* request({ apps: [app] })).kind, "available");
           }
+          const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+          assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
         }),
       undefined,
       undefined,

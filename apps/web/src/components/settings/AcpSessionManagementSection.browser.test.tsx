@@ -224,3 +224,83 @@ it.each(["Save", "Disable"])("keeps other provider edits through a %s refetch", 
   expect(input("other base URL").value).toBe("https://api.example.test/v1");
   expect(input("other write-only headers JSON").value).toBe("");
 });
+
+it("loads another page with the continuation and keeps the truncated notice until refresh", async () => {
+  setup();
+  const continuation = "a".repeat(16);
+  commands.list
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        sessions: [session],
+        nextCursor: null,
+        continuation,
+        truncated: true,
+        canLoad: true,
+        canResume: true,
+        canDelete: true,
+      },
+    })
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        sessions: [{ ...session, sessionId: "native-session-2", title: "Second native session" }],
+        nextCursor: null,
+        canLoad: true,
+        canResume: true,
+        canDelete: true,
+      },
+    });
+  await using screen = await renderSection();
+  await screen.click("List sessions");
+  expect(screen.container.textContent).toContain("Some sessions could not be shown.");
+  await screen.click("Load more");
+  expect(commands.list).toHaveBeenLastCalledWith({
+    environmentId,
+    input: { instanceId, projectId, continuation },
+  });
+  expect(screen.container.textContent).toContain("native-session-2");
+  expect(screen.container.textContent).toContain("Some sessions could not be shown.");
+  await screen.click("Refresh");
+  expect(commands.list).toHaveBeenLastCalledWith({
+    environmentId,
+    input: { instanceId, projectId },
+  });
+  expect(screen.container.textContent).not.toContain("Some sessions could not be shown.");
+  expect(screen.container.textContent).not.toContain("native-session-2");
+});
+
+it("keeps log out and listing apart so a late list cannot restore a cleared session list", async () => {
+  setup();
+  let resolveList!: (value: unknown) => void;
+  commands.list.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveList = resolve;
+    }),
+  );
+  await using screen = await renderSection();
+  await screen.click("List sessions");
+  expect(screen.button("Log out").disabled).toBe(true);
+  await act(async () =>
+    resolveList({
+      _tag: "Success",
+      value: {
+        sessions: [session],
+        nextCursor: null,
+        canLoad: true,
+        canResume: true,
+        canDelete: true,
+      },
+    }),
+  );
+  expect(screen.button("Log out").disabled).toBe(false);
+  let resolveLogout!: (value: unknown) => void;
+  commands.logout.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveLogout = resolve;
+    }),
+  );
+  await screen.click("Log out");
+  expect(screen.button("Refresh").disabled).toBe(true);
+  await act(async () => resolveLogout({ _tag: "Success", value: { loggedOut: true } }));
+});

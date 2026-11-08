@@ -2,8 +2,9 @@ import * as HomeRequests from "../../../provider/CodexHomeRequests.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
-  AcpRegistryListSessionsInput,
-  AcpRegistryListSessionsResult,
+  AcpRegistrySession,
+  ProjectId,
+  ProviderInstanceId,
   CloudHoldersInput,
   CloudHoldersResult,
   CloudLaunchInput,
@@ -40,6 +41,7 @@ import {
   ProviderUpdateInput,
 } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
+import * as Schema from "effect/Schema";
 
 import * as AcpSessionService from "../../../provider/AcpSessionService.ts";
 import * as CloudAgents from "../../../cloudAgents/CloudAgentService.ts";
@@ -51,10 +53,25 @@ import * as ProviderSettings from "../../../provider/ProviderSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { withClientRequestId } from "../keyedParameters.ts";
 
+const AcpSessionListParameters = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  projectId: ProjectId,
+  cursor: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_048))),
+});
+
+const AcpSessionListSuccess = Schema.Struct({
+  sessions: Schema.Array(AcpRegistrySession).check(Schema.isMaxLength(256)),
+  truncated: Schema.optionalKey(Schema.Boolean),
+  nextCursor: Schema.NullOr(Schema.String.check(Schema.isMaxLength(2_048))),
+  canLoad: Schema.Boolean,
+  canResume: Schema.Boolean,
+  canDelete: Schema.Boolean,
+});
+
 const AcpSessionListTool = Tool.make(agentSurfaceRegistry["acp_session.list"].name, {
   description: agentSurfaceRegistry["acp_session.list"].description,
-  parameters: AcpRegistryListSessionsInput,
-  success: AcpRegistryListSessionsResult,
+  parameters: AcpSessionListParameters,
+  success: AcpSessionListSuccess,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
   dependencies: [McpInvocationContext.McpInvocationContext, AcpSessionService.AcpSessionService],

@@ -1,7 +1,7 @@
 // Context tags are runtime singletons; drivers need multiple instances.
 import type {
   ProviderConsumeResetCreditOutcome,
-  AcpRegistryListSessionsResult,
+  AcpRegistrySession,
   AcpRegistryListProvidersResult,
   AcpRegistryOperationError,
   AcpRegistrySetProviderInput,
@@ -32,6 +32,18 @@ export interface ProviderDriverMetadata {
 export type ProviderWorkspaceSnapshot = ServerProvider &
   Pick<ServerProviderWorkspaceSnapshot, "slashCommandsPending" | "optionDescriptors">;
 
+export interface AcpRegistrySessionPage {
+  readonly sessions: ReadonlyArray<AcpRegistrySession>;
+  readonly rawCursor: string | null;
+  readonly droppedSessions: boolean;
+  readonly directoriesCut: boolean;
+  readonly overflow: boolean;
+  readonly cursorDropped: boolean;
+  readonly canLoad: boolean;
+  readonly canResume: boolean;
+  readonly canDelete: boolean;
+}
+
 export interface ProviderInstance {
   readonly instanceId: ProviderInstanceId;
   readonly driverKind: ProviderDriverKind;
@@ -56,7 +68,7 @@ export interface ProviderInstance {
     readonly listSessions: (input: {
       readonly cwd: string;
       readonly cursor?: string;
-    }) => Effect.Effect<AcpRegistryListSessionsResult, AcpRegistryOperationError>;
+    }) => Effect.Effect<AcpRegistrySessionPage, AcpRegistryOperationError>;
     readonly logout: (cwd: string) => Effect.Effect<void, AcpRegistryOperationError>;
     readonly deleteSession: (input: {
       readonly cwd: string;
