@@ -11,6 +11,9 @@ import {
   goatBotActivityTask,
   goatBotTurnsWaiting,
   goatBotReplyingSince,
+  goatBotEnsureFailure,
+  GoatBotUnreachable,
+  GOAT_BOT_NOT_ACCEPTED,
   initialGoatBotEnsure,
   observeResidentAtom,
   residentAtomValue,
@@ -25,7 +28,11 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { goatBotIngestInput } from "@goat/client-runtime/state/channels";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  runAtomCommand,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
 import type {
   BotProfile,
   ChannelBotRef,
@@ -312,7 +319,9 @@ function newSession(environmentId: EnvironmentId): Session {
       return {
         requestKey: result.value.inputId,
         ...(result.value.state === "rejected"
-          ? { rejected: "GOAT Bot did not accept this message" }
+          ? {
+              rejected: GOAT_BOT_NOT_ACCEPTED,
+            }
           : {}),
       };
     },
@@ -543,7 +552,10 @@ export function useMobileGoatBotSession(
           environmentId,
           input: {},
         });
-        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        if (result._tag === "Failure") {
+          if (isAtomCommandInterrupted(result)) throw new GoatBotUnreachable();
+          throw squashAtomCommandFailure(result);
+        }
         settle({ kind: "confirmed", bot: result.value }, result.value);
       } catch (error) {
         const reason =
@@ -554,7 +566,7 @@ export function useMobileGoatBotSession(
             ? { kind: "legacy_active" }
             : {
                 kind: "failed",
-                message: error instanceof Error ? error.message : "Couldn't reach GOAT Bot",
+                ...goatBotEnsureFailure(error),
               },
           null,
           reason === "not_home",
@@ -787,7 +799,7 @@ export function useMobileGoatBotSession(
     homeLabel: resolved.kind === "home_offline" ? resolved.label : null,
     error:
       ensure.state === "failed"
-        ? ensure.message
+        ? (ensure.message ?? null)
         : member !== null && environmentId !== null && member.environmentId !== environmentId
           ? member.name + " runs on another computer."
           : null,

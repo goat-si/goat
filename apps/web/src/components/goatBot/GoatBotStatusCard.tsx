@@ -26,7 +26,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { Button } from "../ui/button";
-import { goatBotSearch } from "./goatBotMemberContext";
+import { goatBotSearch, useGoatBotMainName, useGoatBotName } from "./goatBotMemberContext";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
 
 const NO_PERMISSION = Atom.make(false);
@@ -53,6 +53,7 @@ export function GoatBotStatusCard({
   turnsWaiting,
   onShowChat,
   className,
+  botName,
 }: {
   readonly environmentId: EnvironmentId | null;
   readonly member: BotProfile | null;
@@ -61,7 +62,12 @@ export function GoatBotStatusCard({
   /** Called when a link leads back to the chat, so a sheet over it can close. */
   readonly onShowChat?: (() => void) | undefined;
   readonly className?: string;
+  /** The bot this card describes. Settings passes the main bot; a chat uses the open one. */
+  readonly botName?: string;
 }) {
+  const openName = useGoatBotName();
+  const mainBotName = useGoatBotMainName();
+  const name = botName ?? openName;
   const home = useGoatBotHomeSettings();
   const homeId = home.resolution.state === "claimed" ? home.resolution.claim.environmentId : null;
   // Read at the home the card names, never at another machine the caller happens to show.
@@ -108,6 +114,7 @@ export function GoatBotStatusCard({
           homeId.slice(0, 8)),
     moveTarget: home.moveTarget,
     member: member !== null,
+    mainBotName,
     model:
       settings === null || providers === undefined
         ? null
@@ -125,7 +132,7 @@ export function GoatBotStatusCard({
     now,
   });
   return (
-    <section aria-label="GOAT Bot status" className={cn("space-y-2 text-sm", className)}>
+    <section aria-label={`${name} status`} className={cn("space-y-2 text-sm", className)}>
       <p className="font-semibold">{diagnostics.title}</p>
       <ul className="space-y-1.5">
         {diagnostics.lines.map((line) => (

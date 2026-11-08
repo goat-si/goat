@@ -2,6 +2,8 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  GoatBotUnreachable,
+  goatBotEnsureFailure,
   initialGoatBotEnsure,
   retryGoatBotEnsure,
   settleGoatBotEnsure,
@@ -59,5 +61,11 @@ describe("goat bot ensure", () => {
       state: "failed",
       message: "boom",
     });
+  });
+
+  it("stores a real failure and nothing when the connection dropped", () => {
+    expect(goatBotEnsureFailure(new Error("Intake failed"))).toEqual({ message: "Intake failed" });
+    expect(goatBotEnsureFailure(new GoatBotUnreachable())).toEqual({});
+    expect(goatBotEnsureFailure(new Error(""))).toEqual({});
   });
 });

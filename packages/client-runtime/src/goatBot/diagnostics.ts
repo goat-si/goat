@@ -93,6 +93,8 @@ export interface GoatBotDiagnosticsInput {
   /** A connected machine the viewer may make the home; null when there is none. */
   readonly moveTarget: { readonly environmentId: EnvironmentId; readonly label: string } | null;
   readonly member: boolean;
+  /** The main bot's name, for a member that uses the main bot's model. */
+  readonly mainBotName: string;
   /** Null until the home server's settings and providers have loaded. */
   readonly model: GoatBotModelStatus | null;
   readonly canChangeModel: boolean;
@@ -174,7 +176,7 @@ function modelLine(
     return {
       key: "model",
       tone: "ok",
-      text: model.inherited ? `Uses GOAT Bot's current model (${name})` : name,
+      text: model.inherited ? `Uses ${input.mainBotName}'s current model (${name})` : name,
       action: null,
     };
   // A member's own model is chosen when it is created; an inherited one changes with GOAT Bot's.

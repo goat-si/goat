@@ -40,7 +40,11 @@ export interface GoatBotAttachmentSupport {
  */
 export async function stageGoatBotFiles(
   files: ReadonlyArray<File>,
-  input: { readonly existingCount: number; readonly support: GoatBotAttachmentSupport },
+  input: {
+    readonly existingCount: number;
+    readonly support: GoatBotAttachmentSupport;
+    readonly botName: string;
+  },
 ): Promise<{
   readonly staged: ReadonlyArray<GoatBotDraftAttachment>;
   readonly error: string | null;
@@ -85,7 +89,7 @@ export async function stageGoatBotFiles(
       continue;
     }
     if (maxFileBytes === null) {
-      error = "This server takes only images with GOAT Bot messages.";
+      error = `This server takes only images with ${input.botName} messages.`;
       continue;
     }
     if (picked.size <= 0) {

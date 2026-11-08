@@ -208,7 +208,7 @@ function useRefreshOnBotVisit(environmentId: EnvironmentId | null) {
  * sidebar's mark-read uses, persisted on the server and synced to every client. Null when the
  * bot's server predates read-aware counts.
  */
-export function useMarkGoatBotRead(): (() => Promise<void>) | null {
+export function useMarkGoatBotRead(botName = "GOAT Bot"): (() => Promise<void>) | null {
   const botThreadRef = useBotThreadRef();
   const { environment } = useGoatBotEnabled();
   const statusEnvironmentId = environment?.environmentId ?? null;
@@ -235,7 +235,7 @@ export function useMarkGoatBotRead(): (() => Promise<void>) | null {
     toastManager.add(
       stackedThreadToast({
         type: "error",
-        title: "Failed to mark GOAT Bot tasks as read",
+        title: `Failed to mark ${botName} tasks as read`,
         description: error instanceof Error ? error.message : "An error occurred.",
       }),
     );
