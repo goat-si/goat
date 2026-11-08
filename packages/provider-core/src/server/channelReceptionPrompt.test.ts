@@ -290,6 +290,10 @@ describe("channel reception reads", () => {
     }).prompt;
     expect(second).not.toContain("- read: look things up before answering");
     expect(second).toContain("[work: #123]\ngoat-si/goat#123 (merged)");
+    const recallRule =
+      "When a read says a host may no longer be the GOAT that ran the work, do not read that host or start work there to answer it. When the person asks about the latest, read again instead of reusing an earlier answer.";
+    expect(first).toContain(recallRule);
+    expect(second).toContain(recallRule);
   });
 });
 

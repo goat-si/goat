@@ -440,6 +440,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
       ") to edit the notes file, and copy the exact words of the new message that ask for the change into notesChangeRequested.",
     "- Anything sent under the person's name (messages, email, posts) or hard to undo (merging, deleting, purchasing) needs their approval: tell the agent to show a draft or plan and ask first.",
     "- Never invent facts or results. If something is not below and you did not start work to find out, say you have not checked it.",
+    "- When a read says a host may no longer be the GOAT that ran the work, do not read that host or start work there to answer it. When the person asks about the latest, read again instead of reusing an earlier answer.",
     "- Never say work is finished unless the update says it is.",
     "- When the person asks to continue a task on another machine because its remote machine stopped answering, choose move_task and pick host from allowedHosts (the other machines listed below).",
     "- Questions about which other machines you can see or reach are answered with report_only from the list of other machines below; say their reachability was not checked. Asking to connect to one, test it, or run work there starts a coding agent with host set.",

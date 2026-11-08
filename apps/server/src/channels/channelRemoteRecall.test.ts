@@ -28,6 +28,7 @@ import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { RECALL_RESULT_CHARS } from "./channelBotRecall.ts";
 import { makeRemoteThreadRecall, REMOTE_RECALL_TIMEOUT_MS } from "./channelRemoteRecall.ts";
 import {
+  botMessages,
   defaultScript,
   goatInput,
   makeHarness,
@@ -228,6 +229,123 @@ describe("GOAT Bot reads a work thread on another machine", () => {
       yield* runtime.drain;
       assert.lengthOf(remote.reads(), 1);
       assert.deepStrictEqual(results[0], []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "keeps the timeout reason in the delivered reply when the answer paraphrases it",
+    () => {
+      const remote = fakeHost();
+      const harness = makeHarness({ sshRemote: remote.layer });
+      const reason = "Its thread on devbox did not answer in time";
+      harness.script.current = (input) => {
+        if (!(input.inputText ?? "").includes("payroll thread")) return defaultScript(input);
+        if (input.readsAllowed === true) {
+          return Effect.succeed({
+            replyText: "",
+            action: { type: "read", reads: [{ kind: "thread", query: "payroll" }] },
+          });
+        }
+        return Effect.succeed({
+          replyText: "The export was fixed, from what was reported.",
+          action: { type: "report_only" },
+        });
+      };
+      return Effect.gen(function* () {
+        const { gateway, runtime } = yield* payrollRanOnDevbox(harness, remote.state);
+        const asked = yield* Deferred.make<void>();
+        remote.state.answer = () =>
+          Effect.gen(function* () {
+            Deferred.doneUnsafe(asked, Effect.void);
+            return yield* Effect.never;
+          });
+        yield* gateway.ingest(
+          goatInput("what did the payroll thread say?", "r-timeout"),
+          rpcContext,
+        );
+        const ticking = yield* Effect.forkChild(
+          Effect.gen(function* () {
+            yield* Deferred.await(asked);
+            yield* TestClock.adjust(REMOTE_RECALL_TIMEOUT_MS);
+          }),
+        );
+        yield* runtime.drain;
+        yield* Fiber.join(ticking);
+        const reply = (yield* botMessages).messages
+          .map((message) => message.text)
+          .find((text) => text.includes("from what was reported"));
+        assert.include(reply ?? "", reason);
+        assert.strictEqual((reply ?? "").split(reason).length - 1, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "keeps the unverified-link reason in the delivered reply when the answer starts a turn",
+    () => {
+      const remote = fakeHost();
+      const harness = makeHarness({ sshRemote: remote.layer });
+      const reason = "devbox may no longer be the GOAT that ran it";
+      harness.script.current = (input) => {
+        if (!(input.inputText ?? "").includes("payroll thread")) return defaultScript(input);
+        if (input.readsAllowed === true) {
+          return Effect.succeed({
+            replyText: "",
+            action: { type: "read", reads: [{ kind: "thread", query: "payroll" }] },
+          });
+        }
+        return Effect.succeed({
+          replyText: "Checking that thread on devbox now.",
+          action: {
+            type: "run_turn",
+            title: "Read the payroll thread",
+            instruction: "Read the payroll thread on devbox and say what it last did.",
+          },
+        });
+      };
+      return Effect.gen(function* () {
+        const { gateway, runtime } = yield* payrollRanOnDevbox(harness, remote.state);
+        remote.state.answeredBy = EnvironmentId.make("environment:swapped");
+        yield* gateway.ingest(
+          goatInput("what did the payroll thread say?", "r-unverified"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const reply = (yield* botMessages).messages
+          .map((message) => message.text)
+          .find((text) => text.includes("Checking that thread on devbox now."));
+        assert.include(reply ?? "", reason);
+        assert.strictEqual((reply ?? "").split(reason).length - 1, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("does not repeat a fallback reason the reply already states", () => {
+    const remote = fakeHost();
+    const harness = makeHarness({ sshRemote: remote.layer });
+    const reason = "devbox may no longer be the GOAT that ran it";
+    harness.script.current = (input) => {
+      if (!(input.inputText ?? "").includes("payroll thread")) return defaultScript(input);
+      if (input.readsAllowed === true) {
+        return Effect.succeed({
+          replyText: "",
+          action: { type: "read", reads: [{ kind: "thread", query: "payroll" }] },
+        });
+      }
+      return Effect.succeed({
+        replyText: "From the reports. " + reason,
+        action: { type: "report_only" },
+      });
+    };
+    return Effect.gen(function* () {
+      const { gateway, runtime } = yield* payrollRanOnDevbox(harness, remote.state);
+      remote.state.answeredBy = EnvironmentId.make("environment:swapped");
+      yield* gateway.ingest(goatInput("what did the payroll thread say?", "r-once"), rpcContext);
+      yield* runtime.drain;
+      const reply = (yield* botMessages).messages
+        .map((message) => message.text)
+        .find((text) => text.includes("From the reports."));
+      assert.strictEqual(reply, "From the reports. " + reason);
     }).pipe(Effect.provide(harness.layer));
   });
 });

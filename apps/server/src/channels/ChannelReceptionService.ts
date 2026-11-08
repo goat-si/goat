@@ -100,7 +100,7 @@ import {
   threadDigest,
 } from "./channelBotRecall.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
-import { makeRemoteThreadRecall } from "./channelRemoteRecall.ts";
+import * as ChannelRemoteRecall from "./channelRemoteRecall.ts";
 import {
   approvalCard,
   type ApprovalReply,
@@ -233,7 +233,7 @@ const make = Effect.gen(function* () {
   // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
   const memoryService = yield* Effect.serviceOption(MemoryService.MemoryService);
   const memorySync = yield* Effect.serviceOption(MemorySyncService.MemorySyncService);
-  const remoteThreadRecall = yield* makeRemoteThreadRecall;
+  const remoteThreadRecall = yield* ChannelRemoteRecall.makeRemoteThreadRecall;
 
   // Facts that do not change while the server runs.
   const linuxName =
@@ -1029,6 +1029,7 @@ const make = Effect.gen(function* () {
       const hosts = yield* remoteWorkers.knownHosts;
       const bot = (yield* ledger.getBotById(stored.ownerId, stored.botId))?.bot;
       const targets = yield* allowedTargets(bot?.projectId);
+      const recallFallbacks: Array<string> = [];
       const outcome: ReceptionOutcome =
         choice?.type === "question"
           ? {
@@ -1167,6 +1168,7 @@ const make = Effect.gen(function* () {
                   : narrowed
                     ? results.map((result) => ({ ...result, query: "(withheld)" }))
                     : results;
+                recallFallbacks.push(...ChannelRemoteRecall.fallbackReasons(readResults));
                 const journalNow = journalFor(
                   yield* visibleTasks(current, conversationId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
@@ -1565,7 +1567,7 @@ const make = Effect.gen(function* () {
       }
 
       const relatedTask = createdTasks[0]?.task;
-      if (noteNotice !== undefined) replyText += " " + noteNotice;
+      replyText = ChannelRemoteRecall.keepFallbacks(replyText, noteNotice, recallFallbacks);
       deliveries.unshift(
         replyDelivery({
           causeKey: "reply:" + inputId,

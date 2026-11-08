@@ -67,6 +67,38 @@ const missLine = (host: string, miss: Miss) => {
   }
 };
 
+const REPORTS_SUFFIX = "; this is from its reports.";
+
+const deliveredFallback = (sentence: string) =>
+  (sentence.startsWith("Its thread on ") && sentence.endsWith(" did not answer in time")) ||
+  sentence.endsWith(" may no longer be the GOAT that ran it");
+
+export const fallbackReasons = (
+  results: ReadonlyArray<{ readonly text: string }>,
+): ReadonlyArray<string> => {
+  const reasons: Array<string> = [];
+  for (const result of results) {
+    for (const line of result.text.split("\n")) {
+      if (!line.endsWith(REPORTS_SUFFIX)) continue;
+      const sentence = line.slice(0, -REPORTS_SUFFIX.length);
+      if (deliveredFallback(sentence)) reasons.push(sentence);
+    }
+  }
+  return reasons;
+};
+
+export const keepFallbacks = (
+  reply: string,
+  noteNotice: string | undefined,
+  reasons: ReadonlyArray<string>,
+) => {
+  let text = noteNotice === undefined ? reply : reply + " " + noteNotice;
+  for (const reason of reasons) {
+    if (!text.includes(reason)) text = text.length === 0 ? reason : text + " " + reason;
+  }
+  return text;
+};
+
 type Link = Option.Option<LinkedHosts.LinkedHostCredential>;
 
 /** Every save exchanges a new token, so a link replaced and restored is not the same link. */

@@ -210,6 +210,13 @@ describe("channel worker brief", () => {
     assert.include(turnInstruction(task, files, false), sentence);
   });
 
+  it("tells a bot turn not to read a host that may no longer be the GOAT that ran the work", () => {
+    assert.include(
+      turnInstruction(task, files, false),
+      "When a read says a host may no longer be the GOAT that ran the work, do not read that host or start work there.",
+    );
+  });
+
   describe("notes changes from a GOAT Bot turn", () => {
     const request = { ...task, originInputId: ChannelInputId.make("channel-input:origin") };
 
