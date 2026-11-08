@@ -210,15 +210,18 @@ it.effect("an agent link to a blocked host fences the tab", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
-      const requested = yield* Deferred.make<void>();
-      const onRequest = (request: import("playwright-core").Request) => {
-        if (request.isNavigationRequest() && request.url() === `${f.blocked}/blocked`)
-          Deferred.doneUnsafe(requested, Effect.void);
+      // Leaving before the link's navigation commits would let it interrupt the next one.
+      const committed = yield* Deferred.make<void>();
+      const onNavigated = (frame: import("playwright-core").Frame) => {
+        if (frame === f.page.mainFrame() && frame.url() === `${f.blocked}/blocked`)
+          Deferred.doneUnsafe(committed, Effect.void);
       };
-      f.page.on("request", onRequest);
-      yield* Effect.addFinalizer(() => Effect.sync(() => f.page.off("request", onRequest)));
+      f.page.on("framenavigated", onNavigated);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => f.page.off("framenavigated", onNavigated)),
+      );
       yield* f.call(f.tabId, "click", { locator: "#link" }).pipe(Effect.result);
-      yield* Deferred.await(requested);
+      yield* Deferred.await(committed);
       yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
     }),
