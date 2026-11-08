@@ -84,6 +84,8 @@ export const OpenCodexInventorySnapshot = Schema.Struct({
   ),
   parityEvidence: ForwardCompatibleOptional(HubParityEvidence),
   fallback: ForwardCompatibleOptional(OpenCodexDeviceFallback),
+  /** An ocx call outlasted the inventory's bound, so what it would have filled is unknown. */
+  slow: ForwardCompatibleOptional(Schema.Literal(true)),
 });
 export type OpenCodexInventorySnapshot = typeof OpenCodexInventorySnapshot.Type;
 

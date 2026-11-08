@@ -404,7 +404,7 @@ it.effect(
       expect(requests).toHaveLength(2);
       expect(
         commands.every(
-          (call) => call.timeout === "3 seconds" && call.maxOutputBytes === 256 * 1024,
+          (call) => call.timeout === "10 seconds" && call.maxOutputBytes === 256 * 1024,
         ),
       ).toBe(true);
       yield* TestClock.adjust("31 seconds");
@@ -445,7 +445,7 @@ it.effect("a stuck CLI is bounded without erasing directly observed runtime heal
     });
     const fiber = yield* inventory.read.pipe(Effect.forkChild);
     yield* Deferred.await(started);
-    yield* TestClock.adjust("3 seconds");
+    yield* TestClock.adjust("10 seconds");
     expect((yield* Fiber.join(fiber)).runtime.healthy).toBe(true);
   }),
 );
@@ -466,7 +466,7 @@ it.effect("a hanging PATH shim cannot hide a verified Desktop binary", () =>
     });
     const fiber = yield* inventory.read.pipe(Effect.forkChild);
     yield* Deferred.await(started);
-    yield* TestClock.adjust("3 seconds");
+    yield* TestClock.adjust("15 seconds");
     const result = yield* Fiber.join(fiber);
     expect(result.binaries).toEqual([
       { path: "/fixture/.opencodex-desktop/bin/ocx", version: "2.89.0" },
@@ -739,5 +739,55 @@ it.effect("a Child reads its own row of the Home's OCX-11 fallback view by link 
     // OpenCodex before OCX-11 says nothing, which GOAT treats as not allowed.
     const older = yield* setup({ fixture: studio(undefined) });
     expect((yield* older.inventory.read).fallback).toBeUndefined();
+  }),
+);
+
+const noService = () => new Response("", { status: 404 });
+
+it.effect("an ocx that takes four seconds per call is still read, as on a Cortex-A53 board", () =>
+  Effect.gen(function* () {
+    const slow = (value: unknown) =>
+      Effect.sleep("4 seconds").pipe(Effect.as(JSON.stringify(value) ?? ""));
+    const { inventory } = yield* setup({
+      fixture: fleet.home,
+      response: noService,
+      versionProbe: () => Effect.sleep("4 seconds").pipe(Effect.as("opencodex 2.92.0")),
+      command: (input) =>
+        slow(
+          input.args[0] === "link"
+            ? fleet.home.link
+            : input.args[0] === "status"
+              ? fleet.home.status
+              : null,
+        ),
+    });
+    const fiber = yield* inventory.read.pipe(Effect.forkChild);
+    yield* TestClock.adjust("20 seconds");
+    const snapshot = yield* Fiber.join(fiber);
+    expect(snapshot.installed).toBe(true);
+    expect(snapshot.binaries).toEqual([
+      { path: "/fixture/.opencodex-desktop/bin/ocx", version: "2.92.0" },
+    ]);
+    expect(snapshot.link.available).toBe(true);
+    expect(snapshot.slow).toBeUndefined();
+  }),
+);
+
+it.effect("an ocx that never answers is slow, not missing", () =>
+  Effect.gen(function* () {
+    const { inventory } = yield* setup({
+      fixture: fleet.home,
+      response: noService,
+      versionProbe: () => Effect.never,
+    });
+    const fiber = yield* inventory.read.pipe(Effect.forkChild);
+    yield* TestClock.adjust("20 seconds");
+    const snapshot = yield* Fiber.join(fiber);
+    expect(snapshot).toMatchObject({
+      installed: false,
+      ownership: "none",
+      binaries: [],
+      slow: true,
+    });
   }),
 );

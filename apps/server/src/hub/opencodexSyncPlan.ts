@@ -28,7 +28,7 @@ export const childAliases = (home: OpenCodexInventorySnapshot | undefined) =>
 export function planCoordinator(member: OpenCodexUpdateMember): PlannedSync {
   const snapshot = member.snapshot;
   if (snapshot === undefined) return skipped(null, "unreachable");
-  if (!snapshot.installed) return skipped(null, "not-installed");
+  if (!snapshot.installed) return skipped(null, snapshot.slow ? "unreachable" : "not-installed");
   const idle = member.runningTurns === 0;
   if (!idle && snapshot.link.role === "child") return skipped(null, "busy");
   return {
@@ -60,7 +60,8 @@ export function planChild(
     : undefined;
   if (record === undefined || !SAFE_LINK_ID.test(record.id)) return skipped(alias, "not-connected");
   const snapshot = member?.snapshot;
-  if (snapshot !== undefined && !snapshot.installed) return skipped(alias, "not-installed");
+  if (snapshot !== undefined && !snapshot.installed)
+    return skipped(alias, snapshot.slow ? "unreachable" : "not-installed");
   if (snapshot?.runtime.healthy !== true) return skipped(alias, "unreachable");
   if (snapshot.link.role !== "child" || snapshot.parityEvidence?.childLinkId !== record.id)
     return skipped(alias, "not-connected");

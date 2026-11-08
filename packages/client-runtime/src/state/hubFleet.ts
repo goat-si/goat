@@ -24,7 +24,10 @@ export interface HubDevice {
   /** The Home's tunnel for this link; null for devices that are not Remote Link Children. */
   readonly tunnel: HubLinkState | null;
   readonly parity: HubParityResult | null;
+  /** The running service's version, else the one `ocx --version` printed. */
   readonly version: string | null;
+  /** The device's ocx outlasted the inventory's bound, so its OpenCodex is unknown. */
+  readonly slow?: true;
   /** Null while the device's OpenCodex has not been read. */
   readonly versionVerdict: HubVersionVerdict | null;
   /** Whether OpenCodex lets this device use its own providers (OCX-11); unknown before OCX-11. */
@@ -84,7 +87,8 @@ export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | nu
       reachability: source?.entry?.reachability ?? "not-connected",
       tunnel,
       parity: source?.entry?.parity ?? null,
-      version: remote?.runtime.version ?? null,
+      version: remote?.runtime.version ?? remote?.binaries[0]?.version ?? null,
+      ...(remote?.slow ? { slow: true as const } : {}),
       versionVerdict:
         remote === undefined || !remote.installed || transport === "standalone"
           ? null
@@ -123,7 +127,8 @@ export function hubParityLabel(parity: HubParityResult | null): string {
 }
 
 export function hubVersionLabel(device: HubDevice): string {
-  if (device.version === null) return "OpenCodex not read";
+  if (device.version === null)
+    return device.slow ? "OpenCodex slow to answer" : "OpenCodex not read";
   return device.versionVerdict === null
     ? `OpenCodex ${device.version}`
     : `OpenCodex ${device.version}, ${device.versionVerdict}`;

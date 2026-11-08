@@ -186,3 +186,36 @@ describe("hubSnapshot", () => {
     ]);
   });
 });
+
+describe("hubVersionLabel", () => {
+  it("names OpenCodex from --version when no service answers, and a slow one as slow", () => {
+    const { version: _version, ...unread } = inventory("none").runtime;
+    const runtime = { ...unread, healthy: false, ready: false };
+    const hub = hubSnapshot([
+      { key: "home", label: "home", entry: entry(null, inventory("home")) },
+      {
+        key: "board",
+        label: "board",
+        entry: entry(
+          "board",
+          inventory("none", {
+            runtime,
+            binaries: [{ path: "/home/dietpi/.local/bin/ocx", version: "2.92.0" }],
+          }),
+        ),
+      },
+      {
+        key: "zero",
+        label: "zero",
+        entry: entry(
+          "zero",
+          inventory("none", { installed: false, ownership: "none", runtime, slow: true }),
+        ),
+      },
+    ]);
+    const facts = (alias: string) =>
+      hubDeviceFacts(hub!.devices.find((device) => device.alias === alias)!);
+    expect(facts("board")).toContain("OpenCodex 2.92.0");
+    expect(facts("zero")).toContain("OpenCodex slow to answer");
+  });
+});
