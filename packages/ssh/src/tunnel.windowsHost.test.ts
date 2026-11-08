@@ -347,6 +347,7 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
     "remove-once",
     "cleanup-locked",
     "destination-appears",
+    "destination-race",
   ] as const)("installs the Windows zip with publish failure %s", (failure) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -408,11 +409,17 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
       yield* fs.writeFileString(
         `${bin}/mv`,
         `#!/bin/sh
+# Git Bash's GNU mv: -T renames onto an empty directory and refuses a non-empty one.
+gnu_target=; if [ "$1" = -T ]; then gnu_target=1; shift; fi
 case "$1" in */.staging-*)
+  if [ '${failure}' = destination-race ]; then mkdir -p "$2" && touch "$2/other-install"; fi
   if { [ '${failure}' = always ] || [ '${failure}' = cleanup-locked ]; } || { { [ '${failure}' = once ] || [ '${failure}' = destination-appears ]; } && [ ! -e '${root}/attempt' ]; }; then
     touch '${root}/attempt'; echo 'mv: Permission denied' >&2; exit 1
   fi ;;
 esac
+if [ -n "$gnu_target" ] && [ -d "$2" ] && ! rmdir "$2" 2>/dev/null; then
+  echo "mv: cannot move '$1' to '$2': Directory not empty" >&2; exit 1
+fi
 exec '${realMv}' "$@"
 `,
       );
@@ -457,7 +464,10 @@ exec '${realRm}' "$@"
         );
         assert.equal(leftovers.length, failure === "cleanup-locked" ? 1 : 0);
         if (failure === "cleanup-locked") {
-          yield* fs.writeFileString(`${bin}/mv`, `#!/bin/sh\nexec '${realMv}' "$@"\n`);
+          yield* fs.writeFileString(
+            `${bin}/mv`,
+            `#!/bin/sh\n[ "$1" != -T ] || shift\nexec '${realMv}' "$@"\n`,
+          );
           // A staging directory a scan still holds must not block the next install.
           const runAgain = () =>
             NodeChildProcess.spawnSync(remoteShell, ["-s"], {
@@ -469,6 +479,13 @@ exec '${realRm}' "$@"
           assert.equal(locked.status, 0, locked.stderr);
           assert.isTrue(yield* fs.exists(`${versions}/${leftovers[0]}`));
         }
+        return;
+      }
+      if (failure === "destination-race") {
+        assert.notEqual(result.status, 0);
+        assert.include(result.stderr, "Directory not empty");
+        const published = `${home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}`;
+        assert.deepEqual(yield* fs.readDirectory(published), ["other-install"]);
         return;
       }
       if (failure === "destination-appears") {

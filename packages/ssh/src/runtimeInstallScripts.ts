@@ -9,11 +9,12 @@ export const REMOTE_RUNTIME_PUBLISH_SCRIPT = String.raw`goat_runtime_fs() (
     MINGW* | MSYS* | CYGWIN*) ;;
     *) "$@"; exit $? ;;
   esac
+  # mv into an existing directory nests the stage in it; GNU -T makes the rename refuse instead.
+  if [ "$1" = mv ]; then set -- mv -T "$2" "$3"; fi
   for delay in 0 1 2 4 8 10 10 10; do
     [ "$delay" = 0 ] || sleep "$delay"
-    # mv into an existing directory nests the stage inside it; the install lock keeps GOAT out.
-    if [ "$1" = mv ] && { [ -e "$3" ] || [ -L "$3" ]; }; then
-      printf 'Cannot publish %s: %s already exists.\n' "$2" "$3" >&2; exit 1
+    if [ "$2" = -T ] && { [ -e "$4" ] || [ -L "$4" ]; }; then
+      printf 'Cannot publish %s: %s already exists.\n' "$3" "$4" >&2; exit 1
     fi
     if output="$(LC_ALL=C "$@" 2>&1)"; then
       [ -z "$output" ] || printf '%s\n' "$output"
