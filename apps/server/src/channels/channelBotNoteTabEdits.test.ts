@@ -647,6 +647,52 @@ describe("notes a refused tab request named", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("a forget's re-run refused busy keeps the claim its first run left", () =>
+    Effect.gen(function* () {
+      const { state, writer, ask, read } = yield* guarded(
+        NOTES_HEADER + line(fridays, "a") + "\n",
+        undefined,
+        { afterRename: Effect.die("the server stopped") },
+      );
+      yield* ask(goatBotForgetNoteMessage(fridays), "refused");
+      state.open = false;
+      state.stopPending = true;
+      yield* Effect.exit(ask(goatBotForgetNoteMessage(fridays), "again"));
+      assert.notInclude(yield* read, fridays);
+      // After the restart a grant is open again when the forget runs again.
+      state.open = true;
+      assert.strictEqual(
+        yield* ask(goatBotForgetNoteMessage(fridays), "again"),
+        CHANNEL_COPY.noteEditBusy,
+      );
+      state.open = false;
+      state.stopPending = false;
+      yield* writer.settleRefused;
+      assert.notInclude(yield* read, fridays);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("another input never releases a claim an unfinished forget holds", () =>
+    Effect.gen(function* () {
+      const { state, writer, ask, read } = yield* guarded(
+        NOTES_HEADER + line(fridays, "a") + "\n",
+        undefined,
+        { afterRename: Effect.die("the server stopped") },
+      );
+      yield* ask(goatBotForgetNoteMessage(fridays), "refused");
+      state.open = false;
+      state.stopPending = true;
+      yield* Effect.exit(ask(goatBotForgetNoteMessage(fridays), "again"));
+      assert.strictEqual(
+        yield* ask(goatBotChangeNoteMessage(fridays, "I deploy on Mondays."), "change"),
+        CHANNEL_COPY.noteNotFound,
+      );
+      state.stopPending = false;
+      yield* writer.settleRefused;
+      assert.notInclude(yield* read, fridays);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("a forget that fails before its rename keeps the refusal", () =>
     Effect.gen(function* () {
       const { state, writer, ask, read, write } = yield* guarded(
