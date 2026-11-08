@@ -269,3 +269,38 @@ it("loads another page with the continuation and keeps the truncated notice unti
   expect(screen.container.textContent).not.toContain("Some sessions could not be shown.");
   expect(screen.container.textContent).not.toContain("native-session-2");
 });
+
+it("keeps log out and listing apart so a late list cannot restore a cleared session list", async () => {
+  setup();
+  let resolveList!: (value: unknown) => void;
+  commands.list.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveList = resolve;
+    }),
+  );
+  await using screen = await renderSection();
+  await screen.click("List sessions");
+  expect(screen.button("Log out").disabled).toBe(true);
+  await act(async () =>
+    resolveList({
+      _tag: "Success",
+      value: {
+        sessions: [session],
+        nextCursor: null,
+        canLoad: true,
+        canResume: true,
+        canDelete: true,
+      },
+    }),
+  );
+  expect(screen.button("Log out").disabled).toBe(false);
+  let resolveLogout!: (value: unknown) => void;
+  commands.logout.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveLogout = resolve;
+    }),
+  );
+  await screen.click("Log out");
+  expect(screen.button("Refresh").disabled).toBe(true);
+  await act(async () => resolveLogout({ _tag: "Success", value: { loggedOut: true } }));
+});

@@ -467,3 +467,56 @@ it.effect("does not let an older provider page replace a newer hold", () =>
     }).pipe(Effect.provide(dependencies));
   }),
 );
+
+it.effect("concurrent lists for more projects than the hold cap never drop rows silently", () =>
+  Effect.gen(function* () {
+    const deleted = yield* Ref.make<ReadonlyArray<string>>([]);
+    const started = yield* Ref.make(0);
+    const allStarted = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const projects = Array.from({ length: 9 }, (_, index) =>
+      ProjectId.make(`project-${index + 1}`),
+    );
+    const dependencies = provideHeldSessions(
+      () =>
+        Effect.gen(function* () {
+          if ((yield* Ref.updateAndGet(started, (count) => count + 1)) === projects.length)
+            yield* Deferred.succeed(allStarted, undefined);
+          yield* Deferred.await(release);
+          return heldPage(
+            Array.from({ length: 257 }, (_, index) => heldSession(`native-${index + 1}`)),
+            null,
+          );
+        }),
+      deleted,
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* AcpSessionService.AcpSessionService;
+      const fibers = yield* Effect.forEach(projects, (projectId) =>
+        Effect.forkChild(service.list({ instanceId: continuationInstanceId, projectId })),
+      );
+      yield* Deferred.await(allStarted);
+      yield* Deferred.succeed(release, undefined);
+      const firstPages = yield* Effect.forEach(fibers, Fiber.join);
+      for (const page of firstPages) {
+        expect(page.truncated).toBeUndefined();
+        expect(page.continuation).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+      }
+      const next = yield* Effect.forEach(projects, (projectId, index) =>
+        Effect.result(
+          service.list({
+            instanceId: continuationInstanceId,
+            projectId,
+            continuation: heldContinuation(firstPages[index]?.continuation),
+          }),
+        ),
+      );
+      const served = next.filter(Result.isSuccess);
+      const expired = next.filter(Result.isFailure);
+      expect(served.map((result) => result.success.sessions.map((s) => s.sessionId))).toEqual(
+        Array.from({ length: 8 }, () => ["native-257"]),
+      );
+      expect(expired.map((result) => result.failure.reason)).toEqual(["continuation_unavailable"]);
+    }).pipe(Effect.provide(dependencies));
+  }),
+);
