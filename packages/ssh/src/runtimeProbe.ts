@@ -99,9 +99,10 @@ retained_version=
 retained_sha256=
 if [ -n "$state_key" ] && [ -f "$state/run-t3.sh" ]; then
   retained_sha256="$(runner_sha256 "$state/run-t3.sh")" || exit 1
-  node_path="$(read_runner_hint "$state/run-t3.sh" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})"
-  if [ -z "$node_path" ]; then
-    retained_version="$(read_runner_hint "$state/run-t3.sh" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})"
+  runner_hint_set "$state/run-t3.sh" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} || exit 1
+  if [ -z "$RUNNER_HINT" ]; then
+    runner_hint_set "$state/run-t3.sh" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY} || exit 1
+    retained_version="$RUNNER_HINT"
   fi
 fi
 retained_fields=

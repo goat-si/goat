@@ -167,7 +167,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             pairingCounts,
             {
               goat: 1,
-              awk: 12,
+              awk: 0,
               cat: 2,
               date: 2,
               uname: 3,
@@ -182,7 +182,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             probeCounts,
             {
               goat: 0,
-              awk: 2,
+              awk: 0,
               cat: 0,
               date: 1,
               uname: 2,
@@ -197,7 +197,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             launchCounts,
             {
               goat: 1,
-              awk: 28,
+              awk: 7,
               cat: 2,
               date: 3,
               uname: 6,
@@ -787,6 +787,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
         nodeRunner: "GOAT_NODE_SCRIPT_PATH='/srv/cli.mjs'\nGOAT_ARCHIVE_VERSION='1.2.3'\n",
         legacyNode: "T3_NODE_SCRIPT_PATH='/srv/cli.mjs'\nT3_ARCHIVE_VERSION='0.9.0'\n",
         emptyBoth: "GOAT_NODE_SCRIPT_PATH=''\nGOAT_NODE_SCRIPT_PATH=''\nGOAT_ARCHIVE_VERSION=''\n",
+        crlfRunner:
+          "GOAT_NODE_SCRIPT_PATH='/a'\r\nGOAT_ARCHIVE_VERSION='1.2.3'\r\nT3_ARCHIVE_VERSION='0.9.0'\n",
+        literal: "GOAT_ARCHIVE_VERSION='a\\b *?[x] $(id) \"q\"'\nGOAT_NODE_SCRIPT_PATH='\\'\n",
+        unterminated: "GOAT_NODE_SCRIPT_PATH=''\nGOAT_ARCHIVE_VERSION='1.2.3'",
       };
       for (const [name, text] of Object.entries(files))
         NodeFS.writeFileSync(NodePath.join(dir, name), text);
@@ -800,9 +804,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
         'same() { if [ "$2" = "$3" ]; then echo "$1 ok"; else printf "%s DIFF old=[%s] new=[%s]\\n" "$1" "$2" "$3"; fi; }',
         "for f in " + paths.join(" ") + "; do",
         '  same hint "$(old_hint "$f" GOAT_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)" "$(read_runner_hint "$f" GOAT_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)"',
-        // One awk for both declarations an exec key reads, as the two calls it replaced saw them.
-        '  old_node="$(read_runner_hint "$f" GOAT_NODE_SCRIPT_PATH T3_NODE_SCRIPT_PATH 2>/dev/null || :)"',
-        '  old_version="$(read_runner_hint "$f" GOAT_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)"',
+        '  same hint-node "$(old_hint "$f" GOAT_NODE_SCRIPT_PATH T3_NODE_SCRIPT_PATH 2>/dev/null || :)" "$(read_runner_hint "$f" GOAT_NODE_SCRIPT_PATH T3_NODE_SCRIPT_PATH 2>/dev/null || :)"',
+        '  same hint-same-key "$(old_hint "$f" T3_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)" "$(read_runner_hint "$f" T3_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)"',
+        // Both declarations an exec key reads, as the old reader saw them.
+        '  old_node="$(old_hint "$f" GOAT_NODE_SCRIPT_PATH T3_NODE_SCRIPT_PATH 2>/dev/null || :)"',
+        '  old_version="$(old_hint "$f" GOAT_ARCHIVE_VERSION T3_ARCHIVE_VERSION 2>/dev/null || :)"',
         '  runner_key_hints "$f"',
         '  same node "$' +
           '{old_node:+1}" "$RUNNER_NODE_DECLARED"; same version "$old_version" "$RUNNER_ARCHIVE_VERSION"',

@@ -504,8 +504,8 @@ check_retained_runner
 if [ "$PRESERVE_SELECTED_RUNNER" = 1 ]; then
   # Use copied retained bytes and verify the parsed selected version again.
   if [ ! -f "$RUNNER_FILE" ] ||
-     [ "$(read_runner_hint "$RUNNER_FILE" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})" != "$SELECTED_VERSION" ] ||
-     [ -n "$(read_runner_hint "$RUNNER_FILE" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})" ]; then
+     { runner_hint_set "$RUNNER_FILE" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY} || :; [ "$RUNNER_HINT" != "$SELECTED_VERSION" ]; } ||
+     { runner_hint_set "$RUNNER_FILE" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} || :; [ -n "$RUNNER_HINT" ]; }; then
     printf 'Selected retained runner changed; reconnect to prepare again.\\n' >&2; exit 1
   fi
   cp "$RUNNER_FILE" "$RUNNER_NEXT"

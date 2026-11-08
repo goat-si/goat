@@ -111,7 +111,7 @@ exec_fact_key() {
   case "$1" in
     "$fact_versions"/*/goat) fact_exe="$1"; fact_via=exe ;;
     *)
-      [ -n "\${runner_key_awk:-}" ] || return 1
+      command -v runner_key_hints >/dev/null 2>&1 || return 1
       runner_key_hints "$1"
       [ -z "$RUNNER_NODE_DECLARED" ] || return 1
       fact_exe="$fact_versions/$RUNNER_ARCHIVE_VERSION/goat"
@@ -420,43 +420,31 @@ ${REMOTE_FACTS_SCRIPT}
 `;
 
 // Retained runners are data: inspect either declaration spelling without sourcing shell code.
-export const REMOTE_RUNNER_HINT_SCRIPT = String.raw`# One awk reads a declaration: key $2 when any line declares it, else key $3; quoted values only.
-runner_hint_awk='
-  function quoted(key) {
-    return index($0, key "=\047") == 1 && length($0) > length(key) + 2 && substr($0, length($0)) == "\047"
-  }
-  index($0, want "=") == 1 { named = 1 }
-  quoted(want) { by_want = by_want substr($0, length(want) + 3, length($0) - length(want) - 3) "\n" }
-  quoted(fallback) { by_fallback = by_fallback substr($0, length(fallback) + 3, length($0) - length(fallback) - 3) "\n" }
-  END { printf "%s", named ? by_want : by_fallback }'
-read_runner_hint() { awk -v want="$2" -v fallback="$3" "$runner_hint_awk" "$1"; }
-# Sets RUNNER_NODE_DECLARED (1 or empty) and RUNNER_ARCHIVE_VERSION as two read_runner_hint calls
-# for GOAT_NODE_SCRIPT_PATH and GOAT_ARCHIVE_VERSION would, from one awk: that is a fork under MSYS.
-runner_key_awk='
-  function quoted(key) {
-    return index($0, key "=\047") == 1 && length($0) > length(key) + 2 && substr($0, length($0)) == "\047"
-  }
-  function value(key) { return substr($0, length(key) + 3, length($0) - length(key) - 3) "\n" }
-  index($0, node "=") == 1 { node_named = 1 }
-  quoted(node) { node_want = node_want value(node) }
-  quoted(node_fallback) { node_back = node_back value(node_fallback) }
-  index($0, version "=") == 1 { version_named = 1 }
-  quoted(version) { version_want = version_want value(version) }
-  quoted(version_fallback) { version_back = version_back value(version_fallback) }
-  END {
-    node_value = node_named ? node_want : node_back
-    # As $(...) reads it: trailing newlines go, so an empty declaration declares nothing.
-    while (node_value != "" && substr(node_value, length(node_value)) == "\n")
-      node_value = substr(node_value, 1, length(node_value) - 1)
-    printf "%s\n%s", node_value == "" ? "E" : "N", version_named ? version_want : version_back
-  }'
+export const REMOTE_RUNNER_HINT_SCRIPT = String.raw`# A declaration is key $2 when any line declares it, else key $3; quoted values only. The shell
+# reads it with builtins and sets RUNNER_HINT, as $(...) would keep it: under MSYS a fork costs
+# about 50 ms. The comparison test pins it against the grep and sed reader it replaced.
+hint_nl='
+'
+runner_hint_set() {
+  RUNNER_HINT=; hint_named=; hint_want=; hint_back=; hint_line=
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  while IFS= read -r hint_line || [ -n "$hint_line" ]; do
+    case "$hint_line" in "$2="*) hint_named=1 ;; esac
+    case "$hint_line" in "$2='"*"'") hint_value="${"${"}hint_line#"$2='"}"; hint_want="$hint_want${"${"}hint_value%"'"}$hint_nl" ;; esac
+    case "$hint_line" in "$3='"*"'") hint_value="${"${"}hint_line#"$3='"}"; hint_back="$hint_back${"${"}hint_value%"'"}$hint_nl" ;; esac
+    hint_line=
+  done <"$1"
+  if [ -n "$hint_named" ]; then RUNNER_HINT="$hint_want"; else RUNNER_HINT="$hint_back"; fi
+  while :; do case "$RUNNER_HINT" in *"$hint_nl") RUNNER_HINT="${"${"}RUNNER_HINT%"$hint_nl"}" ;; *) return 0 ;; esac; done
+}
+read_runner_hint() { runner_hint_set "$1" "$2" "$3" || return 1; printf '%s' "$RUNNER_HINT"; }
+# Sets RUNNER_NODE_DECLARED (1 or empty) and RUNNER_ARCHIVE_VERSION, the two declarations an
+# exec key reads.
 runner_key_hints() {
-  runner_hints="$(awk -v node=GOAT_NODE_SCRIPT_PATH -v node_fallback=${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} \
-    -v version=GOAT_ARCHIVE_VERSION -v version_fallback=${LEGACY_SSH_ARCHIVE_VERSION_KEY} \
-    "$runner_key_awk" "$1" 2>/dev/null)" || runner_hints=
   RUNNER_NODE_DECLARED=; RUNNER_ARCHIVE_VERSION=
-  case "$runner_hints" in N*) RUNNER_NODE_DECLARED=1 ;; esac
-  case "$runner_hints" in *"
-"*) RUNNER_ARCHIVE_VERSION="${'${runner_hints#*"\n"}'}" ;; esac
+  runner_hint_set "$1" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} || return 0
+  [ -z "$RUNNER_HINT" ] || RUNNER_NODE_DECLARED=1
+  runner_hint_set "$1" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY} || :
+  RUNNER_ARCHIVE_VERSION="$RUNNER_HINT"
 }
 `;
