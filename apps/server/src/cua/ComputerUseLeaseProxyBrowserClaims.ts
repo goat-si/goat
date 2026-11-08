@@ -394,17 +394,18 @@ export const makeProxyBrowserClaims = (
     collect(result, 0);
     const blocked = browserReplyBlocked(result, current);
     const outside = malformed || browserReplyOutsideClaim(result, current);
+    // With a server judge, its committed block list decides; this process's copy can lag an unblock.
     const allowed =
       judge === undefined
-        ? true
+        ? !blocked
         : yield* judge({
             type: "browserClaimReply",
             claimId: current.claimId,
             claimGeneration: current.claimGeneration,
             urls: malformed ? [] : urls,
-            ...(blocked || outside ? { outside: true as const } : {}),
+            ...(outside ? { outside: true as const } : {}),
           }).pipe(Effect.catchCause(() => Effect.succeed(false)));
-    if (!blocked && !outside && allowed) return false;
+    if (!outside && allowed) return false;
     invalid.add(key(claim));
     if (judge === undefined)
       report?.({

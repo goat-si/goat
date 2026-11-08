@@ -756,3 +756,48 @@ it("explains a blocked site and classifies it as permission denied", () => {
     code: "permission_denied",
   });
 });
+
+effectIt.effect(
+  "lets the server judge a claimed reply when this process's block list is stale",
+  () =>
+    Effect.gen(function* () {
+      const reports: Array<unknown> = [];
+      const h = yield* harness({
+        judgeBrowserClaimReply: (report) =>
+          Effect.sync(() => {
+            reports.push(report);
+            return true;
+          }),
+      });
+      yield* h.push({
+        ...active(),
+        browserClaims: [
+          {
+            claimId: "claim-1",
+            claimGeneration: 2,
+            pid: 42,
+            windowId: 7,
+            targetId: "target-1",
+            tabId: "tab-1",
+            origins: ["https://unblocked.test"],
+            blockedHosts: ["unblocked.test"],
+          },
+        ],
+      });
+      yield* h.applied;
+      yield* supportedDriver(h);
+      yield* h.send(call(6, "get_browser_state", { tab_id: "tab-1" }));
+      yield* h.nextToDriver;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 6,
+          result: { structuredContent: { tab_id: "tab-1", title: "page title" } },
+        }),
+      );
+      assert.include(JSON.stringify(yield* h.nextToProvider), "page title");
+      assert.deepEqual(reports, [
+        { type: "browserClaimReply", claimId: "claim-1", claimGeneration: 2, urls: [] },
+      ]);
+    }),
+);

@@ -72,7 +72,12 @@ export const makeCuaCommittedPolicy = Effect.gen(function* () {
   const acknowledge = () => {
     cursor = Math.max(cursor, emittedThrough);
   };
-  const changes = Stream.concat(Stream.succeed(undefined), Stream.fromPubSub(signals)).pipe(
+  // Subscribe before the first tick so no publication falls between it and the subscription.
+  const changes = Stream.unwrap(
+    Effect.map(PubSub.subscribe(signals), (subscription) =>
+      Stream.concat(Stream.succeed(undefined), Stream.fromSubscription(subscription)),
+    ),
+  ).pipe(
     Stream.map(() => {
       emittedThrough = sequence;
       return hostsNow();

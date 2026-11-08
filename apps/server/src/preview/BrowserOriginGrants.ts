@@ -917,12 +917,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         if (outside) return { deliver: false, end: "origin_changed" as const };
         const hosts = deps.blockedHostsNow?.();
         const origin = claims.get(claimId)?.origin ?? "";
-        if (
-          hosts === undefined ||
-          [origin, ...live.origins, ...urls].some((url) => isBlockedBrowserUrl(url, hosts))
-        )
+        if (hosts === undefined || [origin, ...urls].some((url) => isBlockedBrowserUrl(url, hosts)))
           return { deliver: false, end: "blocked_url" as const };
-        if (!urls.every((url) => live.origins.some((scope) => sameOrigin(url, scope))))
+        // The manifest leaves blocked grants out, so they are outside the claim's scope too.
+        const scope = live.origins.filter((scoped) => !isBlockedBrowserUrl(scoped, hosts));
+        if (!urls.every((url) => scope.some((scoped) => sameOrigin(url, scoped))))
           return { deliver: false, end: "origin_changed" as const };
         return { deliver: true };
       }),
