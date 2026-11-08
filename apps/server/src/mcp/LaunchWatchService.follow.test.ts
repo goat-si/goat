@@ -295,7 +295,6 @@ describe("LaunchWatchService runs the thread starts itself", () => {
             expect(yield* Queue.take(world.idleWaits)).toBe(120_000);
             // Off the hourly sweep's ticks, so only the follower meets the deadline below.
             yield* TestClock.adjust(5 * 24 * 60 * 60_000 + 10 * 60_000);
-            world.replicasListed = undefined;
             yield* Deferred.succeed(listed, undefined);
             runs = [...runs, { runId: run2, ordinal: 2 }];
             yield* look(world);
