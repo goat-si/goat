@@ -406,6 +406,9 @@ Open **Settings → Connections → Add device → SSH**, or tell an agent to
 host-key fingerprint against your server provider's record before approving.
 The first approval also lets GOAT add its Include line to your SSH config. Approving
 only pins the key; the checks run again before GOAT installs anything.
+After **Connect**, the dialog closes and the host waits in the Connections list while
+GOAT installs and starts its runtime, which can take a few minutes the first time. If
+setup fails, the row keeps the reason with **Retry** and **Dismiss**.
 
 GOAT uses SSH keys or your ssh-agent. If it creates a key, register the displayed
 public key with your server provider or add it to the host. If the host only

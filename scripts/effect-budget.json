@@ -416,7 +416,7 @@
   "apps/web/src/components/settings/CodexSetupSection.tsx": 6,
   "apps/web/src/components/settings/ComputerUseSettings.tsx": 1,
   "apps/web/src/components/settings/ConnectionDiagnosisDetails.tsx": 1,
-  "apps/web/src/components/settings/ConnectionEnvironmentsSection.tsx": 2,
+  "apps/web/src/components/settings/ConnectionEnvironmentsSection.tsx": 1,
   "apps/web/src/components/settings/CuaGrantSteps.tsx": 1,
   "apps/web/src/components/settings/DiagnosticsSettings.tsx": 2,
   "apps/web/src/components/settings/EasDeviceHostsSettings.tsx": 1,
