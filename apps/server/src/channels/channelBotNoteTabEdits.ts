@@ -253,7 +253,11 @@ export const makeChannelBotNoteWriter = (
      */
     const claimRefusalsFor = (note: string, inputId: string) =>
       Effect.flatMap(refusals.list, (pending) => {
-        const named = pending.filter((entry) => entry.note === note || entry.claimedBy === inputId);
+        // A claim another input holds stays its own: that input may already have changed the note.
+        const named = pending.filter(
+          (entry) =>
+            entry.claimedBy === inputId || (entry.claimedBy === undefined && entry.note === note),
+        );
         return Effect.as(
           Effect.forEach(named, (entry) => refusals.add({ ...entry, claimedBy: inputId }), {
             discard: true,
@@ -265,11 +269,6 @@ export const makeChannelBotNoteWriter = (
       Effect.forEach(entries, ({ claimedBy: _claimedBy, ...entry }) => refusals.add(entry), {
         discard: true,
       });
-    /** A re-run that no longer reaches the edit lets go of what its first run claimed. */
-    const releaseClaimsOf = (inputId: string) =>
-      Effect.flatMap(refusals.list, (pending) =>
-        release(pending.filter((entry) => entry.claimedBy === inputId)),
-      );
     /**
      * After an edit that failed partway: released only while the note is still in force, so the
      * edit cannot have removed it. Otherwise the claim stays for the input's re-run to settle.
@@ -282,6 +281,17 @@ export const makeChannelBotNoteWriter = (
         );
         return inForce ? release(entries) : Effect.void;
       });
+    /**
+     * A re-run that no longer reaches the edit lets go of what its first run claimed, but only
+     * while the note is in force: otherwise that first run may have removed it.
+     */
+    const releaseClaimsOf = (inputId: string, note: string) =>
+      Effect.flatMap(refusals.list, (pending) =>
+        releaseIfInForce(
+          pending.filter((entry) => entry.claimedBy === inputId),
+          note,
+        ),
+      );
     /**
      * A restart re-runs an input whose note was saved before a refusal could apply. Its first
      * answer, read from the file and never written again: a task holding a grant may be editing it.
@@ -449,7 +459,7 @@ export const makeChannelBotNoteWriter = (
                 holders,
               );
         if (refused !== undefined) yield* refusals.add(refused);
-        yield* releaseClaimsOf(inputId);
+        yield* releaseClaimsOf(inputId, request.note);
         return CHANNEL_COPY.noteEditBusy;
       }
       // Released when the edit did not change the note. A forget that finds the note gone
