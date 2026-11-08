@@ -314,9 +314,11 @@ const stripLegacyGoatPrefix = (rules: PermissionRuleset) => {
   return rules.slice(index);
 };
 
-/** The base GOAT installs, marked so a later resume can tell it from native rules. */
+/** The base GOAT installs, marked so a later resume can tell it from native rules. OpenCode
+ * replaces the whole metadata bag on update, so the session's existing keys are carried along. */
 export function openCodeInstalledPermission(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+  existingMetadata?: { readonly [key: string]: unknown },
 ): {
   readonly permission: PermissionRuleset;
   readonly metadata: { readonly [key: string]: unknown };
@@ -325,6 +327,7 @@ export function openCodeInstalledPermission(
   return {
     permission,
     metadata: {
+      ...existingMetadata,
       [OPENCODE_GOAT_PERMISSION_BASE_KEY]: permission,
       [OPENCODE_GOAT_SUBAGENT_DENY_KEY]: false,
     },

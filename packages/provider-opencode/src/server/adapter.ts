@@ -3569,7 +3569,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   return yield* protocolError(
                     "OpenCode did not preserve the requested rewind boundary.",
                   );
-                const installed = openCodeInstalledPermission(input.runtimePolicy);
+                const installed = openCodeInstalledPermission(input.runtimePolicy, fork.metadata);
                 yield* sdkCall("session.update", { sessionID: fork.id }, () =>
                   client.session.update({ sessionID: fork.id, ...installed }),
                 );
@@ -3643,6 +3643,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               const nativeSession = unwrapData("session.fork", response);
               const installed = openCodeInstalledPermission(
                 forkInput.runtimePolicy ?? input.runtimePolicy,
+                nativeSession.metadata,
               );
               yield* sdkCall("session.update", { sessionID: nativeSession.id }, () =>
                 client.session.update({ sessionID: nativeSession.id, ...installed }),
