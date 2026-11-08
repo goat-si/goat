@@ -3,6 +3,7 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scheduler from "effect/Scheduler";
 import { makeTestBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
@@ -795,4 +796,71 @@ it.effect("stop fences a pending bind without waiting for it", () =>
     yield* Deferred.succeed(release, undefined);
     assert.deepEqual(yield* service.claimsFor(threadId), []);
   }),
+);
+
+it.effect(
+  "a published block refuses the next claimed call before the manifest write finishes",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        yield* Effect.addFinalizer(() =>
+          Deferred.isDone(release).pipe(
+            Effect.flatMap((done) => (done ? Effect.void : Deferred.succeed(release, undefined))),
+          ),
+        );
+        let hold = false;
+        let hosts: ReadonlyArray<string> = [];
+        const service = yield* makeTestBrowserOriginGrants({
+          environmentId: EnvironmentId.make("environment:test"),
+          supported: () => true,
+          blockedHostsNow: () => hosts,
+          publish: () =>
+            hold
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Effect.void,
+          bind: (request) =>
+            Effect.succeed({
+              targetId: "target",
+              tabId: "tab-b",
+              title: "Site",
+              url: request.origin,
+              driverGeneration: 1,
+            }),
+        });
+        const threadId = ThreadId.make("thread:blocked");
+        const claimFor = (windowId: number, origin: string) =>
+          service.claim({ threadId, pid: 42, windowId, origin, windowTitle: "Browser" });
+        const kept = yield* claimFor(8, "https://b.test");
+        const ending = yield* claimFor(7, "https://a.test");
+        if (kept.agentResult.status !== "attached" || ending.agentResult.status !== "attached")
+          return assert.fail("expected attached");
+        hold = true;
+        hosts = ["b.test"];
+        const publishing = yield* service
+          .blockedHostsChanged(["a.test"])
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(entered);
+        const admission = yield* Deferred.make<{ readonly status: string }>();
+        yield* Effect.gen(function* () {
+          const decision = yield* service.admitClaimCall(
+            threadId,
+            "browser_click",
+            { tab_id: "tab-b", url: "https://b.test/secret" },
+            [],
+          );
+          yield* Deferred.succeed(admission, decision);
+        }).pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.yieldNow;
+        const polled = yield* Deferred.poll(admission);
+        assert.isTrue(Option.isSome(polled));
+        if (Option.isSome(polled)) {
+          assert.equal(polled.value._tag, "Success");
+          if (polled.value._tag === "Success") assert.equal(polled.value.value.status, "blocked");
+        }
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(publishing);
+      }),
+    ),
 );

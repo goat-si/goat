@@ -114,7 +114,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const lock = yield* Semaphore.make(1);
   const listedHosts = (fallback: ReadonlyArray<string>) =>
     deps.blockedHostsNow
-      ? Effect.succeed(deps.blockedHostsNow())
+      ? Effect.sync((): ReadonlyArray<string> | undefined => {
+          const now = deps.blockedHostsNow?.();
+          return now === undefined ? undefined : [...new Set([...now, ...fallback])];
+        })
       : (deps.blockedHosts ?? Effect.succeed(fallback)).pipe(
           Effect.map((hosts): ReadonlyArray<string> | undefined => hosts),
         );
@@ -586,32 +589,39 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   );
   const blockedHostsChanged = Effect.fn("BrowserOriginGrants.blockedHostsChanged")(
     (hosts: ReadonlyArray<string> | undefined) =>
-      lock.withPermits(1)(
+      Effect.uninterruptible(
         Effect.gen(function* () {
-          const signals: Array<Deferred.Deferred<void>> = [];
-          let changed = false;
-          const blocked = (url: string) => hosts === undefined || isBlockedBrowserUrl(url, hosts);
-          for (const [id, entry] of pending) {
-            if (!blocked(entry.origin)) continue;
-            pending.delete(id);
-            ended.set(id, { threadId: entry.threadId, reason: "blocked_url" });
-            if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
-              grants.delete(key(entry.threadId, entry.origin));
-            signals.push(entry.stopped);
-            changed = true;
-          }
-          for (const [id, claim] of claims) {
-            if (!blocked(claim.origin)) continue;
-            claims.delete(id);
-            ended.set(id, { threadId: claim.threadId, reason: "blocked_url" });
-            rememberBlockedClaim(id, claim.threadId);
-            changed = true;
-          }
-          for (const signal of signals) yield* Deferred.succeed(signal, undefined);
-          if (changed) yield* advance;
-          if (changed || claims.size > 0 || [...pending.values()].some((entry) => entry.granted))
-            yield* shrink();
-        }).pipe(Effect.uninterruptible),
+          const shouldShrink = yield* lock.withPermits(1)(
+            Effect.gen(function* () {
+              const signals: Array<Deferred.Deferred<void>> = [];
+              let changed = false;
+              const blocked = (url: string) =>
+                hosts === undefined || isBlockedBrowserUrl(url, hosts);
+              for (const [id, entry] of pending) {
+                if (!blocked(entry.origin)) continue;
+                pending.delete(id);
+                ended.set(id, { threadId: entry.threadId, reason: "blocked_url" });
+                if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
+                  grants.delete(key(entry.threadId, entry.origin));
+                signals.push(entry.stopped);
+                changed = true;
+              }
+              for (const [id, claim] of claims) {
+                if (!blocked(claim.origin)) continue;
+                claims.delete(id);
+                ended.set(id, { threadId: claim.threadId, reason: "blocked_url" });
+                rememberBlockedClaim(id, claim.threadId);
+                changed = true;
+              }
+              for (const signal of signals) yield* Deferred.succeed(signal, undefined);
+              if (changed) yield* advance;
+              return (
+                changed || claims.size > 0 || [...pending.values()].some((entry) => entry.granted)
+              );
+            }),
+          );
+          if (shouldShrink) yield* shrink();
+        }),
       ),
   );
   const end = Effect.fn("BrowserOriginGrants.end")(
@@ -772,6 +782,26 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     authority?: "claimBind",
   ) {
     if ("unchanged" in scopeBrowserCall(name, args, [])) return { status: "admit" as const };
+    if (deps.blockedHostsNow) {
+      const hosts = deps.blockedHostsNow();
+      const input =
+        typeof args === "object" && args !== null && !Array.isArray(args)
+          ? (args as Record<string, unknown>)
+          : undefined;
+      const claim =
+        (expected === undefined ? undefined : claims.get(expected.claimId)) ??
+        (typeof input?.tab_id === "string"
+          ? [...claims.values()].find(
+              (value) => value.threadId === threadId && value.tab.tabId === input.tab_id,
+            )
+          : undefined);
+      if (
+        hosts === undefined ||
+        (typeof input?.url === "string" && isBlockedBrowserUrl(input.url, hosts)) ||
+        (claim?.threadId === threadId && isBlockedBrowserUrl(claim.origin, hosts))
+      )
+        return { status: "blocked" as const };
+    }
     // Approved bind calls execute while answer owns the lock; they cannot acquire it again.
     if (
       expected === undefined &&
