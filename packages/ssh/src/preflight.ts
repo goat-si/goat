@@ -39,8 +39,9 @@ done
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
     command -v cygpath >/dev/null 2>&1 && printf 'GOAT_CYGPATH=yes\n'
-    root="$(cygpath -u "$SystemRoot" 2>/dev/null)"
-    [ -x "$root/System32/tar.exe" ] && printf 'GOAT_SYSTEM_TAR=yes\n'
+    # Match the installer (tunnel.ts): Git Bash exports SYSTEMROOT, not SystemRoot.
+    system32="$(cygpath -S 2>/dev/null)"
+    [ -n "$system32" ] && [ -x "$system32/tar.exe" ] && printf 'GOAT_SYSTEM_TAR=yes\n'
     ;;
 esac
 printf 'GOAT_FACTS_DONE=yes\n'
