@@ -1,10 +1,12 @@
 package relayserver_test
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"encoding/binary"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -53,15 +55,16 @@ type peer struct {
 	received atomic.Uint64
 }
 
-func dial(t *testing.T, url string, ack bool, already int) *peer {
+func dial(t *testing.T, url string, ack bool, already int) *peer { return dialHost(t, url, "") }
+
+func dialHost(t *testing.T, url, host string) *peer {
 	t.Helper()
-	ws, _, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled})
+	ws, _, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled, Host: host})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ws.SetReadLimit(4 << 20)
 	p := &peer{ws: ws, msgs: make(chan []byte, 8192), texts: make(chan string, 64), closed: make(chan int, 1)}
-	p.received.Store(uint64(already))
 	t.Cleanup(func() { ws.CloseNow() })
 	return p
 }
@@ -95,6 +98,7 @@ type nodeOpts struct {
 	noAck  bool
 	path   string
 	origin string
+	host   string
 	answer func(signPub, sig []byte) []byte
 }
 
@@ -117,7 +121,7 @@ func nodeWith(t *testing.T, rs *relaytest.Server, id *ident.Identity, o nodeOpts
 		path = o.path
 	}
 	u, _ := wire.WebSocketURL(rs.URL, "/v1/node/"+path)
-	p := dial(t, u, !o.noAck, 0)
+	p := dialHost(t, u, o.host)
 	_, challenge, err := p.ws.Read(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -529,15 +533,135 @@ func TestAnyOtherTextCloses1003(t *testing.T) {
 	}
 }
 
-func TestPublicOriginIsTheOriginUplinksMustSign(t *testing.T) {
-	rs := defaults(t)
-	rs.Relay.PublicOrigin = "wss://relay.example"
-	local := node(t, rs, nodeOpts{})
-	if code := <-local.closed; code != int(wire.CodeRelayAuth) {
-		t.Fatalf("uplink signing the local origin closed %d, want 4403", code)
-	}
-	public := node(t, rs, nodeOpts{origin: "wss://relay.example"})
-	if err := rs.WaitOnline(context.Background(), public.nodeID); err != nil {
+// stuckClient upgrades a client session by hand over raw TCP with a tiny receive buffer, then
+// never reads again.
+func stuckClient(t *testing.T, rs *relaytest.Server, nodeID string) net.Conn {
+	t.Helper()
+	addr := strings.TrimPrefix(rs.URL, "http://")
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
 		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	c.(*net.TCPConn).SetReadBuffer(4096)
+	req := "GET /v1/client/" + nodeID + " HTTP/1.1\r\nHost: " + addr + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+	if _, err := c.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	res, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil || res.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade: %v %v", res, err)
+	}
+	return c
+}
+
+func TestAPeerThatStopsReadingIsDroppedWithItsGoroutines(t *testing.T) {
+	l := relayserver.DefaultLimits()
+	l.WriteTimeout = 300 * time.Millisecond
+	rs := relaytest.NewWithLimits(l)
+	done := make(chan string, 16)
+	rs.Relay.Hooks.OnSocketDone = func(nodeID, role string) { done <- role }
+	rs.Start()
+	t.Cleanup(rs.Close)
+	n := ready(t, rs, nodeOpts{})
+	stuckClient(t, rs, n.nodeID)
+	sid := n.expect(t, wire.FrameOpen, 0).SID
+	chunk := make([]byte, 64<<10)
+	for range relayserver.SocketWindow/len(chunk) - 1 {
+		n.frameOut(wire.FrameData, sid, chunk)
+	}
+	if role := <-done; role != "client" {
+		t.Fatalf("socket done: %s, want the stuck client", role)
+	}
+	if code := n.closeOf(t, sid); code == 0 {
+		t.Fatal("the node was not told the session ended")
+	}
+}
+
+func TestWithAPublicOriginOtherHostsGet421AndOnlyThatOriginAuthenticates(t *testing.T) {
+	rs := defaults(t)
+	rs.Relay.PublicOrigin = "ws://relay.test"
+	id, _ := ident.Generate(nil)
+	u, _ := wire.WebSocketURL(rs.URL, "/v1/node/"+id.NodeID())
+	_, res, err := websocket.Dial(context.Background(), u, &websocket.DialOptions{Host: "other.example"})
+	if err == nil || res == nil || res.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("Host other.example: %v, want 421 before upgrade", err)
+	}
+	wrong := node(t, rs, nodeOpts{host: "relay.test", origin: "ws://other.example"})
+	if code := <-wrong.closed; code != int(wire.CodeRelayAuth) {
+		t.Fatalf("signature over another origin closed %d, want 4403", code)
+	}
+	right := node(t, rs, nodeOpts{host: "relay.test", origin: "ws://relay.test"})
+	if err := rs.WaitOnline(context.Background(), right.nodeID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func dialStatus(t *testing.T, rs *relaytest.Server, path string) int {
+	t.Helper()
+	u, _ := wire.WebSocketURL(rs.URL, path)
+	ws, res, err := websocket.Dial(context.Background(), u, nil)
+	if err == nil {
+		t.Cleanup(func() { ws.CloseNow() })
+		return http.StatusSwitchingProtocols
+	}
+	if res == nil {
+		t.Fatal(err)
+	}
+	return res.StatusCode
+}
+
+func TestSocketsPastTheTotalAndPerAddressCapsGet429(t *testing.T) {
+	for _, set := range []func(*relayserver.Server){
+		func(s *relayserver.Server) { s.MaxSockets = 2 },
+		func(s *relayserver.Server) { s.MaxPerIP = 2 },
+	} {
+		rs := defaults(t)
+		set(rs.Relay)
+		for range 2 {
+			node(t, rs, nodeOpts{silent: true})
+		}
+		id, _ := ident.Generate(nil)
+		if got := dialStatus(t, rs, "/v1/node/"+id.NodeID()); got != http.StatusTooManyRequests {
+			t.Fatalf("third socket got %d, want 429", got)
+		}
+	}
+}
+
+func TestAFifthUnauthenticatedUplinkForOneNodeGets429(t *testing.T) {
+	rs := defaults(t)
+	id, _ := ident.Generate(nil)
+	for range 4 {
+		nodeWith(t, rs, id, nodeOpts{silent: true})
+	}
+	if got := dialStatus(t, rs, "/v1/node/"+id.NodeID()); got != http.StatusTooManyRequests {
+		t.Fatalf("fifth unauthenticated uplink got %d, want 429", got)
+	}
+}
+
+func TestARoomIsFreedWhenItsLastSocketEnds(t *testing.T) {
+	rs := relaytest.NewWithLimits(relayserver.DefaultLimits())
+	done := make(chan string, 4)
+	rs.Relay.Hooks.OnSocketDone = func(_, role string) { done <- role }
+	rs.Start()
+	t.Cleanup(rs.Close)
+	n := ready(t, rs, nodeOpts{})
+	if rs.Relay.Rooms() != 1 {
+		t.Fatalf("rooms %d", rs.Relay.Rooms())
+	}
+	n.ws.Close(websocket.StatusNormalClosure, "")
+	<-done
+	if got := rs.Relay.Rooms(); got != 0 {
+		t.Fatalf("rooms %d after the last socket, want 0", got)
+	}
+}
+
+func TestAnUnauthenticatedUplinkMayNotSendMoreThanItsAnswer(t *testing.T) {
+	rs := defaults(t)
+	n := node(t, rs, nodeOpts{silent: true})
+	n.send(make([]byte, relayserver.MessageMax+1))
+	if code := <-n.closed; code != int(wire.CodeRelayAuth) {
+		t.Fatalf("closed %d, want 4403 after at most 97 bytes", code)
 	}
 }

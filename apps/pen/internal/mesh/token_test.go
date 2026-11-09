@@ -69,6 +69,7 @@ func buildTokenVectors() tokenFile {
 	for why, relays := range map[string][]string{
 		"nine relays":                 many,
 		"duplicate relay":             {"https://a.example", "https://a.example"},
+		"one relay spelled twice":     {"https://a.example", "wss://A.example:443"},
 		"empty relay":                 {"https://a.example", ""},
 		"plain http to a public host": {"https://a.example", "http://b.example"},
 		"relay over 256 bytes":        {"https://a.example", "https://" + strings.Repeat("x", 250) + ".example"},

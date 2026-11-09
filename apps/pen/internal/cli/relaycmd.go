@@ -130,6 +130,9 @@ type serveConfig struct {
 	keyFile      string
 	plain        bool
 	publicOrigin string
+	// readTimeout and limits override the defaults in tests.
+	readTimeout time.Duration
+	limits      *relayserver.Limits
 }
 
 func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
@@ -165,6 +168,15 @@ func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
 		if strings.ContainsAny(c.autocertHost, ":/") || net.ParseIP(c.autocertHost) != nil || !strings.Contains(c.autocertHost, ".") {
 			return c, fmt.Errorf("--autocert wants a DNS name such as 203-0-113-7.sslip.io, not %q", c.autocertHost)
 		}
+		// TLS-ALPN-01 validates on port 443 only.
+		if _, port, err := net.SplitHostPort(c.listen); err != nil || port != "443" {
+			return c, errors.New("--autocert needs --listen on port 443 (TLS-ALPN-01)")
+		}
+		origin := "wss://" + strings.ToLower(c.autocertHost)
+		if c.publicOrigin != "" && c.publicOrigin != origin {
+			return c, fmt.Errorf("--autocert %s serves %s; --public-origin %s differs", c.autocertHost, origin, c.publicOrigin)
+		}
+		c.publicOrigin = origin
 	} else if c.cacheDir != "" {
 		return c, errors.New("--cache is only for --autocert")
 	}
@@ -177,7 +189,36 @@ func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
 			return c, fmt.Errorf("--public-origin must be ws://host or wss://host[:port] exactly, got %q", c.publicOrigin)
 		}
 	}
+	if c.certFile != "" && c.publicOrigin == "" {
+		return c, errors.New("--cert needs --public-origin wss://<host the certificate names>")
+	}
+	if c.plain && c.publicOrigin == "" {
+		host, _, err := net.SplitHostPort(c.listen)
+		if err != nil || !loopbackHost(host) {
+			return c, errors.New("--plain without --public-origin listens on loopback only (e.g. --listen 127.0.0.1:8080)")
+		}
+	}
 	return c, nil
+}
+
+// prepareCache makes the autocert cache a 0700 directory: it holds the TLS private key.
+func prepareCache(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("--cache %s is not a directory", dir)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("--cache %s is open to other users and cannot be made private: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // autocertManager issues certificates for exactly one host.
@@ -191,16 +232,35 @@ func autocertManager(c serveConfig) *autocert.Manager {
 
 // serve runs the relay until ctx ends; ready gets the bound address.
 func serve(ctx context.Context, c serveConfig, ready func(addr string), hooks relayserver.Hooks) error {
-	rs := relayserver.New(relayserver.DefaultLimits())
-	rs.PublicOrigin = c.publicOrigin
-	rs.Hooks = hooks
-	srv := &http.Server{Handler: rs, ReadHeaderTimeout: 10 * time.Second}
 	ln, err := net.Listen("tcp", c.listen)
 	if err != nil {
 		return err
 	}
+	return serveOn(ctx, c, ln, ready, hooks)
+}
+
+// serveOn runs the relay on ln.
+func serveOn(ctx context.Context, c serveConfig, ln net.Listener, ready func(addr string), hooks relayserver.Hooks) error {
+	limits := relayserver.DefaultLimits()
+	if c.limits != nil {
+		limits = *c.limits
+	}
+	rs := relayserver.New(limits)
+	rs.PublicOrigin = c.publicOrigin
+	rs.Hooks = hooks
+	readTimeout := 30 * time.Second
+	if c.readTimeout > 0 {
+		readTimeout = c.readTimeout
+	}
+	// The timeouts bound plain requests; the relay clears them on a socket it upgrades.
+	srv := &http.Server{Handler: rs, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout,
+		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	switch {
 	case c.autocertHost != "":
+		if err := prepareCache(c.cacheDir); err != nil {
+			ln.Close()
+			return err
+		}
 		srv.TLSConfig = autocertManager(c).TLSConfig()
 	case c.certFile != "":
 		cert, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
@@ -250,4 +310,12 @@ func runRelayServe(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	return 0
+}
+
+func loopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

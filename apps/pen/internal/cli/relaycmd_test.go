@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
@@ -12,28 +13,35 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/relayserver"
 	"github.com/goat-si/goat/apps/pen/internal/state"
+	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
 func TestRelayServeFlagsAreValidatedWithoutACME(t *testing.T) {
 	bad := map[string][]string{
-		"no mode":                {"--listen", ":0"},
-		"two modes":              {"--plain", "--cert", "c", "--key", "k"},
-		"autocert without cache": {"--autocert", "1-2-3-4.sslip.io"},
-		"autocert with an IP":    {"--autocert", "1.2.3.4", "--cache", "/tmp/x"},
-		"cache without autocert": {"--plain", "--cache", "/tmp/x"},
-		"cert without key":       {"--cert", "c"},
-		"origin with a path":     {"--plain", "--public-origin", "wss://relay.example/x"},
-		"origin not normalized":  {"--plain", "--public-origin", "wss://Relay.example:443"},
+		"no mode":                 {"--listen", ":0"},
+		"two modes":               {"--plain", "--cert", "c", "--key", "k"},
+		"autocert without cache":  {"--autocert", "1-2-3-4.sslip.io"},
+		"autocert with an IP":     {"--autocert", "1.2.3.4", "--cache", "/tmp/x"},
+		"cache without autocert":  {"--plain", "--cache", "/tmp/x"},
+		"cert without key":        {"--cert", "c"},
+		"origin with a path":      {"--plain", "--public-origin", "wss://relay.example/x"},
+		"origin not normalized":   {"--plain", "--public-origin", "wss://Relay.example:443"},
+		"cert without an origin":  {"--cert", "c", "--key", "k", "--listen", ":8443"},
+		"plain on every address":  {"--plain", "--listen", ":8080"},
+		"autocert origin differs": {"--autocert", "a.sslip.io", "--cache", "/tmp/x", "--public-origin", "wss://b.sslip.io"},
+		"autocert off port 443":   {"--autocert", "a.sslip.io", "--cache", "/tmp/x", "--listen", ":8443"},
 	}
 	for name, args := range bad {
 		if _, err := parseServe(args, &bytes.Buffer{}); err == nil {
@@ -42,8 +50,9 @@ func TestRelayServeFlagsAreValidatedWithoutACME(t *testing.T) {
 	}
 	good := [][]string{
 		{"--autocert", "203-0-113-7.sslip.io", "--cache", "/tmp/pen-acme"},
-		{"--cert", "c.pem", "--key", "k.pem", "--listen", ":8443"},
-		{"--plain", "--listen", "127.0.0.1:0", "--public-origin", "wss://relay.example"},
+		{"--cert", "c.pem", "--key", "k.pem", "--listen", ":8443", "--public-origin", "wss://relay.example:8443"},
+		{"--plain", "--listen", ":8080", "--public-origin", "wss://relay.example"},
+		{"--plain", "--listen", "127.0.0.1:0"},
 	}
 	for _, args := range good {
 		if _, err := parseServe(args, &bytes.Buffer{}); err != nil {
@@ -90,24 +99,29 @@ func selfSigned(t *testing.T, dir string) (certFile, keyFile string, pool *x509.
 	return certFile, keyFile, pool
 }
 
-func TestRelayServeWithCertAndKeyAuthenticatesAWssUplink(t *testing.T) {
+func TestRelayServeWithCertAndKeyBindsUplinksToItsPublicOrigin(t *testing.T) {
 	certFile, keyFile, pool := selfSigned(t, t.TempDir())
-	c, err := parseServe([]string{"--cert", certFile, "--key", keyFile, "--listen", "127.0.0.1:0"}, &bytes.Buffer{})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	origin := "wss://" + addr
+	c, err := parseServe([]string{"--cert", certFile, "--key", keyFile, "--listen", addr, "--public-origin", origin}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	addr := make(chan string, 1)
-	online := make(chan string, 1)
-	go serve(ctx, c, func(a string) { addr <- a }, relayserver.Hooks{OnUplink: func(id string) { online <- id }})
-	url := "https://" + <-addr
-	relay.TLSConfig = &tls.Config{RootCAs: pool}
+	online := make(chan string, 4)
+	go serveOn(ctx, c, ln, nil, relayserver.Hooks{OnUplink: func(id string) { online <- id }})
+	url := "https://" + addr
+	tlsConf := &tls.Config{RootCAs: pool}
+	relay.TLSConfig = tlsConf
 	defer func() { relay.TLSConfig = nil }()
 	id, _ := ident.Generate(nil)
 	up := relay.NewUplink(url, id)
 	go up.Run(ctx)
-	// The relay authenticates the uplink only if it signed wss://127.0.0.1:<port>, the origin of TLS.
 	if got := <-online; got != id.NodeID() {
 		t.Fatalf("online %s", got)
 	}
@@ -122,6 +136,29 @@ func TestRelayServeWithCertAndKeyAuthenticatesAWssUplink(t *testing.T) {
 	conn.Send([]byte("over tls"))
 	if p, err := n.Recv(ctx); err != nil || string(p) != "over tls" {
 		t.Fatalf("node got %q, %v", p, err)
+	}
+
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConf}}
+	other, _ := ident.Generate(nil)
+	wsURL := "wss://" + addr + "/v1/node/" + other.NodeID()
+	// Another Host on the same TLS listener is refused before any upgrade.
+	_, res, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: client, Host: "other.example"})
+	if err == nil || res == nil || res.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("Host other.example: %v, want 421", err)
+	}
+	// A signature over another origin does not authenticate.
+	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, challenge, err := ws.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := ed25519.Sign(other.SignPriv, wire.ChallengeMessage("wss://other.example", other.NodeID(), challenge))
+	ws.Write(ctx, websocket.MessageBinary, append(append([]byte(nil), other.SignPub...), sig...))
+	if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != websocket.StatusCode(wire.CodeRelayAuth) {
+		t.Fatalf("signature over wss://other.example: %v, want 4403", err)
 	}
 }
 
@@ -139,6 +176,9 @@ func TestRelayAddRmEditTheConfigAndKeepAtLeastOne(t *testing.T) {
 	if code := RunRelay([]string{"add", "http://c.example"}, &out, &errOut); code == 0 {
 		t.Fatal("plain http to a public host accepted in a relay list")
 	}
+	if code := RunRelay([]string{"add", "wss://B.example:443"}, &out, &errOut); code == 0 {
+		t.Fatal("the same relay under another spelling was added")
+	}
 	if code := RunRelay([]string{"rm", "https://a.example"}, &out, &errOut); code != 0 {
 		t.Fatalf("rm: %d %s", code, errOut.String())
 	}
@@ -148,5 +188,63 @@ func TestRelayAddRmEditTheConfigAndKeepAtLeastOne(t *testing.T) {
 	got, _ := st.LoadConfig()
 	if strings.Join(got.RelayList(), ",") != "https://b.example" || got.Relay != "https://b.example" {
 		t.Fatalf("config %+v", got)
+	}
+}
+
+func TestUpgradedSocketsOutliveTheHTTPServersReadTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseServe([]string{"--plain", "--listen", ln.Addr().String()}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.readTimeout = 200 * time.Millisecond
+	l := relayserver.DefaultLimits()
+	l.PendingTimeout = 600 * time.Millisecond
+	c.limits = &l
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	online := make(chan string, 1)
+	go serveOn(ctx, c, ln, nil, relayserver.Hooks{OnUplink: func(id string) { online <- id }})
+	url := "http://" + ln.Addr().String()
+	id, _ := ident.Generate(nil)
+	up := relay.NewUplink(url, id)
+	go up.Run(ctx)
+	<-online
+	conn, err := relay.Dial(ctx, url, id.NodeID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The node never answers, so the relay ends the session 4408 at 600 ms, past the 200 ms read
+	// timeout; 4404 or 1006 would mean the uplink or the client died at the HTTP deadline.
+	if _, err := conn.Recv(ctx); relay.CodeOf(err) != wire.CodeTimeout {
+		t.Fatalf("pending session ended with %v, want 4408", err)
+	}
+}
+
+func TestAutocertCacheIsAPrivateDirectory(t *testing.T) {
+	loose := filepath.Join(t.TempDir(), "acme")
+	if err := os.Mkdir(loose, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareCache(loose); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(loose); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("cache mode %v, want 0700", fi.Mode().Perm())
+	}
+	fresh := filepath.Join(t.TempDir(), "new", "acme")
+	if err := prepareCache(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(fresh); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("new cache: %v %v", fi, err)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(file, nil, 0o600)
+	if err := prepareCache(file); err == nil {
+		t.Fatal("a file was accepted as the cache directory")
 	}
 }

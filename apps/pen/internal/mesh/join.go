@@ -76,8 +76,8 @@ func ParseToken(s string) (Token, error) {
 	return t, nil
 }
 
-// ValidRelayList checks a version 2 relay list: 1 to 8 distinct URLs of at most 256 bytes, https or
-// wss (http or ws only for loopback hosts, for local relays).
+// ValidRelayList checks a version 2 relay list: 1 to 8 URLs of at most 256 bytes naming distinct
+// relay origins, https or wss (http or ws only for loopback hosts, for local relays).
 func ValidRelayList(relays []string) error {
 	if len(relays) < 1 || len(relays) > MaxTokenRelays {
 		return fmt.Errorf("%d relays (1 to %d)", len(relays), MaxTokenRelays)
@@ -87,10 +87,6 @@ func ValidRelayList(relays []string) error {
 		if r == "" || len(r) > MaxTokenRelayLen {
 			return fmt.Errorf("relay URL empty or over %d bytes", MaxTokenRelayLen)
 		}
-		if seen[r] {
-			return fmt.Errorf("duplicate relay %q", r)
-		}
-		seen[r] = true
 		u, err := url.Parse(r)
 		if err != nil {
 			return err
@@ -104,9 +100,15 @@ func ValidRelayList(relays []string) error {
 		default:
 			return fmt.Errorf("relay %q: scheme must be https or wss", r)
 		}
-		if _, err := wire.RelayOrigin(r); err != nil {
+		origin, err := wire.RelayOrigin(r)
+		if err != nil {
 			return err
 		}
+		// One relay under two spellings (case, default port, https vs wss) is a duplicate.
+		if seen[origin] {
+			return fmt.Errorf("duplicate relay %q", r)
+		}
+		seen[origin] = true
 	}
 	return nil
 }

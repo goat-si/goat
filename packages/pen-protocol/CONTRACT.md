@@ -214,20 +214,27 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   uplink reconnects, acks and stops on 4409 independently; sessions from all of them are handled alike.
 - Ping race: to reach a node, a client opens one `/v1/client/<nodeId>` socket per relay in parallel and sends the
   text `ping` on each. It keeps the first socket that answers `pong` and closes every other socket with 1000 before
-  sending any other byte, so no Noise byte travels on more than one socket (Doriterm #1351 rule). A relay where the
+  sending any other byte, so no Noise byte travels on more than one socket (Doriterm #1351 rule). Losers finish their
+  dial before that close (an aborted handshake would reach the node as 1006), and the whole race has its own 15 s
+  deadline. A relay where the
   node is offline closes 4404 before any pong, so it never wins; a relay that is down never answers.
 - Fallback: a relay can answer `pong` for a stale uplink. When the handshake on the winning socket fails with
   anything but 4401 or 4400 (the node's own answers), the client drops that relay and races the rest.
 - Token v2: `pen1_` + base64url(no padding) of
   `version (2) || signPub (32) || noisePub (32) || secret (32) || relay URLs (UTF-8, joined by LF)`: 1 to 8 URLs,
-  each 1 to 256 bytes, distinct, `https` or `wss` (`http` or `ws` only for loopback hosts, which local test
+  each 1 to 256 bytes, naming distinct relay origins (`https://a` and `wss://A:443` are one relay), `https` or `wss` (`http` or `ws` only for loopback hosts, which local test
   relays use). A token with one relay stays version 1 so older nodes can join; version 1 keeps parsing. The joiner
   races the token's relays the same way and keeps them as its own list.
 - Relay-serve parity: `pen relay serve` (apps/pen/internal/relayserver) implements this contract's "Relay" section
   rule for rule (auth, origin binding, mux, caps, timeouts, backpressure, acks, ping, 1 MiB cap, `/healthz`) and is
   tested against the same cases as the Worker. It closes a client 4404 right after accept, before reading any text,
-  when the node has no uplink. Its origin is `wss://` + Host for TLS listeners and `ws://` + Host for plain ones;
-  behind a TLS terminator, `--public-origin wss://host` sets the origin uplinks must sign. Session ids are never
+  when the node has no uplink. Its origin is fixed, never taken from the request: `--autocert <host>` serves
+  `wss://<host>`, `--cert`/`--key` and a TLS terminator in front of `--plain` need `--public-origin wss://host`, and a
+  request whose Host does not name that origin gets HTTP 421 before any upgrade. `--plain` without a public origin
+  listens on loopback only (tests and local relays), where the origin follows the request. Beyond the contract it caps all
+  sockets (4096), one source address's sockets (64) and one node id's unauthenticated uplinks (4) with HTTP 429, reads
+  at most the 96-byte answer from an uplink before it authenticates, and drops a socket whose write or closing
+  handshake stalls for 10 s. Session ids are never
   reused while the process runs (a restart starts at 1 again; uplinks reconnect then and see fresh sessions).
 
 ## Close codes
