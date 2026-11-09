@@ -704,12 +704,21 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     const GATED_SLEEP =
       'if [ -p "$GOAT_TEST_DIR/gate" ]; then cat "$GOAT_TEST_DIR/gate" >/dev/null; rm -f "$GOAT_TEST_DIR/gate"; fi';
     const STUCK = ["trap 'exit 129' HUP", 'printf go > "$1/gate"', 'cat "$1/block"'].join("\n");
+    // A clock any bash reads, for tests that need the read tick: EPOCHREALTIME came with bash 5, and
+    // macOS still ships bash 3.2.
+    const FIXED_NOW = "        goat_deadline_t=1000000000";
+    const hasEpoch =
+      NodeChildProcess.spawnSync("bash", [
+        "-c",
+        'case "$EPOCHREALTIME" in *[.,]*) ;; *) exit 1 ;; esac',
+      ]).status === 0;
     const lines = (dir: string, name: string) =>
       NodeFS.existsSync(NodePath.join(dir, name))
         ? NodeFS.readFileSync(NodePath.join(dir, name), "utf8").trim().split("\n")
         : [];
 
-    it.skipIf(!NodeFS.existsSync("/proc/self/fd"))(
+    // Without EPOCHREALTIME the real clock fails and the watchdog ticks with sleep, which this rules out.
+    it.skipIf(!NodeFS.existsSync("/proc/self/fd") || !hasEpoch)(
       "leaves no process of its own once a bash script ends",
       async () => {
         await inDir(async (dir) => {
@@ -809,10 +818,40 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       });
     });
 
+    it("ticks with sleep and hangs up on time when bash has no EPOCHREALTIME", async () => {
+      await inDir(async (dir, bin) => {
+        shim(bin, "mkdir", 'echo "$*" >> "$GOAT_TEST_DIR/mkdirs"; exit 1');
+        // Tick 1 waits until the script is stuck and later countdown ticks pass at once. Tick 5
+        // comes only for a script nothing hung up: it releases the script, and later ticks wait.
+        shim(
+          bin,
+          "tick",
+          [
+            'echo "$1" >> "$GOAT_TEST_DIR/steps"; n=$(($(wc -l < "$GOAT_TEST_DIR/steps")))',
+            'if [ "$n" = 1 ]; then exec cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
+            'if [ "$n" = 5 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
+            'if [ "$n" -gt 5 ]; then ' + HOLD + "; fi",
+          ].join("\n"),
+        );
+        const result = await runShell(
+          "unset EPOCHREALTIME\n" +
+            withRemoteDeadline(STUCK, 2_000, NodePath.join(bin, "tick"), undefined, READ_TICK),
+          [dir],
+          env(dir, bin),
+          { shell: "bash", sessionLeader: true },
+        );
+        expect(result.code).toBe(129);
+        // 2 s of timeout and 5 s of grace count down in steps of 2, 2, 2 and 1; the hang-up follows.
+        expect(lines(dir, "steps").slice(0, 4)).toEqual(["2", "2", "2", "1"]);
+        expect(lines(dir, "mkdirs")).toEqual([]);
+        expect(NodeFS.readdirSync(NodePath.join(dir, "tmp"))).toEqual([]);
+      });
+    });
+
     it("falls back to sleeping when a read fails, and still hangs up", async () => {
       await inDir(async (dir, bin) => {
         shim(bin, "tick", GATED_SLEEP);
-        const ticks = { now: READ_TICK.now, read: 'echo read >> "$GOAT_TEST_DIR/reads"; (exit 1)' };
+        const ticks = { now: FIXED_NOW, read: 'echo read >> "$GOAT_TEST_DIR/reads"; (exit 1)' };
         const result = await runShell(
           withRemoteDeadline(STUCK, 1_000, NodePath.join(bin, "tick"), undefined, ticks),
           [dir],
@@ -833,7 +872,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         shim(bin, tool, body);
         shim(bin, "tick", GATED_SLEEP);
         const ticks = {
-          now: READ_TICK.now,
+          now: FIXED_NOW,
           read: 'echo read >> "$GOAT_TEST_DIR/reads"; (exit 142)',
         };
         const result = await runShell(
@@ -868,10 +907,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               real("mkdir") + ' "$3" && echo keep > "$3/keep"; ' + stop + "; exit 1",
             );
           const ticks = {
-            now: READ_TICK.now,
+            now: FIXED_NOW,
             read:
               stage === "read"
-                ? 'printf x > "$GOAT_TEST_DIR/stopping"; kill -TERM "$BASHPID"; (exit 142)'
+                ? // $BASHPID came with bash 4; sh's parent is this watchdog.
+                  'printf x > "$GOAT_TEST_DIR/stopping"; kill -TERM "$(exec sh -c \'echo $PPID\')"; (exit 142)'
                 : READ_TICK.read,
           };
           const result = await runShell(
