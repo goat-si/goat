@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelChildWorkId, ChannelTaskId, ThreadId } from "@goat/contracts";
+import { ChannelChildWorkId, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -330,6 +330,179 @@ describe("ChannelBotThreads", () => {
             "task:remote": "none",
           },
         );
+      }).pipe(
+        Effect.provide(
+          BotThreads.layer.pipe(
+            Layer.provideMerge(TaskViews.layer),
+            Layer.provideMerge(harness.layer),
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect(
+    "lists the bot's SSH launches by host without borrowing a local thread's title or kind",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(1791763200000);
+        yield* setupBot;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO channel_conversations (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at) VALUES ('conv:bot', ${ownerId}, 'goat', 'goat', ${botThreadId}, ${time})`;
+        yield* insertTask("task:live", ownerId, "running", time);
+        // Older than the retention window and not pinned, so its launches are not listed.
+        yield* insertTask("task:expired", ownerId, "completed", old);
+        yield* insertTask("task:foreign", "foreign", "running", time);
+        const children = yield* ChildStore.ChannelChildWorkStore;
+        const shared = ThreadId.make("thread:shared");
+        const launches = [
+          [
+            "task:live",
+            "remote-chore",
+            "ssh_thread_launch",
+            "bound",
+            {
+              correlationId: "cw-chore",
+              host: "box",
+              threadId: shared,
+              environmentId: EnvironmentId.make("env-box"),
+              workKind: "chore" as const,
+            },
+          ],
+          // A record from before remote identities were kept: the same thread id elsewhere.
+          [
+            "task:live",
+            "remote-old",
+            "ssh_thread_launch",
+            "bound",
+            {
+              correlationId: "cw-old",
+              host: "box",
+              threadId: shared,
+              environmentId: EnvironmentId.make("env-other"),
+            },
+          ],
+          [
+            "task:live",
+            "remote-unknown",
+            "ssh_thread_launch",
+            "unknown",
+            {
+              correlationId: "cw-unknown",
+              host: "mac",
+            },
+          ],
+          [
+            "task:live",
+            "remote-released",
+            "ssh_thread_launch",
+            "released",
+            {
+              correlationId: "cw-released",
+              host: "box",
+            },
+          ],
+          ["task:live", "local", "thread_launch", "bound", { threadId: shared }],
+          [
+            "task:expired",
+            "remote-expired",
+            "ssh_thread_launch",
+            "bound",
+            {
+              correlationId: "cw-expired",
+              host: "box",
+            },
+          ],
+          [
+            "task:foreign",
+            "remote-foreign",
+            "ssh_thread_launch",
+            "bound",
+            {
+              correlationId: "cw-foreign",
+              host: "box",
+            },
+          ],
+        ] as const;
+        for (const [taskId, id, surface, state, destination] of launches) {
+          yield* children.admitReserved(
+            {
+              ownerId: taskId === "task:foreign" ? "foreign" : ownerId,
+              taskId: ChannelTaskId.make(taskId),
+              childWorkId: ChannelChildWorkId.make(id),
+              generation: 1,
+              callerThreadId: botThreadId,
+              requestKey: id,
+              promptDigest: "digest",
+              surface,
+              destination,
+              state,
+              createdAt: time,
+              updatedAt: time,
+            },
+            100,
+          );
+        }
+        const payload = JSON.stringify({
+          launchedBy: {
+            kind: "launch",
+            threadId: botThreadId,
+            environmentId: null,
+            environmentLabel: null,
+            threadTitle: null,
+            via: "thread_launch",
+            workKind: "coding",
+          },
+        });
+        yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json) VALUES (${shared}, 'project:repo', 'Local title', 'codex', 'full-access', 'default', ${time}, ${time}, ${payload})`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.list(owner);
+        assert.deepStrictEqual(
+          result.rows.flatMap((row) => (row.kind === "coding" ? [row] : [])),
+          [
+            {
+              kind: "coding",
+              taskId: ChannelTaskId.make("task:live"),
+              environmentId,
+              threadId: shared,
+              title: "Local title",
+              state: "bound",
+              lastActivityAt: time,
+              workKind: "coding",
+            },
+          ],
+        );
+        const base = {
+          taskId: ChannelTaskId.make("task:live"),
+          callerThreadId: botThreadId,
+          lastActivityAt: time,
+        };
+        assert.deepStrictEqual(result.remoteWork, [
+          {
+            ...base,
+            childWorkId: ChannelChildWorkId.make("remote-chore"),
+            host: "box",
+            state: "bound",
+            threadId: shared,
+            environmentId: EnvironmentId.make("env-box"),
+            workKind: "chore",
+          },
+          {
+            ...base,
+            childWorkId: ChannelChildWorkId.make("remote-old"),
+            host: "box",
+            state: "bound",
+            threadId: shared,
+            environmentId: EnvironmentId.make("env-other"),
+          },
+          {
+            ...base,
+            childWorkId: ChannelChildWorkId.make("remote-unknown"),
+            host: "mac",
+            state: "unknown",
+          },
+        ]);
       }).pipe(
         Effect.provide(
           BotThreads.layer.pipe(

@@ -33,6 +33,7 @@ import {
   type ChannelTaskReportInput,
   type ChannelWorkerRunStatus,
   isGoatBotSessionThreadId,
+  localChildThreadId,
   type OrchestrationV2Run,
   type ThreadId,
 } from "@goat/contracts";
@@ -263,7 +264,7 @@ const make = Effect.gen(function* () {
       if (current.some((record) => CHILD_WORK_HOLD_STATES.has(record.state))) return true;
       if (anyLaunchedResultOwed(ends, runs, allRuns)) return true;
       for (const record of current) {
-        const childThreadId = record.destination?.threadId;
+        const childThreadId = localChildThreadId(record.destination);
         if (childThreadId === undefined || record.state !== "completed") continue;
         const pending = yield* threads
           .delegatedTaskResultPending(childThreadId)

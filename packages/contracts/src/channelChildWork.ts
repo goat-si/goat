@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import {
+  EnvironmentId,
   IsoDateTime,
   NonNegativeInt,
   RunId,
@@ -74,13 +75,24 @@ export const CHANNEL_CHILD_WORK_ACTIVE_STATES = [
 export const isChannelChildWorkActive = (state: ChannelChildWorkState): boolean =>
   (CHANNEL_CHILD_WORK_ACTIVE_STATES as ReadonlyArray<ChannelChildWorkState>).includes(state);
 
-/** Where the child landed. Local children have a threadId; remote ones a correlation id. */
+/**
+ * Where the child landed. Local children have a threadId; remote ones a correlation id and host,
+ * and, once the destination acknowledged the launch, its thread and environment there.
+ */
 export const ChannelChildWorkDestination = Schema.Struct({
   threadId: Schema.optional(ThreadId),
   correlationId: Schema.optional(TrimmedNonEmptyString),
   host: Schema.optional(TrimmedNonEmptyString),
+  /** The destination GOAT's own environment id; absent when it could not be read. */
+  environmentId: Schema.optional(EnvironmentId),
+  /** What GOAT Bot launched it for, judged from the requested workspace at admission. */
+  workKind: Schema.optional(GoatBotWorkKind),
 });
 export type ChannelChildWorkDestination = typeof ChannelChildWorkDestination.Type;
+
+/** The child's thread on this machine; a remote child's thread lives on its host. */
+export const localChildThreadId = (destination: ChannelChildWorkDestination | undefined) =>
+  destination?.host === undefined ? destination?.threadId : undefined;
 
 export const ChannelChildWork = Schema.Struct({
   childWorkId: ChannelChildWorkId,

@@ -60,6 +60,17 @@ const isRemoteDispatchError = (u: unknown): u is RemoteDispatchCoordinator.Remot
   Schema.is(RemoteDispatchCoordinator.RemoteDispatchError)(u);
 
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
+const isThreadId = Schema.is(ThreadId);
+
+/**
+ * What the destination's acknowledgement proved: its thread, and its environment when
+ * goat_environment_read answered (the dispatch calls it sourceEnvironmentId). Nothing is
+ * guessed, so an unproven identity leaves the bot's work unopenable instead of wrong.
+ */
+const acknowledgedDestination = (launch: SshRemoteDispatch.SshLaunchResult) => ({
+  ...(isThreadId(launch.threadId) ? { threadId: launch.threadId } : {}),
+  ...(launch.sourceEnvironmentId == null ? {} : { environmentId: launch.sourceEnvironmentId }),
+});
 
 /**
  * The remote's local branches are usually behind origin, so a dispatched
@@ -418,6 +429,16 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
 
           if (admission !== undefined && admission._tag === "existing")
             return yield* existingChildWorkConflict(admission);
+          // GOAT Bot's launches say what they are for, as local ones do: its own worktree is
+          // coding, the folder itself a chore. The origin cannot see whether the destination
+          // ran a requested worktree in its root, so such a launch stays coding and visible.
+          const workKind =
+            admission === undefined
+              ? undefined
+              : input.workspace?.type === "worktree" ||
+                  input.workspace?.type === "existing_worktree"
+                ? ("coding" as const)
+                : ("chore" as const);
           return yield* Effect.gen(function* () {
             const pressure = yield* admitLaunch(input.host);
             const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
@@ -445,6 +466,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                       environmentLabel: descriptor.label,
                       threadTitle: launcher.title,
                       via: "ssh_thread_launch" as const,
+                      ...(workKind === undefined ? {} : { workKind }),
                     })),
                   );
             const attachments = yield* dispatch
@@ -568,7 +590,12 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                       return { ...value, correlationId: null };
                     }
                     // A refused claim launched nothing, so the lane claimed above returns.
-                    yield* launchRemoteChildWork(channelChildWork, admission, input.host).pipe(
+                    yield* launchRemoteChildWork(
+                      channelChildWork,
+                      admission,
+                      input.host,
+                      workKind,
+                    ).pipe(
                       Effect.onError(() =>
                         admitted.enabled
                           ? permissions.release(laneId).pipe(Effect.ignore)
@@ -593,6 +620,8 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     yield* bindChildWork(channelChildWork, admission, {
                       correlationId: value.correlationId,
                       host: input.host,
+                      ...acknowledgedDestination(value.launch),
+                      ...(workKind === undefined ? {} : { workKind }),
                     });
                     return { ...value.launch, correlationId: value.correlationId };
                   }).pipe(

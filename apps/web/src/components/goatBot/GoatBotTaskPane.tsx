@@ -51,7 +51,7 @@ export function GoatBotTaskPane({
   );
   const member = useGoatBotMember();
   const botName = useGoatBotName();
-  const { rows, refresh } = useBotThreads(environmentId, memberThreadsKey(member));
+  const { rows, remoteWork, refresh } = useBotThreads(environmentId, memberThreadsKey(member));
   const task = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
@@ -161,7 +161,12 @@ export function GoatBotTaskPane({
         )}
       </header>
       <div className="px-3">
-        <GoatBotWorkDetails environmentId={environmentId} taskId={taskId} rows={rows} />
+        <GoatBotWorkDetails
+          environmentId={environmentId}
+          taskId={taskId}
+          rows={rows}
+          remoteWork={remoteWork}
+        />
       </div>
       <GoatBotTimeline
         taskDetails

@@ -60,6 +60,19 @@ export function createChannelEnvironmentAtoms<R, E>(
     );
   });
   /**
+   * Whether this client holds a live session to exactly this environment: the one test that
+   * lets the bot's work on another machine be opened, and so hidden from thread lists. A
+   * disabled or disconnected entry has no session, and a session that reports another identity
+   * does not count.
+   */
+  const remoteWorkOpenable = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get) =>
+        get(sessions.initialConfigValueAtom(environmentId))?.environment.environmentId ===
+        environmentId,
+    ).pipe(Atom.withLabel(`environment-data:channel:remote-work-openable:${environmentId}`)),
+  );
+  /**
    * The threads every bot's rows open as its own work, in the given environments. A bot's
    * rows are read again when its environment's signal changes; until they load, nothing is
    * listed, so thread lists keep showing the work.
@@ -90,7 +103,14 @@ export function createChannelEnvironmentAtoms<R, E>(
         const listed: GoatBotWorkRef[] = [];
         for (const input of inputs) {
           const result = get(rowsQuery({ environmentId, input }));
-          if (AsyncResult.isSuccess(result)) listed.push(...goatBotListedWork(result.value.rows));
+          if (!AsyncResult.isSuccess(result)) continue;
+          listed.push(
+            ...goatBotListedWork(result.value.rows, {
+              originEnvironmentId: environmentId,
+              items: result.value.remoteWork ?? [],
+              isOpenable: (destination) => get(remoteWorkOpenable(destination)),
+            }),
+          );
         }
         return listed.length === 0 ? NO_WORK : listed;
       }).pipe(Atom.withLabel(`environment-data:channel:goat-bot-listed-work:${environmentId}`)),
@@ -106,6 +126,7 @@ export function createChannelEnvironmentAtoms<R, E>(
     }),
     listBots,
     listedBotWork,
+    remoteWorkOpenable,
     /** Edits a bot's name, avatar or purpose; the roster and settings re-read the list after. */
     updateBot: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:update-bot",

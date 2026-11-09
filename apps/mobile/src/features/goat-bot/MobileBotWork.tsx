@@ -5,6 +5,7 @@ import {
   groupBotWork,
   isRetryableTaskStatus,
   presentTaskStatus,
+  resolveRemoteBotWork,
   retryRefusalText,
   taskAttemptLabel,
   type GoatBotWaitingTurn,
@@ -18,11 +19,13 @@ import {
 import type {
   BotId,
   BotProfile,
+  BotRemoteWork,
   ChannelTaskId,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
+import { Atom } from "effect/reactivity";
 import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
@@ -44,6 +47,40 @@ import { MobileBotMemory } from "./MobileBotMemory";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
 const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
+
+const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("mobile-goat-bot-remote-work:none"));
+
+/** A thread the bot launched on another machine: openable while this phone is connected there. */
+function MobileBotRemoteWork(props: {
+  readonly item: BotRemoteWork;
+  readonly onOpenThread: (thread: {
+    readonly environmentId: EnvironmentId;
+    readonly id: ThreadId;
+  }) => void;
+}) {
+  const { item } = props;
+  const openable = useAtomValue(
+    item.environmentId === undefined
+      ? NOT_OPENABLE
+      : channelEnvironment.remoteWorkOpenable(item.environmentId),
+  );
+  const target = resolveRemoteBotWork(
+    item,
+    (environmentId) => environmentId === item.environmentId && openable,
+  );
+  if (target.kind === "unavailable")
+    return <Text className="text-foreground-muted">{target.host} · Unavailable</Text>;
+  const { ref } = target;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      className="min-h-[44px] justify-center"
+      onPress={() => props.onOpenThread({ environmentId: ref.environmentId, id: ref.threadId })}
+    >
+      <Text className="text-foreground underline">Open work thread on {target.host}</Text>
+    </Pressable>
+  );
+}
 
 export function MobileBotWork(props: {
   readonly taskId?: ChannelTaskId;
@@ -103,7 +140,7 @@ export function MobileBotWork(props: {
       : null,
   );
   const work = environmentId
-    ? groupBotWork(rows, children.data?.groups ?? [], environmentId)
+    ? groupBotWork(rows, children.data?.groups ?? [], environmentId, threads.data?.remoteWork)
     : { inProgress: [], done: [] };
   const task = [...work.inProgress, ...work.done].find(
     (entry) => entry.row.task.taskId === props.taskId,
@@ -218,6 +255,13 @@ export function MobileBotWork(props: {
                 >
                   <Text className="text-foreground underline">Open work thread</Text>
                 </Pressable>
+              ))}
+              {task.remote.map((item) => (
+                <MobileBotRemoteWork
+                  key={item.childWorkId}
+                  item={item}
+                  onOpenThread={props.onOpenThread}
+                />
               ))}
               {task.subagents.map((agent) => (
                 <Text key={agent.childWorkId} className="text-foreground-muted">

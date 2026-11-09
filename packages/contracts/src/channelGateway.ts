@@ -10,7 +10,12 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ChannelChildWork, ChannelChildWorkState, GoatBotWorkKind } from "./channelChildWork.ts";
+import {
+  ChannelChildWork,
+  ChannelChildWorkId,
+  ChannelChildWorkState,
+  GoatBotWorkKind,
+} from "./channelChildWork.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
   ChannelActorRef,
@@ -394,11 +399,31 @@ export const BotThreadRow = Schema.Union([
   }),
 ]);
 export type BotThreadRow = typeof BotThreadRow.Type;
+/**
+ * A thread the bot launched on another machine over SSH. It is not a row: its host is this
+ * machine's SSH alias, so only the destination's own environment id, once the launch was
+ * acknowledged, can open it from a client.
+ */
+export const BotRemoteWork = Schema.Struct({
+  childWorkId: ChannelChildWorkId,
+  taskId: ChannelTaskId,
+  /** The bot thread that launched it, which the destination records as its launcher. */
+  callerThreadId: ThreadId,
+  host: TrimmedNonEmptyString,
+  state: ChannelChildWorkState,
+  lastActivityAt: IsoDateTime,
+  threadId: Schema.optional(ThreadId),
+  environmentId: Schema.optional(EnvironmentId),
+  workKind: Schema.optional(GoatBotWorkKind),
+});
+export type BotRemoteWork = typeof BotRemoteWork.Type;
 export const ChannelListBotThreadsInput = Schema.Struct({ botId: Schema.optionalKey(BotId) });
 export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
 export const ChannelListBotThreadsResult = Schema.Struct({
   rows: Schema.Array(BotThreadRow),
   mainMessageCount: NonNegativeInt,
+  /** Absent from servers before it; clients read that as none. */
+  remoteWork: Schema.optional(Schema.Array(BotRemoteWork)),
 });
 export type ChannelListBotThreadsResult = typeof ChannelListBotThreadsResult.Type;
 

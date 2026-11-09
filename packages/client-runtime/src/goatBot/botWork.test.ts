@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { BotThreadRow, ChannelChildWorkGroup, EnvironmentId } from "@goat/contracts";
+import { BotRemoteWork, BotThreadRow, ChannelChildWorkGroup, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { groupBotWork } from "./botWork.ts";
 
@@ -91,5 +91,28 @@ describe("groupBotWork", () => {
     ]);
     // A bot turn runs in the bot's own conversation, which is the chat already open.
     expect(threadsOf(withWorker("goat-bot-session:a"))).toEqual([]);
+  });
+
+  it("lists a task's work on other machines with that task only", () => {
+    const remote = Schema.decodeUnknownSync(BotRemoteWork);
+    const onBox = remote({
+      childWorkId: "cw-box",
+      taskId: "a",
+      callerThreadId: "channel-worker:a",
+      host: "box",
+      state: "bound",
+      lastActivityAt: at,
+      threadId: "remote-thread",
+      environmentId: "env-box",
+      workKind: "chore",
+    });
+    const otherTask = remote({ ...onBox, childWorkId: "cw-b", taskId: "b" });
+    const result = groupBotWork([task("a", null)], [], EnvironmentId.make("env"), [
+      onBox,
+      otherTask,
+    ]);
+    expect(result.inProgress[0]?.remote).toEqual([onBox]);
+    // A remote thread is never opened in the bot's own environment.
+    expect(result.inProgress[0]?.threads).toEqual([]);
   });
 });

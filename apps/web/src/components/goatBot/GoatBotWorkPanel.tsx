@@ -4,7 +4,7 @@ import {
   groupBotWork,
   presentTaskStatus,
 } from "@goat/client-runtime/goatBot";
-import type { BotThreadRow, EnvironmentId, ThreadId } from "@goat/contracts";
+import type { BotRemoteWork, BotThreadRow, EnvironmentId, ThreadId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useEnvironmentQuery } from "~/state/query";
@@ -45,7 +45,7 @@ export function GoatBotWorkPanel({
   const [tab, setTab] = useState<Tab>("Tasks");
   const member = useGoatBotMember();
   const botName = useGoatBotName();
-  const { rows, supported, loaded, failed, turnsWaiting } = useBotThreads(
+  const { rows, remoteWork, supported, loaded, failed, turnsWaiting } = useBotThreads(
     environmentId,
     memberThreadsKey(member),
   );
@@ -101,6 +101,7 @@ export function GoatBotWorkPanel({
                       key={row.task.taskId}
                       row={row}
                       rows={rows}
+                      remoteWork={remoteWork}
                       environmentId={environmentId}
                     />
                   ))}
@@ -138,10 +139,12 @@ export function GoatBotWorkPanel({
 function TaskWorkRow({
   row,
   rows,
+  remoteWork,
   environmentId,
 }: {
   row: Extract<BotThreadRow, { kind: "task" }>;
   rows: readonly BotThreadRow[];
+  remoteWork: readonly BotRemoteWork[];
   environmentId: EnvironmentId;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -167,7 +170,12 @@ function TaskWorkRow({
         {expanded ? "Hide work" : "Show work"}
       </button>
       {expanded && (
-        <GoatBotWorkDetails environmentId={environmentId} taskId={row.task.taskId} rows={rows} />
+        <GoatBotWorkDetails
+          environmentId={environmentId}
+          taskId={row.task.taskId}
+          rows={rows}
+          remoteWork={remoteWork}
+        />
       )}
     </div>
   );
