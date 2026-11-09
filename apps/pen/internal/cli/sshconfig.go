@@ -25,7 +25,7 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 		if err := uninstallSSHConfig(dir); err != nil {
 			return fail(stderr, err)
 		}
-		fmt.Fprintf(stdout, "removed %s and its Include line\n", filepath.Join(dir, "pen"))
+		fmt.Fprintf(stdout, "removed %s and its Include line\n", filepath.Join(dir, "pen", "config"))
 		return 0
 	}
 	exe, err := os.Executable()
@@ -35,9 +35,9 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 	if p, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = p
 	}
-	cmd := exe
+	cmd := shellQuote(exe)
 	if h := os.Getenv("PEN_HOME"); h != "" {
-		cmd = "env PEN_HOME=" + h + " " + exe
+		cmd = "env PEN_HOME=" + shellQuote(h) + " " + cmd
 	}
 	var names []string
 	if st, err := openState(); err == nil {
@@ -58,24 +58,35 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "wrote %s\n", path)
 	if *install {
-		if err := installInclude(dir); err != nil {
+		backup, err := installInclude(dir)
+		if err != nil {
 			return fail(stderr, err)
 		}
-		fmt.Fprintf(stdout, "included it first in %s (backup %s)\n", filepath.Join(dir, "config"), filepath.Join(dir, "config.pen-backup"))
+		fmt.Fprintf(stdout, "%s starts with %s\n", filepath.Join(dir, "config"), includeLine(dir))
+		if backup != "" {
+			fmt.Fprintf(stdout, "previous config kept in %s\n", backup)
+		}
 	} else {
 		fmt.Fprintf(stdout, "add this as the first line of %s:\n%s\n", filepath.Join(dir, "config"), includeLine(dir))
 	}
 	return 0
 }
 
+// shellQuote quotes s for the sh -c that runs ProxyCommand.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// sshArg double-quotes a path for ssh_config and keeps ssh from expanding % tokens in it.
+func sshArg(s string) string { return `"` + strings.ReplaceAll(s, "%", "%%") + `"` }
+
 // sshConfigText is one Host block per member name plus a pen-* fallback for names added later.
+// cmd is already shell-quoted.
 func sshConfigText(cmd, knownHosts string, names []string) string {
 	var b strings.Builder
 	b.WriteString("# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n")
 	block := func(pattern string) {
 		fmt.Fprintf(&b, "Host %s\n", pattern)
-		fmt.Fprintf(&b, "    ProxyCommand %s pipe %%n 22\n", cmd)
-		fmt.Fprintf(&b, "    UserKnownHostsFile %s\n", knownHosts)
+		fmt.Fprintf(&b, "    ProxyCommand %s pipe %%n 22\n", strings.ReplaceAll(cmd, "%", "%%"))
+		fmt.Fprintf(&b, "    UserKnownHostsFile %s\n", sshArg(knownHosts))
 		b.WriteString("    StrictHostKeyChecking yes\n")
 	}
 	for _, n := range names {
@@ -93,7 +104,7 @@ func sshDir() string {
 	return filepath.Join(home, ".ssh")
 }
 
-func includeLine(dir string) string { return "Include " + filepath.Join(dir, "pen", "config") }
+func includeLine(dir string) string { return "Include " + sshArg(filepath.Join(dir, "pen", "config")) }
 
 func writeSSHConfig(dir, text string) (string, error) {
 	if err := os.MkdirAll(filepath.Join(dir, "pen"), 0o700); err != nil {
@@ -107,40 +118,53 @@ func writeSSHConfig(dir, text string) (string, error) {
 	return path, os.Rename(tmp, path)
 }
 
-// installInclude puts the Include line first in <dir>/config, keeping a byte-for-byte backup.
-func installInclude(dir string) error {
+// installInclude puts the Include line first in <dir>/config (OpenSSH keeps the first value it reads),
+// keeping a byte-for-byte backup of an existing file. It returns the backup path, if one was made.
+func installInclude(dir string) (string, error) {
 	cfg := filepath.Join(dir, "config")
 	old, err := os.ReadFile(cfg)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return "", err
 	}
-	line := includeLine(dir)
-	for _, l := range strings.Split(string(old), "\n") {
-		if strings.TrimSpace(l) == line {
-			return nil
-		}
+	prefix := []byte(includeLine(dir) + "\n")
+	if bytes.HasPrefix(old, prefix) {
+		return "", nil
 	}
+	backup := ""
 	if err == nil {
-		if err := os.WriteFile(cfg+".pen-backup", old, 0o600); err != nil {
-			return err
+		backup = cfg + ".pen-backup"
+		if err := os.WriteFile(backup, old, 0o600); err != nil {
+			return "", err
 		}
 	}
-	return os.WriteFile(cfg, append([]byte(line+"\n"), old...), 0o600)
+	return backup, replaceFile(cfg, append(prefix, old...))
 }
 
-// uninstallSSHConfig removes exactly the line installInclude added and the pen directory.
+func replaceFile(path string, data []byte) error {
+	tmp := path + ".pen-tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// uninstallSSHConfig removes exactly the line installInclude added and the config pen wrote. The daemon's
+// known_hosts beside it stays; pen leave or pen down owns that.
 func uninstallSSHConfig(dir string) error {
 	cfg := filepath.Join(dir, "config")
 	old, err := os.ReadFile(cfg)
 	if err == nil {
 		prefix := []byte(includeLine(dir) + "\n")
 		if bytes.HasPrefix(old, prefix) {
-			if err := os.WriteFile(cfg, old[len(prefix):], 0o600); err != nil {
+			if err := replaceFile(cfg, old[len(prefix):]); err != nil {
 				return err
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.RemoveAll(filepath.Join(dir, "pen"))
+	if err := os.Remove(filepath.Join(dir, "pen", "config")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
