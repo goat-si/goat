@@ -228,4 +228,22 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
       projectId: onMacmini.projectId,
     });
   });
+
+  it("choosing an SSH host cancels a clone still waiting for its project", async () => {
+    await using screen = await setup();
+
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
+    await vi.waitFor(() => expect(state.addProjectToMachine).toHaveBeenCalledTimes(1));
+    // ChatView's SSH selection cancels the pending switch before it sets the destination.
+    await act(() => screen.routing.current?.cancelEnvironmentChange());
+    const cloned = clonedRef();
+    await act(() =>
+      state.setProject(cloned, { ...SOURCE, environmentId: studio, id: cloned.projectId }),
+    );
+
+    await vi.waitFor(() => expect(state.listeners.get(state.keyOf(cloned))?.size ?? 0).toBe(0));
+    await act(async () => undefined);
+    expect(screen.draft()).toMatchObject({ environmentId: laptop, projectId: source.projectId });
+    expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
+  });
 });
