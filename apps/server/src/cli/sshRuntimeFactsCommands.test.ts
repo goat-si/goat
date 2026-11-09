@@ -255,6 +255,76 @@ describe("SSH helper facts frame", () => {
     }),
   );
 });
+const helperMainModule = JSON.stringify(new URL("./helperMain.ts", import.meta.url).href);
+const absentFiles = (name: string) => {
+  const home = NodeOS.tmpdir();
+  return [
+    "--runtime-file",
+    NodePath.join(home, `goat-${name}-absent-record`),
+    "--port-file",
+    NodePath.join(home, `goat-${name}-absent-port`),
+    "--pid-file",
+    NodePath.join(home, `goat-${name}-absent-pid`),
+  ];
+};
+
+// Contract: a launch asks its own build's freshly pinned runner these three questions in one start
+// and records the answers as if it had run the separate commands, so they must not drift.
+describe("SSH helper launch facts", () => {
+  it.effect(
+    "facts --version --own --live answer byte for byte as --version, protocol --shell and protocol --runtime-file --shell",
+    () =>
+      Effect.gen(function* () {
+        const version = yield* Effect.promise(() =>
+          runModule(
+            `const {runVersionMain} = await import(${helperMainModule}); runVersionMain();`,
+          ),
+        );
+        expect(version.status).toBe(0);
+        expect(version.stdout).toBe(`goat v${packageJson.version}\n`);
+        const own = yield* helper(["protocol", "--shell"]);
+        const { files } = yield* liveRecord(["start-1"]);
+        for (const input of [files, absentFiles("launch-facts")]) {
+          const frame = frameOf(
+            (yield* helper(["facts", "--version", "--own", "--live", ...input])).stdout,
+          );
+          const live = yield* helper(["protocol", ...input, "--shell"]);
+          expect(frame.get("version")).toBe("ok " + version.stdout.trimEnd());
+          expect(frame.get("own")).toBe("ok " + own.stdout.trimEnd());
+          expect(frame.get("live")).toBe("ok " + live.stdout.trimEnd());
+        }
+      }).pipe(Effect.scoped),
+  );
+
+  it("the full CLI's --version prints the line the version fast path prints", async () => {
+    const result = await runModule(
+      `Command.runWith(Command.make("goat"), {version: ${JSON.stringify(packageJson.version)}})(["--version"]).pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain);`,
+    );
+    expect(result).toEqual({ status: 0, stdout: `goat v${packageJson.version}\n`, stderr: "" });
+  });
+
+  it.effect("holds only the asked answers, in order, after the capabilities line", () =>
+    Effect.gen(function* () {
+      const caps = (yield* helper(["capabilities"])).stdout.trimEnd();
+      const absent = absentFiles("launch-facts-order");
+      const ownLive = (yield* helper(["facts", "--with-caps", "--own", "--live", ...absent]))
+        .stdout;
+      const own = (yield* helper(["protocol", "--shell"])).stdout.trimEnd();
+      expect(ownLive).toBe(
+        [
+          "begin v1 facts",
+          caps,
+          "own ok " + own,
+          "live ok none unknown unknown unknown 0 0",
+          "end 2",
+        ].join("\n") + "\n",
+      );
+      const versionOnly = frameOf((yield* helper(["facts", "--version", ...absent])).stdout);
+      expect([...versionOnly.keys()]).toEqual(["version"]);
+    }),
+  );
+});
+
 describe("SSH helper wait-ready report", () => {
   it.effect("a ready server's report answers live and compat as the separate subcommands do", () =>
     Effect.gen(function* () {
