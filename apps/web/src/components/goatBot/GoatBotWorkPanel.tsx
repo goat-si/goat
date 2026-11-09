@@ -115,20 +115,22 @@ export function GoatBotWorkPanel({
           ) : null}
           {tasks.length > 0 ? (
             <div className="space-y-4">
-              {([false, true] as const).map((done) => (
-                <section key={String(done)}>
-                  <h3 className="font-semibold">{done ? "Done" : "In progress"}</h3>
-                  {(done ? work.done : work.inProgress).map(({ row }) => (
-                    <TaskWorkRow
-                      key={row.task.taskId}
-                      row={row}
-                      rows={rows}
-                      remoteWork={remoteWork}
-                      environmentId={environmentId}
-                    />
-                  ))}
-                </section>
-              ))}
+              {([false, true] as const).map((done) =>
+                (done ? work.done : work.inProgress).length === 0 ? null : (
+                  <section key={String(done)}>
+                    <h3 className="font-semibold">{done ? "Done" : "In progress"}</h3>
+                    {(done ? work.done : work.inProgress).map(({ row }) => (
+                      <TaskWorkRow
+                        key={row.task.taskId}
+                        row={row}
+                        rows={rows}
+                        remoteWork={remoteWork}
+                        environmentId={environmentId}
+                      />
+                    ))}
+                  </section>
+                ),
+              )}
             </div>
           ) : failed ? null : !supported ? (
             <p className="text-muted-foreground">
