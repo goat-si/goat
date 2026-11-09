@@ -14,7 +14,7 @@ import { GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotComputer } from "./GoatBotComputer";
 import { GoatBotLibrary } from "./GoatBotLibrary";
 import { GoatBotMemory } from "./GoatBotMemory";
-import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
+import { GoatBotPanelEmpty, GoatBotPanelFailure } from "./GoatBotPanelEmpty";
 import { GoatBotStatusCard } from "./GoatBotStatusCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import {
@@ -46,7 +46,7 @@ export function GoatBotWorkPanel({
   const [tab, setTab] = useState<Tab>("Tasks");
   const member = useGoatBotMember();
   const botName = useGoatBotName();
-  const { rows, remoteWork, supported, loaded, failed, turnsWaiting } = useBotThreads(
+  const { rows, remoteWork, supported, loaded, failed, turnsWaiting, refresh } = useBotThreads(
     environmentId,
     memberThreadsKey(member),
   );
@@ -95,12 +95,15 @@ export function GoatBotWorkPanel({
               </Link>
             </p>
           ) : null}
-          {tasks.length === 0 ? (
-            <GoatBotPanelEmpty
-              title="No tasks yet"
-              next={`Ask ${botName} in chat to start work.`}
-            />
-          ) : (
+          {failed ? (
+            <div className="mb-3">
+              <GoatBotPanelFailure
+                message={`Couldn't load ${botName}'s tasks.`}
+                onRetry={refresh}
+              />
+            </div>
+          ) : null}
+          {tasks.length > 0 ? (
             <div className="space-y-4">
               {([false, true] as const).map((done) => (
                 <section key={String(done)}>
@@ -117,14 +120,26 @@ export function GoatBotWorkPanel({
                 </section>
               ))}
             </div>
+          ) : failed ? null : !supported ? (
+            <p className="text-muted-foreground">
+              Tasks can't be listed from this server right now.
+            </p>
+          ) : !loaded ? (
+            <p className="text-muted-foreground">Loading tasks…</p>
+          ) : (
+            <GoatBotPanelEmpty
+              title="No tasks yet"
+              next={`Ask ${botName} in chat to start work.`}
+            />
           )}
         </TabsPanel>
         <TabsPanel value="Routines" className="mt-4 min-h-0 overflow-y-auto">
           <GoatBotRoutines
             environmentId={environmentId}
             threadId={threadId}
-            tasks={routines.data?.tasks ?? []}
+            tasks={routines.data?.tasks ?? null}
             error={routines.error}
+            onRetry={routines.refresh}
           />
         </TabsPanel>
         <TabsPanel value="Memory" className="mt-4 min-h-0 overflow-y-auto">
