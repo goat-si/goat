@@ -179,10 +179,29 @@ func (s *Store) EnsureIdentity() (id *ident.Identity, created bool, err error) {
 	return id, true, nil
 }
 
-// Config is config.json.
+// Config is config.json. Relays is the relay list; Relay repeats the first one so binaries that
+// know only one relay still start.
 type Config struct {
-	Relay string `json:"relay"`
-	Name  string `json:"name"`
+	Relay  string   `json:"relay"`
+	Relays []string `json:"relays,omitempty"`
+	Name   string   `json:"name"`
+}
+
+// RelayList is the node's relays; a v1 config's single relay migrates to a one-element list.
+func (c Config) RelayList() []string {
+	if len(c.Relays) == 0 && c.Relay != "" {
+		return []string{c.Relay}
+	}
+	return c.Relays
+}
+
+// SetRelays replaces the relay list.
+func (c *Config) SetRelays(relays []string) {
+	c.Relays = append([]string(nil), relays...)
+	c.Relay = ""
+	if len(relays) > 0 {
+		c.Relay = relays[0]
+	}
 }
 
 // LoadConfig reads config.json (zero value when absent).
@@ -192,5 +211,8 @@ func (s *Store) LoadConfig() (Config, error) {
 	return c, err
 }
 
-// SaveConfig writes config.json.
-func (s *Store) SaveConfig(c Config) error { return s.WriteJSON("config.json", c, 0o600) }
+// SaveConfig writes config.json with both relays and relay (the first one, for older binaries).
+func (s *Store) SaveConfig(c Config) error {
+	c.SetRelays(c.RelayList())
+	return s.WriteJSON("config.json", c, 0o600)
+}
