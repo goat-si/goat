@@ -3,6 +3,14 @@ import {
   LEGACY_SSH_NODE_SCRIPT_PATH_KEY,
 } from "@goat/contracts/legacyT3Names";
 
+/**
+ * What a runtime whose `__ssh-helper` lacks `capabilities` writes to stderr for that flagless
+ * call, with exit status 1. Captured from 0.1.6-nightly.20261108.346 on Git Bash; apps/server
+ * pins the same text for the current CLI. Only this exact answer is recorded as "none".
+ */
+export const OLD_HELPER_CAPS_STDERR =
+  '\nERROR\n  Unknown subcommand "capabilities" for "goat __ssh-helper"\n';
+
 // Starting goat costs about 0.4 s on a host, and one reconnect used to start it dozens of times
 // for answers that cannot change while their inputs stand: those of an unchanged executable, and
 // those of one running server instance. Each answer is recorded under a key naming every input it
@@ -144,7 +152,7 @@ prune_removed_facts() (
   for fact_file in "$GOAT_FACTS_DIR"/*; do
     [ ! -L "$fact_file" ] && [ -f "$fact_file" ] || continue
     fact_base="\${fact_file##*/}"
-    case "$fact_base" in version.*|own.*|commit.*|scopes.*|live.*|compat.*) ;; *) continue ;; esac
+    case "$fact_base" in version.*|own.*|commit.*|scopes.*|live.*|compat.*|caps.*) ;; *) continue ;; esac
     case "$fact_base" in *.exe|*.runner) ;; *) continue ;; esac
     fact_version="\${fact_base#*.}"; fact_version="\${fact_version%.*}"
     valid_version "$fact_version" || continue
@@ -168,9 +176,39 @@ fact_valid() {
         case "$1" in compatible|update-required|client-too-old) ;; *) exit 1 ;; esac
         [ "$2" = 1 ] || exit 1
         case "$3" in ''|-|*[!A-Za-z0-9-]*) exit 1 ;; *) ;; esac) ;;
+    caps) caps_valid "$2" ;;
     *) return 1 ;;
   esac
 }
+# True for "caps v1" followed by none or some of the combined calls a host script knows, each at
+# most once and separated by single spaces.
+caps_valid() {
+  case "$1" in "caps v1") return 0 ;; "caps v1 "*) caps_rest="\${1#caps v1 }" ;; *) return 1 ;; esac
+  caps_seen=" "
+  while :; do
+    caps_word="\${caps_rest%% *}"
+    case "$caps_word" in pick-port-protocol|facts|wait-ready-report) ;; *) return 1 ;; esac
+    case "$caps_seen" in *" $caps_word "*) return 1 ;; esac
+    caps_seen="$caps_seen$caps_word "
+    [ "$caps_rest" != "$caps_word" ] || return 0
+    caps_rest="\${caps_rest#* }"
+  done
+}
+# Sets FRAME_ANSWER to what a combined call earlier in this script answered for question $1 under
+# key $2 ("ok <tokens>" or "fail <word>"), and fails when it left nothing there. These memo
+# records have an empty path, which no exec key lookup matches.
+frame_memo_get() {
+  FRAME_ANSWER=
+  [ -n "$FACT_MEMO" ] && [ -f "$FACT_MEMO" ] && [ -r "$FACT_MEMO" ] || return 1
+  while IFS= read -r memo_path && IFS= read -r memo_name && IFS= read -r memo_key &&
+    IFS= read -r memo_answer && IFS= read -r memo_sig && IFS= read -r memo_path_sig; do
+    [ -z "$memo_path" ] && [ "$memo_name" = "$1" ] && [ "$memo_key" = "$2" ] || continue
+    FRAME_ANSWER="$memo_answer"; return 0
+  done <"$FACT_MEMO"
+  return 1
+}
+# Prints FRAME_ANSWER's tokens, or fails as the separate call would have for a failed question.
+frame_memo_answer() { case "$FRAME_ANSWER" in "ok "*) printf '%s\\n' "\${FRAME_ANSWER#ok }" ;; *) return 1 ;; esac; }
 fact_get() {
   [ -n "$1" ] && [ -n "$2" ] && [ -f "$GOAT_FACTS_DIR/$1" ] && [ ! -L "$GOAT_FACTS_DIR/$1" ] || return 1
   { IFS= read -r fact_recorded && IFS= read -r fact_value; } <"$GOAT_FACTS_DIR/$1" || return 1
@@ -230,6 +268,7 @@ exec_fact() {
   exec_fact_key "$1" || true
   fact_name="$fact_kind.$FACT_NAME"; fact_key="$FACT_KEY"
   if fact_get "$fact_name" "$fact_key"; then return 0; fi
+  if frame_memo_get "frame-$fact_kind" "$1|$fact_name|$fact_key"; then frame_memo_answer || return 1; return 0; fi
   fact_out="$("$@")" || return 1
   if [ -n "$fact_key" ] && exec_fact_key "$1" && [ "$FACT_KEY" = "$fact_key" ]; then
     fact_put "$fact_name" "$fact_key" "$fact_out"
@@ -300,6 +339,9 @@ live_fact() {
     live_fact_key "$1" "$2" "$3" "$4" || FACT_KEY=
     fact_name="live.$FACT_NAME"; fact_key="$FACT_KEY"
     if fact_get "$fact_name" "$fact_key"; then return 0; fi
+    if frame_memo_get frame-live "$1|$2|$3|$4|\${FACT_NAME:+$FACT_NAME $fact_live}|$fact_key"; then
+      frame_memo_answer || return 1; return 0
+    fi
   fi
   fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1
   if [ -n "$live_none_key" ] && (set -f; set -- $fact_out; [ "$1" = none ] && valid_live_tokens "$@") &&
@@ -320,9 +362,11 @@ live_fact() {
 # $6 is the PID the live answer named; it is recorded only for the record's own process.
 compat_fact() {
   live_fact_key "$1" "$3" "$4" "$5" || FACT_KEY=
+  compat_frame_key="$1|$3|$4|$5|\${FACT_NAME:+$FACT_NAME $fact_live}|$FACT_KEY|$2"
   fact_name="compat.$FACT_NAME"; fact_key="$FACT_KEY"
   [ -z "$fact_key" ] || fact_key="$fact_key|$2"
   if fact_get "$fact_name" "$fact_key"; then return 0; fi
+  if frame_memo_get frame-compat "$compat_frame_key"; then frame_memo_answer || return 1; return 0; fi
   fact_out="$("$1" __ssh-helper compat --port "$2")" || return 1
   if [ -n "$fact_key" ] && live_fact_key "$1" "$3" "$4" "$5" && [ "$FACT_KEY|$2" = "$fact_key" ] &&
      fact_valid compat "$fact_out" && fact_bound "$6" "$2"; then

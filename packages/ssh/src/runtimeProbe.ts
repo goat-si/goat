@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { RuntimeSignals, shellSingleQuote } from "./remoteRuntime.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
+import { REMOTE_FACTS_FRAME_SCRIPT } from "./runtimeFactsFrameScripts.ts";
 import { WINDOWS_MANIFEST_SUPPORT_SCRIPT } from "./windowsRuntimeManifest.ts";
 
 export function buildRemoteRuntimeProbeScript(
@@ -25,6 +26,7 @@ ${REMOTE_PROTOCOL_TOKEN_SCRIPT}
 FACT_MEMO="$(mktemp "\${TMPDIR:-/tmp}/goat-facts.XXXXXX" 2>/dev/null)" || FACT_MEMO=
 trap 'probe_exit=$?; [ -z "$FACT_MEMO" ] || rm -f "$FACT_MEMO" 2>/dev/null || :; exit "$probe_exit"' EXIT
 ${WINDOWS_MANIFEST_SUPPORT_SCRIPT}
+${REMOTE_FACTS_FRAME_SCRIPT}
 prune_removed_facts
 ready_version() {
   valid_version "$1" && [ -x "$HOME/.goat/runtime/goat/versions/$1/goat" ] &&
@@ -51,7 +53,14 @@ binary_json() {
   if manifest_key="$(windows_manifest_key "$v" "$exe" 2>/dev/null)"; then
     exec_fact_key "$exe" || true
     manifest_fact_key="$FACT_KEY"; manifest_fact_name="$FACT_NAME"
-    if ! manifest="$("$exe" __ssh-helper runtime-manifest --shell 2>/dev/null)" ||
+    # One start can answer this probe's manifest, commit, live and compat questions together.
+    if facts_frame_ask "$exe"; then
+      manifest="\${FRAME_MANIFEST#ok }"
+      case "$FRAME_MANIFEST" in "ok "*) manifest_ok=1 ;; *) manifest_ok= ;; esac
+    else
+      manifest_ok=1; manifest="$("$exe" __ssh-helper runtime-manifest --shell 2>/dev/null)" || manifest_ok=
+    fi
+    if [ -z "$manifest_ok" ] ||
        [ "$(windows_manifest_key "$v" "$exe" 2>/dev/null || true)" != "$manifest_key" ]; then
       printf '{"serverVersion":"%s","invalid":true}' "$v"; return
     fi
