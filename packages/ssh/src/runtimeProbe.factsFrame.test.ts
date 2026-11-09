@@ -207,6 +207,18 @@ describe("the first probe's facts in one start", () => {
       status: "1",
     },
     { name: "exit 2", err: OLD_HELPER_CAPS_STDERR, status: "2" },
+    // A capture must not take its status from what the helper printed.
+    {
+      name: "stdout naming another status",
+      out: "x".repeat(4077) + "\n:goat-caps-exit:1:" + "y".repeat(100),
+      err: OLD_HELPER_CAPS_STDERR,
+      status: "2",
+    },
+    {
+      name: "stderr naming another status",
+      err: OLD_HELPER_CAPS_STDERR + ".\n1\n",
+      status: "2",
+    },
     { name: "two stdout lines", out: "caps v1 facts\ncaps v1 facts\n", status: "0" },
     { name: "unknown name", out: "caps v1 facts teleport\n", status: "0" },
     { name: "repeated name", out: "caps v1 facts facts\n", status: "0" },
@@ -330,19 +342,21 @@ describe("the first probe's facts in one start", () => {
       }).pipe(Effect.scoped),
   );
 
+  // A server replaced between the frame's live and compat reads is refused by the frame. The
+  // probe's own compat check must take that failure, not ask the replacement afresh.
   it.effect.each([
     "compat ok compatible 2 inst-1",
     "compat ok compatible 1 -",
     "compat fail changed",
-  ])("%s is not recorded and compat is asked by its own call", (answer) =>
+    "compat fail unavailable",
+  ])("%s is that question's failure for this probe and is not recorded", (answer) =>
     Effect.gen(function* () {
       const f = yield* fixture();
       yield* f.supporting();
       yield* f.write("frame", frame([...GOOD.slice(0, 3), answer]));
-      assert.deepEqual(yield* f.run(), ANSWERED);
-      assert.deepEqual(yield* f.asks(), [CAPS, FACTS, COMPAT_ASK]);
-      // What is recorded is the separate call's answer.
-      assert.equal((yield* f.fact("compat." + version + ".exe")).split("\n")[1], COMPAT);
+      assert.deepEqual(yield* f.run(), [...ANSWERED.slice(0, 3), "compat-failed"]);
+      assert.deepEqual(yield* f.asks(), [CAPS, FACTS]);
+      assert.notInclude(yield* f.facts(), "compat." + version + ".exe");
     }).pipe(Effect.scoped),
   );
 

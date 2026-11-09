@@ -10,24 +10,27 @@ export const REMOTE_FACTS_FRAME_SCRIPT = `helper_caps_old='${OLD_HELPER_CAPS_STD
 # Anything else (another status, a signal, other or longer output) counts as none for this script.
 helper_caps() {
   HELPER_CAPS=
-  exec_fact_key "$1" || return 0
+  [ -n "$FACT_MEMO" ] && exec_fact_key "$1" || return 0
   caps_name="caps.$FACT_NAME"; caps_key="$FACT_KEY"
   if caps_line="$(fact_get "$caps_name" "$caps_key")"; then
     HELPER_CAPS="\${caps_line#caps v1}"; HELPER_CAPS="\${HELPER_CAPS# }"; return 0
   fi
-  # Read as stderr, a mark, stdout, then the exit mark and status, each stream bounded while it is
-  # read. A capture is whole only when it ends in the exit mark and a status: head keeps a prefix.
-  caps_mark="$fact_nl:goat-caps-out:"; caps_exit="$fact_nl:goat-caps-exit:"
-  caps_raw="$({ caps_out="$({ caps_s=0; "$1" __ssh-helper capabilities 2>&3 || caps_s=$?
-      printf '%s%s:' "$caps_exit" "$caps_s"; } | head -c 4096)"
-    printf '%s%s' "$caps_mark" "$caps_out"; } 3>&1 | head -c 8192)" || caps_raw=
-  case "$caps_raw" in *"$caps_mark"*"$caps_mark"*) return 0 ;; *"$caps_mark"*"$caps_exit"*:) ;; *) return 0 ;; esac
-  caps_err="\${caps_raw%%"$caps_mark"*}"; caps_rest="\${caps_raw#*"$caps_mark"}"
-  caps_status="\${caps_rest##*"$caps_exit"}"; caps_status="\${caps_status%:}"
-  caps_out="\${caps_rest%"$caps_exit"*}"
+  # The status goes to a file only this script writes; stdout to a file and stderr to the capture,
+  # each through head while it is read. Neither stream's content can stand for the status or hide
+  # a cut: stdout counts only under the bound, and stderr only as an exact text.
+  caps_tmp="$FACT_MEMO.caps"
+  : >"$caps_tmp-status" && : >"$caps_tmp-out" || return 0
+  caps_err="$({ { caps_s=0; "$1" __ssh-helper capabilities 2>&3 || caps_s=$?
+      printf '%s\\n' "$caps_s" >"$caps_tmp-status"; } | head -c 4097 >"$caps_tmp-out"; printf . >&3; } 3>&1 | head -c 4097)" || return 0
+  case "$caps_err" in *.) caps_err="\${caps_err%.}" ;; *) return 0 ;; esac
+  IFS= read -r caps_status <"$caps_tmp-status" || return 0
   case "$caps_status" in ''|*[!0123456789]*) return 0 ;; esac
+  caps_size="$(wc -c <"$caps_tmp-out")" || return 0
+  caps_size="\${caps_size##* }"
+  case "$caps_size" in ''|*[!0123456789]*) return 0 ;; esac
+  [ "$caps_size" -le 4096 ] || return 0
   if [ "$caps_status" = 0 ] && [ -z "$caps_err" ]; then
-    case "$caps_out" in *"$fact_nl"*"$fact_nl"*) return 0 ;; *"$fact_nl") caps_line="\${caps_out%"$fact_nl"}" ;; *) return 0 ;; esac
+    { IFS= read -r caps_line && ! IFS= read -r caps_more && [ -z "$caps_more" ]; } <"$caps_tmp-out" || return 0
     caps_valid "$caps_line" || return 0
   elif [ "$caps_status" = 1 ] && [ "$caps_err" = "$helper_caps_old" ]; then
     caps_line="caps v1"
@@ -75,12 +78,21 @@ facts_frame_parse() {
 }
 # Sets frame_pid and frame_port from live tokens $1.
 facts_frame_live_ids() { set -f; set -- $1; frame_pid="\${5:-}"; frame_port="\${6:-}"; }
+# The compat tokens a separate compat call prints for a server with an instance id.
+facts_frame_compat_valid() {
+  set -f; set -- $1
+  [ "$#" = 3 ] || return 1
+  case "$1" in compatible|update-required|client-too-old|unknown) ;; *) return 1 ;; esac
+  case "$2" in 0|1) ;; *) return 1 ;; esac
+  case "$3" in ''|-|*[!$token_chars]*) return 1 ;; esac
+}
 # Asks installed goat $1, once per executable and script, its manifest, its commit time, the live
 # server behind the probe's record and launch files, and that server's compatibility, in one start.
 # Succeeds, with FRAME_MANIFEST set, only when the reply may be used: the executable supports the
 # call, its key was present before the capability lookup and is unchanged after the call, and the
-# frame is valid in full. Then commit, live and compat are recorded under their usual rules. A
-# live or compat answer that is not recorded is dropped: the probe's own check asks it again.
+# frame is valid in full. Then commit, live and compat are recorded under their usual rules. Any
+# other live or compat answer is dropped and asked again where the probe uses it, except a failed
+# compat question, which stays failed for this probe as a failed separate call would.
 facts_frame_ask() {
   [ -n "$FACT_MEMO" ] && exec_fact_key "$1" || return 1
   frame_name="$FACT_NAME"; frame_key="$FACT_KEY"; frame_exec="$FACT_NAME $FACT_KEY"
@@ -98,21 +110,23 @@ facts_frame_ask() {
   case "$FRAME_COMMIT" in "ok "*) valid_positive "\${FRAME_COMMIT#ok }" || FRAME_COMMIT="fail error" ;; esac
   case "$FRAME_COMMIT" in "ok "*) fact_put "commit.$frame_name" "$frame_key" "\${FRAME_COMMIT#ok }" ;; esac
   frame_memo_put frame-commit "$1|commit.$frame_name|$frame_key" "$FRAME_COMMIT"
-  if [ -n "$frame_live" ] && [ "$frame_live" = "$frame_after" ]; then
-    # Only the record's own server is recorded; compat with it, on the port live named.
-    frame_tokens="\${FRAME_LIVE#ok }"
-    if [ "$FRAME_LIVE" = "ok $frame_tokens" ] && fact_valid live "$frame_tokens"; then
-      facts_frame_live_ids "$frame_tokens"
-      if fact_bound "$frame_pid" "$frame_port"; then
-        fact_put "live.$frame_name" "$frame_live" "$frame_tokens"
-        case "$FRAME_COMPAT" in "ok "*)
-          if fact_valid compat "\${FRAME_COMPAT#ok }"; then
-            fact_put "compat.$frame_name" "$frame_live|$frame_port" "\${FRAME_COMPAT#ok }"
-          fi ;;
-        esac
-      fi
+  if [ "$frame_live" = "$frame_after" ] && facts_frame_live_server "$FRAME_LIVE"; then
+    facts_frame_live_ids "\${FRAME_LIVE#ok }"
+    # Only the record's own server is recorded, and compat with it on the port live named.
+    if [ -n "$frame_live" ] && fact_valid live "\${FRAME_LIVE#ok }" && fact_bound "$frame_pid" "$frame_port"; then
+      fact_put "live.$frame_name" "$frame_live" "\${FRAME_LIVE#ok }"
+      case "$FRAME_COMPAT" in "ok "*)
+        if fact_valid compat "\${FRAME_COMPAT#ok }"; then
+          fact_put "compat.$frame_name" "$frame_live|$frame_port" "\${FRAME_COMPAT#ok }"
+        fi ;;
+      esac
     fi
-  elif [ -n "$frame_absent" ] && [ -n "$frame_absent_after" ] &&
+    # A server replaced between the frame's live and compat reads must not be asked afresh.
+    case "$FRAME_COMPAT" in "ok "*) ! facts_frame_compat_valid "\${FRAME_COMPAT#ok }" || FRAME_COMPAT= ;; esac
+    [ -z "$FRAME_COMPAT" ] ||
+      frame_memo_put frame-compat "$1|$runtime_file|$state/port|$state/pid|$frame_exec|$frame_live|$frame_port" fail
+  fi
+  if [ -n "$frame_absent" ] && [ -n "$frame_absent_after" ] &&
        [ "$FRAME_LIVE" = "ok none unknown unknown unknown 0 0" ]; then
     # The record, port and PID files are absent, as live_fact keeps that answer for this script.
     frame_memo_put live-none "$frame_exec" "\${FRAME_LIVE#ok }"
