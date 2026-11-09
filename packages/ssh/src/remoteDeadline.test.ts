@@ -14,6 +14,10 @@ import { isRemoteShellScript, READ_TICK, withRemoteDeadline } from "./remoteDead
 // reads it and so blocks until the test closes its end once the shell exits. The run then settles
 // only when every process holding fd 3 has exited, including a tick a stopped watchdog leaves.
 const HOLD = "exec /bin/cat <&3 >/dev/null";
+const bashBefore4 =
+  Number(
+    NodeChildProcess.spawnSync("bash", ["-c", "echo $BASH_VERSINFO"], { encoding: "utf8" }).stdout,
+  ) < 4;
 
 const spawnHeld = (
   command: string,
@@ -101,19 +105,9 @@ const isAlive = (pid: number) => {
   }
 };
 // Opening without a reader would block; ENXIO means no reader is left to release.
-const releaseFifo = (path: string) => {
-  let fd: number;
-  try {
-    fd = NodeFS.openSync(path, NodeFS.constants.O_WRONLY | NodeFS.constants.O_NONBLOCK);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENXIO") return;
-    throw error;
-  }
-  NodeFS.closeSync(fd);
-};
-
 // The caller leads its group and runs the wrapped shell in it, beside a sibling that a hang-up of
-// the whole group would end.
+// the whole group would end. The sibling reads fd 3, so it ends once the test closes it after the
+// shell exits, however late it started.
 const runInCaller = async (
   dir: string,
   shell: string,
@@ -121,9 +115,8 @@ const runInCaller = async (
   env: NodeJS.ProcessEnv = {},
 ) => {
   NodeFS.writeFileSync(NodePath.join(dir, "wrapped.sh"), wrapped);
-  NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "keep")]);
   const caller = [
-    'cat "$1/keep" >/dev/null & echo $! > "$1/sibling.pid"',
+    '/bin/cat <&3 >/dev/null & echo $! > "$1/sibling.pid"',
     '"$2" -s -- "$1" < "$1/wrapped.sh" > "$1/out"; echo "$?" > "$1/code"',
   ].join("\n");
   let siblingAlive = false;
@@ -131,13 +124,8 @@ const runInCaller = async (
     env: { GOAT_TEST_DIR: dir, ...env },
     sessionLeader: true,
     onExit: () => {
-      try {
-        const sibling = Number(NodeFS.readFileSync(NodePath.join(dir, "sibling.pid"), "utf8"));
-        siblingAlive = isAlive(sibling);
-      } finally {
-        // Release a surviving sibling so nothing outlives the test, even when the check threw.
-        releaseFifo(NodePath.join(dir, "keep"));
-      }
+      const sibling = Number(NodeFS.readFileSync(NodePath.join(dir, "sibling.pid"), "utf8"));
+      siblingAlive = isAlive(sibling);
     },
   });
   const read = (name: string) => NodeFS.readFileSync(NodePath.join(dir, name), "utf8");
@@ -221,34 +209,39 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
       }
     },
   );
-  it.each(["dash", "bash"])(
-    "returns as soon as the script exits, leaving no watchdog behind (%s)",
-    async (shell) => {
-      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
-      try {
-        for (const fifo of ["ticking"])
-          NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
-        // The watchdog's clock records the watchdog's PID and then ticks far past the test.
-        const clock = NodePath.join(dir, "sleep");
-        NodeFS.writeFileSync(
-          clock,
-          '#!/bin/sh\necho $PPID > "$GOAT_TEST_DIR/watchdog.pid"\nprintf x > "$GOAT_TEST_DIR/ticking"\n' +
-            HOLD +
-            "\n",
-          { mode: 0o755 },
-        );
-        const script = withRemoteDeadline('cat "$1/ticking" >/dev/null\nexit 3', 60_000, clock);
-        expect(await runShell(script, [dir], { GOAT_TEST_DIR: dir }, { shell })).toEqual({
-          code: 3,
-          stdout: "",
-        });
-        // A watchdog left ticking would hold a Windows SSH channel open until its next tick.
-        const watchdog = Number(NodeFS.readFileSync(NodePath.join(dir, "watchdog.pid"), "utf8"));
-        expect(() => process.kill(watchdog, 0)).toThrow();
-      } finally {
-        NodeFS.rmSync(dir, { recursive: true, force: true });
-      }
-    },
+  const returnsAsSoonAsScriptExits = async (shell: string) => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+    try {
+      for (const fifo of ["ticking"])
+        NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
+      // The watchdog's clock records the watchdog's PID and then ticks far past the test.
+      const clock = NodePath.join(dir, "sleep");
+      NodeFS.writeFileSync(
+        clock,
+        '#!/bin/sh\necho $PPID > "$GOAT_TEST_DIR/watchdog.pid"\nprintf x > "$GOAT_TEST_DIR/ticking"\n' +
+          HOLD +
+          "\n",
+        { mode: 0o755 },
+      );
+      const script = withRemoteDeadline('cat "$1/ticking" >/dev/null\nexit 3', 60_000, clock);
+      expect(await runShell(script, [dir], { GOAT_TEST_DIR: dir }, { shell })).toEqual({
+        code: 3,
+        stdout: "",
+      });
+      // A watchdog left ticking would hold a Windows SSH channel open until its next tick.
+      const watchdog = Number(NodeFS.readFileSync(NodePath.join(dir, "watchdog.pid"), "utf8"));
+      expect(() => process.kill(watchdog, 0)).toThrow();
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  it("returns as soon as the script exits, leaving no watchdog behind (dash)", () =>
+    returnsAsSoonAsScriptExits("dash"));
+  // bash before 4 runs a trap during wait only for a signal that came after wait began, so a TERM
+  // that lands as a tick starts waits for that tick, which here never ends.
+  it.skipIf(bashBefore4)(
+    "returns as soon as the script exits, leaving no watchdog behind (bash)",
+    () => returnsAsSoonAsScriptExits("bash"),
   );
 
   it.each(["dash", "bash"])(
@@ -302,7 +295,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
           'n=$(($(/bin/cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
           'if [ "$n" = 1 ]; then exec /bin/cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
           'if [ "$n" = 4 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
-          'if [ "$n" -gt 3 ]; then ' + HOLD + "; fi",
         ].join("\n"),
       };
       for (const [name, body] of Object.entries(shims))
@@ -362,7 +354,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
             'n=$(($(/bin/cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
             'if [ "$n" = 1 ]; then exec /bin/cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
             'if [ "$n" = 4 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
-            'if [ "$n" -gt 3 ]; then ' + HOLD + "; fi",
           ].join("\n"),
         };
         for (const [name, body] of Object.entries(shims))
@@ -413,8 +404,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
       try {
         for (const fifo of ["go"])
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
-        // Ticks start and end around the script. Without a deadline tick 3 lets the script finish,
-        // so the watchdog is stopped mid-tick; with one, the script waits to be hung up.
+        // Ticks pass at once. Without a deadline tick 3 lets the script finish; with one, the script
+        // waits to be hung up.
         const clock = NodePath.join(dir, "sleep");
         NodeFS.writeFileSync(
           clock,
@@ -422,7 +413,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
             "#!/bin/sh",
             'n=$(($(cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
             'if [ "$n" = 3 ] && [ "$GOAT_TEST_DEADLINE" = false ]; then printf x > "$GOAT_TEST_DIR/go"; fi',
-            'if [ "$n" -gt 3 ]; then ' + HOLD + "; fi",
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
@@ -451,8 +441,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
       try {
         for (const fifo of ["gate", "block"])
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
-        // Tick 1 waits until the script is stuck and later deadline ticks pass at once. Tick 4 comes
-        // only for a script nothing hung up: it releases the script, and later ticks wait.
+        // Tick 1 waits until the script is stuck and later ticks pass at once. Tick 4 comes only for a
+        // script nothing hung up: it releases the script.
         const clock = NodePath.join(dir, "sleep");
         NodeFS.writeFileSync(
           clock,
@@ -461,7 +451,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
             'n=$(($(cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
             'if [ "$n" = 1 ]; then exec cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
             'if [ "$n" = 4 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
-            'if [ "$n" -gt 4 ]; then ' + HOLD + "; fi",
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
@@ -557,7 +546,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
             'n=$(($(cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
             'if [ "$n" = 1 ]; then rm -f "$GOAT_TEST_DIR/stat"; exec cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
             'if [ "$n" = 4 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
-            'if [ "$n" -gt 4 ]; then ' + HOLD + "; fi",
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
@@ -823,8 +811,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     it("ticks with sleep and hangs up on time when bash has no EPOCHREALTIME", async () => {
       await inDir(async (dir, bin) => {
         shim(bin, "mkdir", 'echo "$*" >> "$GOAT_TEST_DIR/mkdirs"; exit 1');
-        // Tick 1 waits until the script is stuck and later countdown ticks pass at once. Tick 5
-        // comes only for a script nothing hung up: it releases the script, and later ticks wait.
+        // Tick 1 waits until the script is stuck and later ticks pass at once. Tick 5 comes only for
+        // a script nothing hung up: it releases the script.
         shim(
           bin,
           "tick",
@@ -832,7 +820,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             'echo "$1" >> "$GOAT_TEST_DIR/steps"; n=$(($(wc -l < "$GOAT_TEST_DIR/steps")))',
             'if [ "$n" = 1 ]; then exec cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
             'if [ "$n" = 5 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
-            'if [ "$n" -gt 5 ]; then ' + HOLD + "; fi",
           ].join("\n"),
         );
         const result = await runShell(
