@@ -1,4 +1,4 @@
+.wrangler/
 # Built by apps/pen/scripts/build.sh and uploaded at deploy.
 public/dl/
 public/install.sh
-

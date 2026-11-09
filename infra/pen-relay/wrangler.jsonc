@@ -1,0 +1,18 @@
+// The Pen relay. Deploy from this directory with `pnpm run deploy`; see README.md.
+{
+  "name": "pen-relay",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  // CONTRACT: permessage-deflate off.
+  "compatibility_flags": ["no_web_socket_compression"],
+  "account_id": "88fe49abfe560e75daf6b53b0398bed8",
+  "workers_dev": true,
+  "preview_urls": false,
+  // The relay keeps no request logs: they would hold every connecting address.
+  "observability": { "enabled": false },
+  "durable_objects": { "bindings": [{ "name": "ROOM", "class_name": "Room" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+  // install.sh and /dl/<version>/ binaries, written by apps/pen/scripts/build.sh before deploy.
+  // Requests that match no file (/healthz, /v1/*) reach the Worker.
+  "assets": { "directory": "./public" },
+}
