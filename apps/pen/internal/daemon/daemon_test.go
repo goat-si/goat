@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -486,6 +488,50 @@ func TestRevokeCarriedElsewhereClosesTheSubjectsOpenMeshSessionAtOnce(t *testing
 			t.Fatal("a finished a sync with a key revoked on another session instead of closing it at once")
 		}
 	}
+}
+
+func TestHandshakeFailureAfterWinningThePingRaceFallsBackToTheNextRelay(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Relay b holds the node's live uplink; clients reach it only once gate opens.
+	rb := relaytest.NewUnstarted()
+	gate := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/client/") {
+			<-gate
+		}
+		rb.Relay.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	rb.URL = srv.URL
+	a := founder(t, ctx, rb, "a", nil)
+	// Relay s holds a stale uplink for the same node: it answers pong but drops every session.
+	rs := relaytest.New()
+	defer rs.Close()
+	stale := relay.NewUplink(rs.URL, a.id)
+	go stale.Run(ctx)
+	if err := rs.WaitOnline(ctx, a.d.NodeID()); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		c, err := stale.Accept(ctx)
+		if err != nil {
+			return
+		}
+		c.Close(wire.CodeOffline)
+		close(gate)
+	}()
+	tok := a.invite(t, time.Minute)
+	psk, _ := session.JoinPSK(tok.Secret, a.d.NodeID(), tok.NoisePub)
+	joiner, _ := ident.Generate(nil)
+	payload := session.Payload{V: 1, Stream: "join", Invite: session.InviteID(tok.Secret), Name: "b"}
+	sec, err := OpenAny(ctx, []string{rs.URL, rb.URL}, a.d.NodeID(), func(c relay.Conn) (*session.Secure, error) {
+		return session.Initiate(ctx, c, session.KindJoin, a.d.NodeID(), tok.NoisePub, joiner, psk, payload)
+	})
+	if err != nil {
+		t.Fatalf("handshake through the second relay: %v", err)
+	}
+	sec.Close(wire.CodeNormal)
 }
 
 func TestOnlyABatchHoldingThePeersRevokeDefersItsSessionClose(t *testing.T) {

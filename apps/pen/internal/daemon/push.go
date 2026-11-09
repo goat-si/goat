@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -87,17 +88,31 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 var DialRetries = []time.Duration{300 * time.Millisecond, time.Second, 2 * time.Second}
 
 // OpenAny reaches nodeID through the first of relays to answer (DialRace) and runs handshake on it.
+// A relay can answer pong for a stale uplink, so when the handshake fails there it falls back to the
+// remaining relays; 4401 and 4400 are the node's answer and end the attempt.
 func OpenAny(ctx context.Context, relays []string, nodeID string, handshake func(relay.Conn) (*session.Secure, error)) (*session.Secure, error) {
-	conn, _, err := relay.DialRace(ctx, relays, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	sec, err := handshake(conn)
-	if err != nil {
+	left := append([]string(nil), relays...)
+	var last error
+	for len(left) > 0 {
+		conn, used, err := relay.DialRace(ctx, left, nodeID)
+		if err != nil {
+			if last != nil {
+				return nil, last
+			}
+			return nil, err
+		}
+		sec, err := handshake(conn)
+		if err == nil {
+			return sec, nil
+		}
 		conn.Close(wire.CodeNormal)
-		return nil, err
+		if code := relay.CodeOf(err); code == wire.CodeNotAdmitted || code == wire.CodeCrypto || ctx.Err() != nil {
+			return nil, err
+		}
+		last = err
+		left = slices.DeleteFunc(left, func(u string) bool { return u == used })
 	}
-	return sec, nil
+	return nil, last
 }
 
 // OpenTCP opens a kind 0x01 tcp stream to port on member m and returns the confirmed session.
