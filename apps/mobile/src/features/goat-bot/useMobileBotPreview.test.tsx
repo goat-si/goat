@@ -70,12 +70,12 @@ function message(
 async function previewOf(items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>) {
   state.items = [...items];
   let preview: ReturnType<typeof useMobileBotPreview> = null;
-  function Probe() {
-    preview = useMobileBotPreview();
+  function Probe(props: { readonly onRead: (value: typeof preview) => void }) {
+    props.onRead(useMobileBotPreview());
     return null;
   }
   const root = createRoot(document.createElement("div"));
-  await act(async () => root.render(<Probe />));
+  await act(async () => root.render(<Probe onRead={(value) => (preview = value)} />));
   await act(async () => root.unmount());
   return preview;
 }

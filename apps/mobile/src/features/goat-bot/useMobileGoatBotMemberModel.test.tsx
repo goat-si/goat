@@ -79,12 +79,12 @@ const research = {
 
 async function menuOf(): Promise<MobileGoatBotMemberModelMenu> {
   let menu: MobileGoatBotMemberModelMenu | null = null;
-  function Probe() {
-    menu = useMobileGoatBotMemberModelMenu(research, "Goaty");
+  function Probe(props: { readonly onRead: (value: typeof menu) => void }) {
+    props.onRead(useMobileGoatBotMemberModelMenu(research, "Goaty"));
     return null;
   }
   const root = createRoot(document.createElement("div"));
-  await act(async () => root.render(<Probe />));
+  await act(async () => root.render(<Probe onRead={(value) => (menu = value)} />));
   await act(async () => root.unmount());
   if (menu === null) throw new Error("The menu did not render.");
   return menu;

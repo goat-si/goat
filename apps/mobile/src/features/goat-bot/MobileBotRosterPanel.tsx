@@ -175,9 +175,7 @@ function BotSheet(props: {
     sheet.mode === "edit" &&
     sheet.bot.role === "member";
   if (sheet.mode === "edit") {
-    const modelChanged =
-      modelEditable &&
-      (model?.instanceId !== initialModel?.instanceId || model?.model !== initialModel?.model);
+    const modelChanged = modelEditable && !sameModel(model, initialModel);
     return (
       <MobileBotProfileSheet
         mode="edit"
@@ -219,4 +217,12 @@ function BotSheet(props: {
       />
     </MobileBotProfileSheet>
   );
+}
+
+function sameModel(
+  left: BotProfile["defaultModelSelection"],
+  right: BotProfile["defaultModelSelection"],
+) {
+  if (left === null || right === null) return left === right;
+  return left.instanceId === right.instanceId && left.model === right.model;
 }
