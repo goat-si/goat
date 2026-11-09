@@ -18,6 +18,7 @@ import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { shrinkPng, shrinkJpegWithin } from "./ServerBrowserImage.ts";
+import { captureFullPage } from "./fullPageScreenshot.ts";
 import { pointerInterception } from "./pointerInterception.ts";
 import { subsequentClick } from "./actionClick.ts";
 import { evaluationExpired, requireEvaluationChannel } from "./actionEvaluation.ts";
@@ -60,16 +61,12 @@ import {
   openReaders,
   dottedPattern,
 } from "./pageSecrets.ts";
-import { documentPlacement, screenTree, viewportPlacement } from "./ServerBrowserScreen.ts";
+import { screenTree, viewportPlacement } from "./ServerBrowserScreen.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 const MAX_EVALUATION_BYTES = 64_000;
 const MAX_VISIBLE_TEXT_LENGTH = 20_000;
 const MAX_SCREENSHOT_WIDTH = 1280;
-const MAX_FULL_PAGE_WIDTH = 3840;
-const MAX_FULL_PAGE_HEIGHT = 16_384;
-const MAX_FULL_PAGE_BYTES = 8 * 1024 * 1024;
-const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 export const DIAGNOSTIC_BUFFER_LIMIT = 200;
 
 export { ServerBrowserOperationError } from "./browserOperationError.ts";
@@ -364,10 +361,6 @@ const withoutTreeDataPayloads = (tree: string) =>
       return url ? url[1] + withoutDataPayload(url[2]!) : line;
     })
     .join("\n");
-const FULL_PAGE_TOO_LARGE =
-  "The full-page screenshot exceeds the 3840 × 16384 pixel or 8 MiB limit, even at reduced scale. Use a viewport snapshot instead.";
-// A second capture would fail the same way; this one already tried every scale.
-
 /** Chromium sizes the capture, so the reported size is read from the PNG header. */
 const pngSize = (base64: string) => {
   const header = Buffer.from(base64.slice(0, 32), "base64");
@@ -430,59 +423,6 @@ export const captureViewportWithin = async (
   return (await shrinkJpegWithin(cdp, data, quality, bounds)) ?? data;
 };
 
-// Bounds, PNG checks, and scale retries adapted from Emanuele-web04/synara @ 566efb1b1.
-// Copyright (c) 2026 Emanuele Di Pietro. MIT license; see the repository LICENSE.
-/** Captures at CSS resolution or lower without changing viewport, scroll, or emulation. */
-const captureFullPage = async (cdp: CDPSession) => {
-  const { cssContentSize } = await cdp.send("Page.getLayoutMetrics");
-  if (!Number.isFinite(cssContentSize.width) || !Number.isFinite(cssContentSize.height)) {
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationExecutionError",
-      "The browser did not report valid document dimensions for a full-page screenshot.",
-    );
-  }
-  const width = Math.min(MAX_FULL_PAGE_WIDTH, Math.max(1, Math.ceil(cssContentSize.width)));
-  const height = Math.min(MAX_FULL_PAGE_HEIGHT, Math.max(1, Math.ceil(cssContentSize.height)));
-  const clipped = width < cssContentSize.width || height < cssContentSize.height;
-  // CSS clips and image pixels differ across native and emulated Retina tabs. Bound
-  // the actual PNG to the CSS clip so Retina captures cannot exceed CSS resolution.
-  for (const scale of [1, 0.75, 0.5, 0.25]) {
-    const { data } = await cdp.send("Page.captureScreenshot", {
-      format: "png",
-      fromSurface: true,
-      captureBeyondViewport: true,
-      clip: { x: 0, y: 0, width, height, scale },
-    });
-    const byteLength = Buffer.byteLength(data, "base64");
-    if (byteLength > MAX_FULL_PAGE_BYTES) continue;
-    const header = Buffer.from(data.slice(0, 32), "base64");
-    if (
-      header.length < 24 ||
-      !header.subarray(0, 8).equals(PNG_SIGNATURE) ||
-      header.subarray(12, 16).toString("ascii") !== "IHDR"
-    ) {
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        "The browser returned an invalid full-page PNG. Try another snapshot.",
-      );
-    }
-    const imageWidth = header.readUInt32BE(16);
-    const imageHeight = header.readUInt32BE(20);
-    if (imageWidth < 1 || imageHeight < 1 || imageWidth > width || imageHeight > height) continue;
-    return {
-      mimeType: "image/png" as const,
-      data,
-      width: imageWidth,
-      height: imageHeight,
-      fullPage: true,
-      clipped,
-      byteLength,
-      ...documentPlacement(width, height, imageWidth),
-    };
-  }
-  throw new ServerBrowserOperationError("PreviewAutomationExecutionError", FULL_PAGE_TOO_LARGE);
-};
-
 type SnapshotInput = PreviewAutomationSnapshotInput & {
   readonly agentSessionId?: string | undefined;
   readonly actionChannel?: import("./actionChannel.ts").ActionChannel | undefined;
@@ -491,6 +431,8 @@ type SnapshotInput = PreviewAutomationSnapshotInput & {
   /** Headless pages render at the scale the server set; a desktop page at its display's. */
   readonly renderScale: number | "display";
   readonly fullPage?: boolean | undefined;
+  /** Keep the uncapped capture beside the one the agent sees, for a saved file. */
+  readonly fullScreenshot?: boolean | undefined;
   /** False skips the capture when nothing would show or save the image (L4). */
   readonly captureImage?: boolean;
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
@@ -519,6 +461,12 @@ const renderingOf = async (input: SnapshotInput) => {
   };
 };
 
+type CapturedScreenshot = {
+  readonly image: NonNullable<PreviewAutomationSnapshot["screenshot"]>;
+  /** The capture before `image` was capped, when a saved file asked for full resolution. */
+  readonly full?: string | undefined;
+};
+
 const capture = async (
   input: SnapshotInput,
   deadline: number,
@@ -533,18 +481,22 @@ const capture = async (
   const generation = state.generation;
   const { readers, read } = await openReaders(input.page, input.cdp);
   const before = await read();
-  const captureImage = (): Promise<PreviewAutomationSnapshot["screenshot"]> =>
+  const captureImage = (): Promise<CapturedScreenshot | undefined> =>
     input.captureImage === false
       ? Promise.resolve(undefined)
       : input.fullPage
-        ? captureFullPage(input.cdp)
-        : captureViewport(input.cdp, { format: "png" })
-            .then((png) => (scale < 1 ? shrinkPng(input.cdp, png, scale) : png))
-            .then((data) => ({
-              mimeType: "image/png" as const,
-              data,
-              ...viewportPlacement(viewport, pngSize(data)),
-            }));
+        ? captureFullPage(input.cdp).then((image) => ({ image }))
+        : captureViewport(input.cdp, { format: "png" }).then(async (png) => {
+            const data = scale < 1 ? await shrinkPng(input.cdp, png, scale) : png;
+            return {
+              image: {
+                mimeType: "image/png" as const,
+                data,
+                ...viewportPlacement(viewport, pngSize(data)),
+              },
+              ...(scale < 1 && input.fullScreenshot === true ? { full: png } : {}),
+            };
+          });
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
   const pageAndScreenshot = Promise.all([
@@ -556,7 +508,7 @@ const capture = async (
   ]);
   void pageAndScreenshot.catch(constVoid);
   let tree: string;
-  let screenshot: PreviewAutomationSnapshot["screenshot"];
+  let capturedScreenshot: CapturedScreenshot | undefined;
   let unread: ReadonlyArray<Frame> = [];
   let dotted: ReturnType<typeof dottedPattern>;
   try {
@@ -580,7 +532,7 @@ const capture = async (
             input.actionChannel,
           )
         : Promise.resolve(undefined);
-    screenshot = await image;
+    capturedScreenshot = await image;
     const after = await read(before);
     // A value that changed meanwhile may be in the tree under neither reading.
     if (after.some((values, i) => values && JSON.stringify(values) !== JSON.stringify(before[i])))
@@ -606,7 +558,9 @@ const capture = async (
   const hidden = scoped ? await scopeHidden(scoped) : false;
   const page = hidden ? { ...captured, visibleText: "" } : captured;
   if (hidden) tree = "";
-  screenshot ??= capturedImage;
+  capturedScreenshot ??= capturedImage;
+  const screenshot = capturedScreenshot?.image;
+  const full = capturedScreenshot?.full;
   if (state.generation !== generation) throw pageChanged();
   const filled = input.diagnostics?.mask ?? ((text: string) => text);
   const secrets = maskSecrets(dotted, cookies);
@@ -641,6 +595,7 @@ const capture = async (
       ...treeFields,
       ...maskSnapshotRecords(mask, input),
       ...(screenshot === undefined ? {} : { screenshot }),
+      ...(full === undefined ? {} : { fullScreenshot: { data: full, ...pngSize(full) } }),
     },
     input,
     page.visibleText.length,

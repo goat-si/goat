@@ -402,9 +402,11 @@ const handlers = {
     const { includeImage, save, ...operationInput } = input ?? {};
     // Nothing shows or saves the image, so the browser skips the capture (L4).
     const captureImage = includeImage === true || save === true;
+    // A saved file is for people, so it keeps the resolution the agent's image is capped below.
     return invokeTargeted<PreviewAutomationSnapshot>("snapshot", {
       ...operationInput,
       captureImage,
+      ...(save === true ? { fullScreenshot: true } : {}),
     });
   }),
   preview_logs: McpToolAccess.readsAsCaller((input) =>
