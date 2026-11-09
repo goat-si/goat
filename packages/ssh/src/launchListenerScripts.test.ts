@@ -462,6 +462,7 @@ describe("Windows launch listener wait", () => {
         "a second row for the same address": [
           HEADER + LISTENING + row("127.0.0.1:3773", "0.0.0.0:0", "LISTENING", "4321"),
         ],
+        "the same row twice": [HEADER + LISTENING + LISTENING],
       } as const;
       for (const [name, [output, options = {}]] of Object.entries(rejected)) {
         assert.deepEqual(
