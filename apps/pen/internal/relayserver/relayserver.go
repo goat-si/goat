@@ -31,6 +31,8 @@ const (
 	answerLen     = 96
 	// queueSlack is what a socket's outbound queue may hold past the contract windows (pongs).
 	queueSlack = 64 << 10
+	// maxQueuedPongs caps pongs waiting behind a slow write; more pings get no pong until it drains.
+	maxQueuedPongs = 8
 )
 
 // Close codes the relay sends besides the wire package's.
@@ -590,12 +592,20 @@ func sendable(code uint16) uint16 {
 
 // outq sends a socket's messages in order from one goroutine, so the room never blocks on a slow
 // peer. The contract windows bound what it holds; past them plus slack the socket is aborted.
+// wsWriter is the part of a WebSocket the out queue uses.
+type wsWriter interface {
+	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
+	Close(code websocket.StatusCode, reason string) error
+	CloseNow() error
+}
+
 type outq struct {
-	ws      *websocket.Conn
+	ws      wsWriter
 	timeout time.Duration
 	mu      sync.Mutex
 	items   []outItem
 	bytes   int
+	pongs   int
 	done    bool
 	wake    chan struct{}
 	ended   chan struct{}
@@ -604,10 +614,15 @@ type outq struct {
 type outItem struct {
 	data  []byte
 	text  bool
+	pong  bool
 	close uint16
 }
 
-func newOutq(ws *websocket.Conn, timeout time.Duration) *outq {
+// itemOverhead is what each queued item counts beyond its bytes, so many tiny items cannot hold
+// more memory than the limit says.
+const itemOverhead = 64
+
+func newOutq(ws wsWriter, timeout time.Duration) *outq {
 	q := &outq{ws: ws, timeout: timeout, wake: make(chan struct{}, 1), ended: make(chan struct{})}
 	go q.run()
 	return q
@@ -619,9 +634,13 @@ func (q *outq) push(it outItem) {
 		q.mu.Unlock()
 		return
 	}
+	if it.pong && q.pongs >= maxQueuedPongs {
+		q.mu.Unlock()
+		return
+	}
 	if it.close != 0 {
 		q.done = true
-	} else if q.bytes+len(it.data) > SocketWindow+RelayHeadroom+queueSlack {
+	} else if q.bytes+len(it.data)+itemOverhead > SocketWindow+RelayHeadroom+queueSlack {
 		q.done = true
 		q.items = nil
 		q.mu.Unlock()
@@ -629,7 +648,10 @@ func (q *outq) push(it outItem) {
 		return
 	}
 	q.items = append(q.items, it)
-	q.bytes += len(it.data)
+	q.bytes += len(it.data) + itemOverhead
+	if it.pong {
+		q.pongs++
+	}
 	q.mu.Unlock()
 	select {
 	case q.wake <- struct{}{}:
@@ -638,7 +660,7 @@ func (q *outq) push(it outItem) {
 }
 
 func (q *outq) binary(b []byte) { q.push(outItem{data: b}) }
-func (q *outq) text(s string)   { q.push(outItem{data: []byte(s), text: true}) }
+func (q *outq) text(s string)   { q.push(outItem{data: []byte(s), text: true, pong: s == "pong"}) }
 
 // close queues the close frame; a writer still busy after the write timeout is aborted.
 func (q *outq) close(code uint16) {
@@ -669,7 +691,10 @@ func (q *outq) run() {
 		}
 		it := q.items[0]
 		q.items = q.items[1:]
-		q.bytes -= len(it.data)
+		q.bytes -= len(it.data) + itemOverhead
+		if it.pong {
+			q.pongs--
+		}
 		q.mu.Unlock()
 		if it.close != 0 {
 			cctx, cancel := context.WithTimeout(ctx, q.timeout)
