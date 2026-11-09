@@ -7,6 +7,8 @@ import type {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
+import { goatBotPreviewText } from "./previewText.ts";
+
 /**
  * GOAT Bot's messenger timeline. Only conversation survives: the user's
  * messages, the bot's replies and one card per piece of work. Tool calls,
@@ -211,9 +213,9 @@ export function goatBotConversationPreview(input: {
   return {
     text:
       last.kind === "user"
-        ? `You: ${last.text.trim() || (last.attachments ?? []).map((file) => file.name).join(", ")}`
+        ? `You: ${goatBotPreviewText(last.text) || (last.attachments ?? []).map((file) => file.name).join(", ")}`
         : last.kind === "bot"
-          ? last.text
+          ? goatBotPreviewText(last.text)
           : `${last.card.statusLabel}: ${last.card.title}`,
     at: last.kind === "task" ? last.card.updatedAt : last.createdAt,
     unread,
