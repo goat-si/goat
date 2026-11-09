@@ -916,17 +916,32 @@ server_owns_listener() (
   fi
 )
 # Windows: each PowerShell start costs about 1.5 s, so one waits for server $1 to own the listener on
-# port $2, checking as often as the loop below, until it exits or the epoch second $3 arrives.
+# port $2, checking as often as the loop below, until it exits or the epoch second $3 arrives. Run in
+# the background, the job is PowerShell itself.
 server_awaits_listener() {
-  GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" GOAT_WAIT_UNTIL_MS="${"${"}3}000" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
+  GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" GOAT_WAIT_UNTIL_MS="${"${"}3}000" MSYS2_ARG_CONV_EXCL='*' exec powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
+}
+# True while job $1 still runs: a job this shell lists cannot have been reaped, so its PID is its own.
+listen_running() {
+  case " $(jobs -pr 2>/dev/null | tr '\n' ' ') " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 wait_launched_listener() {
   listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
   while server_alive "$REMOTE_PID" && [ "$(date +%s)" -lt "$listen_deadline" ]; do
     if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
-      # PowerShell starts late and answers late: ready only before the deadline, from a live server.
-      server_awaits_listener "$REMOTE_PID" "$REMOTE_PORT" "$listen_deadline" &&
-        [ "$(date +%s)" -lt "$listen_deadline" ] && server_alive "$REMOTE_PID" && return 0
+      # PowerShell can start, poll and answer late, so this shell holds it to the deadline and the
+      # server's life: at either it ends PowerShell and reports no listener.
+      server_awaits_listener "$REMOTE_PID" "$REMOTE_PORT" "$listen_deadline" &
+      listen_ps=$!
+      while listen_running "$listen_ps"; do
+        if [ "$(date +%s)" -ge "$listen_deadline" ] || ! server_alive "$REMOTE_PID"; then
+          if listen_running "$listen_ps"; then kill "$listen_ps" 2>/dev/null; fi
+          wait "$listen_ps" 2>/dev/null
+          return 1
+        fi
+        sleep 0.1
+      done
+      wait "$listen_ps" && [ "$(date +%s)" -lt "$listen_deadline" ] && server_alive "$REMOTE_PID" && return 0
     else
       server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0
     fi
