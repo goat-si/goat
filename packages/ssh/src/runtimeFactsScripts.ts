@@ -320,8 +320,9 @@ exec_fact() {
   fact_kind="$1"; shift
   exec_fact_key "$1" || true
   fact_name="$fact_kind.$FACT_NAME"; fact_key="$FACT_KEY"
-  if fact_get "$fact_name" "$fact_key"; then return 0; fi
+  # A question the probe's combined call answered keeps that answer, even over a recorded one.
   if frame_memo_get "frame-$fact_kind" "$1|$fact_name|$fact_key"; then frame_memo_answer || return 1; return 0; fi
+  if fact_get "$fact_name" "$fact_key"; then return 0; fi
   fact_out="$("$@")" || return 1
   if [ -n "$fact_key" ] && exec_fact_key "$1" && [ "$FACT_KEY" = "$fact_key" ]; then
     fact_put "$fact_name" "$fact_key" "$fact_out"
@@ -386,11 +387,16 @@ live_fact() {
   if live_none_absent "$2" "$3" "$4"; then
     if [ -n "$FACT_MEMO" ] && exec_fact_key "$1"; then
       live_none_key="$FACT_NAME $FACT_KEY"
+      if frame_memo_get frame-live "$1|$2|$3|$4|$live_none_key|"; then frame_memo_answer || return 1; return 0; fi
       if live_none_get "$live_none_key"; then return 0; fi
     fi
   else
     live_fact_key "$1" "$2" "$3" "$4" || FACT_KEY=
     fact_name="live.$FACT_NAME"; fact_key="$FACT_KEY"
+    # A live question the probe's combined call failed stays failed, even over a recorded answer.
+    if frame_memo_get frame-live "$1|$2|$3|$4|\${FACT_NAME:+$FACT_NAME $fact_live}|$fact_key"; then
+      frame_memo_answer || return 1; return 0
+    fi
     if fact_get "$fact_name" "$fact_key"; then return 0; fi
   fi
   fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1

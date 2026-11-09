@@ -360,10 +360,16 @@ describe("the first probe's facts in one start", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("a compat failure in the frame outranks an earlier recorded compat answer", () =>
+  it.effect.each([
+    { line: 3, answer: "compat fail changed", output: "compat-failed" },
+    { line: 2, answer: "live fail error", output: "live-failed" },
+    { line: 2, answer: "live ok live " + version + " 1 1 4242", output: "live-failed" },
+    { line: 1, answer: "commit fail unavailable", output: "no-commit" },
+    { line: 1, answer: "commit ok 0", output: "no-commit" },
+  ])("$answer in the frame outranks an earlier recorded answer", ({ line, answer, output }) =>
     Effect.gen(function* () {
       const f = yield* fixture();
-      // An earlier probe recorded compat for this server, then the manifest answers were lost.
+      // An earlier probe recorded every answer for this server, then the manifest answers were lost.
       yield* f.run();
       assert.equal((yield* f.fact("compat." + version + ".exe")).split("\n")[1], COMPAT);
       yield* f.forgetManifest();
@@ -372,20 +378,26 @@ describe("the first probe's facts in one start", () => {
       yield* Effect.promise(() =>
         NodeFSP.rm(NodePath.join(f.home, ".goat/ssh-launch/facts/caps." + version + ".exe")),
       );
-      yield* f.write("frame", frame([...GOOD.slice(0, 3), "compat fail changed"]));
-      assert.deepEqual(yield* f.run(), [...ANSWERED.slice(0, 3), "compat-failed"]);
+      // A failed live question leaves no compat line in the frame; the recorded compat stands.
+      const lines = GOOD.map((value, at) => (at === line ? answer : value));
+      yield* f.write("frame", frame(line === 2 ? lines.slice(0, 3) : lines));
+      const expected = [...ANSWERED];
+      expected[line] = output;
+      assert.deepEqual(yield* f.run(), expected);
     }).pipe(Effect.scoped),
   );
 
   it.effect.each(["live ok live " + version + " 1 1 4242", "live fail error"])(
-    "%s is not recorded and live and compat are asked by their own calls",
+    "%s is the live question's failure for this probe and is not recorded",
     (answer) =>
       Effect.gen(function* () {
         const f = yield* fixture();
         yield* f.supporting();
         yield* f.write("frame", frame([GOOD[0]!, GOOD[1]!, answer]));
-        assert.deepEqual(yield* f.run(), ANSWERED);
-        assert.deepEqual(yield* f.asks(), [CAPS, FACTS, LIVE_ASK, COMPAT_ASK]);
+        // The frame has no compat line without a live server; compat is asked by its own call.
+        assert.deepEqual(yield* f.run(), [...ANSWERED.slice(0, 2), "live-failed", COMPAT]);
+        assert.deepEqual(yield* f.asks(), [CAPS, FACTS, COMPAT_ASK]);
+        assert.notInclude(yield* f.facts(), "live." + version + ".exe");
       }).pipe(Effect.scoped),
   );
 

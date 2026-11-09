@@ -110,6 +110,13 @@ facts_frame_ask() {
   case "$FRAME_COMMIT" in "ok "*) valid_positive "\${FRAME_COMMIT#ok }" || FRAME_COMMIT="fail error" ;; esac
   case "$FRAME_COMMIT" in "ok "*) fact_put "commit.$frame_name" "$frame_key" "\${FRAME_COMMIT#ok }" ;; esac
   frame_memo_put frame-commit "$1|commit.$frame_name|$frame_key" "$FRAME_COMMIT"
+  # A failed live question stays failed for this probe, as a failed separate call would.
+  if [ "$frame_live" = "$frame_after" ] && [ "$frame_absent" = "$frame_absent_after" ]; then
+    case "$FRAME_LIVE" in "ok "*) (set -f; set -- \${FRAME_LIVE#ok }; valid_live_tokens "$@") || FRAME_LIVE="fail error" ;; esac
+    case "$FRAME_LIVE" in "fail "*)
+      frame_memo_put frame-live "$1|$runtime_file|$state/port|$state/pid|$frame_exec|$frame_live" fail ;;
+    esac
+  fi
   if [ "$frame_live" = "$frame_after" ] && facts_frame_live_server "$FRAME_LIVE"; then
     facts_frame_live_ids "\${FRAME_LIVE#ok }"
     # Only the record's own server is recorded, and compat with it on the port live named.
