@@ -848,16 +848,25 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       });
     });
 
-    it.each(["directory", "FIFO", "read"])(
-      "removes its FIFO directory when stopped during its %s",
+    // "taken" makes the chosen name an existing directory with a file in it, so mkdir fails.
+    it.each(["directory", "taken", "FIFO", "read"])(
+      "cleans up only what it made when stopped during its %s step",
       async (stage) => {
         await inDir(async (dir, bin) => {
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "stopping")]);
           // The watchdog is stopped once the script knows it reached that stage.
           const stop = 'printf x > "$GOAT_TEST_DIR/stopping"; kill -TERM "$PPID"';
-          const tools = { directory: ["mkdir", "mktemp"], FIFO: ["mkfifo"], read: [] }[stage] ?? [];
-          for (const tool of tools)
-            shim(bin, tool, 'PATH="$' + '{PATH#*:}" ' + tool + ' "$@" && ' + stop);
+          const real = (tool: string) => 'PATH="$' + '{PATH#*:}" ' + tool;
+          if (stage === "directory" || stage === "FIFO") {
+            const tool = stage === "FIFO" ? "mkfifo" : "mkdir";
+            shim(bin, tool, real(tool) + ' "$@" && ' + stop);
+          }
+          if (stage === "taken")
+            shim(
+              bin,
+              "mkdir",
+              real("mkdir") + ' "$3" && echo keep > "$3/keep"; ' + stop + "; exit 1",
+            );
           const ticks = {
             now: READ_TICK.now,
             read:
@@ -878,7 +887,16 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             { shell: "bash" },
           );
           expect(result).toEqual({ code: 3, stdout: "" });
-          expect(NodeFS.readdirSync(NodePath.join(dir, "tmp"))).toEqual([]);
+          const left = NodeFS.readdirSync(NodePath.join(dir, "tmp"));
+          const contents = (name: string) => NodeFS.readdirSync(NodePath.join(dir, "tmp", name));
+          if (stage === "taken") {
+            expect(left).toHaveLength(1);
+            expect(contents(left[0] ?? "")).toEqual(["keep"]);
+          } else if (stage === "directory") {
+            // A TERM right after mkdir, before the watchdog records it, may leave it empty.
+            expect(left.length).toBeLessThanOrEqual(1);
+            for (const name of left) expect(contents(name)).toEqual([]);
+          } else expect(left).toEqual([]);
         });
       },
     );

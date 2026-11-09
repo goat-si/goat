@@ -88,10 +88,12 @@ if ! { true </dev/tty; } 2>/dev/null; then set -m 2>/dev/null || :; fi
       # shell may already have reaped it, so its PID could name another process.
       trap 'goat_deadline_drop; exit 0' TERM
       goat_deadline_me=; goat_deadline_dir=
-      # Removes the tick directory, named before it was made, when it is this user's own directory.
+      # Removes the FIFO's name and then the empty tick directory. goat_deadline_dir is set only after
+      # mkdir made it, so a name that was already taken is never touched; a TERM between mkdir and
+      # that assignment leaves one empty directory behind. rm -d is one process where rm has it.
       goat_deadline_drop() {
-        [ -n "$goat_deadline_dir" ] && [ -d "$goat_deadline_dir" ] && [ ! -L "$goat_deadline_dir" ] &&
-          [ -O "$goat_deadline_dir" ] && rm -rf "$goat_deadline_dir"
+        [ -z "$goat_deadline_dir" ] || rm -f -d "$goat_deadline_dir/tick" "$goat_deadline_dir" 2>/dev/null ||
+          { rm -f "$goat_deadline_dir/tick"; rmdir "$goat_deadline_dir"; } 2>/dev/null
         goat_deadline_dir=
       }
       # The job's shell signals this PID, so only a parent seen to have changed ends the watchdog;
@@ -109,9 +111,8 @@ ${ticks?.now ?? "        return 1"}
       if [ -n "\${BASH_VERSION:-}" ] && goat_deadline_now; then
         goat_deadline_end=$((goat_deadline_t + goat_deadline_left))
         for goat_deadline_try in 1 2 3; do
-          goat_deadline_dir="\${TMPDIR:-/tmp}/goat-deadline.$$.$RANDOM$RANDOM"
-          mkdir -m 700 "$goat_deadline_dir" 2>/dev/null && break
-          goat_deadline_dir=
+          goat_deadline_name="\${TMPDIR:-/tmp}/goat-deadline.$$.$RANDOM$RANDOM"
+          if mkdir -m 700 "$goat_deadline_name" 2>/dev/null; then goat_deadline_dir="$goat_deadline_name"; break; fi
         done
         if [ -n "$goat_deadline_dir" ] && mkfifo "$goat_deadline_dir/tick" 2>/dev/null &&
           { command exec 9<>"$goat_deadline_dir/tick"; } 2>/dev/null; then goat_deadline_tick=read; fi
