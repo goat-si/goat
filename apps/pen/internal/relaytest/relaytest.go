@@ -294,4 +294,3 @@ func (s *Server) serveClient(k *sock, nodeID string) {
 		u.k.send(ctx, wire.Frame{Type: wire.FrameData, SID: sid, Payload: p}.Encode())
 	}
 }
-

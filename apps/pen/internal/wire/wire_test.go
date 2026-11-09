@@ -11,8 +11,8 @@ import (
 
 type relayVectors struct {
 	SignSeed, NodeID, RelayOrigin, Challenge, ChallengeMessage, Signature, Answer string
-	Origins                                                                   []struct{ URL, Origin string }
-	Frames                                                                    []struct {
+	Origins                                                                       []struct{ URL, Origin string }
+	Frames                                                                        []struct {
 		Type    byte
 		SID     uint32
 		Payload string
@@ -84,4 +84,3 @@ func TestReservedFrameTypesAreRejected(t *testing.T) {
 		}
 	}
 }
-

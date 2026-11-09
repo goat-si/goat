@@ -320,4 +320,3 @@ func (s *Store) Append(id *ident.Identity, typ string, at int64, f Fields) (*Rec
 	s.mu.Unlock()
 	return r, s.Save()
 }
-

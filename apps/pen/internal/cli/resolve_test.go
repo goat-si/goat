@@ -28,4 +28,3 @@ func TestResolveAcceptsSshAliasNameNodeIDAndUniquePrefix(t *testing.T) {
 		}
 	}
 }
-

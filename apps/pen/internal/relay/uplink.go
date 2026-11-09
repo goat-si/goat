@@ -268,4 +268,3 @@ func (c *muxConn) Close(code uint16) error {
 	c.in.drop(ErrClosed)
 	return c.m.write(wire.CloseFrame(c.sid, code))
 }
-

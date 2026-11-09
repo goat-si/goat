@@ -143,4 +143,3 @@ func (d *Daemon) serveJoin(ctx context.Context, sec *session.Secure) {
 	d.mu.Unlock()
 	sec.Close(wire.CodeNormal)
 }
-

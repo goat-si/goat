@@ -187,4 +187,3 @@ func TestRekeyEvery2To20MessagesKeepsBothDirectionsInStep(t *testing.T) {
 		t.Fatalf("nonce %d: rekey must not reset n", a.send.Nonce())
 	}
 }
-

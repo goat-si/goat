@@ -27,7 +27,7 @@ import (
 // clock is a settable test clock.
 type clock struct{ ms atomic.Int64 }
 
-func (c *clock) now() time.Time         { return time.UnixMilli(c.ms.Load()) }
+func (c *clock) now() time.Time          { return time.UnixMilli(c.ms.Load()) }
 func (c *clock) advance(d time.Duration) { c.ms.Add(d.Milliseconds()) }
 
 type node struct {
@@ -487,4 +487,3 @@ func TestUplinkReturnSyncsRecordsSignedWhileOffline(t *testing.T) {
 	})
 	_ = bID
 }
-

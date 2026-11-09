@@ -30,4 +30,3 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "    StrictHostKeyChecking yes\n")
 	return 0
 }
-

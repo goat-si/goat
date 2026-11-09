@@ -49,10 +49,10 @@ type LsReply struct {
 
 // WatchLine is one view change.
 type WatchLine struct {
-	T       string     `json:"t"`
-	At      int64      `json:"at"`
-	Members []NameRef  `json:"members"`
-	Revoked []NameRef  `json:"revoked"`
+	T       string    `json:"t"`
+	At      int64     `json:"at"`
+	Members []NameRef `json:"members"`
+	Revoked []NameRef `json:"revoked"`
 }
 
 // NameRef names a node.
@@ -356,4 +356,3 @@ func Call(st *state.Store, req Request, v any) error {
 	}
 	return cl.Next(v)
 }
-

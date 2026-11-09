@@ -251,4 +251,3 @@ func (s *splice) writer(w io.Writer, closeWrite func() error) error {
 	}
 	return nil
 }
-

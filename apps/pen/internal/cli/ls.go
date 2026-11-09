@@ -172,4 +172,3 @@ func offlineLs(v *mesh.View, id *ident.Identity) daemon.LsReply {
 	}
 	return ls
 }
-

@@ -131,4 +131,3 @@ func (d *Daemon) rename(ctx context.Context, name string) error {
 	d.spawn(func() { d.pushAll(d.runCtx) })
 	return nil
 }
-

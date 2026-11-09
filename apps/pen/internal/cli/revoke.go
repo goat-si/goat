@@ -48,4 +48,3 @@ func RunRevoke(args []string, stdout, stderr io.Writer) int {
 	printResults(stdout, res.Results)
 	return 0
 }
-

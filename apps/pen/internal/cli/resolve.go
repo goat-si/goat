@@ -54,4 +54,3 @@ func ambiguous(arg string, ms []mesh.Member) error {
 	}
 	return fmt.Errorf("%q matches %s; use a longer nodeId", arg, strings.Join(c, ", "))
 }
-

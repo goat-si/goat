@@ -45,4 +45,3 @@ func TestNodeNamesFollowTheContractRule(t *testing.T) {
 		}
 	}
 }
-

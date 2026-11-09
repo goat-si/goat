@@ -142,4 +142,3 @@ func DecodeKey(s string) ([]byte, error) {
 	}
 	return b, nil
 }
-

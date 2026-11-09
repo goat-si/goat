@@ -58,4 +58,3 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "admitted %s (%s), fingerprint %s\n", ev.Member.Name, short(ev.Member.NodeID), fingerprintOf(noise))
 	return 0
 }
-

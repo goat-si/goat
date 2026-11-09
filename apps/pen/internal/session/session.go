@@ -283,4 +283,3 @@ func respond(ctx context.Context, conn relay.Conn, local *ident.Identity, nodeID
 	}
 	return s, nil
 }
-

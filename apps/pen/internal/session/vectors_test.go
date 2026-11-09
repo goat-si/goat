@@ -181,4 +181,3 @@ func TestSessionVectors(t *testing.T) {
 		t.Fatal("session.json does not match the implementation")
 	}
 }
-

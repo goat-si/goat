@@ -61,4 +61,3 @@ func main() {
 	}
 	os.Exit(run(os.Args[2:], os.Stdout, os.Stderr))
 }
-

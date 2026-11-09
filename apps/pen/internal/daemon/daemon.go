@@ -57,13 +57,13 @@ type Daemon struct {
 	upMu     sync.Mutex
 	runCtx   context.Context
 
-	mu        sync.Mutex
-	sessions  map[uint64]*live
-	nextLive  uint64
-	watchers  map[chan []byte]struct{}
-	seen      map[string]seenInfo
+	mu         sync.Mutex
+	sessions   map[uint64]*live
+	nextLive   uint64
+	watchers   map[chan []byte]struct{}
+	seen       map[string]seenInfo
 	inviteWait map[string]chan mesh.Member
-	lastView  *mesh.View
+	lastView   *mesh.View
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -367,4 +367,3 @@ func (d *Daemon) unregister(k uint64) {
 	defer d.mu.Unlock()
 	delete(d.sessions, k)
 }
-

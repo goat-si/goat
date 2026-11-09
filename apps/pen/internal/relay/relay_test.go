@@ -149,4 +149,3 @@ func TestDroppedUplinkReconnectsAndEndsItsSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-

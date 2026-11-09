@@ -19,4 +19,3 @@ func newHS(kind byte, resp, init *ident.Identity, psk, eph []byte) (*noise.Hands
 	}
 	return hs, nil
 }
-

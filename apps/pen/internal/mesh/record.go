@@ -438,4 +438,3 @@ func Sign(id *ident.Identity, mesh, typ string, n uint64, prev []string, at int6
 
 // MeshIDOf is the mesh id a founding record names.
 func MeshIDOf(found *Record) string { return ident.Base32ID(found.Body) }
-

@@ -118,4 +118,3 @@ func SyncRespond(ctx context.Context, l Link, s *Store, onMerged Merged) error {
 		}
 	}
 }
-

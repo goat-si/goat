@@ -377,4 +377,3 @@ func TestOversizedLineAndOverlongHaveClose4400(t *testing.T) {
 		}
 	}
 }
-

@@ -171,4 +171,3 @@ func ParseAck(s string) (uint64, bool) {
 	n, err := strconv.ParseUint(rest, 10, 64)
 	return n, err == nil && n <= maxAck
 }
-

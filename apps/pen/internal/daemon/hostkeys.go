@@ -98,4 +98,3 @@ func (d *Daemon) writeKnownHosts(v *mesh.View) {
 		d.opt.Logf("known_hosts: %v", err)
 	}
 }
-

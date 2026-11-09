@@ -112,4 +112,3 @@ func randomNonce() (string, error) {
 	}
 	return ident.B64.EncodeToString(b), nil
 }
-

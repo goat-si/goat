@@ -115,4 +115,3 @@ func short(nodeID string) string {
 	}
 	return nodeID
 }
-

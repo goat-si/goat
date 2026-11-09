@@ -194,4 +194,3 @@ func (s *Store) LoadConfig() (Config, error) {
 
 // SaveConfig writes config.json.
 func (s *Store) SaveConfig(c Config) error { return s.WriteJSON("config.json", c, 0o600) }
-

@@ -148,4 +148,3 @@ func removeService(mode string) error {
 	}
 	return nil
 }
-

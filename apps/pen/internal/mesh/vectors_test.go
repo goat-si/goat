@@ -79,15 +79,15 @@ func buildMeshVectors(t *testing.T) meshFile {
 	admit := func(by, subject *ident.Identity, name string, prev ...*Record) *Record {
 		return bl.sign(by, TypeAdmit, prev, Fields{Card: bl.card(subject, by, name)})
 	}
-	ra := admit(f, a, "alice", found) // founder n=2
-	rb := admit(a, b, "bob", ra)      // alice n=1
-	rn := bl.sign(f, TypeName, []*Record{rb}, Fields{Subject: pub(a), Name: "alice-renamed"}) // founder n=3
+	ra := admit(f, a, "alice", found)                                                                                                                         // founder n=2
+	rb := admit(a, b, "bob", ra)                                                                                                                              // alice n=1
+	rn := bl.sign(f, TypeName, []*Record{rb}, Fields{Subject: pub(a), Name: "alice-renamed"})                                                                 // founder n=3
 	rh := bl.sign(b, TypeHostKeys, []*Record{rb}, Fields{Keys: []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"}}) // bob n=1
 	fork1 := bl.signN(b, 2, TypeName, []*Record{rh}, Fields{Subject: pub(b), Name: "bob-left"})
 	fork2 := bl.signN(b, 2, TypeName, []*Record{rh}, Fields{Subject: pub(b), Name: "bob-right"})
 	bl.n[pub(b)] = 2
-	rc := admit(b, c, "carol", fork1, fork2) // bob n=3
-	rd := admit(f, d, "dave", rn, rc)        // founder n=4, over both branches
+	rc := admit(b, c, "carol", fork1, fork2)                                                     // bob n=3
+	rd := admit(f, d, "dave", rn, rc)                                                            // founder n=4, over both branches
 	bl.sign(f, TypeRevoke, []*Record{rd}, Fields{Subjects: []string{pub(a)}, Compromised: true}) // founder n=5
 	arrival := append([]*Record(nil), bl.recs...)
 	for i, j := 0, len(arrival)-1; i < j; i, j = i+1, j-1 {
@@ -167,4 +167,3 @@ func TestMeshVectors(t *testing.T) {
 		t.Fatal("mesh.json does not match the implementation")
 	}
 }
-

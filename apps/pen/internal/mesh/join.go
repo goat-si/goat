@@ -286,4 +286,3 @@ func CheckJoined(st *state.Store, id *ident.Identity, meshID string, recs []*Rec
 	}
 	return s, nil
 }
-

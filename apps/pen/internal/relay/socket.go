@@ -150,4 +150,3 @@ func (c *clientConn) Close(code uint16) error {
 	}
 	return nil
 }
-

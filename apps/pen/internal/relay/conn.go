@@ -164,4 +164,3 @@ func (p *pipeEnd) Close(code uint16) error {
 	p.peer.in.fail(&CloseError{Code: code})
 	return nil
 }
-
