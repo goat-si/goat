@@ -360,6 +360,23 @@ describe("the first probe's facts in one start", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("a compat failure in the frame outranks an earlier recorded compat answer", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      // An earlier probe recorded compat for this server, then the manifest answers were lost.
+      yield* f.run();
+      assert.equal((yield* f.fact("compat." + version + ".exe")).split("\n")[1], COMPAT);
+      yield* f.forgetManifest();
+      yield* f.write("caps.sh", "printf 'caps v1 facts\\n'");
+      yield* f.write("caps-status", "0");
+      yield* Effect.promise(() =>
+        NodeFSP.rm(NodePath.join(f.home, ".goat/ssh-launch/facts/caps." + version + ".exe")),
+      );
+      yield* f.write("frame", frame([...GOOD.slice(0, 3), "compat fail changed"]));
+      assert.deepEqual(yield* f.run(), [...ANSWERED.slice(0, 3), "compat-failed"]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect.each(["live ok live " + version + " 1 1 4242", "live fail error"])(
     "%s is not recorded and live and compat are asked by their own calls",
     (answer) =>
