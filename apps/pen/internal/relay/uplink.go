@@ -34,6 +34,13 @@ type Uplink struct {
 	accept chan Conn
 }
 
+// NewUplinkInto builds an uplink whose sessions arrive on accept (shared by several uplinks).
+func NewUplinkInto(relayURL string, id *ident.Identity, accept chan Conn) *Uplink {
+	u := NewUplink(relayURL, id)
+	u.accept = accept
+	return u
+}
+
 // NewUplink builds an uplink for id at relayURL.
 func NewUplink(relayURL string, id *ident.Identity) *Uplink {
 	return &Uplink{RelayURL: relayURL, ID: id, accept: make(chan Conn, 64), MinBackoff: 500 * time.Millisecond, MaxBackoff: 30 * time.Second}

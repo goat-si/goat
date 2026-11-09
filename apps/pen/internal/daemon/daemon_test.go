@@ -294,7 +294,7 @@ func TestNonMemberSessionIsClosed4401(t *testing.T) {
 	a := founder(t, ctx, rs, "a", nil)
 	stranger, _ := ident.Generate(nil)
 	self := a.ls(t).Members[0].Member
-	_, err := OpenTCP(ctx, rs.URL, stranger, self, 22)
+	_, err := OpenTCP(ctx, []string{rs.URL}, stranger, self, 22)
 	if relay.CodeOf(err) != wire.CodeNotAdmitted {
 		t.Fatalf("got %v, want 4401", err)
 	}
@@ -342,7 +342,7 @@ func TestTCPStreamCarriesBytesToALocalPortAndRefusedPortCloses4404(t *testing.T)
 	a := founder(t, ctx, rs, "a", nil)
 	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
 	port := echoServer(t)
-	sec, err := OpenTCP(ctx, rs.URL, b.id, memberNamed(t, b, "a"), port)
+	sec, err := OpenTCP(ctx, []string{rs.URL}, b.id, memberNamed(t, b, "a"), port)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestTCPStreamCarriesBytesToALocalPortAndRefusedPortCloses4404(t *testing.T)
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	closed := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
-	sec, err = OpenTCP(ctx, rs.URL, b.id, memberNamed(t, b, "a"), closed)
+	sec, err = OpenTCP(ctx, []string{rs.URL}, b.id, memberNamed(t, b, "a"), closed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,7 +525,7 @@ func TestRevokeClosesTheRevokedMembersLiveSessions4401(t *testing.T) {
 	defer rs.Close()
 	a := founder(t, ctx, rs, "a", nil)
 	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
-	sec, err := OpenTCP(ctx, rs.URL, b.id, memberNamed(t, b, "a"), echoServer(t))
+	sec, err := OpenTCP(ctx, []string{rs.URL}, b.id, memberNamed(t, b, "a"), echoServer(t))
 	if err != nil {
 		t.Fatal(err)
 	}

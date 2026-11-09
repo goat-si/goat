@@ -22,9 +22,9 @@ import (
 
 // peer is what dialing a member needs, read from the state directory (no daemon required).
 type peer struct {
-	id    *ident.Identity
-	relay string
-	view  *mesh.View
+	id     *ident.Identity
+	relays []string
+	view   *mesh.View
 }
 
 func loadPeer(st *state.Store) (*peer, error) {
@@ -43,7 +43,7 @@ func loadPeer(st *state.Store) (*peer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &peer{id: id, relay: cfg.Relay, view: v}, nil
+	return &peer{id: id, relays: cfg.RelayList(), view: v}, nil
 }
 
 func parsePort(s string) (int, error) {
@@ -104,7 +104,7 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	revoked, stopWatch := daemon.WatchRevoked(st, m.NodeID)
 	defer stopWatch()
-	sec, err := daemon.OpenTCP(ctx, p.relay, p.id, m, port)
+	sec, err := daemon.OpenTCP(ctx, p.relays, p.id, m, port)
 	if err != nil {
 		return die(openErr(err, m, port, false))
 	}

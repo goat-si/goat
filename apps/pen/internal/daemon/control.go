@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -161,13 +162,13 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 			return
 		}
 		d.cfgMu.Lock()
-		changed := cfg.Relay != "" && cfg.Relay != d.cfg.Relay
+		changed := len(cfg.RelayList()) > 0 && !slices.Equal(cfg.RelayList(), d.cfg.RelayList())
 		if changed {
-			d.cfg.Relay = cfg.Relay
+			d.cfg.SetRelays(cfg.RelayList())
 		}
 		d.cfgMu.Unlock()
-		if s, _ := d.upState.Load().(string); s == "replaced" || changed {
-			d.startUplink()
+		if changed || d.anyReplaced() {
+			d.startUplinks()
 		}
 		reply(d.status())
 	case "stop":
@@ -180,27 +181,27 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 
 // Status is the status answer.
 type Status struct {
-	NodeID      string `json:"nodeId"`
-	Fingerprint string `json:"fingerprint"`
-	Name        string `json:"name"`
-	Relay       string `json:"relay"`
-	Uplink      string `json:"uplink"`
-	MeshID      string `json:"meshId"`
-	Members     int    `json:"members"`
-	PID         int    `json:"pid"`
+	NodeID      string       `json:"nodeId"`
+	Fingerprint string       `json:"fingerprint"`
+	Name        string       `json:"name"`
+	Relay       string       `json:"relay"`
+	Relays      []RelayState `json:"relays"`
+	Uplink      string       `json:"uplink"`
+	MeshID      string       `json:"meshId"`
+	Members     int          `json:"members"`
+	PID         int          `json:"pid"`
 }
 
 func (d *Daemon) status() Status {
 	v := d.view()
-	s, _ := d.upState.Load().(string)
 	name := v.Members[ident.B64.EncodeToString(d.id.SignPub)].Name
 	return Status{NodeID: d.nodeID, Fingerprint: ident.Fingerprint(d.id.NoisePub), Name: name, Relay: d.relayURL(),
-		Uplink: s, MeshID: v.MeshID, Members: len(v.Members), PID: os.Getpid()}
+		Relays: d.relayStates(), Uplink: d.uplinkState(), MeshID: v.MeshID, Members: len(v.Members), PID: os.Getpid()}
 }
 
 func (d *Daemon) ls() LsReply {
 	v := d.view()
-	s, _ := d.upState.Load().(string)
+	s := d.uplinkState()
 	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s, Revoked: v.SortedRevoked()}
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -235,7 +236,7 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 		fail(err)
 		return
 	}
-	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relays: []string{d.relayURL()}}
+	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relays: d.relays()}
 	var wait chan mesh.Member
 	if req.Wait {
 		wait = make(chan mesh.Member, 1)

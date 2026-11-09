@@ -95,7 +95,7 @@ func RunForward(args []string, stdout, stderr io.Writer) int {
 		go func() {
 			tc := c.(*net.TCPConn)
 			defer tc.Close()
-			sec, err := daemon.OpenTCP(ctx, p.relay, p.id, m, port)
+			sec, err := daemon.OpenTCP(ctx, p.relays, p.id, m, port)
 			if err != nil {
 				fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, false))
 				return

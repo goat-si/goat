@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -70,13 +69,10 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 		}
 		return "error: " + err.Error()
 	}
-	conn, err := relay.Dial(ctx, d.relayURL(), m.NodeID)
+	sec, err := OpenAny(ctx, d.relays(), m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
+		return session.Initiate(ctx, conn, session.KindSession, m.NodeID, noise, d.id, nil, session.Payload{V: 1, Stream: "mesh"})
+	})
 	if err != nil {
-		return res(err)
-	}
-	sec, err := session.Initiate(ctx, conn, session.KindSession, m.NodeID, noise, d.id, nil, session.Payload{V: 1, Stream: "mesh"})
-	if err != nil {
-		conn.Close(wire.CodeNormal)
 		return res(err)
 	}
 	defer sec.Close(wire.CodeNormal)
@@ -90,22 +86,29 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 // DialRetries is how often a join retries a relay 4404 (the inviter's uplink may be registering).
 var DialRetries = []time.Duration{300 * time.Millisecond, time.Second, 2 * time.Second}
 
-// OpenTCP opens a kind 0x01 tcp stream to port on member m and returns the confirmed session.
-func OpenTCP(ctx context.Context, relayURL string, id *ident.Identity, m mesh.Member, port int) (*session.Secure, error) {
-	noise, err := ident.DecodeKey(m.NoisePub)
+// OpenAny reaches nodeID through the first of relays to answer (DialRace) and runs handshake on it.
+func OpenAny(ctx context.Context, relays []string, nodeID string, handshake func(relay.Conn) (*session.Secure, error)) (*session.Secure, error) {
+	conn, _, err := relay.DialRace(ctx, relays, nodeID)
 	if err != nil {
 		return nil, err
 	}
-	conn, err := relay.Dial(ctx, relayURL, m.NodeID)
-	if err != nil {
-		return nil, fmt.Errorf("relay: %w", err)
-	}
-	sec, err := session.Initiate(ctx, conn, session.KindSession, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "tcp", Port: port})
+	sec, err := handshake(conn)
 	if err != nil {
 		conn.Close(wire.CodeNormal)
 		return nil, err
 	}
 	return sec, nil
+}
+
+// OpenTCP opens a kind 0x01 tcp stream to port on member m and returns the confirmed session.
+func OpenTCP(ctx context.Context, relays []string, id *ident.Identity, m mesh.Member, port int) (*session.Secure, error) {
+	noise, err := ident.DecodeKey(m.NoisePub)
+	if err != nil {
+		return nil, err
+	}
+	return OpenAny(ctx, relays, m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
+		return session.Initiate(ctx, conn, session.KindSession, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "tcp", Port: port})
+	})
 }
 
 // Join runs the joiner side of tok against its relay and returns the verified set (not yet saved).
@@ -118,11 +121,9 @@ func Join(ctx context.Context, st *state.Store, id *ident.Identity, tok mesh.Tok
 	payload := session.Payload{V: 1, Stream: "join", Invite: session.InviteID(tok.Secret), Name: name}
 	var sec *session.Secure
 	for attempt := 0; ; attempt++ {
-		conn, err := relay.Dial(ctx, tok.Relays[0], nodeID)
-		if err != nil {
-			return nil, fmt.Errorf("relay: %w", err)
-		}
-		sec, err = session.Initiate(ctx, conn, session.KindJoin, nodeID, tok.NoisePub, id, psk, payload)
+		sec, err = OpenAny(ctx, tok.Relays, nodeID, func(conn relay.Conn) (*session.Secure, error) {
+			return session.Initiate(ctx, conn, session.KindJoin, nodeID, tok.NoisePub, id, psk, payload)
+		})
 		if err == nil {
 			break
 		}
