@@ -99,6 +99,14 @@ const emitStaleXAiPromptCompleteBeforeSecondHang =
 const emitOverlappingXAiPromptCompleteOutOfOrder =
   process.env.GOAT_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
 const failPrompt = process.env.GOAT_ACP_FAIL_PROMPT === "1";
+// JSON for the `data` of an "Internal error" response to `session/new`, as
+// Antigravity sends when its runtime cannot reach its local harness.
+const newSessionErrorData =
+  process.env.GOAT_ACP_NEW_SESSION_ERROR_DATA === undefined
+    ? undefined
+    : Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(
+        process.env.GOAT_ACP_NEW_SESSION_ERROR_DATA,
+      );
 const failPromptOrdinal = Number(process.env.GOAT_ACP_FAIL_PROMPT_ORDINAL);
 const compactionPromptOrdinals = new Set(
   (process.env.GOAT_ACP_COMPACTION_PROMPT_ORDINALS ?? "").split(",").map(Number),
@@ -664,6 +672,9 @@ const program = Effect.gen(function* () {
   yield* agent.handleCreateSession(() =>
     Effect.gen(function* () {
       yield* requireAuthentication();
+      if (newSessionErrorData !== undefined) {
+        return yield* AcpError.AcpRequestError.internalError("Internal error", newSessionErrorData);
+      }
       if (antigravityProfile) {
         yield* publishAntigravityCommands(sessionId);
       }
@@ -2547,7 +2558,6 @@ const program = Effect.gen(function* () {
         });
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
-
       if (emitXAiExitPlanMode) {
         const result = yield* agent.client.extRequest("_x.ai/exit_plan_mode", {
           method: "x.ai/exit_plan_mode",
@@ -2571,7 +2581,6 @@ const program = Effect.gen(function* () {
         }
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
-
       if (emitForeignSessionUpdates) {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
@@ -2610,7 +2619,6 @@ const program = Effect.gen(function* () {
         });
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
-
       yield* agent.client.sessionUpdate({
         sessionId: requestedSessionId,
         update: {
@@ -2633,7 +2641,6 @@ const program = Effect.gen(function* () {
           },
         },
       });
-
       yield* agent.client.sessionUpdate({
         sessionId: requestedSessionId,
         update: {
@@ -2642,11 +2649,9 @@ const program = Effect.gen(function* () {
           content: { type: "text", text: promptResponseText ?? "hello from mock" },
         },
       });
-
       return yield* finishPrompt(requestedSessionId, "end_turn");
     }),
   );
-
   yield* agent.handleUnknownExtRequest((method, params) => {
     if (method === "_test/environment") {
       return Effect.succeed({
@@ -2708,11 +2713,9 @@ const program = Effect.gen(function* () {
         models: availableModels(),
       });
     }
-
     if (method !== "session/mode/set") {
       return Effect.fail(AcpError.AcpRequestError.methodNotFound(method));
     }
-
     const nextModeId =
       typeof params === "object" &&
       params !== null &&
@@ -2732,7 +2735,6 @@ const program = Effect.gen(function* () {
       typeof params.sessionId === "string"
         ? params.sessionId
         : sessionId;
-
     if (typeof nextModeId === "string" && nextModeId.trim()) {
       currentModeId = nextModeId.trim();
       return agent.client
@@ -2745,10 +2747,8 @@ const program = Effect.gen(function* () {
         })
         .pipe(Effect.as({}));
     }
-
     return Effect.succeed({});
   });
-
   yield* agent.handleUnknownExtNotification((method, params) =>
     method === "_test/exit"
       ? Effect.sync(() => {
@@ -2758,7 +2758,6 @@ const program = Effect.gen(function* () {
         })
       : Effect.void,
   );
-
   return yield* Effect.never;
 }).pipe(
   Effect.provide(
@@ -2789,5 +2788,4 @@ const program = Effect.gen(function* () {
   Effect.scoped,
   Effect.provide(NodeServices.layer),
 );
-
 NodeRuntime.runMain(program);
