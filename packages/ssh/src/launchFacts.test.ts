@@ -59,7 +59,7 @@ const launchFor = (ownRuntimeVersion: string) => {
 const PREFIX = `unset EPOCHSECONDS 2>/dev/null || :
 uname() { printf 'MINGW64_NT-10.0\\n'; }
 date() { cat "$HOME/clock"; }
-ps() { cat "$HOME/ps-rows"; }
+ps() { echo ps >>"$HOME/ps-calls"; cat "$HOME/ps-rows"; }
 stat() {
   while [ "$#" -gt 0 ]; do case "$1" in -c|-f) shift 2 ;; *) break ;; esac; done
   for stat_file in "$@"; do
@@ -348,6 +348,35 @@ describe("a fresh own-version launch asks its pinned candidate runner once", () 
         "__ssh-helper facts --with-caps --own --live --runtime-file HOME/.goat/userdata/server-runtime.json --port-file HOME/.goat/ssh-launch/key/port --pid-file HOME/.goat/ssh-launch/key/pid",
       ]);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("a pairing or MCP session, which does not own the launch, asks separately", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.write("settings.sh", "OWNING_LAUNCH=0\n");
+      const launch = yield* f.launch();
+      assert.equal(launch.code, 0, launch.err);
+      assert.deepEqual(launch.asked, ["version", "own", "live"]);
+    }).pipe(Effect.scoped),
+  );
+
+  // Each ps -W start costs a Git Bash launch about as much as the answer it keys.
+  it.effect(
+    "with version and own recorded, the launch reads no more process lists than without the frame",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        yield* f.serve();
+        assert.deepEqual((yield* f.launch()).asked, ["facts", "compat"]);
+        const listings = Effect.gen(function* () {
+          yield* f.write("ps-calls", "");
+          assert.deepEqual((yield* f.launch()).asked, []);
+          return (yield* f.read("ps-calls")).split("\n").filter(Boolean).length;
+        });
+        const withFrame = yield* listings;
+        yield* f.write("settings.sh", "OWN_RUNTIME_VERSION=\n");
+        assert.equal(withFrame, yield* listings);
+      }).pipe(Effect.scoped),
   );
 
   it.effect("an executable without an exec key is asked separately", () =>

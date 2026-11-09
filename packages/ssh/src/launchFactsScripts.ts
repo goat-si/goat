@@ -16,7 +16,8 @@ export const REMOTE_LAUNCH_FACTS_SCRIPT = `${REMOTE_COMBINED_CALL_SCRIPT}
 # nothing, leaves no marker, and the separate calls run as before.
 launch_want() { launch_asks="$launch_asks --$1"; launch_tags="$launch_tags $1"; launch_count=$((launch_count + 1)); }
 launch_facts_ask() {
-  [ -n "$OWN_RUNTIME_VERSION" ] && [ "$PRESERVE_SELECTED_RUNNER" = 0 ] && [ -n "$FACT_MEMO" ] || return 0
+  [ -n "$OWN_RUNTIME_VERSION" ] && [ "$OWNING_LAUNCH" = 1 ] && [ "$PRESERVE_SELECTED_RUNNER" = 0 ] &&
+    [ -n "$FACT_MEMO" ] || return 0
   launch_pin="$RUNNER_CANDIDATE_FILE.pin"
   runner_key_hints "$launch_pin"
   [ -z "$RUNNER_NODE_DECLARED" ] && [ "$RUNNER_ARCHIVE_VERSION" = "$OWN_RUNTIME_VERSION" ] || return 0
@@ -25,6 +26,8 @@ launch_facts_ask() {
   launch_asks=; launch_tags=; launch_count=0; launch_absent=; launch_live=
   fact_get "version.$launch_name" "$launch_key" >/dev/null || launch_want version
   fact_get "own.$launch_name" "$launch_key" >/dev/null || launch_want own
+  # One missing question at most: its separate call costs what the frame would, without the live key.
+  [ "$launch_count" -ge 1 ] || return 0
   if live_none_absent "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE"; then
     launch_absent=1
     live_none_get "$launch_exec" >/dev/null || launch_want live
