@@ -384,6 +384,30 @@ describe("a question the person answered", () => {
     ).toMatchObject({ options: [], answer: "Neither, wait for Monday" });
   });
 
+  it("takes a typed reply to a question without choices, sent to its task, as the answer", () => {
+    const open = { ...card("turn", 2), askInChat: true, openQuestionIds: [] };
+    const routed: GoatBotMessagePresentation = {
+      tone: "question",
+      readAt: null,
+      requestKey: null,
+      taskId: "turn",
+      questionId: "which-guide",
+    };
+    const reply = { tone: "reply" as const, readAt: null, requestKey: "in-2", taskId: "turn" };
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      bot("b1", "2026-10-12T12:00:01Z", "Which guide next?"),
+      user("u1", "2026-10-12T12:00:02Z", "README"),
+    ];
+    expect(questionRow(items, [], { b1: routed, u1: reply }, { n1: open }, null)).toMatchObject({
+      answer: "README",
+    });
+    // A status line is not a question, so a later message does not answer it.
+    expect(
+      questionRow(items, [], { b1: { ...routed, tone: "status" }, u1: reply }, { n1: open }, null),
+    ).not.toHaveProperty("answer");
+  });
+
   it("keeps the choices open when the answer failed to send", () => {
     const row = questionRow(asked, [pending("CI fix", "failed")]);
     expect(row).toMatchObject({ options: ["CI fix", "Release"] });

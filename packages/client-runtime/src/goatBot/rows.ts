@@ -160,7 +160,7 @@ export type GoatBotRow =
       readonly replyTo: string | null;
       /** Answers to pick, only while nothing has been sent since the question. */
       readonly options: ReadonlyArray<string>;
-      /** What the person sent back to a question that offered answers, picked or typed. */
+      /** What the person sent back to a question, picked from its answers or typed. */
       readonly answer?: string;
       /** The task a picked answer goes to, so it answers this question wherever it is pressed. */
       readonly answerTaskId?: string;
@@ -423,7 +423,8 @@ export function buildGoatBotTimeline(input: {
       if (hasOptions && open !== false && presentation?.taskId != null) {
         tasksWithOpenQuestion.add(presentation.taskId);
       }
-      if (hasOptions) askedQuestions.set(item.id, presentation?.taskId ?? null);
+      if (hasOptions || tone === "question")
+        askedQuestions.set(item.id, presentation?.taskId ?? null);
       committed.push({
         kind: "bot",
         id: item.id,
