@@ -2403,7 +2403,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             key,
             merged.status,
             projectedStatus,
-          ) as ProjectedToolStatus | undefined;
+          );
           context.tools.set(key, merged);
           if (
             projectedStatus === undefined &&

@@ -22,25 +22,21 @@ import * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
-
 import * as AcpSchema from "./schema.ts";
 import * as AcpSchemaV1 from "./_generated/schema-v1.gen.ts";
 import { CLIENT_METHODS } from "./_generated/meta.gen.ts";
 import * as AcpError from "./errors.ts";
 import { isolateNotificationHandler } from "./_internal/shared.ts";
 const isAcpError = Schema.is(AcpError.AcpError);
-
 export interface AcpProtocolLogEvent {
   readonly direction: "incoming" | "outgoing";
   readonly stage: "raw" | "decoded" | "decode_failed";
   readonly payload: unknown;
 }
-
 export interface AcpRequestContext {
   readonly requestId: string;
   readonly method: string;
 }
-
 export function acpRequestIdentity(requestId: AcpError.AcpRequestId): string {
   const prefix = "$t3:jsonrpc:";
   if (typeof requestId === "number") return `${prefix}number:${requestId}`;
@@ -186,7 +182,6 @@ const encodeJsonRpcNotification = Schema.encodeUnknownExit(
     }),
   ),
 );
-
 /**
  * First id for typed Effect RPC requests. Starts within signed int32 for SDKs that reject
  * larger numeric ids (e.g. the Kotlin ACP SDK decodes ids as `Int`), while staying far
@@ -700,7 +695,11 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       ).pipe(
         Effect.flatMap(() =>
           Effect.try({
-            try: () => parser.decode(data),
+            try: () =>
+              parser.decode(data).map(({ message, lineLength }) => ({
+                message: normalizeAcpJsonRpcError(message),
+                lineLength,
+              })),
             catch: (cause) =>
               new AcpError.AcpProtocolParseError({
                 operation: "decode-wire-message",

@@ -1,5 +1,5 @@
+import { acpTitledMultiSelectFixture } from "./acp_titled_multiselect/fixture.ts";
 import { ProviderDriverKind } from "@goat/contracts";
-
 import { claudeBackgroundSubagentAfterRootInput } from "./claude_background_subagent_after_root/input.ts";
 import { assertClaudeBackgroundSubagentAfterRootOutput } from "./claude_background_subagent_after_root/output.ts";
 import { claudeBackgroundTaskAfterRootInput } from "./claude_background_task_after_root/input.ts";
@@ -224,7 +224,6 @@ import {
   type OrchestratorReplayFixture,
   WORKSPACE_NEVER_POLICY,
 } from "./shared.ts";
-
 export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixture> = [
   {
     name: "claude_background_subagent_after_root",
@@ -618,6 +617,7 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
       },
     ],
   },
+  acpTitledMultiSelectFixture,
   {
     name: "simple",
     buildInput: simpleInput,

@@ -209,6 +209,14 @@ describe("announcing resolved thread requests", () => {
 });
 
 describe("initial user input drafts", () => {
+  it("seeds a __proto__ id as an own property and preserves its edits", () => {
+    const questions = [{ id: "__proto__", initialAnswer: "original" }];
+    const seeded = seedUserInputDraftAnswers(questions, {});
+    expect(Object.hasOwn(seeded, "__proto__")).toBe(true);
+    expect(seeded["__proto__"]).toEqual({ customAnswer: "original" });
+    const edited = { ["__proto__"]: { customAnswer: "edited" } };
+    expect(seedUserInputDraftAnswers(questions, edited)).toBe(edited);
+  });
   const questions = [
     { id: "editor", initialAnswer: "  Proposed commit\n\n" },
     { id: "empty", initialAnswer: "" },
