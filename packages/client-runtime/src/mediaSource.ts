@@ -14,6 +14,10 @@ import { fileBasename } from "@goat/shared/path";
 import { splitFilePathPosition } from "@goat/shared/fileLinks";
 import { splitMarkdownLinkSearchAndHash } from "@goat/shared/markdownLinks";
 import {
+  type EnvironmentLoopbackUrlInput,
+  resolveEnvironmentLoopbackUrl,
+} from "./connection/environmentLoopbackUrl.ts";
+import {
   mediaFileReference,
   mediaReferenceFileName,
   mediaUrlReference,
@@ -39,6 +43,8 @@ export type ResolvedMediaSource = {
     }
   | {
       readonly access: "unavailable";
+      /** Why this device cannot load it, when the environment's route says so. */
+      readonly reason?: string;
     }
 );
 
@@ -48,6 +54,15 @@ export interface ResolveMediaSourceInput {
   readonly resolvedFilePath?: string | undefined;
   /** Image syntax can target an endpoint without a recognizable extension. */
   readonly imageEmbed?: boolean | undefined;
+  /**
+   * The environment the source came from. Its loopback URLs mean that machine, so direct sources
+   * are normalized with this client's scheme rule and moved onto the environment's address.
+   */
+  readonly environmentConnection?:
+    | (Omit<EnvironmentLoopbackUrlInput, "url"> & {
+        readonly normalizeUri: (uri: string) => string;
+      })
+    | undefined;
 }
 
 function classify(source: string, input: ResolveMediaSourceInput): MarkdownImageSource {
@@ -95,7 +110,15 @@ export function resolveMediaSource(
   } as const;
 
   if (classified._tag === "Direct") {
-    return { ...common, access: "direct", uri: classified.uri };
+    const environment = input.environmentConnection;
+    if (!environment) return { ...common, access: "direct", uri: classified.uri };
+    const routed = resolveEnvironmentLoopbackUrl({
+      ...environment,
+      url: environment.normalizeUri(classified.uri),
+    });
+    return routed._tag === "Open"
+      ? { ...common, access: "direct", uri: routed.url }
+      : { ...common, access: "unavailable", reason: routed.reason };
   }
   if (input.threadId === undefined) return { ...common, access: "unavailable" };
   return {

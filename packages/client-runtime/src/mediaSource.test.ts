@@ -1,9 +1,20 @@
-import { ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { BearerConnectionTarget, SshConnectionTarget } from "./connection/model.ts";
 import { resolveMediaSource } from "./mediaSource.ts";
 
 const threadId = ThreadId.make("thread-1");
+const remote = { environmentId: EnvironmentId.make("environment-1"), label: "Build box" };
+const normalizeUri = (uri: string) => (uri.startsWith("//") ? `http:${uri}` : uri);
+const bearerEnvironment = {
+  connection: {
+    target: new BearerConnectionTarget({ ...remote, connectionId: "saved:box" }),
+    httpBaseUrl: "http://100.65.180.100:3773",
+  },
+  isDesktopRenderer: false,
+  normalizeUri,
+};
 
 describe("resolveMediaSource", () => {
   describe("direct URLs", () => {
@@ -35,6 +46,46 @@ describe("resolveMediaSource", () => {
         kind: "image",
         mimeType: "image/*",
         name: "render",
+      });
+    });
+
+    it("loads a remote environment's localhost media from the environment's address (regression: loaded this device's localhost)", () => {
+      const href = "http://localhost:5173/shot.png";
+      expect(
+        resolveMediaSource(href, { threadId, environmentConnection: bearerEnvironment }),
+      ).toMatchObject({
+        access: "direct",
+        uri: "http://100.65.180.100:5173/shot.png",
+        reference: { kind: "url", url: href },
+      });
+    });
+
+    it("routes a protocol-relative localhost image after this client's scheme rule", () => {
+      expect(
+        resolveMediaSource("//localhost:5173/a.png", {
+          threadId,
+          environmentConnection: bearerEnvironment,
+        }),
+      ).toMatchObject({ access: "direct", uri: "http://100.65.180.100:5173/a.png" });
+    });
+
+    it("reports why a remote environment's localhost media is out of this device's reach", () => {
+      expect(
+        resolveMediaSource("http://localhost:5173/clip.mp4", {
+          threadId,
+          environmentConnection: {
+            connection: {
+              target: new SshConnectionTarget({ ...remote, connectionId: "ssh:box" }),
+              httpBaseUrl: "http://127.0.0.1:41234",
+            },
+            isDesktopRenderer: false,
+            normalizeUri,
+          },
+        }),
+      ).toMatchObject({
+        kind: "video",
+        access: "unavailable",
+        reason: expect.stringContaining("localhost:5173 is on Build box"),
       });
     });
   });
