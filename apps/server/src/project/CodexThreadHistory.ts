@@ -1,0 +1,319 @@
+// @effect-diagnostics nodeBuiltinImport:off - Codex keeps pruned conversation history in SQLite; this is a small read-only lookup.
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
+import type { AgentSessionImportSource, ProviderInstanceId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
+import type { AgentSessionThread } from "./AgentSessionScanner.ts";
+
+const MAX_CODEX_HISTORY_MESSAGES = 200;
+const MAX_CODEX_HISTORY_BYTES = 32 * 1024 * 1024;
+const MAX_CODEX_HISTORY_THREAD_IDS = 100_000;
+const MAX_DATE_MS = 8.64e15;
+const HISTORY_DATABASE = /^thread_history_(\d+)\.sqlite$/;
+
+const UserMessage = Schema.Struct({
+  type: Schema.Literal("userMessage"),
+  content: Schema.Array(
+    Schema.Struct({ type: Schema.optional(Schema.String), text: Schema.optional(Schema.String) }),
+  ),
+});
+const AgentMessage = Schema.Struct({
+  type: Schema.Literal("agentMessage"),
+  text: Schema.String,
+});
+const decodeUserMessage = Schema.decodeUnknownOption(Schema.fromJsonString(UserMessage));
+const decodeAgentMessage = Schema.decodeUnknownOption(Schema.fromJsonString(AgentMessage));
+
+export interface CodexHistoryMessage {
+  readonly role: "user" | "assistant";
+  readonly text: string;
+  readonly createdAtMs: number;
+}
+
+export interface CodexHistoryThreadData {
+  readonly messages: ReadonlyArray<CodexHistoryMessage>;
+  readonly omittedMessageCount: number;
+  readonly createdAtMs: number;
+  readonly bytes: number;
+}
+
+export interface CodexHistoryThreadRef {
+  readonly id: string;
+  readonly title: string;
+  readonly model: string | null;
+  readonly createdAtMs: number;
+  readonly updatedAtMs: number;
+  readonly homePath: string;
+}
+
+function historyDatabasePath(homePath: string): string | undefined {
+  try {
+    const names = NodeFS.readdirSync(homePath);
+    const versioned = names
+      .map((name) => [name, Number(HISTORY_DATABASE.exec(name)?.[1] ?? 0)] as const)
+      .filter(([name, version]) => HISTORY_DATABASE.test(name) && version > 0)
+      .sort((left, right) => right[1] - left[1])[0]?.[0];
+    if (versioned !== undefined) return NodePath.join(homePath, versioned);
+    const legacy = NodePath.join(homePath, "thread_history.sqlite");
+    return NodeFS.existsSync(legacy) ? legacy : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function hasCodexThreadHistory(homePath: string): boolean {
+  const databasePath = historyDatabasePath(homePath);
+  if (databasePath === undefined) return false;
+  let database: NodeSqlite.DatabaseSync | undefined;
+  try {
+    database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true, timeout: 1000 });
+    database.prepare("SELECT 1 FROM thread_items LIMIT 1").get();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      database?.close();
+    } catch {
+      // The database is unusable either way.
+    }
+  }
+}
+
+export function readCodexHistoryThreadIds(homePath: string): ReadonlySet<string> | null {
+  const databasePath = historyDatabasePath(homePath);
+  if (databasePath === undefined) return null;
+  let database: NodeSqlite.DatabaseSync;
+  try {
+    database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true, timeout: 1000 });
+  } catch {
+    return null;
+  }
+  try {
+    const rows = database
+      .prepare(
+        "SELECT DISTINCT thread_id FROM thread_items WHERE item_type = 'userMessage' LIMIT ?",
+      )
+      .all(MAX_CODEX_HISTORY_THREAD_IDS + 1) as unknown as ReadonlyArray<{
+      thread_id?: unknown;
+    }>;
+    if (rows.length > MAX_CODEX_HISTORY_THREAD_IDS) return null;
+    return new Set(
+      rows.flatMap((row) => (typeof row.thread_id === "string" ? [row.thread_id] : [])),
+    );
+  } catch {
+    return null;
+  } finally {
+    database.close();
+  }
+}
+
+function toMs(value: unknown, fallback: number): number {
+  const ms = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(ms) && Math.abs(ms) <= MAX_DATE_MS ? ms : fallback;
+}
+
+function messageText(itemType: unknown, itemJson: unknown): string {
+  if (typeof itemJson !== "string") return "";
+  if (itemType === "userMessage") {
+    const decoded = decodeUserMessage(itemJson);
+    if (Option.isNone(decoded)) return "";
+    return decoded.value.content
+      .filter(
+        (block) =>
+          block.type === undefined ||
+          block.type === "text" ||
+          block.type === "input_text" ||
+          block.type === "output_text",
+      )
+      .map((block) => block.text?.trim() ?? "")
+      .filter((text) => text.length > 0)
+      .join("\n");
+  }
+  if (itemType === "agentMessage") {
+    const decoded = decodeAgentMessage(itemJson);
+    return Option.isSome(decoded) ? decoded.value.text.trim() : "";
+  }
+  return "";
+}
+
+interface HistoryRow {
+  readonly item_type: unknown;
+  readonly item_json: unknown;
+  readonly created_at_ms: unknown;
+  readonly rollout_ordinal: unknown;
+  readonly bytes?: unknown;
+}
+
+export type CodexHistoryReadResult =
+  | { readonly _tag: "Ok"; readonly data: CodexHistoryThreadData }
+  | { readonly _tag: "Empty" }
+  | { readonly _tag: "TooLarge" }
+  | { readonly _tag: "Failed"; readonly cause: unknown };
+
+export interface CodexThreadHistoryReader {
+  readonly read: (threadId: string) => CodexHistoryReadResult;
+  readonly close: () => void;
+}
+
+export function openCodexThreadHistory(homePath: string): CodexThreadHistoryReader | null {
+  const databasePath = historyDatabasePath(homePath);
+  if (databasePath === undefined) return null;
+  let database: NodeSqlite.DatabaseSync;
+  try {
+    database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true, timeout: 1000 });
+  } catch {
+    return null;
+  }
+  try {
+    const count = database.prepare(
+      "SELECT COUNT(*) AS count FROM thread_items WHERE thread_id = ? AND item_type IN ('userMessage', 'agentMessage')",
+    );
+    const recentBytes = database.prepare(
+      "SELECT COALESCE(SUM(LENGTH(CAST(item_json AS BLOB))), 0) AS bytes FROM (SELECT item_json FROM thread_items WHERE thread_id = ? AND item_type IN ('userMessage', 'agentMessage') ORDER BY rollout_ordinal DESC LIMIT ?)",
+    );
+    const recent = database.prepare(
+      "SELECT item_type, item_json, created_at_ms, rollout_ordinal FROM thread_items WHERE thread_id = ? AND item_type IN ('userMessage', 'agentMessage') ORDER BY rollout_ordinal DESC LIMIT ?",
+    );
+    const firstUser = database.prepare(
+      "SELECT item_type, item_json, created_at_ms, rollout_ordinal, LENGTH(CAST(item_json AS BLOB)) AS bytes FROM thread_items WHERE thread_id = ? AND item_type = 'userMessage' ORDER BY rollout_ordinal ASC LIMIT 1",
+    );
+    return {
+      read: (threadId) => {
+        try {
+          const total = Number(
+            (count.get(threadId) as { readonly count?: unknown } | undefined)?.count ?? 0,
+          );
+          const bytesBeforeRows = Number(
+            (
+              recentBytes.get(threadId, MAX_CODEX_HISTORY_MESSAGES) as
+                | { readonly bytes?: unknown }
+                | undefined
+            )?.bytes ?? 0,
+          );
+          if (bytesBeforeRows > MAX_CODEX_HISTORY_BYTES) return { _tag: "TooLarge" as const };
+          const rows = recent.all(
+            threadId,
+            MAX_CODEX_HISTORY_MESSAGES,
+          ) as unknown as ReadonlyArray<HistoryRow>;
+          let bytes = bytesBeforeRows;
+          const parsed = rows
+            .toReversed()
+            .flatMap((row, index): Array<CodexHistoryMessage & { readonly ordinal: number }> => {
+              const text = messageText(row.item_type, row.item_json);
+              if (text.length === 0) return [];
+              const ordinal = Number(row.rollout_ordinal);
+              return [
+                {
+                  role: row.item_type === "userMessage" ? "user" : "assistant",
+                  text,
+                  createdAtMs: toMs(row.created_at_ms, 0),
+                  ordinal: Number.isSafeInteger(ordinal) ? ordinal : index,
+                },
+              ];
+            });
+          if (parsed.length === 0) return { _tag: "Empty" as const };
+          const oldest = parsed[0]?.ordinal;
+          let retained = parsed;
+          const first = firstUser.get(threadId) as HistoryRow | undefined;
+          if (first !== undefined && Number(first.rollout_ordinal) !== oldest) {
+            const firstText = messageText(first.item_type, first.item_json);
+            if (firstText.length > 0) {
+              bytes += Number(first.bytes ?? 0);
+              if (bytes > MAX_CODEX_HISTORY_BYTES) return { _tag: "TooLarge" as const };
+              retained = [
+                {
+                  role: "user" as const,
+                  text: firstText,
+                  createdAtMs: toMs(first.created_at_ms, 0),
+                  ordinal: Number(first.rollout_ordinal),
+                },
+                ...parsed.slice(-(MAX_CODEX_HISTORY_MESSAGES - 1)),
+              ];
+            }
+          }
+          const messages = retained.map(({ ordinal: _ordinal, ...message }) => message);
+          if (!messages.some((message) => message.role === "user")) {
+            return { _tag: "Empty" as const };
+          }
+          return {
+            _tag: "Ok" as const,
+            data: {
+              messages,
+              omittedMessageCount: Math.max(0, total - messages.length),
+              createdAtMs: messages[0]?.createdAtMs ?? 0,
+              bytes,
+            },
+          };
+        } catch (cause) {
+          return { _tag: "Failed" as const, cause };
+        }
+      },
+      close: () => database.close(),
+    };
+  } catch {
+    database.close();
+    return null;
+  }
+}
+
+function iso(ms: number, fallback: string): string {
+  if (ms === 0 || Math.abs(ms) > MAX_DATE_MS) return fallback;
+  return DateTime.formatIso(DateTime.makeUnsafe(ms));
+}
+
+function titleFor(thread: CodexHistoryThreadRef, data: CodexHistoryThreadData): string {
+  const saved = thread.title.trim().split("\n")[0]?.slice(0, 100).trim();
+  if (saved) return saved;
+  const first = data.messages.find((message) => message.role === "user")?.text;
+  return first?.trim().split("\n")[0]?.slice(0, 100).trim() || "Imported thread";
+}
+
+export function codexHistoryThreadSource(
+  thread: CodexHistoryThreadRef,
+  providerInstanceId: ProviderInstanceId,
+): AgentSessionImportSource {
+  return {
+    provider: "codex",
+    providerInstanceId,
+    providerSessionId: thread.id,
+    filePath: codexHistorySourcePath(thread.id),
+    size: 0,
+    mtimeMs: null,
+    device: 0,
+    inode: null,
+    birthtimeMs: null,
+  };
+}
+
+export function codexHistorySourcePath(threadId: string): string {
+  return `codex-history://${threadId}`;
+}
+
+export function codexHistoryThread(
+  thread: CodexHistoryThreadRef,
+  data: CodexHistoryThreadData,
+  providerInstanceId: ProviderInstanceId,
+): AgentSessionThread {
+  const updatedAt = iso(thread.updatedAtMs, "1970-01-01T00:00:00.000Z");
+  const createdAt = iso(data.createdAtMs || thread.createdAtMs, updatedAt);
+  return {
+    source: "codex",
+    providerInstanceId,
+    providerSessionId: thread.id,
+    title: titleFor(thread, data),
+    model: thread.model?.trim() || null,
+    createdAt,
+    updatedAt,
+    messages: data.messages.map((message) => ({
+      role: message.role,
+      text: message.text,
+      createdAt: iso(message.createdAtMs, createdAt),
+    })),
+    omittedMessageCount: data.omittedMessageCount,
+  };
+}

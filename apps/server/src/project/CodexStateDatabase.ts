@@ -10,10 +10,20 @@ import type * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import {
+  codexHistorySourcePath,
+  hasCodexThreadHistory,
+  readCodexHistoryThreadIds,
+  type CodexHistoryThreadRef,
+} from "./CodexThreadHistory.ts";
+
 interface CodexStateThread {
   readonly id: string;
   readonly cwd: string;
   readonly updatedAtMs: number;
+  readonly createdAtMs: number;
+  readonly title: string;
+  readonly model: string | null;
 }
 
 interface CodexStateProject {
@@ -33,6 +43,11 @@ interface CodexCandidateGroup {
   readonly homePath: string;
   readonly threadCount: number;
   readonly lastActiveAtMs: number | null;
+  readonly transcripts: ReadonlyArray<{
+    readonly filePath: string;
+    readonly mtimeMs: number;
+    readonly historyThread: CodexHistoryThreadRef;
+  }>;
 }
 
 interface CodexHome {
@@ -149,15 +164,26 @@ function readSnapshot(databasePath: string): CodexStateSnapshot {
   const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true, timeout: 1000 });
   try {
     let complete = true;
+    const columns = new Set(
+      (
+        database.prepare("PRAGMA table_info(threads)").all() as unknown as ReadonlyArray<{
+          name?: unknown;
+        }>
+      ).flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
+    );
+    const optional = (name: string) => (columns.has(name) ? name : `NULL AS ${name}`);
     const rows = database
       .prepare(
-        "SELECT id, cwd, updated_at, source FROM threads WHERE archived = 0 ORDER BY updated_at DESC LIMIT ?",
+        `SELECT id, cwd, updated_at, source, ${optional("created_at")}, ${optional("title")}, ${optional("model")} FROM threads WHERE archived = 0 ORDER BY updated_at DESC LIMIT ?`,
       )
       .all(MAX_CODEX_STATE_THREADS + 1) as unknown as ReadonlyArray<{
       id: unknown;
       cwd: unknown;
       updated_at: unknown;
       source: unknown;
+      created_at: unknown;
+      title: unknown;
+      model: unknown;
     }>;
     const threadRows = rows.slice(0, MAX_CODEX_STATE_THREADS);
     if (rows.length > MAX_CODEX_STATE_THREADS) complete = false;
@@ -200,11 +226,22 @@ function readSnapshot(databasePath: string): CodexStateSnapshot {
       }
       const raw = typeof row.updated_at === "number" ? row.updated_at : Number(row.updated_at);
       const updatedAtMs = Number.isFinite(raw) ? (raw > 1e12 ? raw : raw * 1000) : 0;
+      const rawCreatedAt =
+        typeof row.created_at === "number" ? row.created_at : Number(row.created_at);
+      const createdAtMs = Number.isFinite(rawCreatedAt)
+        ? rawCreatedAt > 1e12
+          ? rawCreatedAt
+          : rawCreatedAt * 1000
+        : 0;
       return [
         {
           id: row.id,
           cwd: row.cwd,
           updatedAtMs: Math.abs(updatedAtMs) <= MAX_DATE_MS ? updatedAtMs : 0,
+          createdAtMs: Math.abs(createdAtMs) <= MAX_DATE_MS ? createdAtMs : 0,
+          title: typeof row.title === "string" ? row.title.trim() : "",
+          model:
+            typeof row.model === "string" && row.model.trim().length > 0 ? row.model.trim() : null,
         },
       ];
     });
@@ -275,8 +312,14 @@ function buildCodexCandidateGroups(
     homePath: string;
     threadCount: number;
     lastActiveAtMs: number | null;
+    transcripts: Array<{
+      filePath: string;
+      mtimeMs: number;
+      historyThread: CodexHistoryThreadRef;
+    }>;
   };
   const byCwd = new Map<string, MutableGroup>();
+  const seenThreads = new Set<string>();
   for (const home of homes) {
     const state = states.get(home.homePath);
     if (state === undefined) continue;
@@ -291,13 +334,19 @@ function buildCodexCandidateGroups(
             homePath: home.homePath,
             threadCount: 0,
             lastActiveAtMs: null,
+            transcripts: [],
           });
         }
       }
     }
+    const historyAvailable = hasCodexThreadHistory(home.homePath);
+    const importableHistoryThreads = historyAvailable
+      ? readCodexHistoryThreadIds(home.homePath)
+      : null;
     const projectRootKeys = new Set(state.projectRoots.map(comparisonPath));
     for (const thread of state.threads) {
-      if (fileThreads.has(`${home.providerInstanceId}\0${thread.id}`)) continue;
+      const threadKey = `${home.providerInstanceId}\0${thread.id}`;
+      if (fileThreads.has(threadKey)) continue;
       const cwd = cwdByThread.get(`${home.providerInstanceId}\0${thread.id}`);
       if (cwd === undefined) continue;
       if (!projectRootKeys.has(comparisonPath(cwd))) continue;
@@ -308,6 +357,15 @@ function buildCodexCandidateGroups(
         existing.lastActiveAtMs === null
           ? thread.updatedAtMs
           : Math.max(existing.lastActiveAtMs, thread.updatedAtMs);
+      if (!historyAvailable || seenThreads.has(threadKey)) continue;
+      if (importableHistoryThreads !== null && !importableHistoryThreads.has(thread.id)) continue;
+      seenThreads.add(threadKey);
+      existing.transcripts.push({
+        filePath: codexHistorySourcePath(thread.id),
+        mtimeMs: thread.updatedAtMs,
+        historyThread: { ...thread, homePath: home.homePath },
+      });
+      existing.threadCount = existing.transcripts.length;
     }
   }
   return [...byCwd.values()];

@@ -314,6 +314,20 @@ it("keeps the project selection after going back a stage", async () => {
   expect(pageText()).toContain("0 of 2 selected");
 });
 
+it("explains why nothing is selected when no conversation matches the window", async () => {
+  using _now = setup();
+  state.candidates = [
+    {
+      ...candidate("/projects/older"),
+      lastActiveAt: "2025-01-01T00:00:00.000Z",
+    },
+  ];
+  await using _screen = await mountImport();
+
+  expect(pageText()).toContain("0 of 1 selected");
+  expect(pageText()).toContain("No conversations were found in this window.");
+});
+
 it("ticks the recent projects of a computer added after the selection changed", async () => {
   using _now = setup();
   await using _screen = await mountImport();
