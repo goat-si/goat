@@ -58,19 +58,20 @@ file_sig_set() {
 file_sig() { file_sig_set "$1" && printf '%s' "$FILE_SIG"; }
 # A remembered key holds only while its executable keeps the signature and install marker it had,
 # and a remembered runner keeps its own. Their age gates hold again on a fresh clock: one stepped
-# back makes a same-second rewrite look unchanged.
+# back makes a same-second rewrite look unchanged. The clock is read after the signatures, so a
+# step back between them can only refuse.
 fact_memo_get() {
   [ -n "$FACT_MEMO" ] && [ -f "$FACT_MEMO" ] && [ -r "$FACT_MEMO" ] || return 1
   while IFS= read -r memo_path && IFS= read -r memo_name && IFS= read -r memo_key &&
     IFS= read -r memo_exe && IFS= read -r memo_sig && IFS= read -r memo_path_sig; do
     [ "$memo_path" = "$1" ] || continue
-    fact_clock || return 1
     if [ "$memo_path" != "$memo_exe" ]; then
-      file_sig_set "$memo_path" && [ "$FILE_SIG" = "$memo_path_sig" ] &&
-        [ "\${FILE_SIG##*:}" -lt "$fact_now" ] || return 1
+      file_sig_set "$memo_path" && [ "$FILE_SIG" = "$memo_path_sig" ] || return 1
     fi
-    file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] &&
-      [ "$(( fact_now - \${FILE_SIG##*:} ))" -ge 2 ] || return 1
+    file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] || return 1
+    fact_clock || return 1
+    [ "$memo_path" = "$memo_exe" ] || [ "\${memo_path_sig##*:}" -lt "$fact_now" ] || return 1
+    [ "$(( fact_now - \${memo_sig##*:} ))" -ge 2 ] || return 1
     fact_slurp "\${memo_exe%/goat}/.install-complete" && [ "$FACT_TEXT" = "\${memo_name%.*}" ] || return 1
     FACT_NAME="$memo_name"; FACT_KEY="$memo_key"; return 0
   done <"$FACT_MEMO"

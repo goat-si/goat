@@ -503,4 +503,67 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact age gate 
       }
     },
   );
+  // date reads $HOME/before until stat has read a signature, then $HOME/after: a clock that steps
+  // back while a remembered key is checked.
+  it.each([
+    { shell: "dash", prefix: "" },
+    { shell: "bash", prefix: "unset EPOCHSECONDS\n" },
+  ])(
+    "refuses a remembered key when the clock steps back between reading it and the signature ($shell)",
+    ({ shell, prefix }) => {
+      const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-fact-clock-"));
+      try {
+        const dir = home + "/.goat/runtime/goat/versions/1.2.3";
+        NodeFS.mkdirSync(dir, { recursive: true });
+        NodeFS.mkdirSync(home + "/bin");
+        NodeFS.writeFileSync(dir + "/goat", "#!/bin/sh\n", { mode: 0o755 });
+        NodeFS.writeFileSync(dir + "/.install-complete", "1.2.3");
+        NodeFS.writeFileSync(
+          home + "/bin/stat",
+          [
+            "#!/bin/sh",
+            'sig="$(/usr/bin/stat "$@")" || exit 1',
+            ': >"$HOME/statted"',
+            'sig="${sig%:*}"; echo "${sig%:*}:1000000:1000000"',
+          ].join("\n") + "\n",
+          { mode: 0o755 },
+        );
+        NodeFS.writeFileSync(
+          home + "/bin/date",
+          [
+            "#!/bin/sh",
+            'if [ -e "$HOME/statted" ]; then cat "$HOME/after"; else cat "$HOME/before"; fi',
+          ].join("\n") + "\n",
+          { mode: 0o755 },
+        );
+        const result = NodeChildProcess.spawnSync(
+          shell,
+          [
+            "-c",
+            prefix +
+              "set -u\n" +
+              REMOTE_PROTOCOL_TOKEN_SCRIPT +
+              "\n" +
+              [
+                'exe="$HOME/.goat/runtime/goat/versions/1.2.3/goat"',
+                'check() { if exec_fact_key "$exe"; then echo keyed; else echo unkeyed; fi; }',
+                'FACT_MEMO="$HOME/memo"; : >"$FACT_MEMO"',
+                'echo 1000005 >"$HOME/before"; echo 1000005 >"$HOME/after"',
+                "check",
+                'rm -f "$HOME/statted"',
+                'echo 1000002 >"$HOME/before"; echo 1000000 >"$HOME/after"',
+                "printf '#!/bin/sh\\n' >\"$exe\"",
+                "check",
+              ].join("\n"),
+          ],
+          { encoding: "utf8", env: { HOME: home, PATH: home + "/bin:/usr/bin:/bin", LC_ALL: "C" } },
+        );
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(result.stdout.trim().split("\n"), ["keyed", "unkeyed"]);
+        assert.notEqual(NodeFS.readFileSync(home + "/memo", "utf8"), "");
+      } finally {
+        NodeFS.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
 });
