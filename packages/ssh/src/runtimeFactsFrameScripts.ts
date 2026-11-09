@@ -96,17 +96,14 @@ facts_frame_compat_valid() {
   case "$3" in ''|-|*[!$token_chars]*) return 1 ;; esac
 }
 # Makes goat $1's combined call and succeeds when its key is unchanged after it and the reply is
-# valid in full; it records nothing. With $2 "caps" it asks for the capability line, requires it
-# and fails on any stderr, keeping one byte of it, with the status from a file only this writes.
+# valid in full; it records nothing. With $2 "caps" it asks for the capability line and requires
+# it, and stderr joins the reply, so any of it, even a trailing newline the x keeps, breaks the frame.
 facts_frame_call() {
   frame_absent=; ! live_none_absent "$runtime_file" "$state/port" "$state/pid" || frame_absent=1
   frame_live=; ! live_fact_key "$1" "$runtime_file" "$state/port" "$state/pid" || frame_live="$FACT_KEY"
   if [ "\${2:-}" = caps ]; then
-    : >"$FACT_MEMO.facts-status" || return 1
-    frame_out="$({ { "$1" __ssh-helper facts --with-caps --runtime-file "$runtime_file" --port-file "$state/port" --pid-file "$state/pid" 2>&1 1>&3 3>&-
-        printf '%s\\n' "$?" >"$FACT_MEMO.facts-status"; } | head -c 1 >"$FACT_MEMO.facts-err" 3>&-; } 3>&1)" || return 1
-    IFS= read -r frame_status <"$FACT_MEMO.facts-status" && [ "$frame_status" = 0 ] &&
-      [ ! -s "$FACT_MEMO.facts-err" ] || return 1
+    frame_out="$("$1" __ssh-helper facts --with-caps --runtime-file "$runtime_file" --port-file "$state/port" --pid-file "$state/pid" 2>&1 && printf x)" || return 1
+    case "$frame_out" in *"$fact_nl"x) frame_out="\${frame_out%"$fact_nl"x}" ;; *) return 1 ;; esac
   else
     frame_out="$("$1" __ssh-helper facts --runtime-file "$runtime_file" --port-file "$state/port" --pid-file "$state/pid" 2>/dev/null)" || return 1
   fi

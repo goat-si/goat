@@ -126,21 +126,25 @@ describe("the first probe asks the client's own runtime for its facts directly",
     }).pipe(Effect.scoped),
   );
 
-  // A runtime that floods stderr cannot fill the host's disk: the capture keeps one byte.
-  it.effect("a direct call's stderr is captured only as far as needed to refuse it", () =>
+  // A runtime that floods stderr cannot fill the host's disk: the direct reply is read in memory,
+  // and stderr in it breaks the frame, trailing newlines included.
+  it.effect.each([
+    { name: "a flood of stderr", noise: 'head -c 300000 /dev/zero | tr "\\0" x >&2' },
+    { name: "a blank stderr line after the end", noise: "printf '\\n' >&2" },
+  ])("$name refuses the direct frame and writes no file", ({ noise }) =>
     Effect.gen(function* () {
       const f = yield* fixture({ own: version });
       yield* f.supporting();
-      yield* f.write(
-        "facts.sh",
-        onDirect('cat "$HOME/frame-direct"; head -c 300000 /dev/zero | tr "\\\\0" x >&2'),
-      );
-      const tail =
-        "facts_frame_ask " + EXE + ' >/dev/null 2>&1 || :\nwc -c <"$FACT_MEMO.facts-err"';
-      assert.deepEqual(
-        (yield* f.run(tail)).map((line) => line.trim()),
-        ["1"],
-      );
+      yield* f.write("facts.sh", onDirect('cat "$HOME/frame-direct"; ' + noise));
+      // The capability lookup that follows keeps its own two bounded files.
+      const tail = [
+        "facts_frame_ask " + EXE + " >/dev/null 2>&1 || :",
+        "set +f",
+        'for file in "$FACT_MEMO".*; do',
+        '  case "$file" in *.caps-out|*.caps-status) ;; *) [ ! -e "$file" ] || echo "$file" ;; esac',
+        "done",
+      ].join("\n");
+      assert.deepEqual(yield* f.run(tail), []);
       assert.deepEqual(yield* f.asks(), [DIRECT, CAPS, FACTS]);
     }).pipe(Effect.scoped),
   );
