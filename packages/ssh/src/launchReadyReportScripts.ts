@@ -6,11 +6,13 @@ import { REMOTE_COMBINED_CALL_SCRIPT } from "./runtimeFactsFrameScripts.ts";
 // that pairing finds them. Launch only: it reads the launch's runner, record and launch files.
 export const REMOTE_LAUNCH_READY_REPORT_SCRIPT = `${REMOTE_COMBINED_CALL_SCRIPT}
 LAUNCH_CAPS_FILE=
-# Asks, in the background while the launched server starts, what the selected goat supports. The
-# answer counts only when it is complete as the readiness wait starts; nothing waits for it.
+# Asks, once per launch and in the background while the launched server starts, what the selected
+# goat supports. The answer counts only when it is complete as the readiness wait starts; nothing
+# waits for it, so files of a launch that ended first are removed by a later one.
 launch_caps_begin() {
-  LAUNCH_CAPS_FILE=
+  [ -z "$LAUNCH_CAPS_FILE" ] || return 0
   [ "$GOAT_HOST_WINDOWS" = 1 ] && [ "$GOAT_ARCHIVE_MODE" = 1 ] && [ -n "$FACT_MEMO" ] || return 0
+  launch_caps_sweep
   LAUNCH_CAPS_FILE="$FACT_MEMO.caps-answer"
   # An earlier process with this PID may have left one behind.
   if [ -e "$LAUNCH_CAPS_FILE" ] || [ -e "$LAUNCH_CAPS_FILE.next" ]; then
@@ -24,6 +26,30 @@ launch_caps_begin() {
       mv -f "$LAUNCH_CAPS_FILE.next" "$LAUNCH_CAPS_FILE"
   ) </dev/null >/dev/null 2>&1 &
 }
+# Removes what the lookup and report of launches no longer running left beside their memos.
+launch_caps_sweep() {
+  case "$-" in *f*) caps_sweep_glob=1; set +f ;; *) caps_sweep_glob= ;; esac
+  for caps_sweep_file in "$STATE_DIR"/run-t3.next.*.facts.caps-* "$STATE_DIR"/run-t3.next.*.facts.report; do
+    caps_sweep_pid="\${caps_sweep_file#"$STATE_DIR"/run-t3.next.}"; caps_sweep_pid="\${caps_sweep_pid%%.*}"
+    case "$caps_sweep_pid" in ''|*[!0123456789]*) continue ;; esac
+    if [ -e "$caps_sweep_file" ] && ! kill -0 "$caps_sweep_pid" 2>/dev/null; then rm -f "$caps_sweep_file" || :; fi
+  done
+  [ -z "$caps_sweep_glob" ] || set -f
+}
+# The facts are keyed by the server's runtime record, which it writes once started, possibly after
+# it first answers. Waits up to 5 s of clock for the record to name REMOTE_PID, checking every
+# 0.1 s without starting a process.
+launch_record_wait() {
+  launch_now; launch_record_until=$((launch_now_us + 5000000))
+  while :; do
+    if fact_read_record "$DEFAULT_RUNTIME_FILE"; then
+      fact_json_uint '"pid"' "$FACT_TEXT"
+      [ "$FACT_TEXT" != "$REMOTE_PID" ] || return 0
+    fi
+    launch_now; [ "$launch_now_us" -lt "$launch_record_until" ] || return 1
+    launch_pause 100000
+  done
+}
 # Waits $1 ms for the launched server, as wait_ready does, and fails as it would.
 launch_wait_ready() {
   if launch_ready_report "$1"; then return "$LAUNCH_READY"; fi
@@ -31,7 +57,8 @@ launch_wait_ready() {
 }
 # Sets LAUNCH_READY to 0 for a server the report saw ready on REMOTE_PORT, else 1, and fails when
 # the report cannot be used: the lookup was incomplete or found no support, the executable changed
-# since, or the call failed or printed anything but a whole valid frame. A wait is a read, so the
+# since, the record never named the launched server, or the call failed or printed anything but a
+# whole valid frame with a ready answer for REMOTE_PORT or a failure. A wait is a read, so the
 # separate wait then runs, which a ready server answers at once. Live and compat are recorded only
 # for the record's own server, REMOTE_PID on REMOTE_PORT, when its live key was present before the
 # call and unchanged after it, the runner still runs the executable the lookup was for, and both
@@ -43,12 +70,13 @@ launch_ready_report() {
   case " $report_caps " in *" wait-ready-report "*) ;; *) return 1 ;; esac
   report_exe="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION/goat"
   exec_fact_key "$report_exe" && [ "$FACT_KEY" = "$report_caps_key" ] || return 1
+  launch_record_wait || return 1
   report_before=; ! live_fact_key "$RUNNER_FILE" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" || report_before="$FACT_KEY"
   launch_bounded $(( ($1 + 999) / 1000 + 10 )) "$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@" \\
     --report --runtime-file "$DEFAULT_RUNTIME_FILE" --port-file "$PORT_FILE" --pid-file "$PID_FILE" >"$FACT_MEMO.report" 2>/dev/null || return 1
   fact_slurp "$FACT_MEMO.report" || return 1
   frame_parse wait-ready "ready live" "$FACT_TEXT" || return 1
-  [ "$FRAME_READY" != "ok $REMOTE_PORT" ] || LAUNCH_READY=0
+  case "$FRAME_READY" in "ok $REMOTE_PORT") LAUNCH_READY=0 ;; "fail "*) ;; *) return 1 ;; esac
   [ "$LAUNCH_READY" = 0 ] && [ -n "$report_before" ] || return 0
   live_fact_key "$RUNNER_FILE" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" && [ "$FACT_KEY" = "$report_before" ] || return 0
   report_name="$FACT_NAME"; report_runner="$fact_live"

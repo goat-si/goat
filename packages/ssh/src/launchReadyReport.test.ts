@@ -82,6 +82,9 @@ const COMMON =
 // server starts after the capability lookup ends, as a server's start outlasts one goat start.
 const STUBS = [
   'launch_bounded() { shift; "$@"; }',
+  // A clock that moves only when the launch pauses; a pause may run on-pause.sh.
+  'launch_now() { launch_now_us="$(cat "$HOME/clock-us")"; }',
+  'launch_pause() { echo $(( $(cat "$HOME/clock-us") + $1 )) >"$HOME/clock-us"; [ ! -e "$HOME/on-pause.sh" ] || . "$HOME/on-pause.sh"; }',
   'wait_launched_listener() { [ -e "$HOME/no-wait" ] || wait; [ ! -e "$HOME/after-caps.sh" ] || . "$HOME/after-caps.sh"; }',
   "server_owns_listener() { :; }",
   "",
@@ -130,6 +133,7 @@ const fixture = Effect.fn("launchReadyReport.fixture")(function* () {
     await NodeFSP.writeFile(NodePath.join(state, "pid"), "4242\n");
     await write(".goat/userdata/server-runtime.json", RECORD);
     await write("ps-rows", PS_HEADER + PS_ROW);
+    await write("clock-us", "0\n");
     await write("calls", "");
     await write("live", LIVE + "\n");
     await write("compat", COMPAT + "\n");
@@ -151,6 +155,10 @@ const fixture = Effect.fn("launchReadyReport.fixture")(function* () {
   return {
     write: (name: string, value: string) => Effect.promise(() => write(name, value)),
     remove: (name: string) => Effect.promise(() => NodeFSP.rm(at(name), { force: true })),
+    read: (name: string) => Effect.promise(() => NodeFSP.readFile(at(name), "utf8")),
+    // The launch's definitions and stubs, then body.
+    script: (body: string) => sh(DEFINITIONS + STUBS + body),
+    list: (name: string) => Effect.promise(() => NodeFSP.readdir(at(name))),
     // The launch's own step from its launch files to a ready server, as the launch runs it.
     launch: (after = "") => sh(DEFINITIONS + STUBS + READY_STEP + "echo launch-ready\n" + after),
     fifo: (name: string) => Effect.promise(() => exec("mkfifo", [at(name)])),
@@ -221,12 +229,42 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
     }).pipe(Effect.scoped),
   );
 
+  it.effect("a record the server writes while the launch waits for it is captured", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.remove(".goat/userdata/server-runtime.json");
+      // The third pause writes it; the wait checks every 0.1 s for 5 s.
+      yield* f.write(
+        "on-pause.sh",
+        '[ "$(cat "$HOME/clock-us")" != 300000 ] || printf \'%s\' \'' +
+          RECORD +
+          '\' >"$HOME/.goat/userdata/server-runtime.json"',
+      );
+      assert.deepEqual(yield* f.launch(), ["launch-ready"]);
+      assert.deepEqual(yield* f.asked(), ["caps", "report"]);
+      assert.deepEqual(yield* f.facts(), RECORDED);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect.each([
+    { name: "a record never written", remove: true },
     {
-      name: "the record absent before the call and written during it",
-      before: ".goat/userdata/server-runtime.json",
-      during: "printf '%s' '" + RECORD + '\' >"$HOME/.goat/userdata/server-runtime.json"; ',
+      name: "a record that keeps naming an earlier server",
+      record: JSON.stringify({ pid: 5151, port: 4343, instanceId: "inst-0" }),
     },
+  ])("$name: after 5 s the separate wait runs and nothing is recorded", (c) =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      if (c.remove === true) yield* f.remove(".goat/userdata/server-runtime.json");
+      if (c.record !== undefined) yield* f.write(".goat/userdata/server-runtime.json", c.record);
+      assert.deepEqual(yield* f.launch(), ["launch-ready"]);
+      assert.deepEqual(yield* f.asked(), ["caps", "wait"]);
+      assert.deepEqual(yield* f.facts(), ["caps." + version + ".exe"]);
+      assert.equal((yield* f.read("clock-us")).trim(), "5000000");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
     {
       name: "the record's start key absent before the call and appearing during it",
       rows: PS_HEADER,
@@ -264,7 +302,6 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
   ])("$name: the server is ready and nothing is recorded", (c) =>
     Effect.gen(function* () {
       const f = yield* fixture();
-      if (c.before !== undefined) yield* f.remove(c.before);
       if (c.rows !== undefined) yield* f.write("ps-rows", c.rows);
       if (c.lines !== undefined) yield* f.write("report", report(c.lines));
       if (c.during !== undefined) yield* f.write("report.sh", c.during + 'cat "$HOME/report"');
@@ -288,6 +325,8 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
       text: report([GOOD[0]!, "live ok none unknown unknown unknown 0 0", GOOD[2]!]),
     },
     { name: "an unknown failure word", text: report([GOOD[0]!, GOOD[1]!, "compat fail later"]) },
+    { name: "a ready line for another port", text: report(["ready ok 4444", GOOD[1]!, GOOD[2]!]) },
+    { name: "a ready line without a port", text: report(["ready ok yes", GOOD[1]!, GOOD[2]!]) },
     { name: "a nonzero exit", text: report(GOOD), status: 1 },
   ])("$name: the separate wait runs and nothing is recorded", (c) =>
     Effect.gen(function* () {
@@ -345,7 +384,6 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
       name: "a server that did not answer",
       lines: ["ready fail timeout", "live fail unavailable"],
     },
-    { name: "a ready line for another port", lines: ["ready ok 4444", "live fail unavailable"] },
   ])("$name: the wait fails without asking again", (c) =>
     Effect.gen(function* () {
       const f = yield* fixture();
@@ -353,6 +391,51 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
       assert.deepEqual(yield* f.wait(), ["not-ready"]);
       assert.deepEqual(yield* f.asked(), ["caps", "report"]);
       assert.deepEqual(yield* f.facts(), ["caps." + version + ".exe"]);
+    }).pipe(Effect.scoped),
+  );
+});
+describe("the launch's background capability lookup", () => {
+  it.effect("runs once per launch, so a port retry neither asks again nor shares its files", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      assert.deepEqual(
+        yield* f.script(
+          'launch_caps_begin; first="$LAUNCH_CAPS_FILE"; launch_caps_begin; wait\n' +
+            '[ "$LAUNCH_CAPS_FILE" = "$first" ] && echo same\n',
+        ),
+        ["same"],
+      );
+      assert.deepEqual(yield* f.asked(), ["caps"]);
+    }).pipe(Effect.scoped),
+  );
+
+  // Above every PID limit (Linux 2^22, macOS 99999), so no process can have it.
+  const GONE = 2_147_483_646;
+  it.effect("removes what a launch no longer running left behind, and only that", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const left = (pid: number, suffix: string) =>
+        ".goat/ssh-launch/key/run-t3.next." + pid + ".facts." + suffix;
+      for (const suffix of [
+        "caps-answer",
+        "caps-answer.next",
+        "caps-status",
+        "caps-out",
+        "report",
+      ]) {
+        yield* f.write(left(GONE, suffix), "x\n");
+        yield* f.write(left(process.pid, suffix), "x\n");
+      }
+      yield* f.script("launch_caps_begin; wait\n");
+      const kept = yield* f.list(".goat/ssh-launch/key");
+      assert.deepEqual(
+        kept.filter((name) => name.startsWith("run-t3.next." + GONE)),
+        [],
+      );
+      assert.lengthOf(
+        kept.filter((name) => name.startsWith("run-t3.next." + process.pid + ".")),
+        5,
+      );
     }).pipe(Effect.scoped),
   );
 });
