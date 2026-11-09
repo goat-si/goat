@@ -56,6 +56,29 @@ file_sig_set() {
   esac
 }
 file_sig() { file_sig_set "$1" && printf '%s' "$FILE_SIG"; }
+# Sets FILE_SIG and FILE_SIG2 for regular files $1 and $2 as file_sig_set does, from one stat
+# start; anything but two valid lines sets neither.
+file_sigs_set() {
+  FILE_SIG=; FILE_SIG2=
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -f "$2" ] && [ ! -L "$2" ] || return 1
+  if [ "$fact_stat" = bsd ]; then
+    sig_value="$(stat -f '%d:%i:%z:%m:%c' "$1" "$2" 2>/dev/null)" ||
+      sig_value="$(stat -c '%d:%i:%s:%Y:%Z' "$1" "$2" 2>/dev/null)" || return 1
+  else
+    sig_value="$(stat -c '%d:%i:%s:%Y:%Z' "$1" "$2" 2>/dev/null)" ||
+      sig_value="$(stat -f '%d:%i:%z:%m:%c' "$1" "$2" 2>/dev/null)" || return 1
+  fi
+  case "$sig_value" in *"$fact_nl"*) ;; *) return 1 ;; esac
+  sig_first="\${sig_value%%"$fact_nl"*}"; sig_second="\${sig_value#*"$fact_nl"}"
+  for sig_value in "$sig_first" "$sig_second"; do
+    case "$sig_value" in
+      *[!0123456789:]*|:*|*:|*::*|*:*:*:*:*:*) return 1 ;;
+      *:*:*:*:*) ;;
+      *) return 1 ;;
+    esac
+  done
+  FILE_SIG="$sig_first"; FILE_SIG2="$sig_second"
+}
 # A remembered key holds only while its executable keeps the signature and install marker it had,
 # and a remembered runner keeps its own. Their age gates hold again on a fresh clock: one stepped
 # back makes a same-second rewrite look unchanged. The clock is read after the signatures, so a
@@ -66,9 +89,11 @@ fact_memo_get() {
     IFS= read -r memo_exe && IFS= read -r memo_sig && IFS= read -r memo_path_sig; do
     [ "$memo_path" = "$1" ] || continue
     if [ "$memo_path" != "$memo_exe" ]; then
-      file_sig_set "$memo_path" && [ "$FILE_SIG" = "$memo_path_sig" ] || return 1
+      file_sigs_set "$memo_path" "$memo_exe" && [ "$FILE_SIG" = "$memo_path_sig" ] &&
+        [ "$FILE_SIG2" = "$memo_sig" ] || return 1
+    else
+      file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] || return 1
     fi
-    file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] || return 1
     fact_clock || return 1
     [ "$memo_path" = "$memo_exe" ] || [ "\${memo_path_sig##*:}" -lt "$fact_now" ] || return 1
     [ "$(( fact_now - \${memo_sig##*:} ))" -ge 2 ] || return 1

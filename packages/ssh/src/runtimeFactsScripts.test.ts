@@ -235,6 +235,58 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
     },
   );
 
+  it.each(["dash", "bash"])(
+    "check a remembered runner key with one stat start for the runner and its executable (%s)",
+    (shell) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-fact-memo-stat-"));
+      try {
+        const versions = NodePath.join(dir, ".goat/runtime/goat/versions/1.2.3");
+        NodeFS.mkdirSync(versions, { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(versions, "goat"), "#!/bin/sh\n", { mode: 0o755 });
+        NodeFS.writeFileSync(NodePath.join(versions, ".install-complete"), "1.2.3\n");
+        NodeFS.writeFileSync(NodePath.join(dir, "a"), "GOAT_ARCHIVE_VERSION='1.2.3'\n# a\n");
+        const bin = NodePath.join(dir, "bin");
+        NodeFS.mkdirSync(bin);
+        const realStat = NodeChildProcess.spawnSync("sh", ["-c", "command -v stat"], {
+          encoding: "utf8",
+        }).stdout.trim();
+        // The clock is far ahead of the files; stat counts its starts and fails on demand.
+        NodeFS.writeFileSync(NodePath.join(bin, "date"), "#!/bin/sh\necho 4102444800\n", {
+          mode: 0o755,
+        });
+        NodeFS.writeFileSync(
+          NodePath.join(bin, "stat"),
+          `#!/bin/sh\necho stat >>"$HOME/stats"\n[ ! -e "$HOME/stat-fails" ] || exit 1\nexec ${realStat} "$@"\n`,
+          { mode: 0o755 },
+        );
+        const key = 'exec_fact_key "$RUNNER_CANDIDATE_FILE.pin" && printf "%s\\n" "$FACT_KEY"';
+        const out = runIn(
+          shell,
+          [
+            'RUNNER_CANDIDATE_FILE="$HOME/next"; FACT_MEMO="$HOME/next.facts"; fact_memo_drop',
+            'stats() { wc -l <"$HOME/stats" | tr -d " "; }',
+            'pin_runner "$HOME/a"',
+            'first="$(' + key + ')"',
+            ': >"$HOME/stats"',
+            'again="$(' + key + ')"; hit="$(stats)"',
+            // A stat that fails is a miss, and the key cannot be taken afresh either.
+            ': >"$HOME/stat-fails"',
+            'failed="$(' + key + ')" || failed=none',
+            'printf "%s\\n" "$first" "$again" "$hit" "$failed"',
+          ].join("\n"),
+          { HOME: dir, PATH: bin + ":" + (process.env.PATH ?? "") },
+        );
+        const [first, again, hit, failed] = out.trim().split("\n");
+        assert.include(first, "versions/1.2.3/goat ");
+        assert.equal(again, first);
+        assert.equal(hit, "1");
+        assert.equal(failed, "none");
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("reads a built runner in one call and parses only the lines before its end line", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-hint-reads-"));
     try {
