@@ -87,6 +87,52 @@ describe("composer control rows", () => {
     expect(screen.container.querySelector("[data-row]")!.getBoundingClientRect().height).toBe(28);
   });
 
+  it.each([
+    { label: "Refine", promptHasText: true },
+    { label: "Implement", promptHasText: false },
+  ])(
+    "keeps the microphone next to $label for a proposed plan",
+    async ({ label, promptHasText }) => {
+      await desktop();
+      await using screen = await render(
+        <div data-row className="flex items-center gap-2">
+          <ComposerPrimaryActions
+            voiceControl={{ onClick: () => {} }}
+            compact={false}
+            canOperateThread
+            pendingAction={null}
+            isRunning={false}
+            canInterrupt={false}
+            showPlanFollowUpPrompt
+            promptHasText={promptHasText}
+            isSendBusy={false}
+            sendDisabledReason={null}
+            isConnecting={false}
+            isEnvironmentUnavailable={false}
+            isPreparingWorktree={false}
+            hasSendableContent={promptHasText}
+            onPreviousPendingQuestion={() => {}}
+            onInterrupt={() => {}}
+            onImplementPlanInNewThread={() => {}}
+          />
+        </div>,
+        // These isolated controls do not use navigation.
+        { router: false },
+      );
+      const voice = screen.container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Record voice input"]',
+      );
+      const submit = Array.from(
+        screen.container.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) => button.textContent === label);
+      expect(voice).not.toBeNull();
+      expect(submit).toBeDefined();
+      expect(voice!.getBoundingClientRect().right).toBeLessThanOrEqual(
+        submit!.getBoundingClientRect().left,
+      );
+    },
+  );
+
   it("gives a control with a chevron the same padding on both sides", async () => {
     await desktop();
     await using screen = await render(

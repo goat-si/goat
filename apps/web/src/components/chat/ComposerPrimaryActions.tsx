@@ -143,6 +143,18 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     }) === "queue";
   const alternateAction = alternateComposerDispatchAction(followUpBehavior);
   const isSendDisabled = !canOperateThread || sendDisabledReason !== null;
+  const voiceButton = voiceControl ? (
+    <ComposerVoiceButton
+      {...voiceControl}
+      disabled={
+        voiceControl.disabled ||
+        !canOperateThread ||
+        isSendBusy ||
+        isConnecting ||
+        isEnvironmentUnavailable
+      }
+    />
+  ) : null;
 
   const renderStopGenerationButton = () => (
     <Tooltip key="interrupt">
@@ -222,76 +234,75 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   if (showPlanFollowUpPrompt && (promptHasText || !canResume)) {
     if (promptHasText) {
       return (
-        <button
-          type="submit"
-          className={cn(messageActionPillClassName, compact ? "px-3" : "px-4")}
-          {...pointerFocusProps}
-          disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
-        >
-          {isConnecting || isSendBusy ? "Sending..." : "Refine"}
-        </button>
+        <>
+          {voiceButton}
+          <button
+            type="submit"
+            className={cn(messageActionPillClassName, compact ? "px-3" : "px-4")}
+            {...pointerFocusProps}
+            disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+          >
+            {isConnecting || isSendBusy ? "Sending..." : "Refine"}
+          </button>
+        </>
       );
     }
 
     return (
-      <div data-chat-composer-implement-actions="true" className="flex items-center justify-end">
-        <button
-          type="submit"
-          className={cn(messageActionPillClassName, "rounded-r-none px-4")}
-          {...pointerFocusProps}
-          disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
-        >
-          {isConnecting || isSendBusy ? "Sending..." : "Implement"}
-        </button>
-        <Menu>
-          <MenuTrigger
-            render={
-              <button
-                type="button"
-                className={cn(
-                  messageActionPillClassName,
-                  "rounded-l-none border-l border-message-action-foreground/20 px-2",
-                )}
-                aria-label="Implementation actions"
-                onMouseDown={
-                  preserveComposerFocusOnPointerDown ? (event) => event.preventDefault() : undefined
-                }
-                disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
-              />
-            }
+      <>
+        {voiceButton}
+        <div data-chat-composer-implement-actions="true" className="flex items-center justify-end">
+          <button
+            type="submit"
+            className={cn(messageActionPillClassName, "rounded-r-none px-4")}
+            {...pointerFocusProps}
+            disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
           >
-            <ChevronDownIcon className="size-3.5" />
-          </MenuTrigger>
-          <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
-            <MenuItem
-              disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
-              onClick={() => {
-                if (canOperateThread) onImplementPlanInNewThread();
-              }}
+            {isConnecting || isSendBusy ? "Sending..." : "Implement"}
+          </button>
+          <Menu>
+            <MenuTrigger
+              render={
+                <button
+                  type="button"
+                  className={cn(
+                    messageActionPillClassName,
+                    "rounded-l-none border-l border-message-action-foreground/20 px-2",
+                  )}
+                  aria-label="Implementation actions"
+                  onMouseDown={
+                    preserveComposerFocusOnPointerDown
+                      ? (event) => event.preventDefault()
+                      : undefined
+                  }
+                  disabled={
+                    isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable
+                  }
+                />
+              }
             >
-              Implement in a new thread
-            </MenuItem>
-          </MenuPopup>
-        </Menu>
-      </div>
+              <ChevronDownIcon className="size-3.5" />
+            </MenuTrigger>
+            <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
+              <MenuItem
+                disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+                onClick={() => {
+                  if (canOperateThread) onImplementPlanInNewThread();
+                }}
+              >
+                Implement in a new thread
+              </MenuItem>
+            </MenuPopup>
+          </Menu>
+        </div>
+      </>
     );
   }
 
   if (canInterrupt && !hasSendableContent && !isEditingQueuedMessage) {
     return (
       <span className="inline-flex items-center gap-2.5">
-        {voiceControl ? (
-          <ComposerVoiceButton
-            {...voiceControl}
-            disabled={
-              voiceControl.disabled ||
-              !canOperateThread ||
-              isSendBusy ||
-              isConnecting ||
-              isEnvironmentUnavailable
-            }
-          />
-        ) : null}
+        {voiceButton}
         {renderStopGenerationButton()}
       </span>
     );
@@ -371,18 +382,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
 
   const submit = (
     <span className="inline-flex items-center gap-2.5">
-      {voiceControl ? (
-        <ComposerVoiceButton
-          {...voiceControl}
-          disabled={
-            voiceControl.disabled ||
-            !canOperateThread ||
-            isSendBusy ||
-            isConnecting ||
-            isEnvironmentUnavailable
-          }
-        />
-      ) : null}
+      {voiceButton}
       <Tooltip key="submit">
         <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
         <TooltipPopup>{submitTooltip}</TooltipPopup>
