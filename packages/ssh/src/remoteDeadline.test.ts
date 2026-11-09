@@ -8,7 +8,7 @@ import * as NodePath from "node:path";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { describe, expect, it } from "vite-plus/test";
 
-import { isRemoteShellScript, withRemoteDeadline } from "./remoteDeadline.ts";
+import { isRemoteShellScript, READ_TICK, withRemoteDeadline } from "./remoteDeadline.ts";
 
 // The shell and everything it starts share fd 3 with the test. A clock tick that must never pass
 // reads it and so blocks until the test closes its end once the shell exits. The run then settles
@@ -674,3 +674,307 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
     },
   );
 });
+
+// Under bash the watchdog ticks in read on a private FIFO; ticks below replace that read and the
+// clock so a test decides when time passes. The script blocks on $1/block until it is hung up.
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "remote deadline read tick",
+  () => {
+    const inDir = async (run: (dir: string, bin: string) => Promise<void>) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
+      try {
+        const bin = NodePath.join(dir, "bin");
+        NodeFS.mkdirSync(bin);
+        NodeFS.mkdirSync(NodePath.join(dir, "tmp"));
+        for (const fifo of ["gate", "block"])
+          NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
+        await run(dir, bin);
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    const shim = (bin: string, name: string, body: string) =>
+      NodeFS.writeFileSync(NodePath.join(bin, name), "#!/bin/sh\n" + body + "\n", { mode: 0o755 });
+    // Runs the real tool: the one after this stand-in's directory on PATH.
+    const real = (tool: string) => 'PATH="$' + '{PATH#*:}" ' + tool;
+    const env = (dir: string, bin: string) => ({
+      GOAT_TEST_DIR: dir,
+      TMPDIR: NodePath.join(dir, "tmp"),
+      PATH: bin + ":" + (process.env.PATH ?? ""),
+    });
+    // The first tick waits until the script is stuck; later ticks pass at once.
+    const GATED_SLEEP =
+      'if [ -p "$GOAT_TEST_DIR/gate" ]; then cat "$GOAT_TEST_DIR/gate" >/dev/null; rm -f "$GOAT_TEST_DIR/gate"; fi';
+    const STUCK = ["trap 'exit 129' HUP", 'printf go > "$1/gate"', 'cat "$1/block"'].join("\n");
+    // A clock any bash reads, for tests that need the read tick: EPOCHREALTIME came with bash 5, and
+    // macOS still ships bash 3.2.
+    const FIXED_NOW = "        goat_deadline_t=1000000000";
+    const hasEpoch =
+      NodeChildProcess.spawnSync("bash", [
+        "-c",
+        'case "$EPOCHREALTIME" in *[.,]*) ;; *) exit 1 ;; esac',
+      ]).status === 0;
+    const lines = (dir: string, name: string) =>
+      NodeFS.existsSync(NodePath.join(dir, name))
+        ? NodeFS.readFileSync(NodePath.join(dir, name), "utf8").trim().split("\n")
+        : [];
+
+    // Without EPOCHREALTIME the real clock fails and the watchdog ticks with sleep, which this rules out.
+    it.skipIf(!NodeFS.existsSync("/proc/self/fd") || !hasEpoch)(
+      "leaves no process of its own once a bash script ends",
+      async () => {
+        await inDir(async (dir) => {
+          // fd 3 is the test's: a process still holding it at the shell's exit outlived the script.
+          const script = withRemoteDeadline('readlink /proc/self/fd/3 > "$1/hold"\nexit 7', 60_000);
+          let holders: string[] = [];
+          const result = await runShell(
+            script,
+            [dir],
+            {},
+            {
+              shell: "bash",
+              onExit: () => {
+                const hold = NodeFS.readFileSync(NodePath.join(dir, "hold"), "utf8").trim();
+                const holds = (pid: string) => {
+                  try {
+                    return NodeFS.readdirSync("/proc/" + pid + "/fd").some((fd) => {
+                      try {
+                        return NodeFS.readlinkSync("/proc/" + pid + "/fd/" + fd) === hold;
+                      } catch {
+                        return false;
+                      }
+                    });
+                  } catch {
+                    return false;
+                  }
+                };
+                holders = NodeFS.readdirSync("/proc").filter(
+                  (pid) => /^\d+$/.test(pid) && holds(pid),
+                );
+              },
+            },
+          );
+          expect(result).toEqual({ code: 7, stdout: "" });
+          expect(holders).toEqual([]);
+        });
+      },
+    );
+
+    it("hangs up when the clock reaches the deadline, however its reads end", async () => {
+      await inDir(async (dir, bin) => {
+        NodeFS.writeFileSync(NodePath.join(dir, "clock"), "1000000000\n");
+        // Every third read waits its whole step and the clock moves on by it; the others end at
+        // once, one reporting a timeout and one an interrupting signal, with no time passed.
+        const ticks = {
+          now: '        read -r goat_deadline_t < "$GOAT_TEST_DIR/clock"',
+          read: [
+            'n=$(($(cat "$GOAT_TEST_DIR/reads" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/reads"',
+            'if [ "$n" = 1 ]; then cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
+            "case $((n % 3)) in",
+            '  1) echo "$(($(cat "$GOAT_TEST_DIR/clock") + $1 * 1000000))" > "$GOAT_TEST_DIR/clock"; (exit 142) ;;',
+            "  2) (exit 142) ;;",
+            "  *) (exit 138) ;;",
+            "esac",
+          ].join("\n"),
+        };
+        const body = [
+          'trap \'cat "$1/clock" > "$1/fired"; exit 129\' HUP',
+          'printf go > "$1/gate"',
+          'cat "$1/block"',
+        ].join("\n");
+        const result = await runShell(
+          withRemoteDeadline(body, 1_000, undefined, undefined, ticks),
+          [dir],
+          env(dir, bin),
+          { shell: "bash", sessionLeader: true },
+        );
+        expect(result.code).toBe(129);
+        // 1 s of client timeout and 5 s of grace on this clock: no earlier, no later.
+        expect(lines(dir, "fired")).toEqual([String(1_000_000_000 + 6_000_000)]);
+      });
+    });
+
+    it("hangs up at the clock's deadline when a read stalls past its tick", async () => {
+      await inDir(async (dir, bin) => {
+        NodeFS.writeFileSync(NodePath.join(dir, "clock"), "1000000000\n");
+        // The first read is held up 5 s, longer than any tick; later reads take what they ask for.
+        const ticks = {
+          now: '        read -r goat_deadline_t < "$GOAT_TEST_DIR/clock"',
+          read: [
+            'echo "$(cat "$GOAT_TEST_DIR/clock") $1" >> "$GOAT_TEST_DIR/asked"',
+            'if [ -p "$GOAT_TEST_DIR/gate" ]; then cat "$GOAT_TEST_DIR/gate" >/dev/null; rm -f "$GOAT_TEST_DIR/gate"; us=5000000',
+            'else case "$1" in *.*) us=$((${1%.*} * 1000000 + 1${1#*.} - 1000000)) ;; *) us=$(($1 * 1000000)) ;; esac; fi',
+            'echo "$(($(cat "$GOAT_TEST_DIR/clock") + us))" > "$GOAT_TEST_DIR/clock"; (exit 142)',
+          ].join("\n"),
+        };
+        const result = await runShell(
+          withRemoteDeadline(STUCK, 1_000, undefined, undefined, ticks),
+          [dir],
+          env(dir, bin),
+          { shell: "bash", sessionLeader: true },
+        );
+        expect(result.code).toBe(129);
+        // The stall counts in full and the next read asks only for the second left, so the clock
+        // meets the 6 s deadline. A grace read may follow the hang-up before the script ends.
+        expect(lines(dir, "asked").slice(0, 2)).toEqual(["1000000000 2", "1005000000 1.000000"]);
+      });
+    });
+
+    it("ticks with sleep and hangs up on time when bash has no EPOCHREALTIME", async () => {
+      await inDir(async (dir, bin) => {
+        shim(bin, "mkdir", 'echo "$*" >> "$GOAT_TEST_DIR/mkdirs"; exit 1');
+        // Tick 1 waits until the script is stuck and later countdown ticks pass at once. Tick 5
+        // comes only for a script nothing hung up: it releases the script, and later ticks wait.
+        shim(
+          bin,
+          "tick",
+          [
+            'echo "$1" >> "$GOAT_TEST_DIR/steps"; n=$(($(wc -l < "$GOAT_TEST_DIR/steps")))',
+            'if [ "$n" = 1 ]; then exec cat "$GOAT_TEST_DIR/gate" >/dev/null; fi',
+            'if [ "$n" = 5 ]; then printf x 1<>"$GOAT_TEST_DIR/block"; fi',
+            'if [ "$n" -gt 5 ]; then ' + HOLD + "; fi",
+          ].join("\n"),
+        );
+        const result = await runShell(
+          "unset EPOCHREALTIME\n" +
+            withRemoteDeadline(STUCK, 2_000, NodePath.join(bin, "tick"), undefined, READ_TICK),
+          [dir],
+          env(dir, bin),
+          { shell: "bash", sessionLeader: true },
+        );
+        expect(result.code).toBe(129);
+        // 2 s of timeout and 5 s of grace count down in steps of 2, 2, 2 and 1; the hang-up follows.
+        expect(lines(dir, "steps").slice(0, 4)).toEqual(["2", "2", "2", "1"]);
+        expect(lines(dir, "mkdirs")).toEqual([]);
+        expect(NodeFS.readdirSync(NodePath.join(dir, "tmp"))).toEqual([]);
+      });
+    });
+
+    it("falls back to sleeping when a read fails, and still hangs up", async () => {
+      await inDir(async (dir, bin) => {
+        shim(bin, "tick", GATED_SLEEP);
+        const ticks = { now: FIXED_NOW, read: 'echo read >> "$GOAT_TEST_DIR/reads"; (exit 1)' };
+        const result = await runShell(
+          withRemoteDeadline(STUCK, 1_000, NodePath.join(bin, "tick"), undefined, ticks),
+          [dir],
+          env(dir, bin),
+          { shell: "bash", sessionLeader: true },
+        );
+        expect(result.code).toBe(129);
+        expect(lines(dir, "reads")).toEqual(["read"]);
+      });
+    });
+
+    it.each([
+      ["its directory cannot be made", "mkdir", "exit 1"],
+      ["chmod fails", "chmod", "exit 1"],
+      ["mkfifo fails", "mkfifo", "exit 1"],
+      ["the FIFO cannot be opened", "mkfifo", 'mkdir "$1"'],
+    ])("sleeps and still hangs up when %s", async (_, tool, body) => {
+      await inDir(async (dir, bin) => {
+        shim(bin, tool, body);
+        shim(bin, "tick", GATED_SLEEP);
+        const ticks = {
+          now: FIXED_NOW,
+          read: 'echo read >> "$GOAT_TEST_DIR/reads"; (exit 142)',
+        };
+        const result = await runShell(
+          withRemoteDeadline(STUCK, 1_000, NodePath.join(bin, "tick"), undefined, ticks),
+          [dir],
+          env(dir, bin),
+          { shell: "bash", sessionLeader: true },
+        );
+        expect(result.code).toBe(129);
+        expect(lines(dir, "reads")).toEqual([]);
+        expect(NodeFS.readdirSync(NodePath.join(dir, "tmp"))).toEqual([]);
+      });
+    });
+
+    it("ticks in read where mkdir -m makes the directory and then fails, as on Git Bash", async () => {
+      await inDir(async (dir, bin) => {
+        NodeFS.writeFileSync(NodePath.join(dir, "clock"), "1000000000\n");
+        shim(
+          bin,
+          "mkdir",
+          [
+            'echo "$*" >> "$GOAT_TEST_DIR/mkdirs"',
+            'case "$1" in -m) shift 2; ' + real("mkdir") + ' "$@"; exit 1 ;; esac',
+            real("mkdir") + ' "$@"',
+          ].join("\n"),
+        );
+        // The first read waits until the script is stuck; each read moves the clock by its step.
+        const ticks = {
+          now: '        read -r goat_deadline_t < "$GOAT_TEST_DIR/clock"',
+          read: [
+            'echo "$1" >> "$GOAT_TEST_DIR/reads"',
+            'if [ -p "$GOAT_TEST_DIR/gate" ]; then cat "$GOAT_TEST_DIR/gate" >/dev/null; rm -f "$GOAT_TEST_DIR/gate"; fi',
+            'echo "$(($(cat "$GOAT_TEST_DIR/clock") + $1 * 1000000))" > "$GOAT_TEST_DIR/clock"; (exit 142)',
+          ].join("\n"),
+        };
+        const result = await runShell(
+          withRemoteDeadline(STUCK, 1_000, undefined, undefined, ticks),
+          [dir],
+          env(dir, bin),
+          { shell: "bash", sessionLeader: true },
+        );
+        expect(result.code).toBe(129);
+        // 1 s of timeout and 5 s of grace in read steps of 2 s; a grace read may follow the hang-up.
+        expect(lines(dir, "reads").slice(0, 3)).toEqual(["2", "2", "2"]);
+        expect(lines(dir, "mkdirs").filter((line) => line.startsWith("-m"))).toEqual([]);
+        expect(NodeFS.readdirSync(NodePath.join(dir, "tmp"))).toEqual([]);
+      });
+    });
+
+    // "taken" makes the first name an existing directory with a file in it, so mkdir fails there.
+    it.each(["directory", "chmod", "taken", "FIFO", "read"])(
+      "cleans up only what it made when stopped during its %s step",
+      async (stage) => {
+        await inDir(async (dir, bin) => {
+          NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "stopping")]);
+          // The watchdog is stopped once the script knows it reached that stage.
+          const stop = 'printf x > "$GOAT_TEST_DIR/stopping"; kill -TERM "$PPID"';
+          const tool = { directory: "mkdir", chmod: "chmod", FIFO: "mkfifo" }[stage];
+          if (tool !== undefined) shim(bin, tool, real(tool) + ' "$@" && ' + stop);
+          if (stage === "taken")
+            shim(
+              bin,
+              "mkdir",
+              [
+                'if [ ! -e "$GOAT_TEST_DIR/took" ]; then : > "$GOAT_TEST_DIR/took"',
+                "  " + real("mkdir") + ' "$1" && echo keep > "$1/keep"; ' + stop + "; exit 1",
+                "fi",
+                real("mkdir") + ' "$@"',
+              ].join("\n"),
+            );
+          const ticks = {
+            now: FIXED_NOW,
+            read:
+              stage === "read"
+                ? // $BASHPID came with bash 4; sh's parent is this watchdog.
+                  'printf x > "$GOAT_TEST_DIR/stopping"; kill -TERM "$(exec sh -c \'echo $PPID\')"; (exit 142)'
+                : READ_TICK.read,
+          };
+          const result = await runShell(
+            withRemoteDeadline(
+              'cat "$1/stopping" >/dev/null\nexit 3',
+              60_000,
+              undefined,
+              undefined,
+              ticks,
+            ),
+            [dir],
+            env(dir, bin),
+            { shell: "bash" },
+          );
+          expect(result).toEqual({ code: 3, stdout: "" });
+          const left = NodeFS.readdirSync(NodePath.join(dir, "tmp"));
+          const contents = (name: string) => NodeFS.readdirSync(NodePath.join(dir, "tmp", name));
+          if (stage === "taken") {
+            expect(left).toHaveLength(1);
+            expect(contents(left[0] ?? "")).toEqual(["keep"]);
+          } else expect(left).toEqual([]);
+        });
+      },
+    );
+  },
+);
