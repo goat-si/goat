@@ -41,7 +41,11 @@ function GoatBotAvatar(props: { readonly emoji?: string | null | undefined }) {
       className="h-5 w-5 items-center justify-center rounded-full border border-goat-avatar-border bg-goat-avatar"
     >
       {emoji !== null ? (
-        <Text allowFontScaling={false} style={{ fontSize: 11, lineHeight: 14 }}>
+        <Text
+          allowFontScaling={false}
+          className="text-goat-avatar-foreground"
+          style={{ fontSize: 11, lineHeight: 14 }}
+        >
           {emoji}
         </Text>
       ) : (
@@ -258,7 +262,7 @@ export function GoatBotActivityLine(props: {
 
 /**
  * A bot question that offers answers: its words and the answers in one bordered card. Once a
- * person answered, the answers fold into one line naming the one they picked.
+ * person answered, the card settles to one line naming the answer, which opens to the question.
  */
 export function GoatBotQuestionCard(props: {
   readonly children: ReactNode;
@@ -268,33 +272,61 @@ export function GoatBotQuestionCard(props: {
   /** The answer the person sent; absent while the question is open. */
   readonly answered?: string | null | undefined;
 }) {
-  const label = useScaledTextRole("label");
   const answered = props.answered ?? null;
+  if (answered !== null) {
+    return <GoatBotAnsweredQuestion answer={answered}>{props.children}</GoatBotAnsweredQuestion>;
+  }
   return (
     <View accessibilityLabel="Question" className="gap-3 rounded-xl border border-border p-3">
       {props.children}
-      {answered !== null ? (
-        <Text numberOfLines={1} className="text-foreground-muted" style={label}>
-          You answered: {answered}
+      <View accessibilityLabel="Suggested answers" className="flex-row flex-wrap gap-2">
+        {props.options.map((answer) => (
+          <Pressable
+            key={answer}
+            accessibilityRole="button"
+            disabled={!props.canAnswer}
+            onPress={() => props.onPick(answer)}
+            // 44pt touch target; min-h-11 is only 38.5pt at the app's 14pt rem.
+            className="min-h-[44px] max-w-full justify-center rounded-full border border-border px-3 py-2"
+          >
+            <Text numberOfLines={2} className="text-sm text-foreground">
+              {answer}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+/** The settled question, like web's answered summary: one line, opened only when asked. */
+function GoatBotAnsweredQuestion(props: { readonly answer: string; readonly children: ReactNode }) {
+  const label = useScaledTextRole("label");
+  const [open, setOpen] = useState(false);
+  return (
+    <View className="rounded-xl border border-border">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Answered: ${props.answer}`}
+        accessibilityHint={open ? "Hides the question" : "Shows the question"}
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((value) => !value)}
+        className="min-h-[44px] flex-row items-center gap-2 px-3 py-2"
+      >
+        <SymbolView name="checkmark" size={14} tintColorClassName="accent-icon-muted" />
+        <Text numberOfLines={1} className="shrink text-foreground" style={label}>
+          <Text className="text-foreground-muted">Answered: </Text>
+          <Text className="font-medium">{props.answer}</Text>
         </Text>
-      ) : (
-        <View accessibilityLabel="Suggested answers" className="flex-row flex-wrap gap-2">
-          {props.options.map((answer) => (
-            <Pressable
-              key={answer}
-              accessibilityRole="button"
-              disabled={!props.canAnswer}
-              onPress={() => props.onPick(answer)}
-              // 44pt touch target; min-h-11 is only 38.5pt at the app's 14pt rem.
-              className="min-h-[44px] max-w-full justify-center rounded-full border border-border px-3 py-2"
-            >
-              <Text numberOfLines={2} className="text-sm text-foreground">
-                {answer}
-              </Text>
-            </Pressable>
-          ))}
+        <View className="ml-auto">
+          <SymbolView
+            name={open ? "chevron.down" : "chevron.right"}
+            size={12}
+            tintColorClassName="accent-icon-muted"
+          />
         </View>
-      )}
+      </Pressable>
+      {open ? <View className="border-t border-border px-3 py-3">{props.children}</View> : null}
     </View>
   );
 }

@@ -56,6 +56,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { MobileBotWork } from "./MobileBotWork";
 import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
+import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const rowKey = (row: GoatBotRow) => row.id;
@@ -193,7 +194,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         />
       ) : null}
       {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
-      {/* The shared rows fold a question once it is answered: the card then names the answer. */}
+      {/* The shared rows fold a question once it is answered: the card settles to the answer. */}
       {row.options.length > 0 || row.answer !== undefined ? (
         <GoatBotQuestionCard
           options={row.options}
@@ -233,7 +234,7 @@ export function GoatBotScreen(props: {
   const session = useMobileGoatBotSession(props.visible, props.taskId ?? null, member);
   const title = goatBotName(member ?? props.main ?? null);
   const copy = availabilityCopy(mainName, title);
-  const botEmoji = (member ?? props.main ?? null)?.avatar;
+  const botEmoji = member ? mobileGoatBotMemberPicture(member) : props.main?.avatar;
   const taskId = session.supportsTaskThreads ? props.taskId : undefined;
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;

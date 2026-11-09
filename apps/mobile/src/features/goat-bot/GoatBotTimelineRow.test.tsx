@@ -53,7 +53,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   }),
 }));
 import { GoatBotTimelineRow } from "./GoatBotScreen";
-import { GoatBotActivityLine, GoatBotQuestionCard } from "./GoatBotMessageParts";
+import { GoatBotActivityLine } from "./GoatBotMessageParts";
 
 let h: NativeMemoryHarness;
 let view: ReturnType<typeof renderNative>;
@@ -281,17 +281,23 @@ it("asks a question with answers as one card and sends the picked answer to its 
   expect(onSend).toHaveBeenCalledWith("Later", "task-1");
 });
 
-it("folds an answered question to the answer that was picked", async () => {
+it("settles an answered question to one line that opens to the question and closes again", async () => {
   h = createNativeMemoryHarness();
   view = renderNative(
     h,
-    <GoatBotQuestionCard options={["Yes", "Later"]} answered="Later" canAnswer onPick={vi.fn()}>
-      {null}
-    </GoatBotQuestionCard>,
+    <GoatBotTimelineRow
+      {...props}
+      row={bot({ tone: "question", text: "Deploy now?", options: [], answer: "Later" })}
+    />,
   );
   await view.render();
-  expect(view.container.textContent).toContain("You answered: Later");
-  expect(view.container.querySelectorAll("button")).toHaveLength(0);
+  expect(view.container.textContent).toContain("Answered: Later");
+  expect(view.container.textContent).not.toContain("Deploy now?");
+  await view.click("Answered: Later");
+  expect(view.container.textContent).toContain("Deploy now?");
+  expect(view.container.textContent).not.toContain("Yes");
+  await view.click("Answered: Later");
+  expect(view.container.textContent).not.toContain("Deploy now?");
 });
 
 // Turn items for the shared timeline, so these tests read the answered state the way the screen does.
@@ -416,16 +422,18 @@ describe("a question in the chat folds to the answer the person sent", () => {
     const { text, buttons } = await shown(
       questionFrom({ items: [askedItem], pending: [sending("Release", "sending")] }),
     );
-    expect(text).toContain("Which one?");
-    expect(text).toContain("You answered: Release");
+    expect(text).toContain("Answered: Release");
+    expect(text).not.toContain("Which one?");
     expect(buttons).not.toContain("CI fix");
+    await view.click("Answered: Release");
+    expect(view.container.textContent).toContain("Which one?");
   });
 
   it("names a typed reply as the answer", async () => {
     const { text, buttons } = await shown(
       questionFrom({ items: [askedItem, sentItem("Neither, wait for Monday")] }),
     );
-    expect(text).toContain("You answered: Neither, wait for Monday");
+    expect(text).toContain("Answered: Neither, wait for Monday");
     expect(buttons).not.toContain("Release");
   });
 
@@ -433,7 +441,8 @@ describe("a question in the chat folds to the answer the person sent", () => {
     const { text, buttons } = await shown(
       questionFrom({ items: [askedItem], pending: [sending("Release", "failed")] }),
     );
-    expect(text).not.toContain("You answered");
+    expect(text).not.toContain("Answered");
+    expect(text).toContain("Which one?");
     expect(buttons).toEqual(expect.arrayContaining(["CI fix", "Release"]));
   });
 
@@ -448,7 +457,7 @@ describe("a question in the chat folds to the answer the person sent", () => {
         cards: { n1: taskCard([]) },
       }),
     );
-    expect(text).toContain("You answered: Release");
+    expect(text).toContain("Answered: Release");
   });
 
   it("keeps a task's question open while its card still lists it, though an answer was sent", async () => {
@@ -462,7 +471,7 @@ describe("a question in the chat folds to the answer the person sent", () => {
         cards: { n1: taskCard(["q-pick"]) },
       }),
     );
-    expect(text).not.toContain("You answered");
+    expect(text).not.toContain("Answered");
     expect(buttons).toEqual(expect.arrayContaining(["CI fix", "Release"]));
   });
 });
