@@ -1206,36 +1206,35 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     cwd: string,
     requestedBranch: string,
   ) {
-    // A branch at a parent path (such as `goat`) blocks every ref nested under it, so no suffix
-    // would help; flatten to a sibling the way temporary worktree branches already do.
-    const segments = requestedBranch.split("/");
-    let blockedByParent = false;
-    for (let index = 1; index < segments.length && !blockedByParent; index += 1) {
-      blockedByParent = yield* branchExists(cwd, segments.slice(0, index).join("/"));
+    const { stdout } = yield* executeGit(
+      "GitVcsDriver.resolveAvailableBranchName",
+      cwd,
+      ["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"],
+      { maxOutputBytes: 16 * 1024 * 1024 },
+    );
+    const branches = new Set(
+      stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((name) => name.toLowerCase()),
+    );
+    const blockedNames = new Set(branches);
+    for (const branch of branches) {
+      const parts = branch.split("/");
+      for (let i = 1; i < parts.length; i++) blockedNames.add(parts.slice(0, i).join("/"));
     }
+    const segments = requestedBranch.split("/");
+    const blockedByParent = segments.some(
+      (_, i) => i > 0 && branches.has(segments.slice(0, i).join("/").toLowerCase()),
+    );
     const desiredBranch = blockedByParent ? segments.join("-") : requestedBranch;
-    // A branch nested under the name (`goat-fix/child`) blocks it as surely as one with the name.
-    const isBranchNameTaken = (name: string) =>
-      Effect.zipWith(
-        branchExists(cwd, name),
-        runGitStdout(
-          "GitVcsDriver.branchExists",
-          cwd,
-          ["for-each-ref", "--count=1", "--format=%(refname)", `refs/heads/${name}/`],
-          true,
-        ),
-        (exists, nested) => exists || nested.trim().length > 0,
-      );
-
-    const isDesiredTaken = yield* isBranchNameTaken(desiredBranch);
-    if (!isDesiredTaken) {
+    if (!blockedNames.has(desiredBranch.toLowerCase())) {
       return desiredBranch;
     }
 
     for (let suffix = 1; suffix <= 100; suffix += 1) {
       const candidate = `${desiredBranch}-${suffix}`;
-      const isCandidateTaken = yield* isBranchNameTaken(candidate);
-      if (!isCandidateTaken) {
+      if (!blockedNames.has(candidate.toLowerCase())) {
         return candidate;
       }
     }
@@ -4023,19 +4022,21 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.refName);
     yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.newRefName);
     const targetBranch = input.newRefName ?? input.refName;
-    let sanitizedBranch = worktreeFolderName(targetBranch, hostPlatform);
-    if (sanitizedBranch.length > 40) {
-      const digest = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(targetBranch))
-        .pipe(Effect.orDie);
-      const prefix = sanitizedBranch.slice(0, 23).replace(/[\uD800-\uDBFF]$/, "");
-      sanitizedBranch = `${prefix}-${Hex.encode(digest).slice(0, 16)}`;
-    }
     let worktreePath = input.path === null ? null : path.resolve(input.cwd, input.path);
     const progress = options?.progress;
     if (worktreePath == null) {
       const repository = yield* resolveRepositoryPathsUncached(input.cwd);
       const repoName = path.basename(repository?.worktreeRoot ?? path.resolve(input.cwd));
+      const identity = `${repository?.gitCommonDir ?? path.resolve(input.cwd)}\0${targetBranch}`;
+      const digest = yield* crypto
+        .digest("SHA-256", new TextEncoder().encode(identity))
+        .pipe(Effect.orDie);
+      let prefix = "";
+      for (const character of worktreeFolderName(targetBranch, hostPlatform)) {
+        if (Buffer.byteLength(prefix + character) > 23) break;
+        prefix += character;
+      }
+      const sanitizedBranch = `${prefix}-${Hex.encode(digest).slice(0, 16)}`;
       const location = yield* resolveAvailableWorktreesDirectory(
         {
           setting: options?.worktreesDirectory ?? "",

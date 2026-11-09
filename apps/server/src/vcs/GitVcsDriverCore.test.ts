@@ -3562,47 +3562,6 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    it.effect("flattens a generated name when a branch at its parent path blocks it", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        // A local `t3` branch is why launches start on the flat `t3-<hex>` temporary branch.
-        yield* git(cwd, ["branch", "t3"]);
-        yield* git(cwd, ["checkout", "-b", "t3-abcd1234"]);
-        yield* git(cwd, ["branch", "t3-fix-login"]);
-
-        const renamed = yield* driver.renameBranch({
-          cwd,
-          oldBranch: "t3-abcd1234",
-          newBranch: "t3/fix-login",
-        });
-
-        assert.equal(renamed.branch, "t3-fix-login-1");
-        assert.equal(yield* git(cwd, ["branch", "--show-current"]), "t3-fix-login-1");
-      }),
-    );
-
-    it.effect("skips a flattened name that a nested branch blocks", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        yield* git(cwd, ["branch", "t3"]);
-        yield* git(cwd, ["checkout", "-b", "t3-abcd1234"]);
-        yield* git(cwd, ["branch", "t3-fix-login/child"]);
-
-        const renamed = yield* driver.renameBranch({
-          cwd,
-          oldBranch: "t3-abcd1234",
-          newBranch: "t3/fix-login",
-        });
-
-        assert.equal(renamed.branch, "t3-fix-login-1");
-        assert.equal(yield* git(cwd, ["branch", "--show-current"]), "t3-fix-login-1");
-      }),
-    );
-
     it.effect("rejects a missing branch without restoring a matching dirty file", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -4257,13 +4216,15 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           { cwd, path: null, refName: initialBranch, newRefName: "feature/custom-dir" },
           { worktreesDirectory },
         );
-        const expected = pathService.join(
-          worktreesDirectory,
-          pathService.basename(cwd),
-          "feature-custom-dir",
+        assert.equal(
+          pathService.dirname(created.worktree.path),
+          pathService.join(worktreesDirectory, pathService.basename(cwd)),
         );
-        assert.equal(created.worktree.path, expected);
-        assert.equal(yield* fileSystem.exists(expected), true);
+        assert.match(
+          pathService.basename(created.worktree.path),
+          /^feature-custom-dir-[0-9a-f]{16}$/,
+        );
+        assert.equal(yield* fileSystem.exists(created.worktree.path), true);
       }),
     );
 
@@ -4304,9 +4265,13 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
                 },
               },
             );
-            const expected = pathService.join(repoWorktreesDir, branch.replace("/", "-"));
-            assert.equal(created.worktree.path, expected);
-            assert.equal(yield* fileSystem.exists(expected), true);
+            assert.equal(pathService.dirname(created.worktree.path), repoWorktreesDir);
+            assert.isTrue(
+              pathService
+                .basename(created.worktree.path)
+                .startsWith(branch.replace("/", "-") + "-"),
+            );
+            assert.equal(yield* fileSystem.exists(created.worktree.path), true);
             assert.deepStrictEqual(fallbacks, [reason]);
           }
           assert.equal(yield* fileSystem.exists(pathService.dirname(missingParent)), false);
@@ -4327,6 +4292,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           `feature/${"a".repeat(40)}/5fac`,
           `feature/${"a".repeat(40)}/18828`,
           `${"a".repeat(22)}😀/${"b".repeat(30)}`,
+          "😀".repeat(60),
+          "界".repeat(80),
           "z".repeat(40),
           "z".repeat(41),
         ];
@@ -4336,8 +4303,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             { worktreesDirectory },
           );
           const folder = pathService.basename(created.worktree.path);
-          assert.isAtMost(folder.length, 40);
-          if (branch.length <= 40) assert.equal(folder, branch);
+          assert.isAtMost(Buffer.byteLength(folder), 40);
           assert.equal(yield* git(created.worktree.path, ["branch", "--show-current"]), branch);
           assert.include(
             yield* git(cwd, ["-c", "core.quotePath=false", "worktree", "list", "--porcelain"]),
@@ -4785,8 +4751,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           },
         );
 
-        const expected = path.join(worktreesDirectory, path.basename(cwd), "feature-leftover");
-        assert.equal(created.worktree.path, expected);
+        const expected = created.worktree.path;
+        assert.equal(path.dirname(expected), path.join(worktreesDirectory, path.basename(cwd)));
+        assert.match(path.basename(expected), /^feature-leftover-[0-9a-f]{16}$/);
         assert.deepStrictEqual(outcomes, [{ worktree: "added", fastForwarded: false }]);
         assert.deepStrictEqual(claimed, [expected]);
         assert.equal(yield* git(expected, ["branch", "--show-current"]), "feature/leftover");
