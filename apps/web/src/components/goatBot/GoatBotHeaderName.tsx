@@ -1,0 +1,82 @@
+import { useAtomValue } from "@effect/atom-react";
+import { botManageFailure } from "@goat/client-runtime/goatBot";
+import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import type { BotProfile } from "@goat/contracts";
+import { Atom } from "effect/reactivity";
+import { useContext, useState } from "react";
+
+import { ChevronRightIcon } from "~/components/solar";
+import { channelEnvironment } from "~/state/channels";
+import { useEnvironment } from "~/state/environments";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
+import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
+
+const NO_PERMISSION = Atom.make(false);
+
+/** The chat's name capsule; it opens the bot's profile where this connection may edit it. */
+export function GoatBotHeaderName({ title }: { readonly title: string }) {
+  const member = useContext(GoatBotMemberContext);
+  const main = useContext(GoatBotMainProfileContext);
+  const bot = member ?? main;
+  const presentation = useEnvironment(bot?.environmentId ?? null);
+  const supported =
+    bot !== null &&
+    presentation?.serverConfig?.environment.capabilities.goatBotProfileEdit === true;
+  const canEdit = useAtomValue(
+    supported ? channelEnvironment.updateBot.permissionAtom(bot.environmentId) : NO_PERMISSION,
+  );
+  const [editing, setEditing] = useState<BotProfile | null>(null);
+  const name = (
+    <>
+      <span className="min-w-0 truncate">{title}</span>
+      <ChevronRightIcon aria-hidden className="size-3 shrink-0" />
+    </>
+  );
+  if (bot === null || !canEdit) {
+    return <h1 className="goat-name-capsule max-w-full min-w-0 text-foreground">{name}</h1>;
+  }
+  return (
+    <h1 className="flex min-w-0">
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        aria-label={`${title} profile`}
+        className="goat-name-capsule max-w-full min-w-0 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        onClick={() => setEditing(bot)}
+      >
+        {name}
+      </button>
+      {editing !== null ? (
+        <GoatBotProfileEditor bot={editing} onClose={() => setEditing(null)} />
+      ) : null}
+    </h1>
+  );
+}
+
+function GoatBotProfileEditor({
+  bot,
+  onClose,
+}: {
+  readonly bot: BotProfile;
+  readonly onClose: () => void;
+}) {
+  const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
+  return (
+    <GoatBotProfileDialog
+      mode="edit"
+      initial={bot}
+      canSubmit
+      onClose={onClose}
+      onSubmit={async (changes) => {
+        const result = await update({
+          environmentId: bot.environmentId,
+          input: { botId: bot.botId, ...changes },
+        });
+        return result._tag === "Success"
+          ? null
+          : botManageFailure(squashAtomCommandFailure(result));
+      }}
+    />
+  );
+}
