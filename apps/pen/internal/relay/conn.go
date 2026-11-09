@@ -107,6 +107,13 @@ func (q *inbox) drop(err error) {
 	q.wake()
 }
 
+// terminal is the error that ended the queue, or nil while it is open.
+func (q *inbox) terminal() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.err
+}
+
 func (q *inbox) recv(ctx context.Context) ([]byte, error) {
 	for {
 		q.mu.Lock()

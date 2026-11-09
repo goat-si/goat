@@ -128,6 +128,10 @@ func TestClientToOfflineNodeCloses4404(t *testing.T) {
 	if _, err := c.Recv(ctx); relay.CodeOf(err) != wire.CodeOffline {
 		t.Fatalf("got %v, want 4404", err)
 	}
+	// A send that loses the race with the relay's close reports the code the socket received.
+	if err := c.Send([]byte("late")); relay.CodeOf(err) != wire.CodeOffline {
+		t.Fatalf("send after the relay closed: %v, want 4404", err)
+	}
 }
 
 func TestNewerUplinkReplacesOlderAndOlderStops(t *testing.T) {

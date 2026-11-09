@@ -122,10 +122,16 @@ func (c *clientConn) Send(p []byte) error {
 		return ErrClosed
 	}
 	if err := c.ws.Write(c.ctx, websocket.MessageBinary, p); err != nil {
-		if c.ctx.Err() != nil {
-			return &CloseError{Code: 1006}
+		// The socket is gone; report the close code its reader received (4404 from a relay
+		// with no uplink for this node, for example) rather than a generic failure.
+		select {
+		case <-c.done:
+		case <-time.After(time.Second):
 		}
-		return err
+		if ce, ok := c.in.terminal().(*CloseError); ok {
+			return ce
+		}
+		return &CloseError{Code: 1006}
 	}
 	return nil
 }
