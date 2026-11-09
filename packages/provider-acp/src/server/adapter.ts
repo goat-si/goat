@@ -32,7 +32,6 @@ import {
   type ProviderInstanceId,
   type ProviderInteractionMode,
   type ProviderDriverKind,
-  type ProviderRequestKind,
   type ProviderThreadId,
   type ProviderUserInputAnswers,
   type RuntimeRequestId,
@@ -111,6 +110,18 @@ import {
 } from "./runtimeModel.ts";
 import { acpNoticeContent, isReplayedAcpNotice } from "./noticeProjection.ts";
 import { textFromUnknown } from "./toolOutputText.ts";
+import {
+  appendToolCallContentChunk,
+  applyInterruptedToolStatus,
+  completedAtForStatus,
+  elicitationContent,
+  isAcpPlanModeId,
+  nodeStatus,
+  providerRequestKind,
+  stoppedToolStatus,
+  toolStatus,
+  type ProjectedToolStatus,
+} from "./subagentToolProjection.ts";
 import {
   acpClientExecuteDisposition,
   acpMcpToolApprovalElicitationDisposition,
@@ -683,72 +694,6 @@ function acpBackendWebSearch(
   return { query, results: [...urls].map((url) => ({ url })) };
 }
 
-function providerRequestKind(kind: string | "unknown"): ProviderRequestKind {
-  switch (kind) {
-    case "execute":
-      return "command";
-    case "read":
-    case "search":
-    case "fetch":
-      return "file-read";
-    case "edit":
-    case "delete":
-    case "move":
-      return "file-change";
-    default:
-      return "command";
-  }
-}
-
-function toolStatus(
-  status: AcpToolCallState["status"],
-): "pending" | "running" | "waiting" | "completed" | "failed" {
-  switch (status) {
-    case "completed":
-      return "completed";
-    case "failed":
-      return "failed";
-    case "pending":
-      return "pending";
-    case "requiresAction":
-      return "waiting";
-    default:
-      return "running";
-  }
-}
-
-type ProjectedToolStatus = ReturnType<typeof toolStatus> | "interrupted";
-
-function nodeStatus(status: ProjectedToolStatus): OrchestrationV2ExecutionNode["status"] {
-  return status === "pending" ? "running" : status;
-}
-
-function completedAtForStatus(status: ProjectedToolStatus, now: DateTime.Utc): DateTime.Utc | null {
-  return status === "completed" || status === "failed" || status === "interrupted" ? now : null;
-}
-
-// Copilot advertises URL ids such as `https://agentclientprotocol.com/protocol/session-modes#plan`.
-function isAcpPlanModeId(id: string): boolean {
-  const name = id.slice(id.lastIndexOf("#") + 1);
-  return name === "plan" || name === "architect";
-}
-
-function elicitationContent(
-  answers: ProviderUserInputAnswers,
-  allowedKeys: ReadonlySet<string>,
-): Record<string, EffectAcpSchema.ElicitationContentValue> {
-  const content: Record<string, EffectAcpSchema.ElicitationContentValue> = {};
-  for (const [key, value] of Object.entries(answers)) {
-    if (!allowedKeys.has(key)) continue;
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      content[key] = value;
-    } else if (Array.isArray(value)) {
-      content[key] = value.filter((entry): entry is string => typeof entry === "string");
-    }
-  }
-  return content;
-}
-
 interface ActiveTextSegment {
   readonly nativeItemId: string;
   readonly startedAt: DateTime.Utc;
@@ -995,6 +940,8 @@ interface ActiveAcpSubagent {
   nextChildOrdinal: number;
   terminalStatusProjected: boolean;
   readonly toolState: Pick<ActiveAcpTurn, "tools" | "toolUpdatesSkipped" | "toolStartedAt">;
+  // ACP has no interrupted tool status; keep forced interruption across late updates.
+  readonly interruptedToolIds: Set<string>;
   readonly toolSessionIds: Map<string, string>;
 }
 
@@ -2400,6 +2347,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const projectSubagentNotification = Effect.fnUntraced(function* (
           subagent: ActiveAcpSubagent,
           notification: EffectAcpSchema.SessionNotification,
+          owner: ActiveAcpTurn,
         ) {
           const update = notification.update;
           if (update.sessionUpdate === "agent_message_chunk") {
@@ -2407,6 +2355,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             if (text !== undefined) {
               yield* emitSubagentAssistant(subagent, text, "append", update.messageId);
             }
+          } else if (update.sessionUpdate === "tool_call_content_chunk") {
+            yield* projectSubagentTool(subagent, notification.sessionId, update, undefined, owner);
           } else if (update.sessionUpdate === "agent_message") {
             if (update.content === undefined) return;
             const text = (update.content ?? [])
@@ -2422,8 +2372,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const projectSubagentTool = Effect.fnUntraced(function* (
           subagent: ActiveAcpSubagent,
           sessionId: string,
-          toolCall: AcpToolCallState,
+          toolCall:
+            | AcpToolCallState
+            | Extract<EffectAcpSchema.SessionUpdate, { sessionUpdate: "tool_call_content_chunk" }>,
           projectedStatus?: ProjectedToolStatus,
+          owner?: ActiveAcpTurn,
         ) {
           const nativeTaskId = subagent.task.nativeTaskRef?.nativeId ?? String(subagent.task.id);
           const key =
@@ -2434,7 +2387,23 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const rootSessionId = yield* Ref.get(activeSessionId);
           subagent.toolSessionIds.set(key, sessionId);
           const previous = context.tools.get(key);
+          if ("sessionUpdate" in toolCall) {
+            if (toolCall.content.type !== "content") return;
+            const text = acpContentBlockDisplayText(toolCall.content.content);
+            if (text === undefined || text.length === 0) return;
+            toolCall = {
+              toolCallId: toolCall.toolCallId,
+              data: { content: appendToolCallContentChunk(previous?.data.content, text) },
+            };
+          }
           const merged = mergeToolCallState(previous, toolCall);
+          projectedStatus ??= owner === undefined ? undefined : stoppedToolStatus(owner, merged);
+          projectedStatus = applyInterruptedToolStatus(
+            subagent.interruptedToolIds,
+            key,
+            merged.status,
+            projectedStatus,
+          ) as ProjectedToolStatus | undefined;
           context.tools.set(key, merged);
           if (
             projectedStatus === undefined &&
@@ -2616,6 +2585,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               toolUpdatesSkipped: new Map(),
               toolStartedAt: new Map(),
             },
+            interruptedToolIds: new Set(),
             toolSessionIds: new Map(),
           };
           subagent.task = task;
@@ -2704,7 +2674,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             context.pendingSubagentNotifications.delete(childSessionId);
             yield* Effect.forEach(
               buffered,
-              (notification) => projectSubagentNotification(subagent, notification),
+              (notification) => projectSubagentNotification(subagent, notification, context),
               { concurrency: 1, discard: true },
             );
           }
@@ -2944,7 +2914,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 )
                   continue;
                 subagent.toolState.toolUpdatesSkipped.delete(key);
-                yield* projectSubagentTool(subagent, toolSessionId, tool, toolStatus(tool.status));
+                yield* projectSubagentTool(
+                  subagent,
+                  toolSessionId,
+                  tool,
+                  toolStatus(tool.status),
+                  context,
+                );
               }
             }
             if (
@@ -3023,11 +2999,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   subagent,
                   notification.sessionId,
                   flavor.normalizeToolCall?.(event.toolCall) ?? event.toolCall,
+                  undefined,
+                  owner.owner,
                 );
               }
             }
           } else {
-            yield* projectSubagentNotification(subagent, notification);
+            yield* projectSubagentNotification(subagent, notification, owner.owner);
           }
         });
 
@@ -4673,8 +4651,25 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   }
                   continue;
                 }
-                yield* projectSubagentTool(subagent, notification.sessionId, toolCall);
+                yield* projectSubagentTool(
+                  subagent,
+                  notification.sessionId,
+                  toolCall,
+                  undefined,
+                  context,
+                );
               }
+              return;
+            }
+            if (update.sessionUpdate === "tool_call_content_chunk") {
+              if (subagent !== undefined)
+                yield* projectSubagentTool(
+                  subagent,
+                  notification.sessionId,
+                  update,
+                  undefined,
+                  context,
+                );
               return;
             }
             const isDisplayableAssistantUpdate =
@@ -4685,7 +4680,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               return;
             }
             if (subagent !== undefined) {
-              yield* projectSubagentNotification(subagent, notification);
+              yield* projectSubagentNotification(subagent, notification, context);
               return;
             }
             const buffered = context.pendingSubagentNotifications.get(notification.sessionId) ?? [];
