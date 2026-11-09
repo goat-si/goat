@@ -6,6 +6,7 @@ import {
   type ChannelTaskId,
   type ChatAttachment,
   type EnvironmentId,
+  isChannelChildWorkActive,
   SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
@@ -27,6 +28,9 @@ const MAX_TIMER_MS = 2_147_483_647;
 const CUTOFF_MARGIN_MS = 1_000;
 const CUTOFF_RETRY_MS = 60_000;
 const CUTOFF_RETRY_WINDOW_MS = 10 * 60_000;
+// A remote launch can be listed before its destination identity is saved; re-read briefly.
+const PENDING_REMOTE_RETRY_MS = 5_000;
+const PENDING_REMOTE_WINDOW_MS = 2 * 60_000;
 
 /**
  * Commands and queries for the GOAT bot, the channel ledger, and Slack settings. Bot messages
@@ -155,6 +159,12 @@ export function createChannelEnvironmentAtoms<R, E>(
             }
             nextExpiry = Math.min(nextExpiry, retiresAt);
             shown.push(row);
+          }
+          for (const item of result.value.remoteWork ?? []) {
+            if (item.threadId !== undefined && item.environmentId !== undefined) continue;
+            if (!isChannelChildWorkActive(item.state)) continue;
+            if (now - Date.parse(item.lastActivityAt) < PENDING_REMOTE_WINDOW_MS)
+              nextExpiry = Math.min(nextExpiry, now + PENDING_REMOTE_RETRY_MS);
           }
           listed.push(
             ...goatBotListedWork(shown, {

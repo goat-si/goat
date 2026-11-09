@@ -190,3 +190,39 @@ it("keeps re-reading when the server still lists a task at or just past its cuto
   expect(listed()).toEqual([]);
   registry.dispose();
 });
+
+it("re-reads the bot list while a remote launch waits for its destination identity", () => {
+  let reads = 0;
+  const pending = {
+    childWorkId: "child-work:remote",
+    taskId: "task",
+    callerThreadId: "goat-bot-session:main",
+    host: "macbookair",
+    state: "launched",
+    lastActivityAt: iso(START),
+  };
+  server.answer = () => {
+    reads += 1;
+    return {
+      rows: [],
+      mainMessageCount: 0,
+      remoteWork: [pending],
+    } as unknown as ChannelListBotThreadsResult;
+  };
+  const { registry, listed } = setup();
+  listed();
+  const first = reads;
+
+  vi.advanceTimersByTime(5_000);
+  listed();
+  expect(reads).toBeGreaterThan(first);
+
+  // Past the bounded window the list is no longer re-read on its own.
+  vi.advanceTimersByTime(3 * 60_000);
+  listed();
+  const settled = reads;
+  vi.advanceTimersByTime(60_000);
+  listed();
+  expect(reads).toBe(settled);
+  registry.dispose();
+});
