@@ -4,6 +4,7 @@ import {
   goatBotAvatarEmoji,
   goatBotAvatarSignal,
   goatBotFaceLabel,
+  goatBotMemberPicture,
   type GoatBotAvatarSignal,
   type GoatBotFaceState,
 } from "@goat/client-runtime/goatBot";
@@ -182,12 +183,5 @@ export function GoatBotMemberAvatar({
       emoji={goatBotMemberPicture(bot)}
       threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
     />
-  );
-}
-
-/** A member's emoji, else its name's first letter, so members never share the main bot's face. */
-export function goatBotMemberPicture(bot: Pick<BotProfile, "avatar" | "name">): string | null {
-  return (
-    goatBotAvatarEmoji(bot.avatar) ?? Array.from(bot.name.trim())[0]?.toLocaleUpperCase() ?? null
   );
 }

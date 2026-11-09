@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { botManageFailure } from "@goat/client-runtime/goatBot";
+import { botManageFailure, goatBotMemberPicture } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import { Link, useParams } from "@tanstack/react-router";
@@ -24,7 +24,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
-import { GoatBotSessionAvatar, goatBotMemberPicture } from "./GoatBotAvatar";
+import { GoatBotSessionAvatar } from "./GoatBotAvatar";
 import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { useBotManage } from "./useBotManage";
