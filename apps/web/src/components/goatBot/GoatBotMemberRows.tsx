@@ -173,6 +173,8 @@ function GoatBotMemberRow({
           />
         }
       >
+        {/* The same slots as the main bot's row: unread mark, avatar, name over a second line. */}
+        <span aria-hidden className="size-2.5 shrink-0 group-data-[collapsible=icon]:hidden" />
         <GoatBotSessionAvatar
           size="sm"
           place="list"
@@ -180,12 +182,22 @@ function GoatBotMemberRow({
           emoji={bot.avatar}
           threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
         />
-        <span className="min-w-0 flex-1 truncate">{bot.name}</span>
-        {count > 0 ? (
-          <Badge size="sm" variant="secondary" aria-label={`${count} waiting for you`}>
-            {count}
-          </Badge>
-        ) : null}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 flex-1 truncate">{bot.name}</span>
+            {count > 0 ? (
+              <Badge size="sm" variant="secondary" aria-label={`${count} waiting for you`}>
+                {count}
+              </Badge>
+            ) : null}
+          </span>
+          {bot.purpose ? (
+            <span className="min-w-0 truncate text-xs font-normal text-sidebar-muted-foreground">
+              {bot.purpose}
+            </span>
+          ) : null}
+        </span>
+        {canManage ? <span aria-hidden className="w-5 shrink-0" /> : null}
       </SidebarMenuButton>
       {canManage ? (
         <Menu>

@@ -554,7 +554,8 @@ function GoatBotNotice({
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
-      {availability.kind === "ready" && onSelectExample ? (
+      {/* The examples are coding requests for the main bot; a member's purpose says what it does. */}
+      {availability.kind === "ready" && onSelectExample && member === null ? (
         <EmptyContent>
           <div className="flex flex-col items-center gap-2">
             {EXAMPLES.map((example) => (

@@ -160,7 +160,10 @@ export function GoatBotMainAvatar({
   );
 }
 
-/** A member bot's face outside its chat, with its own waiting count. */
+/**
+ * A member bot outside its chat, with its own waiting count. Without an emoji it shows its name's
+ * first letter, so members on the rail are told apart from each other and from the main bot.
+ */
 export function GoatBotMemberAvatar({
   bot,
   size,
@@ -176,8 +179,12 @@ export function GoatBotMemberAvatar({
       size={size}
       place={place}
       waitingCount={waitingCount}
-      emoji={bot.avatar}
+      emoji={goatBotAvatarEmoji(bot.avatar) ?? initialOf(bot.name)}
       threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
     />
   );
+}
+
+function initialOf(name: string): string | null {
+  return Array.from(name.trim())[0]?.toLocaleUpperCase() ?? null;
 }
