@@ -398,6 +398,7 @@ export const fixture = (scenario: string) => {
     config: {
       "tools.update_plan.enabled": true,
       mcp_optional_startup_grace_ms: 10_000,
+      "features.concurrent_reasoning_summaries": true,
       ...extra,
       "mcp_servers.goat": {
         url: config.endpoint,
