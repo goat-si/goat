@@ -13,6 +13,7 @@ import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-
 import { formatSubagentDisplayTitle } from "@goat/client-runtime/state/subagent-display";
 import { isLiveSubagentTurnItem } from "@goat/client-runtime/state/subagentRuntime";
 import { extractToolActivityPresentation } from "@goat/client-runtime/work-log/tool-presentation";
+import { providerErrorPresentation } from "@goat/client-runtime/work-log/provider-error";
 import {
   fileChangeGroupLineCounts,
   type WorkLogLineCounts,
@@ -300,6 +301,9 @@ export function workEntryRowLabel(
   workspaceRoot?: string | null,
 ): string {
   if (entry.itemType === "fork") return entry.label;
+  // A provider retry row shows its retry state; the failure message opens with the row.
+  if (entry.structuredPayload?.type === "error" && entry.structuredPayload.retry !== undefined)
+    return expanded ? (entry.detail ?? entry.label) : entry.label;
   if (expanded && entry.itemType === "reasoning")
     return entry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Thought";
   const presentation = resolveWorkEntryToolPresentation(entry);
@@ -587,7 +591,7 @@ function itemSummary(
     case "run_interrupt_result":
       return "Run interrupted";
     case "error":
-      return item.failure.class === "usage_limit" ? "Usage limit reached" : "Provider error";
+      return providerErrorPresentation(item).label;
     case "handoff":
       return "Context handed off";
     case "fork":
@@ -647,7 +651,7 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
     case "system_notice":
       return item.message.split("\n").slice(1).join("\n").trim() || null;
     case "error":
-      return item.failure.message;
+      return providerErrorPresentation(item).detail;
     case "compaction":
     case "handoff":
       return item.summary ?? null;
