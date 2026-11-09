@@ -115,9 +115,20 @@ func (d *Daemon) serveJoin(ctx context.Context, sec *session.Secure) {
 	ctx, cancel := context.WithTimeout(ctx, meshSessionTimeout)
 	defer cancel()
 	inviteID := sec.Payload.Invite
+	joiner := ident.B64.EncodeToString(sec.RemoteStatic)
 	member, err := mesh.ServeJoin(ctx, sec, sec.RemoteStatic, mesh.Admission{
 		ID: d.id, Store: d.mesh(), Invites: d.invites, InviteID: inviteID, Now: d.now,
-		OnAdmit: func(*mesh.Record) { d.viewChanged() },
+		// The other members hear of the joiner before its join returns.
+		OnAdmit: func(*mesh.Record) {
+			d.viewChanged()
+			var others []mesh.Member
+			for _, m := range d.view().SortedMembers() {
+				if m.NoisePub != joiner {
+					others = append(others, m)
+				}
+			}
+			d.pushTo(ctx, others)
+		},
 	})
 	if err != nil {
 		d.opt.Logf("join: %v", err)
@@ -131,6 +142,5 @@ func (d *Daemon) serveJoin(ctx context.Context, sec *session.Secure) {
 	}
 	d.mu.Unlock()
 	sec.Close(wire.CodeNormal)
-	d.spawn(func() { d.pushAll(d.runCtx) })
 }
 
