@@ -232,9 +232,11 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   `wss://<host>`, `--cert`/`--key` and a TLS terminator in front of `--plain` need `--public-origin wss://host`, and a
   request whose Host does not name that origin gets HTTP 421 before any upgrade. `--plain` without a public origin
   listens on loopback only (tests and local relays), where the origin follows the request. Beyond the contract it caps all
-  sockets (4096), one source address's sockets (64) and one node id's unauthenticated uplinks (4) with HTTP 429, reads
-  at most the 96-byte answer from an uplink before it authenticates, and drops a socket whose write or closing
-  handshake stalls for 10 s. Session ids are never
+  sockets (4096, `--max-sockets`) and one IPv4 address's or IPv6 /64's sockets (64, `--max-per-ip`) with HTTP 429;
+  past one node id's unauthenticated uplinks (4, `--max-unauth-per-node`) a new uplink closes the oldest one 4429. It
+  reads at most the 96-byte answer from an uplink before it authenticates, drops a socket whose write or closing
+  handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, counting 64
+  bytes per message on top of its size, so a client flooding empty DATA ends only its own session 4408. Session ids are never
   reused while the process runs (a restart starts at 1 again; uplinks reconnect then and see fresh sessions).
 
 ## Close codes

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -692,5 +693,62 @@ func TestAClientFloodingEmptyFramesEndsOnlyItsOwnSession(t *testing.T) {
 		default:
 		}
 		c.send(nil)
+	}
+}
+
+func TestThePerSourceCapCountsAnIPv6Slash64AsOneSource(t *testing.T) {
+	rs := relaytest.NewWithLimits(relayserver.DefaultLimits())
+	rs.Relay.MaxPerIP = 1
+	// The handler takes the source address from a test header, so one loopback test can speak
+	// from several IPv6 networks.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = r.Header.Get("X-Test-From")
+		rs.Relay.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(rs.Close)
+	from := func(addr string) int {
+		id, _ := ident.Generate(nil)
+		u, _ := wire.WebSocketURL(srv.URL, "/v1/node/"+id.NodeID())
+		ws, res, err := websocket.Dial(context.Background(), u, &websocket.DialOptions{HTTPHeader: http.Header{"X-Test-From": {addr}}})
+		if err != nil {
+			if res == nil {
+				t.Fatal(err)
+			}
+			return res.StatusCode
+		}
+		t.Cleanup(func() { ws.CloseNow() })
+		return http.StatusSwitchingProtocols
+	}
+	if got := from("[2001:db8:1:2::1]:4000"); got != http.StatusSwitchingProtocols {
+		t.Fatalf("first socket from 2001:db8:1:2::/64 got %d", got)
+	}
+	if got := from("[2001:db8:1:2:ffff::9]:4001"); got != http.StatusTooManyRequests {
+		t.Fatalf("second socket from the same /64 got %d, want 429", got)
+	}
+	if got := from("[2001:db8:1:3::1]:4002"); got != http.StatusSwitchingProtocols {
+		t.Fatalf("a socket from another /64 got %d, want it accepted", got)
+	}
+}
+
+func TestLimitsLeftZeroMeanTheContractDefaults(t *testing.T) {
+	rs := startRelay(t, relayserver.Limits{})
+	n := node(t, rs, nodeOpts{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	online := make(chan error, 1)
+	go func() { online <- rs.WaitOnline(ctx, n.nodeID) }()
+	select {
+	case err := <-online:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case code := <-n.closed:
+		t.Fatalf("uplink closed %d under zero limits, want them to mean the defaults", code)
+	}
+	c := client(t, rs, n.nodeID, true)
+	c.sendText("ping")
+	if got := <-c.texts; got != "pong" {
+		t.Fatalf("got %q, want pong", got)
 	}
 }

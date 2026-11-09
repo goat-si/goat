@@ -110,8 +110,40 @@ func orDefault(v, d int) int {
 
 // New builds a relay with limits.
 func New(l Limits) *Server {
+	d := DefaultLimits()
+	for _, f := range []struct {
+		v *time.Duration
+		d time.Duration
+	}{
+		{&l.AuthTimeout, d.AuthTimeout}, {&l.PendingTimeout, d.PendingTimeout},
+		{&l.IdleTimeout, d.IdleTimeout}, {&l.WriteTimeout, d.WriteTimeout},
+	} {
+		if *f.v <= 0 {
+			*f.v = f.d
+		}
+	}
 	return &Server{Limits: l, rooms: map[string]*room{}, sids: map[string]uint32{}, socks: map[*sock]struct{}{},
 		perIP: map[string]int{}, unauth: map[string][]*sock{}}
+}
+
+// sourceKey is what the per-source cap counts: the IPv4 address, or the IPv6 /64, since one
+// IPv6 host usually holds a whole /64.
+func sourceKey(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i]
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
 var route = regexp.MustCompile(`^/v1/(node|client)/([^/]*)$`)
@@ -143,11 +175,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "websocket upgrade required", http.StatusUpgradeRequired)
 		return
 	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
-	k := &sock{srv: s, nodeID: nodeID, ip: ip}
+	k := &sock{srv: s, nodeID: nodeID, ip: sourceKey(r.RemoteAddr)}
 	ok, victim := s.reserve(k, role == "node")
 	if !ok {
 		http.Error(w, "too many sockets", http.StatusTooManyRequests)
