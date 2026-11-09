@@ -142,9 +142,13 @@ export function createChannelEnvironmentAtoms<R, E>(
         const now = Date.now();
         let nextExpiry = Infinity;
         const stillPending = new Set<string>();
+        let everyListRead = true;
         for (const input of inputs) {
           const result = get(listBotThreads({ environmentId, input }));
-          if (!AsyncResult.isSuccess(result)) continue;
+          if (!AsyncResult.isSuccess(result)) {
+            everyListRead = false;
+            continue;
+          }
           const shown = [];
           const retiredTasks = new Set<string>();
           for (const row of result.value.rows) {
@@ -183,7 +187,13 @@ export function createChannelEnvironmentAtoms<R, E>(
             }),
           );
         }
-        for (const key of pendingSince.keys()) if (!stillPending.has(key)) pendingSince.delete(key);
+        // A failed read proves nothing about a pending launch, so it keeps its window.
+        for (const [key, since] of pendingSince) {
+          if (stillPending.has(key)) continue;
+          if (everyListRead) pendingSince.delete(key);
+          else if (now - since < PENDING_REMOTE_WINDOW_MS)
+            nextExpiry = Math.min(nextExpiry, now + PENDING_REMOTE_RETRY_MS);
+        }
         if (nextExpiry !== Infinity) {
           // @effect-diagnostics-next-line globalTimers:off - One bounded timer per read, cleared on the next.
           const handle = setTimeout(

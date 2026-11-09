@@ -23,6 +23,7 @@ const worker = { environmentId, threadId: ThreadId.make("channel-worker:task") }
 // The server's answer, read each time a bot-thread list is fetched.
 const server = vi.hoisted(() => ({
   answer: (): ChannelListBotThreadsResult => ({ rows: [], mainMessageCount: 0 }),
+  failing: false,
 }));
 const config = Atom.make<ServerConfig | null>({
   environment: { environmentId: "bot-home", capabilities: { goatBotTaskThreads: true } },
@@ -47,9 +48,8 @@ vi.mock("./runtime.ts", async () => {
         const trigger = options.refreshTrigger?.(target);
         return A.make((get) => {
           if (trigger !== undefined) get(trigger);
-          return options.tag === "channel.listBotThreads"
-            ? R.success(server.answer())
-            : R.success({ bots: [], groups: [] });
+          if (options.tag !== "channel.listBotThreads") return R.success({ bots: [], groups: [] });
+          return server.failing ? R.fail(new Error("offline")) : R.success(server.answer());
         });
       });
       return (target: unknown) => family(JSON.stringify(target));
@@ -99,6 +99,7 @@ const setup = () => {
 };
 
 beforeEach(() => {
+  server.failing = false;
   vi.useFakeTimers({ now: START });
 });
 afterEach(() => {
@@ -225,5 +226,38 @@ it("re-reads the bot list while a remote launch waits for its destination, whate
   vi.advanceTimersByTime(60_000);
   listed();
   expect(reads).toBe(settled);
+  registry.dispose();
+});
+
+it("keeps re-reading a pending remote launch across a failed read", () => {
+  let reads = 0;
+  const pending = {
+    childWorkId: "child-work:remote-2",
+    taskId: "task",
+    callerThreadId: "goat-bot-session:main",
+    host: "macbookair",
+    state: "launched",
+    lastActivityAt: iso(START),
+  };
+  server.failing = false;
+  server.answer = () => {
+    reads += 1;
+    return {
+      rows: [],
+      mainMessageCount: 0,
+      remoteWork: [pending],
+    } as unknown as ChannelListBotThreadsResult;
+  };
+  const { registry, listed } = setup();
+  listed();
+
+  server.failing = true;
+  vi.advanceTimersByTime(5_000);
+  listed();
+  server.failing = false;
+  const beforeRecovery = reads;
+  vi.advanceTimersByTime(5_000);
+  listed();
+  expect(reads).toBeGreaterThan(beforeRecovery);
   registry.dispose();
 });
