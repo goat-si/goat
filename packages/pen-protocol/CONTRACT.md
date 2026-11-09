@@ -8,7 +8,8 @@ difference is stated. A rule here wins over the code.
 
 Layering, outermost first:
 
-1. WebSocket, binary messages only, permessage-deflate off. The only text messages are listed under "Relay text".
+1. WebSocket, binary messages only. Pen nodes and clients never offer permessage-deflate (the relay's static-asset
+   router accepts it when a client offers it, so the rule sits with the dialer). The only text messages are listed under "Relay text".
 2. Relay mux header (between relay and node uplink only; clients never see it).
 3. Noise record layer: one WebSocket message = one Noise message.
 4. Stream plaintext, framed per stream (see "Streams").

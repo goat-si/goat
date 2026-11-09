@@ -88,7 +88,7 @@ const opened = (ws: WebSocket) =>
     ? Promise.resolve()
     : new Promise<void>((resolve) => ws.addEventListener("open", () => resolve(), { once: true }));
 
-function upgradeExtensions(path: string): Promise<string> {
+function upgradeExtensions(path: string, offer: boolean): Promise<string> {
   const url = new URL(base + path);
   const request = (url.protocol === "https:" ? NodeHttps.request : NodeHttp.request)(url, {
     headers: {
@@ -98,7 +98,9 @@ function upgradeExtensions(path: string): Promise<string> {
       "sec-websocket-key": Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString(
         "base64",
       ),
-      "sec-websocket-extensions": "permessage-deflate; client_max_window_bits",
+      ...(offer
+        ? { "sec-websocket-extensions": "permessage-deflate; client_max_window_bits" }
+        : {}),
     },
   });
   return new Promise((resolve, reject) => {
@@ -129,15 +131,18 @@ console.log(`healthz ${health.status} ${healthBody.slice(0, 120)}`);
 if (healthBody !== JSON.stringify({ ok: true, version: "pen-relay/1.0" })) fail("healthz");
 
 const probeId = await nodeIdFromSignPub(crypto.getRandomValues(new Uint8Array(32)));
+// CONTRACT: Pen dialers never offer compression, so a 101 to a dial without an offer carries no extension.
 const extensions = [
-  await upgradeExtensions(`/v1/client/${probeId}`),
-  await upgradeExtensions(`/v1/node/${probeId}`),
+  await upgradeExtensions(`/v1/client/${probeId}`, false),
+  await upgradeExtensions(`/v1/node/${probeId}`, false),
 ];
-console.log(`Sec-WebSocket-Extensions on the client and uplink 101: ${extensions.join(" | ")}`);
-// wrangler dev's ProxyWorker negotiates compression itself; only a deployed Worker answers for the relay.
-const local = ["127.0.0.1", "localhost"].includes(new URL(base).hostname);
-if (!local && extensions.some((value) => value !== "(none)"))
-  fail("the relay negotiated a WebSocket extension");
+console.log(
+  `Sec-WebSocket-Extensions on the client and uplink 101 (no offer): ${extensions.join(" | ")}`,
+);
+if (extensions.some((value) => value !== "(none)"))
+  fail("the relay added a WebSocket extension unasked");
+const offered = await upgradeExtensions(`/v1/client/${probeId}`, true);
+console.log(`Sec-WebSocket-Extensions when a non-Pen client offers deflate: ${offered}`);
 
 const seed = process.env.PEN_SMOKE_SEED
   ? fromHex(process.env.PEN_SMOKE_SEED)
