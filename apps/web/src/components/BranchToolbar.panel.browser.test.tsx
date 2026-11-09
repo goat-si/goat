@@ -575,12 +575,11 @@ it.each(LAYOUTS)(
         ),
     );
     const role = layout === "wide" ? "option" : "menuitem";
-    const open = () =>
-      userEvent.click(
-        layout === "wide"
-          ? screen.container.querySelector<HTMLElement>('[aria-label="Run on"]')!
-          : screen.workspaceTrigger(layout),
-      );
+    const trigger = () =>
+      layout === "wide"
+        ? screen.container.querySelector<HTMLElement>('[aria-label="Run on"]')!
+        : screen.workspaceTrigger(layout);
+    const open = () => userEvent.click(trigger());
     const row = (text: string) =>
       [...document.querySelectorAll<HTMLElement>(`[role="${role}"]`)].find(
         (node) => node.textContent === text,
@@ -594,9 +593,8 @@ it.each(LAYOUTS)(
     await userEvent.click(row("Mac StudioClone to ~/code/direction-board")!);
     expect(onEnvironmentChange).toHaveBeenCalledWith(EnvironmentId.make("studio"));
 
-    await vi.waitFor(() =>
-      expect(document.querySelector('[role="listbox"], [role="menu"]')).toBeNull(),
-    );
+    // Picking closes the menu even though the selected machine stays the same until the clone lands.
+    await vi.waitFor(() => expect(trigger().getAttribute("aria-expanded")).toBe("false"));
     await open();
     await vi.waitFor(() => expect(row("macminiCopy over SSH")).toBeDefined());
     await userEvent.click(row("macminiCopy over SSH")!);
