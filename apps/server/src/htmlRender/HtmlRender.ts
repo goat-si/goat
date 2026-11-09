@@ -40,6 +40,7 @@ import {
 import * as ServerConfig from "../config.ts";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import * as HeadlessChrome from "./headlessChrome.ts";
+import { resolveLocalPagePath } from "./htmlPagePath.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 import * as PreviewBrowserHost from "../preview/PreviewBrowserHost.ts";
 
@@ -479,12 +480,25 @@ const make = Effect.gen(function* () {
 
   const readPageFile = Effect.fn("HtmlRender.readPageFile")(function* (filePath: string) {
     const unreadable = new HtmlRenderFileError({ path: filePath });
-    if (!path.isAbsolute(filePath) || isNetworkPath(filePath)) return yield* unreadable;
+    if (
+      !path.isAbsolute(filePath) ||
+      isNetworkPath(filePath) ||
+      !HTML_FILE_EXTENSION.test(filePath)
+    ) {
+      return yield* unreadable;
+    }
+    // Read link targets instead of following them, so a share is refused before any access.
+    const localPath = yield* resolveLocalPagePath({ fs: fileSystem, path }, filePath);
+    if (localPath === undefined) return yield* unreadable;
     // Check the resolved file, so a symlink named .html cannot reach another file.
     const realPath = yield* fileSystem
-      .realPath(filePath)
+      .realPath(localPath)
       .pipe(Effect.mapError((cause) => new HtmlRenderFileError({ path: filePath, cause })));
-    if (!HTML_FILE_EXTENSION.test(realPath) || (yield* isServerInternalPath(realPath))) {
+    if (
+      !HTML_FILE_EXTENSION.test(realPath) ||
+      isNetworkPath(realPath) ||
+      (yield* isServerInternalPath(realPath))
+    ) {
       return yield* unreadable;
     }
     // Open without following links and recheck the path, so a link or FIFO swapped in is refused.

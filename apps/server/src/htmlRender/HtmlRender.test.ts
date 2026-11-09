@@ -363,6 +363,9 @@ describe("HtmlRender", () => {
       yield* fileSystem.writeFileString(renamed, "API_KEY=abc123\n");
       const folder = path.join(directory, "folder.html");
       yield* fileSystem.makeDirectory(folder);
+      // The bytes start like a page, but only an .html name may reach the reader.
+      const textPage = path.join(directory, "page.txt");
+      yield* fileSystem.writeFileString(textPage, "<!doctype html><p>text</p>");
       const internal = path.join(config.secretsDir, "page.html");
       yield* fileSystem.makeDirectory(config.secretsDir, { recursive: true });
       yield* fileSystem.writeFileString(internal, "<!doctype html><p>internal</p>");
@@ -374,6 +377,7 @@ describe("HtmlRender", () => {
         secret,
         hardLinked,
         renamed,
+        textPage,
         folder,
         internal,
       ]) {
@@ -402,17 +406,23 @@ describe("HtmlRender", () => {
       yield* fileSystem.writeFileString(secret, "PRIVATE KEY");
       const symlinked = path.join(directory, "symlinked.html");
       yield* fileSystem.symlink(secret, symlinked);
+      // A .txt name is refused even when it reaches a page.
+      const page = path.join(directory, "page.html");
+      yield* fileSystem.writeFileString(page, "<!doctype html><p>page</p>");
+      const disguised = path.join(directory, "disguised.txt");
+      yield* fileSystem.symlink(page, disguised);
 
-      const error = yield* htmlRender
-        .publish({
-          threadId: ThreadId.make("thread-html-path-link"),
-          path: symlinked,
-          title: "X",
-          height: 200,
-        })
-        .pipe(Effect.flip);
-
-      expect(error).toBeInstanceOf(HtmlRender.HtmlRenderFileError);
+      for (const file of [symlinked, disguised]) {
+        const error = yield* htmlRender
+          .publish({
+            threadId: ThreadId.make("thread-html-path-link"),
+            path: file,
+            title: "X",
+            height: 200,
+          })
+          .pipe(Effect.flip);
+        expect(error, file).toBeInstanceOf(HtmlRender.HtmlRenderFileError);
+      }
     }).pipe(Effect.provide(layerTest)),
   );
 
