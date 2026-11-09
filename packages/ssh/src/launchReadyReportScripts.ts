@@ -1,11 +1,8 @@
-import { REMOTE_COMBINED_CALL_SCRIPT } from "./runtimeFactsFrameScripts.ts";
-
 // The first pairing after a launch asked the new server's live and compat facts with one goat start
 // each, about a second apiece on Git Bash. A Windows launch whose goat lists wait-ready-report asks
-// them in its readiness wait instead and records them under live_fact's and compat_fact's rules, so
-// that pairing finds them. Launch only: it reads the launch's runner, record and launch files.
-export const REMOTE_LAUNCH_READY_REPORT_SCRIPT = `${REMOTE_COMBINED_CALL_SCRIPT}
-LAUNCH_CAPS_FILE=
+// them in its readiness wait and records them under live_fact's and compat_fact's rules. Launch
+// only: it reads the launch's files and uses the combined calls its runner setup defines earlier.
+export const REMOTE_LAUNCH_READY_REPORT_SCRIPT = `LAUNCH_CAPS_FILE=
 # Asks, once per launch and in the background while the launched server starts, what the selected
 # goat supports. The answer counts only when it is complete as the readiness wait starts; nothing
 # waits for it, so files of a launch that ended first are removed by a later one.

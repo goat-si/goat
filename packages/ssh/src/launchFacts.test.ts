@@ -378,7 +378,7 @@ describe("a fresh own-version launch asks its pinned candidate runner once", () 
         const f = yield* fixture();
         yield* f.write(
           "before-pin.sh",
-          'for pin in "$HOME"/.goat/ssh-launch/key/*.pin; do sed "s/End of/End-of/" "$HOME/runner" >"$pin"; done\n',
+          'sed "s/End of/End-of/" "$HOME/runner" >"$RUNNER_CANDIDATE_FILE.pin"\n',
         );
         const launch = yield* f.launch();
         assert.equal(launch.code, 0, launch.err);
@@ -394,7 +394,8 @@ describe("the frame's live answer is used only while its inputs hold", () => {
   ])("$name makes the live check ask goat", ({ file }) =>
     Effect.gen(function* () {
       const f = yield* fixture();
-      yield* f.write(file, 'mkdir -p "$STATE_DIR"; printf "4343\\n" >"$PORT_FILE"\n');
+      // The hook runs in goat's process or the launch's; it names the port file by its path.
+      yield* f.write(file, 'printf "4343\\n" >"$HOME/.goat/ssh-launch/key/port"\n');
       const launch = yield* f.launch();
       assert.equal(launch.code, 0, launch.err);
       assert.deepEqual(launch.asked, ["facts", "live", "live"]);

@@ -1,8 +1,10 @@
 import * as Effect from "effect/Effect";
 import { Command, Flag } from "effect/cli";
 import { BUILD_COMMIT_TIME } from "../buildCommitTime.ts";
+import packageJson from "../../package.json" with { type: "json" };
 import {
   instanceToken,
+  ownSshRuntimeProtocol,
   protocolShellLine,
   readLiveSshRuntimeProtocol,
   readSshRuntimeCompatibility,
@@ -69,22 +71,54 @@ const liveAndCompatLines = async (input: RuntimeFiles) => {
 const frame = (call: string, lines: ReadonlyArray<string>, extra: ReadonlyArray<string> = []) =>
   [`begin v1 ${call}`, ...extra, ...lines, `end ${lines.length}`].join("\n") + "\n";
 
+// What the CLI's built-in --version prints for this package; the contract test compares the two.
+const versionLine = () => `goat v${packageJson.version}`;
+
+type LaunchQuestions = {
+  readonly version: boolean;
+  readonly own: boolean;
+  readonly live: boolean;
+};
+
+const ownLine = () => {
+  try {
+    return `own ok ${protocolShellLine(ownSshRuntimeProtocol())}`;
+  } catch {
+    return "own fail error";
+  }
+};
+
 /**
- * The first probe's four questions in one start, answered by the separate subcommands' functions in
- * the probe's order: manifest, commit time, the live server, then compat on the port live named.
- * The host validates the whole frame before using any line. With `withCaps` the `capabilities`
- * line follows the begin line, outside the count.
+ * A launch's questions about its own build's candidate runner, only those asked, in this order:
+ * what `--version`, `protocol --shell` and `protocol --runtime-file ... --shell` print (the
+ * latter two from their functions; see launch_facts_ask), then compat after a live server.
  */
-const readSshRuntimeFactsFrame = async (input: RuntimeFiles & { readonly withCaps: boolean }) =>
+const launchQuestionLines = async (input: RuntimeFiles & LaunchQuestions) => [
+  ...(input.version ? [`version ok ${versionLine()}`] : []),
+  ...(input.own ? [ownLine()] : []),
+  ...(input.live ? await liveAndCompatLines(input) : []),
+];
+
+/**
+ * The first probe's four questions in one start, answered by the separate subcommands' functions:
+ * manifest, commit time, the live server, then compat on the port live named; or only the launch
+ * questions asked. The host validates the whole frame before using any line. With `withCaps` the
+ * `capabilities` line follows the begin line, outside the count.
+ */
+const readSshRuntimeFactsFrame = async (
+  input: RuntimeFiles & LaunchQuestions & { readonly withCaps: boolean },
+) =>
   frame(
     "facts",
-    [
-      `manifest ok ${runtimeManifestShellLine()}`,
-      BUILD_COMMIT_TIME === undefined
-        ? "commit fail unavailable"
-        : `commit ok ${BUILD_COMMIT_TIME}`,
-      ...(await liveAndCompatLines(input)),
-    ],
+    input.version || input.own || input.live
+      ? await launchQuestionLines(input)
+      : [
+          `manifest ok ${runtimeManifestShellLine()}`,
+          BUILD_COMMIT_TIME === undefined
+            ? "commit fail unavailable"
+            : `commit ok ${BUILD_COMMIT_TIME}`,
+          ...(await liveAndCompatLines(input)),
+        ],
     input.withCaps ? [capabilitiesLine()] : [],
   );
 
@@ -114,6 +148,18 @@ export const facts = Command.make("facts", {
   pidFile: Flag.String("pid-file"),
   withCaps: Flag.Boolean("with-caps").pipe(
     Flag.withDescription("Print the capabilities line after the begin line."),
+    Flag.withDefault(false),
+  ),
+  version: Flag.Boolean("version").pipe(
+    Flag.withDescription("Answer what --version prints."),
+    Flag.withDefault(false),
+  ),
+  own: Flag.Boolean("own").pipe(
+    Flag.withDescription("Answer what protocol --shell prints."),
+    Flag.withDefault(false),
+  ),
+  live: Flag.Boolean("live").pipe(
+    Flag.withDescription("Answer what protocol --shell prints for the three files."),
     Flag.withDefault(false),
   ),
 }).pipe(

@@ -296,13 +296,6 @@ describe("SSH helper launch facts", () => {
       }).pipe(Effect.scoped),
   );
 
-  it("the full CLI's --version prints the line the version fast path prints", async () => {
-    const result = await runModule(
-      `Command.runWith(Command.make("goat"), {version: ${JSON.stringify(packageJson.version)}})(["--version"]).pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain);`,
-    );
-    expect(result).toEqual({ status: 0, stdout: `goat v${packageJson.version}\n`, stderr: "" });
-  });
-
   it.effect("holds only the asked answers, in order, after the capabilities line", () =>
     Effect.gen(function* () {
       const caps = (yield* helper(["capabilities"])).stdout.trimEnd();

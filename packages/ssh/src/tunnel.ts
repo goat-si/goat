@@ -1310,6 +1310,7 @@ capture_reconnect_baseline() {
       : "",
     GOAT_RETAINED_RUNNER_SHA256: shellSingleQuote(selection.retainedRunnerSha256 ?? ""),
     GOAT_INSTALLED_EXECUTABLE_SHA256: shellSingleQuote(selection.installedExecutableSha256 ?? ""),
+    GOAT_OWN_RUNTIME_VERSION: shellSingleQuote(input?.ownRuntimeVersion?.trim() ?? ""),
     GOAT_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
     GOAT_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteGoatRunnerScript(input)),
     GOAT_PROTOCOL_GUARD: applyScriptPlaceholders(REMOTE_PROTOCOL_GUARD_SCRIPT, {
