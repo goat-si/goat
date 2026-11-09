@@ -21,4 +21,4 @@ herdr-core — https://github.com/herdrdev/herdr-core
 The pen binary (apps/pen) links these Go modules:
   github.com/flynn/noise — BSD-3-Clause
   github.com/coder/websocket — ISC
-  golang.org/x/crypto, golang.org/x/sys — BSD-3-Clause
+  golang.org/x/crypto, golang.org/x/net, golang.org/x/sys, golang.org/x/text — BSD-3-Clause
