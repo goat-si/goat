@@ -1,3 +1,8 @@
+import {
+  SOURCE_CONTROL_STAR_METHODS,
+  WsSourceControlStarredRpc,
+  WsSourceControlStarRpc,
+} from "./sourceControlStarRpc.ts";
 import { GlobalSkillsRpcs } from "./globalSkillsRpc.ts";
 import * as AuthAccessRpc from "./authAccessRpc.ts";
 import { WsComputerUseHistoryRpc, WsComputerUseStatusChangesRpc } from "./computerUseHistoryRpc.ts";
@@ -469,7 +474,6 @@ import {
 } from "./projectClone.ts";
 import {
   SourceControlCloneRepositoryInput,
-  SourceControlStarredInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
   SourceControlPublishRepositoryInput,
@@ -777,8 +781,7 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
-  sourceControlStarred: "sourceControl.starred",
-  sourceControlStar: "sourceControl.star",
+  ...SOURCE_CONTROL_STAR_METHODS,
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1525,22 +1528,6 @@ const WsSourceControlLookupRepositoryRpc = Rpc.make(WS_METHODS.sourceControlLook
   payload: SourceControlRepositoryLookupInput,
   success: SourceControlRepositoryInfo,
   error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
-});
-
-// Reports whether the server's GitHub account has starred goat-si/goat; the repository is
-// server-pinned so a client cannot use this as a general star check.
-const WsSourceControlStarredRpc = Rpc.make(WS_METHODS.sourceControlStarred, {
-  payload: SourceControlStarredInput,
-  success: Schema.NullOr(Schema.Boolean),
-  error: EnvironmentAuthorizationError,
-});
-
-// Stars goat-si/goat as the server's GitHub account; false when the forge refused.
-// The repository is server-pinned so a client cannot star arbitrary repositories.
-const WsSourceControlStarRpc = Rpc.make(WS_METHODS.sourceControlStar, {
-  payload: SourceControlStarredInput,
-  success: Schema.Boolean,
-  error: EnvironmentAuthorizationError,
 });
 
 const WsSourceControlCloneRepositoryRpc = Rpc.make(WS_METHODS.sourceControlCloneRepository, {
