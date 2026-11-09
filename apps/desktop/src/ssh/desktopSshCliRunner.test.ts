@@ -34,6 +34,7 @@ describe("resolveDesktopSshCliRunner", () => {
       ),
       {
         archiveVersion: "0.0.46-nightly.20261010.7",
+        ownRuntimeVersion: "0.0.46-nightly.20261010.7",
         ...archiveOptions,
         hostDownload: true,
         publishedFallback: true,
@@ -54,6 +55,7 @@ describe("resolveDesktopSshCliRunner", () => {
         ),
         {
           archiveVersion: "0.0.45",
+          ownRuntimeVersion: "0.0.45",
           ...archiveOptions,
           hostDownload: true,
           publishedFallback: true,

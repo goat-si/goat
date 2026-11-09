@@ -195,6 +195,22 @@ describe("SSH helper facts frame", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect(
+    "--with-caps adds the capabilities line after begin and leaves it out of the count",
+    () =>
+      Effect.gen(function* () {
+        const { files } = yield* liveRecord(["start-1"]);
+        const plain = (yield* helper(["facts", ...files])).stdout;
+        const caps = (yield* helper(["capabilities"])).stdout;
+        const withCaps = (yield* helper(["facts", "--with-caps", ...files])).stdout;
+        // Without the flag the frame is what earlier clients parse: answer tags only.
+        expect(plain).not.toContain("caps v1");
+        const [begin, ...rest] = plain.split("\n");
+        expect(withCaps).toBe([begin, caps.trimEnd(), ...rest].join("\n"));
+        expect(withCaps.split("\n")[1]).toBe("caps v1 facts");
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("asks no compat question when no server runs", () =>
     Effect.gen(function* () {
       const home = NodeOS.tmpdir();
