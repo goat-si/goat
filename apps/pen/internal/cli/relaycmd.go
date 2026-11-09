@@ -130,6 +130,9 @@ type serveConfig struct {
 	keyFile      string
 	plain        bool
 	publicOrigin string
+	// readTimeout and limits override the defaults in tests.
+	readTimeout time.Duration
+	limits      *relayserver.Limits
 }
 
 func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
@@ -214,10 +217,20 @@ func serve(ctx context.Context, c serveConfig, ready func(addr string), hooks re
 
 // serveOn runs the relay on ln.
 func serveOn(ctx context.Context, c serveConfig, ln net.Listener, ready func(addr string), hooks relayserver.Hooks) error {
-	rs := relayserver.New(relayserver.DefaultLimits())
+	limits := relayserver.DefaultLimits()
+	if c.limits != nil {
+		limits = *c.limits
+	}
+	rs := relayserver.New(limits)
 	rs.PublicOrigin = c.publicOrigin
 	rs.Hooks = hooks
-	srv := &http.Server{Handler: rs, ReadHeaderTimeout: 10 * time.Second}
+	readTimeout := 30 * time.Second
+	if c.readTimeout > 0 {
+		readTimeout = c.readTimeout
+	}
+	// The timeouts bound plain requests; the relay clears them on a socket it upgrades.
+	srv := &http.Server{Handler: rs, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout,
+		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	switch {
 	case c.autocertHost != "":
 		srv.TLSConfig = autocertManager(c).TLSConfig()

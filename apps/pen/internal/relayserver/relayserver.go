@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -77,16 +78,39 @@ type Server struct {
 	// Empty only for loopback and tests, where the origin follows each request.
 	PublicOrigin string
 	Hooks        Hooks
+	// MaxSockets, MaxPerIP and MaxUnauthPerNode cap all sockets, one source address's sockets and
+	// one node id's unauthenticated uplinks; past them a request gets HTTP 429 (0 means the default).
+	MaxSockets       int
+	MaxPerIP         int
+	MaxUnauthPerNode int
 
-	mu    sync.Mutex
-	rooms map[string]*room
-	sids  map[string]uint32
-	socks map[*sock]struct{}
+	mu     sync.Mutex
+	rooms  map[string]*room
+	sids   map[string]uint32
+	socks  map[*sock]struct{}
+	total  int
+	perIP  map[string]int
+	unauth map[string]int
+}
+
+// Default caps.
+const (
+	DefaultMaxSockets       = 4096
+	DefaultMaxPerIP         = 64
+	DefaultMaxUnauthPerNode = 4
+)
+
+func orDefault(v, d int) int {
+	if v > 0 {
+		return v
+	}
+	return d
 }
 
 // New builds a relay with limits.
 func New(l Limits) *Server {
-	return &Server{Limits: l, rooms: map[string]*room{}, sids: map[string]uint32{}, socks: map[*sock]struct{}{}}
+	return &Server{Limits: l, rooms: map[string]*room{}, sids: map[string]uint32{}, socks: map[*sock]struct{}{},
+		perIP: map[string]int{}, unauth: map[string]int{}}
 }
 
 var route = regexp.MustCompile(`^/v1/(node|client)/([^/]*)$`)
@@ -118,6 +142,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "websocket upgrade required", http.StatusUpgradeRequired)
 		return
 	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
+	}
+	if !s.reserve(ip, role == "node", nodeID) {
+		http.Error(w, "too many sockets", http.StatusTooManyRequests)
+		return
+	}
+	k := &sock{srv: s, nodeID: nodeID, ip: ip, unauthCounted: role == "node"}
+	// net/http clears its read and write deadlines when Accept hijacks the connection; an upgraded
+	// socket keeps its own idle and write timeouts.
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		CompressionMode: websocket.CompressionDisabled,
 		// Browsers' Origin headers are not checked: the Noise layer and the uplink challenge
@@ -125,6 +160,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
+		s.unreserve(k)
 		return
 	}
 	ws.SetReadLimit(-1)
@@ -138,7 +174,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		origin, _ = wire.RelayOrigin(scheme + "://" + r.Host)
 	}
-	k := &sock{srv: s, ws: ws, nodeID: nodeID, out: newOutq(ws, s.Limits.WriteTimeout)}
+	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout)
 	s.mu.Lock()
 	s.socks[k] = struct{}{}
 	rm := s.rooms[nodeID]
@@ -173,13 +209,63 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	k.out.wait()
 }
 
+// reserve counts a socket against the caps before it is accepted.
+func (s *Server) reserve(ip string, uplink bool, nodeID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.total >= orDefault(s.MaxSockets, DefaultMaxSockets) || s.perIP[ip] >= orDefault(s.MaxPerIP, DefaultMaxPerIP) ||
+		uplink && s.unauth[nodeID] >= orDefault(s.MaxUnauthPerNode, DefaultMaxUnauthPerNode) {
+		return false
+	}
+	s.total++
+	s.perIP[ip]++
+	if uplink {
+		s.unauth[nodeID]++
+	}
+	return true
+}
+
+// unreserve gives back what reserve counted.
+func (s *Server) unreserve(k *sock) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unreserveLocked(k)
+}
+
+func (s *Server) unreserveLocked(k *sock) {
+	s.total--
+	if s.perIP[k.ip]--; s.perIP[k.ip] <= 0 {
+		delete(s.perIP, k.ip)
+	}
+	s.authedLocked(k)
+}
+
+// authedLocked stops counting k as an unauthenticated uplink.
+func (s *Server) authedLocked(k *sock) {
+	if !k.unauthCounted {
+		return
+	}
+	k.unauthCounted = false
+	if s.unauth[k.nodeID]--; s.unauth[k.nodeID] <= 0 {
+		delete(s.unauth, k.nodeID)
+	}
+}
+
 func (s *Server) release(k *sock) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.unreserveLocked(k)
 	delete(s.socks, k)
 	if k.room.refs--; k.room.refs == 0 && s.rooms[k.nodeID] == k.room {
 		delete(s.rooms, k.nodeID)
 	}
+}
+
+// Rooms is the number of nodes with open sockets.
+func (s *Server) Rooms() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.rooms)
 }
 
 // hostMatches reports whether a request's Host names the public origin.
@@ -252,8 +338,11 @@ type sock struct {
 	ws     *websocket.Conn
 	room   *room
 	nodeID string
-	role   int
-	out    *outq
+	ip     string
+	// unauthCounted is guarded by srv.mu.
+	unauthCounted bool
+	role          int
+	out           *outq
 
 	sent, acked uint64
 	closed      bool
@@ -408,6 +497,9 @@ func (rm *room) authenticate(k *sock, answer []byte) {
 	}
 	k.authed, k.challenge = true, nil
 	k.deadline.Stop()
+	rm.srv.mu.Lock()
+	rm.srv.authedLocked(k)
+	rm.srv.mu.Unlock()
 	rm.uplink = k
 	if f := rm.srv.Hooks.OnUplink; f != nil {
 		f(rm.nodeID)

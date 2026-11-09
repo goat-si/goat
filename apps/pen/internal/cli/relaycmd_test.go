@@ -186,3 +186,36 @@ func TestRelayAddRmEditTheConfigAndKeepAtLeastOne(t *testing.T) {
 		t.Fatalf("config %+v", got)
 	}
 }
+
+func TestUpgradedSocketsOutliveTheHTTPServersReadTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseServe([]string{"--plain", "--listen", ln.Addr().String()}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.readTimeout = 200 * time.Millisecond
+	l := relayserver.DefaultLimits()
+	l.PendingTimeout = 600 * time.Millisecond
+	c.limits = &l
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	online := make(chan string, 1)
+	go serveOn(ctx, c, ln, nil, relayserver.Hooks{OnUplink: func(id string) { online <- id }})
+	url := "http://" + ln.Addr().String()
+	id, _ := ident.Generate(nil)
+	up := relay.NewUplink(url, id)
+	go up.Run(ctx)
+	<-online
+	conn, err := relay.Dial(ctx, url, id.NodeID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The node never answers, so the relay ends the session 4408 at 600 ms, past the 200 ms read
+	// timeout; 4404 or 1006 would mean the uplink or the client died at the HTTP deadline.
+	if _, err := conn.Recv(ctx); relay.CodeOf(err) != wire.CodeTimeout {
+		t.Fatalf("pending session ended with %v, want 4408", err)
+	}
+}

@@ -597,3 +597,62 @@ func TestWithAPublicOriginOtherHostsGet421AndOnlyThatOriginAuthenticates(t *test
 		t.Fatal(err)
 	}
 }
+
+func dialStatus(t *testing.T, rs *relaytest.Server, path string) int {
+	t.Helper()
+	u, _ := wire.WebSocketURL(rs.URL, path)
+	ws, res, err := websocket.Dial(context.Background(), u, nil)
+	if err == nil {
+		t.Cleanup(func() { ws.CloseNow() })
+		return http.StatusSwitchingProtocols
+	}
+	if res == nil {
+		t.Fatal(err)
+	}
+	return res.StatusCode
+}
+
+func TestSocketsPastTheTotalAndPerAddressCapsGet429(t *testing.T) {
+	for _, set := range []func(*relayserver.Server){
+		func(s *relayserver.Server) { s.MaxSockets = 2 },
+		func(s *relayserver.Server) { s.MaxPerIP = 2 },
+	} {
+		rs := defaults(t)
+		set(rs.Relay)
+		for range 2 {
+			node(t, rs, nodeOpts{silent: true})
+		}
+		id, _ := ident.Generate(nil)
+		if got := dialStatus(t, rs, "/v1/node/"+id.NodeID()); got != http.StatusTooManyRequests {
+			t.Fatalf("third socket got %d, want 429", got)
+		}
+	}
+}
+
+func TestAFifthUnauthenticatedUplinkForOneNodeGets429(t *testing.T) {
+	rs := defaults(t)
+	id, _ := ident.Generate(nil)
+	for range 4 {
+		nodeWith(t, rs, id, nodeOpts{silent: true})
+	}
+	if got := dialStatus(t, rs, "/v1/node/"+id.NodeID()); got != http.StatusTooManyRequests {
+		t.Fatalf("fifth unauthenticated uplink got %d, want 429", got)
+	}
+}
+
+func TestARoomIsFreedWhenItsLastSocketEnds(t *testing.T) {
+	rs := relaytest.NewWithLimits(relayserver.DefaultLimits())
+	done := make(chan string, 4)
+	rs.Relay.Hooks.OnSocketDone = func(_, role string) { done <- role }
+	rs.Start()
+	t.Cleanup(rs.Close)
+	n := ready(t, rs, nodeOpts{})
+	if rs.Relay.Rooms() != 1 {
+		t.Fatalf("rooms %d", rs.Relay.Rooms())
+	}
+	n.ws.Close(websocket.StatusNormalClosure, "")
+	<-done
+	if got := rs.Relay.Rooms(); got != 0 {
+		t.Fatalf("rooms %d after the last socket, want 0", got)
+	}
+}
