@@ -1,4 +1,7 @@
-import { resolveEnvironmentLoopbackUrl } from "@goat/client-runtime/connection";
+import {
+  type ConnectionTarget,
+  resolveEnvironmentLoopbackUrl,
+} from "@goat/client-runtime/connection";
 import type { ResolveMediaSourceInput } from "@goat/client-runtime/media-source";
 import type { EnvironmentId } from "@goat/contracts";
 import * as Option from "effect/Option";
@@ -8,7 +11,10 @@ import { environmentSession, usePreparedConnection } from "../state/session";
 import { normalizeNativeMarkdownUrl } from "./markdownLinks";
 import type { MediaActionsSource } from "./mediaActionsSource";
 
-type PreparedConnection = ReturnType<typeof usePreparedConnection>;
+type PreparedConnection = Option.Option<{
+  readonly target: ConnectionTarget;
+  readonly httpBaseUrl: string;
+}>;
 
 /** Media from an environment: its loopback servers live on that machine, never on this phone. */
 export function mobileMediaConnection(
