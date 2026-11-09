@@ -22,11 +22,22 @@ function TabsList({ className, ...props }: TabsPrimitive.List.Props) {
   );
 }
 
-function TabsTab({ className, ...props }: TabsPrimitive.Tab.Props) {
+const TAB_VARIANTS = {
+  default: "h-7 gap-1.5 px-2.5 text-xs",
+  // An icon over a short label, so several destinations share a narrow row without scrolling.
+  stacked: "h-auto flex-col gap-0.5 px-0.5 py-1.5 text-[0.6875rem] leading-none [&_svg]:size-4",
+} as const;
+
+function TabsTab({
+  className,
+  variant = "default",
+  ...props
+}: TabsPrimitive.Tab.Props & { variant?: keyof typeof TAB_VARIANTS }) {
   return (
     <TabsPrimitive.Tab
       className={cn(
-        "inline-flex h-7 min-w-0 flex-1 cursor-pointer select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 font-medium text-muted-foreground text-xs outline-none transition-colors hover:bg-background/55 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-active:bg-background data-active:text-foreground data-active:shadow-xs/10 dark:hover:bg-input/32 dark:data-active:bg-input/72",
+        "inline-flex min-w-0 flex-1 cursor-pointer select-none items-center justify-center whitespace-nowrap rounded-md font-medium text-muted-foreground outline-none transition-colors hover:bg-background/55 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-active:bg-background data-active:text-foreground data-active:shadow-xs/10 dark:hover:bg-input/32 dark:data-active:bg-input/72",
+        TAB_VARIANTS[variant],
         className,
       )}
       data-slot="tabs-tab"

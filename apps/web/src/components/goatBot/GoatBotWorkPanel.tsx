@@ -7,6 +7,13 @@ import {
 import type { BotRemoteWork, BotThreadRow, EnvironmentId, ThreadId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
+import {
+  BrainIcon,
+  CalendarClockIcon,
+  FolderIcon,
+  ListChecksIcon,
+  MonitorIcon,
+} from "~/components/solar";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
@@ -14,7 +21,7 @@ import { GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotComputer } from "./GoatBotComputer";
 import { GoatBotLibrary } from "./GoatBotLibrary";
 import { GoatBotMemory } from "./GoatBotMemory";
-import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
+import { GoatBotPanelEmpty, GoatBotPanelFailure } from "./GoatBotPanelEmpty";
 import { GoatBotStatusCard } from "./GoatBotStatusCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import {
@@ -25,8 +32,14 @@ import {
 } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
 
-const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
-type Tab = (typeof tabs)[number];
+const tabs = [
+  { name: "Tasks", Icon: ListChecksIcon },
+  { name: "Routines", Icon: CalendarClockIcon },
+  { name: "Memory", Icon: BrainIcon },
+  { name: "Library", Icon: FolderIcon },
+  { name: "Computer", Icon: MonitorIcon },
+] as const;
+type Tab = (typeof tabs)[number]["name"];
 
 export function GoatBotWorkPanel({
   environmentId,
@@ -46,7 +59,7 @@ export function GoatBotWorkPanel({
   const [tab, setTab] = useState<Tab>("Tasks");
   const member = useGoatBotMember();
   const botName = useGoatBotName();
-  const { rows, remoteWork, supported, loaded, failed, turnsWaiting } = useBotThreads(
+  const { rows, remoteWork, supported, loaded, failed, turnsWaiting, refresh } = useBotThreads(
     environmentId,
     memberThreadsKey(member),
   );
@@ -60,14 +73,11 @@ export function GoatBotWorkPanel({
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         {/* In a sheet the close button sits at the top right, beside the tabs. */}
         <div className={onShowChat ? "pr-10" : undefined}>
-          {/* Five labels do not always fit, so the row scrolls sideways and never wraps. Base UI
-          scrolls the active tab into view by offsetLeft, which needs the list positioned. */}
-          <TabsList
-            aria-label={`${botName} work`}
-            className="relative max-w-full overflow-x-auto [scrollbar-width:none]"
-          >
-            {tabs.map((name) => (
-              <TabsTab key={name} value={name} className="flex-none">
+          {/* Every destination stays in view: five equal columns, each an icon over its label. */}
+          <TabsList aria-label={`${botName} work`} className="grid grid-cols-5">
+            {tabs.map(({ name, Icon }) => (
+              <TabsTab key={name} value={name} variant="stacked">
+                <Icon aria-hidden />
                 {name}
               </TabsTab>
             ))}
@@ -95,36 +105,53 @@ export function GoatBotWorkPanel({
               </Link>
             </p>
           ) : null}
-          {tasks.length === 0 ? (
+          {failed ? (
+            <div className="mb-3">
+              <GoatBotPanelFailure
+                message={`Couldn't load ${botName}'s tasks.`}
+                onRetry={refresh}
+              />
+            </div>
+          ) : null}
+          {tasks.length > 0 ? (
+            <div className="space-y-4">
+              {([false, true] as const).map((done) =>
+                (done ? work.done : work.inProgress).length === 0 ? null : (
+                  <section key={String(done)}>
+                    <h3 className="font-semibold">{done ? "Done" : "In progress"}</h3>
+                    {(done ? work.done : work.inProgress).map(({ row }) => (
+                      <TaskWorkRow
+                        key={row.task.taskId}
+                        row={row}
+                        rows={rows}
+                        remoteWork={remoteWork}
+                        environmentId={environmentId}
+                      />
+                    ))}
+                  </section>
+                ),
+              )}
+            </div>
+          ) : failed ? null : !supported ? (
+            <p className="text-muted-foreground">
+              Tasks can't be listed from this server right now.
+            </p>
+          ) : !loaded ? (
+            <p className="text-muted-foreground">Loading tasks…</p>
+          ) : (
             <GoatBotPanelEmpty
               title="No tasks yet"
               next={`Ask ${botName} in chat to start work.`}
             />
-          ) : (
-            <div className="space-y-4">
-              {([false, true] as const).map((done) => (
-                <section key={String(done)}>
-                  <h3 className="font-semibold">{done ? "Done" : "In progress"}</h3>
-                  {(done ? work.done : work.inProgress).map(({ row }) => (
-                    <TaskWorkRow
-                      key={row.task.taskId}
-                      row={row}
-                      rows={rows}
-                      remoteWork={remoteWork}
-                      environmentId={environmentId}
-                    />
-                  ))}
-                </section>
-              ))}
-            </div>
           )}
         </TabsPanel>
         <TabsPanel value="Routines" className="mt-4 min-h-0 overflow-y-auto">
           <GoatBotRoutines
             environmentId={environmentId}
             threadId={threadId}
-            tasks={routines.data?.tasks ?? []}
+            tasks={routines.data?.tasks ?? null}
             error={routines.error}
+            onRetry={routines.refresh}
           />
         </TabsPanel>
         <TabsPanel value="Memory" className="mt-4 min-h-0 overflow-y-auto">

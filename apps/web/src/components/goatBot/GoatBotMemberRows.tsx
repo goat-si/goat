@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { botManageFailure } from "@goat/client-runtime/goatBot";
+import { botManageFailure, goatBotMemberPicture } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import { Link, useParams } from "@tanstack/react-router";
@@ -179,7 +179,7 @@ function GoatBotMemberRow({
           size="sm"
           place="list"
           waitingCount={count}
-          emoji={bot.avatar}
+          emoji={goatBotMemberPicture(bot)}
           threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
         />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">

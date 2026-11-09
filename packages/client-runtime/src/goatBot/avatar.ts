@@ -6,6 +6,16 @@ export function goatBotAvatarEmoji(avatar: string | null | undefined): string | 
   return trimmed === "" ? null : trimmed;
 }
 
+/** A member's emoji, else its name's first letter, so members never share the main bot's face. */
+export function goatBotMemberPicture(bot: {
+  readonly avatar?: string | null | undefined;
+  readonly name: string;
+}): string | null {
+  return (
+    goatBotAvatarEmoji(bot.avatar) ?? Array.from(bot.name.trim())[0]?.toLocaleUpperCase() ?? null
+  );
+}
+
 /** How a round avatar shows the bot's state around its picture. */
 export interface GoatBotAvatarSignal {
   readonly ring: "active" | "failed" | "finished" | null;

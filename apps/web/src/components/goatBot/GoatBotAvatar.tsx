@@ -4,6 +4,7 @@ import {
   goatBotAvatarEmoji,
   goatBotAvatarSignal,
   goatBotFaceLabel,
+  goatBotMemberPicture,
   type GoatBotAvatarSignal,
   type GoatBotFaceState,
 } from "@goat/client-runtime/goatBot";
@@ -179,12 +180,8 @@ export function GoatBotMemberAvatar({
       size={size}
       place={place}
       waitingCount={waitingCount}
-      emoji={goatBotAvatarEmoji(bot.avatar) ?? initialOf(bot.name)}
+      emoji={goatBotMemberPicture(bot)}
       threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
     />
   );
-}
-
-function initialOf(name: string): string | null {
-  return Array.from(name.trim())[0]?.toLocaleUpperCase() ?? null;
 }

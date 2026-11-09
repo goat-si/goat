@@ -20,29 +20,37 @@ import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { GoatBotCheckInForm } from "./GoatBotCheckInForm";
 import { useGoatBotName } from "./goatBotMemberContext";
-import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
+import { GoatBotPanelEmpty, GoatBotPanelFailure } from "./GoatBotPanelEmpty";
 
 export function GoatBotRoutines(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
-  readonly tasks: readonly BotRoutineSource[];
+  /** Null until the first read answers; a failed read later keeps the last list. */
+  readonly tasks: readonly BotRoutineSource[] | null;
   readonly error: string | null;
+  readonly onRetry: () => void;
 }) {
   const nowMinute = useNowMinute();
   const botName = useGoatBotName();
+  const failure =
+    props.error === null ? null : (
+      <GoatBotPanelFailure message="Couldn't load routines." onRetry={props.onRetry} />
+    );
+  if (props.tasks === null)
+    return failure ?? <p className="text-muted-foreground">Loading routines…</p>;
   const rows = botRoutineRows(props.tasks, props.threadId, Date.parse(`${nowMinute}:00.000Z`));
-  if (props.error !== null) return <p className="text-destructive">Couldn't load routines.</p>;
   return (
     <div className="space-y-3">
-      {findCheckInRoutine(props.tasks, props.threadId) === undefined ? (
+      {failure}
+      {failure === null && findCheckInRoutine(props.tasks, props.threadId) === undefined ? (
         <CheckInOffer environmentId={props.environmentId} threadId={props.threadId} />
       ) : null}
-      {rows.length === 0 ? (
+      {rows.length === 0 && failure === null ? (
         <GoatBotPanelEmpty
           title="No routines yet"
           next={`Ask ${botName} in chat to set up a routine.`}
         />
-      ) : (
+      ) : rows.length === 0 ? null : (
         <ul className="m-0 list-none space-y-1 p-0">
           {rows.map((row) => (
             <RoutineRow key={row.id} environmentId={props.environmentId} row={row} />

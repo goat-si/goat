@@ -8,7 +8,12 @@ import { render } from "../../../test/render";
 
 const mocks = vi.hoisted(() => ({
   tasks: [] as unknown[],
+  routinesError: null as string | null,
+  routinesLoaded: true,
   rows: [] as unknown[],
+  threads: { loaded: true, failed: false },
+  refreshThreads: vi.fn(),
+  refreshRoutines: vi.fn(),
   setEnabled: vi.fn(),
   turnsWaiting: [] as string[],
 }));
@@ -17,10 +22,10 @@ vi.mock("./useBotRoster", () => ({
   useBotThreads: () => ({
     rows: mocks.rows,
     supported: true,
-    loaded: true,
-    failed: false,
+    loaded: mocks.threads.loaded,
+    failed: mocks.threads.failed,
     turnsWaiting: mocks.turnsWaiting,
-    refresh: () => {},
+    refresh: mocks.refreshThreads,
   }),
 }));
 vi.mock("~/state/entities", () => ({
@@ -29,10 +34,10 @@ vi.mock("~/state/entities", () => ({
 }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({
-    data: { tasks: mocks.tasks },
-    error: null,
+    data: mocks.routinesLoaded ? { tasks: mocks.tasks } : null,
+    error: mocks.routinesError,
     failure: null,
-    refresh: () => {},
+    refresh: mocks.refreshRoutines,
   }),
 }));
 vi.mock("~/state/server", () => ({
@@ -61,8 +66,36 @@ function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = 
   mocks.tasks = tasks;
   mocks.turnsWaiting = turnsWaiting;
   mocks.rows = rows;
+  mocks.threads = { loaded: true, failed: false };
+  mocks.routinesError = null;
+  mocks.routinesLoaded = true;
+  mocks.refreshThreads.mockReset();
+  mocks.refreshRoutines.mockReset();
   mocks.setEnabled.mockReset();
 }
+
+const at = "2026-11-09T00:00:00.000Z";
+const runningTask = {
+  kind: "task",
+  task: { taskId: "task-a", title: "Stop the port 3774 server", status: "running", updatedAt: at },
+  view: { taskId: "task-a", pinnedAt: null, doneAt: null, readThrough: null },
+  lastActivityAt: at,
+  unread: false,
+  mainMessagesSinceQuiet: 0,
+  worker: { environmentId: "env", threadId: "channel-worker:a" },
+};
+const digest = {
+  id: "digest",
+  title: "Daily digest",
+  prompt: "Summarize the inbox",
+  enabled: true,
+  schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [] },
+  threadId: "bot",
+  nextRunAt: null,
+  lastRunAt: null,
+  lastRunStatus: "never",
+  lastRunError: null,
+};
 
 it("shows the empty state for each work tab", async () => {
   setup([]);
@@ -78,6 +111,64 @@ it("shows the empty state for each work tab", async () => {
   await expect.element(screen.getByText("Files need a newer GOAT server.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Computer" }));
   await expect.element(screen.getByText("No work running")).toBeVisible();
+});
+
+it("says the task list is loading, not empty, before the first read answers", async () => {
+  setup([]);
+  mocks.threads = { loaded: false, failed: false };
+  await using screen = await render(
+    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+  );
+  await expect.element(screen.getByText("Loading tasks…")).toBeVisible();
+  await expect.element(screen.getByText("No tasks yet")).not.toBeInTheDocument();
+});
+
+it("a failed task read offers a retry and keeps the tasks it already knew", async () => {
+  setup([], [], [runningTask]);
+  mocks.threads = { loaded: false, failed: true };
+  await using screen = await render(
+    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+  );
+  await expect.element(screen.getByText("Couldn't load GOAT Bot's tasks.")).toBeVisible();
+  await expect
+    .element(screen.getByRole("link", { name: /Stop the port 3774 server/ }))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(mocks.refreshThreads).toHaveBeenCalledOnce();
+});
+
+it("a failed first task read never claims there are no tasks", async () => {
+  setup([]);
+  mocks.threads = { loaded: false, failed: true };
+  await using screen = await render(
+    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+  );
+  await expect.element(screen.getByText("Couldn't load GOAT Bot's tasks.")).toBeVisible();
+  await expect.element(screen.getByText("No tasks yet")).not.toBeInTheDocument();
+});
+
+it("says routines are loading, not empty, before the first read answers", async () => {
+  setup([]);
+  mocks.routinesLoaded = false;
+  await using screen = await render(
+    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+  );
+  await userEvent.click(screen.getByRole("tab", { name: "Routines" }));
+  await expect.element(screen.getByText("Loading routines…")).toBeVisible();
+  await expect.element(screen.getByText("No routines yet")).not.toBeInTheDocument();
+});
+
+it("a failed routine read offers a retry and keeps the routines it already knew", async () => {
+  setup([digest]);
+  mocks.routinesError = "Connection lost";
+  await using screen = await render(
+    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+  );
+  await userEvent.click(screen.getByRole("tab", { name: "Routines" }));
+  await expect.element(screen.getByText("Couldn't load routines.")).toBeVisible();
+  await expect.element(screen.getByText("Daily at 09:00 · Not scheduled")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(mocks.refreshRoutines).toHaveBeenCalledOnce();
 });
 
 it("a refused pause keeps the routine's stored state and shows why", async () => {
