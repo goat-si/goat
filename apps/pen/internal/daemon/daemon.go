@@ -36,7 +36,7 @@ type Options struct {
 	// publishes none.
 	SSHUser string
 	// OnView runs after known_hosts is rewritten for a new view (pen keeps its ssh config current there).
-	OnView func(*mesh.View)
+	OnView func(*mesh.View) error
 	// Ready is called once the control socket accepts requests.
 	Ready func()
 	Now   func() time.Time

@@ -91,16 +91,19 @@ func hostsOf(v *mesh.View) []sshHost {
 
 // refreshSSHConfig rewrites <ssh dir>/pen/config from a new view, but only once ssh-config --write or
 // --install created it, so a joined machine sees its new peers (and their User) without another command.
-func refreshSSHConfig(v *mesh.View) {
+func refreshSSHConfig(v *mesh.View) error {
 	dir := sshDir()
-	if _, err := os.Stat(filepath.Join(dir, "pen", "config")); err != nil {
-		return
+	if _, err := os.Stat(filepath.Join(dir, "pen", "config")); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
 	}
 	cmd, err := pipeCommand()
 	if err != nil {
-		return
+		return err
 	}
-	writeSSHConfig(dir, sshConfigText(cmd, knownHostsPath(), hostsOf(v)))
+	_, err = writeSSHConfig(dir, sshConfigText(cmd, knownHostsPath(), hostsOf(v)))
+	return err
 }
 
 // shellQuote quotes s for the sh -c that runs ProxyCommand.
@@ -160,11 +163,25 @@ func writeSSHConfig(dir, text string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, "pen", "config")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(text), 0o600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config.tmp*")
+	if err != nil {
 		return "", err
 	}
-	return path, os.Rename(tmp, path)
+	_, err = tmp.WriteString(text)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp.Name(), 0o600)
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	return path, nil
 }
 
 // installInclude puts the Include line first in <dir>/config (OpenSSH keeps the first value it reads),

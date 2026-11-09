@@ -79,12 +79,19 @@ func (d *Daemon) checkHostKeys(ctx context.Context) {
 // writeKnownHosts writes pen-<name>,pen-<nodeId> lines for every member's host keys. Writers are
 // serialized and each reads the view under the lock, so the last write is always the newest view.
 func (d *Daemon) writeKnownHosts() {
-	if d.opt.KnownHosts == "none" {
-		return
-	}
 	d.khMu.Lock()
 	defer d.khMu.Unlock()
 	v := d.view()
+	if d.opt.OnView != nil {
+		defer func() {
+			if err := d.opt.OnView(v); err != nil {
+				d.opt.Logf("ssh config: %v", err)
+			}
+		}()
+	}
+	if d.opt.KnownHosts == "none" {
+		return
+	}
 	var b strings.Builder
 	for _, m := range v.SortedMembers() {
 		for _, k := range m.HostKeys {
@@ -111,8 +118,5 @@ func (d *Daemon) writeKnownHosts() {
 	if err != nil {
 		os.Remove(tmp.Name())
 		d.opt.Logf("known_hosts: %v", err)
-	}
-	if d.opt.OnView != nil {
-		d.opt.OnView(v)
 	}
 }

@@ -53,7 +53,7 @@ func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 	}
 	if len(res) > 0 && taken == 0 {
 		// Deleting the keys now would leave the mesh counting this node as a member for good.
-		return res, errors.New("no member took the leave; this node keeps running so its next sync delivers it, or run pen leave again")
+		return res, errors.New("no member took the leave; this node keeps running and pushes it when a member's uplink returns or at its 10-minute sync, or run pen leave again")
 	}
 	d.upMu.Lock()
 	if d.upCancel != nil {
