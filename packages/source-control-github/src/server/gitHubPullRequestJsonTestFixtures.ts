@@ -19,7 +19,7 @@ export const user = (login: string, fields: Record<string, unknown> = {}) => ({
   ...fields,
 });
 
-export const row = (fields: Record<string, unknown>) => ({
+const row = (fields: Record<string, unknown>) => ({
   number: 1,
   title: "Add the pull requests page",
   url: "https://github.com/goat-si/goat/pull/1",
@@ -51,11 +51,11 @@ export const listPage = (page: ReturnType<typeof toPullRequestRows>) => ({
 
 export type Json = Record<string, any>;
 export const LAST_PAGE = { hasNextPage: false, endCursor: null };
-export const nodesIn = (connection: Json | null | undefined): ReadonlyArray<Json> =>
+const nodesIn = (connection: Json | null | undefined): ReadonlyArray<Json> =>
   connection?.["nodes"] ?? [];
-export const actor = (raw: Json | null | undefined) =>
+const actor = (raw: Json | null | undefined) =>
   raw === null || raw === undefined ? null : { __typename: "User", avatarUrl: "", ...raw };
-export const reactionGroups = (groups: ReadonlyArray<Json> | undefined) =>
+const reactionGroups = (groups: ReadonlyArray<Json> | undefined) =>
   (groups ?? []).map(({ reactors, ...group }) => ({
     viewerHasReacted: false,
     ...group,
@@ -65,7 +65,7 @@ export const reactionGroups = (groups: ReadonlyArray<Json> | undefined) =>
       nodes: nodesIn(reactors).map((node) => ({ __typename: "User", ...node })),
     },
   }));
-export const remark = ({ author, reactionGroups: groups, ...raw }: Json) => ({
+const remark = ({ author, reactionGroups: groups, ...raw }: Json) => ({
   body: "",
   lastEditedAt: null,
   isMinimized: false,
@@ -74,19 +74,19 @@ export const remark = ({ author, reactionGroups: groups, ...raw }: Json) => ({
   author: actor(author),
   reactionGroups: reactionGroups(groups),
 });
-export const threadCommentsOf = ({ nodes, ...connection }: Json) => ({
+const threadCommentsOf = ({ nodes, ...connection }: Json) => ({
   totalCount: (nodes ?? []).length,
   pageInfo: LAST_PAGE,
   ...connection,
   nodes: (nodes ?? []).map(remark),
 });
-export const requestedReviewer = (raw: Json | null) =>
+const requestedReviewer = (raw: Json | null) =>
   raw === null
     ? null
     : "login" in raw
       ? { name: null, ...actor(raw) }
       : { __typename: "Team", ...raw };
-export const reviewCommit = ({ commit: { authors, ...commit } }: Json) => ({
+const reviewCommit = ({ commit: { authors, ...commit } }: Json) => ({
   commit: {
     messageHeadline: "",
     committedDate: "",
