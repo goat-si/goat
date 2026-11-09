@@ -1,0 +1,63 @@
+// Command pen joins machines into a mesh over a relay and pipes TCP between them.
+package main
+
+import (
+	_ "embed"
+	"fmt"
+	"io"
+	"os"
+
+	"github.com/goat-si/goat/apps/pen/internal/cli"
+)
+
+var version = "dev"
+
+//go:embed install/pen.service
+var serviceUnit string
+
+//go:embed install/si.goat.pen.plist
+var launchdPlist string
+
+const usage = `usage: pen <command> [flags]
+
+  up [--relay URL] [--name N] [--foreground] [--no-service]   start this node (founds a mesh the first time)
+  down                                    stop this node
+  invite [--ttl 10m] [--auto]             print a single-use join token
+  join <token> [--name N]                 join the mesh a token invites to
+  ls [--json] [--watch [--until-revoked <member>]]   list members
+  revoke <member> [--compromised]         remove a member
+  leave                                   remove this node and delete its keys
+  pipe <node> <port>                      connect stdin/stdout to a member's local port
+  forward <localPort> <node>:<port>       forward a local port to a member's port
+  ssh-config                              print an ssh_config block for pen-<name> hosts
+  version                                 print the version
+`
+
+type verb func(args []string, stdout, stderr io.Writer) int
+
+func main() {
+	cli.Version, cli.ServiceUnit, cli.LaunchdPlist = version, serviceUnit, launchdPlist
+	verbs := map[string]verb{
+		"up": cli.RunUp, "down": cli.RunDown, "invite": cli.RunInvite, "join": cli.RunJoin, "ls": cli.RunLs,
+		"revoke": cli.RunRevoke, "leave": cli.RunLeave, "pipe": cli.RunPipe, "forward": cli.RunForward,
+		"ssh-config": cli.RunSSHConfig,
+	}
+	if len(os.Args) < 2 {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
+	}
+	switch os.Args[1] {
+	case "version", "--version", "-v":
+		fmt.Println("pen", version)
+		return
+	case "help", "--help", "-h":
+		fmt.Print(usage)
+		return
+	}
+	run, ok := verbs[os.Args[1]]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "pen: unknown command %q\n\n%s", os.Args[1], usage)
+		os.Exit(2)
+	}
+	os.Exit(run(os.Args[2:], os.Stdout, os.Stderr))
+}

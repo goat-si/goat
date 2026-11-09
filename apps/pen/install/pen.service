@@ -1,0 +1,13 @@
+[Unit]
+Description=pen mesh node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/pen up --foreground
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+
