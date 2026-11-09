@@ -12,7 +12,7 @@ import {
 // A host script asks `capabilities` once per executable before it uses a combined call, and an
 // old runtime's unknown-subcommand answer is cached as "none". The call takes no flags so that
 // answer is one exact error. The names a script may see are fixed there (fact_valid caps).
-const CAPABILITIES = ["facts"] as const;
+const CAPABILITIES = ["facts", "wait-ready-report"] as const;
 const capabilitiesLine = () => ["caps v1", ...CAPABILITIES].join(" ");
 
 export const capabilities = Command.make("capabilities").pipe(
@@ -36,22 +36,16 @@ const compatLine = async (port: number, liveInstance: unknown) => {
   }
 };
 
-/**
- * The first probe's four questions in one start, each answered by the function its separate
- * subcommand uses, in the probe's order: `runtime-manifest --shell`, `commit-time`,
- * `protocol --shell` for the live server, then `compat` on the port that live answer named.
- * With `withCaps` the `capabilities` line follows the begin line, outside the count.
- */
-const readSshRuntimeFactsFrame = async (input: {
+type RuntimeFiles = {
   readonly runtimeFile: string;
   readonly portFile: string;
   readonly pidFile: string;
-  readonly withCaps: boolean;
-}) => {
-  const lines = [
-    `manifest ok ${runtimeManifestShellLine()}`,
-    BUILD_COMMIT_TIME === undefined ? "commit fail unavailable" : `commit ok ${BUILD_COMMIT_TIME}`,
-  ];
+};
+
+// The live answer, then compat on the port that answer named, asked only when the descriptor read
+// for live and the one read for compat carry the same instance id.
+const liveAndCompatLines = async (input: RuntimeFiles) => {
+  const lines: string[] = [];
   let liveInstance: unknown;
   let livePort: number | undefined;
   try {
@@ -69,8 +63,49 @@ const readSshRuntimeFactsFrame = async (input: {
     lines.push("live fail error");
   }
   if (livePort !== undefined) lines.push(await compatLine(livePort, liveInstance));
-  const head = input.withCaps ? ["begin v1 facts", capabilitiesLine()] : ["begin v1 facts"];
-  return [...head, ...lines, `end ${lines.length}`].join("\n") + "\n";
+  return lines;
+};
+
+const frame = (call: string, lines: ReadonlyArray<string>, extra: ReadonlyArray<string> = []) =>
+  [`begin v1 ${call}`, ...extra, ...lines, `end ${lines.length}`].join("\n") + "\n";
+
+/**
+ * The first probe's four questions in one start, answered by the separate subcommands' functions in
+ * the probe's order: manifest, commit time, the live server, then compat on the port live named.
+ * The host validates the whole frame before using any line. With `withCaps` the `capabilities`
+ * line follows the begin line, outside the count.
+ */
+const readSshRuntimeFactsFrame = async (input: RuntimeFiles & { readonly withCaps: boolean }) =>
+  frame(
+    "facts",
+    [
+      `manifest ok ${runtimeManifestShellLine()}`,
+      BUILD_COMMIT_TIME === undefined
+        ? "commit fail unavailable"
+        : `commit ok ${BUILD_COMMIT_TIME}`,
+      ...(await liveAndCompatLines(input)),
+    ],
+    input.withCaps ? [capabilitiesLine()] : [],
+  );
+
+/**
+ * What a launch's `wait-ready --report` prints once its wait ends: whether the server on `port`
+ * answered, then, for a ready server, the live and compat answers the first pairing asks, so the
+ * launch can record them. A server that never answered is asked nothing more.
+ */
+export const waitReadyReportFrame = async (port: number, ready: boolean, input: RuntimeFiles) =>
+  frame(
+    "wait-ready",
+    ready
+      ? [`ready ok ${port}`, ...(await liveAndCompatLines(input))]
+      : ["ready fail timeout", "live fail unavailable"],
+  );
+
+export const waitReadyReportFlags = {
+  report: Flag.Boolean("report").pipe(Flag.withDefault(false)),
+  runtimeFile: Flag.String("runtime-file").pipe(Flag.optional),
+  portFile: Flag.String("port-file").pipe(Flag.optional),
+  pidFile: Flag.String("pid-file").pipe(Flag.optional),
 };
 
 export const facts = Command.make("facts", {

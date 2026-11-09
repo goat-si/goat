@@ -131,6 +131,7 @@ import {
   VERIFY_OWNED_BEFORE_PUBLICATION,
 } from "./runtimeOwnershipScripts.ts";
 import { REMOTE_LAUNCH_LISTENER_SCRIPT } from "./launchListenerScripts.ts";
+import { REMOTE_LAUNCH_READY_REPORT_SCRIPT } from "./launchReadyReportScripts.ts";
 import {
   baseSshArgs,
   buildSshHostSpecEffect,
@@ -833,6 +834,7 @@ wait_ready() {
 @@GOAT_WAIT_READY_SCRIPT@@
 NODE
 }
+${REMOTE_LAUNCH_READY_REPORT_SCRIPT}
 ${REMOTE_LAUNCH_LISTENER_SCRIPT}
 reuse_live_server() {
     REMOTE_PORT="$LIVE_PORT"
@@ -1056,7 +1058,8 @@ while [ -z "$REMOTE_PORT" ]; do
   printf '%s\\n' "$REMOTE_PID" >"$PID_FILE"
   printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
   printf 'managed\\n' >"$MANAGED_FILE"
-  if ! wait_launched_listener || ! wait_ready "@@GOAT_READY_TIMEOUT_MS@@" ||
+  launch_caps_begin
+  if ! wait_launched_listener || ! launch_wait_ready "@@GOAT_READY_TIMEOUT_MS@@" ||
      ! server_owns_listener "$REMOTE_PID" "$REMOTE_PORT"; then
     # Only this attempt's exited child and bind error authorize another port selection.
     # Never signal the listener that won the race between pick-port and serve.
