@@ -5,6 +5,8 @@ import {
   EnvironmentId,
   ANTIGRAVITY_DEFAULT_MODEL,
   ProviderInstanceId,
+  ProviderSessionId,
+  ThreadId,
   type AntigravitySettings,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -29,6 +31,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as ModelManifest from "../ModelManifest.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { AntigravityDriver } from "./AntigravityDriver.ts";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderHostLive from "../ProviderHostLive.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 
@@ -74,8 +77,10 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
 
   const makeExecutable = Effect.fn("AntigravityDriverTest.makeExecutable")(function* (
     name: string,
-    loginRequired = false,
+    options: { loginRequired?: boolean; initialMode?: string } | boolean = {},
   ) {
+    const loginRequired = typeof options === "boolean" ? options : (options.loginRequired ?? false);
+    const initialMode = typeof options === "boolean" ? undefined : options.initialMode;
     const directory = path.join(root, name);
     const executablePath = path.join(directory, "agy_acp_server.par");
     const harnessPath = path.join(directory, "localharness_external");
@@ -89,6 +94,9 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
         ...(loginRequired
           ? [`printf '%s\\n' ${shellQuote(ANTIGRAVITY_AUTH_STDOUT_PREFIX + authorizationUrl)}`]
           : []),
+        ...(initialMode === undefined
+          ? []
+          : [`export GOAT_ACP_INITIAL_MODE=${shellQuote(initialMode)}`]),
         `exec ${shellQuote(nodePath)} ${shellQuote(mockAgentPath)} "$@"`,
         "",
       ].join("\n"),
@@ -108,7 +116,11 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
   const first = yield* makeExecutable("runtime 'one");
   const second = yield* makeExecutable("runtime two");
   const signedOut = yield* makeExecutable("runtime signed-out", true);
-  const controls = { selected: first, failResolution: false, beforeAcquire: Effect.void };
+  const controls: {
+    selected: AntigravityInstallation.AntigravityExecutable;
+    failResolution: boolean;
+    beforeAcquire: Effect.Effect<void>;
+  } = { selected: first, failResolution: false, beforeAcquire: Effect.void };
   const acquisitions: Array<{ binaryPath: string | undefined; path: string | undefined }> = [];
   const releases: Array<string | null> = [];
   const launches: Array<{
@@ -221,6 +233,8 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
   });
   return {
     instance,
+    instanceId,
+    makeExecutable,
     refresh,
     fs,
     path,
@@ -336,6 +350,44 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
             .filter((request) => request.method === "session/new")
             .map((request) => request.params?.mcpServers),
         ).toEqual([[], []]);
+        // The agy CLI rejects `yolo` and `auto_edit`; it stays in `default` and T3 answers its requests.
+        h.controls.selected = {
+          ...(yield* h.makeExecutable("runtime cli", { initialMode: "auto_edit" })),
+          harnessPath: null,
+        };
+        h.controls.selected.harnessPath === null;
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        for (const runtimeMode of ["full-access", "auto-accept-edits"] as const) {
+          const requestsBefore = (yield* h.readRequests).length;
+          const cliThreadId = ThreadId.make(`thread-antigravity-cli-${runtimeMode}`);
+          const cliPolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode,
+            interactionMode: "default",
+            cwd: h.profileDirectory,
+          });
+          const cliSession = yield* h.instance.orchestrationAdapter.openSession({
+            threadId: cliThreadId,
+            providerSessionId: ProviderSessionId.make(`provider-session-cli-${runtimeMode}`),
+            modelSelection,
+            runtimePolicy: cliPolicy,
+          });
+          yield* cliSession.ensureThread({
+            threadId: cliThreadId,
+            modelSelection,
+            runtimePolicy: cliPolicy,
+          });
+          expect(h.launches.at(-1)?.args).toEqual(["acp"]);
+          expect(
+            (yield* h.readRequests)
+              .slice(requestsBefore)
+              .filter(
+                (request) =>
+                  request.method === "session/set_config_option" &&
+                  request.params?.configId === "mode",
+              )
+              .map((request) => request.params?.value),
+          ).toEqual(["default"]);
+        }
         yield* h.assertClosed;
       }).pipe(Effect.scoped),
   );

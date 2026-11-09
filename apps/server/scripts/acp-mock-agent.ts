@@ -136,7 +136,7 @@ const permissionRequestCount = Math.max(
 const sessionId = "mock-session-1";
 
 let currentModeId = antigravityProfile
-  ? "default"
+  ? (process.env.GOAT_ACP_INITIAL_MODE ?? "default")
   : copilotModesProfile
     ? copilotModeId("agent")
     : "ask";
