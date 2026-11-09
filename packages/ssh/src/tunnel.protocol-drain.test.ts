@@ -562,8 +562,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       { name: "outer drain then inner no-drain", responses: ["real", "compatible 0 -"], calls: 5 },
       {
         name: "final launch recheck",
-        responses: ["real", "real", "real", "real", "real", "compatible 0 -"],
-        calls: 7,
+        responses: ["real", "real", "real", "real", "compatible 0 -"],
+        calls: 6,
       },
       { name: "helper failure", responses: ["failure"], calls: 5 },
       { name: "malformed tokens", responses: ["garbage"], calls: 5 },
@@ -603,7 +603,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             ["drain", "drain-request", "supervise", "self-stop", "stop"].includes(entry.type),
           ),
         );
-        assert.equal(log.filter((entry) => entry.type === "activity").length, calls === 7 ? 1 : 0);
+        assert.equal(log.filter((entry) => entry.type === "activity").length, calls === 6 ? 1 : 0);
         assert.isTrue(isAlive(f.pid));
         assert.deepEqual(yield* f.snapshot, before);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
