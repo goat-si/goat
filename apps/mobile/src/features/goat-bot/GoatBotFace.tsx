@@ -170,7 +170,8 @@ export function GoatBotFaceAvatar(props: {
         <Text
           allowFontScaling={false}
           style={{ fontSize: props.size * 0.5, lineHeight: props.size * 0.62 }}
-          className={signal.dimmed ? "opacity-50" : undefined}
+          // A member's initial needs a text colour; an emoji ignores it.
+          className={signal.dimmed ? "text-foreground opacity-50" : "text-foreground"}
         >
           {picture}
         </Text>

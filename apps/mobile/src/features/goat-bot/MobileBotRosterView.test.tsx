@@ -97,8 +97,8 @@ vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => <span /> }));
 const face = vi.hoisted(() => ({ items: [] as ReadonlyArray<object> }));
 vi.mock("./GoatBotFace", () => ({
-  GoatBotFaceAvatar: (props: { motion: object | null }) => (
-    <span data-motion={props.motion ? "moving" : "still"} />
+  GoatBotFaceAvatar: (props: { motion: object | null; emoji?: string | null }) => (
+    <span data-motion={props.motion ? "moving" : "still"} data-picture={props.emoji ?? ""} />
   ),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
@@ -233,9 +233,8 @@ it("shows Done for a task marked done", async () => {
   expect(container.querySelector('[aria-label="Review, Done, unread"]')).not.toBeNull();
 });
 
-it("shows roster empty copy only without child rows", async () => {
+it("keeps the bot rows together when the main bot has no work yet", async () => {
   const props = {
-    bots: [{ kind: "main" as const, profile: null }],
     hasMore: false,
     slackEnabled: false,
     onOpenBot: () => {},
@@ -244,10 +243,14 @@ it("shows roster empty copy only without child rows", async () => {
     onShowMore: () => {},
   };
   root = createRoot(container);
-  await act(async () => root?.render(<MobileBotRosterView {...props} rows={[]} />));
-  expect(container.textContent).toContain("Work GOAT Bot starts will appear here.");
-  await act(async () => root?.render(<MobileBotRosterView {...props} rows={[task]} />));
-  expect(container.textContent).not.toContain("Work GOAT Bot starts will appear here.");
+  await act(async () =>
+    root?.render(
+      <MobileBotRosterView {...props} bots={[{ kind: "main", profile: null }]} rows={[]} />,
+    ),
+  );
+  const buttons = [...container.querySelectorAll("button")].map((button) => button.textContent);
+  expect(buttons[0]).toContain("GOAT Bot");
+  expect(container.textContent).not.toContain("will appear here");
 });
 
 it("exposes task actions and expands and collapses hidden rows", async () => {
@@ -555,6 +558,10 @@ it("offers New bot, a member's own row, and the hidden and deleted bots when the
     );
   expect(button("Research")?.getAttribute("aria-pressed")).toBe("true");
   expect(button("Research")?.querySelector('[aria-label="2 waiting for you"]')).not.toBeNull();
+  // A member without an emoji shows its initial, so it is told apart from the main bot's face.
+  expect(button("Research")?.querySelector("[data-picture]")?.getAttribute("data-picture")).toBe(
+    "R",
+  );
   expect(container.textContent).not.toContain("Coming soon");
   await act(async () => button("New bot")?.click());
   expect(newBot).toHaveBeenCalledOnce();

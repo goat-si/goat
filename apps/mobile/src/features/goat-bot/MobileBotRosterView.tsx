@@ -28,6 +28,7 @@ import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
 import { useMobileMemberWaitingCount } from "./useMobileMemberStatus";
+import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 
 /** Servers without member bots keep New bot disabled. */
 const ignorePress = () => undefined;
@@ -265,11 +266,6 @@ export function MobileBotRosterView(props: {
                 );
               })
             : null}
-          {bot.kind === "main" && props.rows.length === 0 ? (
-            <Text className="ml-10 px-4 py-3 text-foreground-muted">
-              Work {bot.profile?.name ?? "GOAT Bot"} starts will appear here.
-            </Text>
-          ) : null}
           {bot.kind === "main" &&
           (props.hasMore || props.expanded) &&
           (props.hiddenCount ?? 0) > 0 ? (
@@ -435,7 +431,12 @@ function MemberRowContent({ bot }: { readonly bot: BotProfile }) {
   );
   return (
     <>
-      <GoatBotFaceAvatar state={face.state} size={40} motion={null} emoji={bot.avatar} />
+      <GoatBotFaceAvatar
+        state={face.state}
+        size={40}
+        motion={null}
+        emoji={mobileGoatBotMemberPicture(bot)}
+      />
       <BotRowText name={bot.name} waitingCount={waitingCount} />
     </>
   );
