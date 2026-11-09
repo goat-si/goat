@@ -158,6 +158,8 @@ export type GoatBotRow =
       readonly replyTo: string | null;
       /** Answers to pick, only while nothing has been sent since the question. */
       readonly options: ReadonlyArray<string>;
+      /** What the person sent back to a question that offered answers, picked or typed. */
+      readonly answer?: string;
       /** The task a picked answer goes to, so it answers this question wherever it is pressed. */
       readonly answerTaskId?: string;
       readonly memory?: MemoryReportReference;
@@ -355,6 +357,9 @@ export function buildGoatBotTimeline(input: {
   const tasksWithOpenQuestion = new Set<string>();
   const shownQuestionOptions = new Map<string, Set<string>>();
   const answeredRequestKeys = new Set<string>();
+  // The task each question and each of the person's messages belongs to, so an answer finds its question.
+  const askedQuestions = new Map<string, string | null>();
+  const sentTasks = new Map<string, string | null>();
   const committed: UngroupedRow[] = [];
   const committedRequestKeys = new Set<string>();
   const inputTexts = new Map<string, string>();
@@ -381,6 +386,7 @@ export function buildGoatBotTimeline(input: {
         answeredRequestKeys.add(presentation.requestKey);
       }
       previousInputKey = presentation?.requestKey ?? null;
+      sentTasks.set(item.id, presentation?.taskId ?? null);
       committed.push({
         kind: "user",
         id: item.id,
@@ -415,6 +421,7 @@ export function buildGoatBotTimeline(input: {
       if (hasOptions && open !== false && presentation?.taskId != null) {
         tasksWithOpenQuestion.add(presentation.taskId);
       }
+      if (hasOptions) askedQuestions.set(item.id, presentation?.taskId ?? null);
       committed.push({
         kind: "bot",
         id: item.id,
@@ -480,43 +487,61 @@ export function buildGoatBotTimeline(input: {
         !committedRequestKeys.has(entry.clientKey) &&
         (entry.requestKey === null || !committedRequestKeys.has(entry.requestKey)),
     )
-    .map((entry) => ({
-      kind: "user",
-      id: `pending:${entry.clientKey}`,
-      sendKey: entry.clientKey,
-      requestKey: entry.requestKey,
-      text: entry.text,
-      ...attachmentLabels(entry.attachments),
-      createdAt: entry.createdAt,
-      delivery:
-        entry.state === "failed"
-          ? {
-              state: "failed",
-              clientKey: entry.clientKey,
-              ...(entry.rejectionReason === undefined
-                ? {}
-                : { rejectionReason: entry.rejectionReason }),
-            }
-          : entry.state === "accepted"
-            ? { state: "sent" }
-            : { state: entry.state },
-    }));
+    .map((entry) => {
+      sentTasks.set(`pending:${entry.clientKey}`, entry.taskId ?? null);
+      return {
+        kind: "user",
+        id: `pending:${entry.clientKey}`,
+        sendKey: entry.clientKey,
+        requestKey: entry.requestKey,
+        text: entry.text,
+        ...attachmentLabels(entry.attachments),
+        createdAt: entry.createdAt,
+        delivery:
+          entry.state === "failed"
+            ? {
+                state: "failed",
+                clientKey: entry.clientKey,
+                ...(entry.rejectionReason === undefined
+                  ? {}
+                  : { rejectionReason: entry.rejectionReason }),
+              }
+            : entry.state === "accepted"
+              ? { state: "sent" }
+              : { state: entry.state },
+      } satisfies UngroupedRow;
+    });
 
   const ordered = [...committed, ...pending];
   // Choices answer the question they came with. The task's card says when that question closed;
-  // without it, anything the user sent since retires them.
-  let answered = false;
-  for (let index = ordered.length - 1; index >= 0; index--) {
-    const row = ordered[index]!;
-    if (row.kind === "user") answered = true;
-    else if (
-      answered &&
-      row.kind === "bot" &&
-      row.options.length > 0 &&
-      !cardDecidesOptions.has(row.id)
-    ) {
-      ordered[index] = { ...row, options: NO_OPTIONS };
+  // without it, anything the user sent since retires them. A send that failed answers nothing.
+  for (const [index, row] of ordered.entries()) {
+    if (row.kind !== "bot" || !askedQuestions.has(row.id)) continue;
+    const taskId = askedQuestions.get(row.id) ?? null;
+    const decidedByCard = cardDecidesOptions.has(row.id);
+    let answer: string | undefined;
+    let retired = false;
+    for (const next of ordered.slice(index + 1)) {
+      // A later question of the same conversation takes the replies after it.
+      if (
+        next.kind === "bot" &&
+        askedQuestions.has(next.id) &&
+        (!decidedByCard || askedQuestions.get(next.id) === taskId)
+      )
+        break;
+      if (next.kind !== "user" || next.delivery.state === "failed") continue;
+      if (decidedByCard && (taskId === null || sentTasks.get(next.id) !== taskId)) continue;
+      answer = next.text.trim() || (next.attachments ?? []).map((file) => file.name).join(", ");
+      retired = true;
+      break;
     }
+    if (!decidedByCard && !retired) {
+      retired = ordered
+        .slice(index + 1)
+        .some((next) => next.kind === "user" && next.delivery.state !== "failed");
+    }
+    if (answer !== undefined) ordered[index] = { ...row, options: NO_OPTIONS, answer };
+    else if (retired) ordered[index] = { ...row, options: NO_OPTIONS };
   }
 
   const rows: GoatBotRow[] = [];

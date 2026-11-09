@@ -13,6 +13,7 @@ import {
   buildGoatBotTimeline,
   type GoatBotItemReaders,
   type GoatBotMessagePresentation,
+  type GoatBotPendingInput,
   type GoatBotRow,
   type GoatBotTaskCard,
 } from "./rows.ts";
@@ -327,5 +328,116 @@ describe("questions a task asks in the main chat", () => {
     expect(closed.some((row) => row.kind === "task")).toBe(false);
     expect(closed.find((row) => row.id === "b1")).toMatchObject({ options: [] });
     expect(closed.find((row) => row.id === "b1")).not.toHaveProperty("answerTaskId");
+  });
+});
+
+describe("a question the person answered", () => {
+  const which: GoatBotMessagePresentation = {
+    tone: "question",
+    readAt: null,
+    requestKey: null,
+    options: ["CI fix", "Release"],
+  };
+  const asked = [bot("b1", "2026-10-12T12:00:01Z", "Which one?")];
+  const questionRow = (
+    items: OrchestrationV2TurnItem[],
+    pendingInputs: GoatBotPendingInput[] = [],
+    messages: Record<string, GoatBotMessagePresentation> = { b1: which },
+    cards: Record<string, GoatBotTaskCard> = {},
+    taskId: string | null | undefined = undefined,
+  ) =>
+    content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf(items),
+        pendingInputs,
+        readers: readers(messages, cards),
+        ...(taskId === undefined ? {} : { taskId }),
+      }),
+    ).find((row) => row.id === "b1");
+  const pending = (
+    text: string,
+    state: GoatBotPendingInput["state"],
+    extra: Partial<GoatBotPendingInput> = {},
+  ): GoatBotPendingInput => ({
+    clientKey: "c1",
+    text,
+    createdAt: "2026-10-12T12:00:02Z",
+    state,
+    requestKey: null,
+    ...extra,
+  });
+
+  it("keeps the picked choice as the answer while it is on its way and after it lands", () => {
+    expect(questionRow(asked, [pending("CI fix", "sending")])).toMatchObject({
+      options: [],
+      answer: "CI fix",
+    });
+    expect(questionRow([...asked, user("u1", "2026-10-12T12:00:02Z", "CI fix")])).toMatchObject({
+      options: [],
+      answer: "CI fix",
+    });
+  });
+
+  it("takes a typed reply as the answer", () => {
+    expect(
+      questionRow([...asked, user("u1", "2026-10-12T12:00:02Z", "  Neither, wait for Monday ")]),
+    ).toMatchObject({ options: [], answer: "Neither, wait for Monday" });
+  });
+
+  it("keeps the choices open when the answer failed to send", () => {
+    const row = questionRow(asked, [pending("CI fix", "failed")]);
+    expect(row).toMatchObject({ options: ["CI fix", "Release"] });
+    expect(row).not.toHaveProperty("answer");
+  });
+
+  it("still shows the answer after a reload, once the task closed the question", () => {
+    const proposal = {
+      ...card("proposal", 2, "Working"),
+      askInChat: true,
+      openQuestionIds: [],
+    } satisfies GoatBotTaskCard;
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      ...asked,
+      user("u1", "2026-10-12T12:00:02Z", "Save"),
+    ];
+    const messages = {
+      b1: routed,
+      u1: {
+        tone: "reply" as const,
+        readAt: "2026-10-12T12:00:02Z",
+        requestKey: "in-1",
+        taskId: "proposal",
+      },
+    };
+    expect(questionRow(items, [], messages, { n1: proposal }, null)).toMatchObject({
+      options: [],
+      answer: "Save",
+    });
+  });
+
+  it("does not take a message about something else as the answer to a task's open question", () => {
+    const open = { ...card("proposal", 1), askInChat: true, openQuestionIds: ["q-save"] };
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const row = questionRow(
+      [notice("n1", "2026-10-12T12:00:00Z"), ...asked, user("u1", "2026-10-12T12:00:02Z", "hi")],
+      [],
+      { b1: routed },
+      { n1: open },
+      null,
+    );
+    expect(row).toMatchObject({ options: ["Save", "Skip"] });
+    expect(row).not.toHaveProperty("answer");
   });
 });
