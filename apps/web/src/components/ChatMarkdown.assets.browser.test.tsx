@@ -283,3 +283,20 @@ it("drops a playing localhost video's old address when a reconnect leaves it out
   await vi.waitFor(() => expect(screen.container.textContent).toContain("Video unavailable"));
   expect(screen.container.querySelector(`video[src="${routed}"]`)).toBeNull();
 });
+it("offers the page of every image in a link that fails", async () => {
+  using test = setup({ connection: sshConnection(), previewAllowed: true });
+  await using screen = await renderRemoteMarkdown(
+    test.registry,
+    "[![one](http://localhost:1/one) ![two](http://localhost:1/two)](https://example.test/)",
+  );
+  await vi.waitFor(() => expect(screen.container.querySelectorAll("button")).toHaveLength(2));
+  for (const button of screen.container.querySelectorAll("button")) {
+    await act(async () => button.click());
+  }
+  await vi.waitFor(() =>
+    expect(state.openPreview.mock.calls.map(([url]) => url)).toEqual([
+      "http://localhost:1/one",
+      "http://localhost:1/two",
+    ]),
+  );
+});

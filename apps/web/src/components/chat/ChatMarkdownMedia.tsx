@@ -652,23 +652,26 @@ function LinkedImageOpenPage(props: {
     const routed = route(url);
     return routed._tag === "Open" ? routed.url : null;
   };
-  // Remembers the route it failed on, so a reconnect that moves the address tries the image again.
-  const [failure, setFailure] = useState<{ url: string; route: string } | null>(null);
-  const failedUrl =
-    props.imageUrls.find((url) => routeOf(url) === null) ??
-    (failure !== null && routeOf(failure.url) === failure.route ? failure.url : undefined);
+  // Each failure remembers its route, so a reconnect that moves the address tries the image again.
+  const [failures, setFailures] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const failedUrls = new Set([
+    ...props.imageUrls.filter((url) => routeOf(url) === null),
+    ...[...failures]
+      .filter(([url, failedRoute]) => routeOf(url) === failedRoute)
+      .map(([url]) => url),
+  ]);
   const reportFailure = (url: string) => {
     const failedRoute = routeOf(url);
-    if (failedRoute !== null) setFailure({ url, route: failedRoute });
+    if (failedRoute !== null) setFailures((current) => new Map(current).set(url, failedRoute));
   };
   return (
     <>
       <LinkedImageFailureContext value={reportFailure}>{props.children}</LinkedImageFailureContext>
-      {failedUrl !== undefined && (
-        <span data-thread-find-ignore className="ms-2 inline-flex align-middle">
-          <OpenPageButton onOpenPage={() => props.openInPreview(failedUrl)} />
+      {[...failedUrls].map((url) => (
+        <span key={url} data-thread-find-ignore className="ms-2 inline-flex align-middle">
+          <OpenPageButton onOpenPage={() => props.openInPreview(url)} />
         </span>
-      )}
+      ))}
     </>
   );
 }
