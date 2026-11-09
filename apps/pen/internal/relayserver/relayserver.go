@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -90,7 +91,7 @@ type Server struct {
 	socks  map[*sock]struct{}
 	total  int
 	perIP  map[string]int
-	unauth map[string]int
+	unauth map[string][]*sock // unauthenticated uplinks per node, oldest first
 }
 
 // Default caps.
@@ -110,7 +111,7 @@ func orDefault(v, d int) int {
 // New builds a relay with limits.
 func New(l Limits) *Server {
 	return &Server{Limits: l, rooms: map[string]*room{}, sids: map[string]uint32{}, socks: map[*sock]struct{}{},
-		perIP: map[string]int{}, unauth: map[string]int{}}
+		perIP: map[string]int{}, unauth: map[string][]*sock{}}
 }
 
 var route = regexp.MustCompile(`^/v1/(node|client)/([^/]*)$`)
@@ -146,11 +147,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		ip = r.RemoteAddr
 	}
-	if !s.reserve(ip, role == "node", nodeID) {
+	k := &sock{srv: s, nodeID: nodeID, ip: ip}
+	ok, victim := s.reserve(k, role == "node")
+	if !ok {
 		http.Error(w, "too many sockets", http.StatusTooManyRequests)
 		return
 	}
-	k := &sock{srv: s, nodeID: nodeID, ip: ip, unauthCounted: role == "node"}
+	if victim != nil {
+		s.evict(victim)
+	}
 	// net/http clears its read and write deadlines when Accept hijacks the connection; an upgraded
 	// socket keeps its own idle and write timeouts.
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -183,8 +188,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.rooms[nodeID] = rm
 	}
 	rm.refs++
-	s.mu.Unlock()
 	k.room = rm
+	evicted := k.evicted
+	s.mu.Unlock()
 	defer s.release(k)
 	if f := s.Hooks.OnSocketDone; f != nil {
 		defer func() {
@@ -198,6 +204,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if role == "node" {
 		k.role = roleNode
 		rm.acceptUplink(k, origin)
+		if evicted {
+			// A newer uplink for this node took its place while this one was upgrading.
+			rm.mu.Lock()
+			rm.fail(k, wire.CodeCaps)
+			rm.mu.Unlock()
+		}
 	} else {
 		k.role = roleClient
 		if !rm.acceptClient(k) {
@@ -209,20 +221,45 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	k.out.wait()
 }
 
-// reserve counts a socket against the caps before it is accepted.
-func (s *Server) reserve(ip string, uplink bool, nodeID string) bool {
+// reserve counts a socket against the caps before it is accepted. An uplink past the
+// unauthenticated cap for its node takes the place of the oldest one, which reserve returns: a
+// squatter holding unanswered uplinks must not lock the real node out.
+func (s *Server) reserve(k *sock, uplink bool) (bool, *sock) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.total >= orDefault(s.MaxSockets, DefaultMaxSockets) || s.perIP[ip] >= orDefault(s.MaxPerIP, DefaultMaxPerIP) ||
-		uplink && s.unauth[nodeID] >= orDefault(s.MaxUnauthPerNode, DefaultMaxUnauthPerNode) {
-		return false
+	if s.total >= orDefault(s.MaxSockets, DefaultMaxSockets) || s.perIP[k.ip] >= orDefault(s.MaxPerIP, DefaultMaxPerIP) {
+		return false, nil
 	}
 	s.total++
-	s.perIP[ip]++
-	if uplink {
-		s.unauth[nodeID]++
+	s.perIP[k.ip]++
+	if !uplink {
+		return true, nil
 	}
-	return true
+	var victim *sock
+	if q := s.unauth[k.nodeID]; len(q) >= orDefault(s.MaxUnauthPerNode, DefaultMaxUnauthPerNode) {
+		victim = q[0]
+		s.authedLocked(victim)
+		victim.evicted = true
+	}
+	k.unauthCounted = true
+	s.unauth[k.nodeID] = append(s.unauth[k.nodeID], k)
+	return true, victim
+}
+
+// evict closes an unauthenticated uplink 4429 unless it authenticated meanwhile; one still
+// upgrading closes itself when it joins its room.
+func (s *Server) evict(v *sock) {
+	s.mu.Lock()
+	rm := v.room
+	s.mu.Unlock()
+	if rm == nil {
+		return
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if !v.closed && !v.authed {
+		rm.fail(v, wire.CodeCaps)
+	}
 }
 
 // unreserve gives back what reserve counted.
@@ -246,8 +283,11 @@ func (s *Server) authedLocked(k *sock) {
 		return
 	}
 	k.unauthCounted = false
-	if s.unauth[k.nodeID]--; s.unauth[k.nodeID] <= 0 {
+	q := slices.DeleteFunc(s.unauth[k.nodeID], func(x *sock) bool { return x == k })
+	if len(q) == 0 {
 		delete(s.unauth, k.nodeID)
+	} else {
+		s.unauth[k.nodeID] = q
 	}
 }
 
@@ -339,8 +379,9 @@ type sock struct {
 	room   *room
 	nodeID string
 	ip     string
-	// unauthCounted is guarded by srv.mu.
+	// unauthCounted and evicted are guarded by srv.mu.
 	unauthCounted bool
+	evicted       bool
 	role          int
 	out           *outq
 

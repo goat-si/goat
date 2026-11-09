@@ -629,14 +629,19 @@ func TestSocketsPastTheTotalAndPerAddressCapsGet429(t *testing.T) {
 	}
 }
 
-func TestAFifthUnauthenticatedUplinkForOneNodeGets429(t *testing.T) {
+func TestTheRealNodeEvictsTheOldestUnauthenticatedUplinkInsteadOfBeingLockedOut(t *testing.T) {
 	rs := defaults(t)
 	id, _ := ident.Generate(nil)
-	for range 4 {
-		nodeWith(t, rs, id, nodeOpts{silent: true})
+	var squatters []*fakeNode
+	for range relayserver.DefaultMaxUnauthPerNode {
+		squatters = append(squatters, nodeWith(t, rs, id, nodeOpts{silent: true}))
 	}
-	if got := dialStatus(t, rs, "/v1/node/"+id.NodeID()); got != http.StatusTooManyRequests {
-		t.Fatalf("fifth unauthenticated uplink got %d, want 429", got)
+	real := nodeWith(t, rs, id, nodeOpts{})
+	if err := rs.WaitOnline(context.Background(), real.nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-squatters[0].closed; code != int(wire.CodeCaps) {
+		t.Fatalf("oldest unauthenticated uplink closed %d, want 4429", code)
 	}
 }
 
