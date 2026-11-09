@@ -12,4 +12,7 @@
   "observability": { "enabled": false },
   "durable_objects": { "bindings": [{ "name": "ROOM", "class_name": "Room" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+  // install.sh and /dl/<version>/ binaries, written by apps/pen/scripts/build.sh before deploy.
+  // Requests that match no file (/healthz, /v1/*) reach the Worker.
+  "assets": { "directory": "./public" },
 }
