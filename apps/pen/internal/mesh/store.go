@@ -13,13 +13,16 @@ import (
 const (
 	// MaxRecords caps a mesh's record set.
 	MaxRecords = 4096
+	// MaxOrdinary is where records other than revokes stop, keeping room for revokes so a full
+	// set can still revoke and every set fits a 4096-hash have.
+	MaxOrdinary = 3840
 	// MaxPool caps records waiting for their prev; MaxPoolPerSigner caps one signer's share.
 	MaxPool          = 256
 	MaxPoolPerSigner = 16
 )
 
-// ErrFull is returned when a merge would take the set past MaxRecords.
-var ErrFull = errors.New("mesh: record set is full (4096)")
+// ErrFull is returned when a record does not fit under the caps.
+var ErrFull = errors.New("mesh: record set is full (3840 records, 4096 with revokes)")
 
 // Store is a node's record set for one mesh. It is safe for concurrent use.
 type Store struct {
@@ -32,6 +35,8 @@ type Store struct {
 	view  *View
 	// self is this node's signPub; its own records never wait in the pool.
 	self string
+	// uncapped is set while reloading the node's own saved set.
+	uncapped bool
 
 	// pool holds records whose prev is incomplete, in memory only.
 	pool    map[string]pooled
@@ -77,7 +82,11 @@ func Load(st *state.Store) (*Store, error) {
 		return nil, os.ErrNotExist
 	}
 	s := NewStore(st, f.MeshID)
-	if _, err := s.merge(f.Records); err != nil && !errors.Is(err, ErrFull) {
+	// The node's own saved set reloads whole: caps apply to records arriving from peers.
+	s.uncapped = true
+	_, err = s.merge(f.Records)
+	s.uncapped = false
+	if err != nil {
 		return nil, err
 	}
 	s.selfN = f.SelfN
@@ -202,10 +211,10 @@ func (s *Store) merge(recs []*Record) ([]*Record, error) {
 	return added, full
 }
 
-// store keeps a record whose prev is present, if its signer was introduced in its past and the cap
-// allows it (revokes are kept past the cap so a full set can still revoke).
+// store keeps a record whose prev is present, if its signer was introduced in its past and the caps
+// allow it: other records stop at 3840, revokes at 4096.
 func (s *Store) store(r *Record) (bool, error) {
-	if len(s.recs) >= MaxRecords && r.B.Type != TypeRevoke {
+	if !s.uncapped && (len(s.recs) >= MaxRecords || r.B.Type != TypeRevoke && len(s.recs) >= MaxOrdinary) {
 		return false, ErrFull
 	}
 	if !s.introduced(r) {
