@@ -22,6 +22,10 @@ const slice = (from: string, to: string) => {
 };
 const WAIT_READY = slice("wait_ready() {", "\nNODE\n}\n");
 const FAILURE_BRANCH = slice("  if ! wait_launched_listener", "\n    exit 1\n  fi\n");
+// The harness's bash: 4+ lists and waits through a FIFO, older bash keeps tr and sleep.
+const bashMajor = Number(
+  NodeChildProcess.spawnSync("bash", ["-c", "echo $BASH_VERSINFO"], { encoding: "utf8" }).stdout,
+);
 
 describe("Windows launch listener wait", () => {
   // PowerShell answers as its loop would: 3 for a gone server (vanish: mid-wait), 0 for a listener
@@ -40,10 +44,15 @@ describe("Windows launch listener wait", () => {
     "tasklistHang",
     "taskkillHang",
     "tasklistFails",
+    "noFifo",
+    "termAfterFifo",
   ] as const;
   // Every Windows stand-in logs whether it ran as the bounded job, then its arguments.
   const record = (name: string) =>
     `echo "$GOAT_TEST_BOUNDED ${name} $*" >>"$TEST_ROOT/windows-calls"`;
+  // Each start of a command the bounded runner could run per pass is logged; the real one runs.
+  const counted = (name: string) =>
+    `echo ${name} >>"$TEST_ROOT/forks"; PATH="$TEST_REAL_PATH" exec ${name} "$@"`;
   const hangs = (name: string) =>
     'if [ -e "$TEST_ROOT/' +
     name +
@@ -71,7 +80,7 @@ describe("Windows launch listener wait", () => {
         '[ -e "$TEST_ROOT/alive" ] || exit 3',
         '[ -e "$TEST_ROOT/fail" ] && exit 1',
         '[ -e "$TEST_ROOT/listening" ] || exit 4',
-        'if [ -e "$TEST_ROOT/late" ]; then echo 2000 >"$TEST_ROOT/clock"; fi',
+        'if [ -e "$TEST_ROOT/late" ]; then : >"$TEST_ROOT/late-fired"; fi',
         "exit 0",
       ].join("\n"),
       "tasklist.exe": [
@@ -91,6 +100,9 @@ describe("Windows launch listener wait", () => {
       // Once the launch's failure path starts (probing) the clock moves only while a hanging
       // stand-in runs, so no bound can run out before a slow host has started or answered one.
       date: [
+        'echo date >>"$TEST_ROOT/forks"',
+        // A late listener moves the clock past the deadline; a marker, so no read races its write.
+        '[ ! -e "$TEST_ROOT/late-fired" ] || { echo 2000; exit 0; }',
         'if [ -e "$TEST_ROOT/probing" ] &&',
         '  ! { [ -e "$TEST_ROOT/tasklistHang" ] && [ -s "$TEST_ROOT/tasklist-pid" ]; } &&',
         '  ! { [ -e "$TEST_ROOT/taskkillHang" ] && [ -s "$TEST_ROOT/taskkill-pid" ]; }; then',
@@ -98,7 +110,19 @@ describe("Windows launch listener wait", () => {
         "fi",
         'n="$(cat "$TEST_ROOT/clock")"; echo "$((n + 1))" >"$TEST_ROOT/clock"; echo "$n"',
       ].join("\n"),
-      sleep: ":",
+      sleep: 'echo sleep >>"$TEST_ROOT/forks"',
+      tr: counted("tr"),
+      rm: counted("rm"),
+      // termAfterFifo: the shell dies of TERM once its FIFO exists, before it removes the name.
+      mkfifo: [
+        '[ ! -e "$TEST_ROOT/noFifo" ] || exit 1',
+        'echo mkfifo >>"$TEST_ROOT/forks"',
+        'PATH="$TEST_REAL_PATH" mkfifo "$@" || exit',
+        '[ ! -e "$TEST_ROOT/termAfterFifo" ] || kill -TERM "$PPID"',
+      ].join("\n"),
+      // A command that ends at once, and one that ends once the test opens release for writing.
+      quick: [record("quick"), "exit 7"].join("\n"),
+      slow: [record("slow"), 'exec /bin/cat "$TEST_ROOT/release" >/dev/null'].join("\n"),
     })) {
       yield* fs.writeFileString(bin + "/" + name, "#!/bin/sh\n" + body + "\n");
       yield* fs.chmod(bin + "/" + name, 0o755);
@@ -107,11 +131,13 @@ describe("Windows launch listener wait", () => {
       fs
         .readFileString(root + "/" + name)
         .pipe(Effect.map((text) => text.trim().split("\n").filter(Boolean)));
-    // Runs body after the scripts, with the bounded job marking the commands it runs.
+    // Runs body after the scripts, with the bounded job marking the commands it runs. Unless
+    // production, the clock is date's, so it moves a second per read, and a pause returns at once.
     const run = (
       state: Partial<Record<(typeof states)[number], boolean>>,
       body: string,
       launching = false,
+      production = false,
     ) =>
       Effect.gen(function* () {
         for (const name of states) {
@@ -120,6 +146,7 @@ describe("Windows launch listener wait", () => {
         }
         yield* fs.writeFileString(root + "/clock", "1000\n");
         yield* fs.writeFileString(root + "/windows-calls", "");
+        yield* fs.writeFileString(root + "/forks", "");
         yield* fs.writeFileString(root + "/state/server.log", "listen failed\n");
         for (const name of [
           "probing",
@@ -127,6 +154,7 @@ describe("Windows launch listener wait", () => {
           "tasklist-pid",
           "taskkill-pid",
           "powershell-pid",
+          "late-fired",
           "end",
         ])
           yield* fs.remove(root + "/" + name, { force: true });
@@ -142,6 +170,9 @@ describe("Windows launch listener wait", () => {
               REMOTE_HOST_PROCESS_SCRIPT,
               REMOTE_LAUNCH_LISTENER_SCRIPT.replaceAll("@@GOAT_READY_TIMEOUT_MS@@", "60000"),
               "launch_bounded_job() { GOAT_TEST_BOUNDED=1 MSYS2_ARG_CONV_EXCL='*' exec \"$@\"; }",
+              production
+                ? ""
+                : "launch_now() { launch_now_us=$(( $(date +%s) * 1000000 )); }; launch_pause() { :; }",
               'REMOTE_PID=4242; REMOTE_PORT=3773; STATE_DIR="$TEST_ROOT/state"',
               body,
             ].join("\n"),
@@ -152,6 +183,7 @@ describe("Windows launch listener wait", () => {
               ...process.env,
               TEST_ROOT: root,
               TEST_LAUNCH: launching ? "1" : "",
+              TEST_REAL_PATH: process.env.PATH ?? "",
               PATH: bin + ":" + (process.env.PATH ?? ""),
             },
           },
@@ -161,6 +193,7 @@ describe("Windows launch listener wait", () => {
           stdout: result.stdout.trim(),
           stderr: result.stderr,
           calls: yield* lines("windows-calls"),
+          forks: yield* lines("forks"),
         };
       });
     const pid = (name: string) =>
@@ -220,6 +253,81 @@ describe("Windows launch listener wait", () => {
         const killed = yield* pid("powershell-pid");
         assert.throws(() => process.kill(killed, 0));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("a bounded command starts no tr, date or sleep in any pass, however long it runs", () =>
+    Effect.gen(function* () {
+      const { run, root, fs } = yield* makeHarness;
+      NodeChildProcess.execFileSync("mkfifo", [root + "/release"]);
+      const result = yield* run(
+        {},
+        [
+          // The production pause, which opens release on its third call and so ends slow.
+          "eval \"$(declare -f launch_pause | sed '1s/^launch_pause/launch_pause_real/')\"",
+          'launch_pause() { test_pauses=$((test_pauses + 1)); [ "$test_pauses" != 3 ] || : >"$TEST_ROOT/release"; launch_pause_real "$1"; }',
+          'test_pauses=0; if launch_bounded 30 quick; then echo 0; else echo "$?"; fi',
+          'echo mark >>"$TEST_ROOT/forks"',
+          'if launch_bounded 30 quick; then echo 0; else echo "$?"; fi',
+          "test_pauses=0",
+          'if launch_bounded 30 slow; then echo 0; else echo "$?"; fi',
+          'echo "$test_pauses"',
+        ].join("\n"),
+        false,
+        true,
+      );
+      assert.equal(result.code, 0, result.stderr);
+      // On bash 4+ the FIFO is made once per script and its name removed, and no pass starts
+      // anything. Older bash takes the clock from one date per script and lists with tr and sleeps.
+      if (bashMajor >= 4) {
+        assert.deepEqual(result.forks, ["mkfifo", "rm", "mark"]);
+      } else {
+        assert.equal(result.forks.filter((name) => name === "date").length, 1);
+        assert.includeMembers(["tr", "sleep", "date", "mark"], result.forks);
+      }
+      const [quick, again, slow, pauses = ""] = result.stdout.split("\n");
+      assert.deepEqual([quick, again, slow], ["7", "7", "0"]);
+      assert.isAtLeast(Number(pauses), 3);
+      assert.deepEqual(
+        result.calls.map((call) => call.trim()),
+        ["1 quick", "1 quick", "1 slow"],
+      );
+      assert.deepEqual(yield* fs.readDirectory(root + "/state"), ["server.log"]);
+      // Without a FIFO the job list comes from tr, and the command still answers with its status.
+      const fallback = yield* run(
+        { noFifo: true },
+        'if launch_bounded 30 quick; then echo 0; else echo "$?"; fi',
+        false,
+        true,
+      );
+      assert.equal(fallback.stdout, "7", fallback.stderr);
+      assert.include(fallback.forks, "tr");
+      assert.notInclude(fallback.forks, "mkfifo");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("a FIFO name a killed launch left is removed by the next, a live script's never", () =>
+    Effect.gen(function* () {
+      const { run, root, fs } = yield* makeHarness;
+      const fifos = () =>
+        fs
+          .readDirectory(root + "/state")
+          .pipe(Effect.map((names) => names.filter((name) => name.startsWith("launch-tick."))));
+      const killed = yield* run({ termAfterFifo: true }, "launch_bounded 30 quick", false, true);
+      // bash before 4 makes no FIFO, so nothing ends it early and it has none to leave.
+      assert.equal(killed.code, bashMajor >= 4 ? null : 7);
+      assert.lengthOf(yield* fifos(), bashMajor >= 4 ? 1 : 0);
+      // This test's own process is alive, so a FIFO named for it is a live script's.
+      const live = "launch-tick." + process.pid;
+      NodeChildProcess.execFileSync("mkfifo", [root + "/state/" + live]);
+      const next = yield* run(
+        {},
+        'if launch_bounded 30 quick; then echo 0; else echo "$?"; fi',
+        false,
+        true,
+      );
+      assert.equal(next.stdout, "7", next.stderr);
+      assert.deepEqual(yield* fifos(), [live]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect("reads tasklist as gone only from its one-line localized no-match answer", () =>
