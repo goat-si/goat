@@ -230,7 +230,7 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}
-	inv, err := d.invites.Create(ttl, d.now())
+	inv, err := d.inviteBook().Create(ttl, d.now())
 	if err != nil {
 		fail(err)
 		return

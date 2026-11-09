@@ -49,7 +49,7 @@ func (d *Daemon) admit(kind byte, remote []byte, p session.Payload) ([]byte, err
 		if p.Stream != "join" {
 			return nil, errNotAdmitted
 		}
-		inv, ok := d.invites.Lookup(p.Invite, d.now())
+		inv, ok := d.inviteBook().Lookup(p.Invite, d.now())
 		if !ok {
 			return nil, errNotAdmitted
 		}
@@ -132,7 +132,7 @@ func (d *Daemon) serveJoin(ctx context.Context, sec *session.Secure) {
 	inviteID := sec.Payload.Invite
 	joiner := ident.B64.EncodeToString(sec.RemoteStatic)
 	member, err := mesh.ServeJoin(ctx, sec, sec.RemoteStatic, mesh.Admission{
-		ID: d.id, Store: d.mesh(), Invites: d.invites, InviteID: inviteID, Now: d.now,
+		ID: d.id, Store: d.mesh(), Invites: d.inviteBook(), InviteID: inviteID, Now: d.now,
 		// The other members hear of the joiner before its join returns.
 		OnAdmit: func(*mesh.Record) {
 			d.viewChanged()

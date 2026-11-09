@@ -171,6 +171,12 @@ func (d *Daemon) mesh() *mesh.Store {
 
 func (d *Daemon) view() *mesh.View { return d.mesh().View() }
 
+func (d *Daemon) inviteBook() *mesh.Invites {
+	d.meshMu.RLock()
+	defer d.meshMu.RUnlock()
+	return d.invites
+}
+
 func (d *Daemon) relayURL() string {
 	d.cfgMu.Lock()
 	defer d.cfgMu.Unlock()

@@ -516,6 +516,27 @@ func TestRevokeClosesTheRevokedMembersLiveSessions4401(t *testing.T) {
 	}
 }
 
+func TestInvitesMadeAfterARunningNodeJoinsArePersisted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := founder(t, ctx, rs, "b", nil)
+	var ls LsReply
+	if err := Call(b.st, Request{Op: "join", Token: a.invite(t, time.Minute).String(), Name: "b"}, &ls); err != nil {
+		t.Fatal(err)
+	}
+	if len(ls.Members) != 2 || ls.MeshID != a.ls(t).MeshID {
+		t.Fatalf("b after join: %+v", ls)
+	}
+	tok := b.invite(t, time.Minute)
+	var saved []mesh.Invite
+	if ok, err := b.st.ReadJSON("offers.json", &saved); err != nil || !ok || len(saved) != 1 || saved[0].ID != session.InviteID(tok.Secret) {
+		t.Fatalf("offers.json after join: present=%v %v, %d invites", ok, err, len(saved))
+	}
+}
+
 func TestLeavePushReportsTakenAndDeletesKeys(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

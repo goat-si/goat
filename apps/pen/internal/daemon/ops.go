@@ -85,7 +85,11 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 	if err := store.Save(); err != nil {
 		return err
 	}
-	invites, err := mesh.LoadInvites(nil)
+	// The old mesh's invites go; new ones persist in offers.json as before.
+	if err := os.Remove(d.st.Path("offers.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	invites, err := mesh.LoadInvites(d.st)
 	if err != nil {
 		return err
 	}
@@ -97,7 +101,6 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 	if err := store.Save(); err != nil {
 		return err
 	}
-	os.Remove(d.st.Path("offers.json"))
 	d.cfgMu.Lock()
 	changed := d.cfg.Relay != tok.Relay
 	d.cfg.Relay, d.cfg.Name = tok.Relay, name
