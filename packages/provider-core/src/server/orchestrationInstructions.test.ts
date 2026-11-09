@@ -97,7 +97,7 @@ describe("GOAT provider instructions", () => {
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "handoff.create");
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, 'delivery: "file"');
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "sudo -S -p '' <cmd> < \"$file\"");
-    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "supply other input as a file argument");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "pass other input as a file argument");
   });
 
   it("instructs every provider to write GOAT thread links", () => {
