@@ -84,7 +84,7 @@ vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
-vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
+vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
@@ -226,14 +226,12 @@ it("marks a failed answer as danger and prefixes its accessibility label", async
   await view.unmount();
 });
 
-it("uses the selected app appearance for answer chips and the send button", async () => {
+it("keeps answer chips and the send button off the retired blue message palette", async () => {
   appearance.mode = "dark";
   const rowView = await render(<GoatBotTimelineRow {...props} row={{ ...bot, tone: "reply" }} />);
   const chip = rowView.container.querySelector("button");
-  expect(JSON.parse(chip?.getAttribute("data-style") ?? "null").borderColor).toBe("#2B66C6");
-  expect(JSON.parse(chip?.querySelector("span")?.getAttribute("data-style") ?? "null").color).toBe(
-    "#2B66C6",
-  );
+  expect(chip?.textContent).toBe("Try again");
+  expect(rowView.container.innerHTML).not.toMatch(/#2B66C6|#1466D0/i);
   await rowView.unmount();
 
   const screenView = await render(<GoatBotScreen visible />);
@@ -256,9 +254,7 @@ it("uses the selected app appearance for answer chips and the send button", asyn
     height: 28,
     borderRadius: 14,
   });
-  expect(
-    JSON.parse(send?.querySelector("div")?.getAttribute("data-style") ?? "null").backgroundColor,
-  ).toBe("#2B66C6");
+  expect(screenView.container.innerHTML).not.toMatch(/#2B66C6|#1466D0/i);
   await screenView.unmount();
 });
 

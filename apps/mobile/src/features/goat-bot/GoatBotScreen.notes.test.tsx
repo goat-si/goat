@@ -68,7 +68,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
     appearance: { baseFontSize: 16 },
   }),
 }));
-vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
+vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
