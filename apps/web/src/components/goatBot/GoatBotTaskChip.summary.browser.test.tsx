@@ -46,7 +46,7 @@ const card: GoatBotTaskCard = {
 };
 
 it("renders a task result's Markdown summary in its card", async () => {
-  await using screen = await render(<GoatBotTaskChip card={card} tail={false} />);
+  await using screen = await render(<GoatBotTaskChip card={card} />);
   await expect.element(screen.getByText("통과 (3/3)")).toBeVisible();
   const summary = screen.container.querySelector(".goat-task-summary");
   expect([...(summary?.querySelectorAll("strong") ?? [])].map((node) => node.textContent)).toEqual([

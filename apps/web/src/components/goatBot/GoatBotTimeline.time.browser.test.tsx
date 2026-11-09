@@ -74,7 +74,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("links each sent user and bot message to its own time slot, excluding failed sends and task cards", async () => {
+it("links each sent user and bot message to its own time, shows the bot's without hover, and skips failed sends and task cards", async () => {
   await act(() =>
     root.render(
       <GoatBotTimeline rows={[user("sent"), user("failed", true), bot, task]} onRetry={() => {}} />,
@@ -87,8 +87,11 @@ it("links each sent user and bot message to its own time slot, excluding failed 
     const time = [...message.querySelectorAll("time")].find((item) => item.id === timeId);
     expect(message.getAttribute("tabindex")).toBe("0");
     expect(time?.dateTime).toBe(createdAt);
-    expect(time?.className).toContain("max-[360px]:sr-only");
   }
+  const botTime = [...container.querySelectorAll("li")]
+    .find((item) => item.textContent?.includes("Reply"))
+    ?.querySelector("time");
+  expect(botTime?.classList.contains("sr-only")).toBe(false);
   const failed = [...container.querySelectorAll("li")].find((item) =>
     item.textContent?.includes("Not Delivered"),
   );

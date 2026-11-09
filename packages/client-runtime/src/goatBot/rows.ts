@@ -225,7 +225,8 @@ const GOAT_BOT_GROUP_GAP_MS = 5 * 60 * 1000;
  * by this point is not coming and the reading indicator stops.
  */
 export const GOAT_BOT_READING_LIMIT_MS = 90_000;
-const GOAT_BOT_STAMP_GAP_MS = 60 * 60 * 1000;
+/** A quiet stretch this long gets a centered time stamp, like a new day does. */
+const GOAT_BOT_STAMP_GAP_MS = 15 * 60 * 1000;
 const NO_OPTIONS: ReadonlyArray<string> = [];
 
 interface GoatBotQuestionState {

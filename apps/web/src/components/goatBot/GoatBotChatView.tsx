@@ -568,7 +568,7 @@ function GoatBotNotice({
               <button
                 key={example}
                 type="button"
-                className="rounded-full border border-border bg-transparent px-3 py-1.5 text-sm hover:bg-goat-bubble-in"
+                className="rounded-full border border-border bg-transparent px-3 py-1.5 text-sm hover:bg-accent"
                 onClick={() => onSelectExample(example)}
               >
                 {example}

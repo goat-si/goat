@@ -92,7 +92,7 @@ it("keeps plain answers as written, with their addresses linked", async () => {
   await expect
     .element(screen.getByRole("link", { name: "https://github.com/example/opencodex" }))
     .toHaveAttribute("href", "https://github.com/example/opencodex");
-  expect(screen.container.querySelector(".goat-bubble")?.textContent).toBe(text);
+  expect(screen.container.querySelector(".goat-bot-prose")?.textContent).toBe(text);
 });
 
 it("opens thread links in the environment whose history is shown", async () => {
