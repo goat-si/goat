@@ -1,0 +1,210 @@
+# Pen transport contract v1.0
+
+The binding wire contract for every Pen component: the `pen` node (apps/pen, Go), the relay (infra/pen-relay,
+Cloudflare Worker + Durable Objects) and the shared constants and vectors (packages/pen-protocol). It is derived
+from the Doriterm transport contract v1.10 (sisyphuslabs/doriterm, docs/transport.md, AGPL-3.0, adapted with its
+author's permission; see NOTICE). Where Pen keeps a Doriterm rule unchanged this text says so; where it differs the
+difference is stated. A rule here wins over the code.
+
+Layering, outermost first:
+
+1. WebSocket, binary messages only, permessage-deflate off. The only text messages are listed under "Relay text".
+2. Relay mux header (between relay and node uplink only; clients never see it).
+3. Noise record layer: one WebSocket message = one Noise message.
+4. Stream plaintext, framed per stream (see "Streams").
+
+## Identities
+
+- Node signing key: Ed25519. `nodeId` = lowercase base32 (RFC 4648 alphabet, no padding) of the first 16 bytes of
+  SHA-256(signPub): 26 characters (Doriterm's hostId rule).
+- Node Noise static key: X25519.
+- Fingerprint shown to people: first 20 bytes of SHA-256(noiseStaticPub), uppercase hex, 10 groups of 4.
+- Node name: 1 to 32 characters of `a-z 0-9 - _ .`, starting with a letter or digit (herdr machine-name rule).
+- Mesh id: lowercase base32 (no padding) of the first 16 bytes of SHA-256 of the founding record's body bytes.
+- Domain separation prefixes (ASCII): `pen-relay-v1` (uplink challenge), `pen/1` (Noise prologues),
+  `pen-mesh/1` (records), `pen-mesh/1 card` (member cards), `pen/1 join psk` (invite psk), `pen/1 invite` (invite id).
+
+## Relay
+
+One Worker; one Durable Object per nodeId (`idFromName(nodeId)`), SQLite-backed class, WebSocket Hibernation API.
+Socket attachments carry `{role, sid, sent, acked, at, deadline}`; client sockets are tagged `s:<sid>` so a DATA frame finds its socket without a scan. The relay never decrypts, never logs payloads, enforces a
+1 MiB message cap (close 1009) and forwards at once. Worker observability stays off.
+
+- `GET /healthz` -> `{"ok":true,"version":"pen-relay/1.0"}`.
+- Uplink: `GET /v1/node/<nodeId>` (WebSocket). The relay sends a 32-byte random challenge as its first binary
+  message. The node answers `signPub (32) || Ed25519 signature (64)` over
+  `"pen-relay-v1" || relayOrigin || nodeId || challenge`, where relayOrigin is `wss://` (or `ws://` for a local relay) followed by the WHATWG `URL.host` of the URL the node
+  dialed (lowercase host, port omitted when it is the scheme default); the relay rebuilds it from its own request URL
+  (`https:` -> `wss://`, `http:` -> `ws://`). A wrong length,
+  signature, or a signPub whose nodeId is not the path's closes the uplink 4403; no answer within AUTH_TIMEOUT_MS
+  (10 s) closes 4403. One uplink per nodeId: a newer authenticated uplink replaces the old one, which closes 4409,
+  and the old uplink's client sessions close 4404. A node that gets 4409 must not reconnect on its own.
+- Client: `GET /v1/client/<nodeId>` (WebSocket). No relay-level auth (the Noise layer authenticates). With no
+  authenticated uplink the relay accepts and closes 4404.
+- A path whose nodeId is not 26 characters of `[a-z2-7]` is HTTP 400; a non-upgrade request to a WebSocket path is 426.
+- Mux frame on the uplink: `[type u8][sid u32 LE][payload]`.
+  - 1 OPEN (relay -> node): no payload. The relay assigns sid, starting at 1, never reused within one uplink.
+  - 2 DATA (both ways): opaque bytes.
+  - 3 CLOSE (both ways): payload = u16 LE close code. Either side closing a session sends CLOSE; the relay closes the
+    client socket with that code; a client socket that closes produces CLOSE toward the node with the client's code
+    (1000 when the code is outside 1000..4999).
+  - Types 4-7 are reserved (Doriterm PAIR_SLOT, PAIR_SLOT_ACK, CREDIT, PASS) and close the uplink 4402 in v1.0.
+- Session admission: a session is pending until the node sends its first DATA on it; at most 8 pending per node,
+  each with PENDING_TIMEOUT_MS (10 s) to that first DATA, else 4408. A 9th client closes the oldest pending one 4429.
+  At most 32 active sessions; a pending session whose first node DATA would make a 33rd active one is closed 4429.
+- Backpressure (Doriterm v1.7.2/v1.7.3 rules): the DO keeps `sent - acked` per socket, counted in WebSocket message
+  bytes as sent on that socket (uplink frames include their 5-byte header). Toward a client: DATA that would take its
+  socket past 4 MiB unacked ends that session only (client 4408, CLOSE 4408 to the node). Toward the uplink, DATA
+  only: a session is light while its own unacked DATA on the uplink, the message in hand included, is at most 16 KiB,
+  and a light message may use the whole 4 MiB; a heavier one may fill the window only to 4 MiB minus 16 KiB for each
+  other open session (at least one). DATA that does not fit ends only its session with 4408. The relay's own frames
+  (OPEN, CLOSE) may use 64 KiB more; an uplink that leaves even those unacked is closed 4408. Acks are cumulative
+  `a:<n>` texts; a non-decimal, a decrease, or more than was sent closes the socket 4402. A receiver counts bytes as they arrive (never
+  held back for a slow consumer) and sends `a:<n>` once at least 64 KiB arrived since its last ack.
+- Deadlines: one alarm, always set to the earliest pending deadline (auth, pending, idle). Idle: a socket whose
+  auto-response timestamp (or accept time) is older than IDLE_TIMEOUT_MS (90 s) closes 4408.
+- `wrangler dev` overrides (each clamps to its default as a maximum): `PENDING_TIMEOUT_MS`, `IDLE_TIMEOUT_MS`,
+  `AUTH_TIMEOUT_MS`.
+- Deferred from Doriterm v1.10: typed-code pairing slots, relay passes, relay-level credit, per-source rate limits,
+  multi-socket dial racing. A Pen relay ignores their query parameters.
+
+### Relay text
+
+| Message                    | Sender                                                                     | Meaning                         |
+| -------------------------- | -------------------------------------------------------------------------- | ------------------------------- |
+| `ping`                     | client or node, every 30 s                                                 | keepalive                       |
+| `pong`                     | relay via `setWebSocketAutoResponse`                                       | keepalive reply (no DO wake-up) |
+| `a:<total bytes received>` | receiver of relay traffic, after each 64 KiB received (counted on arrival) | cumulative ack                  |
+
+Any other text closes the socket 1003.
+
+## Sessions
+
+The first message a client sends on a session starts with one kind byte:
+
+| kind | Name    | Rest of the first message | Noise protocol                        | Prologue                      |
+| ---- | ------- | ------------------------- | ------------------------------------- | ----------------------------- |
+| 0x01 | session | Noise message 1           | Noise_IK_25519_ChaChaPoly_BLAKE2s     | `pen/1` \|\| nodeId \|\| 0x01 |
+| 0x03 | join    | Noise message 1           | Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s | `pen/1` \|\| nodeId \|\| 0x03 |
+
+nodeId is the responder's 26 ASCII characters. Any other kind byte, or a first message over 4096 bytes, closes 4400
+unanswered. Kind 0x02 (Doriterm's typed code) is not used.
+
+- Join psk = HKDF-SHA256(ikm = invite secret (32 bytes), salt = empty,
+  info = `pen/1 join psk` || nodeId (26 ASCII) || noiseStaticPub (32), length 32).
+- The responder's first message is Noise message 2. The initiator's first transport record after message 2 has an
+  empty plaintext (key confirmation); the responder acts on the stream (dials a port, admits a card)
+  only after decrypting it.
+- Handshake payloads are one JSON line (UTF-8 object + LF, at most 256 bytes, `"v":1`). Message 1: `{"v":1,"stream":S,…}`.
+  Message 2: always `{"v":1}`. A responder that refuses after message 1 closes without answering; one that refuses
+  after confirmation (port refused, invite lost a race) sends CLOSE with the code. Nothing a replayed message 1 can
+  trigger depends on the stream's target.
+- Admission: kind 0x01 admits only an initiator static key that is a current member's noisePub in the responder's
+  mesh view (4401 otherwise). Kind 0x03 is valid only with `stream:"join"` and an `"invite"` member:
+  base64url (no padding) of SHA-256(`pen/1 invite` || secret)[0..12]. In IKpsk2 the message 1 payload is readable before
+  the psk is needed (psk2 is mixed in message 2), so the responder selects the live invite by that id and derives the
+  psk from its secret; an unknown or expired id closes 4401 unanswered.
+- A handshake not complete within 10 s closes 4408.
+
+## Record layer
+
+- Noise transport messages, ChaCha20-Poly1305, 64-bit counter nonces as Noise defines.
+- Maximum plaintext per message 65519 bytes. Rekey (Noise `REKEY()`) every 2^20 messages per direction; n is not reset.
+- Any decryption failure closes 4400. No reordering is tolerated (WebSocket is ordered).
+- Reconnect always runs a fresh handshake.
+
+## Streams
+
+`stream` in message 1 selects what the plaintext carries.
+
+- `tcp` (kind 0x01; extra member `"port"`: integer 1..65535): after key confirmation the responder dials
+  `127.0.0.1:<port>`; a failed dial sends CLOSE 4404 (port refused). It never dials before confirmation. Plaintext records carry an inner type byte:
+  - 0x00 DATA + bytes (at most 65518).
+  - 0x01 FIN: the sender will send no more DATA (TCP half-close). A session ends when both sides sent FIN, or on error.
+  - 0x02 CREDIT + u32 LE: the receiver consumed that many more DATA payload bytes.
+    Window: a sender keeps at most 512 KiB of DATA payload uncredited; a receiver sends CREDIT once at least 64 KiB has
+    been consumed since its last CREDIT, and on FIN. A receiver that gets DATA past the window closes 4408.
+- `mesh` (kind 0x01): mesh sync lines (see "Mesh").
+- `join` (kind 0x03; extra member `"name"`): the join exchange (see "Mesh").
+
+## Mesh
+
+A mesh is a set of nodes that trust each other fully. Mesh traffic is ordinary sessions; the relay learns which
+nodeIds open sessions to which, from which addresses and when, and nothing it can forge, replay or splice.
+
+### Records
+
+- A record is `{"body":"<base64url of body bytes>","sig":"<base64url Ed25519 sig>"}`; `sig` signs
+  `"pen-mesh/1" || SHA-256(body)` with the key `body.by`. Its hash is base64url (no padding) of SHA-256(body).
+- Body: I-JSON object, at most 2048 bytes: `v` (1), `mesh` (mesh id; `"-"` only in `found`), `type`, `by` (signer
+  signPub, base64url), `n` (signer counter, 1 for its first record), `prev` (hashes of the signer's current heads,
+  1 to 64; empty only in `found`), `at` (ms since epoch, display only), plus:
+  - `found`: `card` (the founder's own card).
+  - `admit`: `card` (the joiner's card, `card.mesh` = this mesh, `card.inviter` = signer nodeId).
+  - `revoke`: `subjects` (1 to 16 distinct signPubs), `compromised` (bool).
+  - `name`: `subject` (signPub), `name`.
+  - `hostkeys`: `keys` (0 to 8 OpenSSH public key lines of the signer's own sshd, from `/etc/ssh/ssh_host_*_key.pub`).
+    A node signs a new one when its sshd keys differ from its latest `hostkeys` record.
+- A member card is `{"body":"<b64url>","sig":"<b64url>"}` signed by its subject over `"pen-mesh/1 card" || SHA-256(body)`;
+  body `{"v":1,"mesh","inviter","nonce","nodeId","signPub","noisePub","name"}`. A card nonce admits once. The
+  founder's own card (in `found`) has `"mesh":"-"` and `"inviter":"-"`, so the mesh id (a hash of the `found` body)
+  is not circular.
+- A node stores a record only if it is well formed, its signature verifies, its card (if any) verifies and matches,
+  and it belongs to this mesh. A record whose `prev` is not all present waits in a pool of at most 256. A mesh holds
+  at most 4096 records.
+
+### View
+
+Replay the record set in canonical order: Kahn's topological order over `prev` edges, smallest hash first among
+ready records. Start with no members. Own chain: a record with `n > 1` has no effect unless the signer's record with
+counter `n - 1` is in its past; a second record with the same signer and `n` (a fork) has no effect. `found` makes its card's subject a member. A record whose signer is not a
+member at its turn has no effect. `admit` makes the card subject a member unless that signPub is revoked, the card
+nonce was used, or the card's noisePub or nodeId already belongs to a member. `revoke` marks each subject revoked and removes it; with `compromised`, it also revokes every key
+the subject admitted, transitively, as of that point. `name` sets a current member's name; `hostkeys` replaces the signer's
+SSH host keys. Revoked keys never return. Known weakness: a stolen member key can choose `prev` and grind a
+record hash so its revoke of honest members sorts before its own revocation; the remedy is a new mesh. Every node computes the same view from the same set, whatever order records arrived in.
+
+### Join
+
+1. The inviter's `pen invite` creates an invite `{id, secret (32 random bytes), expiresAt}` (default 10 minutes, single use)
+   and prints a token: `pen1_` + base64url(no padding) of
+   `version (1) || signPub (32) || noisePub (32) || secret (32) || relayURL (UTF-8)`.
+2. The joiner dials `/v1/client/<inviter nodeId>` with kind 0x03, `{"v":1,"stream":"join","invite":"<id>","name":"<name>"}`.
+3. The inviter sends `{"t":"offer","mesh":"<id>","inviter":"<nodeId>","nonce":"<b64url 16 bytes>"}`. The joiner answers
+   `{"t":"card","card":{…}}` whose noisePub equals the key it authenticated with. The inviter burns the invite before
+   it signs (an atomic check-and-set under the state lock; the loser of a race gets CLOSE 4401), signs an `admit`,
+   and sends the whole set as `records` lines of at most 64 records each, then `{"t":"done","mesh":"<id>"}`.
+4. The joiner checks the founding record against the mesh id and that the view makes it a member, then stores the set.
+   Any refusal is `{"t":"refused","reason":"…"}` then close 4401.
+
+### Sync
+
+Stream `mesh` lines are UTF-8 JSON objects with a string `t`, LF-terminated, at most 256 KiB. `{"t":"hello","have":[hashes]}`
+from each side (a `have` list longer than 4096 hashes is 4400); each answers with zero or more
+`{"t":"records","records":[…]}` lines of at most 64 records (the ones the peer's `have` lacks) and `{"t":"done"}`. A node pushes after every record it signs (dialing each online member), on its uplink's return, and
+every 10 minutes. Unknown `t` is ignored; a malformed or oversized line closes 4400.
+
+### Revocation and leave
+
+`pen revoke <member> [--compromised]` signs a `revoke` and pushes it. Every member closes the revoked keys' sessions
+(4401) and refuses them from then on; a session on which the revoke itself arrived is closed only after this side
+sent its `done`, so a leaving node learns its push was taken. `pen leave` signs a revoke of its own key, pushes it, stops its uplink and
+deletes its keys.
+
+## Close codes
+
+Doriterm's codes, same meanings: 4400 crypto or framing failure; 4401 not admitted (unknown key, revoked member,
+no live invite, refused card); 4402 relay protocol error; 4403 relay auth failed; 4404 node offline or port refused;
+4408 idle, backpressure or handshake timeout; 4409 uplink replaced; 4429 caps. 4410 and 4412 are unused in v1.0.
+
+## Vectors
+
+`packages/pen-protocol/vectors/*.json`, read by the TypeScript and Go tests: nodeId and fingerprint from fixed
+keys; the uplink challenge message bytes and signature; mux frames (identity.json, relay.json: generated by TS);
+the invite token, invite id and join psk; Noise IK and IKpsk2 transcripts with fixed ephemerals and payloads; a card,
+a record and its hash; and a canonical-order view case (session.json, mesh.json: generated by Go with flynn/noise,
+verified by Go now and by later TS clients).
+
+## Change log
+
+- v1.0 (2026-11-09): first Pen contract, derived from Doriterm transport v1.10.

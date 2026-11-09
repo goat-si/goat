@@ -1,0 +1,24 @@
+GOAT
+Copyright (c) 2026 T3 Tools Inc.
+Copyright (c) 2026 goat-si contributors
+Licensed under the MIT License (see LICENSE).
+
+Pen (packages/pen-protocol, infra/pen-relay, apps/pen) contains material derived from the projects below.
+
+Doriterm — https://github.com/sisyphuslabs/doriterm
+  packages/pen-protocol/CONTRACT.md is adapted from Doriterm's transport contract v1.10 (docs/transport.md):
+  identities, session kinds, the relay and its mux frame, backpressure, close codes and the mesh record design.
+  Doriterm is licensed AGPL-3.0-only, Copyright the Doriterm authors. Its author permitted this adaptation for
+  GOAT. No Doriterm source code is included.
+
+Ovis — https://github.com/devswha/ovis
+  Relay operating notes (one Durable Object per host, observability off). MIT License, Copyright the Ovis authors.
+
+herdr-core — https://github.com/herdrdev/herdr-core
+  The machine-name rule and the byte-pipe contract of `hc machine add --via`. Apache License 2.0,
+  Copyright the herdr authors.
+
+The pen binary (apps/pen) links these Go modules:
+  github.com/flynn/noise — BSD-3-Clause
+  github.com/coder/websocket — ISC
+  golang.org/x/crypto, golang.org/x/sys — BSD-3-Clause
