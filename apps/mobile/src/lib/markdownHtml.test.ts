@@ -386,3 +386,12 @@ it("keeps backslashes in drive paths in mobile Markdown prose", () => {
     { type: "paragraph", children: [{ type: "text", value: `${path} Then *this*.` }] },
   ]);
 });
+describe("markdownImageSources", () => {
+  it("includes reference-style images, so their routes are watched like inline ones", () => {
+    expect(
+      markdownImageSources(
+        "![inline](http://localhost:5173/a.png) ![shot][img]\n\n[img]: http://localhost:5173/b.png",
+      ),
+    ).toEqual(["http://localhost:5173/a.png", "http://localhost:5173/b.png"]);
+  });
+});
