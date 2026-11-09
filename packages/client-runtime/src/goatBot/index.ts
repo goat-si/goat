@@ -11,6 +11,7 @@ export * from "./model.ts";
 export * from "./taskVisibility.ts";
 export * from "./botRoster.ts";
 export * from "./botWork.ts";
+export * from "./remoteWork.ts";
 export * from "./face.ts";
 export * from "./avatar.ts";
 export * from "./faceMotion.ts";

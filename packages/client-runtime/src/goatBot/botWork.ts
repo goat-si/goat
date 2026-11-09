@@ -1,5 +1,6 @@
 import {
   isGoatBotConversationThreadId,
+  type BotRemoteWork,
   type BotThreadRow,
   type ChannelChildWork,
   type ChannelChildWorkGroup,
@@ -20,6 +21,8 @@ export interface BotWorkTask {
     readonly environmentId: EnvironmentId;
     readonly threadId: ThreadId;
   }>;
+  /** Threads it launched on other machines; resolveRemoteBotWork says which can be opened. */
+  readonly remote: ReadonlyArray<BotRemoteWork>;
   readonly truncated: boolean;
 }
 
@@ -27,6 +30,7 @@ export function groupBotWork(
   rows: ReadonlyArray<BotThreadRow>,
   groups: ReadonlyArray<ChannelChildWorkGroup>,
   environmentId: EnvironmentId,
+  remoteWork: ReadonlyArray<BotRemoteWork> = [],
 ): { readonly inProgress: ReadonlyArray<BotWorkTask>; readonly done: ReadonlyArray<BotWorkTask> } {
   const groupByTask = new Map(groups.map((group) => [group.taskId, group]));
   const inProgress: BotWorkTask[] = [];
@@ -66,7 +70,8 @@ export function groupBotWork(
         addThread(environmentId, child.destination.threadId);
       }
     }
-    const task = { row, subagents, threads, truncated: group?.truncated ?? false };
+    const remote = remoteWork.filter((item) => item.taskId === row.task.taskId);
+    const task = { row, subagents, threads, remote, truncated: group?.truncated ?? false };
     (row.view.doneAt !== null || ["completed", "failed", "cancelled"].includes(row.task.status)
       ? done
       : inProgress

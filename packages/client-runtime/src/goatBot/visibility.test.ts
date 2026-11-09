@@ -1,7 +1,14 @@
-import { EnvironmentId, ThreadId, type BotThreadRow } from "@goat/contracts";
+import {
+  ChannelChildWorkId,
+  EnvironmentId,
+  ThreadId,
+  type BotRemoteWork,
+  type BotThreadRow,
+} from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
+import { resolveRemoteBotWork } from "./remoteWork.ts";
 import {
   goatBotListedWork,
   goatBotObservationThreadKeys,
@@ -289,5 +296,156 @@ describe("goatBotObservationThreadKeys", () => {
         ),
       ),
     ).toEqual([key(SESSION), key("a2"), key("b2"), key("c")].toSorted());
+  });
+});
+
+const BOX = EnvironmentId.make("environment-box");
+const WORKER = "channel-worker:task-a";
+
+function remoteItem(
+  options: {
+    readonly id?: string;
+    readonly threadId?: string | null;
+    readonly environmentId?: EnvironmentId | null;
+    readonly workKind?: "coding" | "chore" | null;
+  } = {},
+): BotRemoteWork {
+  return {
+    childWorkId: ChannelChildWorkId.make(options.id ?? "cw-remote"),
+    taskId: "channel-task:a" as never,
+    callerThreadId: ThreadId.make(WORKER),
+    host: "box",
+    state: "bound",
+    lastActivityAt: NOW,
+    ...(options.threadId === null
+      ? {}
+      : { threadId: ThreadId.make(options.threadId ?? "remote-chore") }),
+    ...(options.environmentId === null ? {} : { environmentId: options.environmentId ?? BOX }),
+    ...(options.workKind === null ? {} : { workKind: options.workKind ?? "chore" }),
+  };
+}
+
+/** The destination's own record of the launch, as goat_ssh_thread_launch forwards it. */
+const remoteChore = (
+  id = "remote-chore",
+  options: {
+    readonly environmentId?: EnvironmentId;
+    /** null: a destination that never recorded one. */
+    readonly workKind?: "coding" | "chore" | null;
+    readonly launcherEnvironment?: EnvironmentId;
+    readonly launchedBy?: string;
+    readonly via?: Via;
+    readonly promoted?: boolean;
+  } = {},
+) =>
+  thread(id, {
+    environmentId: options.environmentId ?? BOX,
+    launchedBy: options.launchedBy ?? WORKER,
+    launcherEnvironment: options.launcherEnvironment ?? HOME,
+    via: options.via ?? "ssh_thread_launch",
+    ...(options.workKind === null ? {} : { workKind: options.workKind ?? "chore" }),
+    ...(options.promoted === true ? { promoted: true } : {}),
+  });
+
+const hiddenRemote = (
+  threads: ReadonlyArray<GoatBotVisibilityThread>,
+  items: ReadonlyArray<BotRemoteWork>,
+  openable: ReadonlyArray<EnvironmentId> = [BOX],
+) => {
+  const listedWork = goatBotListedWork([taskRow()], {
+    originEnvironmentId: HOME,
+    items,
+    isOpenable: (environmentId) => openable.includes(environmentId),
+  });
+  return [...goatBotObservationThreadKeys({ threads, listedWork })]
+    .filter((entry) => threads.some((t) => key(t.id, t.environmentId) === entry))
+    .toSorted();
+};
+
+describe("GOAT Bot work on another machine", () => {
+  it("hides a chore on a connected machine whose own launcher names this bot's task", () => {
+    const threads = [
+      remoteChore(),
+      thread("chore-subagent", { environmentId: BOX, subagentOf: "remote-chore" }),
+    ];
+    expect(hiddenRemote(threads, [remoteItem()])).toEqual(
+      [key("remote-chore", BOX), key("chore-subagent", BOX)].toSorted(),
+    );
+  });
+
+  it("keeps it visible while its machine is disconnected, and hides it again on reconnect", () => {
+    const threads = [remoteChore()];
+    expect(hiddenRemote(threads, [remoteItem()], [])).toEqual([]);
+    expect(hiddenRemote(threads, [remoteItem()], [BOX])).toEqual([key("remote-chore", BOX)]);
+  });
+
+  it("keeps it visible when the origin could not prove the destination's identity", () => {
+    const threads = [remoteChore()];
+    expect(hiddenRemote(threads, [remoteItem({ environmentId: null })])).toEqual([]);
+    expect(hiddenRemote(threads, [remoteItem({ threadId: null })])).toEqual([]);
+  });
+
+  it("keeps it visible when the destination never recorded the chore, as an older GOAT drops it", () => {
+    expect(hiddenRemote([remoteChore("remote-chore", { workKind: null })], [remoteItem()])).toEqual(
+      [],
+    );
+    expect(
+      hiddenRemote([remoteChore("remote-chore", { workKind: "coding" })], [remoteItem()]),
+    ).toEqual([]);
+  });
+
+  it("keeps it visible when the destination's launcher is another thread, machine or route", () => {
+    for (const shell of [
+      remoteChore("remote-chore", { launchedBy: "channel-worker:other" }),
+      remoteChore("remote-chore", { launcherEnvironment: REMOTE }),
+      remoteChore("remote-chore", { via: "thread_launch" }),
+    ]) {
+      expect(hiddenRemote([shell], [remoteItem()])).toEqual([]);
+    }
+  });
+
+  it("keeps coding and unclassified work visible", () => {
+    const threads = [remoteChore()];
+    expect(hiddenRemote(threads, [remoteItem({ workKind: "coding" })])).toEqual([]);
+    expect(hiddenRemote(threads, [remoteItem({ workKind: null })])).toEqual([]);
+  });
+
+  it("keeps a promoted thread visible even though the bot still lists the chore", () => {
+    expect(hiddenRemote([remoteChore("remote-chore", { promoted: true })], [remoteItem()])).toEqual(
+      [],
+    );
+  });
+
+  it("hides only the thread in the named environment when the same id exists elsewhere", () => {
+    const threads = [
+      remoteChore(),
+      remoteChore("remote-chore", { environmentId: REMOTE }),
+      thread("remote-chore", { launchedBy: WORKER, workKind: "chore" }),
+    ];
+    expect(hiddenRemote(threads, [remoteItem()], [BOX, REMOTE, HOME])).toEqual([
+      key("remote-chore", BOX),
+    ]);
+  });
+
+  it("forgets a hidden chore once the bot's rows no longer list it", () => {
+    expect(hiddenRemote([remoteChore()], [])).toEqual([]);
+  });
+});
+
+describe("resolveRemoteBotWork", () => {
+  it("opens the destination thread only on a connected machine with a proven identity", () => {
+    const openable = (environmentId: EnvironmentId) => environmentId === BOX;
+    expect(resolveRemoteBotWork(remoteItem(), openable)).toEqual({
+      kind: "open",
+      host: "box",
+      ref: { environmentId: BOX, threadId: ThreadId.make("remote-chore") },
+    });
+    for (const item of [
+      remoteItem({ environmentId: REMOTE }),
+      remoteItem({ environmentId: null }),
+      remoteItem({ threadId: null }),
+    ]) {
+      expect(resolveRemoteBotWork(item, openable)).toEqual({ kind: "unavailable", host: "box" });
+    }
   });
 });

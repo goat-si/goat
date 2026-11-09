@@ -116,6 +116,71 @@ describe("threadListV2 with GOAT Bot threads", () => {
     expect(ids("member", keys)).toEqual(["channel-member-bot:member"]);
   });
 
+  it("hides a chore on another connected machine only there, and search still finds it", () => {
+    const box = EnvironmentId.make("environment-box");
+    const worker = ThreadId.make("channel-worker:task-a");
+    const base = makeThreadShellFixture({
+      environmentId: box,
+      id: ThreadId.make("restart-3774"),
+      title: "restart-3774",
+    });
+    const remoteChore: EnvironmentThreadShell = {
+      ...base,
+      source: {
+        ...base.source,
+        launchedBy: {
+          kind: "launch",
+          threadId: worker,
+          environmentId,
+          environmentLabel: "studio",
+          threadTitle: null,
+          via: "ssh_thread_launch",
+          workKind: "chore",
+        },
+      },
+    };
+    const twin = makeThread("restart-3774");
+    const all = [...threads, remoteChore, twin];
+    const keysFor = (openable: boolean) =>
+      goatBotObservationThreadKeys({
+        threads: all,
+        // The phone has no SSH alias for box; the destination's own id is what resolves it.
+        listedWork: goatBotListedWork([], {
+          originEnvironmentId: environmentId,
+          items: [
+            {
+              childWorkId: "cw-restart" as never,
+              taskId: "channel-task:a" as never,
+              callerThreadId: worker,
+              host: "box",
+              state: "bound",
+              lastActivityAt: NOW,
+              threadId: remoteChore.id,
+              environmentId: box,
+              workKind: "chore",
+            },
+          ],
+          isOpenable: (id) => openable && id === box,
+        }),
+      });
+    const ids = (searchQuery: string, hidden?: ReadonlySet<string>) =>
+      buildThreadListV2Items({
+        threads: all,
+        environmentId: null,
+        searchQuery,
+        now: NOW,
+        ...(hidden ? { hiddenBotThreadKeys: hidden } : {}),
+      })
+        .items.map((item) => item.thread.environmentId + ":" + item.thread.id)
+        .toSorted();
+    const keys = keysFor(true);
+    expect(ids("", keys)).not.toContain(box + ":restart-3774");
+    expect(ids("", keys)).toContain(environmentId + ":restart-3774");
+    expect(ids("")).toContain(box + ":restart-3774");
+    expect(ids("restart", keys)).toContain(box + ":restart-3774");
+    expect(ids("", keysFor(false))).toContain(box + ":restart-3774");
+  });
+
   it("lists every thread when no bot visibility is passed, the bot's work folded under its session", () => {
     expect(listed("")).toEqual([
       "channel-worker:work",

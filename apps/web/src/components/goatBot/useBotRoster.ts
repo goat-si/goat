@@ -1,13 +1,15 @@
 import { useEffect } from "react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { botRoster, botRosterGroups, goatBotTurnsWaiting } from "@goat/client-runtime/goatBot";
-import type { BotId, EnvironmentId, ThreadId } from "@goat/contracts";
+import type { BotId, BotRemoteWork, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { useThreadVisibleTurnItems } from "~/state/entities";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
 import { syncGoatBotMemberThreads, useGoatBotEnabled } from "./useGoatBotSession";
+
+const NO_REMOTE_WORK: ReadonlyArray<BotRemoteWork> = [];
 
 /**
  * One bot's task threads, main when botId is null. The list is read again when channel records
@@ -59,6 +61,8 @@ export function useBotThreads(
   }, [supported, watchedThreadId, revision, refreshThreads]);
   return {
     rows: threads.data?.rows ?? [],
+    /** Threads the bot launched on other machines; none from servers before this list. */
+    remoteWork: threads.data?.remoteWork ?? NO_REMOTE_WORK,
     supported,
     loaded: threads.isSuccess,
     failed: threads.error !== null,
