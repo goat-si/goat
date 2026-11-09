@@ -9,6 +9,7 @@ import {
 import * as Effect from "effect/Effect";
 import { OMO_PROFILE } from "./profile.ts";
 import type * as Fixture from "./adapter.test.ts";
+import type * as FakePiModule from "./test/fakePi.ts";
 
 // OmO pages history; a page that claims more without a cursor cannot advance.
 const STUCK_PAGE = { entries: [], leafId: null, hasMore: true };
@@ -23,7 +24,7 @@ export function registerOmoAdapterChecks({
   runtimePolicy,
   layerTest,
 }: {
-  makeFakePi: typeof Fixture.makeFakePi;
+  makeFakePi: typeof FakePiModule.makeFakePi;
   openRuntime: typeof Fixture.openRuntime;
   startTurn: typeof Fixture.startTurn;
   THREAD_ID: typeof Fixture.THREAD_ID;
