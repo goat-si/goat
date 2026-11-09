@@ -191,7 +191,7 @@ it("keeps re-reading when the server still lists a task at or just past its cuto
   registry.dispose();
 });
 
-it("re-reads the bot list while a remote launch waits for its destination identity", () => {
+it("re-reads the bot list while a remote launch waits for its destination, whatever the server clock says", () => {
   let reads = 0;
   const pending = {
     childWorkId: "child-work:remote",
@@ -199,7 +199,8 @@ it("re-reads the bot list while a remote launch waits for its destination identi
     callerThreadId: "goat-bot-session:main",
     host: "macbookair",
     state: "launched",
-    lastActivityAt: iso(START),
+    // The server clock trails this client by five minutes.
+    lastActivityAt: iso(START - 5 * 60_000),
   };
   server.answer = () => {
     reads += 1;

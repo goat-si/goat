@@ -122,8 +122,10 @@ export function createChannelEnvironmentAtoms<R, E>(
     readonly signal: (environmentId: EnvironmentId) => Atom.Atom<string>;
   }) => {
     shellWorkSignal = source.signal;
-    const forEnvironment = Atom.family((environmentId: EnvironmentId) =>
-      Atom.make((get): ReadonlyArray<GoatBotWorkRef> => {
+    const forEnvironment = Atom.family((environmentId: EnvironmentId) => {
+      // When this client first saw each remote launch without a destination, by its own clock.
+      const pendingSince = new Map<string, number>();
+      return Atom.make((get): ReadonlyArray<GoatBotWorkRef> => {
         const capabilities = get(sessions.initialConfigValueAtom(environmentId))?.environment
           .capabilities;
         if (capabilities?.goatBotTaskThreads !== true) return NO_WORK;
@@ -139,6 +141,7 @@ export function createChannelEnvironmentAtoms<R, E>(
         // @effect-diagnostics-next-line globalDate:off - Retention is wall-clock, as the bot's lists read it.
         const now = Date.now();
         let nextExpiry = Infinity;
+        const stillPending = new Set<string>();
         for (const input of inputs) {
           const result = get(listBotThreads({ environmentId, input }));
           if (!AsyncResult.isSuccess(result)) continue;
@@ -163,7 +166,10 @@ export function createChannelEnvironmentAtoms<R, E>(
           for (const item of result.value.remoteWork ?? []) {
             if (item.threadId !== undefined && item.environmentId !== undefined) continue;
             if (!isChannelChildWorkActive(item.state)) continue;
-            if (now - Date.parse(item.lastActivityAt) < PENDING_REMOTE_WINDOW_MS)
+            stillPending.add(item.childWorkId);
+            const since = pendingSince.get(item.childWorkId) ?? now;
+            pendingSince.set(item.childWorkId, since);
+            if (now - since < PENDING_REMOTE_WINDOW_MS)
               nextExpiry = Math.min(nextExpiry, now + PENDING_REMOTE_RETRY_MS);
           }
           listed.push(
@@ -177,6 +183,7 @@ export function createChannelEnvironmentAtoms<R, E>(
             }),
           );
         }
+        for (const key of pendingSince.keys()) if (!stillPending.has(key)) pendingSince.delete(key);
         if (nextExpiry !== Infinity) {
           // @effect-diagnostics-next-line globalTimers:off - One bounded timer per read, cleared on the next.
           const handle = setTimeout(
@@ -189,8 +196,8 @@ export function createChannelEnvironmentAtoms<R, E>(
           get.addFinalizer(() => clearTimeout(handle));
         }
         return listed.length === 0 ? NO_WORK : listed;
-      }).pipe(Atom.withLabel(`environment-data:channel:goat-bot-listed-work:${environmentId}`)),
-    );
+      }).pipe(Atom.withLabel(`environment-data:channel:goat-bot-listed-work:${environmentId}`));
+    });
     return Atom.make((get) =>
       get(source.environmentIdsAtom).flatMap((environmentId) => get(forEnvironment(environmentId))),
     ).pipe(Atom.withLabel("environment-data:channel:goat-bot-listed-work"));
