@@ -1,4 +1,7 @@
-import { goatBotObservationThreadKeys } from "@goat/client-runtime/state/threads";
+import {
+  goatBotListedWork,
+  goatBotObservationThreadKeys,
+} from "@goat/client-runtime/state/threads";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -12,7 +15,11 @@ const NOW = "2026-06-02T00:00:00.000Z";
 function makeThread(
   id: string,
   overrides: Partial<EnvironmentThreadShell> = {},
-  launch?: { readonly by: string; readonly via: "thread_launch" | "delegate_task" },
+  launch?: {
+    readonly by: string;
+    readonly via: "thread_launch" | "delegate_task";
+    readonly workKind?: "coding" | "chore";
+  },
 ): EnvironmentThreadShell {
   const thread = makeThreadShellFixture({
     environmentId,
@@ -32,6 +39,7 @@ function makeThread(
         environmentLabel: null,
         threadTitle: null,
         via: launch.via,
+        ...(launch.workKind === undefined ? {} : { workKind: launch.workKind }),
       },
     },
   };
@@ -66,6 +74,46 @@ describe("threadListV2 with GOAT Bot threads", () => {
 
   it("still finds hidden bot threads in search", () => {
     expect(listed("observer", hiddenBotThreadKeys)).toEqual(["observer"]);
+  });
+
+  it("regression GB-M-01: hides member bots and listed chores, lists them when shown, and finds them in search", () => {
+    const withBot = [
+      ...threads,
+      makeThread("channel-member-bot:member"),
+      makeThread(
+        "channel-child-work:chore",
+        {},
+        { by: SESSION, via: "thread_launch", workKind: "chore" },
+      ),
+    ];
+    const keys = goatBotObservationThreadKeys({
+      threads: withBot,
+      listedWork: goatBotListedWork([
+        {
+          kind: "coding",
+          taskId: "channel-task:a" as never,
+          environmentId,
+          threadId: ThreadId.make("channel-child-work:chore"),
+          state: "bound",
+          lastActivityAt: NOW,
+          workKind: "chore",
+        },
+      ]),
+    });
+    const ids = (searchQuery: string, hidden?: ReadonlySet<string>) =>
+      buildThreadListV2Items({
+        threads: withBot,
+        environmentId: null,
+        searchQuery,
+        now: NOW,
+        ...(hidden ? { hiddenBotThreadKeys: hidden } : {}),
+      })
+        .items.map((item) => String(item.thread.id))
+        .toSorted();
+    expect(ids("", keys)).toEqual(["channel-worker:work", "coding", "mine"]);
+    expect(ids("")).toEqual(expect.arrayContaining(["channel-member-bot:member"]));
+    expect(ids("chore", keys)).toEqual(["channel-child-work:chore"]);
+    expect(ids("member", keys)).toEqual(["channel-member-bot:member"]);
   });
 
   it("lists every thread when no bot visibility is passed, the bot's work folded under its session", () => {

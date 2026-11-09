@@ -1,10 +1,14 @@
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
-import { goatBotObservationThreadKeys } from "@goat/client-runtime/state/threads";
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import {
+  goatBotListedWork,
+  goatBotObservationThreadKeys,
+} from "@goat/client-runtime/state/threads";
+import { EnvironmentId, ThreadId, type BotThreadRow } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadFixture } from "../../test-fixtures";
 import type { Thread } from "../../types";
+import { withBotSearchCandidates } from "./botVisibility";
 import { partitionSidebarThreads } from "./sidebarPartition";
 import { resolveNestedRowVariant } from "./settledLaunchShelf";
 
@@ -29,7 +33,11 @@ const local = EnvironmentId.make("environment-local");
 
 function row(
   id: string,
-  launch?: { readonly by: string; readonly via: "thread_launch" | "delegate_task" },
+  launch?: {
+    readonly by: string;
+    readonly via: "thread_launch" | "delegate_task";
+    readonly workKind?: "coding" | "chore";
+  },
 ): Thread {
   const base = makeThreadFixture({ id: ThreadId.make(id), environmentId: local, runtime: null });
   if (launch === undefined) return base;
@@ -44,6 +52,7 @@ function row(
         environmentLabel: null,
         threadTitle: null,
         via: launch.via,
+        ...(launch.workKind === undefined ? {} : { workKind: launch.workKind }),
       },
     },
   };
@@ -101,6 +110,46 @@ describe("partitionSidebarThreads with GOAT Bot threads", () => {
   it("hides exactly what the shared classifier finds for GOAT Bot", () => {
     const result = partition(threads, goatBotObservationThreadKeys({ threads }));
     expect(rowIds(result)).toEqual(["bot-coding", "channel-worker:work"]);
+  });
+
+  it("regression GB-W-01: hides a member bot and a listed chore until bot threads are shown, and search finds them", () => {
+    const member = row("channel-member-bot:member");
+    const chore = row("channel-child-work:chore", {
+      by: session.id,
+      via: "thread_launch",
+      workKind: "chore",
+    });
+    const all = [...threads, member, chore];
+    const rows: BotThreadRow[] = [
+      {
+        kind: "coding",
+        taskId: "channel-task:a" as never,
+        environmentId: local,
+        threadId: chore.id,
+        state: "bound",
+        lastActivityAt: "2026-11-09T00:00:00.000Z",
+        workKind: "chore",
+      },
+    ];
+    const observation = goatBotObservationThreadKeys({
+      threads: all,
+      listedWork: goatBotListedWork(rows),
+    });
+    const hiddenResult = partition(all, observation);
+    expect(rowIds(hiddenResult)).toEqual(["bot-coding", "channel-worker:work"]);
+    // "Show GOAT Bot threads" passes no hidden keys; the chore folds under its session's row.
+    const shown = partition(all, new Set());
+    expect(rowIds(shown)).toEqual(expect.arrayContaining(["channel-member-bot:member"]));
+    expect(shown.launchFold.parentKeyByKey.get(keyOf(chore.id))).toBe(keyOf(session.id));
+    const searchable = withBotSearchCandidates(
+      hiddenResult.visibleThreads,
+      all,
+      observation,
+      null,
+    ).map((thread) => String(thread.id));
+    expect(searchable).toEqual(
+      expect.arrayContaining(["channel-member-bot:member", "channel-child-work:chore"]),
+    );
   });
 });
 

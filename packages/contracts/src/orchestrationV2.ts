@@ -88,6 +88,7 @@ import {
   TurnItemId,
 } from "./baseSchemas.ts";
 import { ChannelMessageMeta } from "./channelCommon.ts";
+import { GoatBotWorkKind } from "./channelChildWork.ts";
 import { ChannelTimelineRecord } from "./channelLedger.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import { OrchestrationV2CloudTask } from "./cloudTask.ts";
@@ -176,6 +177,8 @@ export const OrchestrationV2ThreadLauncher = Schema.Struct({
   via: Schema.optional(
     Schema.Literals(["thread_launch", "create_threads", "ssh_thread_launch", "delegate_task"]),
   ),
+  /** Set when GOAT Bot's own work launched the thread; absent on everything else. */
+  workKind: Schema.optional(GoatBotWorkKind),
   /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
   runId: Schema.optional(RunId),
 });

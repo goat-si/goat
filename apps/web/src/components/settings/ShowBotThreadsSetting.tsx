@@ -8,7 +8,7 @@ export function ShowBotThreadsSetting() {
   return (
     <SettingsRow
       {...searchableSetting("show-goat-bot-threads")}
-      description="List the threads GOAT Bot runs to follow your work. Search finds them either way. Applies to this device."
+      description="List bot conversations and the work bots keep under their tasks. Search finds them either way. Applies to this device."
       control={
         <Switch
           checked={shown}

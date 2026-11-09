@@ -8,13 +8,14 @@ import { render } from "../../../test/render";
 
 const mocks = vi.hoisted(() => ({
   tasks: [] as unknown[],
+  rows: [] as unknown[],
   setEnabled: vi.fn(),
   turnsWaiting: [] as string[],
 }));
 vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({ rows: [] }),
   useBotThreads: () => ({
-    rows: [],
+    rows: mocks.rows,
     supported: true,
     loaded: true,
     failed: false,
@@ -56,9 +57,10 @@ vi.mock("~/state/channels", () => ({
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
-function setup(tasks: unknown[], turnsWaiting: string[] = []) {
+function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
   mocks.tasks = tasks;
   mocks.turnsWaiting = turnsWaiting;
+  mocks.rows = rows;
   mocks.setEnabled.mockReset();
 }
 
@@ -132,4 +134,47 @@ it("points to the chat when the bot asked a question there that no task thread s
   expect(onShowChat).toHaveBeenCalledOnce();
   await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/bot"));
   expect(screen.router?.state.location.search).toEqual({});
+});
+it("opens the worker and the chores that thread lists leave to the bot from its task", async () => {
+  const at = "2026-11-09T00:00:00.000Z";
+  setup(
+    [],
+    [],
+    [
+      {
+        kind: "task",
+        task: {
+          taskId: "task-a",
+          title: "Stop the port 3774 server",
+          status: "running",
+          updatedAt: at,
+        },
+        view: { taskId: "task-a", pinnedAt: null, doneAt: null, readThrough: null },
+        lastActivityAt: at,
+        unread: false,
+        mainMessagesSinceQuiet: 0,
+        worker: { environmentId: "env", threadId: "channel-worker:a" },
+      },
+      {
+        kind: "coding",
+        taskId: "task-a",
+        environmentId: "env",
+        threadId: "channel-child-work:chore",
+        title: "Stop goat serve",
+        state: "bound",
+        lastActivityAt: at,
+        workKind: "chore",
+      },
+    ],
+  );
+  await using screen = await render(
+    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+  );
+  await expect
+    .element(screen.getByRole("link", { name: /Stop the port 3774 server/ }))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Show work" }));
+  const links = screen.getByRole("link", { name: "Open work thread" });
+  await expect.element(links.nth(0)).toHaveAttribute("href", "/env/channel-worker%3Aa");
+  await expect.element(links.nth(1)).toHaveAttribute("href", "/env/channel-child-work%3Achore");
 });
