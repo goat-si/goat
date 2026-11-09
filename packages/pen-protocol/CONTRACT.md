@@ -43,7 +43,8 @@ Socket attachments carry `{role, sid, sent, acked, at, deadline}`; client socket
   authenticated uplink the relay accepts and closes 4404.
 - A path whose nodeId is not 26 characters of `[a-z2-7]` is HTTP 400; a non-upgrade request to a WebSocket path is 426.
 - Mux frame on the uplink: `[type u8][sid u32 LE][payload]`.
-  - 1 OPEN (relay -> node): no payload. The relay assigns sid, starting at 1, never reused within one uplink.
+  - 1 OPEN (relay -> node): no payload. The relay assigns sid: a positive u32 from a per-node counter that
+    survives hibernation and uplink replacement, so a sid is never reused for that node.
   - 2 DATA (both ways): opaque bytes.
   - 3 CLOSE (both ways): payload = u16 LE close code. Either side closing a session sends CLOSE; the relay closes the
     client socket with that code; a client socket that closes produces CLOSE toward the node with the client's code
