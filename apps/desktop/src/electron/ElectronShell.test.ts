@@ -54,6 +54,72 @@ describe("ElectronShell", () => {
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
 
+  it.effect("opens local editor file deep links", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+
+      const urls = [
+        "cursor://file/Users/me/repo/file.md:186",
+        "vscode://file/Users/me/repo/file.md:3:7",
+        "vscode-insiders://file/Users/me/repo/file.md",
+        "vscodium://file/C:/Users/me/repo/file.md:3",
+      ];
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const results = yield* Effect.forEach(urls, (url) => electronShell.openExternal(url));
+
+      assert.deepEqual(results, [true, true, true, true]);
+      assert.deepEqual(
+        openExternalMock.mock.calls,
+        urls.map((url) => [url]),
+      );
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
+  it.effect("normalizes the scheme case of local editor file deep links", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openExternal("VSCode://file/Users/me/repo/file.md:3");
+
+      assert.equal(result, true);
+      assert.deepEqual(openExternalMock.mock.calls, [["vscode://file/Users/me/repo/file.md:3"]]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
+  it.effect("does not open editor URLs that are not absolute local file links", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const results = yield* Effect.forEach(
+        [
+          "cursor://user@file/Users/me/repo/file.md",
+          "cursor://:secret@file/Users/me/repo/file.md",
+          "cursor://file:8080/Users/me/repo/file.md",
+          "cursor://anysphere.cursor-deeplink/prompt?text=hi",
+          "vscode://vscode.git/clone?url=https%3A%2F%2Fexample.com%2Frepo.git",
+          "vscode://extension/example",
+          "vscode://command/workbench.action.openSettings",
+          "vscode:file/relative.md",
+          "./relative.md",
+          "cursor://file",
+          "cursor://file/",
+          "cursor:file/Users/me/repo/file.md",
+          "foo://file/Users/me/repo/file.md",
+          "zed://file/Users/me/repo/file.md",
+          "jetbrains://file/Users/me/repo/file.md",
+          "javascript:alert(1)",
+          "data:text/html,hello",
+        ],
+        (url) => electronShell.openExternal(url),
+      );
+
+      assert.deepEqual(results, Array(17).fill(false));
+      assert.equal(openExternalMock.mock.calls.length, 0);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
   it.effect("does not open editor URLs that mix up link shapes", () =>
     Effect.gen(function* () {
       openExternalMock.mockResolvedValue(undefined);

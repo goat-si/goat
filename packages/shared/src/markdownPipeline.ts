@@ -3,6 +3,7 @@ import {
   CONTEXT_LINK_PROTOCOLS,
   THREAD_LINK_PROTOCOLS,
 } from "@goat/contracts/legacyT3Names";
+import { isLocalEditorFileUrl, LOCAL_FILE_LINK_SCHEMES } from "@goat/contracts";
 import type { Paragraph, PhrasingContent, Root, RootContent } from "mdast";
 import { remarkKeepWindowsPaths } from "./markdownWindowsPaths.ts";
 import { type PluggableList, type Processor, type Transformer } from "unified";
@@ -171,6 +172,31 @@ const IMAGE_SRC_PROTOCOLS = [
   ...CONTEXT_LINK_PROTOCOLS,
 ];
 
+// The sanitizer compares schemes case-sensitively, so lowercase accepted editor links first.
+function rehypeNormalizeLocalEditorLinks() {
+  return (tree: MarkdownImageHastNode) => {
+    const visit = (node: MarkdownImageHastNode) => {
+      const href = node.properties?.href;
+      if (node.type === "element" && node.tagName === "a" && typeof href === "string") {
+        try {
+          const url = new URL(href);
+          if (LOCAL_FILE_LINK_SCHEMES.includes(url.protocol.slice(0, -1))) {
+            node.properties = {
+              ...node.properties,
+              href: isLocalEditorFileUrl(url) ? url.href : undefined,
+            };
+          }
+        } catch {
+          // Not an absolute URL; the sanitizer decides.
+        }
+      }
+      node.children?.forEach(visit);
+    };
+
+    visit(tree);
+  };
+}
+
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,
   attributes: {
@@ -202,6 +228,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
       ...CITATION_LINK_PROTOCOLS,
       ...CONTEXT_LINK_PROTOCOLS,
       ...THREAD_LINK_PROTOCOLS,
+      ...LOCAL_FILE_LINK_SCHEMES,
     ],
     src: IMAGE_SRC_PROTOCOLS,
     dataDarkSrc: IMAGE_SRC_PROTOCOLS,
@@ -310,6 +337,7 @@ export const CHAT_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   rehypePreserveBareAnchorPlaceholders,
   rehypeRawWhenPresent,
   rehypePreserveImageSourceMeta,
+  rehypeNormalizeLocalEditorLinks,
   [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
 ];
 

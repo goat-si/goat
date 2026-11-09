@@ -761,10 +761,11 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0t64 libgbm1 libnss3 libasound2t64
           # Hosted runners install whatever their image lacks.
           if ! pkg-config --exists libsecret-1 2>/dev/null ||
             ! { command -v magick || command -v convert; } >/dev/null 2>&1; then
-            sudo apt-get update
             sudo apt-get install -y libsecret-1-dev pkg-config imagemagick
           fi
 
@@ -811,8 +812,6 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y xvfb libgtk-3-0 libgbm1 libnss3 libasound2t64
           images=("$GITHUB_WORKSPACE"/release/*.AppImage)
           test "${#images[@]}" -eq 1 && test -f "${images[0]}"
           scratch=$(mktemp -d "$RUNNER_TEMP/goat-launch-appimage.XXXXXX")
