@@ -1,6 +1,7 @@
 import type { EnvironmentId, EnvironmentMachineKind } from "@goat/contracts";
+import { isScratchProject } from "@goat/client-runtime/state/projects";
 
-import type { SidebarProjectSnapshot } from "../sidebarProjectGrouping";
+import type { SidebarProjectPickerEntry, SidebarProjectSnapshot } from "../sidebarProjectGrouping";
 import type { Project } from "../types";
 import {
   buildCommandPaletteProjectMetadata,
@@ -24,6 +25,14 @@ const UNKNOWN_PROJECT_LOCATION: CommandPaletteProjectLocation = {
   label: "Remote",
   machine: "server",
 };
+
+export function currentProjectPickerKey(
+  hasCurrentProject: boolean,
+  entries: ReadonlyArray<SidebarProjectPickerEntry>,
+): string | null {
+  const entry = hasCurrentProject ? entries.find((candidate) => candidate.isPreferred) : undefined;
+  return entry ? `${entry.targetProject.environmentId}:${entry.targetProject.id}` : null;
+}
 
 interface ProjectItemsInput {
   readonly projects: ReadonlyArray<CommandPaletteProject>;
@@ -74,10 +83,15 @@ export function buildProjectSearchItems(input: ProjectItemsInput) {
 
 /** Projects as targets of the "New thread in..." submenu. */
 export function buildNewThreadInProjectItems(
-  input: ProjectItemsInput & { readonly currentProjectKey: string | null },
+  input: ProjectItemsInput & {
+    readonly currentProjectKey: string | null;
+    readonly scratchWorkspaceRootFor: (environmentId: EnvironmentId | null) => string | null;
+  },
 ) {
   return buildProjectActionItems({
-    projects: input.projects,
+    projects: input.projects.filter(
+      (project) => !isScratchProject(project, input.scratchWorkspaceRootFor(project.environmentId)),
+    ),
     valuePrefix: "new-thread-in",
     searchTerms: (project) => {
       const group = input.projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);

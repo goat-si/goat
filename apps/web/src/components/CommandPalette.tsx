@@ -232,6 +232,7 @@ import {
 import {
   buildNewThreadInProjectItems,
   buildProjectSearchItems,
+  currentProjectPickerKey,
 } from "./CommandPaletteProjectItems";
 import {
   CommandPaletteSubmitButton,
@@ -883,17 +884,10 @@ function OpenCommandPaletteDialog(props: {
   );
   const openingOrderThreadItems = useOrderWhileOpen(
     (() => {
-      const isScratch = (project: CommandPaletteProject) =>
-        isScratchProject(project, scratchWorkspaceRootFor(project.environmentId));
-      const currentEntry =
-        currentProjectId === null
-          ? undefined
-          : projectPickerEntries.find((entry) => entry.isPreferred);
       const projectItems = buildNewThreadInProjectItems({
-        projects: pickerProjects.filter((project) => !isScratch(project)),
-        currentProjectKey: currentEntry
-          ? `${currentEntry.targetProject.environmentId}:${currentEntry.targetProject.id}`
-          : null,
+        projects: pickerProjects,
+        scratchWorkspaceRootFor,
+        currentProjectKey: currentProjectPickerKey(currentProjectId !== null, projectPickerEntries),
         projectGroupByTargetKey,
         locationByEnvironmentId: projectEnvironmentLocationById,
         pin: projectPin,
@@ -1005,7 +999,6 @@ function OpenCommandPaletteDialog(props: {
       popView();
     }
   }
-
   const startAddProjectBrowse = async (environmentId: EnvironmentId): Promise<void> => {
     const initialQuery = getAddProjectInitialQueryForEnvironment(environmentId);
     const initialBrowsePath = getBrowseDirectoryPath(initialQuery);
