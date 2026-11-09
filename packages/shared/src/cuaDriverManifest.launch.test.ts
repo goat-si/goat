@@ -61,6 +61,24 @@ describe("cuaDriverManifest launch grants", () => {
     expect(cuaDriverManifestLaunchGrants(mixed)).toEqual(["com.apple.TextEdit"]);
   });
 
+  it("ties a launch grant only to the app entry right before it", () => {
+    const apps = (...lines: ReadonlyArray<string>) =>
+      ["  apps:", ...lines, "allow:", "  tools:", '    - "launch_app"', ""].join("\n");
+    const calculator = '    - bundle_id: "com.apple.calculator"';
+    const textEdit = '    - bundle_id: "com.apple.TextEdit"';
+    expect(cuaDriverManifestLaunchGrants(apps(calculator, "      launch: true", textEdit))).toEqual(
+      ["com.apple.calculator"],
+    );
+    expect(
+      cuaDriverManifestLaunchGrants(
+        apps(calculator, '      terminate: "driver_launched"', "      launch: true"),
+      ),
+    ).toEqual(["com.apple.calculator"]);
+    expect(() => cuaDriverManifestLaunchGrants(apps(calculator) + "      launch: true\n")).toThrow(
+      invalid,
+    );
+  });
+
   it.each([
     [
       "a value other than true or false",

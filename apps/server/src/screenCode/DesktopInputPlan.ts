@@ -166,7 +166,8 @@ const buildForwardedInput = (
   action: string | undefined,
 ): Record<string, unknown> => {
   const target = { kind: "window", pid: bound.pid, window_id: bound.windowId };
-  // Only a key press may take the driver's foreground escalation; background refusals stay refusals.
+  // Only a key press may take the driver's foreground escalation, which skips its menu-equivalent
+  // lookup and claims nothing about menus; background refusals stay refusals.
   const delivery =
     method === "press_key" && args.delivery_mode === "foreground" && args.send !== true
       ? "foreground"

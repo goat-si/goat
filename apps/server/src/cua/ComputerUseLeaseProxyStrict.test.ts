@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { TurnItemId, type ComputerUseForegroundGrant } from "@goat/contracts";
 
 import { parse } from "./ComputerUseLeaseProtocol.ts";
 import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
@@ -25,6 +26,7 @@ const judge = (input: {
   readonly args?: Record<string, unknown>;
   readonly tokenFirst?: boolean;
   readonly shared?: boolean;
+  readonly foreground?: ReadonlyArray<ComputerUseForegroundGrant>;
 }) =>
   refuseProxyCall({
     id: 1,
@@ -41,7 +43,7 @@ const judge = (input: {
     toFile: () => undefined,
     tokenFirstRefuses: () => input.tokenFirst === true,
     strict: () => input.strict,
-    foreground: () => [],
+    foreground: () => input.foreground ?? [],
     listApps: Effect.void,
   });
 
@@ -73,6 +75,33 @@ describe("the proxy's own refusals follow the strict input guards setting", () =
       assert.include(refusedAs(yield* judge({ ...base, strict: true })), "foreground_not_approved");
       assert.isUndefined(yield* judge({ ...base, strict: false }));
     }),
+  );
+  it.effect(
+    "a foreground key press needs a live foreground grant only with strict guards; a background one needs none",
+    () =>
+      Effect.gen(function* () {
+        const press = (delivery_mode: string) => ({
+          app: "com.example.Editor",
+          approved: undefined,
+          name: "press_key",
+          args: { pid: PID, window_id: 9, key: "s", modifiers: ["cmd"], delivery_mode },
+        });
+        const grant = {
+          handoffId: TurnItemId.make("handoff:foreground"),
+          purpose: "Save the draft",
+          target: "desktop" as const,
+          expiresAtMillis: 1,
+        };
+        assert.include(
+          refusedAs(yield* judge({ ...press("foreground"), strict: true })),
+          "foreground_not_approved",
+        );
+        assert.isUndefined(
+          yield* judge({ ...press("foreground"), strict: true, foreground: [grant] }),
+        );
+        assert.isUndefined(yield* judge({ ...press("foreground"), strict: false }));
+        assert.isUndefined(yield* judge({ ...press("background"), strict: true }));
+      }),
   );
   it.effect.each([true, false])(
     "a protected app is out of reach only under strict guards (%s)",
