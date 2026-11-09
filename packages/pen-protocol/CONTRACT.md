@@ -159,7 +159,9 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   subject of a `found` or `admit` in its past (records signed by any other key are dropped); it never enters the pool.
   A record whose `prev` is not all present waits in an in-memory pool of at most 256 records and at most 16 per signer
   key, the oldest dropped first; the pool is not persisted. A node's own records never enter the pool. A mesh holds at
-  most 4096 records; `revoke` records are stored past that cap so a full set can still revoke.
+  most 4096 records: a record that is not a `revoke` is refused once 3840 are stored, and a `revoke` once 4096 are
+  stored, so a set full of other records can still revoke and every set fits a 4096-hash `have`. A node reloading its
+  own saved set applies no cap.
 
 ### View
 
