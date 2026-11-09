@@ -20,7 +20,8 @@ const slice = (from: string, to: string) => {
   assert.isAbove(end, start, to);
   return launch.slice(start, end + to.length);
 };
-const WAIT_READY = slice("wait_ready() {", "\nNODE\n}\n");
+// Through launch_wait_ready, which falls back to wait_ready when no capability lookup ran.
+const WAIT_READY = slice("wait_ready() {", '"$report_before|$frame_port" "$report_compat"\n}\n');
 const FAILURE_BRANCH = slice("  if ! wait_launched_listener", "\n    exit 1\n  fi\n");
 // The harness's bash: 4+ lists and waits through a FIFO, older bash keeps tr and sleep.
 const bashMajor = Number(

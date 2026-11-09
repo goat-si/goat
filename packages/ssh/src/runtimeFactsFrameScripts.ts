@@ -1,9 +1,9 @@
 import { OLD_HELPER_CAPS_STDERR } from "./runtimeFactsScripts.ts";
 
-// A goat.exe start costs about a second on Git Bash; a runtime listing "facts" answers the first
-// probe's four questions in one. Old runtimes pay one failed start per install, recorded as none.
-// Probe only: it reads the probe's runtime_file and state.
-export const REMOTE_FACTS_FRAME_SCRIPT = `helper_caps_old='${OLD_HELPER_CAPS_STDERR}'
+// A goat.exe start costs about a second on Git Bash, so a runtime that lists a combined call
+// answers several questions in one start. Old runtimes pay one failed start per install, recorded
+// as none. Shared by the probe's facts call and the launch's wait-ready report.
+export const REMOTE_COMBINED_CALL_SCRIPT = `helper_caps_old='${OLD_HELPER_CAPS_STDERR}'
 # Sets HELPER_CAPS to the combined calls goat $1 supports, empty for none. An answer is recorded
 # under the executable's key when that key holds across the call: a well-formed "caps v1" line on
 # exit 0 with nothing on stderr, or an old runtime's exact unknown-subcommand failure as "caps v1".
@@ -51,29 +51,40 @@ facts_frame_live_server() {
   set -f; set -- \${1#ok }
   valid_live_tokens "$@" && [ "$1" = live ]
 }
-# Sets FRAME_MANIFEST, FRAME_COMMIT, FRAME_LIVE and FRAME_COMPAT to the answers in combined reply
-# $1 ("ok <tokens>" or "fail <word>"). Fails unless the whole frame is valid: its begin line, known
-# tags each at most once, every required tag, compat exactly when live names a live server, and an
-# end line that counts the answers with nothing after it.
-facts_frame_parse() {
-  FRAME_MANIFEST=; FRAME_COMMIT=; FRAME_LIVE=; FRAME_COMPAT=; frame_count=0
-  case "$1" in "begin v1 facts$fact_nl"*) frame_rest="\${1#*"$fact_nl"}" ;; *) return 1 ;; esac
+# Sets FRAME_<TAG> to each answer in the reply $3 of combined call $1 ("ok <tokens>" or
+# "fail <word>"). Fails unless the whole frame is valid: its begin line, tags from $2 or compat
+# each at most once, every tag in $2, compat exactly when live names a live server, and an end
+# line that counts the answers with nothing after it.
+frame_parse() {
+  FRAME_MANIFEST=; FRAME_COMMIT=; FRAME_READY=; FRAME_LIVE=; FRAME_COMPAT=; frame_count=0
+  case "$3" in "begin v1 $1$fact_nl"*) frame_rest="\${3#*"$fact_nl"}" ;; *) return 1 ;; esac
   while :; do
     case "$frame_rest" in *"$fact_nl"*) ;; *) break ;; esac
     frame_line="\${frame_rest%%"$fact_nl"*}"; frame_rest="\${frame_rest#*"$fact_nl"}"
-    frame_answer="\${frame_line#* }"
+    frame_tag="\${frame_line%% *}"; frame_answer="\${frame_line#* }"
+    [ "$frame_line" = "$frame_tag $frame_answer" ] || return 1
+    case " $2 compat " in *" $frame_tag "*) ;; *) return 1 ;; esac
     case "$frame_answer" in "ok "?*|"fail error"|"fail timeout"|"fail changed"|"fail unavailable") ;; *) return 1 ;; esac
-    case "$frame_line" in
-      "manifest $frame_answer") [ -z "$FRAME_MANIFEST" ] || return 1; FRAME_MANIFEST="$frame_answer" ;;
-      "commit $frame_answer") [ -z "$FRAME_COMMIT" ] || return 1; FRAME_COMMIT="$frame_answer" ;;
-      "live $frame_answer") [ -z "$FRAME_LIVE" ] || return 1; FRAME_LIVE="$frame_answer" ;;
-      "compat $frame_answer") [ -z "$FRAME_COMPAT" ] || return 1; FRAME_COMPAT="$frame_answer" ;;
+    case "$frame_tag" in
+      manifest) [ -z "$FRAME_MANIFEST" ] || return 1; FRAME_MANIFEST="$frame_answer" ;;
+      commit) [ -z "$FRAME_COMMIT" ] || return 1; FRAME_COMMIT="$frame_answer" ;;
+      ready) [ -z "$FRAME_READY" ] || return 1; FRAME_READY="$frame_answer" ;;
+      live) [ -z "$FRAME_LIVE" ] || return 1; FRAME_LIVE="$frame_answer" ;;
+      compat) [ -z "$FRAME_COMPAT" ] || return 1; FRAME_COMPAT="$frame_answer" ;;
       *) return 1 ;;
     esac
     frame_count=$((frame_count + 1))
   done
-  [ "$frame_rest" = "end $frame_count" ] && [ -n "$FRAME_MANIFEST" ] && [ -n "$FRAME_COMMIT" ] &&
-    [ -n "$FRAME_LIVE" ] || return 1
+  [ "$frame_rest" = "end $frame_count" ] || return 1
+  for frame_tag in $2; do
+    case "$frame_tag" in
+      manifest) [ -n "$FRAME_MANIFEST" ] ;;
+      commit) [ -n "$FRAME_COMMIT" ] ;;
+      ready) [ -n "$FRAME_READY" ] ;;
+      live) [ -n "$FRAME_LIVE" ] ;;
+      *) false ;;
+    esac || return 1
+  done
   if facts_frame_live_server "$FRAME_LIVE"; then [ -n "$FRAME_COMPAT" ]; else [ -z "$FRAME_COMPAT" ]; fi
 }
 # Sets frame_pid and frame_port from live tokens $1.
@@ -86,6 +97,11 @@ facts_frame_compat_valid() {
   case "$2" in 0|1) ;; *) return 1 ;; esac
   case "$3" in ''|-|*[!$token_chars]*) return 1 ;; esac
 }
+`;
+
+// The first probe's four questions in one start. Probe only: it reads the probe's runtime_file
+// and state.
+export const REMOTE_FACTS_FRAME_SCRIPT = `${REMOTE_COMBINED_CALL_SCRIPT}
 # Asks installed goat $1, once per executable and script, its manifest, its commit time, the live
 # server behind the probe's record and launch files, and that server's compatibility, in one start.
 # Succeeds, with FRAME_MANIFEST set, only when the reply may be used: the executable supports the
@@ -106,7 +122,7 @@ facts_frame_ask() {
   exec_fact_key "$1" && [ "$FACT_NAME $FACT_KEY" = "$frame_exec" ] || return 1
   frame_after=; ! live_fact_key "$1" "$runtime_file" "$state/port" "$state/pid" || frame_after="$FACT_KEY"
   frame_absent_after=; ! live_none_absent "$runtime_file" "$state/port" "$state/pid" || frame_absent_after=1
-  facts_frame_parse "$frame_out" || return 1
+  frame_parse facts "manifest commit live" "$frame_out" || return 1
   case "$FRAME_COMMIT" in "ok "*) valid_positive "\${FRAME_COMMIT#ok }" || FRAME_COMMIT="fail error" ;; esac
   case "$FRAME_COMMIT" in "ok "*) fact_put "commit.$frame_name" "$frame_key" "\${FRAME_COMMIT#ok }" ;; esac
   frame_memo_put frame-commit "$1|commit.$frame_name|$frame_key" "$FRAME_COMMIT"
