@@ -374,6 +374,14 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex projects", (it) => {
     );
   });
 
+  it("picks the most specific root from many candidates", () => {
+    const roots = Array.from({ length: 2_000 }, (_, index) => `/repo-${index}`);
+    roots.push("/repo-0/nested");
+
+    expect(resolveCodexProjectCwd("/repo-0/nested/pkg", roots)).toBe("/repo-0/nested");
+    expect(resolveCodexProjectCwd("/repo-0/pkg", roots)).toBe("/repo-0");
+  });
+
   it.effect("reads the Codex state database from a shadow home", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;

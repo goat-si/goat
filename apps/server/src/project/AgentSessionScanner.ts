@@ -1431,6 +1431,7 @@ export const make = Effect.gen(function* () {
             stateHomes,
             codexState.stateByHome,
             selectedTranscripts,
+            codexState.cwdByThread,
           ).map((group): RawCandidate => ({ ...group, source: "codex", transcripts: [] })),
         );
       }

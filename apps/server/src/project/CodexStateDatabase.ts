@@ -67,24 +67,29 @@ function comparisonPath(value: string): string {
   return normalized.startsWith("//") ? normalized.replaceAll("/", "\\").toLowerCase() : normalized;
 }
 
+function makeProjectRootLookup(projectRoots: ReadonlyArray<string>): ReadonlyMap<string, string> {
+  const roots = new Map<string, string>();
+  for (const root of projectRoots) roots.set(comparisonPath(root), root);
+  return roots;
+}
+
+function resolveProjectRoot(cwd: string, roots: ReadonlyMap<string, string>): string | undefined {
+  const normalized = comparisonPath(cwd);
+  const windows = normalized.startsWith("\\\\") || /^[a-zA-Z]:\\/.test(normalized);
+  const dirname = windows ? NodePath.win32.dirname : NodePath.posix.dirname;
+  let current = normalized;
+  while (true) {
+    const root = roots.get(current);
+    if (root !== undefined) return root;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
 /** Prefer the most specific project root that contains the thread's working directory. */
 export function resolveCodexProjectCwd(cwd: string, projectRoots: ReadonlyArray<string>): string {
-  const normalizedCwd = comparisonPath(cwd);
-  let best: { root: string; length: number } | undefined;
-  for (const root of projectRoots) {
-    const normalizedRoot = comparisonPath(root);
-    if (normalizedRoot.length === 0) continue;
-    const separator = normalizedRoot.includes("\\") ? "\\" : "/";
-    const prefix = normalizedRoot.endsWith(separator)
-      ? normalizedRoot
-      : `${normalizedRoot}${separator}`;
-    if (normalizedCwd === normalizedRoot || normalizedCwd.startsWith(prefix)) {
-      if (best === undefined || normalizedRoot.length > best.length) {
-        best = { root, length: normalizedRoot.length };
-      }
-    }
-  }
-  return best?.root ?? cwd;
+  return resolveProjectRoot(cwd, makeProjectRootLookup(projectRoots)) ?? cwd;
 }
 
 function parseCodexThreadNames(contents: string): ReadonlyMap<string, string> {
@@ -247,10 +252,11 @@ function buildCodexCwdByThread(
   for (const home of homes) {
     const state = states.get(home.homePath);
     if (state === undefined) continue;
+    const roots = makeProjectRootLookup(state.projectRoots);
     for (const thread of state.threads) {
       cwdByThread.set(
         `${home.providerInstanceId}\0${thread.id}`,
-        resolveCodexProjectCwd(thread.cwd, state.projectRoots),
+        resolveProjectRoot(thread.cwd, roots) ?? thread.cwd,
       );
     }
   }
@@ -261,6 +267,7 @@ function buildCodexCandidateGroups(
   homes: ReadonlyArray<CodexHome>,
   states: ReadonlyMap<string, CodexStateSnapshot>,
   fileThreads: ReadonlySet<string>,
+  cwdByThread: ReadonlyMap<string, string>,
 ): ReadonlyArray<CodexCandidateGroup> {
   type MutableGroup = {
     cwd: string;
@@ -291,7 +298,8 @@ function buildCodexCandidateGroups(
     const projectRootKeys = new Set(state.projectRoots.map(comparisonPath));
     for (const thread of state.threads) {
       if (fileThreads.has(`${home.providerInstanceId}\0${thread.id}`)) continue;
-      const cwd = resolveCodexProjectCwd(thread.cwd, state.projectRoots);
+      const cwd = cwdByThread.get(`${home.providerInstanceId}\0${thread.id}`);
+      if (cwd === undefined) continue;
       if (!projectRootKeys.has(comparisonPath(cwd))) continue;
       const key = `${home.providerInstanceId}\0${cwd}`;
       const existing = byCwd.get(key);
@@ -324,6 +332,7 @@ export function codexStateOnlyCandidateGroups(
     readonly filePath: string;
     readonly providerInstanceId: ProviderInstanceId;
   }>,
+  cwdByThread: ReadonlyMap<string, string>,
 ): ReadonlyArray<CodexCandidateGroup> {
   const fileThreads = new Set<string>();
   for (const transcript of transcripts) {
@@ -332,5 +341,5 @@ export function codexStateOnlyCandidateGroups(
       fileThreads.add(`${transcript.providerInstanceId}\0${threadId}`);
     }
   }
-  return buildCodexCandidateGroups(homes, states, fileThreads);
+  return buildCodexCandidateGroups(homes, states, fileThreads, cwdByThread);
 }
