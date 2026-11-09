@@ -1,7 +1,9 @@
 import {
   CUA_DRIVER_VERIFY_TOOLS,
   cuaDriverCapabilityManifest,
+  cuaDriverManifestAllowsTool,
   cuaDriverManifestApplications,
+  cuaDriverManifestLaunchGrants,
   missingCuaDriverApplications,
   prepareCuaDriverCapabilityManifest,
   writeCuaDriverCapabilityManifest,
@@ -54,17 +56,25 @@ export const refreshDesktopManifest = Effect.fn("desktop.cua.refreshManifest")(f
   if (input.apps.length === 0) return false;
   const text = yield* Effect.tryPromise(() => input.read(input.path));
   const before = yield* Effect.try(() => cuaDriverManifestApplications(text));
+  const grantedBefore = yield* Effect.try(() => cuaDriverManifestLaunchGrants(text));
   const missing = missingCuaDriverApplications(input.apps, before);
-  if (missing.length === 0) return false;
+  // The driver launches an app only through a launch grant, so an older manifest is rewritten too.
+  const ungranted = cuaDriverManifestAllowsTool(text, "launch_app")
+    ? missingCuaDriverApplications(input.apps, grantedBefore)
+    : [];
+  if (missing.length === 0 && ungranted.length === 0) return false;
   const path = yield* Effect.tryPromise(input.prepare);
   const updated = yield* Effect.tryPromise(() => input.read(path));
   const after = yield* Effect.try(() => cuaDriverManifestApplications(updated));
+  const grantedAfter = yield* Effect.try(() => cuaDriverManifestLaunchGrants(updated));
   const stillMissing = missingCuaDriverApplications(missing, after);
-  if (stillMissing.length > 0)
-    yield* Effect.logInfo("Approved apps are still absent from Cua Driver manifest", {
-      count: stillMissing.length,
-    });
-  return stillMissing.length < missing.length;
+  const stillUngranted = missingCuaDriverApplications(ungranted, grantedAfter);
+  if (stillMissing.length + stillUngranted.length > 0)
+    yield* Effect.logInfo(
+      "Approved apps are still absent from Cua Driver manifest or lack a launch grant",
+      { count: stillMissing.length, launch: stillUngranted.length },
+    );
+  return stillMissing.length + stillUngranted.length < missing.length + ungranted.length;
 });
 
 export const makeBrowserManifestRequestHandler = (input: {
