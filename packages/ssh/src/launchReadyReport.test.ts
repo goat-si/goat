@@ -57,13 +57,13 @@ const RUNNER = [
   'exec "$HOME/.goat/runtime/goat/versions/' + version + '/goat" "$@"',
   "",
 ].join("\n");
-// Git Bash stand-ins: uname, a fixed clock past every age gate, ps -W from a file, and cygpath -w
-// marking each path it converted with C:.
+// Git Bash stand-ins: uname, a fixed clock past every age gate, and ps -W from a file. Any cygpath
+// call is recorded: the launch must not start one.
 const PREFIX = [
   "uname() { printf 'MINGW64_NT\\n'; }",
   "date() { printf '4102444800\\n'; }",
   'ps() { cat "$HOME/ps-rows"; }',
-  'cygpath() { echo cygpath >>"$HOME/order"; [ ! -e "$HOME/cygpath.sh" ] || { . "$HOME/cygpath.sh"; return; }; [ "$1" = -w ] || return 1; shift; for cygpath_arg in "$@"; do printf \'C:%s\\n\' "$cygpath_arg"; done; }',
+  'cygpath() { echo "cygpath $*" >>"$HOME/calls"; return 1; }',
   "",
 ].join("\n");
 const PS_HEADER = "      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND\n";
@@ -89,7 +89,9 @@ const STUBS = [
   // 10 s ends the script, so an unbounded wait fails instead of hanging.
   'launch_now() { if [ -e "$HOME/clock-back" ]; then launch_now_us=0; else launch_now_us="$(cat "$HOME/clock-us")"; fi; }',
   'launch_pause() { echo $(( $(cat "$HOME/clock-us") + $1 )) >"$HOME/clock-us"; [ "$(cat "$HOME/clock-us")" -le 10000000 ] || exit 97; [ ! -e "$HOME/on-pause.sh" ] || . "$HOME/on-pause.sh"; }',
-  'wait_launched_listener() { echo listener >>"$HOME/order"; [ -e "$HOME/no-wait" ] || wait; [ ! -e "$HOME/after-caps.sh" ] || . "$HOME/after-caps.sh"; }',
+  'wait_launched_listener() { [ -e "$HOME/no-wait" ] || wait; [ ! -e "$HOME/after-caps.sh" ] || . "$HOME/after-caps.sh"; }',
+  // A test home is no Git Bash drive path; its native form is marked with C:, or refused.
+  'launch_native_path() { [ ! -e "$HOME/no-native" ] || return 1; LAUNCH_NATIVE="C:$1"; }',
   "server_owns_listener() { :; }",
   "",
 ].join("\n");
@@ -162,6 +164,8 @@ const fixture = Effect.fn("launchReadyReport.fixture")(function* () {
     read: (name: string) => Effect.promise(() => NodeFSP.readFile(at(name), "utf8")),
     // The launch's definitions and stubs, then body.
     script: (body: string) => sh(DEFINITIONS + STUBS + body),
+    // The launch's definitions without the stubs.
+    plain: (body: string) => sh(DEFINITIONS + body),
     list: (name: string) => Effect.promise(() => NodeFSP.readdir(at(name))),
     // The launch's own step from its launch files to a ready server, as the launch runs it.
     launch: (after = "") => sh(DEFINITIONS + STUBS + READY_STEP + "echo launch-ready\n" + after),
@@ -451,27 +455,39 @@ describe("the launch's background capability lookup", () => {
   );
 });
 describe("the report's native paths", () => {
-  it.effect("are converted once, before the listener wait, whose commands are all bounded", () =>
+  it.effect.each([
+    {
+      path: "/c/Users/u/.goat/userdata/server-runtime.json",
+      native: "c:/Users/u/.goat/userdata/server-runtime.json",
+    },
+    { path: "/D/goat home/port", native: "D:/goat home/port" },
+    { path: "/tmp/goat/port", native: "refused" },
+    { path: "/cc/goat/port", native: "refused" },
+    { path: "/c", native: "refused" },
+    { path: "c/goat/port", native: "refused" },
+    { path: "/1/goat/port", native: "refused" },
+  ])("$path converts without a process: $native", ({ path, native }) =>
     Effect.gen(function* () {
       const f = yield* fixture();
-      assert.deepEqual(yield* f.launch(), ["launch-ready"]);
-      assert.deepEqual((yield* f.read("order")).trim().split("\n"), ["cygpath", "listener"]);
-      assert.deepEqual(yield* f.asked(), ["caps", "report"]);
+      const out = yield* f.plain(
+        "if launch_native_path '" +
+          path +
+          "'; then printf '%s\\n' \"$LAUNCH_NATIVE\"; else echo refused; fi\n",
+      );
+      assert.deepEqual(out, [native]);
+      assert.deepEqual(yield* f.calls(), []);
     }).pipe(Effect.scoped),
   );
 
-  it.effect.each([
-    { name: "a failed conversion", script: "return 1" },
-    { name: "an empty middle path", script: "printf 'C:a\\n\\nC:c\\n'" },
-    { name: "two paths", script: "printf 'C:a\\nC:b\\n'" },
-    { name: "four paths", script: "printf 'C:a\\nC:b\\nC:c\\nC:d\\n'" },
-  ])("$name: the launch keeps today's separate wait and asks nothing more", (c) =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      yield* f.write("cygpath.sh", c.script);
-      assert.deepEqual(yield* f.launch(), ["launch-ready"]);
-      assert.deepEqual(yield* f.asked(), ["wait"]);
-      assert.deepEqual(yield* f.facts(), []);
-    }).pipe(Effect.scoped),
+  it.effect(
+    "a home outside Git Bash's drive paths keeps today's separate wait and asks nothing more",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        yield* f.write("no-native", "");
+        assert.deepEqual(yield* f.launch(), ["launch-ready"]);
+        assert.deepEqual(yield* f.asked(), ["wait"]);
+        assert.deepEqual(yield* f.facts(), []);
+      }).pipe(Effect.scoped),
   );
 });

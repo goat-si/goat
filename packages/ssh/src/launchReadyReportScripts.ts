@@ -28,18 +28,19 @@ launch_caps_begin() {
   ) </dev/null >/dev/null 2>&1 &
 }
 # The report runs as a bounded job, which turns off MSYS's argument conversion, so goat.exe is given
-# native paths. They are converted here, before the listener wait, after which every command the
-# launch runs is bounded. Sets LAUNCH_REPORT_RUNTIME, _PORT and _PID, or fails unless cygpath
-# printed exactly three nonempty lines.
+# native paths. Sets LAUNCH_REPORT_RUNTIME, _PORT and _PID, or fails when a path is not on a drive.
 launch_report_paths() {
   LAUNCH_REPORT_RUNTIME=; LAUNCH_REPORT_PORT=; LAUNCH_REPORT_PID=
-  report_paths="$(cygpath -w "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE")" || return 1
-  report_first="\${report_paths%%"$fact_nl"*}"; report_paths="\${report_paths#*"$fact_nl"}"
-  case "$report_paths" in *"$fact_nl"*) ;; *) return 1 ;; esac
-  report_second="\${report_paths%%"$fact_nl"*}"; report_third="\${report_paths#*"$fact_nl"}"
-  case "$report_third" in *"$fact_nl"*) return 1 ;; esac
-  [ -n "$report_first" ] && [ -n "$report_second" ] && [ -n "$report_third" ] || return 1
-  LAUNCH_REPORT_RUNTIME="$report_first"; LAUNCH_REPORT_PORT="$report_second"; LAUNCH_REPORT_PID="$report_third"
+  launch_native_path "$DEFAULT_RUNTIME_FILE" || return 1; LAUNCH_REPORT_RUNTIME="$LAUNCH_NATIVE"
+  launch_native_path "$PORT_FILE" || return 1; LAUNCH_REPORT_PORT="$LAUNCH_NATIVE"
+  launch_native_path "$PID_FILE" || return 1; LAUNCH_REPORT_PID="$LAUNCH_NATIVE"
+}
+# Sets LAUNCH_NATIVE to Git Bash drive path $1 (/c/rest) as Windows names it (c:/rest), with
+# builtins: a cygpath start could stall after the server is spawned. Fails for any other path.
+launch_native_path() {
+  case "$1" in /[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz]/*) ;; *) return 1 ;; esac
+  native_drive="\${1#/}"; native_drive="\${native_drive%%/*}"
+  LAUNCH_NATIVE="$native_drive:\${1#/?}"
 }
 # Removes what the lookup and report of launches no longer running left beside their memos.
 launch_caps_sweep() {
