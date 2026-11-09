@@ -59,8 +59,14 @@ func TestQueuedPongsAreCapped(t *testing.T) {
 	for range 100 {
 		q.text("pong")
 	}
+	// Count pongs only: the stalled binary item may or may not have left the queue yet.
 	q.mu.Lock()
-	held := len(q.items)
+	held := 0
+	for _, it := range q.items {
+		if it.pong {
+			held++
+		}
+	}
 	q.mu.Unlock()
 	if held > maxQueuedPongs {
 		t.Fatalf("%d pongs queued behind a stalled write, want at most %d", held, maxQueuedPongs)
