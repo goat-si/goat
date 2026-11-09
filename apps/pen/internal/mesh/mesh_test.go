@@ -13,6 +13,7 @@ import (
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/relay"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
@@ -117,8 +118,13 @@ func randomDAG(t *testing.T, rng *rand.Rand) *builder {
 	last := map[string]*Record{pub(ids[0]): found}
 	joined := []*ident.Identity{ids[0]}
 	waiting := ids[1:]
+	signed := map[*ident.Identity]int{}
 	for len(b.recs) < 30 {
 		signer := joined[rng.IntN(len(joined))]
+		if signed[signer] >= 12 {
+			continue
+		}
+		signed[signer]++
 		prev := map[*Record]bool{}
 		if r := last[pub(signer)]; r != nil {
 			prev[r] = true
@@ -133,6 +139,7 @@ func randomDAG(t *testing.T, rng *rand.Rand) *builder {
 		for p := range prev {
 			ps = append(ps, p)
 		}
+		sort.Slice(ps, func(i, j int) bool { return ps[i].Hash < ps[j].Hash })
 		var r *Record
 		switch k := rng.IntN(10); {
 		case k < 3 && len(waiting) > 0:
@@ -140,6 +147,7 @@ func randomDAG(t *testing.T, rng *rand.Rand) *builder {
 			waiting = waiting[1:]
 			r = b.admit(signer, subject, ps...)
 			joined = append(joined, subject)
+			last[pub(subject)] = r // the new member's first record builds on its admit
 		case k < 5:
 			subject := joined[rng.IntN(len(joined))]
 			r = b.sign(signer, TypeName, ps, Fields{Subject: pub(subject), Name: fmt.Sprintf("name-%d", len(b.recs))})
@@ -161,9 +169,19 @@ func TestSameSetInAnyArrivalOrderGivesTheSameView(t *testing.T) {
 	for seed := range uint64(5) {
 		rng := rand.New(rand.NewPCG(seed, 7))
 		b := randomDAG(t, rng)
-		want := summarize(b.view())
-		if len(want.Order) != 30 || len(want.Effective) < 10 {
-			t.Fatalf("seed %d: generated %d records, %d effective", seed, len(want.Order), len(want.Effective))
+		perSigner := map[string]int{}
+		for _, r := range b.recs {
+			if perSigner[r.B.By]++; perSigner[r.B.By] > MaxPoolPerSigner {
+				t.Fatalf("seed %d: a signer has more records than the pool holds per signer", seed)
+			}
+		}
+		// Baseline: the store fed in signing order (it drops records from keys not yet introduced).
+		base := NewStore(nil, b.meshID)
+		base.Merge(b.recs)
+		want := summarize(base.View())
+		t.Logf("seed %d: %d stored, %d effective", seed, len(want.Order), len(want.Effective))
+		if len(want.Order) < 20 || len(want.Effective) < 10 {
+			t.Fatalf("seed %d: %d records stored, %d effective", seed, len(want.Order), len(want.Effective))
 		}
 		for range 40 {
 			perm := rng.Perm(len(b.recs))
@@ -337,6 +355,111 @@ func TestDuplicateNoisePubAdmitHasNoEffect(t *testing.T) {
 	b.admit(f, clash, ra)
 	if isMember(b.view(), clash) {
 		t.Fatal("a second member with the same noisePub was admitted")
+	}
+}
+
+// orphan is a record from a throwaway key whose prev names a record nobody has.
+func orphan(t *testing.T, meshID string, i int) *Record {
+	k, _ := ident.Generate(nil)
+	missing := HashOf([]byte(fmt.Sprintf("missing %d", i)))
+	r, err := Sign(k, meshID, TypeName, 2, []string{missing}, 1, Fields{Subject: pub(k), Name: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestFullPoolOfOrphansStillLetsTheNodeSignAndMergeARevokeAndIsNotSaved(t *testing.T) {
+	f, a := detID(1), detID(2)
+	st, err := state.OpenDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Found(st, f, "f", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, _ := MakeCard(a, s.MeshID, f.NodeID(), ident.B64.EncodeToString(bytes.Repeat([]byte{7}, 16)), "a")
+	if _, err := s.Append(f, TypeAdmit, 2, Fields{Card: card}); err != nil {
+		t.Fatal(err)
+	}
+	var orphans []*Record
+	for i := range MaxPool {
+		orphans = append(orphans, orphan(t, s.MeshID, i))
+	}
+	s.Merge(orphans)
+	if _, err := s.Append(f, TypeRevoke, 3, Fields{Subjects: []string{pub(a)}}); err != nil {
+		t.Fatalf("revoke with a full pool: %v", err)
+	}
+	if _, ok := s.View().Revoked[pub(a)]; !ok {
+		t.Fatal("revoke did not take effect")
+	}
+	var saved storeFile
+	if _, err := st.ReadJSON("mesh.json", &saved); err != nil || len(saved.Pool) != 0 {
+		t.Fatalf("pool persisted: %d records, %v", len(saved.Pool), err)
+	}
+}
+
+func TestReadyRecordFromAKeyNotIntroducedInItsPastIsDropped(t *testing.T) {
+	f := detID(1)
+	s, err := Found(nil, f, "f", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsider := detID(9)
+	r, _ := Sign(outsider, s.MeshID, TypeName, 1, []string{s.Records()[0].Hash}, 1, Fields{Subject: pub(outsider), Name: "o"})
+	if added, _ := s.Merge([]*Record{r}); len(added) != 0 || s.Len() != 1 || len(s.pool) != 0 {
+		t.Fatalf("stored %d, pooled %d records from a key never admitted", len(added), len(s.pool))
+	}
+}
+
+func TestPoolHoldsAtMost16PerSignerAndDropsTheOldest(t *testing.T) {
+	f, a := detID(1), detID(2)
+	b, found := newMesh(t, f)
+	admitA := b.admit(f, a, found)
+	var waiting []*Record
+	prev := admitA
+	for i := range 17 {
+		prev = b.sign(a, TypeName, []*Record{prev}, Fields{Subject: pub(a), Name: fmt.Sprintf("a%d", i)})
+		waiting = append(waiting, prev)
+	}
+	s := NewStore(nil, b.meshID)
+	s.Merge([]*Record{found})
+	// Each of a's records names a missing parent, so each waits; one signer may hold 16.
+	for _, r := range waiting {
+		s.Merge([]*Record{r})
+	}
+	if len(s.pool) != 16 {
+		t.Fatalf("pool holds %d of one signer's records, want 16", len(s.pool))
+	}
+	if _, ok := s.pool[waiting[0].Hash]; ok {
+		t.Fatal("the oldest record was kept and a newer one dropped")
+	}
+}
+
+func TestRevokeIsStoredPastTheRecordCapAndOthersAreNot(t *testing.T) {
+	f, a := detID(1), detID(2)
+	s, err := Found(nil, f, "f", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, _ := MakeCard(a, s.MeshID, f.NodeID(), ident.B64.EncodeToString(bytes.Repeat([]byte{7}, 16)), "a")
+	if _, err := s.Append(f, TypeAdmit, 2, Fields{Card: card}); err != nil {
+		t.Fatal(err)
+	}
+	for s.Len() < MaxRecords {
+		if _, err := s.Append(f, TypeName, 3, Fields{Subject: pub(f), Name: "f"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Append(f, TypeName, 4, Fields{Subject: pub(f), Name: "g"}); err == nil {
+		t.Fatal("a name record was stored past the cap")
+	}
+	if _, err := s.Append(f, TypeRevoke, 5, Fields{Subjects: []string{pub(a)}}); err != nil {
+		t.Fatalf("revoke past the cap: %v", err)
+	}
+	if s.Len() != MaxRecords+1 {
+		t.Fatalf("len %d", s.Len())
 	}
 }
 

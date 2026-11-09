@@ -141,6 +141,7 @@ func New(opt Options) (*Daemon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mesh: %w", err)
 	}
+	store.SetSelf(ident.B64.EncodeToString(id.SignPub))
 	invites, err := mesh.LoadInvites(st)
 	if err != nil {
 		return nil, err
