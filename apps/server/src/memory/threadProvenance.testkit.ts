@@ -18,6 +18,8 @@ const now = DateTime.makeUnsafe("2026-10-14T00:00:00.000Z");
 const parent = M.ThreadId.make("parent");
 const selection = { instanceId: M.ProviderInstanceId.make("fixture"), model: "fixture" };
 type OriginEvent =
+  | { readonly type: "thread.created"; readonly payload: M.OrchestrationV2AppThread }
+  | { readonly type: "thread.deleted"; readonly threadId: M.ThreadId }
   | { readonly type: "message.updated"; readonly payload: M.OrchestrationV2ConversationMessage }
   | { readonly type: "subagent.updated"; readonly payload: M.OrchestrationV2Subagent }
   | { readonly type: "provider-thread.updated"; readonly payload: M.OrchestrationV2ProviderThread }
@@ -26,54 +28,147 @@ type OriginEvent =
       readonly payload: M.OrchestrationV2ContextTransfer;
     };
 
+const freshThread = (threadId: M.ThreadId): M.OrchestrationV2AppThread => ({
+  id: threadId,
+  projectId: M.ProjectId.make("project"),
+  title: "synthetic provenance",
+  createdBy: "user",
+  creationSource: "web",
+  providerInstanceId: selection.instanceId,
+  modelSelection: selection,
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  activeProviderThreadId: null,
+  lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+  forkedFrom: null,
+  createdAt: now,
+  updatedAt: now,
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  lastVisitedAt: null,
+  deletedAt: null,
+});
+const contextTransfer = (
+  type: M.OrchestrationV2ContextTransferType,
+  sourceThreadId: M.ThreadId,
+  targetThreadId: M.ThreadId,
+): M.OrchestrationV2ContextTransfer => ({
+  id: M.ContextTransferId.make(`transfer-${type}`),
+  type,
+  sourceThreadId,
+  targetThreadId,
+  sourcePoint: { threadId: sourceThreadId, runId: M.RunId.make("source-run") },
+  basePoint: null,
+  sourceProviderInstanceId: selection.instanceId,
+  targetProviderInstanceId: selection.instanceId,
+  targetRunId: M.RunId.make("target-run"),
+  status: "consumed",
+  resolution: null,
+  createdBy: "agent",
+  error: null,
+  createdAt: now,
+  updatedAt: now,
+  consumedAt: now,
+});
+const taskChild = (parentThread: M.OrchestrationV2AppThread, childThreadId: M.ThreadId) =>
+  makeSubagentChildThread({
+    parentThread,
+    childThreadId,
+    parentNodeId: M.NodeId.make(`task:${childThreadId}`),
+    activeProviderThreadId: null,
+    providerInstanceId: selection.instanceId,
+    modelSelection: selection,
+    title: "synthetic task",
+    now,
+    createdBy: "agent",
+    creationSource: "mcp",
+  });
+const taskRecord = (
+  parentThreadId: M.ThreadId,
+  childThreadId: M.ThreadId,
+): M.OrchestrationV2Subagent => ({
+  id: M.NodeId.make(`task:${childThreadId}`),
+  threadId: parentThreadId,
+  runId: M.RunId.make("parent-run"),
+  parentNodeId: M.NodeId.make("parent-root"),
+  origin: "app_owned",
+  createdBy: "agent",
+  memoryGrantCeiling: "read",
+  driver: M.ProviderDriverKind.make("codex"),
+  providerInstanceId: selection.instanceId,
+  providerThreadId: null,
+  childThreadId,
+  nativeTaskRef: null,
+  prompt: "Delegated task",
+  title: "task",
+  model: "fixture",
+  status: "completed",
+  result: "Child answer",
+  startedAt: now,
+  completedAt: now,
+  updatedAt: now,
+});
+/** Task record, child creation and delivered result of one app-owned task, as the orchestrator persists them. */
+const appOwnedTaskResult = (
+  parentThread: M.OrchestrationV2AppThread,
+  childThreadId: M.ThreadId,
+): OriginEvent[] => [
+  { type: "thread.created", payload: taskChild(parentThread, childThreadId) },
+  { type: "subagent.updated", payload: taskRecord(parentThread.id, childThreadId) },
+  {
+    type: "context-transfer.created",
+    payload: contextTransfer("subagent_result", childThreadId, parentThread.id),
+  },
+];
+const encodeEvent = (threadId: M.ThreadId, event: OriginEvent) => {
+  switch (event.type) {
+    case "thread.created":
+      return {
+        type: event.type,
+        streamId: event.payload.id,
+        payloadJson: encodeThread(event.payload),
+      };
+    case "thread.deleted":
+      return { type: event.type, streamId: event.threadId, payloadJson: "{}" };
+    case "message.updated":
+      return {
+        type: event.type,
+        streamId: event.payload.threadId,
+        payloadJson: encodeMessage(event.payload),
+      };
+    case "subagent.updated":
+      return {
+        type: event.type,
+        streamId: event.payload.threadId,
+        payloadJson: encodeSubagent(event.payload),
+      };
+    case "provider-thread.updated":
+      return { type: event.type, streamId: threadId, payloadJson: encodeProvider(event.payload) };
+    default:
+      return {
+        type: event.type,
+        streamId: event.payload.targetThreadId,
+        payloadJson: encodeTransfer(event.payload),
+      };
+  }
+};
+
+/** Encoded events of an app-owned task of `parentThreadId` whose result reached that parent. */
+export const appOwnedTaskResultEvents = (parentThreadId: M.ThreadId, childThreadId: M.ThreadId) =>
+  appOwnedTaskResult(freshThread(parentThreadId), childThreadId).map((event) =>
+    encodeEvent(parentThreadId, event),
+  );
+
 /** Persisted producer shapes (not provider execution or proof of native non-inheritance).
  * App-owned task routing is distinct from native projections with unobservable context.
  */
 export function threadProvenanceCases(threadId: M.ThreadId) {
-  const fresh: M.OrchestrationV2AppThread = {
-    id: threadId,
-    projectId: M.ProjectId.make("project"),
-    title: "synthetic provenance",
-    createdBy: "user",
-    creationSource: "web",
-    providerInstanceId: selection.instanceId,
-    modelSelection: selection,
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    activeProviderThreadId: null,
-    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-    forkedFrom: null,
-    createdAt: now,
-    updatedAt: now,
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    lastVisitedAt: null,
-    deletedAt: null,
-  };
-  const transfer = (
-    type: M.OrchestrationV2ContextTransferType,
-    sourceThreadId = parent,
-  ): M.OrchestrationV2ContextTransfer => ({
-    id: M.ContextTransferId.make(`transfer-${type}`),
-    type,
-    sourceThreadId,
-    targetThreadId: threadId,
-    sourcePoint: { threadId: sourceThreadId, runId: M.RunId.make("source-run") },
-    basePoint: null,
-    sourceProviderInstanceId: selection.instanceId,
-    targetProviderInstanceId: selection.instanceId,
-    targetRunId: M.RunId.make("target-run"),
-    status: "consumed",
-    resolution: null,
-    createdBy: "agent",
-    error: null,
-    createdAt: now,
-    updatedAt: now,
-    consumedAt: now,
-  });
+  const fresh = freshThread(threadId);
+  const transfer = (type: M.OrchestrationV2ContextTransferType, sourceThreadId = parent) =>
+    contextTransfer(type, sourceThreadId, threadId);
   const providerThread: M.OrchestrationV2ProviderThread = {
     id: M.ProviderThreadId.make("native"),
     driver: M.ProviderDriverKind.make("codex"),
@@ -112,6 +207,8 @@ export function threadProvenanceCases(threadId: M.ThreadId) {
     lineage: { parentThreadId: parent, relationshipToParent: "fork", rootThreadId: parent },
     forkedFrom: { type: "run", threadId: parent, runId: M.RunId.make("source-run") },
   };
+  const taskChildId = M.ThreadId.make("task-child");
+  const taskResult = appOwnedTaskResult(fresh, taskChildId);
   const row = (
     name: string,
     state: "tracked" | "unknown",
@@ -121,21 +218,7 @@ export function threadProvenanceCases(threadId: M.ThreadId) {
     name,
     state,
     createdJson: encodeThread(thread),
-    events: events.map((event) => ({
-      type: event.type,
-      streamId:
-        event.type === "subagent.updated" || event.type === "message.updated"
-          ? event.payload.threadId
-          : threadId,
-      payloadJson:
-        event.type === "provider-thread.updated"
-          ? encodeProvider(event.payload)
-          : event.type === "message.updated"
-            ? encodeMessage(event.payload)
-            : event.type === "subagent.updated"
-              ? encodeSubagent(event.payload)
-              : encodeTransfer(event.payload),
-    })),
+    events: events.map((event) => encodeEvent(threadId, event)),
   });
   const launched = (via: NonNullable<M.OrchestrationV2AppThread["launchedBy"]>["via"]) => ({
     ...fresh,
@@ -322,6 +405,35 @@ export function threadProvenanceCases(threadId: M.ThreadId) {
     ]),
     row("subagent result", "unknown", fresh, [
       { type: "context-transfer.created", payload: transfer("subagent_result") },
+    ]),
+    row("app-owned task result from a tracked child", "tracked", fresh, taskResult),
+    row(
+      "task result without an app-owned task record",
+      "unknown",
+      fresh,
+      taskResult.filter((event) => event.type !== "subagent.updated"),
+    ),
+    row("task result from a child of another parent", "unknown", fresh, [
+      { type: "thread.created", payload: taskChild({ ...fresh, id: parent }, taskChildId) },
+      ...taskResult.slice(1),
+    ]),
+    row("task result from a provider-created child", "unknown", fresh, [
+      {
+        type: "thread.created",
+        payload: { ...taskChild(fresh, taskChildId), creationSource: "provider" },
+      },
+      ...taskResult.slice(1),
+    ]),
+    row("task result from a deleted child", "unknown", fresh, [
+      ...taskResult,
+      { type: "thread.deleted", threadId: taskChildId },
+    ]),
+    row("task result from a child that took another thread's context", "unknown", fresh, [
+      ...taskResult,
+      {
+        type: "context-transfer.created",
+        payload: contextTransfer("provider_handoff", parent, taskChildId),
+      },
     ]),
   ];
 }

@@ -14,7 +14,10 @@ import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as Service from "../../../memory/MemoryService.ts";
 import * as Store from "../../../memory/MemoryStore.ts";
 import * as Fixture from "./handlers.testkit.ts";
-import { threadProvenanceCases } from "../../../memory/threadProvenance.testkit.ts";
+import {
+  appOwnedTaskResultEvents,
+  threadProvenanceCases,
+} from "../../../memory/threadProvenance.testkit.ts";
 
 const caller = (name = "r5-caller") => ({
   ...Fixture.scope(),
@@ -370,7 +373,7 @@ it.effect.each(threadProvenanceCases(ref().threadId))(
       yield* sql`INSERT INTO orchestration_events VALUES(2,'thread',${ref().threadId},'thread.created',${origin.createdJson})`;
       for (const event of origin.events)
         yield* sql`INSERT INTO orchestration_events VALUES(2,'thread',${event.streamId},${event.type},${event.payloadJson})`;
-      if (origin.events.some((event) => event.type === "subagent.updated")) {
+      if (origin.events.some((event) => event.type === "message.updated")) {
         const history = yield* sql<{
           role: string;
           text: string;
@@ -403,4 +406,99 @@ it.effect.each(threadProvenanceCases(ref().threadId))(
         expect(yield* counts).toEqual(before);
       }
     }).pipe(Effect.provide(Fixture.layer)),
+);
+
+const linkTask = (parent: M.ThreadId, child: M.ThreadId) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    for (const event of appOwnedTaskResultEvents(parent, child))
+      yield* sql`INSERT INTO orchestration_events VALUES(2,'thread',${event.streamId},${event.type},${event.payloadJson})`;
+  });
+const revisions = (from: number, length: number) =>
+  Array.from({ length }, (_, n) => M.MemoryRevisionId.make(Fixture.id(from + n)));
+
+it.effect("app-owned task results carry child lineage into parent saves and retries replay", () =>
+  Effect.gen(function* () {
+    yield* setup;
+    const store = yield* Store.MemoryStore;
+    const child = ref("r5-task-child");
+    const grandchild = ref("r5-task-grandchild");
+    const a = yield* seed(25000);
+    const b = yield* seed(25100);
+    yield* store.appendThreadLineage(child, Fixture.space, [a.revision]);
+    yield* store.appendThreadLineage(grandchild, Fixture.space, [b.revision]);
+    yield* linkTask(ref().threadId, child.threadId);
+    yield* linkTask(child.threadId, grandchild.threadId);
+    const saved = yield* Fixture.call("memory_upsert", Fixture.upsert(), caller());
+    expect(saved.result.isError, JSON.stringify(saved.body)).not.toBe(true);
+    const aggregate = yield* store.loadAggregate(Fixture.space, Fixture.memoryId);
+    const head = aggregate.revisions.find(
+      (pair) => pair.revision.revisionId === aggregate.heads[0],
+    );
+    expect(head?.payload?.derivedFromMemoryRevisions).toEqual(
+      expect.arrayContaining([a.revision, b.revision]),
+    );
+    const before = yield* counts;
+    expect((yield* Fixture.call("memory_upsert", Fixture.upsert(), caller())).body).toEqual(
+      saved.body,
+    );
+    expect(yield* counts).toEqual(before);
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+const taskChild = ref("r5-task-child");
+const appendLineage = (
+  thread: M.ScopedThreadRef,
+  space: M.MemorySpaceId,
+  ids: ReadonlyArray<M.MemoryRevisionId>,
+) =>
+  Effect.gen(function* () {
+    yield* (yield* Store.MemoryStore).appendThreadLineage(thread, space, ids);
+  });
+it.effect.each([
+  {
+    name: "own and child lineage past 100 revisions",
+    state: "overflow",
+    arrange: Effect.all([
+      appendLineage(ref(), Fixture.space, revisions(26000, 60)),
+      appendLineage(taskChild, Fixture.space, revisions(26100, 50)),
+      linkTask(ref().threadId, taskChild.threadId),
+    ]),
+  },
+  {
+    name: "an overflowed child",
+    state: "overflow",
+    arrange: Effect.all([
+      appendLineage(taskChild, Fixture.space, revisions(26200, 101)),
+      linkTask(ref().threadId, taskChild.threadId),
+    ]),
+  },
+  {
+    name: "a child lineage recorded in another memory space",
+    state: "unknown",
+    arrange: Effect.all([
+      appendLineage(taskChild, M.MemorySpaceId.make(Fixture.id(26999)), revisions(26300, 1)),
+      linkTask(ref().threadId, taskChild.threadId),
+    ]),
+  },
+  {
+    name: "more than 100 task children",
+    state: "overflow",
+    arrange: Effect.forEach(
+      Array.from({ length: 101 }, (_, n) => M.ThreadId.make(`r5-task-child-${n}`)),
+      (child) => linkTask(ref().threadId, child),
+    ),
+  },
+] as const)("app-owned task results from $name fail closed as $state", ({ arrange, state }) =>
+  Effect.gen(function* () {
+    yield* setup;
+    yield* arrange;
+    const store = yield* Store.MemoryStore;
+    expect((yield* store.readThreadLineage(ref(), Fixture.space)).state).toBe(state);
+    const before = yield* counts;
+    const saved = yield* Fixture.call("memory_upsert", Fixture.upsert(), caller());
+    expect(saved.result.isError).toBe(true);
+    expect(saved.body).toMatchObject({ code: "thread_lineage_incomplete" });
+    expect(yield* counts).toEqual(before);
+  }).pipe(Effect.provide(Fixture.layer)),
 );
