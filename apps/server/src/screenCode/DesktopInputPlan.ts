@@ -166,7 +166,12 @@ const buildForwardedInput = (
   action: string | undefined,
 ): Record<string, unknown> => {
   const target = { kind: "window", pid: bound.pid, window_id: bound.windowId };
-  const forwarded: Record<string, unknown> = { ...args, target, delivery_mode: "background" };
+  // Only a key press may take the driver's foreground escalation; background refusals stay refusals.
+  const delivery =
+    method === "press_key" && args.delivery_mode === "foreground" && args.send !== true
+      ? "foreground"
+      : "background";
+  const forwarded: Record<string, unknown> = { ...args, target, delivery_mode: delivery };
   delete forwarded.elementRef;
   delete forwarded.send;
   delete forwarded.verify;

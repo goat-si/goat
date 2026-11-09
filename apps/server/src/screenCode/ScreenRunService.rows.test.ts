@@ -214,3 +214,18 @@ it.live("a held tab key is refused before clicking its target or pressing the ke
     }),
   ),
 );
+
+it.live(
+  "a tab key with a delivery mode is refused before clicking its target or pressing the key",
+  () =>
+    withScreen(() =>
+      Effect.gen(function* () {
+        const result = yield* (yield* ScreenRunService).runCell({
+          ...request,
+          source: `${bind} try { await tab.press('Enter', 'button', {delivery_mode: 'foreground'}); } catch(e) { return [e.code, e.nothingSent, e.nextStep]; }`,
+        });
+        expect(result.value).toEqual(["unsupported", true, "Leave delivery_mode out for tabs."]);
+        expect(result.journal.map((entry) => entry.receipt.method)).toEqual(["select_tab"]);
+      }),
+    ),
+);
