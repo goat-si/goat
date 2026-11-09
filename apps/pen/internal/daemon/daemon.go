@@ -65,6 +65,8 @@ type Daemon struct {
 	inviteWait map[string]chan mesh.Member
 	lastView   *mesh.View
 
+	khMu sync.Mutex
+
 	stopOnce sync.Once
 	stopCh   chan struct{}
 	exitErr  error
@@ -210,7 +212,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.spawn(func() { d.acceptLoop(ctx) })
 	d.spawn(func() { d.every(ctx, d.opt.SyncEvery, func() { d.pushAll(ctx) }) })
 	d.spawn(func() { d.hostKeysLoop(ctx) })
-	d.writeKnownHosts(d.view())
+	d.writeKnownHosts()
 	if d.opt.Ready != nil {
 		d.opt.Ready()
 	}
@@ -359,7 +361,7 @@ func (d *Daemon) viewChanged() {
 	for _, l := range doomed {
 		l.sec.Close(4401)
 	}
-	d.writeKnownHosts(v)
+	d.writeKnownHosts()
 }
 
 // register records a live session unless its peer is no longer a member. The check runs under d.mu,

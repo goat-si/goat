@@ -65,11 +65,15 @@ func (d *Daemon) checkHostKeys(ctx context.Context) {
 	d.pushAll(ctx)
 }
 
-// writeKnownHosts writes pen-<name>,pen-<nodeId> lines for every member's host keys.
-func (d *Daemon) writeKnownHosts(v *mesh.View) {
+// writeKnownHosts writes pen-<name>,pen-<nodeId> lines for every member's host keys. Writers are
+// serialized and each reads the view under the lock, so the last write is always the newest view.
+func (d *Daemon) writeKnownHosts() {
 	if d.opt.KnownHosts == "none" {
 		return
 	}
+	d.khMu.Lock()
+	defer d.khMu.Unlock()
+	v := d.view()
 	var b strings.Builder
 	for _, m := range v.SortedMembers() {
 		for _, k := range m.HostKeys {
