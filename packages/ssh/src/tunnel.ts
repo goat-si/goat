@@ -1451,7 +1451,7 @@ export function buildRemoteStopScript(
 function buildReconnectProbeScript(selected: PreparedRemoteRuntime) {
   return `reconnect_probe() {
 sh -s -- "\${1:-}" <<'GOAT_RECONNECT_PROBE_SCRIPT'
-${buildRemoteRuntimeProbeScript(selected.requestedVersion ?? "", REMOTE_RUNTIME_STATE_KEY, false, true)}
+${buildRemoteRuntimeProbeScript(selected.requestedVersion ?? "", REMOTE_RUNTIME_STATE_KEY, false, true, selected.runner?.ownRuntimeVersion)}
 GOAT_RECONNECT_PROBE_SCRIPT
 }`;
 }
@@ -4220,7 +4220,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         );
         if (app !== undefined) return app;
       }
-      const output = yield* NativeWindows.statusRuntimeProbe(resolvedTarget, requestedVersion);
+      const output = yield* NativeWindows.statusRuntimeProbe(
+        resolvedTarget,
+        requestedVersion,
+        runner?.ownRuntimeVersion,
+      );
       const probe = yield* decodeRemoteJsonOutput(output.stdout, decodeRemoteRuntimeProbe).pipe(
         Effect.mapError(runtimePreparationError),
       );

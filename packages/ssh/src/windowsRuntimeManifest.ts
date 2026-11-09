@@ -7,10 +7,12 @@ export const WINDOWS_MANIFEST_SUPPORT_SCRIPT = `windows_cached_own() {
   [ "$1" = "$wc_version" ] || return 1
   signals_json "$1" "$2" "$3"
 }
-windows_manifest_key() {
+# Sets WM_RECORDED to "<version>:<hash>" when goat $2's manifest marker and install record are
+# regular files that both name version $1 and the same executable hash.
+windows_manifest_recorded() {
+  WM_RECORDED=
   case "\${fact_uname-$(uname -s)}" in MINGW*|MSYS*|CYGWIN*) ;; *) return 1 ;; esac
-  wm_version="$1"; wm_exe="$2"; wm_dir="\${2%/goat}"
-  [ -f "$wm_exe" ] && [ ! -L "$wm_exe" ] || return 1
+  wm_version="$1"; wm_dir="\${2%/goat}"
   wm_marker="$wm_dir/goat-manifest-shell-v1.sha256"
   wm_record="$wm_dir/.install-record"
   [ -f "$wm_marker" ] && [ ! -L "$wm_marker" ] &&
@@ -20,8 +22,13 @@ windows_manifest_key() {
   IFS=' ' read -r wm_rv wm_archive wm_rhash wm_source wm_extra < "$wm_record" || return 1
   [ "$wm_rv" = "$wm_version" ] && [ "$wm_rhash" = "$wm_hash" ] &&
     [ -z "$wm_extra" ] || return 1
-  wm_actual="$(runner_sha256 "$wm_exe")" || return 1
+  WM_RECORDED="$wm_version:$wm_hash"
+}
+windows_manifest_key() {
+  windows_manifest_recorded "$1" "$2" || return 1
+  [ -f "$2" ] && [ ! -L "$2" ] || return 1
+  wm_actual="$(runner_sha256 "$2")" || return 1
   [ "$wm_actual" = "$wm_hash" ] || return 1
-  printf '%s:%s' "$wm_version" "$wm_hash"
+  printf '%s' "$WM_RECORDED"
 }
 `;

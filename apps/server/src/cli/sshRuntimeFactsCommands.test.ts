@@ -201,6 +201,41 @@ describe("SSH helper facts frame", () => {
     }).pipe(Effect.scoped),
   );
 
+  // Clients before --with-caps accept only answer tags between the begin and end lines.
+  it.effect("without --with-caps the frame is byte for byte the one earlier clients parse", () =>
+    Effect.gen(function* () {
+      const { files, port } = yield* liveRecord(["start-1"]);
+      const plain = (yield* helper(["facts", ...files])).stdout;
+      const manifest = (yield* helper(["runtime-manifest", "--shell"])).stdout.trim();
+      const commit = yield* helper(["commit-time"]);
+      const live = (yield* helper(["protocol", ...files, "--shell"])).stdout.trim();
+      const compat = (yield* helper(["compat", "--port", String(port)])).stdout.trim();
+      const answers = [
+        "manifest ok " + manifest,
+        commit.failed ? "commit fail unavailable" : "commit ok " + commit.stdout.trim(),
+        "live ok " + live,
+        "compat ok " + compat,
+      ];
+      expect(plain).toBe(["begin v1 facts", ...answers, "end 4"].join("\n") + "\n");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "--with-caps adds the capabilities line after begin and leaves it out of the count",
+    () =>
+      Effect.gen(function* () {
+        const { files } = yield* liveRecord(["start-1"]);
+        const plain = (yield* helper(["facts", ...files])).stdout;
+        const caps = (yield* helper(["capabilities"])).stdout;
+        const withCaps = (yield* helper(["facts", "--with-caps", ...files])).stdout;
+        // Without the flag the frame is what earlier clients parse: answer tags only.
+        expect(plain).not.toContain("caps v1");
+        const [begin, ...rest] = plain.split("\n");
+        expect(withCaps).toBe([begin, caps.trimEnd(), ...rest].join("\n"));
+        expect(withCaps.split("\n")[1]).toBe(caps.trimEnd());
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("asks no compat question when no server runs", () =>
     Effect.gen(function* () {
       const home = NodeOS.tmpdir();

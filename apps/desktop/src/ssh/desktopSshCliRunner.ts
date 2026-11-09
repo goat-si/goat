@@ -34,8 +34,10 @@ export const resolveDesktopSshCliRunner = (
       nodeEngineRange: serverPackage.engines.node,
     };
   }
+  const archiveVersion = environment.isPackaged ? environment.appVersion : serverPackage.version;
   return {
-    archiveVersion: environment.isPackaged ? environment.appVersion : serverPackage.version,
+    archiveVersion,
+    ownRuntimeVersion: archiveVersion,
     ...(buildCommitTime === undefined ? {} : { archiveCommitTime: buildCommitTime }),
     ...archiveOptions,
     hostDownload: true,
