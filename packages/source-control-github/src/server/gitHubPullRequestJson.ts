@@ -1330,9 +1330,10 @@ function toReviewThreadEntries(threads: ReviewThreadPage, viewer: string | null)
     const path = trimmed(thread.path);
     const id = trimmed(thread.id);
     const loaded = nodesOf(thread.comments);
-    // Hidden comments are left out as in `toComments`; a thread with none left is dropped.
+    // Hidden comments are left out; an empty thread keeps its cursor for later pages.
     const comments = loaded.filter((comment) => !comment.isMinimized);
-    if (path === null || id === null || comments.length === 0) return [];
+    const nextCommentCursor = nextCursorOf(thread.comments.pageInfo);
+    if (path === null || id === null || (comments.length === 0 && !nextCommentCursor)) return [];
     return [
       {
         thread: {
@@ -1346,7 +1347,7 @@ function toReviewThreadEntries(threads: ReviewThreadPage, viewer: string | null)
           comments: comments.map((comment) => toThreadComment(comment, viewer)),
         },
         commentCount: thread.comments.totalCount - (loaded.length - comments.length),
-        nextCommentCursor: nextCursorOf(thread.comments.pageInfo),
+        nextCommentCursor,
       },
     ];
   });

@@ -739,6 +739,32 @@ describe("review thread decoding", () => {
     expect(result.threads[0]?.thread.comments.map((comment) => comment.id)).toEqual(["t2"]);
   });
 
+  it("keeps a thread whose first page is all hidden, so its later pages still load", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        threadsJson([
+          {
+            id: "PRRT_hidden_first",
+            path: "apps/server/src/ws.ts",
+            comments: {
+              nodes: [
+                { id: "t1", createdAt: "2026-07-01T00:00:00Z", isMinimized: true },
+                { id: "t2", createdAt: "2026-07-01T01:00:00Z", isMinimized: true },
+              ],
+              totalCount: 13,
+              pageInfo: { hasNextPage: true, endCursor: "Y3Vyc29yOjI" },
+            },
+          },
+        ]),
+      ),
+    );
+
+    expect(
+      result.threads.map((entry) => [entry.thread.id, entry.commentCount, entry.nextCommentCursor]),
+    ).toEqual([["PRRT_hidden_first", 11, "Y3Vyc29yOjI"]]);
+    expect(result.threads[0]?.thread.comments).toEqual([]);
+  });
+
   it("keeps GitHub's own count of a thread whose comments were not all read", () => {
     const result = expectSuccess(
       decodeReviewThreadsJson(
