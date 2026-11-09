@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -20,39 +22,101 @@ import (
 // TokenPrefix starts every invite token.
 const TokenPrefix = "pen1_"
 
-// Token is what an invite hands to a joiner: the inviter's keys, the invite secret and the relay.
+// Token is what an invite hands to a joiner: the inviter's keys, the invite secret and its relays.
 type Token struct {
 	SignPub  []byte
 	NoisePub []byte
 	Secret   []byte
-	Relay    string
+	Relays   []string
 }
 
-// String encodes pen1_ + base64url(version 1 || signPub || noisePub || secret || relay).
+// Token v2 limits.
+const (
+	MaxTokenRelays   = 8
+	MaxTokenRelayLen = 256
+)
+
+// String encodes pen1_ + base64url(version || signPub || noisePub || secret || relays). One relay
+// is version 1 (older nodes can join); several are version 2, joined by LF.
 func (t Token) String() string {
-	b := []byte{1}
+	version := byte(1)
+	if len(t.Relays) > 1 {
+		version = 2
+	}
+	b := []byte{version}
 	b = append(b, t.SignPub...)
 	b = append(b, t.NoisePub...)
 	b = append(b, t.Secret...)
-	b = append(b, t.Relay...)
+	b = append(b, strings.Join(t.Relays, string(rune(10)))...)
 	return TokenPrefix + ident.B64.EncodeToString(b)
 }
 
-// ParseToken decodes an invite token.
+// ParseToken decodes a version 1 or 2 invite token.
 func ParseToken(s string) (Token, error) {
 	rest, ok := strings.CutPrefix(strings.TrimSpace(s), TokenPrefix)
 	if !ok {
 		return Token{}, errors.New("not a pen1_ invite token")
 	}
 	b, err := ident.B64.DecodeString(rest)
-	if err != nil || len(b) < 1+96+1 || b[0] != 1 {
+	if err != nil || len(b) < 1+96+1 || b[0] != 1 && b[0] != 2 {
 		return Token{}, errors.New("malformed invite token")
 	}
-	t := Token{SignPub: b[1:33], NoisePub: b[33:65], Secret: b[65:97], Relay: string(b[97:])}
-	if _, err := wire.RelayOrigin(t.Relay); err != nil {
-		return Token{}, fmt.Errorf("invite token relay: %w", err)
+	t := Token{SignPub: b[1:33], NoisePub: b[33:65], Secret: b[65:97]}
+	if b[0] == 1 {
+		t.Relays = []string{string(b[97:])}
+		if _, err := wire.RelayOrigin(t.Relays[0]); err != nil {
+			return Token{}, fmt.Errorf("invite token relay: %w", err)
+		}
+		return t, nil
+	}
+	t.Relays = strings.Split(string(b[97:]), string(rune(10)))
+	if err := ValidRelayList(t.Relays); err != nil {
+		return Token{}, fmt.Errorf("invite token relays: %w", err)
 	}
 	return t, nil
+}
+
+// ValidRelayList checks a version 2 relay list: 1 to 8 distinct URLs of at most 256 bytes, https or
+// wss (http or ws only for loopback hosts, for local relays).
+func ValidRelayList(relays []string) error {
+	if len(relays) < 1 || len(relays) > MaxTokenRelays {
+		return fmt.Errorf("%d relays (1 to %d)", len(relays), MaxTokenRelays)
+	}
+	seen := map[string]bool{}
+	for _, r := range relays {
+		if r == "" || len(r) > MaxTokenRelayLen {
+			return fmt.Errorf("relay URL empty or over %d bytes", MaxTokenRelayLen)
+		}
+		if seen[r] {
+			return fmt.Errorf("duplicate relay %q", r)
+		}
+		seen[r] = true
+		u, err := url.Parse(r)
+		if err != nil {
+			return err
+		}
+		switch strings.ToLower(u.Scheme) {
+		case "https", "wss":
+		case "http", "ws":
+			if !loopback(u.Hostname()) {
+				return fmt.Errorf("relay %q: plain http only for loopback hosts", r)
+			}
+		default:
+			return fmt.Errorf("relay %q: scheme must be https or wss", r)
+		}
+		if _, err := wire.RelayOrigin(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func loopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // NodeID is the inviter's nodeId.

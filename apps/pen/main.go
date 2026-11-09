@@ -20,7 +20,7 @@ var launchdPlist string
 
 const usage = `usage: pen <command> [flags]
 
-  up [--relay URL] [--name N] [--foreground] [--no-service]   start this node (founds a mesh the first time)
+  up [--relay URL]... [--name N] [--foreground] [--no-service]   start this node (founds a mesh the first time)
   down                                    stop this node
   invite [--ttl 10m] [--auto]             print a single-use join token
   join <token> [--name N]                 join the mesh a token invites to
@@ -30,6 +30,9 @@ const usage = `usage: pen <command> [flags]
   pipe <node> <port>                      connect stdin/stdout to a member's local port
   forward <localPort> <node>:<port>       forward a local port to a member's port
   ssh-config [--write|--install|--uninstall]   ssh_config for pen-<name> hosts (--install puts it first in ~/.ssh/config)
+  relay add|rm <url>, relay ls            change or list this node's relays
+  relay serve [--listen :443] (--autocert <host> --cache <dir> | --cert f --key f | --plain) [--public-origin wss://host]
+                                          run a relay
   version                                 print the version
 `
 
@@ -40,7 +43,7 @@ func main() {
 	verbs := map[string]verb{
 		"up": cli.RunUp, "down": cli.RunDown, "invite": cli.RunInvite, "join": cli.RunJoin, "ls": cli.RunLs,
 		"revoke": cli.RunRevoke, "leave": cli.RunLeave, "pipe": cli.RunPipe, "forward": cli.RunForward,
-		"ssh-config": cli.RunSSHConfig,
+		"ssh-config": cli.RunSSHConfig, "relay": cli.RunRelay,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)

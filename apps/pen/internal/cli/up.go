@@ -18,7 +18,6 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/state"
-	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
 const readyTimeout = 20 * time.Second
@@ -26,7 +25,8 @@ const readyTimeout = 20 * time.Second
 // RunUp creates the identity and mesh if needed and starts the daemon.
 func RunUp(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("up", stderr)
-	relayURL := fs.String("relay", "", "relay URL (https://...)")
+	var relayURLs multiFlag
+	fs.Var(&relayURLs, "relay", "relay URL (https://...); repeat for several relays")
 	name := fs.String("name", "", "this node's name")
 	foreground := fs.Bool("foreground", false, "run the daemon in this process")
 	noService := fs.Bool("no-service", false, "never install a systemd or launchd service")
@@ -54,13 +54,17 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if *relayURL != "" {
-		if _, err := wire.RelayOrigin(*relayURL); err != nil {
+	if len(relayURLs) > 0 {
+		var list []string
+		for _, u := range relayURLs {
+			list = append(list, strings.TrimRight(u, "/"))
+		}
+		if err := relayList(list); err != nil {
 			return fail(stderr, err)
 		}
-		cfg.Relay = strings.TrimRight(*relayURL, "/")
+		cfg.SetRelays(list)
 	}
-	if cfg.Relay == "" {
+	if len(cfg.RelayList()) == 0 {
 		return fail(stderr, errors.New("no relay configured; pass --relay https://<relay>"))
 	}
 	if *name != "" {
@@ -91,7 +95,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		if s.Name != cfg.Name {
 			daemon.Call(st, daemon.Request{Op: "name", Name: cfg.Name}, &s)
 		}
-		if s.Uplink == "replaced" || s.Relay != cfg.Relay {
+		if s.Uplink == "replaced" || !sameRelays(s.Relays, cfg.RelayList()) {
 			daemon.Call(st, daemon.Request{Op: "reconnect"}, &s)
 		}
 		printStatus(stdout, s)
@@ -124,7 +128,9 @@ func clearLeft(st *state.Store) error {
 func printStatus(w io.Writer, s daemon.Status) {
 	fmt.Fprintf(w, "node         %s (%s)\n", s.NodeID, s.Name)
 	fmt.Fprintf(w, "fingerprint  %s\n", s.Fingerprint)
-	fmt.Fprintf(w, "relay        %s (uplink %s)\n", s.Relay, s.Uplink)
+	for _, r := range s.Relays {
+		fmt.Fprintf(w, "relay        %s (uplink %s)\n", r.URL, r.Uplink)
+	}
 	fmt.Fprintf(w, "mesh         %s, %d member(s)\n", s.MeshID, s.Members)
 }
 
@@ -208,4 +214,22 @@ func waitControl(st *state.Store) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// multiFlag collects a repeatable string flag.
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+func sameRelays(states []daemon.RelayState, want []string) bool {
+	if len(states) != len(want) {
+		return false
+	}
+	for i, r := range states {
+		if r.URL != want[i] {
+			return false
+		}
+	}
+	return true
 }

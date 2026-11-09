@@ -1,0 +1,661 @@
+// Package relayserver is the Pen relay in Go: the same contract as infra/pen-relay (uplink auth with
+// origin binding, the session mux, caps, timeouts, backpressure and acks), for running a relay on
+// any machine with "pen relay serve".
+package relayserver
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"io"
+	"net/http"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/goat-si/goat/apps/pen/internal/ident"
+	"github.com/goat-si/goat/apps/pen/internal/wire"
+)
+
+// Contract limits.
+const (
+	MessageMax    = 1 << 20
+	SocketWindow  = 4 << 20
+	LightSession  = 16 << 10
+	RelayHeadroom = 64 << 10
+	PendingMax    = 8
+	ActiveMax     = 32
+	challengeLen  = 32
+	answerLen     = 96
+	// queueSlack is what a socket's outbound queue may hold past the contract windows (pongs).
+	queueSlack = 64 << 10
+)
+
+// Close codes the relay sends besides the wire package's.
+const (
+	CodeUnsupported uint16 = 1003
+	CodeTooBig      uint16 = 1009
+)
+
+// Version is what /healthz reports.
+const Version = "pen-relay/1.0"
+
+// Limits are the relay's timeouts.
+type Limits struct {
+	AuthTimeout    time.Duration
+	PendingTimeout time.Duration
+	IdleTimeout    time.Duration
+}
+
+// DefaultLimits are the contract's: 10 s auth, 10 s pending, 90 s idle.
+func DefaultLimits() Limits {
+	return Limits{AuthTimeout: 10 * time.Second, PendingTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
+}
+
+// Hooks let tests and wrappers observe the relay.
+type Hooks struct {
+	// OnUplink is called after an uplink authenticates.
+	OnUplink func(nodeID string)
+	// OnAck is called with every accepted ack on an uplink.
+	OnAck func(nodeID string, total uint64)
+	// OnBadAck is called when an ack closes a socket 4402.
+	OnBadAck func()
+}
+
+// Server is a relay. It is an http.Handler.
+type Server struct {
+	Limits Limits
+	// PublicOrigin, when set, is the origin uplinks sign (wss://host behind a TLS terminator);
+	// otherwise it is derived from each request.
+	PublicOrigin string
+	Hooks        Hooks
+
+	mu    sync.Mutex
+	rooms map[string]*room
+	sids  map[string]uint32
+	socks map[*sock]struct{}
+}
+
+// New builds a relay with limits.
+func New(l Limits) *Server {
+	return &Server{Limits: l, rooms: map[string]*room{}, sids: map[string]uint32{}, socks: map[*sock]struct{}{}}
+}
+
+var route = regexp.MustCompile(`^/v1/(node|client)/([^/]*)$`)
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/healthz" {
+		w.Header().Set("content-type", "application/json")
+		w.Header().Set("cache-control", "no-store")
+		w.Write([]byte(`{"ok":true,"version":"` + Version + `"}`))
+		return
+	}
+	m := route.FindStringSubmatch(r.URL.Path)
+	if m == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	role, nodeID := m[1], m[2]
+	if !ident.ValidNodeID(nodeID) {
+		http.Error(w, "bad node id", http.StatusBadRequest)
+		return
+	}
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		http.Error(w, "websocket upgrade required", http.StatusUpgradeRequired)
+		return
+	}
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		CompressionMode: websocket.CompressionDisabled,
+		// Browsers' Origin headers are not checked: the Noise layer and the uplink challenge
+		// authenticate, and clients may run on any page.
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		return
+	}
+	ws.SetReadLimit(-1)
+	origin := s.PublicOrigin
+	if origin == "" {
+		scheme := "ws://"
+		if r.TLS != nil {
+			scheme = "wss://"
+		}
+		origin, _ = wire.RelayOrigin(strings.Replace(scheme, "://", "", 1) + "://" + r.Host)
+	}
+	k := &sock{srv: s, ws: ws, nodeID: nodeID, out: newOutq(ws)}
+	s.mu.Lock()
+	s.socks[k] = struct{}{}
+	rm := s.rooms[nodeID]
+	if rm == nil {
+		rm = &room{srv: s, nodeID: nodeID, clients: map[uint32]*sock{}}
+		s.rooms[nodeID] = rm
+	}
+	rm.refs++
+	s.mu.Unlock()
+	k.room = rm
+	defer s.release(k)
+	if role == "node" {
+		k.role = roleNode
+		rm.acceptUplink(k, origin)
+	} else {
+		k.role = roleClient
+		if !rm.acceptClient(k) {
+			k.out.wait()
+			return
+		}
+	}
+	k.readLoop()
+	k.out.wait()
+}
+
+func (s *Server) release(k *sock) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.socks, k)
+	if k.room.refs--; k.room.refs == 0 && s.rooms[k.nodeID] == k.room {
+		delete(s.rooms, k.nodeID)
+	}
+}
+
+// nextSid hands out session ids per node; they are never reused while this process runs.
+func (s *Server) nextSid(nodeID string) uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sids[nodeID]++
+	return s.sids[nodeID]
+}
+
+// Close aborts every socket.
+func (s *Server) Close() {
+	s.mu.Lock()
+	all := make([]*sock, 0, len(s.socks))
+	for k := range s.socks {
+		all = append(all, k)
+	}
+	s.mu.Unlock()
+	for _, k := range all {
+		k.ws.CloseNow()
+	}
+}
+
+// DropUplink aborts nodeID's uplink socket as a failing network would.
+func (s *Server) DropUplink(nodeID string) bool {
+	s.mu.Lock()
+	rm := s.rooms[nodeID]
+	s.mu.Unlock()
+	if rm == nil {
+		return false
+	}
+	rm.mu.Lock()
+	up := rm.uplink
+	rm.mu.Unlock()
+	if up == nil {
+		return false
+	}
+	up.ws.CloseNow()
+	return true
+}
+
+// Online reports whether nodeID has an authenticated uplink.
+func (s *Server) Online(nodeID string) bool {
+	s.mu.Lock()
+	rm := s.rooms[nodeID]
+	s.mu.Unlock()
+	if rm == nil {
+		return false
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return rm.uplink != nil
+}
+
+const (
+	roleNode = iota + 1
+	roleClient
+)
+
+// sock is one accepted WebSocket. Fields below the line are guarded by room.mu.
+type sock struct {
+	srv    *Server
+	ws     *websocket.Conn
+	room   *room
+	nodeID string
+	role   int
+	out    *outq
+
+	sent, acked uint64
+	closed      bool
+	deadline    *time.Timer
+	idle        *time.Timer
+	// uplink
+	authed    bool
+	origin    string
+	challenge []byte
+	// client
+	sid       uint32
+	pending   bool
+	upEnd     uint64
+	upUnacked uint64
+}
+
+// room is one node's uplink and its sessions.
+type room struct {
+	srv    *Server
+	nodeID string
+	refs   int // guarded by srv.mu
+
+	mu      sync.Mutex
+	uplink  *sock
+	clients map[uint32]*sock
+}
+
+func (rm *room) armIdle(k *sock) {
+	k.idle = time.AfterFunc(rm.srv.Limits.IdleTimeout, func() {
+		rm.mu.Lock()
+		defer rm.mu.Unlock()
+		if !k.closed {
+			rm.fail(k, wire.CodeTimeout)
+		}
+	})
+}
+
+func (rm *room) acceptUplink(k *sock, origin string) {
+	challenge := make([]byte, challengeLen)
+	rand.Read(challenge)
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	k.origin, k.challenge = origin, challenge
+	k.sent = challengeLen
+	k.out.binary(challenge)
+	k.deadline = time.AfterFunc(rm.srv.Limits.AuthTimeout, func() {
+		rm.mu.Lock()
+		defer rm.mu.Unlock()
+		if !k.closed && !k.authed {
+			rm.fail(k, wire.CodeRelayAuth)
+		}
+	})
+	rm.armIdle(k)
+}
+
+// acceptClient opens a session, or closes the socket 4404 at once when the node is offline.
+func (rm *room) acceptClient(k *sock) bool {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if rm.uplink == nil {
+		k.closed = true
+		k.out.close(wire.CodeOffline)
+		return false
+	}
+	k.sid = rm.srv.nextSid(rm.nodeID)
+	k.pending = true
+	var pending []*sock
+	for _, c := range rm.clients {
+		if c.pending {
+			pending = append(pending, c)
+		}
+	}
+	for len(pending) >= PendingMax {
+		oldest := pending[0]
+		at := 0
+		for i, c := range pending {
+			if c.sid < oldest.sid {
+				oldest, at = c, i
+			}
+		}
+		rm.endSession(oldest, wire.CodeCaps)
+		pending = append(pending[:at], pending[at+1:]...)
+	}
+	rm.clients[k.sid] = k
+	k.deadline = time.AfterFunc(rm.srv.Limits.PendingTimeout, func() {
+		rm.mu.Lock()
+		defer rm.mu.Unlock()
+		if !k.closed && k.pending {
+			rm.fail(k, wire.CodeTimeout)
+		}
+	})
+	rm.armIdle(k)
+	if rm.uplink != nil {
+		rm.sendRelayFrame(wire.Frame{Type: wire.FrameOpen, SID: k.sid})
+	}
+	return true
+}
+
+func (k *sock) readLoop() {
+	ctx := context.Background()
+	for {
+		typ, rd, err := k.ws.Reader(ctx)
+		if err != nil {
+			k.room.peerGone(k, closeCode(err))
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(rd, MessageMax+1))
+		if err != nil {
+			k.room.peerGone(k, closeCode(err))
+			return
+		}
+		rm := k.room
+		rm.mu.Lock()
+		if k.closed {
+			rm.mu.Unlock()
+			return
+		}
+		if len(data) > MessageMax {
+			rm.fail(k, CodeTooBig)
+			rm.mu.Unlock()
+			return
+		}
+		if typ == websocket.MessageText {
+			rm.onText(k, string(data))
+		} else if k.role == roleClient {
+			rm.onClientData(k, data)
+		} else if !k.authed {
+			rm.authenticate(k, data)
+		} else {
+			rm.onUplinkFrame(k, data)
+		}
+		rm.mu.Unlock()
+	}
+}
+
+func closeCode(err error) uint16 {
+	if c := websocket.CloseStatus(err); c != -1 {
+		return uint16(c)
+	}
+	return 1006
+}
+
+func (rm *room) authenticate(k *sock, answer []byte) {
+	ok := len(answer) == answerLen && ident.NodeID(answer[:32]) == k.nodeID &&
+		ed25519.Verify(answer[:32], wire.ChallengeMessage(k.origin, k.nodeID, k.challenge), answer[32:])
+	if !ok {
+		rm.fail(k, wire.CodeRelayAuth)
+		return
+	}
+	if old := rm.uplink; old != nil {
+		rm.dropUplink(old, wire.CodeReplaced)
+	}
+	k.authed, k.challenge = true, nil
+	k.deadline.Stop()
+	rm.uplink = k
+	if f := rm.srv.Hooks.OnUplink; f != nil {
+		f(rm.nodeID)
+	}
+}
+
+func (rm *room) onText(k *sock, text string) {
+	if text == "ping" {
+		k.idle.Reset(rm.srv.Limits.IdleTimeout)
+		k.out.text("pong")
+		return
+	}
+	if !strings.HasPrefix(text, "a:") {
+		rm.fail(k, CodeUnsupported)
+		return
+	}
+	n, ok := wire.ParseAck(text)
+	if !ok || n < k.acked || n > k.sent {
+		if f := rm.srv.Hooks.OnBadAck; f != nil {
+			f()
+		}
+		rm.fail(k, wire.CodeRelayProtocol)
+		return
+	}
+	k.acked = n
+	if k.role == roleNode {
+		if f := rm.srv.Hooks.OnAck; f != nil {
+			f(rm.nodeID, n)
+		}
+	}
+}
+
+func (rm *room) onUplinkFrame(k *sock, b []byte) {
+	f, err := wire.DecodeFrame(b)
+	if err == nil && f.Type == wire.FrameData {
+		if c := rm.clients[f.SID]; c != nil {
+			rm.toClient(c, f.Payload)
+		}
+		return
+	}
+	if err != nil || f.Type != wire.FrameClose {
+		rm.dropUplink(k, wire.CodeRelayProtocol)
+		return
+	}
+	if c := rm.clients[f.SID]; c != nil {
+		rm.closeSock(c, sendable(f.CloseCode()))
+	}
+}
+
+func (rm *room) toClient(c *sock, payload []byte) {
+	if c.pending {
+		active := 0
+		for _, o := range rm.clients {
+			if !o.pending {
+				active++
+			}
+		}
+		if active >= ActiveMax {
+			rm.endSession(c, wire.CodeCaps)
+			return
+		}
+		c.pending = false
+		c.deadline.Stop()
+	}
+	if c.sent-c.acked+uint64(len(payload)) > SocketWindow {
+		rm.endSession(c, wire.CodeTimeout)
+		return
+	}
+	c.out.binary(payload)
+	c.sent += uint64(len(payload))
+}
+
+func (rm *room) onClientData(c *sock, payload []byte) {
+	up := rm.uplink
+	if up == nil {
+		rm.closeSock(c, wire.CodeOffline)
+		return
+	}
+	frame := wire.Frame{Type: wire.FrameData, SID: c.sid, Payload: payload}.Encode()
+	if up.acked >= c.upEnd {
+		c.upUnacked = 0
+	}
+	mine := c.upUnacked + uint64(len(frame))
+	others := max(1, len(rm.clients)-1)
+	limit := uint64(SocketWindow)
+	if mine > LightSession {
+		limit = uint64(SocketWindow - LightSession*others)
+	}
+	if up.sent-up.acked+uint64(len(frame)) > limit {
+		rm.endSession(c, wire.CodeTimeout)
+		return
+	}
+	up.out.binary(frame)
+	up.sent += uint64(len(frame))
+	c.upEnd = up.sent
+	c.upUnacked = mine
+}
+
+// sendRelayFrame sends OPEN or CLOSE, which may use RelayHeadroom past the window.
+func (rm *room) sendRelayFrame(f wire.Frame) {
+	up := rm.uplink
+	b := f.Encode()
+	if up.sent-up.acked+uint64(len(b)) > SocketWindow+RelayHeadroom {
+		rm.dropUplink(up, wire.CodeTimeout)
+		return
+	}
+	up.out.binary(b)
+	up.sent += uint64(len(b))
+}
+
+// endSession closes a client with code and tells the node.
+func (rm *room) endSession(c *sock, code uint16) {
+	rm.closeSock(c, code)
+	if rm.uplink != nil {
+		rm.sendRelayFrame(wire.CloseFrame(c.sid, code))
+	}
+}
+
+func (rm *room) dropUplink(k *sock, code uint16) {
+	current := rm.uplink == k
+	rm.closeSock(k, code)
+	if !current {
+		return
+	}
+	rm.uplink = nil
+	for _, c := range rm.clients {
+		rm.closeSock(c, wire.CodeOffline)
+	}
+}
+
+func (rm *room) fail(k *sock, code uint16) {
+	if k.role == roleNode {
+		rm.dropUplink(k, code)
+	} else {
+		rm.endSession(k, code)
+	}
+}
+
+func (rm *room) closeSock(k *sock, code uint16) {
+	if k.closed {
+		return
+	}
+	k.closed = true
+	if k.deadline != nil {
+		k.deadline.Stop()
+	}
+	if k.idle != nil {
+		k.idle.Stop()
+	}
+	if k.role == roleClient && rm.clients[k.sid] == k {
+		delete(rm.clients, k.sid)
+	}
+	k.out.close(code)
+}
+
+func (rm *room) peerGone(k *sock, code uint16) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if k.closed {
+		return
+	}
+	if k.role == roleNode {
+		rm.dropUplink(k, wire.CodeOffline)
+		return
+	}
+	rm.closeSock(k, sendable(code))
+	if code < 1000 || code > 4999 {
+		code = 1000
+	}
+	if rm.uplink != nil {
+		rm.sendRelayFrame(wire.CloseFrame(k.sid, code))
+	}
+}
+
+// sendable is a code a close frame may carry.
+func sendable(code uint16) uint16 {
+	if code == 1000 || code >= 3000 && code <= 4999 {
+		return code
+	}
+	return 1000
+}
+
+// outq sends a socket's messages in order from one goroutine, so the room never blocks on a slow
+// peer. The contract windows bound what it holds; past them plus slack the socket is aborted.
+type outq struct {
+	ws    *websocket.Conn
+	mu    sync.Mutex
+	items []outItem
+	bytes int
+	done  bool
+	wake  chan struct{}
+	ended chan struct{}
+}
+
+type outItem struct {
+	data  []byte
+	text  bool
+	close uint16
+}
+
+func newOutq(ws *websocket.Conn) *outq {
+	q := &outq{ws: ws, wake: make(chan struct{}, 1), ended: make(chan struct{})}
+	go q.run()
+	return q
+}
+
+func (q *outq) push(it outItem) {
+	q.mu.Lock()
+	if q.done {
+		q.mu.Unlock()
+		return
+	}
+	if it.close != 0 {
+		q.done = true
+	} else if q.bytes+len(it.data) > SocketWindow+RelayHeadroom+queueSlack {
+		q.done = true
+		q.items = nil
+		q.mu.Unlock()
+		q.ws.CloseNow()
+		return
+	}
+	q.items = append(q.items, it)
+	q.bytes += len(it.data)
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (q *outq) binary(b []byte)   { q.push(outItem{data: b}) }
+func (q *outq) text(s string)     { q.push(outItem{data: []byte(s), text: true}) }
+func (q *outq) close(code uint16) { q.push(outItem{close: code}) }
+func (q *outq) wait()             { <-q.ended }
+
+func (q *outq) run() {
+	defer close(q.ended)
+	ctx := context.Background()
+	for {
+		q.mu.Lock()
+		if len(q.items) == 0 {
+			if q.done {
+				q.mu.Unlock()
+				return
+			}
+			q.mu.Unlock()
+			<-q.wake
+			continue
+		}
+		it := q.items[0]
+		q.items = q.items[1:]
+		q.bytes -= len(it.data)
+		q.mu.Unlock()
+		if it.close != 0 {
+			cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			done := make(chan struct{})
+			go func() {
+				q.ws.Close(websocket.StatusCode(it.close), "")
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-cctx.Done():
+				q.ws.CloseNow()
+			}
+			cancel()
+			return
+		}
+		typ := websocket.MessageBinary
+		if it.text {
+			typ = websocket.MessageText
+		}
+		if err := q.ws.Write(ctx, typ, it.data); err != nil {
+			q.ws.CloseNow()
+			q.mu.Lock()
+			q.done, q.items = true, nil
+			q.mu.Unlock()
+			return
+		}
+	}
+}

@@ -20,8 +20,10 @@ var errNotAdmitted = &relay.CloseError{Code: wire.CodeNotAdmitted}
 
 func (d *Daemon) acceptLoop(ctx context.Context) {
 	for {
-		c, err := d.up.Accept(ctx)
-		if err != nil {
+		var c relay.Conn
+		select {
+		case c = <-d.accept:
+		case <-ctx.Done():
 			return
 		}
 		d.spawn(func() { d.handleOpen(ctx, c) })

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
@@ -55,12 +56,7 @@ func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 		// Deleting the keys now would leave the mesh counting this node as a member for good.
 		return res, errors.New("no member took the leave; this node keeps running and pushes it when a member's uplink returns or at its 10-minute sync, or run pen leave again")
 	}
-	d.upMu.Lock()
-	if d.upCancel != nil {
-		d.upCancel()
-	}
-	d.upMu.Unlock()
-	d.upState.Store("left")
+	d.stopUplinks("left")
 	unlock, err := d.st.Lock()
 	if err != nil {
 		return res, err
@@ -118,15 +114,16 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 		return err
 	}
 	d.cfgMu.Lock()
-	changed := d.cfg.Relay != tok.Relay
-	d.cfg.Relay, d.cfg.Name = tok.Relay, name
+	changed := !slices.Equal(d.cfg.RelayList(), tok.Relays)
+	d.cfg.SetRelays(tok.Relays)
+	d.cfg.Name = name
 	cfg := d.cfg
 	d.cfgMu.Unlock()
 	if err := d.st.SaveConfig(cfg); err != nil {
 		return err
 	}
 	if changed {
-		d.startUplink()
+		d.startUplinks()
 	}
 	d.viewChanged()
 	return nil

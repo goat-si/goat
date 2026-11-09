@@ -2,7 +2,9 @@ package relay
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"net/http"
 	"sync"
 	"time"
 
@@ -13,8 +15,15 @@ import (
 // PingInterval is the keepalive period for uplink and client sockets.
 const PingInterval = 30 * time.Second
 
+// TLSConfig, when set, replaces the system TLS settings for relay sockets (tests with a private CA).
+var TLSConfig *tls.Config
+
 func dialWS(ctx context.Context, wsURL string) (*websocket.Conn, error) {
-	c, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled})
+	opts := &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled}
+	if TLSConfig != nil {
+		opts.HTTPClient = &http.Client{Transport: &http.Transport{TLSClientConfig: TLSConfig}}
+	}
+	c, _, err := websocket.Dial(ctx, wsURL, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -59,6 +68,71 @@ func statusCode(err error) uint16 {
 	return 1006
 }
 
+// DialRace opens one client socket per relay in parallel, sends ping on each and keeps the first
+// that answers pong; the others close with 1000 before any other byte is sent. A relay where the
+// node is offline closes 4404 before any pong, so it never wins. It reports the relay it used.
+func DialRace(ctx context.Context, relays []string, nodeID string) (Conn, string, error) {
+	if len(relays) == 0 {
+		return nil, "", errors.New("relay: no relays")
+	}
+	type result struct {
+		c   *clientConn
+		url string
+		err error
+	}
+	rctx, cancel := context.WithCancel(ctx)
+	results := make(chan result, len(relays))
+	for _, u := range relays {
+		go func() {
+			c, err := Dial(rctx, u, nodeID)
+			if err != nil {
+				results <- result{url: u, err: err}
+				return
+			}
+			cc := c.(*clientConn)
+			cc.ws.Write(rctx, websocket.MessageText, []byte("ping"))
+			select {
+			case <-cc.pong:
+				results <- result{c: cc, url: u}
+			case <-cc.done:
+				err := cc.in.terminal()
+				if err == nil {
+					err = &CloseError{Code: 1006}
+				}
+				results <- result{url: u, err: err}
+			case <-rctx.Done():
+				cc.Close(wire.CodeNormal)
+				results <- result{url: u, err: rctx.Err()}
+			}
+		}()
+	}
+	var errs []error
+	for i := range relays {
+		r := <-results
+		if r.err != nil {
+			errs = append(errs, r.err)
+			continue
+		}
+		// Late winners and dials still running end without a byte past their ping.
+		cancel()
+		go func(left int) {
+			for range left {
+				if late := <-results; late.c != nil {
+					late.c.Close(wire.CodeNormal)
+				}
+			}
+		}(len(relays) - i - 1)
+		return r.c, r.url, nil
+	}
+	cancel()
+	for _, err := range errs {
+		if CodeOf(err) == wire.CodeOffline {
+			return nil, "", err
+		}
+	}
+	return nil, "", errs[len(errs)-1]
+}
+
 // Dial opens a client socket to nodeID through the relay.
 func Dial(ctx context.Context, relayURL, nodeID string) (Conn, error) {
 	u, err := wire.WebSocketURL(relayURL, "/v1/client/"+nodeID)
@@ -70,7 +144,7 @@ func Dial(ctx context.Context, relayURL, nodeID string) (Conn, error) {
 		return nil, err
 	}
 	lctx, cancel := context.WithCancel(context.Background())
-	c := &clientConn{ws: ws, in: newInbox(), ctx: lctx, cancel: cancel, done: make(chan struct{})}
+	c := &clientConn{ws: ws, in: newInbox(), ctx: lctx, cancel: cancel, done: make(chan struct{}), pong: make(chan struct{})}
 	go c.readLoop()
 	go pinger(lctx, ws)
 	return c, nil
@@ -82,6 +156,9 @@ type clientConn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
+	// pong closes on the first pong text (DialRace).
+	pong     chan struct{}
+	pongOnce sync.Once
 
 	mu     sync.Mutex
 	closed bool
@@ -98,6 +175,9 @@ func (c *clientConn) readLoop() {
 			return
 		}
 		if typ != websocket.MessageBinary {
+			if string(p) == "pong" {
+				c.pongOnce.Do(func() { close(c.pong) })
+			}
 			continue
 		}
 		if s, ok := ack.add(len(p)); ok {

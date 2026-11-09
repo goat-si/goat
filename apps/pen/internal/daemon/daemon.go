@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -56,11 +55,12 @@ type Daemon struct {
 	store   *mesh.Store
 	invites *mesh.Invites
 
-	up       *relay.Uplink
-	upState  atomic.Value // string
-	upCancel context.CancelFunc
-	upMu     sync.Mutex
-	runCtx   context.Context
+	// accept receives the sessions of every uplink; slots holds one uplink per relay.
+	accept chan relay.Conn
+	upMu   sync.Mutex
+	slots  []*uplinkSlot
+	halted string // set once the uplinks are down for good ("stopped", "left")
+	runCtx context.Context
 
 	mu         sync.Mutex
 	sessions   map[uint64]*live
@@ -174,10 +174,7 @@ func New(opt Options) (*Daemon, error) {
 		}
 		d.sshUser = opt.SSHUser
 	}
-	d.upState.Store("connecting")
-	d.up = relay.NewUplink(cfg.Relay, id)
-	d.up.Logf = opt.Logf
-	d.up.OnState = d.onUplink
+	d.accept = make(chan relay.Conn, 64)
 	d.lastView = store.View()
 	return d, nil
 }
@@ -199,10 +196,19 @@ func (d *Daemon) inviteBook() *mesh.Invites {
 	return d.invites
 }
 
-func (d *Daemon) relayURL() string {
+// relays is the node's relay list.
+func (d *Daemon) relays() []string {
 	d.cfgMu.Lock()
 	defer d.cfgMu.Unlock()
-	return d.cfg.Relay
+	return d.cfg.RelayList()
+}
+
+// relayURL is the first relay (shown where one relay is expected).
+func (d *Daemon) relayURL() string {
+	if r := d.relays(); len(r) > 0 {
+		return r[0]
+	}
+	return ""
 }
 
 func (d *Daemon) now() time.Time { return d.opt.Now() }
@@ -228,7 +234,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	started := d.now()
 	d.writeDaemonJSON(started)
 	d.spawn(func() { d.serveControl(ctx, ln) })
-	d.startUplink()
+	d.startUplinks()
 	d.spawn(func() { d.acceptLoop(ctx) })
 	d.spawn(func() { d.every(ctx, d.opt.SyncEvery, func() { d.pushAll(ctx) }) })
 	d.spawn(func() { d.hostKeysLoop(ctx) })
@@ -240,12 +246,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	case <-d.stopCh:
 	}
-	d.upMu.Lock()
-	if d.upCancel != nil {
-		d.upCancel()
-	}
-	d.upMu.Unlock()
-	d.upState.Store("stopped")
+	d.stopUplinks("stopped")
 	cancel()
 	ln.Close()
 	d.wg.Wait()
@@ -276,40 +277,128 @@ type daemonJSON struct {
 }
 
 func (d *Daemon) writeDaemonJSON(started time.Time) {
-	s, _ := d.upState.Load().(string)
-	if err := d.st.WriteJSON("daemon.json", daemonJSON{PID: os.Getpid(), Started: started.UnixMilli(), Uplink: s}, 0o600); err != nil {
+	if err := d.st.WriteJSON("daemon.json", daemonJSON{PID: os.Getpid(), Started: started.UnixMilli(), Uplink: d.uplinkState()}, 0o600); err != nil {
 		d.opt.Logf("daemon.json: %v", err)
 	}
 }
 
-func (d *Daemon) startUplink() {
-	d.upMu.Lock()
-	defer d.upMu.Unlock()
-	if d.upCancel != nil {
-		d.upCancel()
-	}
-	ctx, cancel := context.WithCancel(d.runCtx)
-	d.upCancel = cancel
-	d.up.RelayURL = d.relayURL()
-	d.upState.Store("connecting")
-	d.spawn(func() {
-		err := d.up.Run(ctx)
-		if errors.Is(err, relay.ErrReplaced) {
-			d.opt.Logf("uplink replaced by another pen for this node (4409); not reconnecting until pen up")
-			d.upState.Store("replaced")
-			d.writeDaemonJSON(d.now())
-		}
-	})
+// uplinkSlot is the uplink to one relay.
+type uplinkSlot struct {
+	url    string
+	up     *relay.Uplink
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	state  string
 }
 
-func (d *Daemon) onUplink(up bool) {
+func (sl *uplinkSlot) set(state string) {
+	sl.mu.Lock()
+	sl.state = state
+	sl.mu.Unlock()
+}
+
+func (sl *uplinkSlot) get() string {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+	return sl.state
+}
+
+// startUplinks (re)connects one uplink per relay.
+func (d *Daemon) startUplinks() {
+	d.upMu.Lock()
+	defer d.upMu.Unlock()
+	for _, sl := range d.slots {
+		sl.cancel()
+	}
+	d.slots, d.halted = nil, ""
+	for _, url := range d.relays() {
+		ctx, cancel := context.WithCancel(d.runCtx)
+		sl := &uplinkSlot{url: url, cancel: cancel, state: "connecting"}
+		sl.up = relay.NewUplinkInto(url, d.id, d.accept)
+		sl.up.Logf = func(format string, args ...any) { d.opt.Logf(url+": "+format, args...) }
+		sl.up.OnState = func(up bool) { d.onUplink(sl, up) }
+		d.slots = append(d.slots, sl)
+		d.spawn(func() {
+			err := sl.up.Run(ctx)
+			if errors.Is(err, relay.ErrReplaced) {
+				d.opt.Logf("%s: uplink replaced by another pen for this node (4409); not reconnecting until pen up", url)
+				sl.set("replaced")
+				d.writeDaemonJSON(d.now())
+			}
+		})
+	}
+}
+
+// stopUplinks ends every uplink for good.
+func (d *Daemon) stopUplinks(why string) {
+	d.upMu.Lock()
+	defer d.upMu.Unlock()
+	for _, sl := range d.slots {
+		sl.cancel()
+	}
+	d.halted = why
+}
+
+func (d *Daemon) onUplink(sl *uplinkSlot, up bool) {
 	if up {
-		d.upState.Store("up")
+		sl.set("up")
 		d.spawn(func() { d.pushAll(d.runCtx) })
-	} else if s, _ := d.upState.Load().(string); s == "up" {
-		d.upState.Store("connecting")
+	} else if sl.get() == "up" {
+		sl.set("connecting")
 	}
 	d.writeDaemonJSON(d.now())
+}
+
+// RelayState is one relay's uplink.
+type RelayState struct {
+	URL    string `json:"url"`
+	Uplink string `json:"uplink"`
+}
+
+func (d *Daemon) relayStates() []RelayState {
+	d.upMu.Lock()
+	defer d.upMu.Unlock()
+	out := make([]RelayState, 0, len(d.slots))
+	for _, sl := range d.slots {
+		s := sl.get()
+		if d.halted != "" {
+			s = d.halted
+		}
+		out = append(out, RelayState{URL: sl.url, Uplink: s})
+	}
+	return out
+}
+
+// uplinkState is "up" when any uplink is up, else the best state among them.
+func (d *Daemon) uplinkState() string {
+	d.upMu.Lock()
+	halted, slots := d.halted, d.slots
+	d.upMu.Unlock()
+	if halted != "" {
+		return halted
+	}
+	best := "stopped"
+	for _, sl := range slots {
+		switch s := sl.get(); {
+		case s == "up":
+			return "up"
+		case s == "connecting":
+			best = s
+		case s == "replaced" && best == "stopped":
+			best = s
+		}
+	}
+	return best
+}
+
+// anyReplaced reports an uplink that a newer one replaced (4409).
+func (d *Daemon) anyReplaced() bool {
+	for _, r := range d.relayStates() {
+		if r.Uplink == "replaced" {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Daemon) every(ctx context.Context, period time.Duration, f func()) {
