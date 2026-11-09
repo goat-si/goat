@@ -8,6 +8,7 @@ import { mediaFileReference, mediaUrlReference } from "@goat/client-runtime/medi
 import { ExternalLinkIcon, TriangleAlertIcon } from "~/components/solar";
 import type { AssetResource, EnvironmentId, SOURCE_CONTROL_MEDIA_ASSET } from "@goat/contracts";
 import type { Element as HastElement } from "hast";
+import { normalizeMarkdownLinkDestination } from "@goat/shared/markdownLinks";
 import {
   createContext,
   memo,
@@ -92,7 +93,9 @@ export const WorkspaceMutationIdContext = createContext<string | null | undefine
 /** The environment Markdown media came from; the gallery routes its links there when it opens. */
 export const MarkdownEnvironmentContext = createContext<EnvironmentId | null>(null);
 /** Lets an image inside a link report a failed load to the link, which offers the page beside it. */
-const LinkedImageFailureContext = createContext<((url: string) => void) | null>(null);
+const LinkedImageFailureContext = createContext<((url: string, loaded: boolean) => void) | null>(
+  null,
+);
 
 function expandableMarkdownImageProps(
   onImageExpand: ((preview: ExpandedImagePreview) => void) | undefined,
@@ -147,13 +150,13 @@ function isWebPageUrl(uri: string): boolean {
   return /^(?:https?:)?\/\//i.test(uri);
 }
 
-/** The web URL of the image a Markdown link wraps. */
-/** The web URLs of the images inside a Markdown link, at any depth. */
 function linkedWebImageUrls(node: HastElement | undefined): string[] {
   return (node?.children ?? []).flatMap((child) => {
     if (child.type !== "element") return [];
     const src = child.tagName === "img" ? child.properties.src : undefined;
-    return typeof src === "string" && isWebPageUrl(src) ? [src] : linkedWebImageUrls(child);
+    if (typeof src !== "string") return linkedWebImageUrls(child);
+    const url = normalizeMarkdownLinkDestination(src);
+    return isWebPageUrl(url) ? [url] : [];
   });
 }
 
@@ -243,7 +246,7 @@ function ChatMarkdownImage(props: {
   readonly onRetry?: (() => Promise<unknown>) | undefined;
   /** Offered once the image fails, for a URL that is a web page rather than an image. */
   readonly onOpenPage?: OpenPage | undefined;
-  readonly onLoadError?: (() => void) | undefined;
+  readonly onLoadResult?: ((loaded: boolean) => void) | undefined;
 }) {
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
@@ -269,11 +272,12 @@ function ChatMarkdownImage(props: {
     onLoad: () => {
       setLoadedSrc(loadingSrc);
       setFailedSrc(null);
+      props.onLoadResult?.(true);
     },
     onError: () => {
       setFailedSrc(loadingSrc);
       setLoadedSrc(null);
-      props.onLoadError?.();
+      props.onLoadResult?.(false);
     },
   });
   const retry = async () => {
@@ -587,7 +591,7 @@ export function ChatMarkdownDirectMedia(props: {
 }) {
   const routed = useEnvironmentMediaRoute(props.environmentId)(props.uri);
   const inLink = use(MarkdownLinkContext);
-  const reportLinkedFailure = use(LinkedImageFailureContext);
+  const reportLinkedResult = use(LinkedImageFailureContext);
   const openInPreview = props.openInPreview;
   const onOpenPage =
     openInPreview && props.kind === "image" && !inLink && isWebPageUrl(props.uri)
@@ -632,7 +636,9 @@ export function ChatMarkdownDirectMedia(props: {
       originalUrl={originalUrl}
       onImageExpand={props.onImageExpand}
       onOpenPage={onOpenPage}
-      onLoadError={reportLinkedFailure ? () => reportLinkedFailure(props.uri) : undefined}
+      onLoadResult={
+        reportLinkedResult ? (loaded) => reportLinkedResult(props.uri, loaded) : undefined
+      }
     />
   );
 }
@@ -657,16 +663,21 @@ function LinkedImageOpenPage(props: {
   const failedUrls = new Set([
     ...props.imageUrls.filter((url) => routeOf(url) === null),
     ...[...failures]
-      .filter(([url, failedRoute]) => routeOf(url) === failedRoute)
+      .filter(([url, failedRoute]) => props.imageUrls.includes(url) && routeOf(url) === failedRoute)
       .map(([url]) => url),
   ]);
-  const reportFailure = (url: string) => {
-    const failedRoute = routeOf(url);
-    if (failedRoute !== null) setFailures((current) => new Map(current).set(url, failedRoute));
+  const reportResult = (url: string, loaded: boolean) => {
+    const route = routeOf(url);
+    setFailures((current) => {
+      const next = new Map(current);
+      if (loaded || route === null) next.delete(url);
+      else next.set(url, route);
+      return next;
+    });
   };
   return (
     <>
-      <LinkedImageFailureContext value={reportFailure}>{props.children}</LinkedImageFailureContext>
+      <LinkedImageFailureContext value={reportResult}>{props.children}</LinkedImageFailureContext>
       {[...failedUrls].map((url) => (
         <span key={url} data-thread-find-ignore className="ms-2 inline-flex align-middle">
           <OpenPageButton onOpenPage={() => props.openInPreview(url)} />

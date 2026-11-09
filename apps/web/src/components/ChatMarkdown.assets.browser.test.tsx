@@ -301,3 +301,26 @@ it("offers the page of every image in a link that fails", async () => {
     ]),
   );
 });
+it("withdraws a linked image's page once the image loads after a reconnect", async () => {
+  using test = setup({ connection: tailnetConnection(), previewAllowed: true });
+  const markdown = () => (
+    <RegistryContext.Provider value={test.registry}>
+      <ChatMarkdown
+        cwd="/repo"
+        threadRef={{ environmentId: remoteEnvironment, threadId: ThreadId.make("remote-thread") }}
+        text={`[![page](${PAGE_IMAGE})](https://example.test/)`}
+      />
+    </RegistryContext.Provider>
+  );
+  await using screen = await render(markdown());
+  const buttons = () => screen.container.querySelectorAll("button");
+  await vi.waitFor(() => expect(buttons()).toHaveLength(1));
+  state.connection = sshConnection();
+  await screen.rerender(markdown());
+  state.connection = tailnetConnection();
+  await screen.rerender(markdown());
+  const image = screen.container.querySelector("img");
+  expect(image).not.toBeNull();
+  await act(async () => image!.dispatchEvent(new Event("load")));
+  await vi.waitFor(() => expect(buttons()).toHaveLength(0));
+});
