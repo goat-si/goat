@@ -117,6 +117,33 @@ func TestUnconfirmedLinkQueuesAtMostOneMiBThenCloses4408(t *testing.T) {
 	}
 }
 
+func TestUplinkAckCountsEveryRelayMessageIncludingTheChallenge(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	id := newID(t)
+	u, _, _ := startUplink(t, ctx, rs, id)
+	c, err := relay.Dial(ctx, rs.URL, id.NodeID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Accept(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Send(make([]byte, 64<<10)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := rs.NextUplinkAck(ctx, id.NodeID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// challenge (32) + OPEN frame (5) + DATA frame (5 + 64 KiB)
+	if want := uint64(32 + 5 + 5 + 64<<10); got != want {
+		t.Fatalf("first ack a:%d, want a:%d", got, want)
+	}
+}
+
 func TestClientToOfflineNodeCloses4404(t *testing.T) {
 	ctx := context.Background()
 	rs := relaytest.New()
