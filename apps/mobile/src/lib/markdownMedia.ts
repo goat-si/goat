@@ -12,6 +12,7 @@ import {
 } from "@goat/client-runtime/media-reference";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import type { ResolveMediaSourceInput } from "@goat/client-runtime/media-source";
+import { resolveEnvironmentLoopbackUrl } from "@goat/client-runtime/connection";
 import { normalizeNativeMarkdownUrl, resolveMarkdownLinkPresentation } from "./markdownLinks";
 import { resolveMobileMarkdownMediaSource } from "./markdownMediaSource";
 
@@ -87,7 +88,16 @@ export function resolveMarkdownMediaPreview(
         mimeType,
       };
       if (classified._tag === "Direct") {
-        const uri = normalizeNativeMarkdownUrl(path);
+        const environment = input.environmentConnection;
+        const routed = environment
+          ? resolveEnvironmentLoopbackUrl({
+              connection: environment.connection,
+              isDesktopRenderer: environment.isDesktopRenderer,
+              url: environment.normalizeUri(path),
+            })
+          : ({ _tag: "Open", url: normalizeNativeMarkdownUrl(path) } as const);
+        if (routed._tag === "Unreachable") return null;
+        const uri = routed.url;
         return {
           kind,
           source: {

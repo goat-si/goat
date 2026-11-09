@@ -46,6 +46,46 @@ describe("resolveMarkdownMediaPreview", () => {
     ).toBeNull();
   });
 
+  it("opens a remote environment's localhost document link at its address, and not at all when out of reach", () => {
+    const remote = { environmentId: input.environmentId, label: "Build box" };
+    const through = (
+      target: BearerConnectionTarget | SshConnectionTarget,
+      httpBaseUrl: string,
+    ) => ({
+      ...input,
+      environmentConnection: {
+        connection: { target, httpBaseUrl },
+        isDesktopRenderer: false,
+        normalizeUri: (uri: string) => uri,
+      },
+    });
+    const href = "http://localhost:5173/report.pdf";
+    expect(
+      resolveMarkdownMediaPreview(
+        href,
+        through(
+          new BearerConnectionTarget({ ...remote, connectionId: "saved:box" }),
+          "http://100.65.180.100:3773",
+        ),
+      ),
+    ).toMatchObject({
+      kind: "pdf",
+      source: {
+        uri: "http://100.65.180.100:5173/report.pdf",
+        actionsSource: { uri: "http://100.65.180.100:5173/report.pdf" },
+      },
+    });
+    expect(
+      resolveMarkdownMediaPreview(
+        href,
+        through(
+          new SshConnectionTarget({ ...remote, connectionId: "ssh:box" }),
+          "http://127.0.0.1:41234",
+        ),
+      ),
+    ).toBeNull();
+  });
+
   it("decodes remote filenames once without changing the authored URL", () => {
     const href = "https://cdn.example.com/clip%20one%2520%2Emp4?signature=a%2fb#t=2";
     expect(resolveMarkdownMediaPreview(href, input)).toMatchObject({

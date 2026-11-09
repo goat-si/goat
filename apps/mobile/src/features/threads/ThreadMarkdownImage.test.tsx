@@ -19,6 +19,7 @@ const connection = vi.hoisted(() => {
   const listeners = new Set<() => void>();
   return {
     value: undefined as unknown,
+    shared: undefined as unknown,
     set(next: unknown) {
       this.value = next;
       for (const listener of listeners) listener();
@@ -80,7 +81,12 @@ vi.mock("../../components/MediaActionsMenu", () => ({
 vi.mock("../../components/ui/NativePresentation", () => ({
   PresentationSource: ({ children }: { children: ReactNode }) => children,
 }));
-vi.mock("../../state/mediaActions", () => ({ useMediaActions: () => ({ actions: [] }) }));
+vi.mock("../../state/mediaActions", () => ({
+  useMediaActions: (source: unknown) => {
+    connection.shared = source;
+    return { actions: [] };
+  },
+}));
 
 import {
   MarkdownImageAvailableWidthContext,
@@ -295,6 +301,11 @@ it("follows a reconnect for a remote environment's localhost image, both ways", 
         environmentId={environmentId}
         uri="http://localhost:5173/shot.png"
         alt={null}
+        actionsSource={{
+          uri: "http://localhost:5173/shot.png",
+          name: "shot.png",
+          mimeType: "image/png",
+        }}
         onPressPreview={() => undefined}
       />,
     ),
@@ -305,6 +316,8 @@ it("follows a reconnect for a remote environment's localhost image, both ways", 
   expect(container.querySelector("img")?.getAttribute("src")).toBe(
     "http://100.65.180.100:5173/shot.png",
   );
+  // Share downloads what it is given, so it must be the address this phone can reach.
+  expect(connection.shared).toMatchObject({ uri: "http://100.65.180.100:5173/shot.png" });
   act(() => connection.set(ssh));
   expect(container.querySelector("img")).toBeNull();
   expect(container.textContent).toContain("localhost:5173 is on Build box");

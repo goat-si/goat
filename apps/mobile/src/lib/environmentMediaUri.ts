@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import { appAtomRegistry } from "../state/atom-registry";
 import { environmentSession, usePreparedConnection } from "../state/session";
 import { normalizeNativeMarkdownUrl } from "./markdownLinks";
+import type { MediaActionsSource } from "./mediaActionsSource";
 
 type PreparedConnection = ReturnType<typeof usePreparedConnection>;
 
@@ -38,4 +39,12 @@ export function readMobileMediaConnection(environmentId: EnvironmentId) {
   return mobileMediaConnection(
     appAtomRegistry.get(environmentSession.preparedConnectionValueAtom(environmentId)),
   );
+}
+/** Share and save act on the routed address, and on nothing when this phone cannot reach it. */
+export function routedActionsSource(
+  source: MediaActionsSource | undefined,
+  routedUri: string | null,
+): MediaActionsSource | undefined {
+  if (source === undefined || !("uri" in source)) return source;
+  return routedUri === null ? undefined : { ...source, uri: routedUri };
 }

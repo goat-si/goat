@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 import type { EnvironmentId } from "@goat/contracts";
 import { MediaVideoPlayer } from "../../components/MediaVideoPlayer";
-import { useEnvironmentMediaUri } from "../../lib/environmentMediaUri";
+import { routedActionsSource, useEnvironmentMediaUri } from "../../lib/environmentMediaUri";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
 import {
   mediaVideoPreviewUri,
@@ -58,7 +58,11 @@ export function ThreadMarkdownVideo(props: {
       visible={visible}
       onPlaybackStart={props.onPlaybackStart}
       unavailable={"resource" in source ? asset._tag === "Failure" : routed.uri === null}
-      actionsSource={source.actionsSource}
+      actionsSource={
+        "uri" in source
+          ? routedActionsSource(source.actionsSource, routed.uri)
+          : source.actionsSource
+      }
     />
   );
 }

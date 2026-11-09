@@ -29,7 +29,7 @@ import type { MediaActionsSource } from "../../lib/mediaActionsSource";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
 import { WorkspaceMutationIdContext } from "./workspaceMutationIdContext";
 import { assetImageCacheKey } from "../../lib/assetImageSource";
-import { useEnvironmentMediaUri } from "../../lib/environmentMediaUri";
+import { routedActionsSource, useEnvironmentMediaUri } from "../../lib/environmentMediaUri";
 import {
   MARKDOWN_IMAGE_MAX_WIDTH,
   type MarkdownImageDisplaySize,
@@ -410,6 +410,7 @@ export function ThreadMarkdownDirectImage(props: {
   readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
   const routed = useEnvironmentMediaUri(props.environmentId, props.uri);
+  const actionsSource = routedActionsSource(props.actionsSource, routed.uri);
   return (
     <ThreadMarkdownImageView
       uri={routed.uri}
@@ -422,7 +423,7 @@ export function ThreadMarkdownDirectImage(props: {
       unavailable={routed.uri === null}
       unavailableDetail={routed.reason}
       alt={props.alt}
-      actionsSource={props.actionsSource}
+      actionsSource={actionsSource}
       onPressPreview={props.onPressPreview}
     />
   );
