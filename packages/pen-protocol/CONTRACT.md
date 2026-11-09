@@ -60,7 +60,8 @@ Socket attachments carry `{role, sid, sent, acked, at, deadline}`; client socket
   and a light message may use the whole 4 MiB; a heavier one may fill the window only to 4 MiB minus 16 KiB for each
   other open session (at least one). DATA that does not fit ends only its session with 4408. The relay's own frames
   (OPEN, CLOSE) may use 64 KiB more; an uplink that leaves even those unacked is closed 4408. Acks are cumulative
-  `a:<n>` texts; a non-decimal, a decrease, or more than was sent closes the socket 4402. A receiver counts bytes as they arrive (never
+  `a:<n>` texts counting every binary message the socket received from the relay, the uplink's 32-byte challenge
+  included; a non-decimal, a decrease, or more than was sent closes the socket 4402. A receiver counts bytes as they arrive (never
   held back for a slow consumer) and sends `a:<n>` once at least 64 KiB arrived since its last ack.
 - Deadlines: one alarm, always set to the earliest pending deadline (auth, pending, idle). Idle: a socket whose
   auto-response timestamp (or accept time) is older than IDLE_TIMEOUT_MS (90 s) closes 4408.
@@ -135,6 +136,8 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
 
 ### Records
 
+- Record and card bodies are parsed with exact, case-sensitive member names; a body with a member name that differs
+  from a known one only by case, or with a duplicate name, is malformed.
 - A record is `{"body":"<base64url of body bytes>","sig":"<base64url Ed25519 sig>"}`; `sig` signs
   `"pen-mesh/1" || SHA-256(body)` with the key `body.by`. Its hash is base64url (no padding) of SHA-256(body).
 - Body: I-JSON object, at most 2048 bytes: `v` (1), `mesh` (mesh id; `"-"` only in `found`), `type`, `by` (signer
@@ -151,13 +154,16 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   founder's own card (in `found`) has `"mesh":"-"` and `"inviter":"-"`, so the mesh id (a hash of the `found` body)
   is not circular.
 - A node stores a record only if it is well formed, its signature verifies, its card (if any) verifies and matches,
-  and it belongs to this mesh. A record whose `prev` is not all present waits in a pool of at most 256. A mesh holds
-  at most 4096 records.
+  and it belongs to this mesh. A record whose `prev` is all present is stored at once only if its signer is the card
+  subject of a `found` or `admit` in its past (records signed by any other key are dropped); it never enters the pool.
+  A record whose `prev` is not all present waits in an in-memory pool of at most 256 records and at most 16 per signer
+  key, the oldest dropped first; the pool is not persisted. A node's own records never enter the pool. A mesh holds at
+  most 4096 records; `revoke` records are stored past that cap so a full set can still revoke.
 
 ### View
 
 Replay the record set in canonical order: Kahn's topological order over `prev` edges, smallest hash first among
-ready records. Start with no members. Own chain: a record with `n > 1` has no effect unless the signer's record with
+ready records, comparing the raw 32-byte SHA-256 values as unsigned bytes (not their base64url text). Start with no members. Own chain: a record with `n > 1` has no effect unless the signer's record with
 counter `n - 1` is in its past; a second record with the same signer and `n` (a fork) has no effect. `found` makes its card's subject a member. A record whose signer is not a
 member at its turn has no effect. `admit` makes the card subject a member unless that signPub is revoked, the card
 nonce was used, or the card's noisePub or nodeId already belongs to a member. `revoke` marks each subject revoked and removes it; with `compromised`, it also revokes every key
