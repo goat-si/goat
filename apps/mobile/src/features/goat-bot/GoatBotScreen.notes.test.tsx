@@ -336,9 +336,7 @@ it("the open Memory tab reads the notes again after the answer and after the tas
   session.rows = [botRow, taskRow(2)];
   await view.rerender();
   expect(session.refresh).toHaveBeenCalledTimes(opened + 3);
-  expect(view.container.textContent).toContain(
-    "No notes yet. Ask GOAT Bot to remember a standing rule.",
-  );
+  expect(view.container.textContent).toContain("Ask GOAT Bot to remember a standing rule.");
   await press(view.container, "Close");
   await openMemory(view.container);
   expect(session.refresh).toHaveBeenCalledTimes(opened + 4);

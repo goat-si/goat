@@ -52,6 +52,7 @@ import {
   goatBotMemberModelHeaderKey,
 } from "./goatBotMemberModelHeader";
 import { useMobileGoatBotMemberModelMenu } from "./useMobileGoatBotMemberModel";
+import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
 const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
 
@@ -413,9 +414,10 @@ export function MobileBotWork(props: {
                 ) : threads.isPending || !threads.isSuccess ? (
                   <Text className="text-foreground-muted">Loading tasks…</Text>
                 ) : work.inProgress.length + work.done.length === 0 ? (
-                  <Text className="text-foreground-muted">
-                    No tasks yet. Ask {botName} to start work.
-                  </Text>
+                  <MobileBotPanelEmpty
+                    title="No tasks yet"
+                    next={`Ask ${botName} in chat to start work.`}
+                  />
                 ) : (
                   (
                     [
@@ -534,9 +536,10 @@ export function MobileBotWork(props: {
                     />
                   ))
                 ) : (
-                  <Text className="text-foreground-muted">
-                    Ask {botName} in chat to set up a routine.
-                  </Text>
+                  <MobileBotPanelEmpty
+                    title="No routines yet"
+                    next={`Ask ${botName} in chat to set up a routine.`}
+                  />
                 )
               ) : null}
               {tab === "Memory" ? (
