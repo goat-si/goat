@@ -219,7 +219,7 @@ export function MobileBotWork(props: {
             >
               <Text className="text-danger-foreground">Couldn't load task. Try again</Text>
             </Pressable>
-          ) : threads.isPending || !threads.isSuccess ? (
+          ) : threads.data === null ? (
             <Text className="text-foreground-muted">Loading task…</Text>
           ) : !task ? (
             <Text className="text-foreground-muted">Task not found.</Text>
@@ -398,26 +398,33 @@ export function MobileBotWork(props: {
                   </Text>
                 </Pressable>
               ) : null}
+              {tab === "Tasks" && enabled && threads.error ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={threads.refresh}
+                  className="min-h-[44px] justify-center"
+                >
+                  <Text className="text-danger-foreground">Couldn't load tasks. Try again</Text>
+                </Pressable>
+              ) : null}
+              {/* Known tasks stay listed through a refresh and a failed one; only a read that
+                  succeeded with nothing in it says there are no tasks. */}
               {tab === "Tasks" ? (
                 !enabled ? (
                   <Text className="text-foreground-muted">
                     Tasks are unavailable while {botName} is offline or unsupported.
                   </Text>
-                ) : threads.error ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={threads.refresh}
-                    className="min-h-[44px] justify-center"
-                  >
-                    <Text className="text-danger-foreground">Couldn't load tasks. Try again</Text>
-                  </Pressable>
-                ) : threads.isPending || !threads.isSuccess ? (
-                  <Text className="text-foreground-muted">Loading tasks…</Text>
+                ) : threads.data === null ? (
+                  threads.error ? null : (
+                    <Text className="text-foreground-muted">Loading tasks…</Text>
+                  )
                 ) : work.inProgress.length + work.done.length === 0 ? (
-                  <MobileBotPanelEmpty
-                    title="No tasks yet"
-                    next={`Ask ${botName} in chat to start work.`}
-                  />
+                  threads.error ? null : (
+                    <MobileBotPanelEmpty
+                      title="No tasks yet"
+                      next={`Ask ${botName} in chat to start work.`}
+                    />
+                  )
                 ) : (
                   (
                     [

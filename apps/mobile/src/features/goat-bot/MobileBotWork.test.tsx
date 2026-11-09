@@ -238,6 +238,8 @@ it("distinguishes task and routine loading, empty, offline, and retry states", a
   expect(container.textContent).toContain("No tasks yet");
   Object.assign(state.task, { error: "failed", isSuccess: false });
   await render();
+  // The last read was empty, but a failed read says nothing about whether tasks exist now.
+  expect(container.textContent).not.toContain("No tasks yet");
   await press("Couldn't load tasks");
   expect(state.task.refresh).toHaveBeenCalledOnce();
   await press("Routines");
@@ -262,6 +264,32 @@ it("shows empty routines when live data is available while the subscription wait
   await press("Routines");
   expect(container.textContent).toContain("set up a routine");
   expect(container.textContent).not.toContain("Loading routines");
+});
+
+it("keeps known tasks in view while they refresh and after a refresh fails", async () => {
+  reset();
+  const at = "2026-11-07T10:00:00.000Z";
+  const rows = [
+    decodeRow({
+      kind: "task",
+      task: { taskId: "known", title: "Known task", status: "running", updatedAt: at },
+      view: { taskId: "known", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    }),
+  ];
+  // A refresh after Pin or Mark done waits on top of the rows already shown.
+  Object.assign(state.task, { isPending: true, isSuccess: true, data: { rows } });
+  await render();
+  await press("Work");
+  expect(container.textContent).toContain("Known task");
+  expect(container.textContent).not.toContain("Loading tasks");
+  Object.assign(state.task, { isPending: false, isSuccess: false, error: "failed" });
+  await render();
+  expect(container.textContent).toContain("Known task");
+  await press("Couldn't load tasks");
+  expect(state.task.refresh).toHaveBeenCalledOnce();
 });
 
 it("exposes work tabs as buttons and updates their selected state", async () => {
