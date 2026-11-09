@@ -216,7 +216,7 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
     );
   });
 
-  it("a newer machine pick wins over a clone still waiting for its project", async () => {
+  it("a newer machine pick wins over a pending clone, which then shows its own progress toast", async () => {
     await using screen = await setup();
 
     await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
@@ -227,14 +227,30 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
       state.setProject(cloned, { ...SOURCE, environmentId: studio, id: cloned.projectId }),
     );
 
-    // The late project has been seen (its wait unsubscribed) and its retarget has run.
-    await vi.waitFor(() => expect(state.listeners.get(state.keyOf(cloned))?.size ?? 0).toBe(0));
-    await act(async () => undefined);
+    await vi.waitFor(() => expect(state.unsilenceProjectCloneToasts).toHaveBeenCalledWith(cloned));
     expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
     expect(screen.draft()).toMatchObject({
       environmentId: macmini,
       projectId: onMacmini.projectId,
     });
+  });
+
+  it("going back to a machine whose clone is still pending reuses that clone", async () => {
+    await using screen = await setup();
+
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
+    await vi.waitFor(() => expect(state.addProjectToMachine).toHaveBeenCalledTimes(1));
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(macmini));
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
+    const cloned = clonedRef();
+    await act(() =>
+      state.setProject(cloned, { ...SOURCE, environmentId: studio, id: cloned.projectId }),
+    );
+
+    await vi.waitFor(() =>
+      expect(screen.draft()).toMatchObject({ environmentId: studio, projectId: cloned.projectId }),
+    );
+    expect(state.addProjectToMachine).toHaveBeenCalledTimes(1);
   });
 
   it("choosing an SSH host cancels a clone still waiting for its project", async () => {
@@ -249,10 +265,9 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
       state.setProject(cloned, { ...SOURCE, environmentId: studio, id: cloned.projectId }),
     );
 
-    await vi.waitFor(() => expect(state.listeners.get(state.keyOf(cloned))?.size ?? 0).toBe(0));
-    await act(async () => undefined);
+    // Handing the clone back to its toast is the last thing a pick that cannot move the draft does.
+    await vi.waitFor(() => expect(state.unsilenceProjectCloneToasts).toHaveBeenCalledWith(cloned));
     expect(screen.draft()).toMatchObject({ environmentId: laptop, projectId: source.projectId });
-    expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
   });
 
   it("picking the machine again while it clones starts no second clone into the same folder", async () => {

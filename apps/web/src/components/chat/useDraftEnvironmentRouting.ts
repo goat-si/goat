@@ -2,8 +2,8 @@ import { useLoadBalancedEnvironment } from "../../hooks/useLoadBalancedEnvironme
 import { useLogicalProjectEnvironments } from "../../hooks/useLogicalProjectEnvironments";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useStableCallback } from "../../hooks/useStableCallback";
-import { addProjectToMachine } from "../../lib/addProjectToMachine";
 import type { MachineWithoutProject } from "../../lib/runOnArrival";
+import { cloneForRunOn } from "../../lib/runOnClone";
 import { newProjectId } from "../../lib/utils";
 import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import {
@@ -11,7 +11,6 @@ import {
   type ProviderDriverKind,
   ProviderInstanceId,
   resolveProjectProviderInstanceEnabled,
-  type ScopedProjectRef,
   type ThreadContextRecord,
 } from "@goat/contracts";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
@@ -23,7 +22,7 @@ import {
 } from "../../logicalProject";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import { type EnvironmentPresentation, useEnvironmentProviders } from "../../state/environments";
-import { useProjects, waitForProject } from "../../state/entities";
+import { useProjects } from "../../state/entities";
 import { unsilenceProjectCloneToasts } from "../../state/projectClones";
 import type { DraftSessionState } from "../../composerDraftStore";
 
@@ -224,7 +223,8 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     const request = { environmentId: nextEnvironmentId, scope: environmentChangeScope };
     environmentChangeRef.current = request;
     setBusyEnvironmentChange(null);
-    const retarget = (project: EnvironmentProject) => {
+    /** Moves the draft unless the user moved on; says whether it did. */
+    const retarget = (project: EnvironmentProject): boolean => {
       const currentDraft = getDraftSession(draftId);
       if (
         environmentChangeRef.current !== request ||
@@ -235,7 +235,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
         currentDraft.environmentId !== originalDraft.environmentId ||
         currentDraft.projectId !== originalDraft.projectId
       )
-        return;
+        return false;
       const projectRef = scopeProjectRef(project.environmentId, project.id);
       if (activeProjectIsScratch) {
         setLogicalProjectDraftThreadId(
@@ -256,6 +256,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
           loadBalancedEnvironmentId: null,
         });
       }
+      return true;
     };
     const finish = () => {
       if (environmentChangeRef.current === request) environmentChangeRef.current = null;
@@ -268,25 +269,25 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
       }
       const { arrival } = cloneTarget;
       setBusyEnvironmentChange(request);
-      const clonedRef: ScopedProjectRef = scopeProjectRef(nextEnvironmentId, newProjectId());
       const name = activeProject.repositoryIdentity?.displayName ?? activeProject.title;
       // The clone is registered on its machine before the reply, but this client may not
       // have the project yet; the draft moves once it does, and its composer shows the clone.
-      void addProjectToMachine({
+      void cloneForRunOn({
         source: { environmentId: activeProject.environmentId, cwd: activeProject.workspaceRoot },
         subdirectory: "",
         target: { environmentId: nextEnvironmentId, label: cloneTarget.label },
-        projectId: clonedRef.projectId,
+        projectId: newProjectId(),
         title: activeProject.title,
         remoteUrl: arrival.remoteUrl,
         destinationPath: arrival.destinationPath,
         files: [],
       })
         .then(
-          // A started clone keeps running if its project is slow to arrive; its toast then
-          // shows the progress and Cancel the composer would have shown.
-          () =>
-            waitForProject(clonedRef).then(retarget, () => unsilenceProjectCloneToasts(clonedRef)),
+          async ({ ref, arrived }) => {
+            const project = await arrived;
+            // Unless the clone's project opens in this draft, its own toast shows progress and Cancel.
+            if (!project || !retarget(project)) unsilenceProjectCloneToasts(ref);
+          },
           (cause: unknown) => {
             if (environmentChangeRef.current !== request) return;
             toastManager.add({
