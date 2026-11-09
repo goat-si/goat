@@ -15,6 +15,88 @@ import {
 } from "./testing/gitFixture.ts";
 
 it.layer(layerTest)("worktree branch allocation", (it) => {
+  it.effect("reuses a clean legacy generated worktree on launch retry", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      const { initialBranch } = yield* initRepoWithCommit(cwd);
+      const path = yield* Path.Path;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const worktreesDirectory = yield* makeTmpDir();
+      const legacy = path.join(worktreesDirectory, path.basename(cwd), "feature-retry");
+      yield* driver.createWorktree({
+        cwd,
+        path: legacy,
+        refName: initialBranch,
+        newRefName: "feature/retry",
+      });
+      const result = yield* driver.createWorktree(
+        { cwd, path: null, refName: initialBranch, newRefName: "feature/retry" },
+        { worktreesDirectory, reuseExistingBranch: true },
+      );
+      assert.equal(result.worktree.path, legacy);
+      assert.equal(yield* git(legacy, ["branch", "--show-current"]), "feature/retry");
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(path.join(legacy, "untracked"), "changes");
+      const dirty = yield* driver
+        .createWorktree(
+          { cwd, path: null, refName: initialBranch, newRefName: "feature/retry" },
+          { worktreesDirectory, reuseExistingBranch: true },
+        )
+        .pipe(Effect.flip);
+      assert.include(dirty.detail, "uncommitted changes");
+      const explicit = yield* driver
+        .createWorktree(
+          {
+            cwd,
+            path: path.join(worktreesDirectory, "other"),
+            refName: initialBranch,
+            newRefName: "feature/retry",
+          },
+          { worktreesDirectory, reuseExistingBranch: true },
+        )
+        .pipe(Effect.flip);
+      assert.include(explicit.detail, "outside this launch");
+    }),
+  );
+
+  it.effect("reuses a long legacy hashed worktree on launch retry", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      const { initialBranch } = yield* initRepoWithCommit(cwd);
+      const path = yield* Path.Path;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const worktreesDirectory = yield* makeTmpDir();
+      const branch = `feature/${"a".repeat(50)}`;
+      const legacy = path.join(
+        worktreesDirectory,
+        path.basename(cwd),
+        `feature-${"a".repeat(15)}-dea33f15896868a3`,
+      );
+      yield* driver.createWorktree({
+        cwd,
+        path: legacy,
+        refName: initialBranch,
+        newRefName: branch,
+      });
+      const result = yield* driver.createWorktree(
+        { cwd, path: null, refName: initialBranch, newRefName: branch },
+        { worktreesDirectory, reuseExistingBranch: true },
+      );
+      assert.equal(result.worktree.path, legacy);
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(path.join(legacy, "unique.txt"), "unique");
+      yield* git(legacy, ["add", "unique.txt"]);
+      yield* git(legacy, ["commit", "-m", "unique work"]);
+      const rejected = yield* driver
+        .createWorktree(
+          { cwd, path: null, refName: initialBranch, newRefName: branch },
+          { worktreesDirectory, reuseExistingBranch: true },
+        )
+        .pipe(Effect.flip);
+      assert.equal(rejected.reason, "branch_already_exists");
+      assert.include(rejected.detail, "commit");
+    }),
+  );
   it.effect.each(["t3", "T3"])("flattens a generated name when parent %s blocks it", (parent) =>
     Effect.gen(function* () {
       const cwd = yield* makeTmpDir();

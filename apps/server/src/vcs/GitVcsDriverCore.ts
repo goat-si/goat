@@ -19,12 +19,11 @@ import { GOAT_PRE_REFRESH_REF } from "@goat/contracts/legacyT3Names";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Hex from "effect/encoding/Hex";
+import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -80,7 +79,8 @@ import {
   readWorktreeRoot,
   replayPostCheckout,
   WINDOWS_CHECKOUT_SETTINGS,
-  worktreeFolderName,
+  generatedWorktreeNames,
+  matchesLegacyWorktree,
   worktreeSparseCheckoutPatterns,
 } from "./worktreeCheckout.ts";
 import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
@@ -4023,20 +4023,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.newRefName);
     const targetBranch = input.newRefName ?? input.refName;
     let worktreePath = input.path === null ? null : path.resolve(input.cwd, input.path);
+    let legacyPath: string | null = null;
     const progress = options?.progress;
     if (worktreePath == null) {
       const repository = yield* resolveRepositoryPathsUncached(input.cwd);
       const repoName = path.basename(repository?.worktreeRoot ?? path.resolve(input.cwd));
-      const identity = `${repository?.gitCommonDir ?? path.resolve(input.cwd)}\0${targetBranch}`;
-      const digest = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(identity))
-        .pipe(Effect.orDie);
-      let prefix = "";
-      for (const character of worktreeFolderName(targetBranch, hostPlatform)) {
-        if (Buffer.byteLength(prefix + character) > 23) break;
-        prefix += character;
-      }
-      const sanitizedBranch = `${prefix}-${Hex.encode(digest).slice(0, 16)}`;
+      const names = yield* generatedWorktreeNames(
+        targetBranch,
+        repository?.gitCommonDir ?? path.resolve(input.cwd),
+        hostPlatform,
+        options?.reuseExistingBranch === true && input.newRefName !== undefined,
+      ).pipe(Effect.provideService(Crypto.Crypto, crypto));
       const location = yield* resolveAvailableWorktreesDirectory(
         {
           setting: options?.worktreesDirectory ?? "",
@@ -4054,9 +4051,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           yield* progress.onWorktreesDirectoryFallback({ ...location, unavailable });
         }
       }
-      worktreePath = path.join(location.directory, repoName, sanitizedBranch);
+      worktreePath = path.join(location.directory, repoName, names.current);
+      if (names.legacy !== null) legacyPath = path.join(location.directory, repoName, names.legacy);
     }
-    const targetPath = worktreePath;
+    let targetPath = worktreePath;
     const newBranch = input.newRefName;
     const reuse = newBranch !== undefined && options?.reuseExistingBranch === true;
     const state = reuse
@@ -4067,7 +4065,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ? (state?.tip ?? null)
         : yield* readBranchTip(input.cwd, newBranch)
       : null;
-    // "reused": bind the branch's clean worktree; "added": check the existing branch out.
     let existing: "reused" | "added" | null = null;
     if (newBranch && state !== null) {
       const checkedOutAt = state.worktreePath;
@@ -4089,12 +4086,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         return yield* conflict(uniqueCommitsProblem(state.uniqueCommits, input.refName));
       }
       if (checkedOutAt !== null) {
+        const matchesLegacy = yield* matchesLegacyWorktree(
+          fileSystem,
+          legacyPath,
+          checkedOutAt,
+          (a, b) => isSameWorktreePath(a, b, hostPlatform),
+        );
         const realTarget = yield* fileSystem
           .realPath(targetPath)
           .pipe(Effect.orElseSucceed(() => targetPath));
         if (
           !isSameWorktreePath(checkedOutAt, targetPath, hostPlatform) &&
-          !isSameWorktreePath(checkedOutAt, realTarget, hostPlatform)
+          !isSameWorktreePath(checkedOutAt, realTarget, hostPlatform) &&
+          !matchesLegacy
         ) {
           return yield* conflict(
             `is checked out at ${checkedOutAt}, outside this launch's worktree folder ${targetPath}`,
@@ -4103,6 +4107,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (state.dirty) {
           return yield* conflict(`its worktree ${checkedOutAt} has uncommitted changes`);
         }
+        if (matchesLegacy) worktreePath = targetPath = checkedOutAt;
         if (existingTip !== startSha) {
           yield* runGit("GitVcsDriver.createWorktree.fastForward", checkedOutAt, [
             "merge",
