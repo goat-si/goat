@@ -126,26 +126,35 @@ describe("the first probe asks the client's own runtime for its facts directly",
     }).pipe(Effect.scoped),
   );
 
-  // A runtime that floods stderr cannot fill the host's disk: the direct reply is read in memory,
-  // and stderr in it breaks the frame, trailing newlines included.
+  // Any stderr refuses the direct frame, even text that would complete it, and a flood of it
+  // keeps one byte on disk.
   it.effect.each([
-    { name: "a flood of stderr", noise: 'head -c 300000 /dev/zero | tr "\\0" x >&2' },
-    { name: "a blank stderr line after the end", noise: "printf '\\n' >&2" },
-  ])("$name refuses the direct frame and writes no file", ({ noise }) =>
+    {
+      name: "a flood of stderr",
+      direct: 'cat "$HOME/frame-direct"; head -c 300000 /dev/zero | tr "\\0" x >&2',
+    },
+    {
+      name: "a blank stderr line after the end",
+      direct: 'cat "$HOME/frame-direct"; printf "\\\\n" >&2',
+    },
+    {
+      name: "an end line on stderr",
+      direct: "grep -v '^end ' \"$HOME/frame-direct\"; printf 'end 4\\n' >&2",
+    },
+  ])("$name refuses the direct frame", ({ direct }) =>
     Effect.gen(function* () {
       const f = yield* fixture({ own: version });
       yield* f.supporting();
-      yield* f.write("facts.sh", onDirect('cat "$HOME/frame-direct"; ' + noise));
-      // The capability lookup that follows keeps its own two bounded files.
+      yield* f.write("frame-direct", directFrame(DIRECT_ONLY));
+      yield* f.write("facts.sh", onDirect(direct));
       const tail = [
         "facts_frame_ask " + EXE + " >/dev/null 2>&1 || :",
-        "set +f",
-        'for file in "$FACT_MEMO".*; do',
-        '  case "$file" in *.caps-out|*.caps-status) ;; *) [ ! -e "$file" ] || echo "$file" ;; esac',
-        "done",
+        '{ wc -c <"$FACT_MEMO.facts-err" || echo missing; } 2>/dev/null',
       ].join("\n");
-      assert.deepEqual(yield* f.run(tail), []);
+      const kept = (yield* f.run(tail)).map((line) => line.trim());
       assert.deepEqual(yield* f.asks(), [DIRECT, CAPS, FACTS]);
+      assert.deepEqual(kept, ["1"]);
+      assert.equal((yield* f.fact("commit." + version + ".exe")).split("\n")[1], "1700000000");
     }).pipe(Effect.scoped),
   );
 

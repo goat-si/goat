@@ -25,7 +25,7 @@ runtime_file="$HOME/.goat/userdata/server-runtime.json"
 ${REMOTE_PROTOCOL_TOKEN_SCRIPT}
 # The probe's subshells share exec keys of installed executables; it never pins a runner.
 FACT_MEMO="$(mktemp "\${TMPDIR:-/tmp}/goat-facts.XXXXXX" 2>/dev/null)" || FACT_MEMO=
-trap 'probe_exit=$?; [ -z "$FACT_MEMO" ] || rm -f "$FACT_MEMO" "$FACT_MEMO.caps-status" "$FACT_MEMO.caps-out" 2>/dev/null || :; exit "$probe_exit"' EXIT
+trap 'probe_exit=$?; [ -z "$FACT_MEMO" ] || rm -f "$FACT_MEMO" "$FACT_MEMO.caps-status" "$FACT_MEMO.caps-out" "$FACT_MEMO.facts-err" "$FACT_MEMO.facts-status" 2>/dev/null || :; exit "$probe_exit"' EXIT
 # The runtime version of the client that built this script, which it may ask for facts directly.
 facts_own_version=${shellSingleQuote(ownRuntimeVersion ?? "")}
 ${WINDOWS_MANIFEST_SUPPORT_SCRIPT}
