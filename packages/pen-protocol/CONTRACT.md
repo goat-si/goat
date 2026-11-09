@@ -226,8 +226,10 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
 - Relay-serve parity: `pen relay serve` (apps/pen/internal/relayserver) implements this contract's "Relay" section
   rule for rule (auth, origin binding, mux, caps, timeouts, backpressure, acks, ping, 1 MiB cap, `/healthz`) and is
   tested against the same cases as the Worker. It closes a client 4404 right after accept, before reading any text,
-  when the node has no uplink. Its origin is `wss://` + Host for TLS listeners and `ws://` + Host for plain ones;
-  behind a TLS terminator, `--public-origin wss://host` sets the origin uplinks must sign. Session ids are never
+  when the node has no uplink. Its origin is fixed, never taken from the request: `--autocert <host>` serves
+  `wss://<host>`, `--cert`/`--key` and a TLS terminator in front of `--plain` need `--public-origin wss://host`, and a
+  request whose Host does not name that origin gets HTTP 421 before any upgrade. `--plain` without a public origin
+  listens on loopback only (tests and local relays), where the origin follows the request. Session ids are never
   reused while the process runs (a restart starts at 1 again; uplinks reconnect then and see fresh sessions).
 
 ## Close codes

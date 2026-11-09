@@ -165,6 +165,11 @@ func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
 		if strings.ContainsAny(c.autocertHost, ":/") || net.ParseIP(c.autocertHost) != nil || !strings.Contains(c.autocertHost, ".") {
 			return c, fmt.Errorf("--autocert wants a DNS name such as 203-0-113-7.sslip.io, not %q", c.autocertHost)
 		}
+		origin := "wss://" + strings.ToLower(c.autocertHost)
+		if c.publicOrigin != "" && c.publicOrigin != origin {
+			return c, fmt.Errorf("--autocert %s serves %s; --public-origin %s differs", c.autocertHost, origin, c.publicOrigin)
+		}
+		c.publicOrigin = origin
 	} else if c.cacheDir != "" {
 		return c, errors.New("--cache is only for --autocert")
 	}
@@ -175,6 +180,15 @@ func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
 		o, err := wire.RelayOrigin(c.publicOrigin)
 		if err != nil || o != c.publicOrigin {
 			return c, fmt.Errorf("--public-origin must be ws://host or wss://host[:port] exactly, got %q", c.publicOrigin)
+		}
+	}
+	if c.certFile != "" && c.publicOrigin == "" {
+		return c, errors.New("--cert needs --public-origin wss://<host the certificate names>")
+	}
+	if c.plain && c.publicOrigin == "" {
+		host, _, err := net.SplitHostPort(c.listen)
+		if err != nil || !loopbackHost(host) {
+			return c, errors.New("--plain without --public-origin listens on loopback only (e.g. --listen 127.0.0.1:8080)")
 		}
 	}
 	return c, nil
@@ -191,14 +205,19 @@ func autocertManager(c serveConfig) *autocert.Manager {
 
 // serve runs the relay until ctx ends; ready gets the bound address.
 func serve(ctx context.Context, c serveConfig, ready func(addr string), hooks relayserver.Hooks) error {
-	rs := relayserver.New(relayserver.DefaultLimits())
-	rs.PublicOrigin = c.publicOrigin
-	rs.Hooks = hooks
-	srv := &http.Server{Handler: rs, ReadHeaderTimeout: 10 * time.Second}
 	ln, err := net.Listen("tcp", c.listen)
 	if err != nil {
 		return err
 	}
+	return serveOn(ctx, c, ln, ready, hooks)
+}
+
+// serveOn runs the relay on ln.
+func serveOn(ctx context.Context, c serveConfig, ln net.Listener, ready func(addr string), hooks relayserver.Hooks) error {
+	rs := relayserver.New(relayserver.DefaultLimits())
+	rs.PublicOrigin = c.publicOrigin
+	rs.Hooks = hooks
+	srv := &http.Server{Handler: rs, ReadHeaderTimeout: 10 * time.Second}
 	switch {
 	case c.autocertHost != "":
 		srv.TLSConfig = autocertManager(c).TLSConfig()
@@ -250,4 +269,12 @@ func runRelayServe(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	return 0
+}
+
+func loopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

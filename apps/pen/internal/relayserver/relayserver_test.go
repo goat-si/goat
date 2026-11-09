@@ -53,15 +53,16 @@ type peer struct {
 	received atomic.Uint64
 }
 
-func dial(t *testing.T, url string, ack bool, already int) *peer {
+func dial(t *testing.T, url string, ack bool, already int) *peer { return dialHost(t, url, "") }
+
+func dialHost(t *testing.T, url, host string) *peer {
 	t.Helper()
-	ws, _, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled})
+	ws, _, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled, Host: host})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ws.SetReadLimit(4 << 20)
 	p := &peer{ws: ws, msgs: make(chan []byte, 8192), texts: make(chan string, 64), closed: make(chan int, 1)}
-	p.received.Store(uint64(already))
 	t.Cleanup(func() { ws.CloseNow() })
 	return p
 }
@@ -95,6 +96,7 @@ type nodeOpts struct {
 	noAck  bool
 	path   string
 	origin string
+	host   string
 	answer func(signPub, sig []byte) []byte
 }
 
@@ -117,7 +119,7 @@ func nodeWith(t *testing.T, rs *relaytest.Server, id *ident.Identity, o nodeOpts
 		path = o.path
 	}
 	u, _ := wire.WebSocketURL(rs.URL, "/v1/node/"+path)
-	p := dial(t, u, !o.noAck, 0)
+	p := dialHost(t, u, o.host)
 	_, challenge, err := p.ws.Read(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -529,15 +531,21 @@ func TestAnyOtherTextCloses1003(t *testing.T) {
 	}
 }
 
-func TestPublicOriginIsTheOriginUplinksMustSign(t *testing.T) {
+func TestWithAPublicOriginOtherHostsGet421AndOnlyThatOriginAuthenticates(t *testing.T) {
 	rs := defaults(t)
-	rs.Relay.PublicOrigin = "wss://relay.example"
-	local := node(t, rs, nodeOpts{})
-	if code := <-local.closed; code != int(wire.CodeRelayAuth) {
-		t.Fatalf("uplink signing the local origin closed %d, want 4403", code)
+	rs.Relay.PublicOrigin = "ws://relay.test"
+	id, _ := ident.Generate(nil)
+	u, _ := wire.WebSocketURL(rs.URL, "/v1/node/"+id.NodeID())
+	_, res, err := websocket.Dial(context.Background(), u, &websocket.DialOptions{Host: "other.example"})
+	if err == nil || res == nil || res.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("Host other.example: %v, want 421 before upgrade", err)
 	}
-	public := node(t, rs, nodeOpts{origin: "wss://relay.example"})
-	if err := rs.WaitOnline(context.Background(), public.nodeID); err != nil {
+	wrong := node(t, rs, nodeOpts{host: "relay.test", origin: "ws://other.example"})
+	if code := <-wrong.closed; code != int(wire.CodeRelayAuth) {
+		t.Fatalf("signature over another origin closed %d, want 4403", code)
+	}
+	right := node(t, rs, nodeOpts{host: "relay.test", origin: "ws://relay.test"})
+	if err := rs.WaitOnline(context.Background(), right.nodeID); err != nil {
 		t.Fatal(err)
 	}
 }

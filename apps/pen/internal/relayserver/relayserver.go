@@ -67,8 +67,8 @@ type Hooks struct {
 // Server is a relay. It is an http.Handler.
 type Server struct {
 	Limits Limits
-	// PublicOrigin, when set, is the origin uplinks sign (wss://host behind a TLS terminator);
-	// otherwise it is derived from each request.
+	// PublicOrigin is the origin uplinks sign (wss://host); requests for any other Host get 421.
+	// Empty only for loopback and tests, where the origin follows each request.
 	PublicOrigin string
 	Hooks        Hooks
 
@@ -86,6 +86,12 @@ func New(l Limits) *Server {
 var route = regexp.MustCompile(`^/v1/(node|client)/([^/]*)$`)
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// With a public origin, the request's Host must name it: uplinks sign that origin, and a relay
+	// reached under another name must not let a node sign for it.
+	if s.PublicOrigin != "" && !s.hostMatches(r.Host) {
+		http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+		return
+	}
 	if r.URL.Path == "/healthz" {
 		w.Header().Set("content-type", "application/json")
 		w.Header().Set("cache-control", "no-store")
@@ -118,11 +124,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(-1)
 	origin := s.PublicOrigin
 	if origin == "" {
-		scheme := "ws://"
+		// Loopback and tests only: the origin follows the request (pen relay serve requires a
+		// public origin on any other address).
+		scheme := "ws"
 		if r.TLS != nil {
-			scheme = "wss://"
+			scheme = "wss"
 		}
-		origin, _ = wire.RelayOrigin(strings.Replace(scheme, "://", "", 1) + "://" + r.Host)
+		origin, _ = wire.RelayOrigin(scheme + "://" + r.Host)
 	}
 	k := &sock{srv: s, ws: ws, nodeID: nodeID, out: newOutq(ws)}
 	s.mu.Lock()
@@ -157,6 +165,13 @@ func (s *Server) release(k *sock) {
 	if k.room.refs--; k.room.refs == 0 && s.rooms[k.nodeID] == k.room {
 		delete(s.rooms, k.nodeID)
 	}
+}
+
+// hostMatches reports whether a request's Host names the public origin.
+func (s *Server) hostMatches(host string) bool {
+	scheme, _, _ := strings.Cut(s.PublicOrigin, "://")
+	o, err := wire.RelayOrigin(scheme + "://" + host)
+	return err == nil && o == s.PublicOrigin
 }
 
 // nextSid hands out session ids per node; they are never reused while this process runs.
