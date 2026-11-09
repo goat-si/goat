@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"os"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -50,14 +51,24 @@ func (d *Daemon) hostKeysLoop(ctx context.Context) {
 	d.every(ctx, d.opt.HostKeysEvery, func() { d.checkHostKeys(ctx) })
 }
 
-// checkHostKeys signs a hostkeys record when the local sshd keys differ from the latest one.
+// LoginUser is this process's OS login name when it is a valid hostkeys user, else "".
+func LoginUser() string {
+	u, err := user.Current()
+	if err != nil || !mesh.ValidUser(u.Username) {
+		return ""
+	}
+	return u.Username
+}
+
+// checkHostKeys signs a hostkeys record when the local sshd keys or the login user differ from the
+// latest one.
 func (d *Daemon) checkHostKeys(ctx context.Context) {
 	keys := ReadHostKeys(d.opt.HostKeyGlob)
 	self, ok := d.view().Members[d.selfKey()]
-	if !ok || slices.Equal(self.HostKeys, keys) {
+	if !ok || slices.Equal(self.HostKeys, keys) && self.User == d.sshUser {
 		return
 	}
-	if _, err := d.mesh().Append(d.id, mesh.TypeHostKeys, d.now().UnixMilli(), mesh.Fields{Keys: keys}); err != nil {
+	if _, err := d.mesh().Append(d.id, mesh.TypeHostKeys, d.now().UnixMilli(), mesh.Fields{Keys: keys, User: d.sshUser}); err != nil {
 		d.opt.Logf("hostkeys: %v", err)
 		return
 	}

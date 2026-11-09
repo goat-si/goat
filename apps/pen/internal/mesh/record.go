@@ -154,6 +154,7 @@ type Body struct {
 	Subject     string   `json:"subject,omitempty"`
 	Name        string   `json:"name,omitempty"`
 	Keys        []string `json:"keys,omitempty"`
+	User        *string  `json:"user,omitempty"`
 }
 
 // Record is a signed mesh record. Body holds the exact signed bytes.
@@ -246,7 +247,7 @@ func checkBody(b *Body, raw []byte) error {
 	hasCard := b.Card != nil
 	hasRevoke := b.Subjects != nil || b.Compromised != nil
 	hasName := b.Subject != "" || b.Name != ""
-	hasKeys := b.Keys != nil
+	hasKeys := b.Keys != nil || b.User != nil
 	extras := 0
 	for _, x := range []bool{hasCard, hasRevoke, hasName, hasKeys} {
 		if x {
@@ -309,6 +310,9 @@ func checkBody(b *Body, raw []byte) error {
 				return fmt.Errorf("mesh: bad host key %q", k)
 			}
 		}
+		if b.User != nil && !ValidUser(*b.User) {
+			return fmt.Errorf("mesh: bad hostkeys user %q", *b.User)
+		}
 	default:
 		return fmt.Errorf("mesh: unknown record type %q", b.Type)
 	}
@@ -317,6 +321,23 @@ func checkBody(b *Body, raw []byte) error {
 		return errors.New("mesh: field does not belong to this record type")
 	}
 	return nil
+}
+
+// ValidUser reports whether s is a hostkeys login name: [a-z_][a-z0-9_.-]{0,31}.
+func ValidUser(s string) bool {
+	if len(s) < 1 || len(s) > 32 {
+		return false
+	}
+	for i, c := range s {
+		lower := c >= 'a' && c <= 'z' || c == '_'
+		if i == 0 && !lower {
+			return false
+		}
+		if !lower && !(c >= '0' && c <= '9') && c != '.' && c != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func validHostKey(k string) bool {
@@ -408,6 +429,8 @@ type Fields struct {
 	Subject     string
 	Name        string
 	Keys        []string
+	// User is the hostkeys record's SSH login name (optional).
+	User string
 }
 
 // Sign builds and signs a record body.
@@ -443,7 +466,8 @@ func Sign(id *ident.Identity, mesh, typ string, n uint64, prev []string, at int6
 		v = struct {
 			bodyHead
 			Keys []string `json:"keys"`
-		}{h, keys}
+			User string   `json:"user,omitempty"`
+		}{h, keys, f.User}
 	default:
 		return nil, fmt.Errorf("mesh: unknown record type %q", typ)
 	}

@@ -248,6 +248,34 @@ func TestBodiesAndCardsWithKeysDifferingOnlyByCaseAreMalformed(t *testing.T) {
 	}
 }
 
+func TestViewExposesTheLatestHostkeysUserAndRejectsABadOne(t *testing.T) {
+	f := detID(1)
+	b, found := newMesh(t, f)
+	keys := []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"}
+	h1 := b.sign(f, TypeHostKeys, []*Record{found}, Fields{Keys: keys, User: "alice"})
+	b.sign(f, TypeHostKeys, []*Record{h1}, Fields{Keys: keys, User: "ubuntu"})
+	if got := b.view().Members[pub(f)].User; got != "ubuntu" {
+		t.Fatalf("view user %q, want the latest hostkeys user ubuntu", got)
+	}
+	if !bytes.Contains(h1.Body, []byte(`"user":"alice"`)) {
+		t.Fatalf("user is not in the signed body: %s", h1.Body)
+	}
+	for _, bad := range []string{"Root", "9lives", "a b", "abcdefghijklmnopqrstuvwxyz0123456"} {
+		if _, err := Sign(f, b.meshID, TypeHostKeys, 9, []string{h1.Hash}, 1, Fields{Keys: keys, User: bad}); err == nil {
+			t.Fatalf("user %q was accepted", bad)
+		}
+	}
+	named, err := Sign(f, b.meshID, TypeName, 9, []string{h1.Hash}, 1, Fields{Subject: pub(f), Name: "f"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := append(bytes.TrimSuffix(named.Body, []byte("}")), []byte(`,"user":"alice"}`)...)
+	forged := &Record{Body: body, Sig: ed25519.Sign(f.SignPriv, digest(recordPrefix, body))}
+	if err := forged.Verify(); err == nil {
+		t.Fatal("user was accepted on a name record")
+	}
+}
+
 func TestNonMembersAdmitHasNoEffect(t *testing.T) {
 	f, x, y := detID(1), detID(2), detID(3)
 	b, found := newMesh(t, f)

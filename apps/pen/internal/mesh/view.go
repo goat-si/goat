@@ -16,7 +16,9 @@ type Member struct {
 	Name       string   `json:"name"`
 	AdmittedBy string   `json:"admittedBy,omitempty"`
 	HostKeys   []string `json:"hostKeys,omitempty"`
-	Since      int64    `json:"since"`
+	// User is the SSH login name from the member's latest hostkeys record.
+	User  string `json:"user,omitempty"`
+	Since int64  `json:"since"`
 }
 
 // View is the state replayed from a record set.
@@ -258,6 +260,10 @@ func Compute(meshID string, recs []*Record) *View {
 		case TypeHostKeys:
 			m := v.Members[b.By]
 			m.HostKeys = append([]string(nil), b.Keys...)
+			m.User = ""
+			if b.User != nil {
+				m.User = *b.User
+			}
 			v.Members[b.By] = m
 		}
 		v.Effective[r.Hash] = true

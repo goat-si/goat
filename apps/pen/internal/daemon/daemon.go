@@ -32,6 +32,9 @@ type Options struct {
 	SyncEvery time.Duration
 	// HostKeysEvery is the host key check interval (1 hour).
 	HostKeysEvery time.Duration
+	// SSHUser is the login name published in hostkeys records; "" reads it from os/user, "none"
+	// publishes none.
+	SSHUser string
 	// Ready is called once the control socket accepts requests.
 	Ready func()
 	Now   func() time.Time
@@ -66,6 +69,8 @@ type Daemon struct {
 	lastView   *mesh.View
 
 	khMu sync.Mutex
+	// sshUser is published in this node's hostkeys records.
+	sshUser string
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -156,6 +161,16 @@ func New(opt Options) (*Daemon, error) {
 		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites,
 		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, seen: map[string]seenInfo{},
 		inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
+	}
+	switch opt.SSHUser {
+	case "":
+		d.sshUser = LoginUser()
+	case "none":
+	default:
+		if !mesh.ValidUser(opt.SSHUser) {
+			return nil, fmt.Errorf("invalid ssh user %q", opt.SSHUser)
+		}
+		d.sshUser = opt.SSHUser
 	}
 	d.upState.Store("connecting")
 	d.up = relay.NewUplink(cfg.Relay, id)
