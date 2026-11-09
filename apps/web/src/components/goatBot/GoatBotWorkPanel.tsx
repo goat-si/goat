@@ -14,6 +14,7 @@ import { GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotComputer } from "./GoatBotComputer";
 import { GoatBotLibrary } from "./GoatBotLibrary";
 import { GoatBotMemory } from "./GoatBotMemory";
+import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
 import { GoatBotStatusCard } from "./GoatBotStatusCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import {
@@ -57,9 +58,14 @@ export function GoatBotWorkPanel({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 text-sm">
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
-        <div className="pr-10">
-          {/* Five tabs do not fit the panel at equal widths, so each keeps its label and the row wraps. */}
-          <TabsList aria-label={`${botName} work`} className="flex-wrap">
+        {/* In a sheet the close button sits at the top right, beside the tabs. */}
+        <div className={onShowChat ? "pr-10" : undefined}>
+          {/* Five labels do not always fit, so the row scrolls sideways and never wraps. Base UI
+          scrolls the active tab into view by offsetLeft, which needs the list positioned. */}
+          <TabsList
+            aria-label={`${botName} work`}
+            className="relative max-w-full overflow-x-auto [scrollbar-width:none]"
+          >
             {tabs.map((name) => (
               <TabsTab key={name} value={name} className="flex-none">
                 {name}
@@ -90,7 +96,10 @@ export function GoatBotWorkPanel({
             </p>
           ) : null}
           {tasks.length === 0 ? (
-            <p>No task threads yet. Ask {botName} to start work.</p>
+            <GoatBotPanelEmpty
+              title="No tasks yet"
+              next={`Ask ${botName} in chat to start work.`}
+            />
           ) : (
             <div className="space-y-4">
               {([false, true] as const).map((done) => (

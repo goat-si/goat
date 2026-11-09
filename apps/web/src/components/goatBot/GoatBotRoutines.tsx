@@ -20,6 +20,7 @@ import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { GoatBotCheckInForm } from "./GoatBotCheckInForm";
 import { useGoatBotName } from "./goatBotMemberContext";
+import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
 
 export function GoatBotRoutines(props: {
   readonly environmentId: EnvironmentId;
@@ -37,7 +38,10 @@ export function GoatBotRoutines(props: {
         <CheckInOffer environmentId={props.environmentId} threadId={props.threadId} />
       ) : null}
       {rows.length === 0 ? (
-        <p>Ask {botName} in chat to set up a routine.</p>
+        <GoatBotPanelEmpty
+          title="No routines yet"
+          next={`Ask ${botName} in chat to set up a routine.`}
+        />
       ) : (
         <ul className="m-0 list-none space-y-1 p-0">
           {rows.map((row) => (

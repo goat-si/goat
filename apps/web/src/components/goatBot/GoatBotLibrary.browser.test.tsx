@@ -109,7 +109,7 @@ it("an older server is not asked for files", async () => {
 it("says when GOAT Bot has saved nothing yet", async () => {
   setup({ data: listing([]) });
   await using screen = await render(<GoatBotLibrary environmentId={environmentId} />);
-  await expect.element(screen.getByText("Files GOAT Bot saves will appear here.")).toBeVisible();
+  await expect.element(screen.getByText("No files yet")).toBeVisible();
 });
 
 it("lists files newest first with folder and size, and says when the list is cut short", async () => {

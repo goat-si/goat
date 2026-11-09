@@ -69,9 +69,7 @@ it("shows the empty state for each work tab", async () => {
   await using screen = await render(
     <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
   );
-  await expect
-    .element(screen.getByText("No task threads yet. Ask GOAT Bot to start work."))
-    .toBeVisible();
+  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Routines" }));
   await expect.element(screen.getByText("Ask GOAT Bot in chat to set up a routine.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Memory" }));
@@ -79,7 +77,7 @@ it("shows the empty state for each work tab", async () => {
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
   await expect.element(screen.getByText("Files need a newer GOAT server.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Computer" }));
-  await expect.element(screen.getByText("No work is running right now.")).toBeVisible();
+  await expect.element(screen.getByText("No work running")).toBeVisible();
 });
 
 it("a refused pause keeps the routine's stored state and shows why", async () => {
