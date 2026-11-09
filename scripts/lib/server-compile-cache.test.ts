@@ -8,7 +8,8 @@ import { cacheKey, seedPreparedCache } from "./server-compile-cache.ts";
 
 it.each([
   { platform: "freebsd", hostArch: "x64", arch: 1, reason: "unsupported target freebsd" },
-  { platform: "linux", hostArch: "arm64", arch: 3, reason: "unsupported Linux architecture arm64" },
+  { platform: "linux", hostArch: "x64", arch: 3, reason: "unexecutable target linux/arm64" },
+  { platform: "linux", hostArch: "arm64", arch: 1, reason: "unexecutable target linux/x64" },
 ])(
   "skips unsupported $platform/$hostArch cache generation",
   async ({ platform, hostArch, arch, reason }) => {
@@ -36,11 +37,13 @@ it.each([
   {
     platform: "darwin",
     hostArch: "arm64",
+    arch: 1,
     resources: "Fixture.app/Contents/Resources",
     executable: "Fixture.app/Contents/MacOS/Fixture",
   },
-  { platform: "linux", hostArch: "x64", resources: "resources", executable: "fixture" },
-])("prepares $platform x64 cache", async ({ platform, hostArch, ...layout }) => {
+  { platform: "linux", hostArch: "x64", arch: 1, resources: "resources", executable: "fixture" },
+  { platform: "linux", hostArch: "arm64", arch: 3, resources: "resources", executable: "fixture" },
+])("prepares $platform/$hostArch cache", async ({ platform, hostArch, arch, ...layout }) => {
   const { spawnSync } = await import("node:child_process");
   const root = NodeFS.realpathSync(
     NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-hook-cache-")),
@@ -68,15 +71,20 @@ it.each([
         "-e",
         `
       const childProcess = require("node:child_process");
-      const spawn = childProcess.spawnSync;
-      childProcess.spawnSync = (executable, args, options) => {
+      const spawn = childProcess.spawn;
+      childProcess.spawnSync = (executable, args) => {
+        require("node:assert/strict").equal(executable, "/usr/bin/arch");
+        require("node:assert/strict").deepEqual(args, ["-x86_64", "/usr/bin/true"]);
+        return { status: 0 };
+      };
+      childProcess.spawn = (executable, args, options) => {
         require("node:assert/strict").equal(executable, ${JSON.stringify(NodePath.join(root, layout.executable))});
         return spawn(process.execPath, args, options);
       };
       Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });
       Object.defineProperty(process, "arch", { value: ${JSON.stringify(hostArch)} });
       require(${JSON.stringify(hook)})({
-        appOutDir: ${JSON.stringify(root)}, electronPlatformName: ${JSON.stringify(platform)}, arch: 1,
+        appOutDir: ${JSON.stringify(root)}, electronPlatformName: ${JSON.stringify(platform)}, arch: ${arch},
         packager: { appInfo: { productFilename: "Fixture" }, executableName: "fixture" }
       }).catch(error => { console.error(error); process.exitCode = 1; });
     `,
