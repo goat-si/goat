@@ -175,6 +175,9 @@ func TestRelayAddRmEditTheConfigAndKeepAtLeastOne(t *testing.T) {
 	if code := RunRelay([]string{"add", "http://c.example"}, &out, &errOut); code == 0 {
 		t.Fatal("plain http to a public host accepted in a relay list")
 	}
+	if code := RunRelay([]string{"add", "wss://B.example:443"}, &out, &errOut); code == 0 {
+		t.Fatal("the same relay under another spelling was added")
+	}
 	if code := RunRelay([]string{"rm", "https://a.example"}, &out, &errOut); code != 0 {
 		t.Fatalf("rm: %d %s", code, errOut.String())
 	}
