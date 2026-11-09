@@ -60,8 +60,55 @@ server_owns_listener() (
     "$lsof_bin" -nP -a -p "$1" -iTCP@127.0.0.1:"$2" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$1"
   fi
 )
-# True while the single-process job with PID $1 still runs.
+# Sets launch_now_us to the wall clock in microseconds without a process where it can: bash 5's
+# EPOCHREALTIME (its decimal point follows the locale), else SECONDS from one date per script.
+LAUNCH_EPOCH_BASE=
+launch_now() {
+  launch_now_us="${"${"}EPOCHREALTIME:-}"
+  case "$launch_now_us" in
+    *[.,]*)
+      launch_now_us="${"${"}launch_now_us%[.,]*}${"${"}launch_now_us#*[.,]}"
+      case "$launch_now_us" in ''|*[!0123456789]*) ;; *) return 0 ;; esac ;;
+  esac
+  if [ -z "${"${"}SECONDS:-}" ]; then launch_now_us=$(( $(date +%s) * 1000000 )); return 0; fi
+  [ -n "$LAUNCH_EPOCH_BASE" ] || LAUNCH_EPOCH_BASE=$(( $(date +%s) - SECONDS ))
+  launch_now_us=$(( (LAUNCH_EPOCH_BASE + SECONDS) * 1000000 ))
+}
+# fd 7 is a private FIFO that only carries this shell's job list: bash lists it there and reads it
+# back, and waits on it with read -t, so a pass starts no process. Its name is removed once open (the
+# launch's EXIT trap removes it too). Any failed step falls back to tr and sleep, as does bash before
+# 4, which crashes after a function that ran command exec returns and cannot read -t 0.05.
+LAUNCH_FIFO=
+launch_fifo_open() {
+  LAUNCH_FIFO=0
+  if [ "${"${"}BASH_VERSINFO:-0}" -ge 4 ] && mkfifo "$STATE_DIR/launch-tick.$$" 2>/dev/null; then
+    if { command exec 7<>"$STATE_DIR/launch-tick.$$"; } 2>/dev/null; then LAUNCH_FIFO=1; fi
+    rm -f "$STATE_DIR/launch-tick.$$" || :
+  fi
+}
+launch_fifo_close() { LAUNCH_FIFO=0; exec 7<&-; }
+# Waits $1 microseconds.
+launch_pause() {
+  launch_pause_s=$(( $1 % 1000000 + 1000000 )); launch_pause_s="$(( $1 / 1000000 )).${"${"}launch_pause_s#1}"
+  if [ "$LAUNCH_FIFO" = 1 ]; then
+    if read -t "$launch_pause_s" -u 7 launch_pause_line 2>/dev/null; then launch_pause_r=0; else launch_pause_r=$?; fi
+    [ "$launch_pause_r" -le 128 ] || return 0
+    launch_fifo_close
+  fi
+  sleep "$launch_pause_s"
+}
+# True while the single-process job with PID $1 still runs: bash lists a job as running only until
+# it reaps it, so no reused PID can match.
 listen_running() {
+  if [ "$LAUNCH_FIFO" = 1 ]; then
+    if jobs -pr >&7 2>/dev/null && echo . >&7 2>/dev/null; then
+      listen_found=1
+      while IFS= read -r -t 1 -u 7 listen_line; do
+        case "$listen_line" in .) return "$listen_found" ;; "$1") listen_found=0 ;; esac
+      done
+    fi
+    launch_fifo_close
+  fi
   case " $(jobs -pr 2>/dev/null | tr '\n' ' ') " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 # Ends single-process job $2 through its job spec $1, which bash refuses once the job is reaped and
@@ -69,8 +116,8 @@ listen_running() {
 # a dead member). TERM, then KILL after up to 2 s of clock-checked waits; waited for only after.
 end_job() {
   kill -TERM "$1" 2>/dev/null || :
-  end_job_until=$(( $(date +%s) + 2 ))
-  while listen_running "$2" && [ "$(date +%s)" -lt "$end_job_until" ]; do sleep 0.1; done
+  launch_now; end_job_until=$((launch_now_us + 2000000))
+  while listen_running "$2" && launch_now && [ "$launch_now_us" -lt "$end_job_until" ]; do launch_pause 100000; done
   if listen_running "$2"; then kill -KILL "$1" 2>/dev/null || :; fi
   wait "$2" 2>/dev/null || :
 }
@@ -78,42 +125,50 @@ end_job() {
 launch_bounded_job() { MSYS2_ARG_CONV_EXCL='*' exec "$@"; }
 # Windows commands can stall, so after the listener wait starts every one the launch runs goes
 # through here: command $2... runs for at most $1 s of clock and returns its own status, or 124 once
-# it was ended at the bound. Elsewhere the command runs directly.
+# it was ended at the bound. It is checked at once and then after 0.05, 0.1 and every 0.25 s. Other
+# hosts, and shells other than bash, whose job specs cannot name it safely, run it directly.
 launch_bounded() {
-  if [ "$GOAT_HOST_WINDOWS" != 1 ]; then shift; "$@"; return; fi
-  launch_bound_until=$(( $(date +%s) + $1 )); shift
-  launch_bounded_job "$@" <&0 &
+  if [ "$GOAT_HOST_WINDOWS" != 1 ] || [ -z "${"${"}BASH_VERSION:-}" ]; then shift; "$@"; return; fi
+  [ -n "$LAUNCH_FIFO" ] || launch_fifo_open
+  launch_now; launch_bound_until=$((launch_now_us + $1 * 1000000)); shift
+  launch_bounded_job "$@" <&0 7<&- &
   launch_bound_job=$!
+  launch_bound_step=50000
   while listen_running "$launch_bound_job"; do
-    if [ "$(date +%s)" -ge "$launch_bound_until" ]; then
+    launch_now
+    if [ "$launch_now_us" -ge "$launch_bound_until" ]; then
       end_job '%?launch_bounded_job' "$launch_bound_job"; return 124
     fi
-    sleep 0.1
+    launch_bound_left=$((launch_bound_until - launch_now_us))
+    [ "$launch_bound_left" -lt "$launch_bound_step" ] || launch_bound_left="$launch_bound_step"
+    launch_pause "$launch_bound_left"
+    case "$launch_bound_step" in 50000) launch_bound_step=100000 ;; *) launch_bound_step=250000 ;; esac
   done
   wait "$launch_bound_job"
 }
 # The launch runs under set -u; these start empty, before any check reads them.
 LISTEN_GONE=; LAUNCH_TASKLIST_STALLED=
 wait_launched_listener() {
-  listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
   LISTEN_GONE=
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
+    launch_now; listen_deadline=$(( launch_now_us / 1000000 + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
     # Each PowerShell start costs about 1.5 s, so one waits for the server to own its listener,
     # checking it every 0.1 s: exit 0 once it does, 3 once the server is gone, 4 at the deadline.
     # A failed start (any other exit) is started again before the deadline.
-    while [ "$(date +%s)" -lt "$listen_deadline" ]; do
+    while launch_now && [ "$launch_now_us" -lt "$((listen_deadline * 1000000))" ]; do
       if GOAT_PROCESS_ID="$REMOTE_PID" GOAT_LISTEN_PORT="$REMOTE_PORT" GOAT_WAIT_UNTIL_MS="$listen_deadline"000 \
-        launch_bounded $((listen_deadline - $(date +%s))) powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
+        launch_bounded $((listen_deadline - launch_now_us / 1000000)) powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
       then listen_status=0; else listen_status=$?; fi
       case "$listen_status" in
-        0) [ "$(date +%s)" -lt "$listen_deadline" ] && return 0; return 1 ;;
+        0) launch_now; [ "$launch_now_us" -lt "$((listen_deadline * 1000000))" ] && return 0; return 1 ;;
         3) LISTEN_GONE="$REMOTE_PID"; return 2 ;;
         4|124) return 1 ;;
       esac
-      sleep 0.1
+      launch_pause 100000
     done
     return 1
   fi
+  listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
   while server_alive "$REMOTE_PID"; do
     [ "$(date +%s)" -lt "$listen_deadline" ] || return 1
     server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0

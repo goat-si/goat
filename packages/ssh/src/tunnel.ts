@@ -805,7 +805,7 @@ ownership_unverified() {
 @@GOAT_LEGACY_IDENTITY@@
 @@GOAT_RUNNER_SETUP@@
 IDENTITY_NEXT="$STATE_DIR/identity.next.$$"
-trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT"; exit "$runner_exit"' EXIT
+trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT" "$STATE_DIR/launch-tick.$$"; exit "$runner_exit"' EXIT
 GOAT_ARCHIVE_MODE=@@GOAT_ARCHIVE_MODE@@
 GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
 if [ "$GOAT_ARCHIVE_MODE" = 0 ]; then
