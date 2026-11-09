@@ -1,3 +1,4 @@
+import { maskResult, walk } from "./ServerBrowserResultMask.ts";
 import { makeLoginOperation } from "./ServerBrowserLoginOperation.ts";
 import { FILL, IDENTIFIER, IDENTIFIER_NAME } from "./secretFillAccountScripts.ts";
 import { FOCUSED, SELECTED } from "./secretFillTargetScripts.ts";
@@ -369,54 +370,6 @@ const maskWith = (values: ReadonlySet<string>) => {
   return Object.assign(mask, {
     slack: 4 * longestForm(forms, skeletons.raw, skeletons.decoded),
   });
-};
-
-/** Fields GOAT itself fills in its answers; masking one would only corrupt the answer's shape. */
-const SERVER_KEYS = new Set([
-  "_tag",
-  "reason",
-  "phase",
-  "status",
-  "level",
-  "requestId",
-  "tabId",
-  "id",
-  "ref",
-]);
-
-const walk = (value: unknown, mask: (text: string) => string, keys: boolean): unknown => {
-  if (typeof value === "string") return mask(value);
-  if (Array.isArray(value)) return value.map((each) => walk(each, mask, keys));
-  if (value === null || typeof value !== "object") return value;
-  // Page-made JSON (`keys`) is the page's throughout; only server-built shapes keep their fields.
-  return Object.fromEntries(
-    Object.entries(value).map(([key, each]) => [
-      keys ? mask(key) : key,
-      !keys && SERVER_KEYS.has(key) && typeof each === "string" ? each : walk(each, mask, keys),
-    ]),
-  );
-};
-
-/** Page-derived JSON can carry a value in its keys; server-built shapes keep theirs. */
-const maskResult = (
-  operation: PreviewAutomationRequest["operation"],
-  result: unknown,
-  mask: (text: string, cut?: boolean) => string,
-): unknown => {
-  if (operation === "evaluate") return walk(result, mask, true);
-  if (result === null || typeof result !== "object" || Array.isArray(result))
-    return walk(result, mask, false);
-  const record = result as Record<string, unknown>;
-  const masked = walk(record, mask, false) as Record<string, unknown>;
-  if (operation === "scrollCollect" && Array.isArray(record.items))
-    masked.items = walk(record.items, mask, true);
-  if (operation === "fetch" && record.truncated === true && typeof record.text === "string")
-    masked.text = mask(record.text, true);
-  const screenshot = record.screenshot as { readonly data?: unknown } | undefined;
-  // Chromium encodes these pixels; text replacement would only corrupt them.
-  if (operation === "snapshot" && typeof screenshot?.data === "string")
-    masked.screenshot = { ...(masked.screenshot as object), data: screenshot.data };
-  return masked;
 };
 
 type Outcome =
