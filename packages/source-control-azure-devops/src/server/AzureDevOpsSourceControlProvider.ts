@@ -76,21 +76,30 @@ function remoteRepository(remoteUrl: string): AzureDevOpsRemote | null {
     }
   });
   const name = segments.at(-1);
-  if (name === undefined || name.length === 0) return null;
-  // `az` replaces any argument value starting with `@` by the contents of that local file.
-  if (name.startsWith("@")) return null;
+  if (name === undefined || !isSafeArgument(name)) return null;
   const gitIndex = segments.at(-2) === "_git" ? segments.length - 2 : null;
   const project = gitIndex === null ? (segments.at(-2) ?? null) : (segments.at(-3) ?? null);
+  if (project !== null && !isSafeArgument(project)) return null;
   const organizationSegment =
     gitIndex === null ? (segments.at(-3) ?? null) : (segments.at(-4) ?? null);
+  if (organizationSegment !== null && !isSafeArgument(organizationSegment)) return null;
   const host = url?.hostname.toLowerCase() ?? null;
+  // Only an HTTPS clone URL names its organization in the host; the SSH hosts (`vs-ssh.`,
+  // `ssh.`) carry it in the path like every other remote.
   const organization =
-    host !== null && host.endsWith(".visualstudio.com")
+    (url?.protocol === "https:" || url?.protocol === "http:") &&
+    host !== null &&
+    host.endsWith(".visualstudio.com")
       ? `https://${host}`
       : organizationSegment === null
         ? null
         : `https://dev.azure.com/${organizationSegment}`;
   return { organization, project, name };
+}
+
+/** `az` reads a value starting with `@` as a file and one starting with `-` as an option. */
+function isSafeArgument(value: string): boolean {
+  return value.length > 0 && !value.startsWith("@") && !value.startsWith("-");
 }
 
 function toChangeRequest(summary: NormalizedAzureDevOpsPullRequestRecord): ChangeRequest {

@@ -92,13 +92,23 @@ it.effect(
           "project",
           "https://dev.azure.com/acme",
         ],
+        ["https://dev.azure.com/acme/project/_git/-repo", null, null, null],
         [
-          "https://dev.azure.com/acme/project/_git/-repo",
-          "-repo",
+          "ssh://git@vs-ssh.visualstudio.com/v3/acme/project/My%20Repo",
+          "My Repo",
+          "project",
+          "https://dev.azure.com/acme",
+        ],
+        [
+          "git@vs-ssh.visualstudio.com:v3/acme/project/My%20Repo",
+          "My Repo",
           "project",
           "https://dev.azure.com/acme",
         ],
         ["https://dev.azure.com/acme/project/_git/%40.env", null, null, null],
+        ["https://dev.azure.com/acme/%40.env/_git/My%20Repo", null, null, null],
+        ["https://dev.azure.com/acme/-alpha/_git/My%20Repo", null, null, null],
+        ["https://dev.azure.com/-acme/project/_git/My%20Repo", null, null, null],
       ] as const) {
         run.mockClear();
         const branch = yield* provider.getDefaultBranch({
@@ -121,8 +131,8 @@ it.effect(
         assert.strictEqual(branch, "master", remoteUrl);
         const args = [...(run.mock.calls[0]?.[0].args ?? [])];
         assert.include(args, `--repository=${repository}`, remoteUrl);
-        assert.include(args.join(" "), `--project ${project}`, remoteUrl);
-        assert.include(args.join(" "), `--organization ${organization}`, remoteUrl);
+        assert.include(args, `--project=${project}`, remoteUrl);
+        assert.include(args, `--organization=${organization}`, remoteUrl);
       }
     }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provide(support))));
   },
@@ -164,7 +174,7 @@ it.effect("follows the selected remote's project when another one is detected", 
         },
       });
       const args = [...(run.mock.calls[0]?.[0].args ?? [])];
-      assert.include(args.join(" "), `--project ${project}`, project);
+      assert.include(args, `--project=${project}`, project);
     }
   }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provide(support))));
 });

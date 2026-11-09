@@ -317,6 +317,11 @@ function normalizeRepositoryCloneUrls(
   };
 }
 
+/** `az` reads a value starting with `@` as a file and one starting with `-` as an option. */
+function isSafeArgument(value: string): boolean {
+  return value.length > 0 && !value.startsWith("@") && !value.startsWith("-");
+}
+
 function parseRepositorySpecifier(repository: string): {
   readonly project: string | null;
   readonly name: string;
@@ -557,6 +562,15 @@ export const make = Effect.gen(function* () {
     getDefaultBranch: Effect.fn("AzureDevOpsCli.getDefaultBranch")(function (input) {
       const repository = parseRepositorySpecifier(input.repository);
       const project = input.project ?? repository.project;
+      const organization = input.organization ?? null;
+      // Every value comes from a remote URL, so none may reach `az` as a file or an option.
+      if (
+        !isSafeArgument(repository.name) ||
+        (project !== null && !isSafeArgument(project)) ||
+        (organization !== null && !isSafeArgument(organization))
+      ) {
+        return Effect.succeed(null);
+      }
       return executeJson({
         cwd: input.cwd,
         args: [
@@ -564,10 +578,9 @@ export const make = Effect.gen(function* () {
           "show",
           "--detect",
           "true",
-          // Joined so a name starting with `-` stays the option's value.
           `--repository=${repository.name}`,
-          ...(project === null ? [] : ["--project", project]),
-          ...(input.organization === undefined ? [] : ["--organization", input.organization]),
+          ...(project === null ? [] : [`--project=${project}`]),
+          ...(organization === null ? [] : [`--organization=${organization}`]),
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),

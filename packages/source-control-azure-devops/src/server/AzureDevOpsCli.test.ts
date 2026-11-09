@@ -233,6 +233,63 @@ describe("AzureDevOpsCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("refuses a project or organization az would read as a file or an option", () =>
+    Effect.gen(function* () {
+      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      for (const input of [
+        { cwd: "/somewhere", repository: "My Repo", project: "@.env" },
+        { cwd: "/somewhere", repository: "My Repo", project: "-alpha" },
+        { cwd: "/somewhere", repository: "My Repo", organization: "@acme" },
+        { cwd: "/somewhere", repository: "My Repo", organization: "-acme" },
+        { cwd: "/somewhere", repository: "@.env" },
+        { cwd: "/somewhere", repository: "-repo" },
+      ]) {
+        assert.strictEqual(yield* az.getDefaultBranch(input), null, JSON.stringify(input));
+      }
+      assert.strictEqual(mockRun.mock.calls.length, 0);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("names the project and organization as their options' values", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(
+        Effect.succeed(
+          processOutput(
+            JSON.stringify({
+              name: "My Repo",
+              webUrl: "https://dev.azure.com/acme/project/_git/My%20Repo",
+              remoteUrl: "https://dev.azure.com/acme/project/_git/My%20Repo",
+              sshUrl: "git@ssh.dev.azure.com:v3/acme/project/My%20Repo",
+              defaultBranch: "refs/heads/main",
+            }),
+          ),
+        ),
+      );
+
+      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const branch = yield* az.getDefaultBranch({
+        cwd: "/somewhere",
+        repository: "My Repo",
+        project: "project",
+        organization: "https://dev.azure.com/acme",
+      });
+
+      assert.strictEqual(branch, "main");
+      assert.deepStrictEqual(mockRun.mock.calls.at(-1)?.[0].args, [
+        "repos",
+        "show",
+        "--detect",
+        "true",
+        "--repository=My Repo",
+        "--project=project",
+        "--organization=https://dev.azure.com/acme",
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("percent-encodes the source branch while preserving recognized ref prefixes", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(Effect.succeed(processOutput("[]")));
