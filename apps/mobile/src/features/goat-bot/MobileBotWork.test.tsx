@@ -87,6 +87,30 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
+// The header's trailing items render as buttons, so tests press Work where iOS shows it.
+vi.mock("../../native/StackHeader", () => ({
+  NativeStackScreenOptions: ({
+    options,
+  }: {
+    options: {
+      unstable_headerRightItems: () => {
+        label: string;
+        accessibilityLabel: string;
+        onPress: () => void;
+      }[];
+    };
+  }) =>
+    options.unstable_headerRightItems().map((item) => (
+      <button
+        key={item.label}
+        data-header-item
+        aria-label={item.accessibilityLabel}
+        onClick={item.onPress}
+      >
+        {item.label}
+      </button>
+    )),
+}));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({

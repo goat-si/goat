@@ -24,16 +24,18 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import { useEffect, useState, type ReactNode } from "react";
-import { Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { useNowMinuteMs } from "../../lib/clock";
 import { uuidv4 } from "../../lib/uuid";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import { MobileBotComputer } from "./MobileBotComputer";
@@ -229,6 +231,22 @@ export function MobileBotWork(props: {
           ) : null}
           {props.taskCard}
         </View>
+      ) : Platform.OS === "ios" ? (
+        // The chat's header carries Work on its trailing side, like the web header's button.
+        <NativeStackScreenOptions
+          optionsVersion={botName}
+          options={{
+            unstable_headerRightItems: () => [
+              withNativeGlassHeaderItem({
+                accessibilityLabel: `Open ${botName} work`,
+                identifier: "goat-bot-work",
+                label: "Work",
+                onPress: () => setOpen(true),
+                type: "button" as const,
+              }),
+            ],
+          }}
+        />
       ) : (
         <Pressable
           accessibilityRole="button"

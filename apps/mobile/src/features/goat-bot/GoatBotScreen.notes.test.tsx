@@ -69,7 +69,27 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   }),
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
+// Work sits in the iOS header's trailing items; they render as buttons here.
+vi.mock("../../native/StackHeader", () => ({
+  NativeStackScreenOptions: ({
+    options,
+  }: {
+    options: {
+      unstable_headerRightItems: () => {
+        label: string;
+        accessibilityLabel: string;
+        onPress: () => void;
+      }[];
+    };
+  }) =>
+    options.unstable_headerRightItems().map((item) => (
+      <button key={item.label} aria-label={item.accessibilityLabel} onClick={item.onPress}>
+        {item.label}
+      </button>
+    )),
+}));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
