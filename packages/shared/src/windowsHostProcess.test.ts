@@ -46,11 +46,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")(
         GOAT_WAIT_UNTIL_MS: "0",
       });
       const read = (name: string) => NodeFS.readFileSync(NodePath.join(directory, name), "utf8");
-      let pid = 0;
+      const stop = (recordedPid: string, recordedBirth: string) =>
+        powershell(WINDOWS_STOP_RECORDED_POWERSHELL, {
+          GOAT_PROCESS_ID: recordedPid,
+          GOAT_PROCESS_BIRTH: recordedBirth,
+        });
       try {
         assert.equal(spawned.status, 4, spawned.stderr);
         const [recordedPid = "", birth = "", ...rest] = read("launch.1").trimEnd().split(" ");
-        pid = Number(recordedPid);
+        const pid = Number(recordedPid);
         assert.deepEqual(rest, []);
         assert.match(birth, /^\d+$/);
         assert.deepEqual(["pid", "port", "managed"].map(read), [
@@ -59,23 +63,21 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")(
           "managed\n",
         ]);
         assert.isTrue(running(pid));
-        const stop = (recordedBirth: string) =>
-          powershell(WINDOWS_STOP_RECORDED_POWERSHELL, {
-            GOAT_PROCESS_ID: recordedPid,
-            GOAT_PROCESS_BIRTH: recordedBirth,
-          });
         // Another creation time names another process at that PID: nothing is ended.
-        const other = stop(String(BigInt(birth) + 1n));
+        const other = stop(recordedPid, String(BigInt(birth) + 1n));
         assert.equal(other.status, 3, other.stderr);
         assert.isTrue(running(pid));
-        const stopped = stop(birth);
+        const stopped = stop(recordedPid, birth);
         assert.equal(stopped.status, 0, stopped.stderr);
         assert.isFalse(running(pid));
-        const again = stop(birth);
+        const again = stop(recordedPid, birth);
         assert.equal(again.status, 2, again.stderr);
       } finally {
-        // Only the program this test started, by the PID its own record captured.
-        if (pid > 0 && running(pid)) process.kill(pid);
+        // A failed assertion leaves the program running: end it by its record, never by PID alone.
+        if (NodeFS.existsSync(NodePath.join(directory, "launch.1"))) {
+          const [recordedPid = "", birth = ""] = read("launch.1").trimEnd().split(" ");
+          if (/^\d+$/.test(recordedPid) && /^\d+$/.test(birth)) stop(recordedPid, birth);
+        }
         NodeFS.rmSync(directory, { recursive: true, force: true });
       }
     });
