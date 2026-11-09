@@ -39,10 +39,35 @@ listener_probe_available() {
   if [ -d /proc/self/fd ]; then return 0; fi
   listener_lsof >/dev/null 2>&1
 }
+# netstat answers in about 0.15 s where a PowerShell start takes 1.5 s, but its state word is
+# localized on some display languages. It proves server $1 owns 127.0.0.1:$2 only after it exited
+# 0 within 5 s and its whole output has a row TCP 127.0.0.1:$2 0.0.0.0:0 LISTENING $1 and no other
+# row from 127.0.0.1:$2 to 0.0.0.0:0; a final line with no newline is not a row. Bash only.
+listener_netstat_owns() {
+  listener_netstat="$(launch_bounded 5 netstat.exe -ano -p TCP </dev/null 2>/dev/null && printf .)" || return 1
+  listener_netstat="${"${"}listener_netstat%.}"
+  listener_pid="$1"; listener_port="$2"; listener_found=1
+  printf -v listener_cr '\r'; printf -v IFS ' \t'; set -f
+  while :; do
+    case "$listener_netstat" in *"
+"*) ;; *) break ;; esac
+    listener_line="${"${"}listener_netstat%%"
+"*}"
+    listener_netstat="${"${"}listener_netstat#*"
+"}"
+    set -- ${"${"}listener_line%"$listener_cr"}
+    [ "$#" -ge 3 ] && [ "$1" = TCP ] && [ "$2" = "127.0.0.1:$listener_port" ] && [ "$3" = 0.0.0.0:0 ] || continue
+    [ "$#" = 5 ] && [ "$4" = LISTENING ] && [ "$5" = "$listener_pid" ] || return 1
+    case "$5" in ''|*[!0123456789]*) return 1 ;; esac
+    listener_found=0
+  done
+  return "$listener_found"
+}
 server_owns_listener() (
   # Protocol parsing leaves noglob enabled; socket fd discovery needs expansion.
   set +f
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
+    if [ -n "${"${"}BASH_VERSION:-}" ] && listener_netstat_owns "$1" "$2"; then return 0; fi
     GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" launch_bounded 15 powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand("$ErrorActionPreference = 'Stop'; $connections = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:GOAT_LISTEN_PORT) -ErrorAction Stop); if ($connections | Where-Object { $_.OwningProcess -eq [int]$env:GOAT_PROCESS_ID -and $_.LocalAddress -eq '127.0.0.1' }) { exit 0 }; exit 1")}' </dev/null >/dev/null 2>&1
   elif [ -d /proc/self/fd ]; then
     listen_sockets=' '
