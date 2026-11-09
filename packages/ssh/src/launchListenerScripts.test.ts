@@ -39,6 +39,7 @@ describe("Windows launch listener wait", () => {
     "ready",
     "tasklistHang",
     "taskkillHang",
+    "tasklistFails",
   ] as const;
   // Every Windows stand-in logs whether it ran as the bounded job, then its arguments.
   const record = (name: string) =>
@@ -76,9 +77,12 @@ describe("Windows launch listener wait", () => {
       "tasklist.exe": [
         record("tasklist"),
         hangs("tasklist"),
-        'if [ -e "$TEST_ROOT/alive" ]; then echo \'"goat.exe","4242","Services","0","1 K"\'; fi',
+        '[ ! -e "$TEST_ROOT/tasklistFails" ] || exit 1',
+        'if [ -e "$TEST_ROOT/alive" ]; then echo \'"goat.exe","4242","Services","0","1 K"\'',
+        "else echo 'INFO: No tasks are running which match the specified criteria.'; fi",
       ].join("\n"),
-      "taskkill.exe": [record("taskkill"), hangs("taskkill"), 'rm -f "$TEST_ROOT/alive"'].join(
+      // It ends the server even when it then hangs, so only its own timeout says the stop is unknown.
+      "taskkill.exe": [record("taskkill"), 'rm -f "$TEST_ROOT/alive"', hangs("taskkill")].join(
         "\n",
       ),
       runner: [record("runner"), '[ -e "$TEST_ROOT/ready" ]'].join("\n"),
@@ -243,8 +247,8 @@ describe("Windows launch listener wait", () => {
           };
         });
       // A taskkill that never answers and ignores TERM is killed at its bound, and the server is
-      // reported as not confirmed stopped. The clock's bound: 10 s for taskkill and 2 s for TERM, 3 s of
-      // exit wait, two tasklist checks of at most 5 s and 2 s that can straddle its end, and the reads.
+      // reported as not confirmed stopped although tasklist no longer lists it. The clock's bound: 10 s
+      // for taskkill and 2 s for TERM, 3 s of exit wait, two tasklist checks of at most 5 + 2 s, reads.
       const stalledKill = yield* launchRun({ alive: true, taskkillHang: true });
       assert.isTrue(stalledKill.unconfirmed);
       assert.equal(stalledKill.commands.filter((name) => name === "taskkill").length, 1);
@@ -260,6 +264,11 @@ describe("Windows launch listener wait", () => {
       assert.equal(stalledList.commands.filter((name) => name === "tasklist").length, 1);
       const listPid = yield* pid("tasklist-pid");
       assert.throws(() => process.kill(listPid, 0));
+      // A tasklist that fails with no output is no answer: the server counts as alive, is stopped,
+      // and is still reported as not confirmed stopped.
+      const failedList = yield* launchRun({ alive: true, tasklistFails: true });
+      assert.isTrue(failedList.unconfirmed);
+      assert.include(failedList.commands, "taskkill");
       // PowerShell's word that the server is gone stands: no tasklist, no taskkill.
       const gone = yield* launchRun({});
       assert.isFalse(gone.unconfirmed);

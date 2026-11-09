@@ -120,8 +120,9 @@ wait_launched_listener() {
   return 2
 }
 # After the listener wait. Windows: PowerShell's word that the server is gone stands; otherwise
-# tasklist runs bounded to 5 s. One that did not answer counts as alive, and later checks in this
-# script do not run tasklist again.
+# tasklist runs bounded to 5 s. Only a clean answer without a process line ("INFO: No tasks...")
+# means gone; a failed, empty or odd answer counts as alive, and after a timeout later checks in
+# this script do not run tasklist again.
 launch_server_alive() {
   [ "$GOAT_HOST_WINDOWS" = 1 ] || { server_alive "$1"; return; }
   [ "$LISTEN_GONE" != "$1" ] || return 1
@@ -129,17 +130,21 @@ launch_server_alive() {
   if launch_bounded 5 tasklist.exe /FI "PID eq $1" /NH /FO CSV </dev/null >"$STATE_DIR/alive.$$" 2>/dev/null; then
     launch_probe=0; else launch_probe=$?; fi
   if [ "$launch_probe" = 124 ]; then LAUNCH_TASKLIST_STALLED=1; rm -f "$STATE_DIR/alive.$$"; return 0; fi
-  if grep -q "^\"[^\"]*\",\"$1\"," "$STATE_DIR/alive.$$" 2>/dev/null; then launch_alive=0; else launch_alive=1; fi
+  launch_alive=0
+  if [ "$launch_probe" = 0 ] && [ -s "$STATE_DIR/alive.$$" ] &&
+    ! grep -q '^"' "$STATE_DIR/alive.$$" 2>/dev/null; then launch_alive=1; fi
   rm -f "$STATE_DIR/alive.$$"
   return "$launch_alive"
 }
 # Stops server $1 after a failed launch: taskkill is bounded to 10 s, then up to about 2 s for the
-# exit. A server still seen afterwards, or one tasklist did not answer for, is reported as not
-# confirmed stopped; a kill that timed out never counts as a stop.
+# exit. A kill that timed out, or a server still seen or not answered for afterwards, is reported
+# as not confirmed stopped.
 launch_stop_server() {
+  launch_stop_unconfirmed=
   if launch_server_alive "$1"; then
-    if [ "$GOAT_HOST_WINDOWS" = 1 ]; then launch_bounded 10 taskkill.exe /PID "$1" /F >/dev/null 2>&1 || :
-    else server_kill "$1" || :; fi
+    if [ "$GOAT_HOST_WINDOWS" != 1 ]; then server_kill "$1" || :
+    elif launch_bounded 10 taskkill.exe /PID "$1" /F >/dev/null 2>&1; then :
+    elif [ "$?" = 124 ]; then launch_stop_unconfirmed=1; fi
   fi
   launch_stop_count=0; launch_stop_until=$(( $(date +%s) + 3 ))
   while [ "$launch_stop_count" -lt 20 ] && [ "$(date +%s)" -lt "$launch_stop_until" ] &&
@@ -147,7 +152,7 @@ launch_stop_server() {
     launch_stop_count=$((launch_stop_count + 1))
     sleep 0.1
   done
-  if launch_server_alive "$1"; then
+  if [ -n "$launch_stop_unconfirmed" ] || launch_server_alive "$1"; then
     printf 'GOAT could not confirm that the server (PID %s) stopped; it may still be running on this host.\n' "$1" >&2
   fi
 }
