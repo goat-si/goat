@@ -314,7 +314,6 @@ const config: ExpoConfig = {
   },
   plugins: [
     "expo-asset",
-    "react-native-pdf-jsi",
     "expo-secure-store",
     "expo-sqlite",
     ...(isIosPersonalTeamBuild
