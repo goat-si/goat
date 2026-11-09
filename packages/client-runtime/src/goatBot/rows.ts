@@ -361,6 +361,7 @@ export function buildGoatBotTimeline(input: {
   const answeredRequestKeys = new Set<string>();
   // The task each question and each of the person's messages belongs to, so an answer finds its question.
   const askedQuestions = new Map<string, string | null>();
+  const openOnCard = new Set<string>();
   const sentTasks = new Map<string, string | null>();
   const committed: UngroupedRow[] = [];
   const committedRequestKeys = new Set<string>();
@@ -415,6 +416,7 @@ export function buildGoatBotTimeline(input: {
       const tone = presentation?.tone ?? "reply";
       const open = questionOpen(presentation?.taskId, presentation?.questionId);
       if (open !== null) cardDecidesOptions.add(item.id);
+      if (open === true) openOnCard.add(item.id);
       if (input.taskId === null && hasOptions && presentation?.taskId != null) {
         const options = shownQuestionOptions.get(presentation.taskId) ?? new Set<string>();
         for (const option of presentation.options ?? []) options.add(option);
@@ -516,10 +518,11 @@ export function buildGoatBotTimeline(input: {
     });
 
   const ordered = [...committed, ...pending];
-  // Choices answer the question they came with. The task's card says when that question closed;
-  // without it, anything the user sent since retires them. A send that failed answers nothing.
+  // Choices answer the question they came with. The task's card says when that question closed,
+  // and it stays open until then; without a card, anything the user sent since answers it. A send
+  // that failed answers nothing.
   for (const [index, row] of ordered.entries()) {
-    if (row.kind !== "bot" || !askedQuestions.has(row.id)) continue;
+    if (row.kind !== "bot" || !askedQuestions.has(row.id) || openOnCard.has(row.id)) continue;
     const taskId = askedQuestions.get(row.id) ?? null;
     const decidedByCard = cardDecidesOptions.has(row.id);
     let answer: string | undefined;

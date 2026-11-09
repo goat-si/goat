@@ -446,6 +446,28 @@ describe("a question the person answered", () => {
     });
   });
 
+  it("keeps a task's question open until its card closes it, though an answer was sent", () => {
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      ...asked,
+      user("u1", "2026-10-12T12:00:02Z", "Save"),
+    ];
+    const messages = {
+      b1: routed,
+      u1: { tone: "reply" as const, readAt: null, requestKey: "in-1", taskId: "proposal" },
+    };
+    const stillOpen = { ...card("proposal", 2), askInChat: true, openQuestionIds: ["q-save"] };
+    const row = questionRow(items, [], messages, { n1: stillOpen }, null);
+    expect(row).toMatchObject({ options: ["Save", "Skip"] });
+    expect(row).not.toHaveProperty("answer");
+  });
+
   it("does not take a message about something else as the answer to a task's open question", () => {
     const open = { ...card("proposal", 1), askInChat: true, openQuestionIds: ["q-save"] };
     const routed = {
