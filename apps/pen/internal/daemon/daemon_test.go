@@ -488,6 +488,36 @@ func TestRevokeCarriedElsewhereClosesTheSubjectsOpenMeshSessionAtOnce(t *testing
 	}
 }
 
+func TestOnlyABatchHoldingThePeersRevokeDefersItsSessionClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	c := joiner(t, ctx, rs, a.invite(t, time.Minute), "c")
+	cm := memberNamed(t, a, "c")
+	var out struct{ Results []PushResult }
+	if err := Call(a.st, Request{Op: "revoke", Subject: cm.SignPub}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var revoke *mesh.Record
+	for _, r := range a.d.mesh().Records() {
+		if r.B.Type == mesh.TypeRevoke {
+			revoke = r
+		}
+	}
+	unrelated, err := a.d.mesh().Append(a.id, mesh.TypeName, 9, mesh.Fields{Subject: ident.B64.EncodeToString(a.id.SignPub), Name: "a2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.d.carriesPeerRevoke(c.id.NoisePub, []*mesh.Record{unrelated}) {
+		t.Fatal("a batch without the peer's revoke deferred the close of a session already revoked elsewhere")
+	}
+	if !a.d.carriesPeerRevoke(c.id.NoisePub, []*mesh.Record{revoke}) {
+		t.Fatal("the batch that holds the peer's revoke did not defer the close")
+	}
+}
+
 func TestRevokeClosesTheRevokedMembersLiveSessions4401(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

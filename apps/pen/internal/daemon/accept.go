@@ -106,7 +106,7 @@ func (d *Daemon) serveMesh(ctx context.Context, sec *session.Secure, l *live) {
 	merged := func(added []*mesh.Record) {
 		// Records on this session that remove its own peer: keep it open until our done so the
 		// peer learns its push was taken. Every other session of a revoked key closes at once.
-		if _, ok := d.view().MemberByNoise(sec.RemoteStatic); !ok {
+		if d.carriesPeerRevoke(sec.RemoteStatic, added) {
 			d.mu.Lock()
 			l.deferred = true
 			d.mu.Unlock()
@@ -157,4 +157,35 @@ func (d *Daemon) serveJoin(ctx context.Context, sec *session.Secure) {
 	}
 	d.mu.Unlock()
 	sec.Close(wire.CodeNormal)
+}
+
+// carriesPeerRevoke reports whether a batch merged on a peer's own session holds that peer's revoke:
+// a revoke naming it, or a compromised revoke after which it is no longer a member. A revoke that
+// arrived on another session does not count, so this session still closes at once.
+func (d *Daemon) carriesPeerRevoke(peerNoise []byte, added []*mesh.Record) bool {
+	v := d.view()
+	if _, member := v.MemberByNoise(peerNoise); member {
+		return false
+	}
+	peer := ""
+	noise := ident.B64.EncodeToString(peerNoise)
+	for k, m := range v.Revoked {
+		if m.NoisePub == noise {
+			peer = k
+		}
+	}
+	for _, r := range added {
+		if r.B.Type != mesh.TypeRevoke {
+			continue
+		}
+		if r.B.Compromised != nil && *r.B.Compromised {
+			return true
+		}
+		for _, s := range r.B.Subjects {
+			if s == peer {
+				return true
+			}
+		}
+	}
+	return false
 }

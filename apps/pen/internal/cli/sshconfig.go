@@ -39,15 +39,15 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 	if h := os.Getenv("PEN_HOME"); h != "" {
 		cmd = "env PEN_HOME=" + shellQuote(h) + " " + cmd
 	}
-	var names []string
+	var hosts []sshHost
 	if st, err := openState(); err == nil {
 		if v, err := localView(st); err == nil {
 			for _, m := range v.SortedMembers() {
-				names = append(names, m.Name)
+				hosts = append(hosts, sshHost{Name: m.Name, User: m.User})
 			}
 		}
 	}
-	text := sshConfigText(cmd, knownHostsPath(), names)
+	text := sshConfigText(cmd, knownHostsPath(), hosts)
 	if !*write && !*install {
 		fmt.Fprint(stdout, text)
 		return 0
@@ -80,19 +80,25 @@ func sshArg(s string) string { return `"` + strings.ReplaceAll(s, "%", "%%") + `
 
 // sshConfigText is one Host block per member name plus a pen-* fallback for names added later.
 // cmd is already shell-quoted.
-func sshConfigText(cmd, knownHosts string, names []string) string {
+// sshHost is one member's concrete Host block; User is empty when the member did not publish one.
+type sshHost struct{ Name, User string }
+
+func sshConfigText(cmd, knownHosts string, hosts []sshHost) string {
 	var b strings.Builder
 	b.WriteString("# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n")
-	block := func(pattern string) {
+	block := func(pattern, user string) {
 		fmt.Fprintf(&b, "Host %s\n", pattern)
+		if user != "" {
+			fmt.Fprintf(&b, "    User %s\n", user)
+		}
 		fmt.Fprintf(&b, "    ProxyCommand %s pipe %%n 22\n", strings.ReplaceAll(cmd, "%", "%%"))
 		fmt.Fprintf(&b, "    UserKnownHostsFile %s\n", sshArg(knownHosts))
 		b.WriteString("    StrictHostKeyChecking yes\n")
 	}
-	for _, n := range names {
-		block("pen-" + n)
+	for _, h := range hosts {
+		block("pen-"+h.Name, h.User)
 	}
-	block("pen-*")
+	block("pen-*", "")
 	return b.String()
 }
 

@@ -8,11 +8,22 @@ import (
 )
 
 func TestSSHConfigTextNamesEveryMemberAndAFallback(t *testing.T) {
-	got := sshConfigText(shellQuote("/bin/pen"), "/k/known_hosts", []string{"studio", "sbx"})
+	got := sshConfigText(shellQuote("/bin/pen"), "/k/known_hosts", []sshHost{{Name: "studio"}, {Name: "sbx"}})
 	block := func(host string) string {
 		return "Host " + host + "\n    ProxyCommand '/bin/pen' pipe %n 22\n    UserKnownHostsFile \"/k/known_hosts\"\n    StrictHostKeyChecking yes\n"
 	}
 	want := "# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n" + block("pen-studio") + block("pen-sbx") + block("pen-*")
+	if got != want {
+		t.Fatalf("config text:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestSSHConfigTextSetsUserOnHostsThatPublishedOne(t *testing.T) {
+	got := sshConfigText(shellQuote("/bin/pen"), "/k/known_hosts", []sshHost{{Name: "sbx", User: "ubuntu"}, {Name: "studio"}})
+	want := "# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n" +
+		"Host pen-sbx\n    User ubuntu\n    ProxyCommand '/bin/pen' pipe %n 22\n    UserKnownHostsFile \"/k/known_hosts\"\n    StrictHostKeyChecking yes\n" +
+		"Host pen-studio\n    ProxyCommand '/bin/pen' pipe %n 22\n    UserKnownHostsFile \"/k/known_hosts\"\n    StrictHostKeyChecking yes\n" +
+		"Host pen-*\n    ProxyCommand '/bin/pen' pipe %n 22\n    UserKnownHostsFile \"/k/known_hosts\"\n    StrictHostKeyChecking yes\n"
 	if got != want {
 		t.Fatalf("config text:\n%s\nwant:\n%s", got, want)
 	}

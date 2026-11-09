@@ -248,6 +248,34 @@ func TestBodiesAndCardsWithKeysDifferingOnlyByCaseAreMalformed(t *testing.T) {
 	}
 }
 
+func TestViewExposesTheLatestHostkeysUserAndRejectsABadOne(t *testing.T) {
+	f := detID(1)
+	b, found := newMesh(t, f)
+	keys := []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"}
+	h1 := b.sign(f, TypeHostKeys, []*Record{found}, Fields{Keys: keys, User: "alice"})
+	b.sign(f, TypeHostKeys, []*Record{h1}, Fields{Keys: keys, User: "ubuntu"})
+	if got := b.view().Members[pub(f)].User; got != "ubuntu" {
+		t.Fatalf("view user %q, want the latest hostkeys user ubuntu", got)
+	}
+	if !bytes.Contains(h1.Body, []byte(`"user":"alice"`)) {
+		t.Fatalf("user is not in the signed body: %s", h1.Body)
+	}
+	for _, bad := range []string{"Root", "9lives", "a b", "abcdefghijklmnopqrstuvwxyz0123456"} {
+		if _, err := Sign(f, b.meshID, TypeHostKeys, 9, []string{h1.Hash}, 1, Fields{Keys: keys, User: bad}); err == nil {
+			t.Fatalf("user %q was accepted", bad)
+		}
+	}
+	named, err := Sign(f, b.meshID, TypeName, 9, []string{h1.Hash}, 1, Fields{Subject: pub(f), Name: "f"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := append(bytes.TrimSuffix(named.Body, []byte("}")), []byte(`,"user":"alice"}`)...)
+	forged := &Record{Body: body, Sig: ed25519.Sign(f.SignPriv, digest(recordPrefix, body))}
+	if err := forged.Verify(); err == nil {
+		t.Fatal("user was accepted on a name record")
+	}
+}
+
 func TestNonMembersAdmitHasNoEffect(t *testing.T) {
 	f, x, y := detID(1), detID(2), detID(3)
 	b, found := newMesh(t, f)
@@ -437,7 +465,93 @@ func TestPoolHoldsAtMost16PerSignerAndDropsTheOldest(t *testing.T) {
 	}
 }
 
-func TestRevokeIsStoredPastTheRecordCapAndOthersAreNot(t *testing.T) {
+func TestRevokeFitsTheRoomReservedUnderTheCapSyncsAndReloads(t *testing.T) {
+	f, a := detID(1), detID(2)
+	st, err := state.OpenDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Found(nil, f, "f", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, _ := MakeCard(a, s.MeshID, f.NodeID(), ident.B64.EncodeToString(bytes.Repeat([]byte{7}, 16)), "a")
+	if _, err := s.Append(f, TypeAdmit, 2, Fields{Card: card}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := s.Append(f, TypeName, 3, Fields{Subject: pub(f), Name: "f"}); err != nil {
+			break
+		}
+	}
+	if s.Len() != MaxOrdinary {
+		t.Fatalf("ordinary records stopped at %d, want %d", s.Len(), MaxOrdinary)
+	}
+	if _, err := s.Append(f, TypeRevoke, 4, Fields{Subjects: []string{pub(a)}}); err != nil {
+		t.Fatalf("revoke in the reserved room: %v", err)
+	}
+	recs := s.Records()
+	peer := NewStore(nil, s.MeshID)
+	peer.Merge(recs[:len(recs)-1])
+	x, y := relay.Pipe()
+	y.(relay.QueueLimiter).SetQueueLimit(relay.MaxQueued)
+	x.(relay.QueueLimiter).SetQueueLimit(relay.MaxQueued)
+	errc := make(chan error, 1)
+	go func() { errc <- SyncRespond(context.Background(), y, peer, nil) }()
+	if err := SyncInitiate(context.Background(), x, s, nil); err != nil {
+		t.Fatalf("sync of a capped set: %v", err)
+	}
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := peer.View().Revoked[pub(a)]; !ok || peer.Len() != len(recs) {
+		t.Fatalf("peer holds %d of %d records, revoke taken: %v", peer.Len(), len(recs), ok)
+	}
+	s.st = st
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Load(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Len() != len(recs) {
+		t.Fatalf("reload kept %d of %d records", back.Len(), len(recs))
+	}
+}
+
+func TestReloadOfTheNodesOwnSetAppliesNoCap(t *testing.T) {
+	f := detID(1)
+	st, err := state.OpenDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Found(nil, f, "f", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := s.Records()[0]
+	all := []*Record{prev}
+	for i := range MaxRecords + 10 {
+		r, err := Sign(f, s.MeshID, TypeName, uint64(i+2), []string{prev.Hash}, 1, Fields{Subject: pub(f), Name: "f"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		all, prev = append(all, r), r
+	}
+	if err := st.WriteJSON("mesh.json", storeFile{MeshID: s.MeshID, Records: all, Pool: []*Record{}}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Load(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Len() != len(all) {
+		t.Fatalf("reload kept %d of %d saved records", back.Len(), len(all))
+	}
+}
+
+func TestRevokesStopAt4096AndOthersAt3840(t *testing.T) {
 	f, a := detID(1), detID(2)
 	s, err := Found(nil, f, "f", 1)
 	if err != nil {
@@ -447,19 +561,21 @@ func TestRevokeIsStoredPastTheRecordCapAndOthersAreNot(t *testing.T) {
 	if _, err := s.Append(f, TypeAdmit, 2, Fields{Card: card}); err != nil {
 		t.Fatal(err)
 	}
-	for s.Len() < MaxRecords {
+	for s.Len() < MaxOrdinary {
 		if _, err := s.Append(f, TypeName, 3, Fields{Subject: pub(f), Name: "f"}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := s.Append(f, TypeName, 4, Fields{Subject: pub(f), Name: "g"}); err == nil {
-		t.Fatal("a name record was stored past the cap")
+		t.Fatal("a name record was stored past 3840")
 	}
-	if _, err := s.Append(f, TypeRevoke, 5, Fields{Subjects: []string{pub(a)}}); err != nil {
-		t.Fatalf("revoke past the cap: %v", err)
+	for s.Len() < MaxRecords {
+		if _, err := s.Append(f, TypeRevoke, 5, Fields{Subjects: []string{pub(a)}}); err != nil {
+			t.Fatalf("revoke %d under 4096: %v", s.Len(), err)
+		}
 	}
-	if s.Len() != MaxRecords+1 {
-		t.Fatalf("len %d", s.Len())
+	if _, err := s.Append(f, TypeRevoke, 6, Fields{Subjects: []string{pub(a)}}); err == nil {
+		t.Fatal("a revoke was stored past 4096")
 	}
 }
 

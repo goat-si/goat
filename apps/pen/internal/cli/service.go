@@ -20,7 +20,7 @@ func serviceMode(noService bool, st *state.Store) string {
 	if noService || os.Getenv("PEN_SERVICE") == "none" || os.Getenv("PEN_HOME") != "" {
 		return "none"
 	}
-	switch runtime.GOOS {
+	switch serviceOS {
 	case "linux":
 		if exec.Command("systemctl", "--user", "show-environment").Run() == nil {
 			return "systemd"
@@ -48,10 +48,10 @@ func installedService(st *state.Store) string {
 	if os.Getenv("PEN_HOME") != "" {
 		return "none"
 	}
-	if _, err := os.Stat(unitPath()); err == nil && runtime.GOOS == "linux" {
+	if _, err := os.Stat(unitPath()); err == nil && serviceOS == "linux" {
 		return "systemd"
 	}
-	if _, err := os.Stat(plistPath()); err == nil && runtime.GOOS == "darwin" {
+	if _, err := os.Stat(plistPath()); err == nil && serviceOS == "darwin" {
 		return "launchd"
 	}
 	return "none"
@@ -79,7 +79,10 @@ func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-func run(name string, args ...string) error {
+// serviceOS and run are variables so tests can drive the service paths without a service manager.
+var serviceOS = runtime.GOOS
+
+var run = func(name string, args ...string) error {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
@@ -113,7 +116,7 @@ func startService(mode string, st *state.Store) error {
 		if err := writeFile(plistPath(), plist); err != nil {
 			return err
 		}
-		exec.Command("launchctl", "bootout", guiDomain()+"/"+launchdLabel).Run()
+		run("launchctl", "bootout", guiDomain()+"/"+launchdLabel)
 		// pen leave disables the job; starting again re-enables it.
 		if err := run("launchctl", "enable", guiDomain()+"/"+launchdLabel); err != nil {
 			return err
@@ -135,27 +138,21 @@ func stopService(mode string) error {
 	return nil
 }
 
-// detachService disables the service and deletes its file without stopping the running daemon.
-func detachService(mode string) error {
+// removeService stops and disables the service, then deletes its file. disable --now stops a unit
+// that an older install loaded with Restart=always, so it cannot loop on the left marker.
+func removeService(mode string) error {
 	switch mode {
 	case "systemd":
-		if err := run("systemctl", "--user", "disable", "pen.service"); err != nil {
-			return err
-		}
+		run("systemctl", "--user", "disable", "--now", "pen.service") // absent or already stopped is fine
 		if err := os.Remove(unitPath()); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return run("systemctl", "--user", "daemon-reload")
 	case "launchd":
-		if err := run("launchctl", "disable", guiDomain()+"/"+launchdLabel); err != nil {
-			return err
-		}
+		run("launchctl", "bootout", guiDomain()+"/"+launchdLabel) // the job may already be gone
 		if err := os.Remove(plistPath()); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
 	return nil
 }
-
-// unloadLaunchd drops the (already exited) launchd job after leave.
-func unloadLaunchd() { exec.Command("launchctl", "bootout", guiDomain()+"/"+launchdLabel).Run() }
