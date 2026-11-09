@@ -216,6 +216,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.rooms[nodeID] = rm
 	}
 	rm.refs++
+	// role is set with room under s.mu: evict reads room under s.mu and then role, so it never
+	// sees a node socket without its role.
+	k.role = roleClient
+	if role == "node" {
+		k.role = roleNode
+	}
 	k.room = rm
 	evicted := k.evicted
 	s.mu.Unlock()
@@ -230,7 +236,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 	if role == "node" {
-		k.role = roleNode
 		rm.acceptUplink(k, origin)
 		if evicted {
 			// A newer uplink for this node took its place while this one was upgrading.
@@ -239,7 +244,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			rm.mu.Unlock()
 		}
 	} else {
-		k.role = roleClient
 		if !rm.acceptClient(k) {
 			k.out.wait()
 			return
