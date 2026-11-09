@@ -10,7 +10,11 @@ vi.mock("../state/session", () => ({
   usePreparedConnection: () => connection.value,
 }));
 
-import { mediaRouteKey, mobileMediaConnection, routeMobileMediaUrl } from "./environmentMediaUri";
+import {
+  loopbackRouteKey,
+  mobileMediaConnection,
+  routeMobileMediaUrl,
+} from "./environmentMediaUri";
 
 const environmentId = EnvironmentId.make("remote");
 const remote = { environmentId, label: "Build box" };
@@ -33,7 +37,7 @@ it("opens a tapped localhost document at the environment's address, or refuses w
     reason: expect.stringContaining("localhost:5173 is on Build box"),
   });
 });
-it("moves an image's route key only for loopback URLs when the connection changes", () => {
+it("keys loopback images by where the environment's loopback leads, shared by every such image", () => {
   const tailnet = mobileMediaConnection(
     Option.some({
       httpBaseUrl: "http://100.65.180.100:3773",
@@ -46,12 +50,12 @@ it("moves an image's route key only for loopback URLs when the connection change
       target: new SshConnectionTarget({ ...remote, connectionId: "ssh:box" }),
     }),
   );
-  const keys = (href: string) => [mediaRouteKey(tailnet, href), mediaRouteKey(ssh, href)];
-  const [tailnetKey, sshKey] = keys("http://localhost:5173/shot.png");
-  expect(tailnetKey).toBe("http://100.65.180.100:5173/shot.png");
-  expect(sshKey).not.toBe(tailnetKey);
+  // Another loopback image arriving keeps the key, so a streaming message is not remounted.
+  expect(loopbackRouteKey(tailnet, "http://localhost:5173/a.png")).toBe("100.65.180.100");
+  expect(loopbackRouteKey(tailnet, "http://127.0.0.1:4317/w")).toBe("100.65.180.100");
+  expect(loopbackRouteKey(ssh, "http://localhost:5173/a.png")).toBe("unreachable");
   for (const href of ["https://cdn.example.com/a.png", "/repo/shots/a.png", "shots/a.png"]) {
-    const [first, second] = keys(href);
-    expect(first).toBe(second);
+    expect(loopbackRouteKey(tailnet, href)).toBeNull();
+    expect(loopbackRouteKey(ssh, href)).toBeNull();
   }
 });

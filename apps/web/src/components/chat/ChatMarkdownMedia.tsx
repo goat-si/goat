@@ -22,6 +22,7 @@ import {
 } from "react";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "../../assets/assetUrls";
+import { useRenderedAppearance } from "../../hooks/useTheme";
 import {
   readEnvironmentMediaRoute,
   useEnvironmentMediaRoute,
@@ -150,11 +151,14 @@ function isWebPageUrl(uri: string): boolean {
   return /^(?:https?:)?\/\//i.test(uri);
 }
 
-function linkedWebImageUrls(node: HastElement | undefined): string[] {
+function linkedWebImageUrls(node: HastElement | undefined, theme: "light" | "dark"): string[] {
   return (node?.children ?? []).flatMap((child) => {
     if (child.type !== "element") return [];
-    const src = child.tagName === "img" ? child.properties.src : undefined;
-    if (typeof src !== "string") return linkedWebImageUrls(child);
+    if (child.tagName !== "img") return linkedWebImageUrls(child, theme);
+    // The source MarkdownImage renders: this theme's <picture> source, then the authored src.
+    const themeSrc = child.properties[theme === "dark" ? "dataDarkSrc" : "dataLightSrc"];
+    const src = typeof themeSrc === "string" ? themeSrc : child.properties.src;
+    if (typeof src !== "string") return [];
     const url = normalizeMarkdownLinkDestination(src);
     return isWebPageUrl(url) ? [url] : [];
   });
@@ -649,10 +653,11 @@ export function ChatMarkdownDirectMedia(props: {
  */
 function LinkedImageOpenPage(props: {
   readonly environmentId: EnvironmentId | null;
-  readonly imageUrls: ReadonlyArray<string>;
+  readonly node: HastElement | undefined;
   readonly openInPreview: OpenUrlInPreview;
   readonly children: ReactNode;
 }) {
+  const imageUrls = linkedWebImageUrls(props.node, useRenderedAppearance());
   const route = useEnvironmentMediaRoute(props.environmentId);
   const routeOf = (url: string) => {
     const routed = route(url);
@@ -661,9 +666,9 @@ function LinkedImageOpenPage(props: {
   // Each failure remembers its route, so a reconnect that moves the address tries the image again.
   const [failures, setFailures] = useState<ReadonlyMap<string, string>>(() => new Map());
   const failedUrls = new Set([
-    ...props.imageUrls.filter((url) => routeOf(url) === null),
+    ...imageUrls.filter((url) => routeOf(url) === null),
     ...[...failures]
-      .filter(([url, failedRoute]) => props.imageUrls.includes(url) && routeOf(url) === failedRoute)
+      .filter(([url, failedRoute]) => imageUrls.includes(url) && routeOf(url) === failedRoute)
       .map(([url]) => url),
   ]);
   const reportResult = (url: string, loaded: boolean) => {
@@ -696,12 +701,14 @@ export function withLinkedImagePage(
     readonly openInPreview: OpenUrlInPreview | undefined;
   },
 ): ReactNode {
-  const imageUrls = input.openInPreview ? linkedWebImageUrls(input.node) : [];
-  if (!input.openInPreview || imageUrls.length === 0) return link;
+  const hasWebImage = (["light", "dark"] as const).some(
+    (theme) => linkedWebImageUrls(input.node, theme).length > 0,
+  );
+  if (!input.openInPreview || !hasWebImage) return link;
   return (
     <LinkedImageOpenPage
       environmentId={input.environmentId}
-      imageUrls={imageUrls}
+      node={input.node}
       openInPreview={input.openInPreview}
     >
       {link}

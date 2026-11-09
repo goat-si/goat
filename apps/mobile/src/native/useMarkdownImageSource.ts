@@ -2,7 +2,7 @@ import { resolveFilesystemReadAccess } from "@goat/client-runtime/state/filesyst
 import { useEnvironmentPresentation } from "../state/presentation";
 import { useEnvironmentQuery } from "../state/query";
 import { resolveMobileMarkdownMediaSource } from "../lib/markdownMediaSource";
-import { mediaRouteKey, mobileMediaConnection } from "../lib/environmentMediaUri";
+import { loopbackRouteKey, mobileMediaConnection } from "../lib/environmentMediaUri";
 import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import type { MarkdownImageSourceResolver } from "./SelectableMarkdownText.types";
@@ -76,7 +76,7 @@ export function useMarkdownImageSource(props: {
   return useMemo(
     () =>
       Object.assign((image: Parameters<MarkdownImageSourceResolver>[0]) => resolve(image), {
-        routeKey: (href: string) => mediaRouteKey(mobileMediaConnection(connection), href),
+        routeKey: (href: string) => loopbackRouteKey(mobileMediaConnection(connection), href),
       }),
     [connection, resolve],
   );

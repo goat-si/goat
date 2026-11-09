@@ -340,3 +340,14 @@ it("keeps an image nested in a file link's label", async () => {
   );
   await expect.element(screen.getByRole("button", { name: "Open page" })).toBeInTheDocument();
 });
+it("offers the page of a linked picture's theme source", async () => {
+  using test = setup({ connection: sshConnection(), previewAllowed: true });
+  await using screen = await renderRemoteMarkdown(
+    test.registry,
+    `<a href="https://example.test/"><picture><source media="(prefers-color-scheme: light)" srcset="${PAGE_IMAGE}"><source media="(prefers-color-scheme: dark)" srcset="${PAGE_IMAGE}"><img alt="page" src="shots/page.png"></picture></a>`,
+  );
+  const openPage = screen.getByRole("button", { name: "Open page" });
+  await expect.element(openPage).toBeInTheDocument();
+  await openPage.click();
+  await vi.waitFor(() => expect(state.openPreview).toHaveBeenCalledWith(PAGE_IMAGE));
+});

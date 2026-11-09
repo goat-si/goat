@@ -63,15 +63,21 @@ export function routeMobileMediaUrl(environmentId: EnvironmentId, url: string) {
     url: environment.normalizeUri(url),
   });
 }
-/** Where a Markdown image source loads from with this connection; it changes only for loopback URLs. */
-export function mediaRouteKey(
+/**
+ * Where this environment's loopback addresses lead now, for a source that is one; null for a
+ * source that loads where it points. Every loopback image shares it, so it changes on a reconnect
+ * that moves them and not when another image arrives.
+ */
+export function loopbackRouteKey(
   environment: ReturnType<typeof mobileMediaConnection>,
   href: string,
-): string {
+): string | null {
+  const url = environment.normalizeUri(href);
   const routed = resolveEnvironmentLoopbackUrl({
     connection: environment.connection,
     isDesktopRenderer: false,
-    url: environment.normalizeUri(href),
+    url,
   });
-  return routed._tag === "Open" ? routed.url : `unreachable:${href}`;
+  if (routed._tag === "Unreachable") return "unreachable";
+  return routed.url === url ? null : new URL(routed.url).hostname;
 }

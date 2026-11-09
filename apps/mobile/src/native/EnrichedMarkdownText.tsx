@@ -182,10 +182,15 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     [renderImage],
   );
   const resolveNativeImageSource = useRetryingImageSource(resolveImageSource);
-  // Enriched asks about each image once, so a moved image address needs a fresh native view.
+  // Enriched asks about each image once, so a moved loopback address needs a fresh native view.
   const imageRouteKey = useMemo(() => {
     const routeKey = resolveImageSource?.routeKey;
-    return routeKey ? markdownImageSources(props.markdown).map(routeKey).join("\n") : "";
+    if (!routeKey) return "";
+    return (
+      markdownImageSources(props.markdown)
+        .map(routeKey)
+        .find((key) => key !== null) ?? ""
+    );
   }, [props.markdown, resolveImageSource]);
   const renderMarkdown = (openAndroidMenu?: () => void) => {
     const onLinkLongPress =

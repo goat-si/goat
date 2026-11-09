@@ -42,8 +42,8 @@ export type MarkdownImageSourceResolver = ((
   | { uri: string; headers?: Record<string, string> }
   | null
   | Promise<{ uri: string; headers?: Record<string, string> } | null>) & {
-  /** Where an image source loads from now; a change means a resolved image must be asked again. */
-  readonly routeKey?: (href: string) => string;
+  /** Where an image source's address leads now, or null when it loads where it points. */
+  readonly routeKey?: (href: string) => string | null;
 };
 
 export interface MarkdownFileContextMenuAction {
