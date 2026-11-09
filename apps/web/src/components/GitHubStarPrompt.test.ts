@@ -2,6 +2,7 @@ import { EnvironmentId } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { toastManager } from "./ui/toast";
+import { hasVisibleToastAction } from "./ui/toast.logic";
 
 const { add, update, openExternal, commands, starred, page } = vi.hoisted(() => ({
   add: vi.fn<typeof toastManager.add>(),
@@ -83,6 +84,7 @@ async function startSession() {
       await sent;
     },
     sendWithoutWaiting: () => void session.recordPromptSent(environmentId),
+    trackSubmission: (sent: boolean) => session.recordPromptOnSuccess(environmentId, sent),
   };
 }
 
@@ -91,6 +93,23 @@ const click = (props: unknown) => (props as { onClick: () => unknown }).onClick(
 
 describe("recordPromptSent", () => {
   vi.useFakeTimers();
+
+  it.each(["plan follow-up", "multiple-model submission"])(
+    "counts a successful %s once, but does not count a failed submission",
+    async () => {
+      const store = setup();
+      const session = await startSession();
+      session.trackSubmission(false);
+      expect(store.get("goat:github-star-prompt:sent")).toBe("0");
+      for (let i = 0; i < 5; i++) {
+        session.trackSubmission(true);
+      }
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
+      expect(store.get("goat:github-star-prompt:sent")).toBe("5");
+      expect(add).toHaveBeenCalledOnce();
+      vi.unstubAllGlobals();
+    },
+  );
 
   it("asks only after the focused page is idle", async () => {
     setup({ sent: 5 });
@@ -200,6 +219,19 @@ describe("recordPromptSent", () => {
     click(add.mock.lastCall?.[0].actionProps);
     await vi.advanceTimersByTimeAsync(0);
     expect(update.mock.lastCall?.[1]).toMatchObject({ title: "Thanks for the star!" });
+    const initial = add.mock.lastCall?.[0];
+    const updateValues = update.mock.calls.map((call) => call[1]);
+    const rendered = Object.assign(
+      {},
+      initial,
+      ...updateValues.map((value) =>
+        Object.fromEntries(
+          Object.entries(value as object).filter(([, field]) => field !== undefined),
+        ),
+      ),
+    );
+    expect(rendered.description).toBeFalsy();
+    expect(hasVisibleToastAction(rendered.actionProps)).toBe(false);
     expect(add).toHaveBeenCalledOnce();
     expect(openExternal).not.toHaveBeenCalled();
 

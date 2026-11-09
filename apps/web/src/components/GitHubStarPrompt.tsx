@@ -45,8 +45,8 @@ function showStarPrompt(environmentId: EnvironmentId) {
       toastManager.update(id, {
         type: "success",
         title: "Thanks for the star!",
-        description: undefined,
-        actionProps: undefined,
+        description: null,
+        actionProps: { children: "" },
         data: {},
         timeout: 4_000,
       });
@@ -155,4 +155,8 @@ export async function recordPromptSent(environmentId: EnvironmentId): Promise<vo
     return;
   }
   showStarPrompt(environmentId);
+}
+
+export function recordPromptOnSuccess(environmentId: EnvironmentId, sent: boolean): void {
+  if (sent) void recordPromptSent(environmentId);
 }
