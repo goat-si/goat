@@ -170,6 +170,8 @@ export const readLiveSshRuntimeProtocol = async (
   runtimeFile: string,
   portFile?: string,
   pidFile?: string,
+  /** Receives the instance id of the descriptor this answer was read from. */
+  observeInstance?: (instanceId: unknown) => void,
 ) => {
   let pid = 0;
   let port = 0;
@@ -232,6 +234,7 @@ export const readLiveSshRuntimeProtocol = async (
   }
   try {
     const descriptor = decodeEnvironmentDescriptor(raw);
+    observeInstance?.(descriptor.instanceId);
     if (!protocolVersion(descriptor.serverVersion)) return unknown;
     for (const field of ["sshRuntimeProtocolVersion", "orchestrationProtocolVersion"] as const) {
       const value = descriptor[field];
@@ -283,38 +286,61 @@ export const readLiveSshRuntimeProtocol = async (
 declare const __GOAT_BUILD_COMMIT__: string | undefined;
 
 const encodeRuntimeManifest = Schema.encodeSync(Schema.fromJsonString(RuntimeManifest));
+const ownManifest = () =>
+  ownRuntimeManifest({
+    version: packageJson.version,
+    commit:
+      typeof __GOAT_BUILD_COMMIT__ === "string" && __GOAT_BUILD_COMMIT__
+        ? __GOAT_BUILD_COMMIT__
+        : undefined,
+    commitTime: BUILD_COMMIT_TIME,
+  });
+/** The five tokens of `runtime-manifest --shell`. */
+export const runtimeManifestShellLine = () => {
+  const manifest = ownManifest();
+  const own = ownSshRuntimeProtocol();
+  return [
+    manifest.version,
+    own.sshRuntimeProtocolVersion,
+    own.orchestrationProtocolVersion,
+    manifest.commitTime ?? 0,
+    manifest.capabilities.includes("memory-scopes") ? "has" : "lacks",
+  ].join(" ");
+};
 export const runtimeManifest = Command.make("runtime-manifest", {
   shell: Flag.Boolean("shell").pipe(Flag.withDefault(false)),
 }).pipe(
   Command.unlisted,
   Command.withHandler(({ shell }) =>
     Effect.sync(() => {
-      const manifest = ownRuntimeManifest({
-        version: packageJson.version,
-        commit:
-          typeof __GOAT_BUILD_COMMIT__ === "string" && __GOAT_BUILD_COMMIT__
-            ? __GOAT_BUILD_COMMIT__
-            : undefined,
-        commitTime: BUILD_COMMIT_TIME,
-      });
-      if (shell) {
-        const own = ownSshRuntimeProtocol();
-        const scopes = manifest.capabilities.includes("memory-scopes") ? "has" : "lacks";
-        process.stdout.write(
-          [
-            manifest.version,
-            own.sshRuntimeProtocolVersion,
-            own.orchestrationProtocolVersion,
-            manifest.commitTime ?? 0,
-            scopes,
-          ].join(" ") + "\n",
-        );
-      } else {
-        process.stdout.write(encodeRuntimeManifest(manifest) + "\n");
-      }
+      process.stdout.write(
+        (shell ? runtimeManifestShellLine() : encodeRuntimeManifest(ownManifest())) + "\n",
+      );
     }),
   ),
 );
+
+type ProtocolSignals =
+  | ReturnType<typeof ownSshRuntimeProtocol>
+  | Awaited<ReturnType<typeof readLiveSshRuntimeProtocol>>;
+/** The tokens of `protocol --shell`; throws for a version token the shell would reject. */
+export const protocolShellLine = (signals: ProtocolSignals) => {
+  if ("serverVersion" in signals && !protocolVersion(signals.serverVersion)) {
+    throw new Error("Invalid SSH protocol version token");
+  }
+  const version = "serverVersion" in signals ? signals.serverVersion : "unknown";
+  const integer = (value: unknown) => (protocolInteger(value) ? String(value) : "unknown");
+  const fields = [
+    version,
+    integer("sshRuntimeProtocolVersion" in signals ? signals.sshRuntimeProtocolVersion : undefined),
+    integer(
+      "orchestrationProtocolVersion" in signals ? signals.orchestrationProtocolVersion : undefined,
+    ),
+    "pid" in signals ? signals.pid : 0,
+    "port" in signals ? signals.port : 0,
+  ];
+  return ("status" in signals ? signals.status + " " : "") + fields.join(" ");
+};
 
 export const protocol = Command.make("protocol", {
   shell: Flag.Boolean("shell").pipe(Flag.withDefault(false)),
@@ -337,27 +363,7 @@ export const protocol = Command.make("protocol", {
           process.stdout.write(JSON.stringify(signals) + "\n");
           return;
         }
-        if ("serverVersion" in signals && !protocolVersion(signals.serverVersion)) {
-          throw new Error("Invalid SSH protocol version token");
-        }
-        const version = "serverVersion" in signals ? signals.serverVersion : "unknown";
-        const integer = (value: unknown) => (protocolInteger(value) ? String(value) : "unknown");
-        const fields = [
-          version,
-          integer(
-            "sshRuntimeProtocolVersion" in signals ? signals.sshRuntimeProtocolVersion : undefined,
-          ),
-          integer(
-            "orchestrationProtocolVersion" in signals
-              ? signals.orchestrationProtocolVersion
-              : undefined,
-          ),
-          "pid" in signals ? signals.pid : 0,
-          "port" in signals ? signals.port : 0,
-        ];
-        process.stdout.write(
-          ("status" in signals ? signals.status + " " : "") + fields.join(" ") + "\n",
-        );
+        process.stdout.write(protocolShellLine(signals) + "\n");
       } catch (cause) {
         process.stderr.write(
           (cause instanceof Error ? cause.message : "Cannot inspect SSH protocol") + "\n",
@@ -486,7 +492,7 @@ export const commitTime = Command.make("commit-time").pipe(
   ),
 );
 
-const instanceToken = (value: unknown): value is string =>
+export const instanceToken = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9-]{1,64}$/.test(value);
 
 /**
