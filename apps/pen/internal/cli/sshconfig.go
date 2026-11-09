@@ -110,7 +110,19 @@ func sshDir() string {
 	return filepath.Join(home, ".ssh")
 }
 
-func includeLine(dir string) string { return "Include " + sshArg(filepath.Join(dir, "pen", "config")) }
+// includeLine quotes the path; Include takes no % tokens, so none are escaped.
+func includeLine(dir string) string { return "Include \"" + filepath.Join(dir, "pen", "config") + "\"" }
+
+// ownInclude reports how many leading bytes of a config are pen's Include line, quoted or (older builds) not.
+func ownInclude(dir string, cfg []byte) int {
+	path := filepath.Join(dir, "pen", "config")
+	for _, line := range []string{includeLine(dir), "Include " + path} {
+		if p := []byte(line + "\n"); bytes.HasPrefix(cfg, p) {
+			return len(p)
+		}
+	}
+	return 0
+}
 
 func writeSSHConfig(dir, text string) (string, error) {
 	if err := os.MkdirAll(filepath.Join(dir, "pen"), 0o700); err != nil {
@@ -132,10 +144,13 @@ func installInclude(dir string) (string, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	prefix := []byte(includeLine(dir) + "\n")
-	if bytes.HasPrefix(old, prefix) {
-		return "", nil
+	if n := ownInclude(dir, old); n > 0 {
+		if string(old[:n]) == includeLine(dir)+"\n" {
+			return "", nil
+		}
+		old = old[n:]
 	}
+	prefix := []byte(includeLine(dir) + "\n")
 	backup := ""
 	if err == nil {
 		backup = cfg + ".pen-backup"
@@ -146,7 +161,11 @@ func installInclude(dir string) (string, error) {
 	return backup, replaceFile(cfg, append(prefix, old...))
 }
 
+// replaceFile writes through a symlinked config (dotfile managers link it) by replacing the link's target.
 func replaceFile(path string, data []byte) error {
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
 	tmp := path + ".pen-tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
@@ -160,9 +179,8 @@ func uninstallSSHConfig(dir string) error {
 	cfg := filepath.Join(dir, "config")
 	old, err := os.ReadFile(cfg)
 	if err == nil {
-		prefix := []byte(includeLine(dir) + "\n")
-		if bytes.HasPrefix(old, prefix) {
-			if err := replaceFile(cfg, old[len(prefix):]); err != nil {
+		if n := ownInclude(dir, old); n > 0 {
+			if err := replaceFile(cfg, old[n:]); err != nil {
 				return err
 			}
 		}
