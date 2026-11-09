@@ -46,6 +46,8 @@ export const isExempt = (path: string): boolean =>
   (path.startsWith("infra/") &&
     (!path.startsWith("infra/relay/") || path.startsWith("infra/relay/migrations/"))) ||
   path.startsWith(".repos/") ||
+  // Pen test vectors hold random key, nonce and hash bytes, not upstream names.
+  path.startsWith("packages/pen-protocol/vectors/") ||
   path.startsWith("devlog/") ||
   path.startsWith("scripts/lib/goat-rename/") ||
   path === "scripts/goat-rename.ts" ||
