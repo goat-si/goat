@@ -10,7 +10,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ChannelChildWork, ChannelChildWorkState } from "./channelChildWork.ts";
+import { ChannelChildWork, ChannelChildWorkState, GoatBotWorkKind } from "./channelChildWork.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
   ChannelActorRef,
@@ -378,6 +378,8 @@ export const BotThreadRow = Schema.Union([
     lastActivityAt: IsoDateTime,
     unread: Schema.Boolean,
     mainMessagesSinceQuiet: NonNegativeInt,
+    /** The task's worker thread on this machine, which this row opens. */
+    worker: Schema.optional(Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId })),
   }),
   Schema.Struct({
     kind: Schema.Literal("coding"),
@@ -387,6 +389,8 @@ export const BotThreadRow = Schema.Union([
     title: Schema.optional(Schema.String),
     state: ChannelChildWorkState,
     lastActivityAt: IsoDateTime,
+    /** Absent when the launch recorded none and its project does not say. */
+    workKind: Schema.optional(GoatBotWorkKind),
   }),
 ]);
 export type BotThreadRow = typeof BotThreadRow.Type;

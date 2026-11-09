@@ -28,6 +28,14 @@ export const ChannelChildWorkSurface = Schema.Literals([
 ]);
 export type ChannelChildWorkSurface = typeof ChannelChildWorkSurface.Type;
 
+/**
+ * What a thread GOAT Bot launched is for, judged by its workspace at admission: its own
+ * worktree is coding, which stays in thread lists; a scratch folder or a project root is a
+ * chore, which lists show only under the bot's task.
+ */
+export const GoatBotWorkKind = Schema.Literals(["coding", "chore"]);
+export type GoatBotWorkKind = typeof GoatBotWorkKind.Type;
+
 export const ChannelChildWorkState = Schema.Literals([
   /** Admission reserved capacity; the launch has not been attempted yet. */
   "reserved",
