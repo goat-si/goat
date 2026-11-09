@@ -248,11 +248,12 @@ it("offers a captioned linked image's page beside the link", async () => {
   await vi.waitFor(() => expect(state.openPreview).toHaveBeenCalledWith(PAGE_IMAGE));
   expect(state.openExternal).not.toHaveBeenCalled();
 });
-it("offers the page of the image that failed, among several or nested in a link", async () => {
+it("offers the page of a web image nested in a link beside its file images", async () => {
   using test = setup({ connection: sshConnection(), previewAllowed: true });
+  mint.mockResolvedValue({ relativeUrl: "/api/assets/thumb.png", expiresAt: 1 });
   await using screen = await renderRemoteMarkdown(
     test.registry,
-    `[![thumb](https://cdn.test/thumb.png) *![page](${PAGE_IMAGE})*](https://example.test/)`,
+    `[![thumb](/repo/thumb.png) *![page](${PAGE_IMAGE})*](https://example.test/)`,
   );
   const openPage = screen.getByRole("button", { name: "Open page" });
   await expect.element(openPage).toBeInTheDocument();
