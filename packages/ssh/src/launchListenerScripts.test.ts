@@ -22,6 +22,8 @@ const slice = (from: string, to: string) => {
 };
 const WAIT_READY = slice("wait_ready() {", "\nNODE\n}\n");
 const FAILURE_BRANCH = slice("  if ! wait_launched_listener", "\n    exit 1\n  fi\n");
+// One launch attempt: the server's start, its records, the listener wait and the failure branch.
+const ATTEMPT = slice('  touch "$LOG_FILE"', "\n    exit 1\n  fi\n");
 // The harness's bash: 4+ lists and waits through a FIFO, older bash keeps tr and sleep.
 const bashMajor = Number(
   NodeChildProcess.spawnSync("bash", ["-c", "echo $BASH_VERSINFO"], { encoding: "utf8" }).stdout,
@@ -30,8 +32,8 @@ const bashMajor = Number(
 describe("Windows launch listener wait", () => {
   // PowerShell answers as its loop would: 3 for a gone server (vanish: mid-wait), 0 for a listener
   // (late: after the deadline), 4 at its deadline, 1 for a failed start; hang never answers, and
-  // stubborn also ignores TERM. tasklist lists the server while alive; taskkill ends it, and the
-  // *Hang states never answer and ignore TERM. The clock moves a second per read.
+  // stubborn also ignores TERM. tasklist lists the server while alive; a launch never runs taskkill.
+  // The *Hang states never answer and ignore TERM. The clock moves a second per read.
   const states = [
     "listening",
     "alive",
@@ -42,12 +44,17 @@ describe("Windows launch listener wait", () => {
     "fail",
     "ready",
     "tasklistHang",
-    "taskkillHang",
     "tasklistFails",
     "noFifo",
     "termAfterFifo",
     "owns",
     "netstatHang",
+    "stopHang",
+    "spawnDies",
+    "failSpawn",
+    "addrInUse",
+    "recordFails",
+    "recordFailsUnconfirmed",
   ] as const;
   // Every Windows stand-in logs whether it ran as the bounded job, then its arguments.
   const record = (name: string) =>
@@ -69,8 +76,33 @@ describe("Windows launch listener wait", () => {
     yield* fs.makeDirectory(root + "/state");
     for (const [name, body] of Object.entries({
       uname: "echo MINGW64_NT-10.0-26200",
+      cygpath: 'printf "%s\\n" "$2"',
       "powershell.exe": [
         record("powershell"),
+        // The recorded-identity stop: PID 4242's creation time is current-birth, and it ends the
+        // server only when the recorded one matches.
+        'if [ -n "${GOAT_PROCESS_BIRTH:-}" ]; then',
+        '  echo "$GOAT_PROCESS_ID $GOAT_PROCESS_BIRTH" >>"$TEST_ROOT/stops"',
+        "  " + hangs("stop"),
+        '  [ "$GOAT_PROCESS_BIRTH" = "$(cat "$TEST_ROOT/current-birth" 2>/dev/null)" ] || exit 3',
+        '  rm -f "$TEST_ROOT/alive"; exit 0',
+        "fi",
+        // A spawn logs its record name. Without a deadline it only starts the server and prints its
+        // PID; with one it publishes the record beside the log and then waits as the loop below.
+        'if [ -n "${GOAT_SPAWN_ARGS:-}" ]; then',
+        '  echo "${GOAT_SPAWN_RECORD:-detached}" >>"$TEST_ROOT/spawns"',
+        '  [ ! -e "$TEST_ROOT/spawnDies" ] || exit 1',
+        '  if [ -z "${GOAT_WAIT_UNTIL_MS:-}" ]; then echo 4242; exit 0; fi',
+        '  [ ! -e "$TEST_ROOT/recordFails" ] || exit 6',
+        '  [ ! -e "$TEST_ROOT/recordFailsUnconfirmed" ] || exit 7',
+        '  dir="$(dirname "$GOAT_SPAWN_LOG")"',
+        '  echo "4242 1111" >"$dir/$GOAT_SPAWN_RECORD"',
+        '  echo 4242 >"$dir/pid"; echo "$GOAT_LISTEN_PORT" >"$dir/port"; echo managed >"$dir/managed"',
+        '  if [ -e "$TEST_ROOT/addrInUse" ]; then',
+        '    rm -f "$TEST_ROOT/addrInUse"; echo "listen EADDRINUSE" >>"$GOAT_SPAWN_LOG"; exit 3',
+        "  fi",
+        '  [ ! -e "$TEST_ROOT/failSpawn" ] || exit 1',
+        "fi",
         // Without a deadline it is the one-shot listener check, which finds one only when owns is set.
         'if [ -z "$GOAT_WAIT_UNTIL_MS" ]; then [ -e "$TEST_ROOT/owns" ]; exit; fi',
         'if [ -e "$TEST_ROOT/hang" ]; then',
@@ -94,10 +126,7 @@ describe("Windows launch listener wait", () => {
         'if [ -e "$TEST_ROOT/alive" ]; then echo \'"goat.exe","4242","Services","0","1 K"\'',
         "else echo 'INFO: No tasks are running which match the specified criteria.'; fi",
       ].join("\n"),
-      // It ends the server even when it then hangs, so only its own timeout says the stop is unknown.
-      "taskkill.exe": [record("taskkill"), 'rm -f "$TEST_ROOT/alive"', hangs("taskkill")].join(
-        "\n",
-      ),
+      "taskkill.exe": [record("taskkill"), 'rm -f "$TEST_ROOT/alive"'].join("\n"),
       // Prints netstat-out byte for byte, then may stall, then exits with netstat-status.
       "netstat.exe": [
         record("netstat"),
@@ -114,8 +143,8 @@ describe("Windows launch listener wait", () => {
         '[ ! -e "$TEST_ROOT/late-fired" ] || { echo 2000; exit 0; }',
         'if [ -e "$TEST_ROOT/probing" ] &&',
         '  ! { [ -e "$TEST_ROOT/tasklistHang" ] && [ -s "$TEST_ROOT/tasklist-pid" ]; } &&',
-        '  ! { [ -e "$TEST_ROOT/taskkillHang" ] && [ -s "$TEST_ROOT/taskkill-pid" ]; } &&',
-        '  ! { [ -e "$TEST_ROOT/netstatHang" ] && [ -s "$TEST_ROOT/netstat-pid" ]; }; then',
+        '  ! { [ -e "$TEST_ROOT/netstatHang" ] && [ -s "$TEST_ROOT/netstat-pid" ]; } &&',
+        '  ! { [ -e "$TEST_ROOT/stopHang" ] && [ -s "$TEST_ROOT/stop-pid" ]; }; then',
         '  cat "$TEST_ROOT/clock"; exit 0',
         "fi",
         'n="$(cat "$TEST_ROOT/clock")"; echo "$((n + 1))" >"$TEST_ROOT/clock"; echo "$n"',
@@ -162,9 +191,11 @@ describe("Windows launch listener wait", () => {
           "probing",
           "clock-at-probe",
           "tasklist-pid",
-          "taskkill-pid",
           "powershell-pid",
           "netstat-pid",
+          "stop-pid",
+          "stops",
+          "spawns",
           "late-fired",
           "end",
         ])
@@ -193,6 +224,7 @@ describe("Windows launch listener wait", () => {
             env: {
               ...process.env,
               TEST_ROOT: root,
+              USERPROFILE: root,
               TEST_LAUNCH: launching ? "1" : "",
               TEST_REAL_PATH: process.env.PATH ?? "",
               PATH: bin + ":" + (process.env.PATH ?? ""),
@@ -515,6 +547,7 @@ describe("Windows launch listener wait", () => {
         'GOAT_ARCHIVE_MODE=1; RUNNER_FILE="$TEST_ROOT/bin/runner"; LAUNCH_ATTEMPTS=9; LAUNCH_LOG_OFFSET=0',
         'LOG_FILE="$STATE_DIR/server.log"; PID_FILE="$STATE_DIR/pid"; PORT_FILE="$STATE_DIR/port"',
         'MANAGED_FILE="$STATE_DIR/managed"; DATABASE_AHEAD_FILE="$STATE_DIR/ahead"; SELECTED_VERSION=1.2.3',
+        "REMOTE_BIRTH=1111",
         "database_ahead_exit() { exit 9; }",
         'trap \'cat "$TEST_ROOT/clock" >"$TEST_ROOT/end"\' EXIT',
         "for launch_try in 1; do",
@@ -523,6 +556,7 @@ describe("Windows launch listener wait", () => {
       ].join("\n");
       const launchRun = (state: Parameters<typeof run>[0]) =>
         Effect.gen(function* () {
+          yield* fs.writeFileString(root + "/current-birth", "1111\n");
           const result = yield* run(state, body, true);
           assert.notInclude(result.stderr, "unbound variable");
           assert.equal(result.code, 1, result.stderr);
@@ -540,44 +574,187 @@ describe("Windows launch listener wait", () => {
             commands,
           };
         });
-      // A taskkill that never answers and ignores TERM is killed at its bound, and the server is
-      // reported as not confirmed stopped although tasklist no longer lists it. The clock's bound: 10 s
-      // for taskkill and 2 s for TERM, 3 s of exit wait, two tasklist checks of at most 5 + 2 s, reads.
-      const stalledKill = yield* launchRun({ alive: true, taskkillHang: true });
-      assert.isTrue(stalledKill.unconfirmed);
-      assert.equal(stalledKill.commands.filter((name) => name === "taskkill").length, 1);
-      const killPid = yield* pid("taskkill-pid");
-      assert.throws(() => process.kill(killPid, 0));
+      // A stop that never answers and ignores TERM is killed at its bound, and the server is
+      // reported as not confirmed stopped. The clock's bound: 20 s for the stop and 2 s for TERM,
+      // two tasklist checks of at most 5 + 2 s, and reads.
+      const stalledStop = yield* launchRun({ alive: true, stopHang: true });
+      assert.isTrue(stalledStop.unconfirmed);
+      assert.equal(stalledStop.commands.filter((name) => name === "powershell").length, 2);
+      const stopPid = yield* pid("stop-pid");
+      assert.throws(() => process.kill(stopPid, 0));
       assert.isAtMost(
         (yield* clockAt("end")) - (yield* clockAt("clock-at-probe")),
-        10 + 2 + 3 + 2 * (5 + 2) + 4,
+        20 + 2 + 2 * (5 + 2) + 4,
       );
-      // A tasklist that never answers counts as alive, so the stop is not confirmed either.
+      // A tasklist that never answers is ended at its bound and counts as alive; the stop then
+      // confirms the recorded server exited.
       const stalledList = yield* launchRun({ alive: true, tasklistHang: true });
-      assert.isTrue(stalledList.unconfirmed);
+      assert.isFalse(stalledList.unconfirmed);
       assert.equal(stalledList.commands.filter((name) => name === "tasklist").length, 1);
       const listPid = yield* pid("tasklist-pid");
       assert.throws(() => process.kill(listPid, 0));
-      // A tasklist that fails with no output is no answer: the server counts as alive, is stopped,
-      // and is still reported as not confirmed stopped.
+      // A tasklist that fails with no output is no answer either; the stop's answer stands.
       const failedList = yield* launchRun({ alive: true, tasklistFails: true });
-      assert.isTrue(failedList.unconfirmed);
-      assert.include(failedList.commands, "taskkill");
-      // PowerShell's word that the server is gone stands: no tasklist, no taskkill.
+      assert.isFalse(failedList.unconfirmed);
+      // PowerShell's word that the server is gone stands: no tasklist, no stop.
       const gone = yield* launchRun({});
       assert.isFalse(gone.unconfirmed);
       assert.deepEqual(gone.commands, ["powershell"]);
       // A ready server that does not own its listener is stopped, with each command bounded.
       const stopped = yield* launchRun({ listening: true, alive: true, ready: true });
       assert.isFalse(stopped.unconfirmed);
-      assert.includeMembers(stopped.commands, [
+      assert.deepEqual(stopped.commands.toSorted(), [
+        "netstat",
+        "powershell",
+        "powershell",
         "powershell",
         "runner",
-        "netstat",
         "tasklist",
-        "taskkill",
+        "tasklist",
       ]);
       assert.deepEqual(yield* fs.readDirectory(root + "/state"), ["server.log"]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  // One Windows launch attempt as the launch script runs it, from the server's start through the
+  // failure branch, tried again on a taken port. netstat proves the listener without PowerShell,
+  // and PID 4242's creation time is currentBirth (its record says 1111).
+  const attempt = (
+    harness: Effect.Success<typeof makeHarness>,
+    state: Partial<Record<(typeof states)[number], boolean>>,
+    currentBirth = "1111",
+  ) =>
+    Effect.gen(function* () {
+      const { run, root, fs } = harness;
+      yield* fs.writeFileString(root + "/current-birth", currentBirth + "\n");
+      yield* fs.writeFileString(
+        root + "/netstat-out",
+        "  TCP 127.0.0.1:3773 0.0.0.0:0 LISTENING 4242\r\n",
+      );
+      for (const name of ["pid", "port", "managed", "identity"])
+        yield* fs.remove(root + "/state/" + name, { force: true });
+      const result = yield* run(
+        state,
+        [
+          WAIT_READY,
+          'valid_positive() { case "$1" in ""|*[!0123456789]*) return 1 ;; esac; [ "$1" != 0 ]; }',
+          'GOAT_ARCHIVE_MODE=1; RUNNER_FILE="$TEST_ROOT/bin/runner"; SELECTED_VERSION=1.2.3',
+          'LOG_FILE="$STATE_DIR/server.log"; PID_FILE="$STATE_DIR/pid"; PORT_FILE="$STATE_DIR/port"',
+          'MANAGED_FILE="$STATE_DIR/managed"; DATABASE_AHEAD_FILE="$STATE_DIR/ahead"',
+          'IDENTITY_NEXT="$STATE_DIR/identity.next.$$"; DEFAULT_SERVER_HOME="$TEST_ROOT/home"',
+          'SPAWN_IDENTITY="$TEST_ROOT/goat"; REMOTE_PID=',
+          "database_ahead_exit() { exit 9; }",
+          "for LAUNCH_ATTEMPTS in 1 2; do",
+          "REMOTE_PORT=3773",
+          ATTEMPT,
+          'echo "ready $REMOTE_PID"; break',
+          "done",
+        ].join("\n"),
+        // The clock holds once the wait has answered, so only a stalled command reaches its bound.
+        true,
+      );
+      const logged = (name: string) =>
+        fs.readFileString(root + "/" + name).pipe(
+          Effect.map((text) => text.trim().split("\n").filter(Boolean)),
+          Effect.orElseSucceed((): string[] => []),
+        );
+      assert.notInclude(result.stderr, "unbound variable");
+      return {
+        ...result,
+        // An unbounded call's line has no leading 1 (and the log's first line loses its space).
+        commands: result.calls.map((call) => call.replace(/^1 /, "").trim().split(" ")[0]),
+        spawns: yield* logged("spawns"),
+        stops: yield* logged("stops"),
+        alive: yield* fs.exists(root + "/alive"),
+        state: (yield* fs.readDirectory(root + "/state")).toSorted(),
+        unconfirmed: result.stderr.includes("could not confirm"),
+      };
+    });
+
+  it.effect("one PowerShell start per attempt starts the server and waits for its listener", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const ready = yield* attempt(harness, { alive: true, listening: true, ready: true });
+      assert.equal(ready.code, 0, ready.stderr);
+      assert.equal(ready.stdout, "ready 4242");
+      assert.deepEqual(
+        ready.commands.filter((name) => name === "powershell"),
+        ["powershell"],
+      );
+      // The spawn is held to the launch's deadline like every other Windows command.
+      assert.deepEqual(
+        ready.calls.filter((call) => !call.startsWith("1 ")),
+        [],
+      );
+      // Its record is published and the attempt's own record name is gone.
+      assert.deepEqual(ready.state, ["identity", "managed", "pid", "port", "server.log"]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("a failed wait after a spawn waits again and never starts a second server", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const state = { alive: true, listening: true, ready: true } as const;
+      const retried = yield* attempt(harness, { ...state, failSpawn: true });
+      assert.equal(retried.code, 0, retried.stderr);
+      assert.lengthOf(retried.spawns, 1);
+      assert.lengthOf(
+        retried.commands.filter((name) => name === "powershell"),
+        2,
+      );
+      // A port taken during launch is a new attempt with a new record.
+      const moved = yield* attempt(harness, { ...state, addrInUse: true });
+      assert.equal(moved.code, 0, moved.stderr);
+      assert.include(moved.stderr, "was taken during launch; retrying");
+      assert.lengthOf(moved.spawns, 2);
+      assert.notEqual(moved.spawns[0], moved.spawns[1]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("a failed launch stops only the process its record names, never through taskkill", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      // The PID now names another process, with another creation time: nothing is killed.
+      const reused = yield* attempt(harness, { alive: true }, "2222");
+      assert.equal(reused.code, 1, reused.stderr);
+      assert.include(reused.stderr, "did not become ready");
+      assert.deepEqual(reused.stops, ["4242 1111"]);
+      assert.notInclude(reused.commands, "taskkill");
+      assert.isTrue(reused.alive);
+      assert.isTrue(reused.unconfirmed);
+      // The recorded process itself is stopped, and that is confirmed.
+      const matched = yield* attempt(harness, { alive: true });
+      assert.deepEqual(matched.stops, ["4242 1111"]);
+      assert.notInclude(matched.commands, "taskkill");
+      assert.isFalse(matched.alive);
+      assert.isFalse(matched.unconfirmed);
+      assert.deepEqual(matched.state, ["server.log"]);
+      // A stop that never answers is ended at its bound and reported as not confirmed.
+      const stalled = yield* attempt(harness, { alive: true, stopHang: true });
+      assert.isTrue(stalled.unconfirmed);
+      const stuck = yield* harness.pid("stop-pid");
+      assert.throws(() => process.kill(stuck, 0));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("a spawn that ends before publishing its record kills nothing and says so", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const died = yield* attempt(harness, { alive: true, spawnDies: true });
+      assert.equal(died.code, 1, died.stderr);
+      assert.include(died.stderr, "Could not start the GOAT server outside the SSH session");
+      assert.isTrue(died.unconfirmed);
+      assert.deepEqual(died.stops, []);
+      assert.notInclude(died.commands, "taskkill");
+      assert.deepEqual(died.state, ["server.log"]);
+      // A record it could not write: the PowerShell ended the server through its own handle.
+      const unwritten = yield* attempt(harness, { alive: true, recordFails: true });
+      assert.equal(unwritten.code, 1, unwritten.stderr);
+      assert.isFalse(unwritten.unconfirmed);
+      assert.deepEqual(unwritten.state, ["server.log"]);
+      const unstopped = yield* attempt(harness, { alive: true, recordFailsUnconfirmed: true });
+      assert.isTrue(unstopped.unconfirmed);
+      assert.deepEqual(unstopped.state, ["server.log"]);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

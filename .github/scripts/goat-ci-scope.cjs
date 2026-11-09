@@ -62,6 +62,7 @@ const WINDOWS_SUITES = [
   "packages/shared/src/goatHome",
   "packages/shared/src/devHome",
   "packages/shared/src/testing/",
+  "packages/shared/src/windowsHostProcess",
   "scripts/lib/changed-tests",
   "scripts/build-computer-use-helper",
 ];

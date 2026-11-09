@@ -1,4 +1,8 @@
-import { encodePowerShellCommand } from "@goat/shared/windowsHostProcess";
+import {
+  encodePowerShellCommand,
+  WINDOWS_SPAWN_AND_WAIT_POWERSHELL,
+  WINDOWS_STOP_RECORDED_POWERSHELL,
+} from "@goat/shared/windowsHostProcess";
 
 // Retained archives have a port-only wait-ready helper. Inspect the kernel's socket owner
 // in the launch shell instead, without adding helper arguments or starts on reconnect.
@@ -191,26 +195,66 @@ launch_bounded() {
   wait "$launch_bound_job"
 }
 # The launch runs under set -u; these start empty, before any check reads them.
-LISTEN_GONE=; LAUNCH_TASKLIST_STALLED=
+LISTEN_GONE=; LAUNCH_TASKLIST_STALLED=; LAUNCH_SPAWN_STATUS=; REMOTE_BIRTH=
+# Windows OpenSSH ends every process left in the session, so the server starts outside it. One
+# PowerShell starts it, publishes its record and waits for its listener until the launch's
+# deadline; wait_launched_listener takes that answer first. The record's PID and creation time
+# (REMOTE_BIRTH) are all a failed launch may stop the server by.
+windows_launch_server() {
+  if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then set -- "$(cygpath -w "$SPAWN_IDENTITY")"
+  else set -- "$(cygpath -w "$(command -v node)")" "$(cygpath -w "$SPAWN_IDENTITY")"; fi
+  export GOAT_RUNTIME_ORIGIN=ssh
+  REMOTE_PID=; REMOTE_BIRTH=; launch_record_name="launch.$$.$LAUNCH_ATTEMPTS"
+  launch_record="${"${"}LOG_FILE%/*}/$launch_record_name"
+  launch_now; listen_deadline=$(( launch_now_us / 1000000 + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
+  if windows_spawn_inputs "$LOG_FILE" "$@" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$(cygpath -w "$DEFAULT_SERVER_HOME")"; then
+    if GOAT_SPAWN_CWD="$win_cwd" GOAT_SPAWN_LOG="$win_log" GOAT_SPAWN_ARGS="$win_args" GOAT_SPAWN_ENV='T3CODE_NO_BROWSER=1' \
+      GOAT_SPAWN_RECORD="$launch_record_name" GOAT_LISTEN_PORT="$REMOTE_PORT" GOAT_WAIT_UNTIL_MS="$listen_deadline"000 \
+      launch_bounded $((listen_deadline - launch_now_us / 1000000)) powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_SPAWN_AND_WAIT_POWERSHELL)}' </dev/null >/dev/null
+    then LAUNCH_SPAWN_STATUS=0; else LAUNCH_SPAWN_STATUS=$?; fi
+  else LAUNCH_SPAWN_STATUS=2; fi
+  launch_pid=; launch_birth=; launch_rest=
+  if [ -f "$launch_record" ]; then
+    IFS=' ' read -r launch_pid launch_birth launch_rest <"$launch_record" || launch_pid=
+    rm -f "$launch_record"
+  fi
+  case "$launch_birth" in ''|*[!0123456789]*) launch_pid= ;; esac
+  if [ -z "$launch_rest" ] && valid_positive "$launch_pid"; then
+    case "$LAUNCH_SPAWN_STATUS" in 6|7) ;; *) REMOTE_PID="$launch_pid"; REMOTE_BIRTH="$launch_birth"; return 0 ;; esac
+  fi
+  rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
+  printf 'Could not start the GOAT server outside the SSH session on this Windows host.\n' >&2
+  tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
+  # Without a record the PowerShell made no server (2-4) or ended the one it made (6); any other
+  # answer, a stall or its death may leave one running that no record names, so none is stopped.
+  case "$LAUNCH_SPAWN_STATUS" in 2|3|4|6) ;; *)
+    printf 'GOAT could not confirm that the server it started stopped; it may still be running on this host.\n' >&2 ;;
+  esac
+  exit 1
+}
 wait_launched_listener() {
   LISTEN_GONE=
   if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
-    launch_now; listen_deadline=$(( launch_now_us / 1000000 + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
     # Each PowerShell start costs about 1.5 s, so one waits for the server to own its listener,
     # checking it every 0.1 s: exit 0 once it does, 3 once the server is gone, 4 at the deadline.
-    # A failed start (any other exit) is started again before the deadline.
-    while launch_now && [ "$launch_now_us" -lt "$((listen_deadline * 1000000))" ]; do
-      if GOAT_PROCESS_ID="$REMOTE_PID" GOAT_LISTEN_PORT="$REMOTE_PORT" GOAT_WAIT_UNTIL_MS="$listen_deadline"000 \
-        launch_bounded $((listen_deadline - launch_now_us / 1000000)) powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
-      then listen_status=0; else listen_status=$?; fi
+    # The spawning PowerShell's answer comes first; a failed start (any other exit) is followed by
+    # this wait alone, never a second spawn, before the same deadline.
+    listen_status="$LAUNCH_SPAWN_STATUS"; LAUNCH_SPAWN_STATUS=
+    if [ -z "$listen_status" ]; then
+      launch_now; listen_deadline=$(( launch_now_us / 1000000 + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
+    fi
+    while :; do
       case "$listen_status" in
         0) launch_now; [ "$launch_now_us" -lt "$((listen_deadline * 1000000))" ] && return 0; return 1 ;;
         3) LISTEN_GONE="$REMOTE_PID"; return 2 ;;
         4|124) return 1 ;;
       esac
-      launch_pause 100000
+      [ -z "$listen_status" ] || launch_pause 100000
+      launch_now; [ "$launch_now_us" -lt "$((listen_deadline * 1000000))" ] || return 1
+      if GOAT_PROCESS_ID="$REMOTE_PID" GOAT_LISTEN_PORT="$REMOTE_PORT" GOAT_WAIT_UNTIL_MS="$listen_deadline"000 \
+        launch_bounded $((listen_deadline - launch_now_us / 1000000)) powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
+      then listen_status=0; else listen_status=$?; fi
     done
-    return 1
   fi
   listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
   while server_alive "$REMOTE_PID"; do
@@ -238,23 +282,27 @@ launch_server_alive() {
   rm -f "$STATE_DIR/alive.$$"
   return "$launch_alive"
 }
-# Stops server $1 after a failed launch: taskkill is bounded to 10 s, then up to about 2 s for the
-# exit. A kill that timed out, or a server still seen or not answered for afterwards, is reported
-# as not confirmed stopped.
+# Stops server $1 after a failed launch. Windows: PowerShell's word that the server is gone
+# stands; otherwise only the process with PID $1 and creation time $2, the launch record's, is
+# ended, through one handle and bounded to 20 s; no PID alone is ever killed. Other hosts: kill,
+# then up to about 2 s for the exit. A server not confirmed gone is reported as such.
 launch_stop_server() {
-  launch_stop_unconfirmed=
-  if launch_server_alive "$1"; then
-    if [ "$GOAT_HOST_WINDOWS" != 1 ]; then server_kill "$1" || :
-    elif launch_bounded 10 taskkill.exe /PID "$1" /F >/dev/null 2>&1; then :
-    elif [ "$?" = 124 ]; then launch_stop_unconfirmed=1; fi
+  if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
+    [ "${"${"}LISTEN_GONE:-}" != "$1" ] || return 0
+    if [ -n "$2" ] && GOAT_PROCESS_ID="$1" GOAT_PROCESS_BIRTH="$2" launch_bounded 20 powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_STOP_RECORDED_POWERSHELL)}' </dev/null >/dev/null 2>&1
+    then launch_stop_status=0; else launch_stop_status=$?; fi
+    case "$launch_stop_status" in 0|2) return 0 ;; esac
+    printf 'GOAT could not confirm that the server (PID %s) stopped; it may still be running on this host.\n' "$1" >&2
+    return 0
   fi
+  if launch_server_alive "$1"; then server_kill "$1" || :; fi
   launch_stop_count=0; launch_stop_until=$(( $(date +%s) + 3 ))
   while [ "$launch_stop_count" -lt 20 ] && [ "$(date +%s)" -lt "$launch_stop_until" ] &&
     launch_server_alive "$1"; do
     launch_stop_count=$((launch_stop_count + 1))
     sleep 0.1
   done
-  if [ -n "$launch_stop_unconfirmed" ] || launch_server_alive "$1"; then
+  if launch_server_alive "$1"; then
     printf 'GOAT could not confirm that the server (PID %s) stopped; it may still be running on this host.\n' "$1" >&2
   fi
 }

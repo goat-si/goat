@@ -10,7 +10,10 @@ import {
 } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as NetService from "@goat/shared/Net";
-import { WINDOWS_DETACHED_SPAWN_POWERSHELL } from "@goat/shared/windowsHostProcess";
+import {
+  WINDOWS_DETACHED_SPAWN_POWERSHELL,
+  WINDOWS_SPAWN_AND_WAIT_POWERSHELL,
+} from "@goat/shared/windowsHostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Crypto from "effect/Crypto";
@@ -425,9 +428,10 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
         assert.equal(result.stdout.trim(), expected);
       }
       const launch = buildRemoteLaunchScript(ARCHIVE);
-      assert.include(WINDOWS_DETACHED_SPAWN_POWERSHELL, "CurrentDirectory = $env:GOAT_SPAWN_CWD");
+      for (const spawn of [WINDOWS_DETACHED_SPAWN_POWERSHELL, WINDOWS_SPAWN_AND_WAIT_POWERSHELL])
+        assert.include(spawn, "CurrentDirectory = $env:GOAT_SPAWN_CWD");
       assert.include(launch, 'windows_spawn_detached "$SUPERVISE_LOG"');
-      assert.include(launch, 'windows_spawn_detached "$LOG_FILE"');
+      assert.include(launch, 'windows_spawn_inputs "$LOG_FILE"');
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 

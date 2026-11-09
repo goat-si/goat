@@ -1037,25 +1037,17 @@ while [ -z "$REMOTE_PORT" ]; do
   fi
   touch "$LOG_FILE"
   LAUNCH_LOG_OFFSET="$(wc -c <"$LOG_FILE")"
-  if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
-    # Windows OpenSSH ends every process left in the session, so the server starts outside it.
-    if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then set -- "$(cygpath -w "$SPAWN_IDENTITY")"
-    else set -- "$(cygpath -w "$(command -v node)")" "$(cygpath -w "$SPAWN_IDENTITY")"; fi
-    export GOAT_RUNTIME_ORIGIN=ssh; REMOTE_PID="$(windows_spawn_detached "$LOG_FILE" "$@" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$(cygpath -w "$DEFAULT_SERVER_HOME")")" || REMOTE_PID=
-    if ! valid_positive "$REMOTE_PID"; then
-      printf 'Could not start the GOAT server outside the SSH session on this Windows host.\\n' >&2
-      tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
-      exit 1
-    fi
+  printf '%s\\n' "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME" >"$IDENTITY_NEXT"
+  mv "$IDENTITY_NEXT" "$STATE_DIR/identity"
+  # Windows writes the PID, port and managed records from the PowerShell that starts the server.
+  if [ "$GOAT_HOST_WINDOWS" = 1 ]; then windows_launch_server
   else
     nohup env GOAT_RUNTIME_ORIGIN=ssh T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
     REMOTE_PID="$!"
+    printf '%s\\n' "$REMOTE_PID" >"$PID_FILE"
+    printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
+    printf 'managed\\n' >"$MANAGED_FILE"
   fi
-  printf '%s\\n' "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME" >"$IDENTITY_NEXT"
-  mv "$IDENTITY_NEXT" "$STATE_DIR/identity"
-  printf '%s\\n' "$REMOTE_PID" >"$PID_FILE"
-  printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
-  printf 'managed\\n' >"$MANAGED_FILE"
   if ! wait_launched_listener || ! wait_ready "@@GOAT_READY_TIMEOUT_MS@@" ||
      ! server_owns_listener "$REMOTE_PID" "$REMOTE_PORT"; then
     # Only this attempt's exited child and bind error authorize another port selection.
@@ -1087,7 +1079,7 @@ while [ -z "$REMOTE_PORT" ]; do
     else
       printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
     fi
-    launch_stop_server "$REMOTE_PID"
+    launch_stop_server "$REMOTE_PID" "$REMOTE_BIRTH"
     rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
     if [ "$database_ahead" = 1 ]; then
       printf '%s\\n' "$SELECTED_VERSION" >"$DATABASE_AHEAD_FILE.next.$$"
