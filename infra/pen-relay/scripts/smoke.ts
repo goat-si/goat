@@ -125,7 +125,7 @@ async function hashOf(chunks: Array<Uint8Array>): Promise<string> {
 console.log(`relay ${base}`);
 const health = await fetch(`${base}/healthz`);
 const healthBody = await health.text();
-console.log(`healthz ${health.status} ${healthBody}`);
+console.log(`healthz ${health.status} ${healthBody.slice(0, 120)}`);
 if (healthBody !== JSON.stringify({ ok: true, version: "pen-relay/1.0" })) fail("healthz");
 
 const probeId = await nodeIdFromSignPub(crypto.getRandomValues(new Uint8Array(32)));
