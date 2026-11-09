@@ -96,6 +96,7 @@ func (p *peer) sendText(s string) { p.ws.Write(context.Background(), websocket.M
 type nodeOpts struct {
 	silent bool
 	noAck  bool
+	noRead bool // after authenticating, never read again
 	path   string
 	origin string
 	host   string
@@ -140,7 +141,9 @@ func nodeWith(t *testing.T, rs *relaytest.Server, id *ident.Identity, o nodeOpts
 		}
 		p.send(ans)
 	}
-	go p.run(!o.noAck)
+	if !o.noRead {
+		go p.run(!o.noAck)
+	}
 	return n
 }
 
@@ -668,5 +671,26 @@ func TestAnUnauthenticatedUplinkMayNotSendMoreThanItsAnswer(t *testing.T) {
 	n.send(make([]byte, relayserver.MessageMax+1))
 	if code := <-n.closed; code != int(wire.CodeRelayAuth) {
 		t.Fatalf("closed %d, want 4403 after at most 97 bytes", code)
+	}
+}
+
+func TestAClientFloodingEmptyFramesEndsOnlyItsOwnSession(t *testing.T) {
+	rs := defaults(t)
+	n := ready(t, rs, nodeOpts{noRead: true})
+	c := client(t, rs, n.nodeID, true)
+	// The node reads nothing, so OPEN and the empty DATA frames pile up toward it.
+	for {
+		select {
+		case code := <-c.closed:
+			if code != int(wire.CodeTimeout) {
+				t.Fatalf("flooding session closed %d, want 4408", code)
+			}
+			if !rs.Online(n.nodeID) {
+				t.Fatal("one client's empty frames took the whole uplink down")
+			}
+			return
+		default:
+		}
+		c.send(nil)
 	}
 }

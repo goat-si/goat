@@ -641,11 +641,19 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	if mine > LightSession {
 		limit = uint64(SocketWindow - LightSession*others)
 	}
-	if up.sent-up.acked+uint64(len(frame)) > limit {
+	// The same fair share applies to what the uplink's queue holds, where each frame also costs
+	// itemOverhead: a flood of empty frames ends its own session before the queue overflows.
+	cost := len(frame) + itemOverhead
+	qMine, qTotal := up.out.queued(c.sid)
+	qLimit := SocketWindow
+	if qMine+cost > LightSession {
+		qLimit = SocketWindow - LightSession*others
+	}
+	if up.sent-up.acked+uint64(len(frame)) > limit || qTotal+cost > qLimit {
 		rm.endSession(c, wire.CodeTimeout)
 		return
 	}
-	up.out.binary(frame)
+	up.out.push(outItem{data: frame, sid: c.sid})
 	up.sent += uint64(len(frame))
 	c.upEnd = up.sent
 	c.upUnacked = mine
@@ -750,6 +758,7 @@ type outq struct {
 	mu      sync.Mutex
 	items   []outItem
 	bytes   int
+	bySID   map[uint32]int
 	pongs   int
 	done    bool
 	wake    chan struct{}
@@ -761,6 +770,7 @@ type outItem struct {
 	text  bool
 	pong  bool
 	close uint16
+	sid   uint32 // the client session a DATA frame on the uplink belongs to, else 0
 }
 
 // itemOverhead is what each queued item counts beyond its bytes, so many tiny items cannot hold
@@ -787,13 +797,19 @@ func (q *outq) push(it outItem) {
 		q.done = true
 	} else if q.bytes+len(it.data)+itemOverhead > SocketWindow+RelayHeadroom+queueSlack {
 		q.done = true
-		q.items = nil
+		q.items, q.bySID = nil, nil
 		q.mu.Unlock()
 		q.ws.CloseNow()
 		return
 	}
 	q.items = append(q.items, it)
 	q.bytes += len(it.data) + itemOverhead
+	if it.sid != 0 {
+		if q.bySID == nil {
+			q.bySID = map[uint32]int{}
+		}
+		q.bySID[it.sid] += len(it.data) + itemOverhead
+	}
 	if it.pong {
 		q.pongs++
 	}
@@ -806,6 +822,13 @@ func (q *outq) push(it outItem) {
 
 func (q *outq) binary(b []byte) { q.push(outItem{data: b}) }
 func (q *outq) text(s string)   { q.push(outItem{data: []byte(s), text: true, pong: s == "pong"}) }
+
+// queued reports what the queue holds for one session and in total, overhead included.
+func (q *outq) queued(sid uint32) (mine, total int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.bySID[sid], q.bytes
+}
 
 // close queues the close frame; a writer still busy after the write timeout is aborted.
 func (q *outq) close(code uint16) {
@@ -837,6 +860,11 @@ func (q *outq) run() {
 		it := q.items[0]
 		q.items = q.items[1:]
 		q.bytes -= len(it.data) + itemOverhead
+		if it.sid != 0 {
+			if q.bySID[it.sid] -= len(it.data) + itemOverhead; q.bySID[it.sid] == 0 {
+				delete(q.bySID, it.sid)
+			}
+		}
 		if it.pong {
 			q.pongs--
 		}
@@ -866,7 +894,7 @@ func (q *outq) run() {
 		if err != nil {
 			q.ws.CloseNow()
 			q.mu.Lock()
-			q.done, q.items = true, nil
+			q.done, q.items, q.bySID = true, nil, nil
 			q.mu.Unlock()
 			return
 		}
