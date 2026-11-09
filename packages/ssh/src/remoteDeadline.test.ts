@@ -213,53 +213,51 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
       }
     },
   );
-  // TERM interrupts wait in dash and bash 4+: tick 1 drops fd 3 and runs a 30 s fallback a passing
-  // run never waits for, so a watchdog that waits for its tick fails the test instead of hanging.
-  // bash before 4 traps during wait only signals that came once wait began, so its tick 1 ends when
-  // the script exits; the watchdog must still stop and leave nothing behind.
-  it.each(["dash", "bash"])(
+  // TERM interrupts wait in dash and bash 4+, so the watchdog stops mid-tick: tick 1 blocks on a FIFO
+  // only the test releases, and the shell must exit while it still blocks. bash before 4 traps during
+  // wait only signals that came once wait began, so there tick 1 ends when the script exits.
+  it.for(["dash", "bash"])(
     "returns as soon as the script exits, leaving no watchdog behind (%s)",
-    async (shell) => {
+    async (shell, { onTestFinished }) => {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-deadline-"));
-      const midTick = shell === "dash" || !bashBefore4;
-      try {
-        for (const fifo of ["ticking", "done.fifo"])
-          NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, fifo)]);
-        const clock = NodePath.join(dir, "sleep");
-        NodeFS.writeFileSync(
-          clock,
-          [
-            "#!/bin/sh",
-            'n=$(($(cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
-            '[ "$n" = 1 ] || exit 0',
-            'echo $PPID > "$GOAT_TEST_DIR/watchdog.pid"; printf x > "$GOAT_TEST_DIR/ticking"',
-            midTick
-              ? 'exec 3>&-; /bin/sleep 30 & echo $! > "$GOAT_TEST_DIR/fallback.pid"; wait $! && : > "$GOAT_TEST_DIR/ran-out"'
-              : UNTIL_DONE,
-          ].join("\n") + "\n",
-          { mode: 0o755 },
-        );
-        const body = SCRIPT_DONE + '\ncat "$1/ticking" >/dev/null\nexit 3';
-        const script = withRemoteDeadline(body, 60_000, clock);
-        expect(await runShell(script, [dir], { GOAT_TEST_DIR: dir }, { shell })).toEqual({
-          code: 3,
-          stdout: "",
-        });
-        // A watchdog left ticking would hold a Windows SSH channel open until its next tick.
-        const watchdog = Number(NodeFS.readFileSync(NodePath.join(dir, "watchdog.pid"), "utf8"));
-        expect(() => process.kill(watchdog, 0)).toThrow();
-        if (midTick) {
-          expect(NodeFS.existsSync(NodePath.join(dir, "ran-out"))).toBe(false);
-          expect(NodeFS.readFileSync(NodePath.join(dir, "ticks"), "utf8").trim()).toBe("1");
-        }
-      } finally {
-        // The fallback outlives a watchdog that stopped mid-tick; its PID was taken at its start.
-        const pidFile = NodePath.join(dir, "fallback.pid");
-        const fallback = NodeFS.existsSync(pidFile)
-          ? Number(NodeFS.readFileSync(pidFile, "utf8"))
+      const file = (name: string) => NodePath.join(dir, name);
+      // After a pass, a failure or the project timeout: release the tick by ending it through the PID
+      // it recorded before it signalled the script, then remove what the test made.
+      onTestFinished(() => {
+        const tick = NodeFS.existsSync(file("tick.pid"))
+          ? Number(NodeFS.readFileSync(file("tick.pid"), "utf8"))
           : 0;
-        if (fallback > 0 && isAlive(fallback)) process.kill(fallback);
+        if (tick > 0 && isAlive(tick)) process.kill(tick);
         NodeFS.rmSync(dir, { recursive: true, force: true });
+      });
+      const midTick = shell === "dash" || !bashBefore4;
+      for (const fifo of ["ticking", "done.fifo", "release"])
+        NodeChildProcess.execFileSync("mkfifo", [file(fifo)]);
+      const clock = file("sleep");
+      NodeFS.writeFileSync(
+        clock,
+        [
+          "#!/bin/sh",
+          'n=$(($(cat "$GOAT_TEST_DIR/ticks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$GOAT_TEST_DIR/ticks"',
+          '[ "$n" = 1 ] || exit 0',
+          'echo $$ > "$GOAT_TEST_DIR/tick.pid"; echo $PPID > "$GOAT_TEST_DIR/watchdog.pid"',
+          'printf x > "$GOAT_TEST_DIR/ticking"',
+          midTick ? 'exec 3>&- /bin/cat "$GOAT_TEST_DIR/release" >/dev/null' : UNTIL_DONE,
+        ].join("\n") + "\n",
+        { mode: 0o755 },
+      );
+      const body = SCRIPT_DONE + '\ncat "$1/ticking" >/dev/null\nexit 3';
+      const script = withRemoteDeadline(body, 60_000, clock);
+      expect(await runShell(script, [dir], { GOAT_TEST_DIR: dir }, { shell })).toEqual({
+        code: 3,
+        stdout: "",
+      });
+      // A watchdog left ticking would hold a Windows SSH channel open until its next tick.
+      expect(isAlive(Number(NodeFS.readFileSync(file("watchdog.pid"), "utf8")))).toBe(false);
+      if (midTick) {
+        // It stopped while its tick still blocked, and started no other.
+        expect(isAlive(Number(NodeFS.readFileSync(file("tick.pid"), "utf8")))).toBe(true);
+        expect(NodeFS.readFileSync(file("ticks"), "utf8").trim()).toBe("1");
       }
     },
   );
