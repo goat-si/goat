@@ -35,6 +35,9 @@ func RunJoin(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
+	if err := clearLeft(st); err != nil {
+		return fail(stderr, err)
+	}
 	id, _, err := st.EnsureIdentity()
 	if err != nil {
 		return fail(stderr, err)

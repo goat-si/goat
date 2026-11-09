@@ -95,6 +95,9 @@ type seenInfo struct {
 	Online bool
 }
 
+// LeftMarker is written by pen leave; pen up --foreground (a service restart) then refuses to start.
+const LeftMarker = "left"
+
 // ErrNoIdentity means pen up has not run in this state directory.
 var ErrNoIdentity = errors.New("no identity in this state directory; run pen up")
 

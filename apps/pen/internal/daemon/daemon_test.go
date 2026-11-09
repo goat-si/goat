@@ -563,6 +563,9 @@ func TestLeavePushReportsTakenAndDeletesKeys(t *testing.T) {
 	if _, err := b.st.LoadIdentity(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("identity still present: %v", err)
 	}
+	if _, err := os.Stat(b.st.Path(LeftMarker)); err != nil {
+		t.Fatalf("no left marker after leave: %v", err)
+	}
 }
 
 func TestThreeNodesRevokeOnAReachesAWatchOnB(t *testing.T) {

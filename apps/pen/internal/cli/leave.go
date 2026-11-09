@@ -17,16 +17,21 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	mode := installedService(st)
+	// Take the service out of the service manager first, so nothing restarts the daemon once
+	// leave stops it (the units also restart only on failure, and the left marker backs this up).
+	if mode != "none" {
+		if err := detachService(mode); err != nil {
+			return fail(stderr, err)
+		}
+	}
 	var res struct{ Results []daemon.PushResult }
 	if err := daemon.Call(st, daemon.Request{Op: "leave"}, &res); err != nil {
 		return fail(stderr, err)
 	}
 	fmt.Fprintln(stdout, "left the mesh and deleted this node's keys; told:")
 	printResults(stdout, res.Results)
-	if mode != "none" {
-		if err := removeService(mode); err != nil {
-			return fail(stderr, err)
-		}
+	if mode == "launchd" {
+		unloadLaunchd()
 	}
 	return 0
 }

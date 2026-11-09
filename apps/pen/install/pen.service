@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 ExecStart=%h/.local/bin/pen up --foreground
-Restart=always
+Restart=on-failure
 RestartSec=2
 
 [Install]

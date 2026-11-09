@@ -54,6 +54,10 @@ func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 		return res, err
 	}
 	defer unlock()
+	// Written before the keys go, so a service manager restarting pen up --foreground finds it.
+	if err := d.st.WriteAtomic(LeftMarker, nil, 0o600); err != nil {
+		return res, err
+	}
 	for _, f := range []string{"identity.json", "mesh.json", "offers.json"} {
 		if err := os.Remove(d.st.Path(f)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return res, err

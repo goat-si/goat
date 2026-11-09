@@ -37,6 +37,15 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
+	if *foreground {
+		// A service manager restarting the daemon after pen leave must not mint a new node.
+		if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
+			fmt.Fprintln(stderr, "pen: this node left its mesh; run pen up or pen join to start again")
+			return 0
+		}
+	} else if err := clearLeft(st); err != nil {
+		return fail(stderr, err)
+	}
 	id, _, err := st.EnsureIdentity()
 	if err != nil {
 		return fail(stderr, err)
@@ -102,6 +111,14 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	}
 	printStatus(stdout, s)
 	return 0
+}
+
+// clearLeft removes the leave marker: pen up and pen join, run by a person, start the node again.
+func clearLeft(st *state.Store) error {
+	if err := os.Remove(st.Path(daemon.LeftMarker)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func printStatus(w io.Writer, s daemon.Status) {
