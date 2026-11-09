@@ -23,7 +23,13 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as ManagedRelay from "./managedRelay.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as Connectivity from "../connection/connectivity.ts";
-import { ConnectionBlockedError, type NetworkStatus } from "../connection/model.ts";
+import {
+  BearerConnectionTarget,
+  ConnectionBlockedError,
+  type NetworkStatus,
+} from "../connection/model.ts";
+import { BearerConnectionProfile } from "../connection/catalog.ts";
+import { environmentMcpUrl } from "../connection/presentation.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as RelayEnvironmentDiscovery from "./discovery.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
@@ -67,8 +73,13 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
   const networkStatus = yield* SubscriptionRef.make<NetworkStatus>("online");
   const listCalls = yield* Ref.make(0);
   const listFailure = yield* Ref.make<ManagedRelay.ManagedRelayClientError | null>(null);
+  const listedEnvironments =
+    yield* Ref.make<ReadonlyArray<RelayClientEnvironmentRecord>>(environments);
+  const listGate = yield* Ref.make<Deferred.Deferred<void> | null>(null);
   const secondListCall = yield* Deferred.make<void>();
-  const clerkToken = yield* Ref.make<string | null>("clerk-token");
+  const clerkToken = yield* Ref.make<string | null>(
+    `e30.${Buffer.from(JSON.stringify({ sub: "account-1" })).toString("base64url")}.signature`,
+  );
   const sessionIdentity = { accountId: "account-1" };
   const wakeups = yield* SubscriptionRef.make<{
     readonly sequence: number;
@@ -105,11 +116,13 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
         if (count >= 2) {
           yield* Deferred.succeed(secondListCall, undefined);
         }
+        const gate = yield* Ref.get(listGate);
+        if (gate !== null) yield* Deferred.await(gate);
         const failure = yield* Ref.get(listFailure);
         if (failure) {
           return yield* failure;
         }
-        return environments;
+        return yield* Ref.get(listedEnvironments);
       }),
     getEnvironmentStatus: ({ environmentId }) =>
       Ref.get(statusRequests).pipe(
@@ -173,6 +186,8 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
     layer,
     listCalls,
     listFailure,
+    listedEnvironments,
+    listGate,
     clerkToken,
     networkStatus,
     secondListCall,
@@ -186,6 +201,94 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
 });
 
 describe("RelayEnvironmentDiscovery", () => {
+  it.effect("clears the previous account's routes before listing the next account", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const token = (subject: string) =>
+        `e30.${Buffer.from(JSON.stringify({ sub: subject })).toString("base64url")}.signature`;
+      yield* Ref.set(harness.clerkToken, token("first"));
+      yield* Effect.gen(function* () {
+        const discovery = yield* RelayEnvironmentDiscovery.RelayEnvironmentDiscovery;
+        const requests = yield* Ref.get(harness.statusRequests);
+        for (const environment of environments) {
+          yield* Deferred.succeed(
+            requests.get(environment.environmentId)!,
+            status(environment, "online"),
+          );
+        }
+        yield* discovery.refresh;
+        const gate = yield* Deferred.make<void>();
+        yield* Ref.set(harness.listGate, gate);
+        yield* Ref.set(harness.clerkToken, token("second"));
+        yield* Ref.set(harness.listedEnvironments, []);
+        const fiber = yield* Effect.forkChild(discovery.refresh);
+        yield* Deferred.await(harness.secondListCall);
+        expect((yield* SubscriptionRef.get(discovery.state)).environments.size).toBe(0);
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(fiber);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect(
+    "keeps the relay URL during refresh but falls back to the direct route after removal",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* Effect.gen(function* () {
+          const discovery = yield* RelayEnvironmentDiscovery.RelayEnvironmentDiscovery;
+          const requests = yield* Ref.get(harness.statusRequests);
+          for (const environment of environments) {
+            yield* Deferred.succeed(
+              requests.get(environment.environmentId)!,
+              status(environment, "online"),
+            );
+          }
+          yield* discovery.refresh;
+          const target = new BearerConnectionTarget({
+            environmentId: environments[0]!.environmentId,
+            connectionId: "direct",
+            label: "Direct",
+          });
+          const entry = {
+            target,
+            enabled: true,
+            profile: Option.some(
+              new BearerConnectionProfile({
+                connectionId: "direct",
+                environmentId: target.environmentId,
+                label: "Direct",
+                httpBaseUrl: "https://direct.example.test",
+                wsBaseUrl: "wss://direct.example.test",
+              }),
+            ),
+          };
+          const copiedUrl = (state: RelayEnvironmentDiscovery.RelayEnvironmentDiscoveryState) =>
+            environmentMcpUrl({
+              entry,
+              connectedTarget: target,
+              relayHttpBaseUrl: state.environments.get(target.environmentId)?.environment.endpoint
+                .httpBaseUrl,
+            });
+          expect(copiedUrl(yield* SubscriptionRef.get(discovery.state))).toBe(
+            "https://one.example.test/mcp",
+          );
+          const gate = yield* Deferred.make<void>();
+          yield* Ref.set(harness.listGate, gate);
+          yield* Ref.set(harness.listedEnvironments, []);
+          const fiber = yield* Effect.forkChild(discovery.refresh);
+          yield* Deferred.await(harness.secondListCall);
+          expect(copiedUrl(yield* SubscriptionRef.get(discovery.state))).toBe(
+            "https://one.example.test/mcp",
+          );
+          yield* Deferred.succeed(gate, undefined);
+          yield* Fiber.join(fiber);
+          expect(copiedUrl(yield* SubscriptionRef.get(discovery.state))).toBe(
+            "https://direct.example.test/mcp",
+          );
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
   it.effect("publishes each environment status as soon as that lookup completes", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
@@ -397,6 +500,15 @@ describe("RelayEnvironmentDiscovery", () => {
       const harness = yield* makeHarness();
       yield* Effect.gen(function* () {
         const discovery = yield* RelayEnvironmentDiscovery.RelayEnvironmentDiscovery;
+        const requests = yield* Ref.get(harness.statusRequests);
+        for (const environment of environments) {
+          yield* Deferred.succeed(
+            requests.get(environment.environmentId)!,
+            status(environment, "online"),
+          );
+        }
+        yield* discovery.refresh;
+        expect((yield* SubscriptionRef.get(discovery.state)).environments.size).toBe(2);
         yield* Ref.set(harness.clerkToken, null);
         yield* discovery.refresh;
 
