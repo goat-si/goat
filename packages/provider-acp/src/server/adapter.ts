@@ -110,11 +110,11 @@ import {
 } from "./runtimeModel.ts";
 import { acpNoticeContent, isReplayedAcpNotice } from "./noticeProjection.ts";
 import { textFromUnknown } from "./toolOutputText.ts";
+import { parseElicitationForm } from "./elicitationForm.ts";
 import {
   appendToolCallContentChunk,
   applyInterruptedToolStatus,
   completedAtForStatus,
-  elicitationContent,
   isAcpPlanModeId,
   nodeStatus,
   providerRequestKind,
@@ -6069,36 +6069,29 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               if (params.mode !== "form" || !("requestedSchema" in params)) {
                 return { action: "decline" } as const;
               }
-              const requestedSchema = unknownRecord(params.requestedSchema);
-              const properties = unknownRecord(requestedSchema?.properties) ?? {};
               const nativeForm = flavor.extractElicitationForm?.(params);
+              const parsedForm =
+                nativeForm === undefined
+                  ? parseElicitationForm(params.requestedSchema, params.message)
+                  : undefined;
+              const form =
+                nativeForm ??
+                (parsedForm === undefined
+                  ? undefined
+                  : {
+                      questions: parsedForm.questions,
+                      respond: (
+                        answers: ProviderUserInputAnswers,
+                      ): EffectAcpSchema.CreateElicitationResponse => {
+                        const content = parsedForm.content(answers);
+                        return content === undefined
+                          ? { action: "cancel" }
+                          : { action: "accept", content };
+                      },
+                    });
+              if (form === undefined) return { action: "decline" } as const;
               const elicitationScopeId =
                 "sessionId" in params ? params.sessionId : `request:${params.requestId}`;
-              const questions =
-                nativeForm?.questions ??
-                Object.entries(properties).map(
-                  ([id, property], index): OrchestrationV2UserInputQuestion => {
-                    const record = unknownRecord(property);
-                    const enumValues = Array.isArray(record?.enum)
-                      ? record.enum.filter((value): value is string => typeof value === "string")
-                      : [];
-                    const options =
-                      enumValues.length > 0
-                        ? enumValues.map((value) => ({ label: value, description: value }))
-                        : record?.type === "boolean"
-                          ? [
-                              { label: "true", description: "Yes" },
-                              { label: "false", description: "No" },
-                            ]
-                          : [];
-                    return {
-                      id,
-                      header: nonEmptyText(record?.title, `Question ${index + 1}`),
-                      question: nonEmptyText(record?.description, params.message),
-                      options,
-                    };
-                  },
-                );
               const userInput = yield* requestUserInputWithAdmission(
                 handlerGeneration,
                 Effect.gen(function* () {
@@ -6110,7 +6103,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   return {
                     nativeItemId: nativeRequestId,
                     nativeRequestId,
-                    questions,
+                    questions: form.questions,
                   };
                 }),
                 transportRequestId,
@@ -6118,14 +6111,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               const response =
                 userInput.answers === null
                   ? ({ action: "cancel" } as const)
-                  : (nativeForm?.respond(userInput.answers) ??
-                    ({
-                      action: "accept",
-                      content: elicitationContent(
-                        userInput.answers,
-                        new Set(Object.keys(properties)),
-                      ),
-                    } as const));
+                  : form.respond(userInput.answers);
               yield* userInput.acknowledgeNativeResponse;
               return response;
             }).pipe(holdingAgentRequest(handlerGeneration)),

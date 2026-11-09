@@ -172,7 +172,7 @@ export function buildPendingUserInputAnswers<Question extends PendingUserInputQu
   questions: ReadonlyArray<Question>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): Record<string, PendingUserInputAnswer> | null {
-  const answers: Record<string, PendingUserInputAnswer> = {};
+  const entries: Array<[string, PendingUserInputAnswer]> = [];
 
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
@@ -181,8 +181,8 @@ export function buildPendingUserInputAnswers<Question extends PendingUserInputQu
       if (question.required === false) continue;
       return null;
     }
-    answers[question.id] = answer;
+    entries.push([question.id, answer]);
   }
 
-  return answers;
+  return Object.fromEntries(entries);
 }

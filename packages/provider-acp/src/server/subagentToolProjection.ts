@@ -1,6 +1,4 @@
-import type * as EffectAcpSchema from "effect-acp/compat";
 import type { OrchestrationV2ExecutionNode, ProviderRequestKind } from "@goat/contracts";
-import type { ProviderUserInputAnswers } from "@goat/contracts";
 import type { DateTime } from "effect";
 import type { AcpToolCallState } from "./runtimeModel.ts";
 import { unknownRecord } from "./clientPolicy.ts";
@@ -71,22 +69,6 @@ export function applyInterruptedToolStatus(
   if (mergedStatus !== "failed") interruptedToolIds.delete(key);
   if (projectedStatus === "interrupted") interruptedToolIds.add(key);
   return mergedStatus === "failed" && interruptedToolIds.has(key) ? "interrupted" : projectedStatus;
-}
-
-export function elicitationContent(
-  answers: ProviderUserInputAnswers,
-  allowedKeys: ReadonlySet<string>,
-): Record<string, EffectAcpSchema.ElicitationContentValue> {
-  const content: Record<string, EffectAcpSchema.ElicitationContentValue> = {};
-  for (const [key, value] of Object.entries(answers)) {
-    if (!allowedKeys.has(key)) continue;
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      content[key] = value;
-    } else if (Array.isArray(value)) {
-      content[key] = value.filter((entry): entry is string => typeof entry === "string");
-    }
-  }
-  return content;
 }
 
 export function toolStatus(
