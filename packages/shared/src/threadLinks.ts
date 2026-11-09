@@ -13,7 +13,7 @@ const THREAD_LINK_HREF_PREFIX = `${THREAD_LINK_PROTOCOL}://v1/`;
 const THREAD_LINK_HREF_PREFIXES = THREAD_LINK_PROTOCOLS.map((protocol) => `${protocol}://v1/`);
 // Code comes first in the alternation so a link written inside a code span or fence is skipped.
 const THREAD_LINK_OUTSIDE_CODE = new RegExp(
-  String.raw`(?<fence>(\`{3,}|~{3,})[\s\S]*?(?:\2|$))|(?<span>(\`+)[^\n]*?\4)|\[[^\]\n]*\]\((?<href>(?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s)]+)\)`,
+  String.raw`(?<fence>(\`{3,}|~{3,})[\s\S]*?(?:\2|$))|(?<span>(\`+)[^\n]*?\4)|\[[^\]\n]*\]\(<?(?<href>(?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s>)]+)>?\)`,
   "g",
 );
 
@@ -73,7 +73,9 @@ export function formatThreadLink(
 }
 
 export function hasThreadLinks(markdown: string): boolean {
-  return THREAD_LINK_HREF_PREFIXES.some((prefix) => markdown.includes(`](${prefix}`));
+  return THREAD_LINK_HREF_PREFIXES.some(
+    (prefix) => markdown.includes(`](${prefix}`) || markdown.includes(`](<${prefix}`),
+  );
 }
 
 export function relabelThreadLinks(

@@ -44,6 +44,11 @@ describe("thread link destinations", () => {
 });
 
 describe("thread links", () => {
+  it("relabels an angle-bracketed thread destination", () => {
+    expect(relabelThreadLinks("[old](<goat-thread://v1/t1>)", () => "New")).toBe(
+      "[New](goat-thread://v1/t1)",
+    );
+  });
   it("takes the thread id verbatim, percent escapes included", () => {
     expect(parseThreadLinkHref("t3-thread://v1/mcp:1234")).toBe("mcp:1234");
     expect(parseThreadLinkHref("t3-thread://v1/thread:delegated-task:mcp%3A1")).toBe(
