@@ -316,12 +316,17 @@ export const ChannelBotSummary = Schema.Struct({
 export const ChannelBotListResult = Schema.Struct({ bots: Schema.Array(ChannelBotSummary) });
 export type ChannelBotListResult = typeof ChannelBotListResult.Type;
 
-/** Changes only the keys sent. A null avatar returns the bot to its default face. */
+/**
+ * Changes only the keys sent. A null avatar returns the bot to its default face. A member's model
+ * takes effect on its next turn, and null returns it to the main bot's; the main bot's model is a
+ * setting, so a model sent for it is refused. Servers with `goatBotMemberModelEdit` read it.
+ */
 export const ChannelUpdateBotInput = Schema.Struct({
   botId: BotId,
   name: Schema.optionalKey(BotProfile.fields.name),
   avatar: Schema.optionalKey(BotProfile.fields.avatar),
   purpose: Schema.optionalKey(BotProfile.fields.purpose),
+  defaultModelSelection: Schema.optionalKey(BotProfile.fields.defaultModelSelection),
 });
 export const ChannelUpdateBotResult = Schema.Struct({ bot: BotProfile });
 

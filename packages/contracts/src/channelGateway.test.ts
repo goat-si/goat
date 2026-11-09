@@ -39,6 +39,24 @@ describe("channel.updateBot input", () => {
       "Success",
     );
   });
+  it("carries a member's model edit only when one is sent", () => {
+    const model = { instanceId: "codex", model: "gpt-small" };
+    const decoded = Schema.decodeUnknownSync(ChannelUpdateBotInput);
+    expect(decoded({ botId: "helper", defaultModelSelection: model })).toEqual({
+      botId: "helper",
+      defaultModelSelection: model,
+    });
+    expect(decoded({ botId: "helper", defaultModelSelection: null })).toEqual({
+      botId: "helper",
+      defaultModelSelection: null,
+    });
+    expect(decoded({ botId: "helper", name: "Builder" })).not.toHaveProperty(
+      "defaultModelSelection",
+    );
+    expect(decode({ botId: "helper", defaultModelSelection: { model: "gpt-small" } })._tag).toBe(
+      "Failure",
+    );
+  });
 });
 
 describe("channel ingest", () => {

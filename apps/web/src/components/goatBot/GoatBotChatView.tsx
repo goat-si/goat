@@ -31,6 +31,7 @@ import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
 import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotHeaderName } from "./GoatBotHeaderName";
+import { GoatBotMemberModelPicker } from "./GoatBotMemberModelPicker";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotReading } from "./useGoatBotFace";
@@ -191,13 +192,7 @@ export function GoatBotChatView({
             </div>
           </div>
           <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
-            {member ? (
-              <span className="text-xs text-muted-foreground">
-                {member.defaultModelSelection?.model ?? `${mainName}'s model`}
-              </span>
-            ) : (
-              <GoatBotModelPicker />
-            )}
+            {member ? <GoatBotMemberModelPicker member={member} /> : <GoatBotModelPicker />}
             {bot && (
               <Button
                 variant="ghost"

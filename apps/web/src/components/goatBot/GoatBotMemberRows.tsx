@@ -25,6 +25,7 @@ import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { GoatBotSessionAvatar } from "./GoatBotAvatar";
+import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
@@ -111,21 +112,7 @@ export function GoatBotMemberRoster({
         </SidebarGroup>
       ) : null}
       {editing !== null ? (
-        <GoatBotProfileDialog
-          mode="edit"
-          initial={editing}
-          canSubmit={canEdit}
-          onClose={() => setEditing(null)}
-          onSubmit={async (changes) => {
-            const result = await manage.update({
-              environmentId,
-              input: { botId: editing.botId, ...changes },
-            });
-            return result._tag === "Success"
-              ? null
-              : botManageFailure(squashAtomCommandFailure(result));
-          }}
-        />
+        <GoatBotEditBotDialog bot={editing} canSubmit={canEdit} onClose={() => setEditing(null)} />
       ) : null}
       <AlertDialog open={deleting !== null} onOpenChange={(open) => open || setDeleting(null)}>
         <AlertDialogPopup>
