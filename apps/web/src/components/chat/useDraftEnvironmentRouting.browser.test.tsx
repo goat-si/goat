@@ -14,6 +14,8 @@ const state = vi.hoisted(() => {
     keyOf,
     addProjectToMachine: vi.fn(),
     toast: vi.fn(),
+    unsilenceProjectCloneToasts: vi.fn(),
+    projectArrivalTimesOut: false,
     setProject(ref: ScopedProjectRef, project: unknown) {
       projects.set(keyOf(ref), project);
       for (const listener of listeners.get(keyOf(ref)) ?? []) listener();
@@ -28,7 +30,8 @@ vi.mock("../../lib/addProjectToMachine", () => ({
 vi.mock("../../state/entities", () => ({
   useProjects: () => [...state.projects.values()],
   waitForProject: (ref: ScopedProjectRef) =>
-    new Promise((resolve) => {
+    new Promise((resolve, reject) => {
+      if (state.projectArrivalTimesOut) return reject(new Error("The project did not appear."));
       const key = state.keyOf(ref);
       const existing = state.projects.get(key);
       if (existing) return resolve(existing);
@@ -55,6 +58,9 @@ vi.mock("../../hooks/useLoadBalancedEnvironment", () => ({
   }),
 }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
+vi.mock("../../state/projectClones", () => ({
+  unsilenceProjectCloneToasts: state.unsilenceProjectCloneToasts,
+}));
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import type { MachineWithoutProject } from "../../lib/runOnArrival";
@@ -97,6 +103,8 @@ async function setup() {
   state.listeners.clear();
   state.addProjectToMachine.mockReset().mockResolvedValue(undefined);
   state.toast.mockReset();
+  state.unsilenceProjectCloneToasts.mockReset();
+  state.projectArrivalTimesOut = false;
   state.setProject(source, SOURCE);
   state.setProject(onMacmini, { ...SOURCE, environmentId: macmini, id: onMacmini.projectId });
   useComposerDraftStore.setState({
@@ -245,5 +253,34 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
     await act(async () => undefined);
     expect(screen.draft()).toMatchObject({ environmentId: laptop, projectId: source.projectId });
     expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
+  });
+
+  it("picking the machine again while it clones starts no second clone into the same folder", async () => {
+    await using screen = await setup();
+
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
+    await vi.waitFor(() => expect(state.addProjectToMachine).toHaveBeenCalledTimes(1));
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
+
+    expect(state.addProjectToMachine).toHaveBeenCalledTimes(1);
+    const cloned = clonedRef();
+    await act(() =>
+      state.setProject(cloned, { ...SOURCE, environmentId: studio, id: cloned.projectId }),
+    );
+    await vi.waitFor(() => expect(screen.draft()?.environmentId).toBe(studio));
+  });
+
+  it("a started clone whose project is slow to arrive goes back to its own progress toast", async () => {
+    await using screen = await setup();
+    state.projectArrivalTimesOut = true;
+
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
+
+    await vi.waitFor(() => expect(state.unsilenceProjectCloneToasts).toHaveBeenCalledTimes(1));
+    expect(state.unsilenceProjectCloneToasts).toHaveBeenCalledWith(clonedRef());
+    await vi.waitFor(() => expect(screen.routing.current?.isEnvironmentChanging).toBe(false));
+    // The clone is still running, so nothing claims it failed; the draft stays put.
+    expect(state.toast).not.toHaveBeenCalled();
+    expect(screen.draft()?.environmentId).toBe(laptop);
   });
 });

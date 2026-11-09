@@ -24,6 +24,7 @@ import {
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import { type EnvironmentPresentation, useEnvironmentProviders } from "../../state/environments";
 import { useProjects, waitForProject } from "../../state/entities";
+import { unsilenceProjectCloneToasts } from "../../state/projectClones";
 import type { DraftSessionState } from "../../composerDraftStore";
 
 interface DraftEnvironmentRoutingInput {
@@ -218,6 +219,8 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
       : (machinesWithoutProject.find((machine) => machine.environmentId === nextEnvironmentId) ??
         null);
     if (!target && cloneTarget?.arrival.kind !== "clone") return;
+    // A second pick of a machine still being cloned to would start another clone into the same folder.
+    if (!target && readPendingEnvironmentChange()?.environmentId === nextEnvironmentId) return;
     const request = { environmentId: nextEnvironmentId, scope: environmentChangeScope };
     environmentChangeRef.current = request;
     setBusyEnvironmentChange(null);
@@ -279,15 +282,20 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
         destinationPath: arrival.destinationPath,
         files: [],
       })
-        .then(() => waitForProject(clonedRef))
-        .then(retarget, (cause: unknown) => {
-          if (environmentChangeRef.current !== request) return;
-          toastManager.add({
-            type: "error",
-            title: `Could not clone ${name} to ${cloneTarget.label}`,
-            description: cause instanceof Error ? cause.message : "An error occurred.",
-          });
-        })
+        .then(
+          // A started clone keeps running if its project is slow to arrive; its toast then
+          // shows the progress and Cancel the composer would have shown.
+          () =>
+            waitForProject(clonedRef).then(retarget, () => unsilenceProjectCloneToasts(clonedRef)),
+          (cause: unknown) => {
+            if (environmentChangeRef.current !== request) return;
+            toastManager.add({
+              type: "error",
+              title: `Could not clone ${name} to ${cloneTarget.label}`,
+              description: cause instanceof Error ? cause.message : "An error occurred.",
+            });
+          },
+        )
         .finally(finish);
       return;
     }

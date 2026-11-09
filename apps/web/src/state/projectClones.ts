@@ -56,3 +56,8 @@ export function silenceProjectCloneToasts(ref: ScopedProjectRef) {
 export function isProjectCloneToastSilenced(ref: ScopedProjectRef): boolean {
   return silencedCloneToasts.has(scopedProjectKey(ref));
 }
+
+/** Hands a clone back to its toasts when the user never got to its project. */
+export function unsilenceProjectCloneToasts(ref: ScopedProjectRef) {
+  silencedCloneToasts.delete(scopedProjectKey(ref));
+}
