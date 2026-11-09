@@ -8,11 +8,11 @@ import (
 )
 
 func TestSSHConfigTextNamesEveryMemberAndAFallback(t *testing.T) {
-	got := sshConfigText("/bin/pen", "/k/known_hosts", []string{"studio", "sbx"})
-	want := "# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n" +
-		"Host pen-studio\n    ProxyCommand /bin/pen pipe %n 22\n    UserKnownHostsFile /k/known_hosts\n    StrictHostKeyChecking yes\n" +
-		"Host pen-sbx\n    ProxyCommand /bin/pen pipe %n 22\n    UserKnownHostsFile /k/known_hosts\n    StrictHostKeyChecking yes\n" +
-		"Host pen-*\n    ProxyCommand /bin/pen pipe %n 22\n    UserKnownHostsFile /k/known_hosts\n    StrictHostKeyChecking yes\n"
+	got := sshConfigText(shellQuote("/bin/pen"), "/k/known_hosts", []string{"studio", "sbx"})
+	block := func(host string) string {
+		return "Host " + host + "\n    ProxyCommand '/bin/pen' pipe %n 22\n    UserKnownHostsFile \"/k/known_hosts\"\n    StrictHostKeyChecking yes\n"
+	}
+	want := "# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n" + block("pen-studio") + block("pen-sbx") + block("pen-*")
 	if got != want {
 		t.Fatalf("config text:\n%s\nwant:\n%s", got, want)
 	}
@@ -31,7 +31,7 @@ func TestSSHConfigInstallThenUninstallRestoresTheUserConfig(t *testing.T) {
 		t.Fatalf("install exit %d: %s", code, errOut.String())
 	}
 	installed, _ := os.ReadFile(cfg)
-	if !bytes.HasPrefix(installed, []byte("Include "+filepath.Join(dir, "pen", "config")+"\n")) {
+	if !bytes.HasPrefix(installed, []byte("Include \""+filepath.Join(dir, "pen", "config")+"\"\n")) {
 		t.Fatalf("Include is not the first line:\n%s", installed)
 	}
 	if code := RunSSHConfig([]string{"--install"}, &out, &errOut); code != 0 {
@@ -47,7 +47,16 @@ func TestSSHConfigInstallThenUninstallRestoresTheUserConfig(t *testing.T) {
 	if !bytes.Equal(restored, original) {
 		t.Fatalf("uninstall left:\n%s", restored)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "pen")); !os.IsNotExist(err) {
-		t.Fatalf("pen dir still present: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "pen", "config")); !os.IsNotExist(err) {
+		t.Fatalf("pen config still present: %v", err)
+	}
+}
+
+func TestSSHConfigQuotesPathsWithSpacesQuotesAndPercent(t *testing.T) {
+	got := sshConfigText(shellQuote("/Users/a b/it's/pen"), "/k 100%/known_hosts", nil)
+	want := "# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n" +
+		"Host pen-*\n    ProxyCommand '/Users/a b/it'\\''s/pen' pipe %n 22\n    UserKnownHostsFile \"/k 100%%/known_hosts\"\n    StrictHostKeyChecking yes\n"
+	if got != want {
+		t.Fatalf("config text:\n%s\nwant:\n%s", got, want)
 	}
 }
