@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
@@ -201,5 +202,77 @@ func TestDroppedUplinkReconnectsAndEndsItsSessions(t *testing.T) {
 	}
 	if err := rs.WaitOnline(ctx, id.NodeID()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func dead(t *testing.T) string {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := "http://" + ln.Addr().String()
+	ln.Close()
+	return url
+}
+
+func TestDialRacePicksTheRelayThatAnswersAndSkipsADeadOne(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	id := newID(t)
+	u, _, _ := startUplink(t, ctx, rs, id)
+	c, used, err := relay.DialRace(ctx, []string{dead(t), rs.URL}, id.NodeID())
+	if err != nil || used != rs.URL {
+		t.Fatalf("used %q, %v; want the live relay", used, err)
+	}
+	n, _ := u.Accept(ctx)
+	c.Send([]byte("x"))
+	if p, err := n.Recv(ctx); err != nil || string(p) != "x" {
+		t.Fatalf("node got %q, %v", p, err)
+	}
+}
+
+func TestDialRaceIgnoresARelayWhereTheNodeIsOffline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	offline, online := relaytest.New(), relaytest.New()
+	defer offline.Close()
+	defer online.Close()
+	id := newID(t)
+	startUplink(t, ctx, online, id)
+	if _, used, err := relay.DialRace(ctx, []string{offline.URL, online.URL}, id.NodeID()); err != nil || used != online.URL {
+		t.Fatalf("used %q, %v; want the relay that has the node", used, err)
+	}
+	if _, _, err := relay.DialRace(ctx, []string{offline.URL, dead(t)}, id.NodeID()); relay.CodeOf(err) != wire.CodeOffline {
+		t.Fatalf("no relay has the node: %v, want 4404", err)
+	}
+}
+
+func TestDialRaceClosesTheLosersWith1000BeforeAnyByte(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, b := relaytest.New(), relaytest.New()
+	defer a.Close()
+	defer b.Close()
+	id := newID(t)
+	ua, _, _ := startUplink(t, ctx, a, id)
+	ub, _, _ := startUplink(t, ctx, b, id)
+	c, used, err := relay.DialRace(ctx, []string{a.URL, b.URL}, id.NodeID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner, loser := ua, ub
+	if used == b.URL {
+		winner, loser = ub, ua
+	}
+	c.Send([]byte{0x01})
+	w, _ := winner.Accept(ctx)
+	if p, err := w.Recv(ctx); err != nil || len(p) != 1 {
+		t.Fatalf("winner got %x, %v", p, err)
+	}
+	l, _ := loser.Accept(ctx)
+	if p, err := l.Recv(ctx); relay.CodeOf(err) != wire.CodeNormal {
+		t.Fatalf("loser got %x, %v; want CLOSE 1000 and no byte", p, err)
 	}
 }
