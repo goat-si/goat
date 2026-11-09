@@ -112,4 +112,7 @@ func (d *Daemon) writeKnownHosts() {
 		os.Remove(tmp.Name())
 		d.opt.Logf("known_hosts: %v", err)
 	}
+	if d.opt.OnView != nil {
+		d.opt.OnView(v)
+	}
 }

@@ -87,6 +87,7 @@ func daemonOptions(st *state.Store) daemon.Options {
 	if d := os.Getenv("PEN_SSH_DIR"); d != "" {
 		opt.KnownHosts = filepath.Join(d, "known_hosts")
 	}
+	opt.OnView = refreshSSHConfig
 	return opt
 }
 

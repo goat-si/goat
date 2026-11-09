@@ -3,12 +3,13 @@ package cli
 import (
 	"bytes"
 	"errors"
-
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/goat-si/goat/apps/pen/internal/mesh"
 )
 
 // RunSSHConfig prints, writes or installs an ssh_config that reaches members as pen-<name>.
@@ -28,26 +29,15 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "removed %s and its Include line\n", filepath.Join(dir, "pen", "config"))
 		return 0
 	}
-	exe, err := os.Executable()
+	cmd, err := pipeCommand()
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if p, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = p
-	}
-	cmd := shellQuote(exe)
-	if h := os.Getenv("PEN_HOME"); h != "" {
-		cmd = "env PEN_HOME=" + shellQuote(h) + " " + cmd
-	}
-	var hosts []sshHost
+	var v *mesh.View
 	if st, err := openState(); err == nil {
-		if v, err := localView(st); err == nil {
-			for _, m := range v.SortedMembers() {
-				hosts = append(hosts, sshHost{Name: m.Name, User: m.User})
-			}
-		}
+		v, _ = localView(st)
 	}
-	text := sshConfigText(cmd, knownHostsPath(), hosts)
+	text := sshConfigText(cmd, knownHostsPath(), hostsOf(v))
 	if !*write && !*install {
 		fmt.Fprint(stdout, text)
 		return 0
@@ -70,6 +60,47 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "add this as the first line of %s:\n%s\n", filepath.Join(dir, "config"), includeLine(dir))
 	}
 	return 0
+}
+
+// pipeCommand is the shell-quoted ProxyCommand prefix for this binary and state directory.
+func pipeCommand() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if p, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = p
+	}
+	cmd := shellQuote(exe)
+	if h := os.Getenv("PEN_HOME"); h != "" {
+		cmd = "env PEN_HOME=" + shellQuote(h) + " " + cmd
+	}
+	return cmd, nil
+}
+
+func hostsOf(v *mesh.View) []sshHost {
+	if v == nil {
+		return nil
+	}
+	var hosts []sshHost
+	for _, m := range v.SortedMembers() {
+		hosts = append(hosts, sshHost{Name: m.Name, User: m.User})
+	}
+	return hosts
+}
+
+// refreshSSHConfig rewrites <ssh dir>/pen/config from a new view, but only once ssh-config --write or
+// --install created it, so a joined machine sees its new peers (and their User) without another command.
+func refreshSSHConfig(v *mesh.View) {
+	dir := sshDir()
+	if _, err := os.Stat(filepath.Join(dir, "pen", "config")); err != nil {
+		return
+	}
+	cmd, err := pipeCommand()
+	if err != nil {
+		return
+	}
+	writeSSHConfig(dir, sshConfigText(cmd, knownHostsPath(), hostsOf(v)))
 }
 
 // shellQuote quotes s for the sh -c that runs ProxyCommand.

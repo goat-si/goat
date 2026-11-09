@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/goat-si/goat/apps/pen/internal/mesh"
 )
 
 func TestSSHConfigTextNamesEveryMemberAndAFallback(t *testing.T) {
@@ -126,5 +128,29 @@ func TestSSHConfigInstallReplacesAnOlderUnquotedIncludeInsteadOfAddingASecond(t 
 	}
 	if got, _ := os.ReadFile(cfg); string(got) != includeLine(dir)+"\n"+rest {
 		t.Fatalf("config:\n%s", got)
+	}
+}
+
+func TestRefreshSSHConfigRewritesAnInstalledConfigWithEveryMemberAndLeavesAMissingOneAlone(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PEN_SSH_DIR", dir)
+	v := &mesh.View{Members: map[string]mesh.Member{
+		"k1": {Name: "studio", NodeID: "aaaa"},
+		"k2": {Name: "sbx1", NodeID: "bbbb", User: "ubuntu"},
+	}}
+	refreshSSHConfig(v)
+	if _, err := os.Stat(filepath.Join(dir, "pen", "config")); !os.IsNotExist(err) {
+		t.Fatalf("refresh created a config nobody asked for: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "pen"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pen", "config"), []byte("# old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refreshSSHConfig(v)
+	got, _ := os.ReadFile(filepath.Join(dir, "pen", "config"))
+	if !bytes.Contains(got, []byte("Host pen-sbx1\n    User ubuntu\n")) || !bytes.Contains(got, []byte("Host pen-studio\n")) {
+		t.Fatalf("refreshed config:\n%s", got)
 	}
 }
