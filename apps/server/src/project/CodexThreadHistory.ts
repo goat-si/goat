@@ -50,18 +50,23 @@ export interface CodexHistoryThreadRef {
   readonly homePath: string;
 }
 
-function historyDatabasePath(homePath: string): string | undefined {
+type HistoryDatabaseLocation =
+  | { readonly _tag: "Found"; readonly path: string }
+  | { readonly _tag: "Missing" }
+  | { readonly _tag: "Failed"; readonly cause: unknown };
+
+function historyDatabasePath(homePath: string): HistoryDatabaseLocation {
   try {
     const names = NodeFS.readdirSync(homePath);
     const versioned = names
       .map((name) => [name, Number(HISTORY_DATABASE.exec(name)?.[1] ?? 0)] as const)
       .filter(([name, version]) => HISTORY_DATABASE.test(name) && version > 0)
       .sort((left, right) => right[1] - left[1])[0]?.[0];
-    if (versioned !== undefined) return NodePath.join(homePath, versioned);
+    if (versioned !== undefined) return { _tag: "Found", path: NodePath.join(homePath, versioned) };
     const legacy = NodePath.join(homePath, "thread_history.sqlite");
-    return NodeFS.existsSync(legacy) ? legacy : undefined;
-  } catch {
-    return undefined;
+    return NodeFS.existsSync(legacy) ? { _tag: "Found", path: legacy } : { _tag: "Missing" };
+  } catch (cause) {
+    return { _tag: "Failed", cause };
   }
 }
 
@@ -73,11 +78,12 @@ export interface CodexHistoryThreadIds {
 
 export function readCodexHistoryThreadIds(homePath: string): CodexHistoryThreadIds {
   const empty = { ids: new Set<string>(), complete: true } as const;
-  const databasePath = historyDatabasePath(homePath);
-  if (databasePath === undefined) return empty;
+  const location = historyDatabasePath(homePath);
+  if (location._tag === "Failed") return { ids: new Set(), complete: false, error: location.cause };
+  if (location._tag === "Missing") return empty;
   let database: NodeSqlite.DatabaseSync;
   try {
-    database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true, timeout: 1000 });
+    database = new NodeSqlite.DatabaseSync(location.path, { readOnly: true, timeout: 1000 });
   } catch (error) {
     return { ids: new Set(), complete: false, error };
   }
@@ -158,11 +164,11 @@ export function openCodexThreadHistory(
   homePath: string,
   maxBytes = MAX_CODEX_HISTORY_BYTES,
 ): CodexThreadHistoryReader | null {
-  const databasePath = historyDatabasePath(homePath);
-  if (databasePath === undefined) return null;
+  const location = historyDatabasePath(homePath);
+  if (location._tag !== "Found") return null;
   let database: NodeSqlite.DatabaseSync;
   try {
-    database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true, timeout: 1000 });
+    database = new NodeSqlite.DatabaseSync(location.path, { readOnly: true, timeout: 1000 });
   } catch {
     return null;
   }
@@ -222,7 +228,11 @@ export function openCodexThreadHistory(
           const firstMeta = firstUserBytes.get(threadId) as
             | { readonly rollout_ordinal?: unknown; readonly bytes?: unknown }
             | undefined;
-          if (firstMeta !== undefined && Number(firstMeta.rollout_ordinal) !== oldest) {
+          if (
+            firstMeta !== undefined &&
+            oldest !== undefined &&
+            Number(firstMeta.rollout_ordinal) < oldest
+          ) {
             if (bytes + Number(firstMeta.bytes ?? 0) > maxBytes) {
               return { _tag: "TooLarge" as const };
             }

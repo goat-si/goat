@@ -1503,6 +1503,10 @@ export const make = Effect.gen(function* () {
       completedSources,
       (source) => `${source.providerInstanceId}\0${source.filePath}`,
     );
+    const completedBySession = Map.groupBy(
+      completedSources,
+      (source) => `${source.providerInstanceId}\0${source.providerSessionId}`,
+    );
     const importedSessions = new Set<string>();
     const codexThreadNamesByHome = new Map<string, ReadonlyMap<string, string>>();
     const historyReaders = new Map<string, ReturnType<typeof openCodexThreadHistory>>();
@@ -1555,6 +1559,18 @@ export const make = Effect.gen(function* () {
               return Option.some<AgentSessionRecentThread>({
                 _tag: "AlreadyImported",
                 source: completedSource,
+              });
+            }
+            const sessionSource = completedBySession.get(
+              `${candidate.providerInstanceId}\0${transcript.historyThread.id}`,
+            )?.[0];
+            if (sessionSource !== undefined) {
+              const sessionKey = `${sessionSource.providerInstanceId}\0${sessionSource.providerSessionId}`;
+              if (importedSessions.has(sessionKey)) return Option.none<AgentSessionRecentThread>();
+              importedSessions.add(sessionKey);
+              return Option.some<AgentSessionRecentThread>({
+                _tag: "AlreadyImported",
+                source: sessionSource,
               });
             }
             const reader = historyReader(transcript.historyThread.homePath);

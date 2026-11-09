@@ -21,7 +21,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
-import { openCodexThreadHistory } from "./CodexThreadHistory.ts";
+import { openCodexThreadHistory, readCodexHistoryThreadIds } from "./CodexThreadHistory.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
@@ -449,6 +449,41 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex thread history", (it) =>
           outcome._tag === "Importable" ? [outcome.thread.providerSessionId] : [],
         ),
       ).toEqual([rolloutThreadId]);
+
+      const prunedRolloutSource: AgentSessionImportSource = {
+        provider: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerSessionId: historyThreadId,
+        filePath: path.join(
+          codexHomePath,
+          "sessions",
+          "2026",
+          "08",
+          "24",
+          `rollout-2026-08-24T09-00-00-${historyThreadId}.jsonl`,
+        ),
+        size: 0,
+        mtimeMs: null,
+        device: 0,
+        inode: null,
+        birthtimeMs: null,
+      };
+      const rerunAfterPrune = yield* runRecentThreads({
+        claudeHomePath,
+        codexHomePath,
+        piAgentDir,
+        workspaceRoot: workspace,
+        windowDays: 30,
+        completedSources: [prunedRolloutSource],
+      });
+      const pruned = rerunAfterPrune.find(
+        (outcome) =>
+          outcome._tag !== "Skipped" && outcome.source.providerSessionId === historyThreadId,
+      );
+      expect(pruned?._tag).toBe("AlreadyImported");
+      expect(pruned?._tag === "AlreadyImported" ? pruned.source.filePath : undefined).toBe(
+        prunedRolloutSource.filePath,
+      );
     }),
   );
 
@@ -673,6 +708,72 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex thread history", (it) =>
       const limited = openCodexThreadHistory(home, 10);
       expect(limited?.read("99999999-9999-4999-8999-999999999999")._tag).toBe("TooLarge");
       limited?.close();
+    }),
+  );
+
+  it.effect("keeps the first user message and drops older messages", () =>
+    Effect.gen(function* () {
+      const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+      const home = yield* makeTempDir("goat-codex-history-window-");
+      const threadId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      const messages = Array.from({ length: 205 }, (_, index) => ({
+        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        text: `Message ${index}`,
+        createdAtMs: nowMs + index,
+      }));
+      yield* writeCodexHistory({ homePath: home, threads: [{ id: threadId, messages }] });
+
+      const reader = openCodexThreadHistory(home);
+      expect(reader).not.toBeNull();
+      if (reader === null) return;
+      const result = reader.read(threadId);
+      reader.close();
+      expect(result._tag).toBe("Ok");
+      if (result._tag !== "Ok") return;
+      expect(result.data.messages).toHaveLength(200);
+      expect(result.data.messages[0]?.text).toBe("Message 0");
+      expect(result.data.messages[1]?.text).toBe("Message 6");
+      expect(result.data.omittedMessageCount).toBe(5);
+    }),
+  );
+
+  it.effect("does not duplicate a first user message that follows an agent message", () =>
+    Effect.gen(function* () {
+      const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+      const home = yield* makeTempDir("goat-codex-history-order-");
+      const threadId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      yield* writeCodexHistory({
+        homePath: home,
+        threads: [
+          {
+            id: threadId,
+            messages: [
+              { role: "assistant", text: "Greeting", createdAtMs: nowMs },
+              { role: "user", text: "Question", createdAtMs: nowMs + 1 },
+            ],
+          },
+        ],
+      });
+
+      const reader = openCodexThreadHistory(home);
+      expect(reader).not.toBeNull();
+      if (reader === null) return;
+      const result = reader.read(threadId);
+      reader.close();
+      expect(result._tag).toBe("Ok");
+      if (result._tag !== "Ok") return;
+      expect(result.data.messages.map((message) => message.text)).toEqual(["Greeting", "Question"]);
+    }),
+  );
+
+  it.effect("reports an unreadable Codex home instead of an empty history", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* makeTempDir("goat-codex-history-file-");
+      const file = path.join(home, "not-a-directory");
+      yield* fileSystem.writeFileString(file, "");
+      expect(readCodexHistoryThreadIds(file).complete).toBe(false);
     }),
   );
 });
