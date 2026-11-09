@@ -241,6 +241,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
           empty: "",
           noTrailingNewline: rows.trimEnd(),
           rowsIntoHeaderSpot: rows.slice(header.length),
+          // awk matched 05678 to 5678 numerically, so the first of these is the row it keyed.
+          leadingZero:
+            header +
+            "  1  1  1  05678  ?  0  10:00:00 /old\n" +
+            "  2  2  2  5678  ?  0  10:00:01 /new\n",
         };
         const pairs = [
           ["5678", ""],
@@ -283,17 +288,25 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
         }
         // The corpus exercises matches, not only misses.
         assert.isAbove(matched, 20);
-        // A WINPID spelled with a leading zero matched awk numerically; as text it misses the key.
-        const zero = runIn(
+        // Another numeric spelling, which ps -W never prints, is a miss where awk keyed its row.
+        const odd = runIn(
           shell,
-          'fact_windows=1\nfact_process_starts 5678 ""\necho "[$FACT_START]"',
+          [
+            before,
+            "fact_windows=1",
+            'awk_process_starts 5678 ""; echo "[$FACT_START]"',
+            'fact_process_starts 5678 ""; echo "[$FACT_START]"',
+          ].join("\n"),
           {
             PATH: bin + ":" + (process.env.PATH ?? ""),
-            GOAT_TEST_PS: header + "  1  1  1  05678  ?  0  10:00:00 /zero\n",
+            GOAT_TEST_PS:
+              header +
+              "  1  1  1  5678.0  ?  0  10:00:00 /odd\n" +
+              "  2  2  2  5678  ?  0  10:00:01 /new\n",
             GOAT_TEST_PS_STATUS: "0",
           },
         );
-        assert.equal(zero.trim(), "[]");
+        assert.deepEqual(odd.trim().split("\n"), ["[1 1 1 5678.0 ? 0 10:00:00 /odd]", "[]"]);
       } finally {
         NodeFS.rmSync(dir, { recursive: true, force: true });
       }
