@@ -155,7 +155,18 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 		}
 		reply(d.status())
 	case "reconnect":
-		if s, _ := d.upState.Load().(string); s == "replaced" {
+		cfg, err := d.st.LoadConfig()
+		if err != nil {
+			fail(err)
+			return
+		}
+		d.cfgMu.Lock()
+		changed := cfg.Relay != "" && cfg.Relay != d.cfg.Relay
+		if changed {
+			d.cfg.Relay = cfg.Relay
+		}
+		d.cfgMu.Unlock()
+		if s, _ := d.upState.Load().(string); s == "replaced" || changed {
 			d.startUplink()
 		}
 		reply(d.status())

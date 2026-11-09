@@ -94,6 +94,29 @@ func TestClientSessionCarriesMessagesAndCloseCodesBothWays(t *testing.T) {
 	}
 }
 
+func TestUnconfirmedLinkQueuesAtMostOneMiBThenCloses4408(t *testing.T) {
+	chunk := make([]byte, 64<<10)
+	a, b := relay.Pipe()
+	var err error
+	for sent := 0; err == nil && sent <= relay.PreHandshakeQueued; sent += len(chunk) {
+		err = a.Send(chunk)
+	}
+	if relay.CodeOf(err) != wire.CodeTimeout {
+		t.Fatalf("flooding an unconfirmed link: %v, want 4408", err)
+	}
+	if _, err := b.Recv(context.Background()); relay.CodeOf(err) != wire.CodeTimeout {
+		t.Fatalf("receiver saw %v, want 4408", err)
+	}
+
+	a, b = relay.Pipe()
+	b.(relay.QueueLimiter).SetQueueLimit(relay.MaxQueued)
+	for sent := 0; sent < 4*relay.PreHandshakeQueued; sent += len(chunk) {
+		if err := a.Send(chunk); err != nil {
+			t.Fatalf("confirmed link refused %d queued bytes: %v", sent, err)
+		}
+	}
+}
+
 func TestClientToOfflineNodeCloses4404(t *testing.T) {
 	ctx := context.Background()
 	rs := relaytest.New()

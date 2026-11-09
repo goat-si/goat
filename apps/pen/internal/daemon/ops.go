@@ -93,6 +93,10 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 	d.store = store
 	d.invites = invites
 	d.meshMu.Unlock()
+	// A save of the old set that was already running must not be the last write.
+	if err := store.Save(); err != nil {
+		return err
+	}
 	os.Remove(d.st.Path("offers.json"))
 	d.cfgMu.Lock()
 	changed := d.cfg.Relay != tok.Relay

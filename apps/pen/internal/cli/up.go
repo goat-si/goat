@@ -82,7 +82,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		if s.Name != cfg.Name {
 			daemon.Call(st, daemon.Request{Op: "name", Name: cfg.Name}, &s)
 		}
-		if s.Uplink == "replaced" {
+		if s.Uplink == "replaced" || s.Relay != cfg.Relay {
 			daemon.Call(st, daemon.Request{Op: "reconnect"}, &s)
 		}
 		printStatus(stdout, s)

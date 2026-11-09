@@ -194,6 +194,7 @@ func (m *mux) readLoop(accept chan Conn) error {
 			c := m.sessions[f.SID]
 			m.mu.Unlock()
 			if c != nil && !c.in.push(f.Payload) {
+				c.in.drop(&CloseError{Code: wire.CodeTimeout})
 				c.Close(wire.CodeTimeout)
 			}
 		case wire.FrameClose:
@@ -253,6 +254,8 @@ func (c *muxConn) Send(p []byte) error {
 }
 
 func (c *muxConn) Recv(ctx context.Context) ([]byte, error) { return c.in.recv(ctx) }
+
+func (c *muxConn) SetQueueLimit(n int) { c.in.setLimit(n) }
 
 func (c *muxConn) Close(code uint16) error {
 	c.mu.Lock()

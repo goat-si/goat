@@ -34,8 +34,16 @@ func CodeOf(err error) uint16 {
 // ErrClosed is returned after this side closed the link.
 var ErrClosed = errors.New("relay: link closed")
 
-// MaxQueued caps bytes received but not yet consumed on one session; past it the session closes 4408.
-const MaxQueued = 16 << 20
+// MaxQueued caps bytes received but not yet consumed on a confirmed session; past it the session
+// closes 4408. Until the handshake confirms (SetQueueLimit), the cap is PreHandshakeQueued, which
+// covers message 1, the key confirmation and a first window.
+const (
+	MaxQueued          = 16 << 20
+	PreHandshakeQueued = 1 << 20
+)
+
+// QueueLimiter is implemented by links whose receive queue cap can be raised after a handshake.
+type QueueLimiter interface{ SetQueueLimit(n int) }
 
 // inbox is an ordered queue of messages ending in one terminal error. It never blocks the producer.
 type inbox struct {
@@ -43,10 +51,17 @@ type inbox struct {
 	msgs   [][]byte
 	bytes  int
 	err    error
+	limit  int
 	notify chan struct{}
 }
 
-func newInbox() *inbox { return &inbox{notify: make(chan struct{}, 1)} }
+func newInbox() *inbox { return &inbox{notify: make(chan struct{}, 1), limit: PreHandshakeQueued} }
+
+func (q *inbox) setLimit(n int) {
+	q.mu.Lock()
+	q.limit = n
+	q.mu.Unlock()
+}
 
 func (q *inbox) wake() {
 	select {
@@ -55,14 +70,14 @@ func (q *inbox) wake() {
 	}
 }
 
-// push queues p; false when the queue would exceed MaxQueued.
+// push queues p; false when the queue would exceed its limit.
 func (q *inbox) push(p []byte) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.err != nil {
 		return true
 	}
-	if q.bytes+len(p) > MaxQueued {
+	if q.bytes+len(p) > q.limit {
 		return false
 	}
 	q.msgs = append(q.msgs, p)
@@ -144,6 +159,7 @@ func (p *pipeEnd) Send(m []byte) error {
 		return ErrClosed
 	}
 	if !p.peer.in.push(append([]byte(nil), m...)) {
+		p.peer.in.drop(&CloseError{Code: wire.CodeTimeout})
 		p.Close(wire.CodeTimeout)
 		return &CloseError{Code: wire.CodeTimeout}
 	}
@@ -151,6 +167,8 @@ func (p *pipeEnd) Send(m []byte) error {
 }
 
 func (p *pipeEnd) Recv(ctx context.Context) ([]byte, error) { return p.in.recv(ctx) }
+
+func (p *pipeEnd) SetQueueLimit(n int) { p.in.setLimit(n) }
 
 func (p *pipeEnd) Close(code uint16) error {
 	p.mu.Lock()

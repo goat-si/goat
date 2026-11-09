@@ -204,6 +204,7 @@ func initiate(ctx context.Context, conn relay.Conn, kind byte, nodeID string, re
 	if err := s.Send(nil); err != nil {
 		return nil, err
 	}
+	raiseQueue(conn)
 	return s, nil
 }
 
@@ -281,5 +282,13 @@ func respond(ctx context.Context, conn relay.Conn, local *ident.Identity, nodeID
 	if len(confirm) != 0 {
 		return fail(wire.CodeCrypto)
 	}
+	raiseQueue(conn)
 	return s, nil
+}
+
+// raiseQueue lifts the link's receive cap once the peer is authenticated.
+func raiseQueue(conn relay.Conn) {
+	if l, ok := conn.(relay.QueueLimiter); ok {
+		l.SetQueueLimit(relay.MaxQueued)
+	}
 }

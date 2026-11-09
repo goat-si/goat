@@ -132,6 +132,8 @@ func (c *clientConn) Send(p []byte) error {
 
 func (c *clientConn) Recv(ctx context.Context) ([]byte, error) { return c.in.recv(ctx) }
 
+func (c *clientConn) SetQueueLimit(n int) { c.in.setLimit(n) }
+
 // Close sends a close frame with code and waits (bounded) for the socket to finish.
 func (c *clientConn) Close(code uint16) error {
 	c.mu.Lock()
