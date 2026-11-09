@@ -39,7 +39,7 @@ export const removeIncompleteRegistration =
     readonly failure: (operation: string, detail: string) => ProviderSetupError;
   }) =>
   (methodId: string) =>
-    Effect.fnUntraced(function* () {
+    Effect.gen(function* () {
       const saved = yield* deps.readRegistrations;
       const profile = saved.profiles.find((entry) => profileMethodId(entry.clientId) === methodId);
       const sessionClientIds = yield* deps.readSessionClientIds;
@@ -61,4 +61,4 @@ export const removeIncompleteRegistration =
           deps.failure("removeMethod", "Could not remove the saved ChatGPT connection. Try again."),
         ),
       );
-    })();
+    });

@@ -77,10 +77,14 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
 
   const makeExecutable = Effect.fn("AntigravityDriverTest.makeExecutable")(function* (
     name: string,
-    options: { loginRequired?: boolean; initialMode?: string } | boolean = {},
+    options:
+      | { loginRequired?: boolean; initialMode?: string; newSessionErrorData?: unknown }
+      | boolean = {},
   ) {
     const loginRequired = typeof options === "boolean" ? options : (options.loginRequired ?? false);
     const initialMode = typeof options === "boolean" ? undefined : options.initialMode;
+    const newSessionErrorData =
+      typeof options === "boolean" ? undefined : options.newSessionErrorData;
     const directory = path.join(root, name);
     const executablePath = path.join(directory, "agy_acp_server.par");
     const harnessPath = path.join(directory, "localharness_external");
@@ -355,12 +359,12 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
             .filter((request) => request.method === "session/new")
             .map((request) => request.params?.mcpServers),
         ).toEqual([[], []]);
-        // The agy CLI rejects `yolo` and `auto_edit`; it stays in `default` and T3 answers its requests.
+        yield* h.assertClosed;
+        // The agy CLI rejects `yolo` and `auto_edit`; it stays in `default` and GOAT answers its requests.
         h.controls.selected = {
           ...(yield* h.makeExecutable("runtime cli", { initialMode: "auto_edit" })),
           harnessPath: null,
         };
-        h.controls.selected.harnessPath === null;
         const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
         for (const runtimeMode of ["full-access", "auto-accept-edits"] as const) {
           const requestsBefore = (yield* h.readRequests).length;
@@ -393,7 +397,6 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
               .map((request) => request.params?.value),
           ).toEqual(["default"]);
         }
-        yield* h.assertClosed;
       }).pipe(Effect.scoped),
   );
 

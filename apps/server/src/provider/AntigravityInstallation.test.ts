@@ -696,10 +696,12 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
           const windowsDirectory = path.join(baseDir, `windows-${name}`);
           yield* fs.makeDirectory(windowsDirectory);
           yield* fs.writeFileString(path.join(windowsDirectory, name), "cli");
-          expect(yield* windows.resolve("agy", { PATH: windowsDirectory })).toMatchObject({
-            executablePath: path.join(windowsDirectory, name),
-            harnessPath: null,
-          });
+          const resolved = yield* windows.resolve("agy", { PATH: windowsDirectory });
+          // A case-insensitive host matches the PATHEXT spelling, so compare the name ignoring case.
+          expect(resolved.executablePath.toLowerCase()).toBe(
+            path.join(windowsDirectory, name).toLowerCase(),
+          );
+          expect(resolved.harnessPath).toBeNull();
         }
       }),
   );
