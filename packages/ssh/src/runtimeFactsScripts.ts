@@ -169,7 +169,8 @@ fact_put() {
   case "$2$3" in *"$fact_nl"*) return 0 ;; esac
   (
     umask 077
-    [ ! -L "$GOAT_FACTS_DIR" ] && mkdir -p "$GOAT_FACTS_DIR" &&
+    # mkdir -p changes nothing for an existing directory; skipping it saves a process start.
+    [ ! -L "$GOAT_FACTS_DIR" ] && { [ -d "$GOAT_FACTS_DIR" ] || mkdir -p "$GOAT_FACTS_DIR"; } &&
       fact_tmp="$(mktemp "$GOAT_FACTS_DIR/.fact.XXXXXX")" || exit 0
     printf '%s\\n%s\\n' "$2" "$3" >"$fact_tmp" && mv -f "$fact_tmp" "$GOAT_FACTS_DIR/$1" || rm -f "$fact_tmp"
   ) 2>/dev/null || true

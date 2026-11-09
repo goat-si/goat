@@ -641,7 +641,9 @@ if [ "$OWNING_LAUNCH" = 1 ]; then
   fi
   check_candidate_protocol
   check_retained_runner
-  check_live_protocol
+  # Nothing since the check under the lock re-pins or changes its inputs when it found no server,
+  # and the launch asks again before it acts on the answer.
+  [ "$LIVE_STATUS" = none ] || check_live_protocol
   [ "$RECONCILING_DRAIN" != 1 ] || NEEDS_OWNED_UPGRADE=1
 @@GOAT_VERIFY_OWNED_BEFORE_PUBLICATION@@
   [ "$DEFER_NO_DRAIN" != 1 ] || emit_pending unknown drain-unavailable
