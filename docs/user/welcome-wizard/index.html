@@ -39,20 +39,22 @@ terminal metadata while the terminal process can use them.</p>
 are listed first, newest activity on top. When the remote is on GitHub, the
 group shows the repository as <code>owner/name</code>. Clones with the same remote share
 one group. Directories that are not git repositories sit under “Other folders”.</p>
-<p>The default selection includes git repositories active within the last 30 days
-with at least three conversations. Use the checkboxes, or “Select all” and
-“Select none”, to change the selection. Linked worktrees of bare repositories
-can be offered as separate projects. Other linked git worktrees, Codex scratch
-directories under <code>Documents/Codex</code>, and anything under <code>Downloads</code> are not
-offered.</p>
+<p>The default selection includes git repositories active within the import window
+(30 days by default) with at least three conversations. Use the checkboxes, or
+“Select all” and “Select none”, to change the selection. Linked worktrees of
+bare repositories can be offered as separate projects. Other linked git
+worktrees, Codex scratch directories under <code>Documents/Codex</code>, and anything under
+<code>Downloads</code> are not offered.</p>
 <p>A large or malformed history can reach the scan limit. GOAT keeps the
 projects it found and warns when projects or conversations may be missing.</p>
-<p>Imported projects include Claude, Codex and Pi conversations active within the last
-30 days. You can continue those conversations in GOAT. Pi is off by default:
-enable it in Settings, then open <code>/welcome</code> to import its sessions. Pi sessions
-are read from each enabled Pi provider’s session directory, which follows
-<code>PI_CODING_AGENT_SESSION_DIR</code> and <code>PI_CODING_AGENT_DIR</code> in its environment. A
-Pi conversation imports its active branch, the one Pi reopens.</p>
+<p>Imported projects include Claude, Codex and Pi conversations active within the
+window chosen under <strong>Import conversations from</strong>: 30 days by default, 90 days,
+12 months, or all time. The window applies to the default selection and to the
+history GOAT imports. You can continue those conversations in GOAT. Pi is off
+by default: enable it in Settings, then open <code>/welcome</code> to import its sessions.
+Pi sessions are read from each enabled Pi provider’s session directory, which
+follows <code>PI_CODING_AGENT_SESSION_DIR</code> and <code>PI_CODING_AGENT_DIR</code> in its
+environment. A Pi conversation imports its active branch, the one Pi reopens.</p>
 <p>Conversation import is best effort. GOAT keeps the first user prompt and the
 newest remaining visible user and assistant messages, with 200 messages total.
 It omits tool activity and attachments. For Codex, it omits generated setup
