@@ -695,6 +695,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     };
     const shim = (bin: string, name: string, body: string) =>
       NodeFS.writeFileSync(NodePath.join(bin, name), "#!/bin/sh\n" + body + "\n", { mode: 0o755 });
+    // Runs the real tool: the one after this stand-in's directory on PATH.
+    const real = (tool: string) => 'PATH="$' + '{PATH#*:}" ' + tool;
     const env = (dir: string, bin: string) => ({
       GOAT_TEST_DIR: dir,
       TMPDIR: NodePath.join(dir, "tmp"),
@@ -865,6 +867,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
 
     it.each([
       ["its directory cannot be made", "mkdir", "exit 1"],
+      ["chmod fails", "chmod", "exit 1"],
       ["mkfifo fails", "mkfifo", "exit 1"],
       ["the FIFO cannot be opened", "mkfifo", 'mkdir "$1"'],
     ])("sleeps and still hangs up when %s", async (_, tool, body) => {
@@ -887,24 +890,61 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       });
     });
 
-    // "taken" makes the chosen name an existing directory with a file in it, so mkdir fails.
-    it.each(["directory", "taken", "FIFO", "read"])(
+    it("ticks in read where mkdir -m makes the directory and then fails, as on Git Bash", async () => {
+      await inDir(async (dir, bin) => {
+        NodeFS.writeFileSync(NodePath.join(dir, "clock"), "1000000000\n");
+        shim(
+          bin,
+          "mkdir",
+          [
+            'echo "$*" >> "$GOAT_TEST_DIR/mkdirs"',
+            'case "$1" in -m) shift 2; ' + real("mkdir") + ' "$@"; exit 1 ;; esac',
+            real("mkdir") + ' "$@"',
+          ].join("\n"),
+        );
+        // The first read waits until the script is stuck; each read moves the clock by its step.
+        const ticks = {
+          now: '        read -r goat_deadline_t < "$GOAT_TEST_DIR/clock"',
+          read: [
+            'echo "$1" >> "$GOAT_TEST_DIR/reads"',
+            'if [ -p "$GOAT_TEST_DIR/gate" ]; then cat "$GOAT_TEST_DIR/gate" >/dev/null; rm -f "$GOAT_TEST_DIR/gate"; fi',
+            'echo "$(($(cat "$GOAT_TEST_DIR/clock") + $1 * 1000000))" > "$GOAT_TEST_DIR/clock"; (exit 142)',
+          ].join("\n"),
+        };
+        const result = await runShell(
+          withRemoteDeadline(STUCK, 1_000, undefined, undefined, ticks),
+          [dir],
+          env(dir, bin),
+          { shell: "bash", sessionLeader: true },
+        );
+        expect(result.code).toBe(129);
+        // 1 s of timeout and 5 s of grace in read steps of 2 s; a grace read may follow the hang-up.
+        expect(lines(dir, "reads").slice(0, 3)).toEqual(["2", "2", "2"]);
+        expect(lines(dir, "mkdirs").filter((line) => line.startsWith("-m"))).toEqual([]);
+        expect(NodeFS.readdirSync(NodePath.join(dir, "tmp"))).toEqual([]);
+      });
+    });
+
+    // "taken" makes the first name an existing directory with a file in it, so mkdir fails there.
+    it.each(["directory", "chmod", "taken", "FIFO", "read"])(
       "cleans up only what it made when stopped during its %s step",
       async (stage) => {
         await inDir(async (dir, bin) => {
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "stopping")]);
           // The watchdog is stopped once the script knows it reached that stage.
           const stop = 'printf x > "$GOAT_TEST_DIR/stopping"; kill -TERM "$PPID"';
-          const real = (tool: string) => 'PATH="$' + '{PATH#*:}" ' + tool;
-          if (stage === "directory" || stage === "FIFO") {
-            const tool = stage === "FIFO" ? "mkfifo" : "mkdir";
-            shim(bin, tool, real(tool) + ' "$@" && ' + stop);
-          }
+          const tool = { directory: "mkdir", chmod: "chmod", FIFO: "mkfifo" }[stage];
+          if (tool !== undefined) shim(bin, tool, real(tool) + ' "$@" && ' + stop);
           if (stage === "taken")
             shim(
               bin,
               "mkdir",
-              real("mkdir") + ' "$3" && echo keep > "$3/keep"; ' + stop + "; exit 1",
+              [
+                'if [ ! -e "$GOAT_TEST_DIR/took" ]; then : > "$GOAT_TEST_DIR/took"',
+                "  " + real("mkdir") + ' "$1" && echo keep > "$1/keep"; ' + stop + "; exit 1",
+                "fi",
+                real("mkdir") + ' "$@"',
+              ].join("\n"),
             );
           const ticks = {
             now: FIXED_NOW,
@@ -932,10 +972,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if (stage === "taken") {
             expect(left).toHaveLength(1);
             expect(contents(left[0] ?? "")).toEqual(["keep"]);
-          } else if (stage === "directory") {
-            // A TERM right after mkdir, before the watchdog records it, may leave it empty.
-            expect(left.length).toBeLessThanOrEqual(1);
-            for (const name of left) expect(contents(name)).toEqual([]);
           } else expect(left).toEqual([]);
         });
       },

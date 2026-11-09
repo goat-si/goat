@@ -83,14 +83,15 @@ if ! { true </dev/tty; } 2>/dev/null; then set -m 2>/dev/null || :; fi
     goat_deadline_job="\${goat_deadline_probe% *}"; goat_deadline_group="\${goat_deadline_probe#* }"
     (
       trap '' HUP
-      # Leaving from the trap stops the watchdog even when TERM lands just before a wait begins, and
-      # takes a tick directory of its own still being set up with it. A sleep tick ends by itself: a
-      # shell may already have reaped it, so its PID could name another process.
-      trap 'goat_deadline_drop; exit 0' TERM
+      # During setup TERM only records itself, so a directory mkdir made is recorded before anything
+      # acts on TERM, which happens right after setup. Later, leaving from the trap stops the watchdog
+      # even when TERM lands just before a wait begins. A sleep tick ends by itself: a shell may already
+      # have reaped it, so its PID could name another process.
+      goat_deadline_stop=
+      trap 'goat_deadline_stop=1' TERM
       goat_deadline_me=; goat_deadline_dir=
-      # Removes the FIFO's name and then the empty tick directory. goat_deadline_dir is set only after
-      # mkdir made it, so a name that was already taken is never touched; a TERM between mkdir and
-      # that assignment leaves one empty directory behind. rm -d is one process where rm has it.
+      # Removes the FIFO's name and then the empty tick directory, which is recorded only once mkdir
+      # made it, so a name that was already taken is never touched. rm -d is one process where rm has it.
       goat_deadline_drop() {
         [ -z "$goat_deadline_dir" ] || rm -f -d "$goat_deadline_dir/tick" "$goat_deadline_dir" 2>/dev/null ||
           { rm -f "$goat_deadline_dir/tick"; rmdir "$goat_deadline_dir"; } 2>/dev/null
@@ -110,14 +111,18 @@ ${ticks?.now ?? "        return 1"}
       goat_deadline_left=${seconds * 1_000_000}
       if [ -n "\${BASH_VERSION:-}" ] && goat_deadline_now; then
         goat_deadline_end=$((goat_deadline_t + goat_deadline_left))
+        # Git Bash's mkdir -m makes the directory and then fails to set its mode, so chmod sets it.
         for goat_deadline_try in 1 2 3; do
           goat_deadline_name="\${TMPDIR:-/tmp}/goat-deadline.$$.$RANDOM$RANDOM"
-          if mkdir -m 700 "$goat_deadline_name" 2>/dev/null; then goat_deadline_dir="$goat_deadline_name"; break; fi
+          if mkdir "$goat_deadline_name" 2>/dev/null; then goat_deadline_dir="$goat_deadline_name"; break; fi
         done
-        if [ -n "$goat_deadline_dir" ] && mkfifo "$goat_deadline_dir/tick" 2>/dev/null &&
+        if [ -n "$goat_deadline_dir" ] && chmod 700 "$goat_deadline_dir" 2>/dev/null &&
+          mkfifo "$goat_deadline_dir/tick" 2>/dev/null &&
           { command exec 9<>"$goat_deadline_dir/tick"; } 2>/dev/null; then goat_deadline_tick=read; fi
         goat_deadline_drop
       fi
+      trap 'goat_deadline_drop; exit 0' TERM
+      [ -z "$goat_deadline_stop" ] || { goat_deadline_drop; exit 0; }
       goat_deadline_read() {
 ${ticks?.read ?? "        return 1"}
       }
