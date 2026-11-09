@@ -111,6 +111,64 @@ it.layer(NodeServices.layer)("server settings duplicate secrets", (it) => {
       }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect.each(
+    [
+      {
+        label: "write then empty sensitive",
+        duplicate: { value: "", sensitive: true },
+        writeLast: false,
+      },
+      {
+        label: "empty sensitive then write",
+        duplicate: { value: "", sensitive: true },
+        writeLast: true,
+      },
+      {
+        label: "write then plain",
+        duplicate: { value: "plain-foo", sensitive: false },
+        writeLast: false,
+      },
+      {
+        label: "plain then write",
+        duplicate: { value: "plain-foo", sensitive: false },
+        writeLast: true,
+      },
+    ].map((testCase) => [testCase.label, testCase] as const),
+  )(
+    "preserves a newly written secret alongside a duplicate row (%s)",
+    ([, { duplicate, writeLast }]) =>
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const store = yield* ServerSecretStore.ServerSecretStore;
+        const instanceId = ProviderInstanceId.make("codex_personal");
+        const written = { name: "FOO", value: "new-foo", sensitive: true };
+        const copy = { name: "FOO", ...duplicate };
+        yield* service.updateSettings({
+          providerInstances: {
+            [instanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: writeLast ? [copy, written] : [written, copy],
+              config: {},
+            },
+          },
+        });
+        const stored = yield* store.get("provider-env-Y29kZXhfcGVyc29uYWw-Rk9P");
+        assert.isTrue(Option.isSome(stored));
+        if (Option.isSome(stored)) assert.equal(new TextDecoder().decode(stored.value), "new-foo");
+        const fresh = yield* Effect.gen(function* () {
+          const reloaded = yield* ServerSettingsModule.ServerSettingsService;
+          return yield* reloaded.getSettings;
+        }).pipe(
+          Effect.provide(
+            Layer.fresh(ServerSettingsModule.layer).pipe(Layer.provide(ServerSecretStore.layer)),
+          ),
+        );
+        const rows = fresh.providerInstances[instanceId]?.environment;
+        assert.equal(rows?.[writeLast ? 1 : 0]?.value, "new-foo");
+        assert.equal(rows?.[writeLast ? 0 : 1]?.value, duplicate.value);
+      }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
   it.effect("removes a kept secret once every row with its name is deleted", () =>
     Effect.gen(function* () {
       const service = yield* ServerSettingsModule.ServerSettingsService;
