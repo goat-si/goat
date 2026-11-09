@@ -774,6 +774,86 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex thread history", (it) =>
       const file = path.join(home, "not-a-directory");
       yield* fileSystem.writeFileString(file, "");
       expect(readCodexHistoryThreadIds(file).complete).toBe(false);
+      expect(readCodexHistoryThreadIds(path.join(home, "missing")).complete).toBe(true);
+    }),
+  );
+
+  it.effect("keeps an already imported thread when the import budget is spent", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+      yield* TestClock.setTime(nowMs);
+      const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+      const codexHomePath = yield* makeTempDir("goat-codex-home-");
+      const piAgentDir = yield* makeTempDir("goat-pi-agent-");
+      const workspace = yield* makeTempDir("goat-workspace-");
+      const threadIdFor = (index: number) =>
+        `${String(index).padStart(8, "0")}-0000-4000-8000-${String(index).padStart(12, "0")}`;
+      const completedThreadId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+      const freshIds = Array.from({ length: 100 }, (_, index) => threadIdFor(index + 1));
+
+      yield* writeCodexState({
+        homePath: codexHomePath,
+        projectRoot: workspace,
+        threads: [
+          ...freshIds.map((id, index) => ({
+            id,
+            updatedAtMs: nowMs - index * 1000,
+            title: `Fresh ${index}`,
+          })),
+          { id: completedThreadId, updatedAtMs: nowMs - 200_000, title: "Already imported" },
+        ],
+      });
+      const historyThread = (id: string, text: string, createdAtMs: number) => ({
+        id,
+        messages: [
+          { role: "user" as const, text, createdAtMs },
+          { role: "assistant" as const, text: `${text} answer`, createdAtMs: createdAtMs + 1 },
+        ],
+      });
+      yield* writeCodexHistory({
+        homePath: codexHomePath,
+        threads: [
+          ...freshIds.map((id, index) =>
+            historyThread(id, `Fresh question ${index}`, nowMs - index * 1000),
+          ),
+          historyThread(completedThreadId, "Old question", nowMs - 200_000),
+        ],
+      });
+
+      const outcomes = yield* runRecentThreads({
+        claudeHomePath,
+        codexHomePath,
+        piAgentDir,
+        workspaceRoot: workspace,
+        windowDays: 30,
+        completedSources: [
+          {
+            provider: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            providerSessionId: completedThreadId,
+            filePath: path.join(
+              codexHomePath,
+              "sessions",
+              "2026",
+              "08",
+              "24",
+              `rollout-2026-08-24T08-00-00-${completedThreadId}.jsonl`,
+            ),
+            size: 0,
+            mtimeMs: null,
+            device: 0,
+            inode: null,
+            birthtimeMs: null,
+          },
+        ],
+      });
+      expect(outcomes.filter((outcome) => outcome._tag === "Importable")).toHaveLength(100);
+      const completed = outcomes.find(
+        (outcome) =>
+          outcome._tag !== "Skipped" && outcome.source.providerSessionId === completedThreadId,
+      );
+      expect(completed?._tag).toBe("AlreadyImported");
     }),
   );
 });

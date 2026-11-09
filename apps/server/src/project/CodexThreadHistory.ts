@@ -66,7 +66,9 @@ function historyDatabasePath(homePath: string): HistoryDatabaseLocation {
     const legacy = NodePath.join(homePath, "thread_history.sqlite");
     return NodeFS.existsSync(legacy) ? { _tag: "Found", path: legacy } : { _tag: "Missing" };
   } catch (cause) {
-    return { _tag: "Failed", cause };
+    return (cause as { readonly code?: unknown }).code === "ENOENT"
+      ? { _tag: "Missing" }
+      : { _tag: "Failed", cause };
   }
 }
 

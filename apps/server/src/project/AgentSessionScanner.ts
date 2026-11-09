@@ -1547,7 +1547,17 @@ export const make = Effect.gen(function* () {
           const completed = completedByFile.get(
             `${candidate.providerInstanceId}\0${transcript.filePath}`,
           );
-          if (completed === undefined && (transcriptsRemaining === 0 || bytesRemaining === 0)) {
+          const sessionSource =
+            transcript.historyThread === undefined
+              ? undefined
+              : completedBySession.get(
+                  `${candidate.providerInstanceId}\0${transcript.historyThread.id}`,
+                )?.[0];
+          if (
+            completed === undefined &&
+            sessionSource === undefined &&
+            (transcriptsRemaining === 0 || bytesRemaining === 0)
+          ) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
           if (transcript.historyThread !== undefined) {
@@ -1561,9 +1571,6 @@ export const make = Effect.gen(function* () {
                 source: completedSource,
               });
             }
-            const sessionSource = completedBySession.get(
-              `${candidate.providerInstanceId}\0${transcript.historyThread.id}`,
-            )?.[0];
             if (sessionSource !== undefined) {
               const sessionKey = `${sessionSource.providerInstanceId}\0${sessionSource.providerSessionId}`;
               if (importedSessions.has(sessionKey)) return Option.none<AgentSessionRecentThread>();
