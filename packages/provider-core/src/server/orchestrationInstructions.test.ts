@@ -93,11 +93,19 @@ describe("GOAT provider instructions", () => {
   });
 
   it("directs sudo passwords through a private file", () => {
-    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "Try `sudo -n <cmd>` first");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "Try `sudo -n <cmd>`; on failure");
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "handoff.create");
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, 'delivery: "file"');
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "sudo -S -p '' <cmd> < \"$file\"");
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "pass other input as a file argument");
+  });
+
+  it("distinguishes top-level threads and lane admission", () => {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "starts a top-level sidebar thread");
+    assert.include(
+      GOAT_ORCHESTRATION_INSTRUCTIONS,
+      "admits dispatched lanes and counts observed native subagents",
+    );
   });
 
   it("instructs every provider to write GOAT thread links", () => {
