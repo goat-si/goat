@@ -378,100 +378,106 @@ describe("Windows SSH host", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
-  it.effect("waits for a launched server's listener inside one PowerShell start", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-listener-" });
-      const bin = `${root}/bin`;
-      yield* fs.makeDirectory(bin);
-      // PowerShell records each start. Given a deadline it answers as its loop would (asked once,
-      // only from its third poll); late, it moves the clock past the deadline; vanishing, the server
-      // exits; hung, it never answers. tasklist lists the server while $TEST_ROOT/alive exists, and
-      // the clock moves a second per read.
-      for (const [name, body] of Object.entries({
-        uname: WINDOWS_DOUBLES.uname,
-        "powershell.exe": String.raw`echo "${"${"}GOAT_WAIT_UNTIL_MS:-poll}" >>"$TEST_ROOT/powershell-calls"
-if [ -n "${"${"}GOAT_WAIT_UNTIL_MS:-}" ] && [ -e "$TEST_ROOT/hang" ]; then
-  echo "$$" >"$TEST_ROOT/powershell-pid"; exec /bin/sleep 600
-fi
-[ -e "$TEST_ROOT/listening" ] || exit 1
-if [ -n "${"${"}GOAT_WAIT_UNTIL_MS:-}" ]; then
-  if [ -e "$TEST_ROOT/late" ]; then echo 2000 >"$TEST_ROOT/clock"; fi
-  if [ -e "$TEST_ROOT/vanish" ]; then rm -f "$TEST_ROOT/alive"; fi
-  exit 0
-fi
-[ "$(wc -l <"$TEST_ROOT/powershell-calls")" -ge 3 ]`,
-        "tasklist.exe": `[ -e "$TEST_ROOT/alive" ] && echo '"goat.exe","4242","Services","0","1 K"'`,
-        date: 'n="$(cat "$TEST_ROOT/clock")"; echo "$((n + 1))" >"$TEST_ROOT/clock"; echo "$n"',
-        sleep: ":",
-      })) {
-        yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
-        yield* fs.chmod(`${bin}/${name}`, 0o755);
-      }
-      const states = ["listening", "alive", "late", "vanish", "hang"] as const;
-      const run = (state: Partial<Record<(typeof states)[number], boolean>>) =>
-        Effect.gen(function* () {
-          for (const name of states) {
-            if (state[name]) yield* fs.writeFileString(`${root}/${name}`, "");
-            else yield* fs.remove(`${root}/${name}`, { force: true });
-          }
-          yield* fs.writeFileString(`${root}/clock`, "1000\n");
-          yield* fs.writeFileString(`${root}/powershell-calls`, "");
-          // Git Bash's sh is bash, whose job list the wait reads.
-          const result = NodeChildProcess.spawnSync(
-            "bash",
-            [
-              "-c",
+  it.effect(
+    "waits for a launched server's listener inside one PowerShell start, held to the deadline",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-listener-" });
+        const bin = `${root}/bin`;
+        yield* fs.makeDirectory(bin);
+        // Given a deadline, PowerShell answers as its loop would: 3 once the server is gone (vanish
+        // makes it exit mid-wait), 0 for a listener (late moves the clock past the deadline first), 4
+        // at its own deadline, 1 for a failed start; hung, it never answers. tasklist records every
+        // call and hangs with it. The clock moves a second per read.
+        for (const [name, body] of Object.entries({
+          uname: WINDOWS_DOUBLES.uname,
+          "powershell.exe": String.raw`echo "${"${"}GOAT_WAIT_UNTIL_MS:-poll}" >>"$TEST_ROOT/powershell-calls"
+[ -n "${"${"}GOAT_WAIT_UNTIL_MS:-}" ] || exit 1
+if [ -e "$TEST_ROOT/hang" ]; then echo "$$" >"$TEST_ROOT/powershell-pid"; exec /bin/sleep 600; fi
+if [ -e "$TEST_ROOT/vanish" ]; then rm -f "$TEST_ROOT/alive"; fi
+[ -e "$TEST_ROOT/alive" ] || exit 3
+[ -e "$TEST_ROOT/fail" ] && exit 1
+[ -e "$TEST_ROOT/listening" ] || exit 4
+if [ -e "$TEST_ROOT/late" ]; then echo 2000 >"$TEST_ROOT/clock"; fi
+exit 0`,
+          "tasklist.exe": `echo "$*" >>"$TEST_ROOT/tasklist-calls"
+if [ -e "$TEST_ROOT/hang" ]; then exec /bin/sleep 600; fi
+[ -e "$TEST_ROOT/alive" ] && echo '"goat.exe","4242","Services","0","1 K"'`,
+          date: 'n="$(cat "$TEST_ROOT/clock")"; echo "$((n + 1))" >"$TEST_ROOT/clock"; echo "$n"',
+          sleep: ":",
+        })) {
+          yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
+          yield* fs.chmod(`${bin}/${name}`, 0o755);
+        }
+        const states = ["listening", "alive", "late", "vanish", "hang", "fail"] as const;
+        const run = (state: Partial<Record<(typeof states)[number], boolean>>) =>
+          Effect.gen(function* () {
+            for (const name of states) {
+              if (state[name]) yield* fs.writeFileString(`${root}/${name}`, "");
+              else yield* fs.remove(`${root}/${name}`, { force: true });
+            }
+            yield* fs.writeFileString(`${root}/clock`, "1000\n");
+            yield* fs.writeFileString(`${root}/powershell-calls`, "");
+            yield* fs.writeFileString(`${root}/tasklist-calls`, "");
+            // Git Bash's sh is bash, whose job list the wait reads.
+            const result = NodeChildProcess.spawnSync(
+              "bash",
               [
-                REMOTE_HOST_PROCESS_SCRIPT,
-                REMOTE_LAUNCH_LISTENER_SCRIPT.replaceAll("@@GOAT_READY_TIMEOUT_MS@@", "60000"),
-                "REMOTE_PID=4242; REMOTE_PORT=3773",
-                "if wait_launched_listener; then echo ready; else echo gone; fi",
-              ].join("\n"),
-            ],
-            {
-              encoding: "utf8",
-              env: { ...process.env, TEST_ROOT: root, PATH: `${bin}:${process.env.PATH ?? ""}` },
-            },
-          );
-          assert.equal(result.status, 0, result.stderr);
-          const calls = (yield* fs.readFileString(`${root}/powershell-calls`))
-            .trim()
-            .split("\n")
-            .filter(Boolean);
-          return { out: result.stdout.trim(), calls };
+                "-c",
+                [
+                  REMOTE_HOST_PROCESS_SCRIPT,
+                  REMOTE_LAUNCH_LISTENER_SCRIPT.replaceAll("@@GOAT_READY_TIMEOUT_MS@@", "60000"),
+                  "REMOTE_PID=4242; REMOTE_PORT=3773",
+                  'wait_launched_listener; echo "$?"',
+                ].join("\n"),
+              ],
+              {
+                encoding: "utf8",
+                env: { ...process.env, TEST_ROOT: root, PATH: `${bin}:${process.env.PATH ?? ""}` },
+              },
+            );
+            assert.equal(result.status, 0, result.stderr);
+            const lines = (name: string) =>
+              fs
+                .readFileString(`${root}/${name}`)
+                .pipe(Effect.map((text) => text.trim().split("\n").filter(Boolean)));
+            // The wait never runs tasklist, which can stall past the deadline.
+            assert.deepEqual(yield* lines("tasklist-calls"), []);
+            return { status: result.stdout.trim(), calls: yield* lines("powershell-calls") };
+          });
+        // One start waits until the launch's own deadline (1060 s, in ms); its answer is rechecked
+        // against the clock only.
+        assert.deepEqual(yield* run({ listening: true, alive: true }), {
+          status: "0",
+          calls: ["1060000"],
         });
-      // One start waits for the listener until the launch's own deadline (1060 s, in ms).
-      assert.deepEqual(yield* run({ listening: true, alive: true }), {
-        out: "ready",
-        calls: ["1060000"],
-      });
-      // A listener that never comes still ends at that deadline. Starts that fail at once leave
-      // the loop as the clock moves, so only their deadline and their bound are fixed.
-      const never = yield* run({ listening: false, alive: true });
-      assert.equal(never.out, "gone");
-      assert.isAtLeast(never.calls.length, 1);
-      assert.isAtMost(never.calls.length, 60);
-      assert.deepEqual([...new Set(never.calls)], ["1060000"]);
-      // A PowerShell that never answers is ended at the deadline and collected.
-      assert.deepEqual(yield* run({ alive: true, hang: true }), {
-        out: "gone",
-        calls: ["1060000"],
-      });
-      const hung = Number((yield* fs.readFileString(`${root}/powershell-pid`)).trim());
-      assert.throws(() => process.kill(hung, 0));
-      // An answer after the deadline, or from a server that has exited, is not ready.
-      assert.deepEqual(yield* run({ listening: true, alive: true, late: true }), {
-        out: "gone",
-        calls: ["1060000"],
-      });
-      assert.deepEqual(yield* run({ listening: true, alive: true, vanish: true }), {
-        out: "gone",
-        calls: ["1060000"],
-      });
-      // A server that exits is not waited for.
-      assert.deepEqual(yield* run({ listening: true, alive: false }), { out: "gone", calls: [] });
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        // PowerShell's own deadline, and an answer after the shell's deadline, are not ready.
+        assert.deepEqual(yield* run({ alive: true }), { status: "1", calls: ["1060000"] });
+        assert.deepEqual(yield* run({ listening: true, alive: true, late: true }), {
+          status: "1",
+          calls: ["1060000"],
+        });
+        // A server that is gone, at the start or mid-wait, is reported as exited, not as a timeout.
+        assert.deepEqual(yield* run({ listening: true }), { status: "2", calls: ["1060000"] });
+        assert.deepEqual(yield* run({ listening: true, alive: true, vanish: true }), {
+          status: "2",
+          calls: ["1060000"],
+        });
+        // A failed start is tried again until the deadline.
+        const failing = yield* run({ alive: true, fail: true });
+        assert.equal(failing.status, "1");
+        assert.isAtLeast(failing.calls.length, 2);
+        assert.deepEqual([...new Set(failing.calls)], ["1060000"]);
+        // A PowerShell that never answers, beside a tasklist that would hang, is ended at the deadline
+        // and collected.
+        assert.deepEqual(yield* run({ alive: true, hang: true }), {
+          status: "1",
+          calls: ["1060000"],
+        });
+        const hung = Number((yield* fs.readFileString(`${root}/powershell-pid`)).trim());
+        assert.throws(() => process.kill(hung, 0));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect("passes a usable Windows working directory to initial and supervisor launches", () =>

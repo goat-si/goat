@@ -862,12 +862,12 @@ $id = [int]$env:GOAT_PROCESS_ID
 $port = [int]$env:GOAT_LISTEN_PORT
 $until = [long]$env:GOAT_WAIT_UNTIL_MS
 while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $until) {
-  if (-not (Get-Process -Id $id -ErrorAction SilentlyContinue)) { exit 1 }
+  if (-not (Get-Process -Id $id -ErrorAction SilentlyContinue)) { exit 3 }
   $connections = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
   if ($connections | Where-Object { $_.OwningProcess -eq $id -and $_.LocalAddress -eq '127.0.0.1' }) { exit 0 }
   Start-Sleep -Milliseconds 100
 }
-exit 1`;
+exit 4`;
 
 export const REMOTE_LAUNCH_LISTENER_SCRIPT = String.raw`# macOS login shells often omit /usr/sbin, which is where lsof lives, and archive
 # launches never call ensure_remote_node_path. Resolve lsof without that PATH.
@@ -916,8 +916,8 @@ server_owns_listener() (
   fi
 )
 # Windows: each PowerShell start costs about 1.5 s, so one waits for server $1 to own the listener on
-# port $2, checking as often as the loop below, until it exits or the epoch second $3 arrives. Run in
-# the background, the job is PowerShell itself.
+# port $2 every 0.1 s: exit 0 once it does, 3 once the server is gone, 4 at the epoch second $3. Run
+# in the background, the job is PowerShell itself.
 server_awaits_listener() {
   GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" GOAT_WAIT_UNTIL_MS="${"${"}3}000" MSYS2_ARG_CONV_EXCL='*' exec powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
 }
@@ -927,27 +927,37 @@ listen_running() {
 }
 wait_launched_listener() {
   listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
-  while server_alive "$REMOTE_PID" && [ "$(date +%s)" -lt "$listen_deadline" ]; do
-    if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
-      # PowerShell can start, poll and answer late, so this shell holds it to the deadline and the
-      # server's life: at either it ends PowerShell and reports no listener.
+  if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
+    # tasklist and PowerShell can stall, so only the PowerShell child looks at the server. This shell
+    # checks the clock and that child alone, ends it at the deadline, and returns 1 there, 2 once the
+    # server is gone. Another exit, such as a failed start, starts a new child before the deadline.
+    while [ "$(date +%s)" -lt "$listen_deadline" ]; do
       server_awaits_listener "$REMOTE_PID" "$REMOTE_PORT" "$listen_deadline" &
       listen_ps=$!
       while listen_running "$listen_ps"; do
-        if [ "$(date +%s)" -ge "$listen_deadline" ] || ! server_alive "$REMOTE_PID"; then
+        if [ "$(date +%s)" -ge "$listen_deadline" ]; then
           if listen_running "$listen_ps"; then kill "$listen_ps" 2>/dev/null; fi
           wait "$listen_ps" 2>/dev/null
           return 1
         fi
         sleep 0.1
       done
-      wait "$listen_ps" && [ "$(date +%s)" -lt "$listen_deadline" ] && server_alive "$REMOTE_PID" && return 0
-    else
-      server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0
-    fi
+      if wait "$listen_ps"; then listen_status=0; else listen_status=$?; fi
+      case "$listen_status" in
+        0) [ "$(date +%s)" -lt "$listen_deadline" ] && return 0; return 1 ;;
+        3) return 2 ;;
+        4) return 1 ;;
+      esac
+      sleep 0.1
+    done
+    return 1
+  fi
+  while server_alive "$REMOTE_PID"; do
+    [ "$(date +%s)" -lt "$listen_deadline" ] || return 1
+    server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0
     sleep 0.1
   done
-  return 1
+  return 2
 }
 `;
 
