@@ -28,6 +28,7 @@ import { useAppearancePreferences } from "../features/settings/appearance/Appear
 import { Menu } from "../components/ui/Menu";
 import { useEnrichedLinkVariants } from "./useEnrichedLinkVariants";
 import { useRetryingImageSource } from "./useRetryingImageSource";
+import { markdownImageSources } from "../lib/markdownImageSources";
 import { enrichedStyle } from "./enrichedMarkdownStyle";
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
 import {
@@ -181,6 +182,11 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     [renderImage],
   );
   const resolveNativeImageSource = useRetryingImageSource(resolveImageSource);
+  // Enriched asks about each image once, so a moved image address needs a fresh native view.
+  const imageRouteKey = useMemo(() => {
+    const routeKey = resolveImageSource?.routeKey;
+    return routeKey ? markdownImageSources(props.markdown).map(routeKey).join("\n") : "";
+  }, [props.markdown, resolveImageSource]);
   const renderMarkdown = (openAndroidMenu?: () => void) => {
     const onLinkLongPress =
       Platform.OS === "android" && props.fileContextMenu
@@ -207,6 +213,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
         }}
       >
         <EnrichedMarkdownText
+          key={imageRouteKey}
           markdown={markdown}
           markdownStyle={markdownStyle}
           writingDirection={props.writingDirection}

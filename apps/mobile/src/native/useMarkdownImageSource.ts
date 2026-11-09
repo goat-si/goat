@@ -2,12 +2,12 @@ import { resolveFilesystemReadAccess } from "@goat/client-runtime/state/filesyst
 import { useEnvironmentPresentation } from "../state/presentation";
 import { useEnvironmentQuery } from "../state/query";
 import { resolveMobileMarkdownMediaSource } from "../lib/markdownMediaSource";
-import { mobileMediaConnection } from "../lib/environmentMediaUri";
+import { mediaRouteKey, mobileMediaConnection } from "../lib/environmentMediaUri";
 import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import type { MarkdownImageSourceResolver } from "./SelectableMarkdownText.types";
 import { normalizeNativeMarkdownUrl } from "../lib/markdownLinks";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import * as Option from "effect/Option";
 
 import { assetEnvironment } from "../state/assets";
@@ -33,7 +33,7 @@ export function useMarkdownImageSource(props: {
   });
   const httpBaseUrl = Option.isSome(connection) ? connection.value.httpBaseUrl : null;
   const createUrl = useAtomQueryRunner(assetEnvironment.createUrl, { reportFailure: false });
-  return useCallback(
+  const resolve = useCallback<MarkdownImageSourceResolver>(
     async (image) => {
       const media = resolveMobileMarkdownMediaSource(image.href, {
         threadId: threadId ?? undefined,
@@ -72,5 +72,12 @@ export function useMarkdownImageSource(props: {
       threadId,
       workspaceRoot,
     ],
+  );
+  return useMemo(
+    () =>
+      Object.assign((image: Parameters<MarkdownImageSourceResolver>[0]) => resolve(image), {
+        routeKey: (href: string) => mediaRouteKey(mobileMediaConnection(connection), href),
+      }),
+    [connection, resolve],
   );
 }

@@ -57,3 +57,15 @@ export function routeMobileMediaUrl(environmentId: EnvironmentId, url: string) {
     url: environment.normalizeUri(url),
   });
 }
+/** Where a Markdown image source loads from with this connection; it changes only for loopback URLs. */
+export function mediaRouteKey(
+  environment: ReturnType<typeof mobileMediaConnection>,
+  href: string,
+): string {
+  const routed = resolveEnvironmentLoopbackUrl({
+    connection: environment.connection,
+    isDesktopRenderer: false,
+    url: environment.normalizeUri(href),
+  });
+  return routed._tag === "Open" ? routed.url : `unreachable:${href}`;
+}

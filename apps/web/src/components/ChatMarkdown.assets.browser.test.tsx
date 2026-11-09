@@ -332,3 +332,11 @@ it("keeps an image that labels a file link, with its page", async () => {
   );
   await expect.element(screen.getByRole("button", { name: "Open page" })).toBeInTheDocument();
 });
+it("keeps an image nested in a file link's label", async () => {
+  using test = setup({ connection: tailnetConnection(), previewAllowed: true });
+  await using screen = await renderRemoteMarkdown(
+    test.registry,
+    `[README.md *![page](${PAGE_IMAGE})*](README.md)`,
+  );
+  await expect.element(screen.getByRole("button", { name: "Open page" })).toBeInTheDocument();
+});

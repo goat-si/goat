@@ -40,3 +40,9 @@ export function hastHasText(node: unknown): boolean {
   }
   return "children" in node && Array.isArray(node.children) && node.children.some(hastHasText);
 }
+/** Whether an image sits anywhere inside the node. */
+export function hastHasImage(node: unknown): boolean {
+  if (!node || typeof node !== "object") return false;
+  if ("tagName" in node && node.tagName === "img") return true;
+  return "children" in node && Array.isArray(node.children) && node.children.some(hastHasImage);
+}
