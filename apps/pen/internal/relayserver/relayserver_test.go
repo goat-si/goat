@@ -94,6 +94,7 @@ type nodeOpts struct {
 	silent bool
 	noAck  bool
 	path   string
+	origin string
 	answer func(signPub, sig []byte) []byte
 }
 
@@ -125,6 +126,9 @@ func nodeWith(t *testing.T, rs *relaytest.Server, id *ident.Identity, o nodeOpts
 	n := &fakeNode{peer: p, id: id, nodeID: id.NodeID()}
 	if !o.silent {
 		origin, _ := wire.RelayOrigin(rs.URL)
+		if o.origin != "" {
+			origin = o.origin
+		}
 		sig := ed25519.Sign(id.SignPriv, wire.ChallengeMessage(origin, path, challenge))
 		ans := append(append([]byte(nil), id.SignPub...), sig...)
 		if o.answer != nil {
@@ -522,5 +526,18 @@ func TestAnyOtherTextCloses1003(t *testing.T) {
 	n.sendText("hello")
 	if code := <-n.closed; code != int(relayserver.CodeUnsupported) {
 		t.Fatalf("uplink closed %d, want 1003", code)
+	}
+}
+
+func TestPublicOriginIsTheOriginUplinksMustSign(t *testing.T) {
+	rs := defaults(t)
+	rs.Relay.PublicOrigin = "wss://relay.example"
+	local := node(t, rs, nodeOpts{})
+	if code := <-local.closed; code != int(wire.CodeRelayAuth) {
+		t.Fatalf("uplink signing the local origin closed %d, want 4403", code)
+	}
+	public := node(t, rs, nodeOpts{origin: "wss://relay.example"})
+	if err := rs.WaitOnline(context.Background(), public.nodeID); err != nil {
+		t.Fatal(err)
 	}
 }

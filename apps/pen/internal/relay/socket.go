@@ -2,7 +2,9 @@ package relay
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"net/http"
 	"sync"
 	"time"
 
@@ -13,8 +15,15 @@ import (
 // PingInterval is the keepalive period for uplink and client sockets.
 const PingInterval = 30 * time.Second
 
+// TLSConfig, when set, replaces the system TLS settings for relay sockets (tests with a private CA).
+var TLSConfig *tls.Config
+
 func dialWS(ctx context.Context, wsURL string) (*websocket.Conn, error) {
-	c, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled})
+	opts := &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled}
+	if TLSConfig != nil {
+		opts.HTTPClient = &http.Client{Transport: &http.Transport{TLSClientConfig: TLSConfig}}
+	}
+	c, _, err := websocket.Dial(ctx, wsURL, opts)
 	if err != nil {
 		return nil, err
 	}
