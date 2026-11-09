@@ -143,7 +143,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         "uname",
       ];
       for (const name of counted) {
-        // Each shim drops its own directory, so later shims (clock, identity) still apply.
+        // Each shim removes its own directory wherever it is, so later shims (clock, identity) still
+        // apply: a launch prepends /usr/sbin and /sbin when PATH lacks them, as on CI's runner.
         // Each also records its first arguments: a failed bound names the awk programs it counted,
         // and the per-check bounds below match each awk to the check that ran it.
         yield* f.fs.writeFileString(
@@ -153,15 +154,19 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             // A command the runner starts is tagged with the runner's PID: /bin/ps is not counted.
             'case "$(/bin/ps -o args= -p "$PPID" 2>/dev/null)" in */run-t3*) by="runner:$PPID " ;; *) by= ;; esac',
             `printf '%s${name} %s\\n' "$by" "$(printf '%s' "$*" | tr '\\n' ' ' | cut -c1-200)" >> "$HOME/.test/counted.log"`,
-            `PATH="\${PATH#*:}" exec ${name} "$@"`,
+            `rest=; set -f; IFS=:; for dir in $PATH; do [ "$dir" = '${bin}' ] || rest="\${rest:+$rest:}$dir"; done`,
+            `unset IFS; set +f; PATH="$rest" exec ${name} "$@"`,
             "",
           ].join("\n"),
         );
         yield* f.fs.chmod(`${bin}/${name}`, 0o755);
       }
-      f.setRemotePath(
-        `${bin}:${f.home}/.test/clock:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`,
-      );
+      // Without /usr/sbin and /sbin every host takes the path CI's runner takes: the launch adds them.
+      const inherited = (process.env.PATH ?? "")
+        .split(":")
+        .filter((dir) => dir !== "/usr/sbin" && dir !== "/sbin")
+        .join(":");
+      f.setRemotePath(`${bin}:${f.home}/.test/clock:${f.home}/.test/identity-bin:${inherited}`);
       const awkPrograms = new Map<Record<string, number>, string[]>();
       const checksOf = new Map<Record<string, number>, [string, number, number][]>();
       // Every command each script started, with its first arguments, for a failed bound to show.
