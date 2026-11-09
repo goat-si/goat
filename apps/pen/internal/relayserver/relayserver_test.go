@@ -656,3 +656,12 @@ func TestARoomIsFreedWhenItsLastSocketEnds(t *testing.T) {
 		t.Fatalf("rooms %d after the last socket, want 0", got)
 	}
 }
+
+func TestAnUnauthenticatedUplinkMayNotSendMoreThanItsAnswer(t *testing.T) {
+	rs := defaults(t)
+	n := node(t, rs, nodeOpts{silent: true})
+	n.send(make([]byte, relayserver.MessageMax+1))
+	if code := <-n.closed; code != int(wire.CodeRelayAuth) {
+		t.Fatalf("closed %d, want 4403 after at most 97 bytes", code)
+	}
+}

@@ -449,7 +449,14 @@ func (k *sock) readLoop() {
 			k.room.peerGone(k, closeCode(err))
 			return
 		}
-		data, err := io.ReadAll(io.LimitReader(rd, MessageMax+1))
+		// Until it authenticates an uplink may send only its 96-byte answer. Only this goroutine
+		// sets authed, so reading it here needs no lock.
+		limit := int64(MessageMax)
+		preAuth := k.role == roleNode && !k.authed
+		if preAuth {
+			limit = answerLen
+		}
+		data, err := io.ReadAll(io.LimitReader(rd, limit+1))
 		if err != nil {
 			k.room.peerGone(k, closeCode(err))
 			return
@@ -457,6 +464,11 @@ func (k *sock) readLoop() {
 		rm := k.room
 		rm.mu.Lock()
 		if k.closed {
+			rm.mu.Unlock()
+			return
+		}
+		if preAuth && len(data) > answerLen {
+			rm.fail(k, wire.CodeRelayAuth)
 			rm.mu.Unlock()
 			return
 		}
