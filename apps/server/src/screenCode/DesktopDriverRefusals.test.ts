@@ -756,6 +756,8 @@ it.live("a screenshot-only read succeeds while the screen is locked", () => {
 const launchArgs = { bundle_id: "com.apple.calculator" };
 const outsideManifest =
   "launch_app bundle_id 'com.apple.calculator' is outside the capability manifest";
+const notGranted = "Accessibility access is not granted.";
+const notApproved = "com.apple.calculator is not approved for computer use in this thread.";
 const manifestNote =
   "GOAT: this is outside what GOAT lets agents do with computer use on this host, not a missing macOS permission.";
 const genericNextStep = "Observe the desktop and try again.";
@@ -775,13 +777,13 @@ const failedCall = (
 it.each([
   {
     shape: "an outer code with text",
-    reply: failedCall({ code: "permission_denied" }, outsideManifest),
-    nextStep: outsideManifest,
+    reply: failedCall({ code: "permission_denied" }, notGranted),
+    nextStep: notGranted,
   },
   {
     shape: "a nested refusal message",
-    reply: failedCall({ refusal: { code: "permission_denied", message: outsideManifest } }),
-    nextStep: outsideManifest,
+    reply: failedCall({ refusal: { code: "permission_denied", message: notGranted } }),
+    nextStep: notGranted,
   },
   {
     shape: "no words",
@@ -808,14 +810,14 @@ it("a driver permission refusal keeps the refusal fields it was given", () => {
   };
   expect(
     driverError(
-      failedCall({ code: "permission_denied", ...fields }, outsideManifest),
+      failedCall({ code: "permission_denied", ...fields }, notApproved),
       "launch_app",
       launchArgs,
     ),
   ).toEqual({
     code: "permission_denied",
     effectStarted: false,
-    nextStep: outsideManifest,
+    nextStep: notApproved,
     evidence: ["driver:code=permission_denied"],
     ...fields,
   });
@@ -839,7 +841,6 @@ it("a manifest denial typed outside_manifest stays unsupported with the driver's
 });
 
 const launchFailed = "Launch failed: The application “Calculator” could not be launched.";
-const outsideBounds = "com.apple.calculator is outside this session's bounded resources.";
 
 it.each([
   {
@@ -847,15 +848,6 @@ it.each([
     structured: { error: "NSWORKSPACE_LAUNCH_FAILED" },
     texts: [launchFailed],
     expected: { nextStep: launchFailed },
-  },
-  {
-    shape: "a bounded resource refusal",
-    structured: { refusal: { code: "bounded_resource_outside_manifest", message: outsideBounds } },
-    texts: [],
-    expected: {
-      nextStep: outsideBounds,
-      evidence: ["driver:code=bounded_resource_outside_manifest"],
-    },
   },
   {
     shape: "an unknown code",

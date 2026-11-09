@@ -53,6 +53,18 @@ const refusalText = (
       .find((text) => text !== undefined);
   return said === undefined || said.length <= 1000 ? said : `${said.slice(0, 999)}…`;
 };
+/** The proxy's own test for a manifest denial it did not type: the driver's words name the manifest. */
+const namesManifest = (
+  result: Record<string, unknown> | undefined,
+  structured: Record<string, unknown> | undefined,
+) =>
+  [
+    ...array(result?.content)
+      .map(object)
+      .map((part) => (part?.type === "text" ? string(part.text) : undefined)),
+    string(object(structured?.refusal)?.message),
+    string(structured?.message),
+  ].some((text) => text?.includes("capability manifest") === true);
 /** The driver's own effect and code, kept on a failed call's receipt beside GOAT's error code. */
 const driverEvidence = (structured: Record<string, unknown> | undefined) => {
   const effect = string(structured?.effect);
@@ -62,13 +74,18 @@ const driverEvidence = (structured: Record<string, unknown> | undefined) => {
     ...(code === undefined ? [] : [`driver:code=${code.slice(0, 80)}`]),
   ];
 };
+/** The driver's structured answer: a tool result's content, else a JSON-RPC error's data or the error. */
+const driverPayload = (reply: ComputerUsePrimitiveReply) =>
+  object(object(reply.result)?.structuredContent) ??
+  object(object(reply.error)?.data) ??
+  object(reply.error);
 export const driverError = (
   reply: ComputerUsePrimitiveReply,
   tool?: string,
   args?: unknown,
 ): ScreenRunError | undefined => {
   const error = classifyDriverError(reply, tool, args);
-  const evidence = driverEvidence(object(object(reply.result)?.structuredContent));
+  const evidence = driverEvidence(driverPayload(reply));
   return error === undefined || evidence.length === 0 ? error : { ...error, evidence };
 };
 export const driverFailureNextStep = (
@@ -76,7 +93,7 @@ export const driverFailureNextStep = (
   error: ScreenRunError,
   possibleCommit: boolean,
 ) => {
-  const structured = object(object(reply.result)?.structuredContent);
+  const structured = driverPayload(reply);
   const code = string(object(structured?.refusal)?.code) ?? string(structured?.code);
   return possibleCommit &&
     replaceWithTerminal(error).reason === undefined &&
@@ -90,7 +107,7 @@ const classifyDriverError = (
   args?: unknown,
 ): ScreenRunError | undefined => {
   const result = object(reply.result);
-  const structured = object(result?.structuredContent);
+  const structured = driverPayload(reply);
   const nested = string(object(structured?.refusal)?.code);
   const outer = string(structured?.code);
   const evidence = driverReplyEvidence(tool, reply, args);
@@ -119,13 +136,20 @@ const classifyDriverError = (
     };
   if (reply.status === "unknown_outcome")
     return { ...fail("unknown_outcome"), effectStarted: true };
-  // A call outside GOAT's manifest, refused by GOAT's proxy or by the driver as permission_denied:
-  // its words say what to do, never a permission to ask for. A write that may have run is not unsent.
+  // A call outside GOAT's manifest, refused by GOAT's proxy or by the driver (typed outside_manifest,
+  // naming the manifest, or a bounded resource): its words say what to do, never a permission to ask
+  // for. The driver's own denial must not have run.
   const mayHaveRun = () => driverOutcomeSafety(tool, reply, args).possibleCommit;
+  const driverManifestDenial =
+    (driverCode === "bounded_resource_outside_manifest" ||
+      (driverCode === "permission_denied" &&
+        (structured?.detail === "outside_manifest" || namesManifest(result, structured)))) &&
+    (structured?.effect === undefined || structured.effect === "refused");
   if (
-    structured?.detail === "outside_manifest" &&
-    structured.effect === undefined &&
-    (driverCode === undefined || (driverCode === "permission_denied" && !mayHaveRun()))
+    (structured?.detail === "outside_manifest" &&
+      structured.effect === undefined &&
+      driverCode === undefined) ||
+    (driverManifestDenial && !mayHaveRun())
   )
     return { ...fail("unsupported", said), ...refusalOf(structured) };
   if (
