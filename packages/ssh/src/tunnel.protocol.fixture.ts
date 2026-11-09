@@ -627,6 +627,8 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
   const setScriptPrefix = (value: string) => {
     scriptPrefix = value;
   };
+  // bash 5 reads EPOCHSECONDS instead of date; unset, it loses that meaning, so a shifted clock holds.
+  let clockPrefix = "";
   let beforeCommand: ((script: string) => ReturnType<typeof fs.writeFileString>) | undefined;
   const setBeforeCommand = (callback: typeof beforeCommand) => {
     beforeCommand = callback;
@@ -680,7 +682,10 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
         ChildProcess.make(remoteShell, ["-c", [remoteShellCommand, ...args].join(" ")], {
           env: { HOME: home, PATH: withPortShim(remotePath), LC_ALL: "C" },
           extendEnv: false,
-          stdin: { ...stdin, stream: Stream.make(new TextEncoder().encode(scriptPrefix + script)) },
+          stdin: {
+            ...stdin,
+            stream: Stream.make(new TextEncoder().encode(clockPrefix + scriptPrefix + script)),
+          },
         }),
       );
     });
@@ -755,6 +760,7 @@ if [ "$#" = 1 ] && [ "$1" = +%s ]; then echo $(( ${freezeFileTimes ? '$(cat "$HO
 `,
       );
       yield* fs.chmod(`${bin}/date`, 0o700);
+      clockPrefix = "unset EPOCHSECONDS 2>/dev/null || :\n";
       if (freezeFileTimes) {
         yield* fs.writeFileString(
           `${bin}/sleep`,

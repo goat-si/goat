@@ -315,10 +315,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
       );
       assert.equal(Number(yield* stop.exitCode), 0);
       const stopCounts = yield* counts;
-      // goat starts only for the pairing itself, readiness and the activity check. Measured on
-      // eefc2a1f: pairing awk 20, cat 18, date 9, uname 9; probe cat 7, uname 7; launch awk 43,
-      // cat 81, date 17, uname 17; stop cat 17, uname 3.
-      // These count each script's own commands; what the runner starts is bounded per run below.
+      // goat starts only for the pairing, readiness and the activity check. These are each script's
+      // own commands; the runner's are bounded per run below. date is every age-gate clock read,
+      // one per key computed and one per remembered key used; bash 5 reads EPOCHSECONDS instead,
+      // which the fixture unsets to keep its clock.
       const bounds = {
         pairing: [
           pairingCounts,
@@ -326,7 +326,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             goat: 1,
             awk: 0,
             cat: 0,
-            date: 9,
+            date: 19,
             uname: 3,
             grep: 0,
             sed: 1,
@@ -341,7 +341,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             goat: 0,
             awk: 0,
             cat: 0,
-            date: 1,
+            date: 10,
             uname: 2,
             grep: 0,
             sed: 1,
@@ -356,7 +356,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             goat: 1,
             awk: 0,
             cat: 0,
-            date: 17,
+            date: 45,
             uname: 6,
             grep: 0,
             sed: 2,
