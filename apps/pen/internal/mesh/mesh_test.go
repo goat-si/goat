@@ -119,6 +119,7 @@ func randomDAG(t *testing.T, rng *rand.Rand) *builder {
 	joined := []*ident.Identity{ids[0]}
 	waiting := ids[1:]
 	signed := map[*ident.Identity]int{}
+	admitOf := map[string]*Record{}
 	for len(b.recs) < 30 {
 		signer := joined[rng.IntN(len(joined))]
 		if signed[signer] >= 12 {
@@ -146,6 +147,7 @@ func randomDAG(t *testing.T, rng *rand.Rand) *builder {
 			subject := waiting[0]
 			waiting = waiting[1:]
 			r = b.admit(signer, subject, ps...)
+			admitOf[pub(subject)] = r
 			joined = append(joined, subject)
 			last[pub(subject)] = r // the new member's first record builds on its admit
 		case k < 5:
@@ -156,6 +158,11 @@ func randomDAG(t *testing.T, rng *rand.Rand) *builder {
 		case k < 8 && len(joined) > 2:
 			// The founder is never revoked, so later records still have a live signer.
 			subject := joined[1+rng.IntN(len(joined)-1)]
+			// A revoke names only keys introduced in its past, so it builds on the subject's admit too.
+			if a := admitOf[pub(subject)]; !prev[a] {
+				ps = append(ps, a)
+				sort.Slice(ps, func(i, j int) bool { return ps[i].Hash < ps[j].Hash })
+			}
 			r = b.sign(signer, TypeRevoke, ps, Fields{Subjects: []string{pub(subject)}, Compromised: rng.IntN(2) == 0})
 		default:
 			r = b.sign(signer, TypeName, ps, Fields{Subject: pub(signer), Name: fmt.Sprintf("self-%d", len(b.recs))})
@@ -670,5 +677,18 @@ func TestOversizedLineAndOverlongHaveClose4400(t *testing.T) {
 		if _, err := a.Recv(context.Background()); relay.CodeOf(err) != wire.CodeCrypto {
 			t.Fatalf("peer saw %v, want 4400", err)
 		}
+	}
+}
+
+func TestRevokeNamingAKeyNeverIntroducedInItsPastIsDropped(t *testing.T) {
+	f := detID(1)
+	s, err := Found(nil, f, "f", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranger := detID(9)
+	r, _ := Sign(f, s.MeshID, TypeRevoke, 2, []string{s.Records()[0].Hash}, 1, Fields{Subjects: []string{pub(stranger)}})
+	if added, _ := s.Merge([]*Record{r}); len(added) != 0 || s.Len() != 1 {
+		t.Fatalf("stored a revoke of a key no found or admit introduced (added %d)", len(added))
 	}
 }

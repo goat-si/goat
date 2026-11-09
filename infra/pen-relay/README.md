@@ -22,7 +22,8 @@ compression check runs in `scripts/smoke.ts` against the deployed Worker.
 
 `pnpm run deploy` publishes to workers.dev on the account in `wrangler.jsonc` (log in with
 `wrangler login` first). Then run `node scripts/smoke.ts <url>`: it checks `/healthz` and that the
-101 carries no `Sec-WebSocket-Extensions`, moves 1 MiB each way between a fresh node and a client with
+101 carries no `Sec-WebSocket-Extensions` when the dialer offers none (Pen dialers never offer compression;
+the static-asset router accepts it from clients that do), moves 1 MiB each way between a fresh node and a client with
 SHA-256 comparison, and prints close latency.
 
 ## What the relay sees

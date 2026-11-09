@@ -29,7 +29,7 @@ const usage = `usage: pen <command> [flags]
   leave                                   remove this node and delete its keys
   pipe <node> <port>                      connect stdin/stdout to a member's local port
   forward <localPort> <node>:<port>       forward a local port to a member's port
-  ssh-config                              print an ssh_config block for pen-<name> hosts
+  ssh-config [--write|--install|--uninstall]   ssh_config for pen-<name> hosts (--install puts it first in ~/.ssh/config)
   version                                 print the version
 `
 

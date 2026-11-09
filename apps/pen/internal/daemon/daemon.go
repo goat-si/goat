@@ -35,6 +35,8 @@ type Options struct {
 	// SSHUser is the login name published in hostkeys records; "" reads it from os/user, "none"
 	// publishes none.
 	SSHUser string
+	// OnView runs after known_hosts is rewritten for a new view (pen keeps its ssh config current there).
+	OnView func(*mesh.View) error
 	// Ready is called once the control socket accepts requests.
 	Ready func()
 	Now   func() time.Time

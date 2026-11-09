@@ -82,10 +82,12 @@ func defaultName() string {
 
 // daemonOptions builds the daemon options from the environment.
 func daemonOptions(st *state.Store) daemon.Options {
-	opt := daemon.Options{Store: st, HostKeyGlob: os.Getenv("PEN_HOSTKEYS")}
+	// PEN_SSH_USER overrides the published SSH login name; "none" publishes none.
+	opt := daemon.Options{Store: st, HostKeyGlob: os.Getenv("PEN_HOSTKEYS"), SSHUser: os.Getenv("PEN_SSH_USER")}
 	if d := os.Getenv("PEN_SSH_DIR"); d != "" {
 		opt.KnownHosts = filepath.Join(d, "known_hosts")
 	}
+	opt.OnView = refreshSSHConfig
 	return opt
 }
 

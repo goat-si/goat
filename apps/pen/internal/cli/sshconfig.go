@@ -3,12 +3,13 @@ package cli
 import (
 	"bytes"
 	"errors"
-
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/goat-si/goat/apps/pen/internal/mesh"
 )
 
 // RunSSHConfig prints, writes or installs an ssh_config that reaches members as pen-<name>.
@@ -28,26 +29,15 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "removed %s and its Include line\n", filepath.Join(dir, "pen", "config"))
 		return 0
 	}
-	exe, err := os.Executable()
+	cmd, err := pipeCommand()
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if p, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = p
-	}
-	cmd := shellQuote(exe)
-	if h := os.Getenv("PEN_HOME"); h != "" {
-		cmd = "env PEN_HOME=" + shellQuote(h) + " " + cmd
-	}
-	var hosts []sshHost
+	var v *mesh.View
 	if st, err := openState(); err == nil {
-		if v, err := localView(st); err == nil {
-			for _, m := range v.SortedMembers() {
-				hosts = append(hosts, sshHost{Name: m.Name, User: m.User})
-			}
-		}
+		v, _ = localView(st)
 	}
-	text := sshConfigText(cmd, knownHostsPath(), hosts)
+	text := sshConfigText(cmd, knownHostsPath(), hostsOf(v))
 	if !*write && !*install {
 		fmt.Fprint(stdout, text)
 		return 0
@@ -70,6 +60,50 @@ func RunSSHConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "add this as the first line of %s:\n%s\n", filepath.Join(dir, "config"), includeLine(dir))
 	}
 	return 0
+}
+
+// pipeCommand is the shell-quoted ProxyCommand prefix for this binary and state directory.
+func pipeCommand() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if p, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = p
+	}
+	cmd := shellQuote(exe)
+	if h := os.Getenv("PEN_HOME"); h != "" {
+		cmd = "env PEN_HOME=" + shellQuote(h) + " " + cmd
+	}
+	return cmd, nil
+}
+
+func hostsOf(v *mesh.View) []sshHost {
+	if v == nil {
+		return nil
+	}
+	var hosts []sshHost
+	for _, m := range v.SortedMembers() {
+		hosts = append(hosts, sshHost{Name: m.Name, User: m.User})
+	}
+	return hosts
+}
+
+// refreshSSHConfig rewrites <ssh dir>/pen/config from a new view, but only once ssh-config --write or
+// --install created it, so a joined machine sees its new peers (and their User) without another command.
+func refreshSSHConfig(v *mesh.View) error {
+	dir := sshDir()
+	if _, err := os.Stat(filepath.Join(dir, "pen", "config")); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	cmd, err := pipeCommand()
+	if err != nil {
+		return err
+	}
+	_, err = writeSSHConfig(dir, sshConfigText(cmd, knownHostsPath(), hostsOf(v)))
+	return err
 }
 
 // shellQuote quotes s for the sh -c that runs ProxyCommand.
@@ -110,18 +144,44 @@ func sshDir() string {
 	return filepath.Join(home, ".ssh")
 }
 
-func includeLine(dir string) string { return "Include " + sshArg(filepath.Join(dir, "pen", "config")) }
+// includeLine quotes the path; Include takes no % tokens, so none are escaped.
+func includeLine(dir string) string { return "Include \"" + filepath.Join(dir, "pen", "config") + "\"" }
+
+// ownInclude reports how many leading bytes of a config are pen's Include line, quoted or (older builds) not.
+func ownInclude(dir string, cfg []byte) int {
+	path := filepath.Join(dir, "pen", "config")
+	for _, line := range []string{includeLine(dir), "Include " + path} {
+		if p := []byte(line + "\n"); bytes.HasPrefix(cfg, p) {
+			return len(p)
+		}
+	}
+	return 0
+}
 
 func writeSSHConfig(dir, text string) (string, error) {
 	if err := os.MkdirAll(filepath.Join(dir, "pen"), 0o700); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, "pen", "config")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(text), 0o600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config.tmp*")
+	if err != nil {
 		return "", err
 	}
-	return path, os.Rename(tmp, path)
+	_, err = tmp.WriteString(text)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp.Name(), 0o600)
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	return path, nil
 }
 
 // installInclude puts the Include line first in <dir>/config (OpenSSH keeps the first value it reads),
@@ -132,10 +192,13 @@ func installInclude(dir string) (string, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	prefix := []byte(includeLine(dir) + "\n")
-	if bytes.HasPrefix(old, prefix) {
-		return "", nil
+	if n := ownInclude(dir, old); n > 0 {
+		if string(old[:n]) == includeLine(dir)+"\n" {
+			return "", nil
+		}
+		old = old[n:]
 	}
+	prefix := []byte(includeLine(dir) + "\n")
 	backup := ""
 	if err == nil {
 		backup = cfg + ".pen-backup"
@@ -146,7 +209,11 @@ func installInclude(dir string) (string, error) {
 	return backup, replaceFile(cfg, append(prefix, old...))
 }
 
+// replaceFile writes through a symlinked config (dotfile managers link it) by replacing the link's target.
 func replaceFile(path string, data []byte) error {
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
 	tmp := path + ".pen-tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
@@ -160,9 +227,8 @@ func uninstallSSHConfig(dir string) error {
 	cfg := filepath.Join(dir, "config")
 	old, err := os.ReadFile(cfg)
 	if err == nil {
-		prefix := []byte(includeLine(dir) + "\n")
-		if bytes.HasPrefix(old, prefix) {
-			if err := replaceFile(cfg, old[len(prefix):]); err != nil {
+		if n := ownInclude(dir, old); n > 0 {
+			if err := replaceFile(cfg, old[n:]); err != nil {
 				return err
 			}
 		}
