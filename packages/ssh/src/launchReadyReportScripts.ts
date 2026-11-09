@@ -37,16 +37,17 @@ launch_caps_sweep() {
   [ -z "$caps_sweep_glob" ] || set -f
 }
 # The facts are keyed by the server's runtime record, which it writes once started, possibly after
-# it first answers. Waits up to 5 s of clock for the record to name REMOTE_PID, checking every
-# 0.1 s without starting a process.
+# it first answers. Waits for the record to name REMOTE_PID, checking it without starting a process
+# up to 50 times 0.1 s apart: a count, so a clock stepped back cannot lengthen the wait.
 launch_record_wait() {
-  launch_now; launch_record_until=$((launch_now_us + 5000000))
+  launch_record_left=50
   while :; do
     if fact_read_record "$DEFAULT_RUNTIME_FILE"; then
       fact_json_uint '"pid"' "$FACT_TEXT"
       [ "$FACT_TEXT" != "$REMOTE_PID" ] || return 0
     fi
-    launch_now; [ "$launch_now_us" -lt "$launch_record_until" ] || return 1
+    [ "$launch_record_left" -gt 0 ] || return 1
+    launch_record_left=$((launch_record_left - 1))
     launch_pause 100000
   done
 }
@@ -58,11 +59,12 @@ launch_wait_ready() {
 # Sets LAUNCH_READY to 0 for a server the report saw ready on REMOTE_PORT, else 1, and fails when
 # the report cannot be used: the lookup was incomplete or found no support, the executable changed
 # since, the record never named the launched server, or the call failed or printed anything but a
-# whole valid frame with a ready answer for REMOTE_PORT or a failure. A wait is a read, so the
-# separate wait then runs, which a ready server answers at once. Live and compat are recorded only
-# for the record's own server, REMOTE_PID on REMOTE_PORT, when its live key was present before the
-# call and unchanged after it, the runner still runs the executable the lookup was for, and both
-# answers pass the checks live_fact and compat_fact record by.
+# whole valid frame with a ready answer for REMOTE_PORT or a failure and live and compat answers
+# that pass their validators. A wait is a read, so the separate wait then runs, which a ready
+# server answers at once. Live and compat are recorded only for the record's own server, REMOTE_PID
+# on REMOTE_PORT, when its live key was present before the call and unchanged after it, the runner
+# still runs the executable the lookup was for, and both pass the checks live_fact and compat_fact
+# record by.
 launch_ready_report() {
   LAUNCH_READY=1
   [ -n "$LAUNCH_CAPS_FILE" ] && [ -f "$LAUNCH_CAPS_FILE" ] || return 1
@@ -72,11 +74,18 @@ launch_ready_report() {
   exec_fact_key "$report_exe" && [ "$FACT_KEY" = "$report_caps_key" ] || return 1
   launch_record_wait || return 1
   report_before=; ! live_fact_key "$RUNNER_FILE" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" || report_before="$FACT_KEY"
+  # The bounded job turns off MSYS's argument conversion, so goat.exe is given native paths.
+  report_files="$(cygpath -w "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE")" || return 1
+  report_runtime="\${report_files%%"$fact_nl"*}"; report_files="\${report_files#*"$fact_nl"}"
+  report_port="\${report_files%%"$fact_nl"*}"; report_pid="\${report_files#*"$fact_nl"}"
+  case "$report_runtime$report_port$report_pid" in ''|*"$fact_nl"*) return 1 ;; esac
   launch_bounded $(( ($1 + 999) / 1000 + 10 )) "$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@" \\
-    --report --runtime-file "$DEFAULT_RUNTIME_FILE" --port-file "$PORT_FILE" --pid-file "$PID_FILE" >"$FACT_MEMO.report" 2>/dev/null || return 1
+    --report --runtime-file "$report_runtime" --port-file "$report_port" --pid-file "$report_pid" >"$FACT_MEMO.report" 2>/dev/null || return 1
   fact_slurp "$FACT_MEMO.report" || return 1
   frame_parse wait-ready "ready live" "$FACT_TEXT" || return 1
   case "$FRAME_READY" in "ok $REMOTE_PORT") LAUNCH_READY=0 ;; "fail "*) ;; *) return 1 ;; esac
+  case "$FRAME_LIVE" in "ok "*) (set -f; set -- \${FRAME_LIVE#ok }; valid_live_tokens "$@") || return 1 ;; esac
+  case "$FRAME_COMPAT" in "ok "*) facts_frame_compat_valid "\${FRAME_COMPAT#ok }" || return 1 ;; esac
   [ "$LAUNCH_READY" = 0 ] && [ -n "$report_before" ] || return 0
   live_fact_key "$RUNNER_FILE" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" && [ "$FACT_KEY" = "$report_before" ] || return 0
   report_name="$FACT_NAME"; report_runner="$fact_live"

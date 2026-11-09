@@ -57,11 +57,13 @@ const RUNNER = [
   'exec "$HOME/.goat/runtime/goat/versions/' + version + '/goat" "$@"',
   "",
 ].join("\n");
-// Git Bash stand-ins: uname, a fixed clock past every age gate, and ps -W from a file.
+// Git Bash stand-ins: uname, a fixed clock past every age gate, ps -W from a file, and cygpath -w
+// marking each path it converted with C:.
 const PREFIX = [
   "uname() { printf 'MINGW64_NT\\n'; }",
   "date() { printf '4102444800\\n'; }",
   'ps() { cat "$HOME/ps-rows"; }',
+  'cygpath() { [ "$1" = -w ] || return 1; shift; for cygpath_arg in "$@"; do printf \'C:%s\\n\' "$cygpath_arg"; done; }',
   "",
 ].join("\n");
 const PS_HEADER = "      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND\n";
@@ -83,8 +85,10 @@ const COMMON =
 const STUBS = [
   'launch_bounded() { shift; "$@"; }',
   // A clock that moves only when the launch pauses; a pause may run on-pause.sh.
-  'launch_now() { launch_now_us="$(cat "$HOME/clock-us")"; }',
-  'launch_pause() { echo $(( $(cat "$HOME/clock-us") + $1 )) >"$HOME/clock-us"; [ ! -e "$HOME/on-pause.sh" ] || . "$HOME/on-pause.sh"; }',
+  // With clock-back the wall clock reads as stepped back to 0 on every read. A wait of more than
+  // 10 s ends the script, so an unbounded wait fails instead of hanging.
+  'launch_now() { if [ -e "$HOME/clock-back" ]; then launch_now_us=0; else launch_now_us="$(cat "$HOME/clock-us")"; fi; }',
+  'launch_pause() { echo $(( $(cat "$HOME/clock-us") + $1 )) >"$HOME/clock-us"; [ "$(cat "$HOME/clock-us")" -le 10000000 ] || exit 97; [ ! -e "$HOME/on-pause.sh" ] || . "$HOME/on-pause.sh"; }',
   'wait_launched_listener() { [ -e "$HOME/no-wait" ] || wait; [ ! -e "$HOME/after-caps.sh" ] || . "$HOME/after-caps.sh"; }',
   "server_owns_listener() { :; }",
   "",
@@ -203,16 +207,19 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
       }).pipe(Effect.scoped),
   );
 
-  it.effect("the report names the launched port and the files the pairing's live check reads", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      yield* f.launch();
-      const [, call] = yield* f.calls();
-      assert.match(
-        call ?? "",
-        /^__ssh-helper wait-ready 4343 [0-9]+ [0-9]+ --report --runtime-file HOME\/\.goat\/userdata\/server-runtime\.json --port-file HOME\/\.goat\/ssh-launch\/key\/port --pid-file HOME\/\.goat\/ssh-launch\/key\/pid$/u,
-      );
-    }).pipe(Effect.scoped),
+  // The bounded job turns off MSYS's argument conversion, so goat.exe needs native paths.
+  it.effect(
+    "the report names the launched port and, as native paths, the files the pairing's live check reads",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        yield* f.launch();
+        const [, call] = yield* f.calls();
+        assert.match(
+          call ?? "",
+          /^__ssh-helper wait-ready 4343 [0-9]+ [0-9]+ --report --runtime-file C:HOME\/\.goat\/userdata\/server-runtime\.json --port-file C:HOME\/\.goat\/ssh-launch\/key\/port --pid-file C:HOME\/\.goat\/ssh-launch\/key\/pid$/u,
+        );
+      }).pipe(Effect.scoped),
   );
 
   it.effect("a server replaced after the capture is asked again by the pairing", () =>
@@ -248,6 +255,7 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
 
   it.effect.each([
     { name: "a record never written", remove: true },
+    { name: "a record never written while the clock steps back", remove: true, back: true },
     {
       name: "a record that keeps naming an earlier server",
       record: JSON.stringify({ pid: 5151, port: 4343, instanceId: "inst-0" }),
@@ -256,6 +264,7 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
     Effect.gen(function* () {
       const f = yield* fixture();
       if (c.remove === true) yield* f.remove(".goat/userdata/server-runtime.json");
+      if (c.back === true) yield* f.write("clock-back", "");
       if (c.record !== undefined) yield* f.write(".goat/userdata/server-runtime.json", c.record);
       assert.deepEqual(yield* f.launch(), ["launch-ready"]);
       assert.deepEqual(yield* f.asked(), ["caps", "wait"]);
@@ -297,7 +306,7 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
     },
     {
       name: "a compat answer that cannot drain",
-      lines: [GOOD[0]!, GOOD[1]!, "compat ok compatible 0 -"],
+      lines: [GOOD[0]!, GOOD[1]!, "compat ok compatible 0 inst-1"],
     },
   ])("$name: the server is ready and nothing is recorded", (c) =>
     Effect.gen(function* () {
@@ -327,6 +336,8 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
     { name: "an unknown failure word", text: report([GOOD[0]!, GOOD[1]!, "compat fail later"]) },
     { name: "a ready line for another port", text: report(["ready ok 4444", GOOD[1]!, GOOD[2]!]) },
     { name: "a ready line without a port", text: report(["ready ok yes", GOOD[1]!, GOOD[2]!]) },
+    { name: "a malformed live answer", text: report([GOOD[0]!, "live ok garbage"]) },
+    { name: "a malformed compat answer", text: report([GOOD[0]!, GOOD[1]!, "compat ok garbage"]) },
     { name: "a nonzero exit", text: report(GOOD), status: 1 },
   ])("$name: the separate wait runs and nothing is recorded", (c) =>
     Effect.gen(function* () {
