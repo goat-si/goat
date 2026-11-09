@@ -9,13 +9,26 @@ import * as FileSystem from "effect/FileSystem";
 
 import { REMOTE_LAUNCH_LISTENER_SCRIPT } from "./launchListenerScripts.ts";
 import { REMOTE_HOST_PROCESS_SCRIPT } from "./runtimeOwnershipScripts.ts";
+import { buildRemoteLaunchScript } from "./tunnel.ts";
+
+// The launch's own failure branch and its wait_ready, as the launch script runs them.
+const launch = buildRemoteLaunchScript({ archiveVersion: "1.2.3" });
+const slice = (from: string, to: string) => {
+  const start = launch.indexOf(from);
+  const end = launch.indexOf(to, start);
+  assert.isAtLeast(start, 0, from);
+  assert.isAbove(end, start, to);
+  return launch.slice(start, end + to.length);
+};
+const WAIT_READY = slice("wait_ready() {", "\nNODE\n}\n");
+const FAILURE_BRANCH = slice("  if ! wait_launched_listener", "\n    exit 1\n  fi\n");
 
 describe("Windows launch listener wait", () => {
   // PowerShell answers as its loop would: 3 for a gone server (vanish: mid-wait), 0 for a listener
   // (late: after the deadline), 4 at its deadline, 1 for a failed start; hang never answers, and
-  // stubborn also ignores TERM. tasklist lists the server while alive and not dies; tasklistHang
-  // never answers and ignores TERM. The clock moves a second per read.
-  const listenerStates = [
+  // stubborn also ignores TERM. tasklist lists the server while alive; taskkill ends it, and the
+  // *Hang states never answer and ignore TERM. The clock moves a second per read.
+  const states = [
     "listening",
     "alive",
     "late",
@@ -23,179 +36,284 @@ describe("Windows launch listener wait", () => {
     "hang",
     "stubborn",
     "fail",
-    "dies",
+    "ready",
     "tasklistHang",
+    "taskkillHang",
+    "tasklistFails",
   ] as const;
-  const makeListenerHarness = Effect.gen(function* () {
+  // Every Windows stand-in logs whether it ran as the bounded job, then its arguments.
+  const record = (name: string) =>
+    `echo "$GOAT_TEST_BOUNDED ${name} $*" >>"$TEST_ROOT/windows-calls"`;
+  const hangs = (name: string) =>
+    'if [ -e "$TEST_ROOT/' +
+    name +
+    'Hang" ]; then trap \'\' TERM; echo "$$" >"$TEST_ROOT/' +
+    name +
+    '-pid"; exec /bin/sleep 600; fi';
+  const makeHarness = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-listener-" });
-    const bin = `${root}/bin`;
+    const bin = root + "/bin";
     yield* fs.makeDirectory(bin);
-    yield* fs.makeDirectory(`${root}/state`);
+    yield* fs.makeDirectory(root + "/state");
     for (const [name, body] of Object.entries({
       uname: "echo MINGW64_NT-10.0-26200",
-      "powershell.exe": String.raw`echo "${"${"}GOAT_WAIT_UNTIL_MS:-poll}" >>"$TEST_ROOT/powershell-calls"
-[ -n "${"${"}GOAT_WAIT_UNTIL_MS:-}" ] || exit 1
-if [ -e "$TEST_ROOT/hang" ]; then
-  if [ -e "$TEST_ROOT/stubborn" ]; then trap '' TERM; fi
-  echo "$$" >"$TEST_ROOT/powershell-pid"; exec /bin/sleep 600
-fi
-if [ -e "$TEST_ROOT/vanish" ]; then rm -f "$TEST_ROOT/alive"; fi
-[ -e "$TEST_ROOT/alive" ] || exit 3
-[ -e "$TEST_ROOT/fail" ] && exit 1
-[ -e "$TEST_ROOT/listening" ] || exit 4
-if [ -e "$TEST_ROOT/late" ]; then echo 2000 >"$TEST_ROOT/clock"; fi
-exit 0`,
-      "tasklist.exe": String.raw`echo "$*" >>"$TEST_ROOT/tasklist-calls"
-if [ -e "$TEST_ROOT/tasklistHang" ]; then trap '' TERM; echo "$$" >"$TEST_ROOT/tasklist-pid"; exec /bin/sleep 600; fi
-if [ -e "$TEST_ROOT/alive" ] && [ ! -e "$TEST_ROOT/dies" ]; then echo '"goat.exe","4242","Services","0","1 K"'; fi`,
-      // In the failure path (probing) the clock moves only once a hanging tasklist has started, so no
-      // tasklist's 5 s run out before a slow host has started or answered it.
+      "powershell.exe": [
+        record("powershell"),
+        // Without a deadline it is the one-shot listener check, which finds none.
+        '[ -n "$GOAT_WAIT_UNTIL_MS" ] || exit 1',
+        'if [ -e "$TEST_ROOT/hang" ]; then',
+        "  if [ -e \"$TEST_ROOT/stubborn\" ]; then trap '' TERM; fi",
+        '  echo "$$" >"$TEST_ROOT/powershell-pid"; exec /bin/sleep 600',
+        "fi",
+        '[ -z "$TEST_LAUNCH" ] || { cp "$TEST_ROOT/clock" "$TEST_ROOT/clock-at-probe"; : >"$TEST_ROOT/probing"; }',
+        'if [ -e "$TEST_ROOT/vanish" ]; then rm -f "$TEST_ROOT/alive"; fi',
+        '[ -e "$TEST_ROOT/alive" ] || exit 3',
+        '[ -e "$TEST_ROOT/fail" ] && exit 1',
+        '[ -e "$TEST_ROOT/listening" ] || exit 4',
+        'if [ -e "$TEST_ROOT/late" ]; then echo 2000 >"$TEST_ROOT/clock"; fi',
+        "exit 0",
+      ].join("\n"),
+      "tasklist.exe": [
+        record("tasklist"),
+        // A recorded answer, byte for byte, when a test gives one.
+        'if [ -e "$TEST_ROOT/tasklist-out" ]; then cat "$TEST_ROOT/tasklist-out"; exit 0; fi',
+        hangs("tasklist"),
+        '[ ! -e "$TEST_ROOT/tasklistFails" ] || exit 1',
+        'if [ -e "$TEST_ROOT/alive" ]; then echo \'"goat.exe","4242","Services","0","1 K"\'',
+        "else echo 'INFO: No tasks are running which match the specified criteria.'; fi",
+      ].join("\n"),
+      // It ends the server even when it then hangs, so only its own timeout says the stop is unknown.
+      "taskkill.exe": [record("taskkill"), 'rm -f "$TEST_ROOT/alive"', hangs("taskkill")].join(
+        "\n",
+      ),
+      runner: [record("runner"), '[ -e "$TEST_ROOT/ready" ]'].join("\n"),
+      // Once the launch's failure path starts (probing) the clock moves only while a hanging
+      // stand-in runs, so no bound can run out before a slow host has started or answered one.
       date: [
-        'if [ -e "$TEST_ROOT/probing" ] && { [ ! -e "$TEST_ROOT/tasklistHang" ] || [ ! -s "$TEST_ROOT/tasklist-pid" ]; }; then',
+        'if [ -e "$TEST_ROOT/probing" ] &&',
+        '  ! { [ -e "$TEST_ROOT/tasklistHang" ] && [ -s "$TEST_ROOT/tasklist-pid" ]; } &&',
+        '  ! { [ -e "$TEST_ROOT/taskkillHang" ] && [ -s "$TEST_ROOT/taskkill-pid" ]; }; then',
         '  cat "$TEST_ROOT/clock"; exit 0',
         "fi",
         'n="$(cat "$TEST_ROOT/clock")"; echo "$((n + 1))" >"$TEST_ROOT/clock"; echo "$n"',
       ].join("\n"),
       sleep: ":",
     })) {
-      yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
-      yield* fs.chmod(`${bin}/${name}`, 0o755);
+      yield* fs.writeFileString(bin + "/" + name, "#!/bin/sh\n" + body + "\n");
+      yield* fs.chmod(bin + "/" + name, 0o755);
     }
     const lines = (name: string) =>
       fs
-        .readFileString(`${root}/${name}`)
+        .readFileString(root + "/" + name)
         .pipe(Effect.map((text) => text.trim().split("\n").filter(Boolean)));
-    // Runs the wait, prints its status and the clock, then runs `after`.
+    // Runs body after the scripts, with the bounded job marking the commands it runs.
     const run = (
-      state: Partial<Record<(typeof listenerStates)[number], boolean>>,
-      after: ReadonlyArray<string> = [],
+      state: Partial<Record<(typeof states)[number], boolean>>,
+      body: string,
+      launching = false,
     ) =>
       Effect.gen(function* () {
-        for (const name of listenerStates) {
-          if (state[name]) yield* fs.writeFileString(`${root}/${name}`, "");
-          else yield* fs.remove(`${root}/${name}`, { force: true });
+        for (const name of states) {
+          if (state[name]) yield* fs.writeFileString(root + "/" + name, "");
+          else yield* fs.remove(root + "/" + name, { force: true });
         }
-        yield* fs.writeFileString(`${root}/clock`, "1000\n");
-        yield* fs.writeFileString(`${root}/powershell-calls`, "");
-        yield* fs.writeFileString(`${root}/tasklist-calls`, "");
-        for (const name of ["probing", "tasklist-pid", "powershell-pid"])
-          yield* fs.remove(`${root}/${name}`, { force: true });
-        // Git Bash's sh is bash, whose job list the wait reads.
+        yield* fs.writeFileString(root + "/clock", "1000\n");
+        yield* fs.writeFileString(root + "/windows-calls", "");
+        yield* fs.writeFileString(root + "/state/server.log", "listen failed\n");
+        for (const name of [
+          "probing",
+          "clock-at-probe",
+          "tasklist-pid",
+          "taskkill-pid",
+          "powershell-pid",
+          "end",
+        ])
+          yield* fs.remove(root + "/" + name, { force: true });
+        // Git Bash's sh is bash, whose job list the bounded runner reads.
         const result = NodeChildProcess.spawnSync(
           "bash",
           [
+            "--posix",
             "-c",
             [
+              // As in the launch script, which Git Bash runs as sh: POSIX mode, set -eu.
+              "set -eu",
               REMOTE_HOST_PROCESS_SCRIPT,
               REMOTE_LAUNCH_LISTENER_SCRIPT.replaceAll("@@GOAT_READY_TIMEOUT_MS@@", "60000"),
+              "launch_bounded_job() { GOAT_TEST_BOUNDED=1 MSYS2_ARG_CONV_EXCL='*' exec \"$@\"; }",
               'REMOTE_PID=4242; REMOTE_PORT=3773; STATE_DIR="$TEST_ROOT/state"',
-              'wait_launched_listener; echo "$?"; cat "$TEST_ROOT/clock"; : >"$TEST_ROOT/probing"',
-              ...after,
+              body,
             ].join("\n"),
           ],
           {
             encoding: "utf8",
-            env: { ...process.env, TEST_ROOT: root, PATH: `${bin}:${process.env.PATH ?? ""}` },
+            env: {
+              ...process.env,
+              TEST_ROOT: root,
+              TEST_LAUNCH: launching ? "1" : "",
+              PATH: bin + ":" + (process.env.PATH ?? ""),
+            },
           },
         );
-        assert.equal(result.status, 0, result.stderr);
-        const [status = "", clock = "", ...out] = result.stdout.trim().split("\n");
         return {
-          status,
-          clock: Number(clock),
-          out,
-          calls: yield* lines("powershell-calls"),
-          tasklist: yield* lines("tasklist-calls"),
+          code: result.status,
+          stdout: result.stdout.trim(),
+          stderr: result.stderr,
+          calls: yield* lines("windows-calls"),
         };
       });
     const pid = (name: string) =>
-      fs.readFileString(`${root}/${name}`).pipe(Effect.map((text) => Number(text.trim())));
-    return { run, pid, state: `${root}/state`, fs };
+      fs.readFileString(root + "/" + name).pipe(Effect.map((text) => Number(text.trim())));
+    const clockAt = (name: string) =>
+      fs.readFileString(root + "/" + name).pipe(Effect.map((text) => Number(text.trim())));
+    return { run, pid, clockAt, root, fs };
   });
 
   it.effect(
     "waits for a launched server's listener inside one PowerShell start, held to the deadline",
     () =>
       Effect.gen(function* () {
-        const { run, pid } = yield* makeListenerHarness;
+        const { run, pid } = yield* makeHarness;
         const wait = (state: Parameters<typeof run>[0]) =>
-          run(state).pipe(
-            Effect.map(({ status, calls, tasklist }) => {
-              // The wait never runs tasklist, which can stall past the deadline.
-              assert.deepEqual(tasklist, []);
-              return { status, calls };
+          run(
+            state,
+            'if wait_launched_listener; then s=0; else s=$?; fi; echo "$s"; cat "$TEST_ROOT/clock"',
+          ).pipe(
+            Effect.map(({ code, stdout, stderr, calls }) => {
+              assert.equal(code, 0, stderr);
+              const [status = "", clock = ""] = stdout.split("\n");
+              // Only PowerShell runs, and only as the bounded job.
+              for (const call of calls) assert.match(call, /^1 powershell /);
+              return { status, clock: Number(clock), starts: calls.length };
             }),
           );
-        // One start waits until the launch's own deadline (1060 s, in ms); its answer is rechecked
-        // against the clock only.
-        assert.deepEqual(yield* wait({ listening: true, alive: true }), {
+        assert.deepInclude(yield* wait({ listening: true, alive: true }), {
           status: "0",
-          calls: ["1060000"],
+          starts: 1,
         });
         // PowerShell's own deadline, and an answer after the shell's deadline, are not ready.
-        assert.deepEqual(yield* wait({ alive: true }), { status: "1", calls: ["1060000"] });
-        assert.deepEqual(yield* wait({ listening: true, alive: true, late: true }), {
+        assert.deepInclude(yield* wait({ alive: true }), { status: "1", starts: 1 });
+        assert.deepInclude(yield* wait({ listening: true, alive: true, late: true }), {
           status: "1",
-          calls: ["1060000"],
+          starts: 1,
         });
         // A server that is gone, at the start or mid-wait, is reported as exited, not as a timeout.
-        assert.deepEqual(yield* wait({ listening: true }), { status: "2", calls: ["1060000"] });
-        assert.deepEqual(yield* wait({ listening: true, alive: true, vanish: true }), {
+        assert.deepInclude(yield* wait({ listening: true }), { status: "2", starts: 1 });
+        assert.deepInclude(yield* wait({ listening: true, alive: true, vanish: true }), {
           status: "2",
-          calls: ["1060000"],
+          starts: 1,
         });
         // A failed start is tried again until the deadline.
         const failing = yield* wait({ alive: true, fail: true });
         assert.equal(failing.status, "1");
-        assert.isAtLeast(failing.calls.length, 2);
-        assert.deepEqual([...new Set(failing.calls)], ["1060000"]);
-        // A PowerShell that never answers, beside a tasklist that would hang, is ended at the deadline
-        // and collected.
-        assert.deepEqual(yield* wait({ alive: true, hang: true, tasklistHang: true }), {
-          status: "1",
-          calls: ["1060000"],
-        });
+        assert.isAtLeast(failing.starts, 2);
+        // A PowerShell that never answers is ended at the deadline and collected; one that also
+        // ignores TERM is killed, the clock passing the deadline (1060) only by the 2 s TERM gets
+        // and the reads that check it.
+        assert.deepInclude(yield* wait({ alive: true, hang: true }), { status: "1", starts: 1 });
         const hung = yield* pid("powershell-pid");
         assert.throws(() => process.kill(hung, 0));
-        // One that also ignores TERM is killed: the clock passes the deadline (1060) only by the
-        // 2 s that TERM gets and the reads that check it.
-        const stubborn = yield* run({ alive: true, hang: true, stubborn: true });
+        const stubborn = yield* wait({ alive: true, hang: true, stubborn: true });
         assert.equal(stubborn.status, "1");
-        assert.isAtMost(stubborn.clock, 1060 + 4);
+        assert.isAtMost(stubborn.clock, 1060 + 5);
         const killed = yield* pid("powershell-pid");
         assert.throws(() => process.kill(killed, 0));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
-  it.effect("a failed launch's server checks after the listener wait cannot hang on tasklist", () =>
+  it.effect("reads tasklist as gone only from its one-line localized no-match answer", () =>
     Effect.gen(function* () {
-      const { run, pid, state, fs } = yield* makeListenerHarness;
-      // The failure path checks the server twice, then waits for it to exit.
-      const failurePath = [
-        'for check in 1 2; do if launch_server_alive "$REMOTE_PID"; then echo alive; else echo gone; fi; done',
-        'launch_wait_exit "$REMOTE_PID"; cat "$TEST_ROOT/clock"',
-      ];
-      // A tasklist that never answers and ignores TERM runs once, is killed, and counts as alive:
-      // 5 s for tasklist, 2 s for TERM and up to 3 s of exit wait, plus the reads that check them.
-      const stalled = yield* run({ alive: true, tasklistHang: true }, failurePath);
-      assert.equal(stalled.status, "1");
-      assert.deepEqual(stalled.out.slice(0, 2), ["alive", "alive"]);
-      assert.isAtMost(Number(stalled.out[2]) - stalled.clock, 5 + 2 + 3 + 3);
-      assert.lengthOf(stalled.tasklist, 1);
-      const stalledPid = yield* pid("tasklist-pid");
-      assert.throws(() => process.kill(stalledPid, 0));
-      assert.deepEqual(yield* fs.readDirectory(state), []);
-      // PowerShell's word that the server is gone stands without tasklist.
-      const gone = yield* run({ tasklistHang: true }, failurePath);
-      assert.deepEqual([gone.status, ...gone.out.slice(0, 2)], ["2", "gone", "gone"]);
-      assert.deepEqual(gone.tasklist, []);
-      // A tasklist that answers is read as before.
-      const answered = yield* run({ alive: true }, failurePath);
-      assert.deepEqual(answered.out.slice(0, 2), ["alive", "alive"]);
-      const died = yield* run({ alive: true, dies: true }, failurePath);
-      assert.deepEqual(died.out.slice(0, 2), ["gone", "gone"]);
-      assert.deepEqual(yield* fs.readDirectory(state), []);
+      const { run, root, fs } = yield* makeHarness;
+      const answer = (bytes: Uint8Array) =>
+        Effect.gen(function* () {
+          yield* fs.writeFile(root + "/tasklist-out", bytes);
+          const result = yield* run(
+            { alive: true },
+            'if launch_server_alive "$REMOTE_PID"; then echo alive; else echo gone; fi',
+          );
+          yield* fs.remove(root + "/tasklist-out");
+          assert.equal(result.code, 0, result.stderr);
+          return result.stdout;
+        });
+      const text = (value: string) => new TextEncoder().encode(value);
+      const info = "INFO: No tasks are running which match the specified criteria.\r\n";
+      assert.equal(yield* answer(text(info)), "gone");
+      // Korean Windows answers in CP949, as measured on a Git Bash host.
+      const korean =
+        "c1a4bab83a20bdc7c7e020c1dfc0ce20c0dbbef720c1df20c1f6c1a4b5c820c1b6b0c7bfa120c0cfc4a1c7cfb4c220c0dbbef7c0cc20bef8bdc0b4cfb4d92e0d0a";
+      assert.equal(yield* answer(Buffer.from(korean, "hex")), "gone");
+      assert.equal(yield* answer(text("unexpected output\r\n")), "alive");
+      assert.equal(yield* answer(text('"goat.exe","4242","Services","0","1 K"\r\n')), "alive");
+      assert.equal(yield* answer(text(info + info)), "alive");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("a failed launch runs every Windows command bounded and never hangs on one", () =>
+    Effect.gen(function* () {
+      const { run, pid, clockAt, root, fs } = yield* makeHarness;
+      const body = [
+        WAIT_READY,
+        'GOAT_ARCHIVE_MODE=1; RUNNER_FILE="$TEST_ROOT/bin/runner"; LAUNCH_ATTEMPTS=9; LAUNCH_LOG_OFFSET=0',
+        'LOG_FILE="$STATE_DIR/server.log"; PID_FILE="$STATE_DIR/pid"; PORT_FILE="$STATE_DIR/port"',
+        'MANAGED_FILE="$STATE_DIR/managed"; DATABASE_AHEAD_FILE="$STATE_DIR/ahead"; SELECTED_VERSION=1.2.3',
+        "database_ahead_exit() { exit 9; }",
+        'trap \'cat "$TEST_ROOT/clock" >"$TEST_ROOT/end"\' EXIT',
+        "for launch_try in 1; do",
+        FAILURE_BRANCH,
+        "done",
+      ].join("\n");
+      const launchRun = (state: Parameters<typeof run>[0]) =>
+        Effect.gen(function* () {
+          const result = yield* run(state, body, true);
+          assert.notInclude(result.stderr, "unbound variable");
+          assert.equal(result.code, 1, result.stderr);
+          assert.include(result.stderr, "did not become ready");
+          // Every Windows command the launch ran after its listener wait started was the bounded job.
+          assert.deepEqual(
+            result.calls.filter((call) => !call.startsWith("1 ")),
+            [],
+          );
+          const commands = result.calls.map((call) => call.split(" ")[1]);
+          return {
+            unconfirmed: result.stderr.includes(
+              "could not confirm that the server (PID 4242) stopped",
+            ),
+            commands,
+          };
+        });
+      // A taskkill that never answers and ignores TERM is killed at its bound, and the server is
+      // reported as not confirmed stopped although tasklist no longer lists it. The clock's bound: 10 s
+      // for taskkill and 2 s for TERM, 3 s of exit wait, two tasklist checks of at most 5 + 2 s, reads.
+      const stalledKill = yield* launchRun({ alive: true, taskkillHang: true });
+      assert.isTrue(stalledKill.unconfirmed);
+      assert.equal(stalledKill.commands.filter((name) => name === "taskkill").length, 1);
+      const killPid = yield* pid("taskkill-pid");
+      assert.throws(() => process.kill(killPid, 0));
+      assert.isAtMost(
+        (yield* clockAt("end")) - (yield* clockAt("clock-at-probe")),
+        10 + 2 + 3 + 2 * (5 + 2) + 4,
+      );
+      // A tasklist that never answers counts as alive, so the stop is not confirmed either.
+      const stalledList = yield* launchRun({ alive: true, tasklistHang: true });
+      assert.isTrue(stalledList.unconfirmed);
+      assert.equal(stalledList.commands.filter((name) => name === "tasklist").length, 1);
+      const listPid = yield* pid("tasklist-pid");
+      assert.throws(() => process.kill(listPid, 0));
+      // A tasklist that fails with no output is no answer: the server counts as alive, is stopped,
+      // and is still reported as not confirmed stopped.
+      const failedList = yield* launchRun({ alive: true, tasklistFails: true });
+      assert.isTrue(failedList.unconfirmed);
+      assert.include(failedList.commands, "taskkill");
+      // PowerShell's word that the server is gone stands: no tasklist, no taskkill.
+      const gone = yield* launchRun({});
+      assert.isFalse(gone.unconfirmed);
+      assert.deepEqual(gone.commands, ["powershell"]);
+      // A ready server that does not own its listener is stopped, with each command bounded.
+      const stopped = yield* launchRun({ listening: true, alive: true, ready: true });
+      assert.isFalse(stopped.unconfirmed);
+      assert.includeMembers(stopped.commands, ["powershell", "runner", "tasklist", "taskkill"]);
+      assert.deepEqual(yield* fs.readDirectory(root + "/state"), ["server.log"]);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });
