@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -90,7 +91,7 @@ type Server struct {
 	socks  map[*sock]struct{}
 	total  int
 	perIP  map[string]int
-	unauth map[string]int
+	unauth map[string][]*sock // unauthenticated uplinks per node, oldest first
 }
 
 // Default caps.
@@ -109,8 +110,40 @@ func orDefault(v, d int) int {
 
 // New builds a relay with limits.
 func New(l Limits) *Server {
+	d := DefaultLimits()
+	for _, f := range []struct {
+		v *time.Duration
+		d time.Duration
+	}{
+		{&l.AuthTimeout, d.AuthTimeout}, {&l.PendingTimeout, d.PendingTimeout},
+		{&l.IdleTimeout, d.IdleTimeout}, {&l.WriteTimeout, d.WriteTimeout},
+	} {
+		if *f.v <= 0 {
+			*f.v = f.d
+		}
+	}
 	return &Server{Limits: l, rooms: map[string]*room{}, sids: map[string]uint32{}, socks: map[*sock]struct{}{},
-		perIP: map[string]int{}, unauth: map[string]int{}}
+		perIP: map[string]int{}, unauth: map[string][]*sock{}}
+}
+
+// sourceKey is what the per-source cap counts: the IPv4 address, or the IPv6 /64, since one
+// IPv6 host usually holds a whole /64.
+func sourceKey(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i]
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
 var route = regexp.MustCompile(`^/v1/(node|client)/([^/]*)$`)
@@ -142,15 +175,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "websocket upgrade required", http.StatusUpgradeRequired)
 		return
 	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
-	if !s.reserve(ip, role == "node", nodeID) {
+	k := &sock{srv: s, nodeID: nodeID, ip: sourceKey(r.RemoteAddr)}
+	ok, victim := s.reserve(k, role == "node")
+	if !ok {
 		http.Error(w, "too many sockets", http.StatusTooManyRequests)
 		return
 	}
-	k := &sock{srv: s, nodeID: nodeID, ip: ip, unauthCounted: role == "node"}
+	if victim != nil {
+		s.evict(victim)
+	}
 	// net/http clears its read and write deadlines when Accept hijacks the connection; an upgraded
 	// socket keeps its own idle and write timeouts.
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -183,8 +216,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.rooms[nodeID] = rm
 	}
 	rm.refs++
-	s.mu.Unlock()
 	k.room = rm
+	evicted := k.evicted
+	s.mu.Unlock()
 	defer s.release(k)
 	if f := s.Hooks.OnSocketDone; f != nil {
 		defer func() {
@@ -198,6 +232,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if role == "node" {
 		k.role = roleNode
 		rm.acceptUplink(k, origin)
+		if evicted {
+			// A newer uplink for this node took its place while this one was upgrading.
+			rm.mu.Lock()
+			rm.fail(k, wire.CodeCaps)
+			rm.mu.Unlock()
+		}
 	} else {
 		k.role = roleClient
 		if !rm.acceptClient(k) {
@@ -209,20 +249,45 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	k.out.wait()
 }
 
-// reserve counts a socket against the caps before it is accepted.
-func (s *Server) reserve(ip string, uplink bool, nodeID string) bool {
+// reserve counts a socket against the caps before it is accepted. An uplink past the
+// unauthenticated cap for its node takes the place of the oldest one, which reserve returns: a
+// squatter holding unanswered uplinks must not lock the real node out.
+func (s *Server) reserve(k *sock, uplink bool) (bool, *sock) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.total >= orDefault(s.MaxSockets, DefaultMaxSockets) || s.perIP[ip] >= orDefault(s.MaxPerIP, DefaultMaxPerIP) ||
-		uplink && s.unauth[nodeID] >= orDefault(s.MaxUnauthPerNode, DefaultMaxUnauthPerNode) {
-		return false
+	if s.total >= orDefault(s.MaxSockets, DefaultMaxSockets) || s.perIP[k.ip] >= orDefault(s.MaxPerIP, DefaultMaxPerIP) {
+		return false, nil
 	}
 	s.total++
-	s.perIP[ip]++
-	if uplink {
-		s.unauth[nodeID]++
+	s.perIP[k.ip]++
+	if !uplink {
+		return true, nil
 	}
-	return true
+	var victim *sock
+	if q := s.unauth[k.nodeID]; len(q) >= orDefault(s.MaxUnauthPerNode, DefaultMaxUnauthPerNode) {
+		victim = q[0]
+		s.authedLocked(victim)
+		victim.evicted = true
+	}
+	k.unauthCounted = true
+	s.unauth[k.nodeID] = append(s.unauth[k.nodeID], k)
+	return true, victim
+}
+
+// evict closes an unauthenticated uplink 4429 unless it authenticated meanwhile; one still
+// upgrading closes itself when it joins its room.
+func (s *Server) evict(v *sock) {
+	s.mu.Lock()
+	rm := v.room
+	s.mu.Unlock()
+	if rm == nil {
+		return
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if !v.closed && !v.authed {
+		rm.fail(v, wire.CodeCaps)
+	}
 }
 
 // unreserve gives back what reserve counted.
@@ -246,8 +311,11 @@ func (s *Server) authedLocked(k *sock) {
 		return
 	}
 	k.unauthCounted = false
-	if s.unauth[k.nodeID]--; s.unauth[k.nodeID] <= 0 {
+	q := slices.DeleteFunc(s.unauth[k.nodeID], func(x *sock) bool { return x == k })
+	if len(q) == 0 {
 		delete(s.unauth, k.nodeID)
+	} else {
+		s.unauth[k.nodeID] = q
 	}
 }
 
@@ -339,8 +407,9 @@ type sock struct {
 	room   *room
 	nodeID string
 	ip     string
-	// unauthCounted is guarded by srv.mu.
+	// unauthCounted and evicted are guarded by srv.mu.
 	unauthCounted bool
+	evicted       bool
 	role          int
 	out           *outq
 
@@ -600,11 +669,19 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	if mine > LightSession {
 		limit = uint64(SocketWindow - LightSession*others)
 	}
-	if up.sent-up.acked+uint64(len(frame)) > limit {
+	// The same fair share applies to what the uplink's queue holds, where each frame also costs
+	// itemOverhead: a flood of empty frames ends its own session before the queue overflows.
+	cost := len(frame) + itemOverhead
+	qMine, qTotal := up.out.queued(c.sid)
+	qLimit := SocketWindow
+	if qMine+cost > LightSession {
+		qLimit = SocketWindow - LightSession*others
+	}
+	if up.sent-up.acked+uint64(len(frame)) > limit || qTotal+cost > qLimit {
 		rm.endSession(c, wire.CodeTimeout)
 		return
 	}
-	up.out.binary(frame)
+	up.out.push(outItem{data: frame, sid: c.sid})
 	up.sent += uint64(len(frame))
 	c.upEnd = up.sent
 	c.upUnacked = mine
@@ -709,6 +786,7 @@ type outq struct {
 	mu      sync.Mutex
 	items   []outItem
 	bytes   int
+	bySID   map[uint32]int
 	pongs   int
 	done    bool
 	wake    chan struct{}
@@ -720,6 +798,7 @@ type outItem struct {
 	text  bool
 	pong  bool
 	close uint16
+	sid   uint32 // the client session a DATA frame on the uplink belongs to, else 0
 }
 
 // itemOverhead is what each queued item counts beyond its bytes, so many tiny items cannot hold
@@ -746,13 +825,19 @@ func (q *outq) push(it outItem) {
 		q.done = true
 	} else if q.bytes+len(it.data)+itemOverhead > SocketWindow+RelayHeadroom+queueSlack {
 		q.done = true
-		q.items = nil
+		q.items, q.bySID = nil, nil
 		q.mu.Unlock()
 		q.ws.CloseNow()
 		return
 	}
 	q.items = append(q.items, it)
 	q.bytes += len(it.data) + itemOverhead
+	if it.sid != 0 {
+		if q.bySID == nil {
+			q.bySID = map[uint32]int{}
+		}
+		q.bySID[it.sid] += len(it.data) + itemOverhead
+	}
 	if it.pong {
 		q.pongs++
 	}
@@ -765,6 +850,13 @@ func (q *outq) push(it outItem) {
 
 func (q *outq) binary(b []byte) { q.push(outItem{data: b}) }
 func (q *outq) text(s string)   { q.push(outItem{data: []byte(s), text: true, pong: s == "pong"}) }
+
+// queued reports what the queue holds for one session and in total, overhead included.
+func (q *outq) queued(sid uint32) (mine, total int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.bySID[sid], q.bytes
+}
 
 // close queues the close frame; a writer still busy after the write timeout is aborted.
 func (q *outq) close(code uint16) {
@@ -796,6 +888,11 @@ func (q *outq) run() {
 		it := q.items[0]
 		q.items = q.items[1:]
 		q.bytes -= len(it.data) + itemOverhead
+		if it.sid != 0 {
+			if q.bySID[it.sid] -= len(it.data) + itemOverhead; q.bySID[it.sid] == 0 {
+				delete(q.bySID, it.sid)
+			}
+		}
 		if it.pong {
 			q.pongs--
 		}
@@ -825,7 +922,7 @@ func (q *outq) run() {
 		if err != nil {
 			q.ws.CloseNow()
 			q.mu.Lock()
-			q.done, q.items = true, nil
+			q.done, q.items, q.bySID = true, nil, nil
 			q.mu.Unlock()
 			return
 		}

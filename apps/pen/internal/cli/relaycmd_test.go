@@ -42,6 +42,9 @@ func TestRelayServeFlagsAreValidatedWithoutACME(t *testing.T) {
 		"plain on every address":  {"--plain", "--listen", ":8080"},
 		"autocert origin differs": {"--autocert", "a.sslip.io", "--cache", "/tmp/x", "--public-origin", "wss://b.sslip.io"},
 		"autocert off port 443":   {"--autocert", "a.sslip.io", "--cache", "/tmp/x", "--listen", ":8443"},
+		"zero socket cap":         {"--plain", "--listen", "127.0.0.1:0", "--max-sockets", "0"},
+		"negative per-IP cap":     {"--plain", "--listen", "127.0.0.1:0", "--max-per-ip", "-1"},
+		"zero unauth cap":         {"--plain", "--listen", "127.0.0.1:0", "--max-unauth-per-node", "0"},
 	}
 	for name, args := range bad {
 		if _, err := parseServe(args, &bytes.Buffer{}); err == nil {
@@ -188,6 +191,39 @@ func TestRelayAddRmEditTheConfigAndKeepAtLeastOne(t *testing.T) {
 	got, _ := st.LoadConfig()
 	if strings.Join(got.RelayList(), ",") != "https://b.example" || got.Relay != "https://b.example" {
 		t.Fatalf("config %+v", got)
+	}
+}
+
+func TestRelayServeCapFlagsReachTheRelay(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	c, err := parseServe([]string{"--plain", "--listen", ln.Addr().String(), "--max-per-ip", "1"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go serveOn(ctx, c, ln, nil, relayserver.Hooks{})
+	dialUplink := func() int {
+		id, _ := ident.Generate(nil)
+		ws, res, err := websocket.Dial(ctx, "ws://"+ln.Addr().String()+"/v1/node/"+id.NodeID(), nil)
+		if err != nil {
+			if res == nil {
+				t.Fatal(err)
+			}
+			return res.StatusCode
+		}
+		t.Cleanup(func() { ws.CloseNow() })
+		return http.StatusSwitchingProtocols
+	}
+	if got := dialUplink(); got != http.StatusSwitchingProtocols {
+		t.Fatalf("first socket got %d", got)
+	}
+	if got := dialUplink(); got != http.StatusTooManyRequests {
+		t.Fatalf("second socket from 127.0.0.1 with --max-per-ip 1 got %d, want 429", got)
 	}
 }
 

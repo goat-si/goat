@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -96,6 +97,7 @@ func (p *peer) sendText(s string) { p.ws.Write(context.Background(), websocket.M
 type nodeOpts struct {
 	silent bool
 	noAck  bool
+	noRead bool // after authenticating, never read again
 	path   string
 	origin string
 	host   string
@@ -140,7 +142,9 @@ func nodeWith(t *testing.T, rs *relaytest.Server, id *ident.Identity, o nodeOpts
 		}
 		p.send(ans)
 	}
-	go p.run(!o.noAck)
+	if !o.noRead {
+		go p.run(!o.noAck)
+	}
 	return n
 }
 
@@ -629,14 +633,19 @@ func TestSocketsPastTheTotalAndPerAddressCapsGet429(t *testing.T) {
 	}
 }
 
-func TestAFifthUnauthenticatedUplinkForOneNodeGets429(t *testing.T) {
+func TestTheRealNodeEvictsTheOldestUnauthenticatedUplinkInsteadOfBeingLockedOut(t *testing.T) {
 	rs := defaults(t)
 	id, _ := ident.Generate(nil)
-	for range 4 {
-		nodeWith(t, rs, id, nodeOpts{silent: true})
+	var squatters []*fakeNode
+	for range relayserver.DefaultMaxUnauthPerNode {
+		squatters = append(squatters, nodeWith(t, rs, id, nodeOpts{silent: true}))
 	}
-	if got := dialStatus(t, rs, "/v1/node/"+id.NodeID()); got != http.StatusTooManyRequests {
-		t.Fatalf("fifth unauthenticated uplink got %d, want 429", got)
+	real := nodeWith(t, rs, id, nodeOpts{})
+	if err := rs.WaitOnline(context.Background(), real.nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-squatters[0].closed; code != int(wire.CodeCaps) {
+		t.Fatalf("oldest unauthenticated uplink closed %d, want 4429", code)
 	}
 }
 
@@ -663,5 +672,83 @@ func TestAnUnauthenticatedUplinkMayNotSendMoreThanItsAnswer(t *testing.T) {
 	n.send(make([]byte, relayserver.MessageMax+1))
 	if code := <-n.closed; code != int(wire.CodeRelayAuth) {
 		t.Fatalf("closed %d, want 4403 after at most 97 bytes", code)
+	}
+}
+
+func TestAClientFloodingEmptyFramesEndsOnlyItsOwnSession(t *testing.T) {
+	rs := defaults(t)
+	n := ready(t, rs, nodeOpts{noRead: true})
+	c := client(t, rs, n.nodeID, true)
+	// The node reads nothing, so OPEN and the empty DATA frames pile up toward it.
+	for {
+		select {
+		case code := <-c.closed:
+			if code != int(wire.CodeTimeout) {
+				t.Fatalf("flooding session closed %d, want 4408", code)
+			}
+			if !rs.Online(n.nodeID) {
+				t.Fatal("one client's empty frames took the whole uplink down")
+			}
+			return
+		default:
+		}
+		c.send(nil)
+	}
+}
+
+func TestThePerSourceCapCountsAnIPv6Slash64AsOneSource(t *testing.T) {
+	rs := relaytest.NewWithLimits(relayserver.DefaultLimits())
+	rs.Relay.MaxPerIP = 1
+	// The handler takes the source address from a test header, so one loopback test can speak
+	// from several IPv6 networks.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = r.Header.Get("X-Test-From")
+		rs.Relay.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(rs.Close)
+	from := func(addr string) int {
+		id, _ := ident.Generate(nil)
+		u, _ := wire.WebSocketURL(srv.URL, "/v1/node/"+id.NodeID())
+		ws, res, err := websocket.Dial(context.Background(), u, &websocket.DialOptions{HTTPHeader: http.Header{"X-Test-From": {addr}}})
+		if err != nil {
+			if res == nil {
+				t.Fatal(err)
+			}
+			return res.StatusCode
+		}
+		t.Cleanup(func() { ws.CloseNow() })
+		return http.StatusSwitchingProtocols
+	}
+	if got := from("[2001:db8:1:2::1]:4000"); got != http.StatusSwitchingProtocols {
+		t.Fatalf("first socket from 2001:db8:1:2::/64 got %d", got)
+	}
+	if got := from("[2001:db8:1:2:ffff::9]:4001"); got != http.StatusTooManyRequests {
+		t.Fatalf("second socket from the same /64 got %d, want 429", got)
+	}
+	if got := from("[2001:db8:1:3::1]:4002"); got != http.StatusSwitchingProtocols {
+		t.Fatalf("a socket from another /64 got %d, want it accepted", got)
+	}
+}
+
+func TestLimitsLeftZeroMeanTheContractDefaults(t *testing.T) {
+	rs := startRelay(t, relayserver.Limits{})
+	n := node(t, rs, nodeOpts{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	online := make(chan error, 1)
+	go func() { online <- rs.WaitOnline(ctx, n.nodeID) }()
+	select {
+	case err := <-online:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case code := <-n.closed:
+		t.Fatalf("uplink closed %d under zero limits, want them to mean the defaults", code)
+	}
+	c := client(t, rs, n.nodeID, true)
+	c.sendText("ping")
+	if got := <-c.texts; got != "pong" {
+		t.Fatalf("got %q, want pong", got)
 	}
 }

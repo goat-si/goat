@@ -69,29 +69,43 @@ func statusCode(err error) uint16 {
 }
 
 // DialRaceTimeout bounds a whole race, whatever the caller's context allows.
-var DialRaceTimeout = 15 * time.Second
+const DialRaceTimeout = 15 * time.Second
 
-// RaceSettled, when set, is called once every socket of a race is resolved, with the relays whose
-// sockets connected and were closed with 1000. It is a test hook, read when a race starts.
-var RaceSettled func(closed []string)
+// Racer holds one dialer's race options; the zero value uses the defaults.
+type Racer struct {
+	// Timeout bounds a whole race (DialRaceTimeout when zero).
+	Timeout time.Duration
+	// Settled, when set, is called once every socket of a race is resolved, with the relays whose
+	// sockets connected and were closed with 1000.
+	Settled func(closed []string)
+}
 
 var errLost = errors.New("relay: another relay answered first")
 
-// DialRace opens one client socket per relay in parallel, sends ping on each and keeps the first
+// DialRace races relays with the default options.
+func DialRace(ctx context.Context, relays []string, nodeID string) (Conn, string, error) {
+	return Racer{}.Dial(ctx, relays, nodeID)
+}
+
+// Dial opens one client socket per relay in parallel, sends ping on each and keeps the first
 // that answers pong; every other socket that connects is closed with 1000 before any other byte.
 // A relay where the node is offline closes 4404 before any pong, so it never wins. Losers finish
-// their dial (an aborted handshake would reach the node as 1006) within DialRaceTimeout.
-func DialRace(ctx context.Context, relays []string, nodeID string) (Conn, string, error) {
+// their dial (an aborted handshake would reach the node as 1006) within the race's timeout.
+func (rc Racer) Dial(ctx context.Context, relays []string, nodeID string) (Conn, string, error) {
 	if len(relays) == 0 {
 		return nil, "", errors.New("relay: no relays")
 	}
-	settled := RaceSettled
+	settled := rc.Settled
+	timeout := rc.Timeout
+	if timeout <= 0 {
+		timeout = DialRaceTimeout
+	}
 	type result struct {
 		c   *clientConn
 		url string
 		err error
 	}
-	rctx, cancel := context.WithTimeout(ctx, DialRaceTimeout)
+	rctx, cancel := context.WithTimeout(ctx, timeout)
 	decided := make(chan struct{})
 	results := make(chan result, len(relays))
 	for _, u := range relays {

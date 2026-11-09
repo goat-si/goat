@@ -250,6 +250,7 @@ func TestDialRaceIgnoresARelayWhereTheNodeIsOffline(t *testing.T) {
 }
 
 func TestDialRaceClosesTheLosersWith1000BeforeAnyByte(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a, b := relaytest.New(), relaytest.New()
@@ -259,9 +260,8 @@ func TestDialRaceClosesTheLosersWith1000BeforeAnyByte(t *testing.T) {
 	ua, _, _ := startUplink(t, ctx, a, id)
 	ub, _, _ := startUplink(t, ctx, b, id)
 	settled := make(chan []string, 1)
-	relay.RaceSettled = func(closed []string) { settled <- closed }
-	defer func() { relay.RaceSettled = nil }()
-	c, used, err := relay.DialRace(ctx, []string{a.URL, b.URL}, id.NodeID())
+	racer := relay.Racer{Settled: func(closed []string) { settled <- closed }}
+	c, used, err := racer.Dial(ctx, []string{a.URL, b.URL}, id.NodeID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,17 +279,25 @@ func TestDialRaceClosesTheLosersWith1000BeforeAnyByte(t *testing.T) {
 	if used == b.URL {
 		loserURL = a.URL
 	}
+	// The settle report bounds the loser's Accept: a socket the race closed with 1000 was
+	// accepted by its relay, which sent OPEN; with no such socket no OPEN can come.
+	actx, stop := context.WithCancel(ctx)
+	defer stop()
 	if len(closed) != 1 || closed[0] != loserURL {
+		stop()
 		t.Fatalf("closed %v, want the loser %s", closed, loserURL)
 	}
-	// The loser's OPEN and CLOSE precede the race settling, so Accept has them.
-	l, _ := loser.Accept(ctx)
+	l, err := loser.Accept(actx)
+	if err != nil {
+		t.Fatalf("loser relay sent no OPEN: %v", err)
+	}
 	if p, err := l.Recv(ctx); relay.CodeOf(err) != wire.CodeNormal {
 		t.Fatalf("loser got %x, %v; want CLOSE 1000 and no byte", p, err)
 	}
 }
 
 func TestDialRaceGivesUpAtItsOwnDeadlineWhenARelayNeverAnswers(t *testing.T) {
+	t.Parallel()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -304,11 +312,9 @@ func TestDialRaceGivesUpAtItsOwnDeadlineWhenARelayNeverAnswers(t *testing.T) {
 			defer c.Close() // accepted and never answered
 		}
 	}()
-	old := relay.DialRaceTimeout
-	relay.DialRaceTimeout = 200 * time.Millisecond
-	defer func() { relay.DialRaceTimeout = old }()
 	id := newID(t)
-	if _, _, err := relay.DialRace(context.Background(), []string{"http://" + ln.Addr().String()}, id.NodeID()); err == nil {
+	racer := relay.Racer{Timeout: 200 * time.Millisecond}
+	if _, _, err := racer.Dial(context.Background(), []string{"http://" + ln.Addr().String()}, id.NodeID()); err == nil {
 		t.Fatal("a relay that never answered won the race")
 	}
 }
