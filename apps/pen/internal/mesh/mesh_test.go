@@ -3,6 +3,7 @@ package mesh
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
@@ -204,6 +205,28 @@ func TestCanonicalOrderComparesRawHashBytesNotBase64Text(t *testing.T) {
 	second, _ := ident.B64.DecodeString(order[2].Hash)
 	if bytes.Compare(first, second) > 0 {
 		t.Fatalf("ready records ordered by text: %s before %s", order[1].Hash, order[2].Hash)
+	}
+}
+
+func TestBodiesAndCardsWithKeysDifferingOnlyByCaseAreMalformed(t *testing.T) {
+	f := detID(1)
+	_, found := newMesh(t, f)
+	resign := func(body []byte) *Record {
+		return &Record{Body: body, Sig: ed25519.Sign(f.SignPriv, digest(recordPrefix, body))}
+	}
+	by := []byte(`"by":"` + pub(f) + `"`)
+	both := bytes.Replace(found.Body, by, append(append([]byte{}, by...), []byte(`,"By":"`+pub(f)+`"`)...), 1)
+	onlyUpper := bytes.Replace(found.Body, []byte(`"by":`), []byte(`"By":`), 1)
+	for name, body := range map[string][]byte{"by and By": both, "By only": onlyUpper} {
+		if err := resign(body).Verify(); err == nil {
+			t.Fatalf("%s: a body with a case-variant key verified", name)
+		}
+	}
+	cb := found.B.Card.Body
+	upper := bytes.Replace(cb, []byte(`"nodeId":`), []byte(`"NodeId":`), 1)
+	c := &Card{Body: upper, Sig: ed25519.Sign(f.SignPriv, digest(cardPrefix, upper))}
+	if err := c.Verify(); err == nil {
+		t.Fatal("a card with a case-variant key verified")
 	}
 }
 
