@@ -178,6 +178,23 @@ describe("the first probe asks the client's own runtime for its facts directly",
     }).pipe(Effect.scoped),
   );
 
+  // Command substitution drops NUL bytes; one in the reply must still refuse it.
+  it.effect.each([
+    { name: "inside an answer", at: "commit ok 16" },
+    { name: "after the end line", at: "end 4\n" },
+  ])("a NUL byte $name refuses the direct frame", ({ at }) =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ own: version });
+      yield* f.supporting();
+      const text = directFrame(DIRECT_ONLY);
+      const cut = text.indexOf(at) + at.length;
+      yield* f.write("frame-direct", text.slice(0, cut) + "\u0000" + text.slice(cut));
+      assert.deepEqual(yield* f.run(), ANSWERED);
+      assert.deepEqual(yield* f.asks(), [DIRECT, CAPS, FACTS]);
+      assert.equal((yield* f.fact("commit." + version + ".exe")).split("\n")[1], "1700000000");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("an executable replaced during the direct call leaves nothing from that call", () =>
     Effect.gen(function* () {
       const f = yield* fixture({ own: version });
