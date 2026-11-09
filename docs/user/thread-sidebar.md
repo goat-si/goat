@@ -63,6 +63,8 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.
+In Projects view, drag a thread onto the composer to mention it; threads cannot be
+reordered within the project list.
 
 When GOAT Bot is enabled, **Bots** lists the main bot and, on supported servers,
 its task and coding threads. Use a task's menu to pin it, mark it done, or mark it read.
