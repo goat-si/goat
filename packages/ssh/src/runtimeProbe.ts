@@ -15,6 +15,7 @@ export function buildRemoteRuntimeProbeScript(
   stateKey?: string,
   _keepExistingRunner = false,
   recordReconnect = false,
+  ownRuntimeVersion?: string,
 ): string {
   return `set -eu
 V=${shellSingleQuote(version)}
@@ -24,7 +25,9 @@ runtime_file="$HOME/.goat/userdata/server-runtime.json"
 ${REMOTE_PROTOCOL_TOKEN_SCRIPT}
 # The probe's subshells share exec keys of installed executables; it never pins a runner.
 FACT_MEMO="$(mktemp "\${TMPDIR:-/tmp}/goat-facts.XXXXXX" 2>/dev/null)" || FACT_MEMO=
-trap 'probe_exit=$?; [ -z "$FACT_MEMO" ] || rm -f "$FACT_MEMO" "$FACT_MEMO.caps-status" "$FACT_MEMO.caps-out" 2>/dev/null || :; exit "$probe_exit"' EXIT
+trap 'probe_exit=$?; [ -z "$FACT_MEMO" ] || rm -f "$FACT_MEMO" "$FACT_MEMO.caps-status" "$FACT_MEMO.caps-out" "$FACT_MEMO.facts-err" 2>/dev/null || :; exit "$probe_exit"' EXIT
+# The runtime version of the client that built this script, which it may ask for facts directly.
+facts_own_version=${shellSingleQuote(ownRuntimeVersion ?? "")}
 ${WINDOWS_MANIFEST_SUPPORT_SCRIPT}
 ${REMOTE_FACTS_FRAME_SCRIPT}
 prune_removed_facts
@@ -50,6 +53,10 @@ binary_json() {
   v="$1"; exe="$HOME/.goat/runtime/goat/versions/$v/goat"
   ready_version "$v" || return 1
   if signals="$(windows_cached_own "$v" "$exe" 2>/dev/null)"; then printf '%s' "$signals"; return; fi
+  manifest_key_before=
+  case "\${fact_uname-$(uname -s)}" in
+    MINGW*|MSYS*|CYGWIN*) exec_fact_key "$exe" || true; manifest_key_before="$FACT_KEY" ;;
+  esac
   if manifest_key="$(windows_manifest_key "$v" "$exe" 2>/dev/null)"; then
     exec_fact_key "$exe" || true
     manifest_fact_key="$FACT_KEY"; manifest_fact_name="$FACT_NAME"
@@ -60,7 +67,16 @@ binary_json() {
     else
       manifest_ok=1; manifest="$("$exe" __ssh-helper runtime-manifest --shell 2>/dev/null)" || manifest_ok=
     fi
-    if [ -z "$manifest_ok" ] ||
+    # The hash above was taken between two equal keys of the executable. When its key still holds
+    # after the call and its marker and record still name that hash, it is not hashed again: the
+    # assurance every exec fact has (signature, install marker, 2 s age gate), not a content proof.
+    manifest_held=
+    if [ -n "$manifest_ok" ] && [ -n "$manifest_fact_key" ] &&
+       [ "$manifest_key_before" = "$manifest_fact_key" ] &&
+       exec_fact_key "$exe" && [ "$FACT_KEY" = "$manifest_fact_key" ] &&
+       windows_manifest_recorded "$v" "$exe" && [ "$WM_RECORDED" = "$manifest_key" ]; then
+      manifest_held=1
+    elif [ -z "$manifest_ok" ] ||
        [ "$(windows_manifest_key "$v" "$exe" 2>/dev/null || true)" != "$manifest_key" ]; then
       printf '{"serverVersion":"%s","invalid":true}' "$v"; return
     fi
@@ -73,7 +89,8 @@ binary_json() {
     case "$5" in has|lacks) ;; *)
       printf '{"serverVersion":"%s","invalid":true}' "$v"; return ;;
     esac
-    if [ -n "$manifest_fact_key" ] && exec_fact_key "$exe" && [ "$FACT_KEY" = "$manifest_fact_key" ]; then
+    if [ -n "$manifest_held" ] ||
+       { [ -n "$manifest_fact_key" ] && exec_fact_key "$exe" && [ "$FACT_KEY" = "$manifest_fact_key" ]; }; then
       fact_put "version.$manifest_fact_name" "$manifest_fact_key" "goat v$v"
       fact_put "own.$manifest_fact_name" "$manifest_fact_key" "$1 $2 $3 0 0"
     fi

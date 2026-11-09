@@ -13,11 +13,12 @@ import {
 // old runtime's unknown-subcommand answer is cached as "none". The call takes no flags so that
 // answer is one exact error. The names a script may see are fixed there (fact_valid caps).
 const CAPABILITIES = ["facts"] as const;
+const capabilitiesLine = () => ["caps v1", ...CAPABILITIES].join(" ");
 
 export const capabilities = Command.make("capabilities").pipe(
   Command.withHandler(() =>
     Effect.sync(() => {
-      process.stdout.write(["caps v1", ...CAPABILITIES].join(" ") + "\n");
+      process.stdout.write(capabilitiesLine() + "\n");
     }),
   ),
 );
@@ -39,12 +40,13 @@ const compatLine = async (port: number, liveInstance: unknown) => {
  * The first probe's four questions in one start, each answered by the function its separate
  * subcommand uses, in the probe's order: `runtime-manifest --shell`, `commit-time`,
  * `protocol --shell` for the live server, then `compat` on the port that live answer named.
- * The host script validates the whole frame before it uses or records any line.
+ * With `withCaps` the `capabilities` line follows the begin line, outside the count.
  */
 const readSshRuntimeFactsFrame = async (input: {
   readonly runtimeFile: string;
   readonly portFile: string;
   readonly pidFile: string;
+  readonly withCaps: boolean;
 }) => {
   const lines = [
     `manifest ok ${runtimeManifestShellLine()}`,
@@ -67,13 +69,15 @@ const readSshRuntimeFactsFrame = async (input: {
     lines.push("live fail error");
   }
   if (livePort !== undefined) lines.push(await compatLine(livePort, liveInstance));
-  return ["begin v1 facts", ...lines, `end ${lines.length}`].join("\n") + "\n";
+  const head = input.withCaps ? ["begin v1 facts", capabilitiesLine()] : ["begin v1 facts"];
+  return [...head, ...lines, `end ${lines.length}`].join("\n") + "\n";
 };
 
 export const facts = Command.make("facts", {
   runtimeFile: Flag.String("runtime-file"),
   portFile: Flag.String("port-file"),
   pidFile: Flag.String("pid-file"),
+  withCaps: Flag.Boolean("with-caps").pipe(Flag.withDefault(false)),
 }).pipe(
   Command.withHandler((input) =>
     Effect.promise(async () => {

@@ -54,10 +54,19 @@ facts_frame_live_server() {
 # Sets FRAME_MANIFEST, FRAME_COMMIT, FRAME_LIVE and FRAME_COMPAT to the answers in combined reply
 # $1 ("ok <tokens>" or "fail <word>"). Fails unless the whole frame is valid: its begin line, known
 # tags each at most once, every required tag, compat exactly when live names a live server, and an
-# end line that counts the answers with nothing after it.
+# end line that counts the answers with nothing after it. The capability line \`facts --with-caps\`
+# prints may follow the begin line, well formed and uncounted; with $2 "caps" it must, listing facts.
 facts_frame_parse() {
   FRAME_MANIFEST=; FRAME_COMMIT=; FRAME_LIVE=; FRAME_COMPAT=; frame_count=0
   case "$1" in "begin v1 facts$fact_nl"*) frame_rest="\${1#*"$fact_nl"}" ;; *) return 1 ;; esac
+  frame_caps=
+  case "$frame_rest" in "caps v1$fact_nl"*|"caps v1 "*)
+    frame_caps="\${frame_rest%%"$fact_nl"*}"; frame_rest="\${frame_rest#*"$fact_nl"}"
+    caps_valid "$frame_caps" || return 1 ;;
+  esac
+  if [ "\${2:-}" = caps ]; then
+    case " \${frame_caps#caps v1} " in *" facts "*) ;; *) return 1 ;; esac
+  fi
   while :; do
     case "$frame_rest" in *"$fact_nl"*) ;; *) break ;; esac
     frame_line="\${frame_rest%%"$fact_nl"*}"; frame_rest="\${frame_rest#*"$fact_nl"}"
@@ -86,27 +95,50 @@ facts_frame_compat_valid() {
   case "$2" in 0|1) ;; *) return 1 ;; esac
   case "$3" in ''|-|*[!$token_chars]*) return 1 ;; esac
 }
+# Makes goat $1's combined call and succeeds when its key is unchanged after it and the reply is
+# valid in full; it records nothing. With $2 "caps" it asks for the capability line, requires it
+# and fails on anything written to stderr.
+facts_frame_call() {
+  frame_absent=; ! live_none_absent "$runtime_file" "$state/port" "$state/pid" || frame_absent=1
+  frame_live=; ! live_fact_key "$1" "$runtime_file" "$state/port" "$state/pid" || frame_live="$FACT_KEY"
+  frame_err=/dev/null; frame_flag=
+  if [ "\${2:-}" = caps ]; then frame_err="$FACT_MEMO.facts-err"; frame_flag=--with-caps; fi
+  frame_out="$("$1" __ssh-helper facts $frame_flag --runtime-file "$runtime_file" --port-file "$state/port" --pid-file "$state/pid" 2>"$frame_err")" || return 1
+  [ "$frame_err" = /dev/null ] || [ ! -s "$frame_err" ] || return 1
+  exec_fact_key "$1" && [ "$FACT_NAME $FACT_KEY" = "$frame_exec" ] || return 1
+  frame_after=; ! live_fact_key "$1" "$runtime_file" "$state/port" "$state/pid" || frame_after="$FACT_KEY"
+  frame_absent_after=; ! live_none_absent "$runtime_file" "$state/port" "$state/pid" || frame_absent_after=1
+  facts_frame_parse "$frame_out" "\${2:-}"
+}
 # Asks installed goat $1, once per executable and script, its manifest, its commit time, the live
 # server behind the probe's record and launch files, and that server's compatibility, in one start.
 # Succeeds, with FRAME_MANIFEST set, only when the reply may be used: the executable supports the
-# call, its key was present before the capability lookup and is unchanged after the call, and the
-# frame is valid in full. Then commit, live and compat are recorded under their usual rules. Any
-# other live or compat answer is dropped and asked again where the probe uses it, except a failed
-# compat question, which stays failed for this probe as a failed separate call would.
+# call, its key was present before the call and is unchanged after it, and the frame is valid in
+# full. Then commit, live and compat are recorded under their usual rules. Any other live or compat
+# answer is dropped and asked again where the probe uses it, except a failed compat question,
+# which stays failed for this probe as a failed separate call would.
 facts_frame_ask() {
   [ -n "$FACT_MEMO" ] && exec_fact_key "$1" || return 1
   frame_name="$FACT_NAME"; frame_key="$FACT_KEY"; frame_exec="$FACT_NAME $FACT_KEY"
   if frame_memo_get frame-asked "$1|$frame_exec"; then return 1; fi
+  # The client's own runtime version, with no recorded capability answer, is asked directly with
+  # --with-caps. A valid frame whose own capability line lists facts is the evidence for using and
+  # recording its answers, each under its own rule; that line is never recorded as a caps fact.
+  # Any failure leaves no trace and takes the lookup below, as for every other version.
+  if [ -n "$facts_own_version" ] && [ "$frame_name" = "$facts_own_version.exe" ] &&
+     ! fact_get "caps.$frame_name" "$frame_key" >/dev/null && facts_frame_call "$1" caps; then
+    frame_memo_put frame-asked "$1|$frame_exec" ok
+    facts_frame_record "$1"
+    return 0
+  fi
   helper_caps "$1"
   case " $HELPER_CAPS " in *" facts "*) ;; *) return 1 ;; esac
   frame_memo_put frame-asked "$1|$frame_exec" ok
-  frame_absent=; ! live_none_absent "$runtime_file" "$state/port" "$state/pid" || frame_absent=1
-  frame_live=; ! live_fact_key "$1" "$runtime_file" "$state/port" "$state/pid" || frame_live="$FACT_KEY"
-  frame_out="$("$1" __ssh-helper facts --runtime-file "$runtime_file" --port-file "$state/port" --pid-file "$state/pid" 2>/dev/null)" || return 1
-  exec_fact_key "$1" && [ "$FACT_NAME $FACT_KEY" = "$frame_exec" ] || return 1
-  frame_after=; ! live_fact_key "$1" "$runtime_file" "$state/port" "$state/pid" || frame_after="$FACT_KEY"
-  frame_absent_after=; ! live_none_absent "$runtime_file" "$state/port" "$state/pid" || frame_absent_after=1
-  facts_frame_parse "$frame_out" || return 1
+  facts_frame_call "$1" || return 1
+  facts_frame_record "$1"
+}
+# Records the answers facts_frame_call validated for goat $1, each under its usual rule.
+facts_frame_record() {
   case "$FRAME_COMMIT" in "ok "*) valid_positive "\${FRAME_COMMIT#ok }" || FRAME_COMMIT="fail error" ;; esac
   case "$FRAME_COMMIT" in "ok "*) fact_put "commit.$frame_name" "$frame_key" "\${FRAME_COMMIT#ok }" ;; esac
   frame_memo_put frame-commit "$1|commit.$frame_name|$frame_key" "$FRAME_COMMIT"

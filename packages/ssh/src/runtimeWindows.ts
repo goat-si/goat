@@ -194,6 +194,7 @@ export const inspectWindowsRuntime = Effect.fn("ssh.windows.inspect")(function* 
 export const statusRuntimeProbe = Effect.fn("ssh.windows.statusRuntimeProbe")(function* (
   target: DesktopSshEnvironmentTarget,
   version: string,
+  ownRuntimeVersion?: string,
 ) {
   const auth = {
     batchMode: "yes" as const,
@@ -203,7 +204,13 @@ export const statusRuntimeProbe = Effect.fn("ssh.windows.statusRuntimeProbe")(fu
   return yield* runSshCommand(target, {
     ...auth,
     remoteCommandArgs: ["sh", "-l", "-s"],
-    stdin: buildRemoteRuntimeProbeScript(version, REMOTE_RUNTIME_STATE_KEY),
+    stdin: buildRemoteRuntimeProbeScript(
+      version,
+      REMOTE_RUNTIME_STATE_KEY,
+      false,
+      false,
+      ownRuntimeVersion,
+    ),
     timeoutMs: SSH_READY_TIMEOUT_MS,
   }).pipe(
     Effect.catchTags({
