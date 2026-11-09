@@ -67,7 +67,7 @@ async function alreadyStarred(environmentId: EnvironmentId) {
 }
 
 /**
- * Counts a sent prompt. After more than five, asks once per session for a star until dismissed,
+ * Counts a sent prompt. After five, asks once per session for a star until dismissed,
  * unless the environment's GitHub account already starred the repo.
  */
 export async function recordPromptSent(environmentId: EnvironmentId): Promise<void> {
@@ -76,7 +76,7 @@ export async function recordPromptSent(environmentId: EnvironmentId): Promise<vo
     if (getLocalStorageItem(DISMISSED_KEY, Schema.Boolean)) return;
     const sent = (getLocalStorageItem(SENT_KEY, Schema.Number) ?? 0) + 1;
     setLocalStorageItem(SENT_KEY, sent, Schema.Number);
-    if (sent <= PROMPTS_BEFORE_ASKING) return;
+    if (sent < PROMPTS_BEFORE_ASKING) return;
   } catch {
     // Storage that cannot be read or written could not keep a dismissal, so never ask.
     return;
@@ -84,8 +84,11 @@ export async function recordPromptSent(environmentId: EnvironmentId): Promise<vo
   shownThisSession = true;
   const starred = await alreadyStarred(environmentId);
   // An unavailable check (no driver, no credentials, auth or rate-limit failure) is
-  // not "not starred": ask again on a later session instead of prompting or dismissing.
-  if (starred === undefined) return;
+  // not "not starred": retry on a later send instead of prompting or dismissing.
+  if (starred === undefined) {
+    shownThisSession = false;
+    return;
+  }
   if (starred) return dismiss();
   try {
     // Another tab can dismiss while the check runs.

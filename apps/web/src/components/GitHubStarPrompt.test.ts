@@ -51,10 +51,11 @@ describe("recordPromptSent", () => {
   it("asks after five prompts, once per session, and never again once closed", async () => {
     setup();
     let session = await startSession();
-    for (let sent = 0; sent < 5; sent++) await session.send();
+    for (let sent = 0; sent < 4; sent++) await session.send();
     expect(add).not.toHaveBeenCalled();
 
     await session.send();
+    expect(add).toHaveBeenCalledOnce();
     await session.send();
     expect(add).toHaveBeenCalledOnce();
 
@@ -88,11 +89,12 @@ describe("recordPromptSent", () => {
   it("skips an unavailable server check without permanently dismissing", async () => {
     const store = setup({ sent: 5 });
     starred.failed = true;
-    await (await startSession()).send();
+    const session = await startSession();
+    await session.send();
     expect(add).not.toHaveBeenCalled();
     expect(store.has("goat:github-star-prompt:dismissed")).toBe(false);
     starred.failed = false;
-    await (await startSession()).send();
+    await session.send();
     expect(add).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
