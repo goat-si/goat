@@ -776,6 +776,7 @@ export const WS_METHODS = {
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
   sourceControlStarred: "sourceControl.starred",
+  sourceControlStar: "sourceControl.star",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1523,6 +1524,14 @@ const WsSourceControlLookupRepositoryRpc = Rpc.make(WS_METHODS.sourceControlLook
 const WsSourceControlStarredRpc = Rpc.make(WS_METHODS.sourceControlStarred, {
   payload: SourceControlStarredInput,
   success: Schema.NullOr(Schema.Boolean),
+  error: EnvironmentAuthorizationError,
+});
+
+// Stars goat-si/goat as the server's GitHub account; false when the forge refused.
+// The repository is server-pinned so a client cannot star arbitrary repositories.
+const WsSourceControlStarRpc = Rpc.make(WS_METHODS.sourceControlStar, {
+  payload: SourceControlStarredInput,
+  success: Schema.Boolean,
   error: EnvironmentAuthorizationError,
 });
 
@@ -2623,6 +2632,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
 export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlStarredRpc,
+  WsSourceControlStarRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
   WsProjectCloneStartRpc,

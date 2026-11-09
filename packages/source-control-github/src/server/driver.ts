@@ -24,28 +24,49 @@ const services = GitHubPullRequestApi.layer.pipe(
 // Pinned by the server so the public star prompt cannot be used for arbitrary repositories.
 const GOAT_REPOSITORY = "goat-si/goat";
 
-// Only 204 means starred. A missing repository is not starred; other failures propagate so the
-// client can distinguish an unavailable check from a definite answer.
+const starredPath = (repository: string) => {
+  const segments = repository.split("/");
+  // "." and ".." survive encoding and would normalize the URL out of user/starred.
+  return segments.length === 2 && segments.every((segment) => !["", ".", ".."].includes(segment))
+    ? `user/starred/${segments.map(encodeURIComponent).join("/")}`
+    : undefined;
+};
+
+// Only 204 means starred; failures other than not-found make the check unavailable.
 export const makeIsRepositoryStarred = Effect.gen(function* () {
   const api = yield* GitHubRest.GitHubRest;
   return Effect.fn("GitHubDriver.isRepositoryStarred")((host: string, repository: string) =>
     Effect.gen(function* () {
       if (repository !== GOAT_REPOSITORY) return false;
-      const response = yield* api
+      const path = starredPath(GOAT_REPOSITORY);
+      if (path === undefined) return false;
+      return yield* api
         .rest({
           host,
           operation: "isRepositoryStarred",
-          path: `user/starred/${GOAT_REPOSITORY.split("/").map(encodeURIComponent).join("/")}`,
+          path,
           allowReserve: false,
         })
         .pipe(
-          Effect.catchIf(
-            (error) => error._tag === "GitHubApiNotFoundError",
-            () => Effect.succeed(undefined),
-          ),
+          Effect.map((response) => response.status === 204),
+          Effect.catchTags({ GitHubApiNotFoundError: () => Effect.succeed(false) }),
+          Effect.orElseSucceed(() => null),
         );
-      return response === undefined ? false : response.status === 204;
     }),
+  );
+});
+
+// False on any failure, such as a token or app sign-in without permission to star.
+export const makeStarRepository = Effect.gen(function* () {
+  const api = yield* GitHubRest.GitHubRest;
+  return Effect.fn("GitHubDriver.starRepository")((host: string, repository: string) =>
+    Effect.gen(function* () {
+      if (repository !== GOAT_REPOSITORY) return false;
+      const path = starredPath(GOAT_REPOSITORY);
+      if (path === undefined) return false;
+      const response = yield* api.rest({ host, operation: "starRepository", method: "PUT", path });
+      return response.status === 204;
+    }).pipe(Effect.orElseSucceed(() => false)),
   );
 });
 
@@ -55,6 +76,7 @@ const makeInstance = Effect.all({
   pullRequests: GitHubPullRequestProvider.make,
   fetchMedia: GitHubMediaFetch.make,
   isRepositoryStarred: makeIsRepositoryStarred,
+  starRepository: makeStarRepository,
 });
 
 export const driver = defineSourceControlDriver({

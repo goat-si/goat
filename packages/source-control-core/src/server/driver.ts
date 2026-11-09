@@ -33,7 +33,12 @@ export interface SourceControlDriverInstance {
    * to. Null when the fetch went nowhere a response could come from, such as a redirect loop.
    */
   /** Whether the server's account on `host` starred `repository` (`owner/name`). */
-  readonly isRepositoryStarred?: (host: string, repository: string) => Effect.Effect<boolean>;
+  readonly isRepositoryStarred?: (
+    host: string,
+    repository: string,
+  ) => Effect.Effect<boolean | null>;
+  /** Stars `repository` as the server's account on `host`; false when the forge refused. */
+  readonly starRepository?: (host: string, repository: string) => Effect.Effect<boolean>;
   readonly fetchMedia?: (
     request: SourceControlMediaRequest,
   ) => Effect.Effect<

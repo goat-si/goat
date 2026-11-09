@@ -30,6 +30,10 @@ export function createSourceControlEnvironmentAtoms<R, E>(
       label: "environment-data:source-control:check-starred",
       tag: WS_METHODS.sourceControlStarred,
     }),
+    star: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:source-control:star",
+      tag: WS_METHODS.sourceControlStar,
+    }),
     cloneRepository: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:source-control:clone-repository",
       tag: WS_METHODS.sourceControlCloneRepository,
