@@ -143,12 +143,12 @@ type OpenPage = () => Promise<AtomCommandResult<unknown, unknown>>;
 export type OpenUrlInPreview = (url: string) => Promise<AtomCommandResult<unknown, unknown>>;
 
 /** An image URL the preview sidebar can open as a page when no image comes back. */
-export function isWebPageUrl(uri: string): boolean {
+function isWebPageUrl(uri: string): boolean {
   return /^(?:https?:)?\/\//i.test(uri);
 }
 
 /** The web URL of the image a Markdown link wraps. */
-export function linkedWebImageUrl(node: HastElement | undefined): string | null {
+function linkedWebImageUrl(node: HastElement | undefined): string | null {
   const image = node?.children.find((child) => child.type === "element" && child.tagName === "img");
   const src = image?.type === "element" ? image.properties.src : undefined;
   return typeof src === "string" && isWebPageUrl(src) ? src : null;
@@ -221,7 +221,7 @@ const CHAT_MARKDOWN_IMAGE_FRAME_CLASS_NAME = cn(
  * the same file keeps the decoded image on screen while the new bytes arrive,
  * and a different file starts from the slot again.
  */
-export function ChatMarkdownImage(props: {
+function ChatMarkdownImage(props: {
   readonly src: string | null;
   readonly srcFragment?: string | undefined;
   readonly sourceFailed?: boolean | undefined;
@@ -388,7 +388,7 @@ export function ChatMarkdownImage(props: {
   );
 }
 
-export function ChatMarkdownVideo(props: {
+function ChatMarkdownVideo(props: {
   readonly src: string | null;
   readonly alt: string;
   readonly copyMarkdown: string | undefined;

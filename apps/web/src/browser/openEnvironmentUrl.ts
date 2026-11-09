@@ -62,7 +62,7 @@ export function urlNeedsEnvironmentRoute(
 type PreparedConnection = { readonly target: ConnectionTarget; readonly httpBaseUrl: string };
 
 /** How media from an environment reaches this device: its loopback servers live on that machine. */
-export function environmentMediaConnection(connection: PreparedConnection | null) {
+function environmentMediaConnection(connection: PreparedConnection | null) {
   return {
     connection:
       connection === null
@@ -77,7 +77,7 @@ export function readEnvironmentMediaConnection(environmentId: EnvironmentId) {
   return environmentMediaConnection(readPreparedConnection(environmentId));
 }
 
-export function routeEnvironmentMediaUrl(
+function routeEnvironmentMediaUrl(
   environment: ReturnType<typeof environmentMediaConnection>,
   url: string,
 ): EnvironmentLoopbackUrl {

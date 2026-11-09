@@ -11,8 +11,8 @@ const mint = vi.hoisted(() => vi.fn<() => Promise<AssetCreateUrlResult>>());
 const state = vi.hoisted(() => ({
   connection: { httpBaseUrl: "https://host.test" } as { httpBaseUrl: string; target?: unknown },
   previewAllowed: false,
-  openPreview: null as unknown as ReturnType<typeof vi.fn>,
-  openExternal: null as unknown as ReturnType<typeof vi.fn>,
+  openPreview: vi.fn<(url: string) => Promise<unknown>>(),
+  openExternal: vi.fn<(url: string) => Promise<void>>(),
 }));
 // Atoms derived from the server config run in the real registry over a missing config.
 vi.mock(import("../state/server"), async (original) => {
@@ -80,10 +80,12 @@ function setup(input: { connection: typeof state.connection; previewAllowed?: bo
   state.connection = input.connection;
   state.previewAllowed = input.previewAllowed ?? false;
   // The preview refuses, so a fallback to the system browser would show up as an openExternal call.
-  state.openPreview = vi.fn(async (_url: string) =>
-    AsyncResult.failure(Cause.fail(new Error("Preview is unavailable."))),
-  );
-  state.openExternal = vi.fn(async (_url: string) => undefined);
+  state.openPreview
+    .mockReset()
+    .mockImplementation(async () =>
+      AsyncResult.failure(Cause.fail(new Error("Preview is unavailable."))),
+    );
+  state.openExternal.mockReset().mockResolvedValue(undefined);
   mint.mockReset();
   const registry = AtomRegistry.make();
   return { registry, [Symbol.dispose]: () => registry.dispose() };

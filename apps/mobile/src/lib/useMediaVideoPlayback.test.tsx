@@ -96,6 +96,10 @@ vi.mock("../state/assets", () => ({
   useAssetUrlState: () => ({ _tag: "Success", url: "https://media.example/clip.mp4" }),
   useRefreshAssetUrl: () => mocks.refresh,
 }));
+vi.mock("../state/session", async () => {
+  const Option = await import("effect/Option");
+  return { usePreparedConnection: () => Option.none() };
+});
 vi.mock("./localAttachmentPreview", () => ({ loadLocalAttachmentPreview: vi.fn() }));
 vi.mock("./videoThumbnails", () => ({
   cachedVideoThumbnail: () => null,
