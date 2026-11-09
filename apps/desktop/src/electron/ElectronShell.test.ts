@@ -99,6 +99,10 @@ describe("ElectronShell", () => {
           "cursor://file:8080/Users/me/repo/file.md",
           "cursor://anysphere.cursor-deeplink/prompt?text=hi",
           "vscode://vscode.git/clone?url=https%3A%2F%2Fexample.com%2Frepo.git",
+          "vscode://extension/example",
+          "vscode://command/workbench.action.openSettings",
+          "vscode:file/relative.md",
+          "./relative.md",
           "cursor://file",
           "cursor://file/",
           "cursor:file/Users/me/repo/file.md",
@@ -106,11 +110,12 @@ describe("ElectronShell", () => {
           "zed://file/Users/me/repo/file.md",
           "jetbrains://file/Users/me/repo/file.md",
           "javascript:alert(1)",
+          "data:text/html,hello",
         ],
         (url) => electronShell.openExternal(url),
       );
 
-      assert.deepEqual(results, Array(12).fill(false));
+      assert.deepEqual(results, Array(17).fill(false));
       assert.equal(openExternalMock.mock.calls.length, 0);
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
