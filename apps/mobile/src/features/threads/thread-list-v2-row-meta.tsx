@@ -1,4 +1,5 @@
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import { threadOriginLabel } from "@goat/client-runtime/state/models";
 import { View } from "react-native";
 
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -115,8 +116,7 @@ export function ThreadListV2RowOrigin(props: {
   readonly className: string;
 }) {
   const folder = folderName(props.project?.workspaceRoot) ?? props.project?.title ?? null;
-  const launcher = props.thread.source.externalLauncher;
-  const text = [folder, launcher ? `via ${launcher}` : null].filter(Boolean).join(" · ");
+  const text = [folder, threadOriginLabel(props.thread.source)].filter(Boolean).join(" · ");
   return (
     <Text className={cn("text-xs", props.className)} numberOfLines={1}>
       {text}

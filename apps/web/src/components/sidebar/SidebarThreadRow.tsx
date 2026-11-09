@@ -5,6 +5,7 @@ import { discardComposerDraft } from "../../lib/discardComposerDraft";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { useDeadlinePassed } from "~/hooks/useDeadline";
 import { resolveThreadCurrentPullRequestLink } from "@goat/client-runtime/thread-pull-requests";
+import { threadOriginLabel } from "@goat/client-runtime/state/models";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -943,11 +944,10 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     </span>
   );
   const accessibleTitle = isRenaming ? null : <span className="sr-only">{thread.title}</span>;
-  // A registered cloud run names the outside agent that launched it.
-  const externalLauncherBadge = thread.source.externalLauncher ? (
-    <span className="max-w-24 shrink-0 truncate text-xs text-muted-foreground">
-      via {thread.source.externalLauncher}
-    </span>
+  // A cloud run names the outside agent that launched it; GOAT Bot marks the coding it sent.
+  const originLabel = threadOriginLabel(thread.source);
+  const externalLauncherBadge = originLabel ? (
+    <span className="max-w-24 shrink-0 truncate text-xs text-muted-foreground">{originLabel}</span>
   ) : null;
   const historyArchiveHint = (
     <ThreadHistoryArchiveHint
@@ -1450,10 +1450,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               <span className="min-w-0 flex-1 truncate">
                 {sidebarFolderName(props.project?.workspaceRoot) ?? props.projectDisplayName}
               </span>
-              {thread.source.externalLauncher ? (
-                <span className="max-w-[40%] shrink-0 truncate">
-                  via {thread.source.externalLauncher}
-                </span>
+              {originLabel ? (
+                <span className="max-w-[40%] shrink-0 truncate">{originLabel}</span>
               ) : null}
               <ThreadHistoryArchiveHint
                 state={thread.source.historyArchive}

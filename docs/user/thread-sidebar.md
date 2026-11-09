@@ -67,6 +67,12 @@ Pin a thread from its menu to keep it above your active work.
 When GOAT Bot is enabled, **Bots** lists the main bot and, on supported servers,
 its task and coding threads. Use a task's menu to pin it, mark it done, or mark it read.
 
+The thread list leaves out what the bots run for themselves: each bot's conversation, a task's
+worker, and threads a bot starts outside a worktree, such as stopping a server. Open those from
+the bot's task. Coding a bot sends to its own worktree stays in the list, marked
+**from GOAT Bot**. Search still finds every thread, and **Show GOAT Bot threads** in Settings
+lists them all on that device.
+
 A task opens its own conversation beside the main chat on a wide screen, or in place
 of the chat on a narrow one; messages you send there stay with that task. To always
 open tasks in place, turn off **Open task threads beside the main chat** in

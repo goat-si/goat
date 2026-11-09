@@ -349,7 +349,7 @@ export function MobileBotWork(props: {
                   ).map(([label, tasks]) => (
                     <View key={label} className="gap-2 py-2">
                       <Text className="font-semibold text-foreground">{label}</Text>
-                      {tasks.map(({ row }) => (
+                      {tasks.map(({ row, threads }) => (
                         <View key={row.task.taskId}>
                           <Pressable
                             accessibilityRole="button"
@@ -384,6 +384,36 @@ export function MobileBotWork(props: {
                               </Pressable>
                             ) : null,
                           )}
+                          {/* The task's worker and other launches no row lists: lists leave them to the bot. */}
+                          {threads
+                            .filter(
+                              (thread) =>
+                                !rows.some(
+                                  (coding) =>
+                                    coding.kind === "coding" &&
+                                    coding.environmentId === thread.environmentId &&
+                                    coding.threadId === thread.threadId,
+                                ),
+                            )
+                            .map((thread) => (
+                              <Pressable
+                                key={thread.environmentId + ":" + thread.threadId}
+                                accessibilityRole="button"
+                                accessibilityLabel={"Work thread: " + row.task.title}
+                                className="ml-4 min-h-[44px] justify-center"
+                                onPress={() => {
+                                  setOpen(false);
+                                  props.onOpenThread({
+                                    environmentId: thread.environmentId,
+                                    id: thread.threadId,
+                                  });
+                                }}
+                              >
+                                <Text numberOfLines={1} className="text-foreground-muted">
+                                  Work thread
+                                </Text>
+                              </Pressable>
+                            ))}
                         </View>
                       ))}
                     </View>

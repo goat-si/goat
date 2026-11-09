@@ -80,4 +80,16 @@ describe("groupBotWork", () => {
     expect(result.inProgress[0]?.threads).toEqual([{ environmentId: "env", threadId: "thread" }]);
     expect(result.inProgress[0]?.truncated).toBe(true);
   });
+
+  it("opens a task's worker from its task, since thread lists leave it to the bot", () => {
+    const withWorker = (threadId: string) =>
+      row({ ...task("a", null), worker: { environmentId: "env", threadId } });
+    const threadsOf = (taskRow: ReturnType<typeof withWorker>) =>
+      groupBotWork([taskRow], [], EnvironmentId.make("env")).inProgress[0]?.threads;
+    expect(threadsOf(withWorker("channel-worker:a"))).toEqual([
+      { environmentId: "env", threadId: "channel-worker:a" },
+    ]);
+    // A bot turn runs in the bot's own conversation, which is the chat already open.
+    expect(threadsOf(withWorker("goat-bot-session:a"))).toEqual([]);
+  });
 });

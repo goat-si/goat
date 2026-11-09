@@ -1,6 +1,6 @@
 import {
-  isGoatBotSessionThreadId,
-  type ChannelTaskKind,
+  isGoatBotConversationThreadId,
+  type BotThreadRow,
   type EnvironmentId,
   type OrchestrationV2ThreadLauncher,
   type OrchestrationV2ThreadShell,
@@ -23,15 +23,42 @@ export interface GoatBotVisibilityThread {
   };
 }
 
-/** A channel task's worker thread, in the worker's own environment. A missing kind is work. */
-export interface GoatBotKnownWorker {
+/** A thread in its own environment. */
+export interface GoatBotWorkRef {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
-  readonly kind?: ChannelTaskKind | undefined;
 }
 
 const keyOf = (environmentId: EnvironmentId, threadId: ThreadId) =>
   scopedThreadKey(scopeThreadRef(environmentId, threadId));
+
+/** Whether GOAT Bot's own work launched this thread, rather than a person or their agent. */
+export const isGoatBotLaunch = (
+  launcher:
+    | Pick<OrchestrationV2ThreadLauncher, "kind" | "threadId" | "via" | "workKind">
+    | undefined,
+) =>
+  launcher?.kind === "launch" &&
+  launcher.via !== "delegate_task" &&
+  (launcher.workKind !== undefined ||
+    isGoatBotConversationThreadId(launcher.threadId) ||
+    launcher.threadId.startsWith("channel-worker:"));
+
+/**
+ * The threads a bot's rows open that are its own work: each task's worker and every launch the
+ * server marked a chore. Coding launches and unmarked ones stay people's work.
+ */
+export function goatBotListedWork(rows: ReadonlyArray<BotThreadRow>): GoatBotWorkRef[] {
+  const listed: GoatBotWorkRef[] = [];
+  for (const row of rows) {
+    if (row.kind === "task") {
+      if (row.worker !== undefined) listed.push(row.worker);
+    } else if (row.workKind === "chore") {
+      listed.push({ environmentId: row.environmentId, threadId: row.threadId });
+    }
+  }
+  return listed;
+}
 
 // Coding work a thread launched and threads the user promoted are people's work: the walk up
 // from a bot thread stops there, and their own children fold as they do today.
@@ -62,31 +89,32 @@ function observedParents(thread: GoatBotVisibilityThread) {
 }
 
 /**
- * Scoped keys of the threads GOAT Bot runs for observation: its session threads, its per-task
- * turn workers when their tasks are known, and every subagent or delegated child below them.
+ * Scoped keys of the threads lists leave to GOAT Bot: its conversation threads, the work its
+ * rows list (so the bot can always open what is hidden), and every subagent or delegated child
+ * below them. Work no row lists yet, or any more, stays in lists.
  */
 export function goatBotObservationThreadKeys(input: {
   readonly threads: ReadonlyArray<GoatBotVisibilityThread>;
-  readonly knownWorkers?: ReadonlyArray<GoatBotKnownWorker>;
+  readonly listedWork?: ReadonlyArray<GoatBotWorkRef>;
 }): ReadonlySet<string> {
-  const workerKind = new Map<string, ChannelTaskKind>();
-  for (const worker of input.knownWorkers ?? []) {
-    workerKind.set(keyOf(worker.environmentId, worker.threadId), worker.kind ?? "work");
-  }
+  const listed = new Set<string>();
+  for (const ref of input.listedWork ?? []) listed.add(keyOf(ref.environmentId, ref.threadId));
   const seeds = new Set<string>();
-  for (const [key, kind] of workerKind) if (kind === "turn") seeds.add(key);
   const childrenByParent = new Map<string, string[]>();
   for (const thread of input.threads) {
     const key = keyOf(thread.environmentId, thread.id);
-    if (isGoatBotSessionThreadId(thread.id)) {
+    if (
+      isGoatBotConversationThreadId(thread.id) ||
+      (listed.has(key) && thread.source.launchedBy?.kind !== "promotion")
+    ) {
       seeds.add(key);
       continue;
     }
-    if (seeds.has(key) || isVisibleWork(thread) || workerKind.get(key) === "work") continue;
+    if (isVisibleWork(thread)) continue;
     for (const parent of observedParents(thread)) {
       const parentKey = keyOf(parent.environmentId, parent.threadId);
-      // A session parent is known by its id even when its shell is not loaded here.
-      if (isGoatBotSessionThreadId(parent.threadId)) seeds.add(parentKey);
+      // A conversation parent is known by its id even when its shell is not loaded here.
+      if (isGoatBotConversationThreadId(parent.threadId)) seeds.add(parentKey);
       const siblings = childrenByParent.get(parentKey);
       if (siblings === undefined) childrenByParent.set(parentKey, [key]);
       else siblings.push(key);

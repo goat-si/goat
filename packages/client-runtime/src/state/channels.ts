@@ -2,6 +2,7 @@ import {
   CHANNEL_GATEWAY_WS_METHODS,
   type ChannelBotRef,
   type ChannelIngestInput,
+  type ChannelListBotThreadsInput,
   type ChannelTaskId,
   type ChatAttachment,
   type EnvironmentId,
@@ -11,12 +12,15 @@ import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import * as Effect from "effect/Effect";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { goatBotListedWork, type GoatBotWorkRef } from "../goatBot/visibility.ts";
 import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "./runtime.ts";
 import { createEnvironmentSessionAtoms } from "./session.ts";
+
+const NO_WORK: ReadonlyArray<GoatBotWorkRef> = Object.freeze([]);
 
 /**
  * Commands and queries for the GOAT bot, the channel ledger, and Slack settings. Bot messages
@@ -55,12 +59,53 @@ export function createChannelEnvironmentAtoms<R, E>(
         : AsyncResult.success({ groups: [] }),
     );
   });
+  /**
+   * The threads every bot's rows open as its own work, in the given environments. A bot's
+   * rows are read again when its environment's signal changes; until they load, nothing is
+   * listed, so thread lists keep showing the work.
+   */
+  const listedBotWork = (source: {
+    readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
+    readonly signal: (environmentId: EnvironmentId) => Atom.Atom<string>;
+  }) => {
+    const rowsQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:goat-bot-listed-work",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
+      staleTimeMs: 2_000,
+      refreshTrigger: ({ environmentId }) => source.signal(environmentId),
+    });
+    const forEnvironment = Atom.family((environmentId: EnvironmentId) =>
+      Atom.make((get): ReadonlyArray<GoatBotWorkRef> => {
+        const capabilities = get(sessions.initialConfigValueAtom(environmentId))?.environment
+          .capabilities;
+        if (capabilities?.goatBotTaskThreads !== true) return NO_WORK;
+        const inputs: ChannelListBotThreadsInput[] = [{}];
+        if (capabilities.goatBotMembers === true && capabilities.goatBotProfiles === true) {
+          // The roster's own query, so both read one list of bots.
+          const bots = get(listBots({ environmentId, input: { includeDeleted: true } }));
+          for (const bot of AsyncResult.isSuccess(bots) ? bots.value.bots : []) {
+            if (bot.role === "member" && bot.state !== "deleted") inputs.push({ botId: bot.botId });
+          }
+        }
+        const listed: GoatBotWorkRef[] = [];
+        for (const input of inputs) {
+          const result = get(rowsQuery({ environmentId, input }));
+          if (AsyncResult.isSuccess(result)) listed.push(...goatBotListedWork(result.value.rows));
+        }
+        return listed.length === 0 ? NO_WORK : listed;
+      }).pipe(Atom.withLabel(`environment-data:channel:goat-bot-listed-work:${environmentId}`)),
+    );
+    return Atom.make((get) =>
+      get(source.environmentIdsAtom).flatMap((environmentId) => get(forEnvironment(environmentId))),
+    ).pipe(Atom.withLabel("environment-data:channel:goat-bot-listed-work"));
+  };
   return {
     ensureBot: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:ensure-bot",
       tag: CHANNEL_GATEWAY_WS_METHODS.ensureBot,
     }),
     listBots,
+    listedBotWork,
     /** Edits a bot's name, avatar or purpose; the roster and settings re-read the list after. */
     updateBot: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:update-bot",

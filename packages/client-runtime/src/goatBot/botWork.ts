@@ -1,9 +1,10 @@
-import type {
-  BotThreadRow,
-  ChannelChildWork,
-  ChannelChildWorkGroup,
-  EnvironmentId,
-  ThreadId,
+import {
+  isGoatBotConversationThreadId,
+  type BotThreadRow,
+  type ChannelChildWork,
+  type ChannelChildWorkGroup,
+  type EnvironmentId,
+  type ThreadId,
 } from "@goat/contracts";
 
 export interface BotWorkTask {
@@ -43,6 +44,9 @@ export function groupBotWork(
         threads.push({ environmentId: env, threadId });
       }
     };
+    // Lists leave the worker to the bot, so its task opens it; a bot turn's worker is the chat.
+    if (row.worker !== undefined && !isGoatBotConversationThreadId(row.worker.threadId))
+      addThread(row.worker.environmentId, row.worker.threadId);
     for (const coding of rows) {
       if (coding.kind === "coding" && coding.taskId === row.task.taskId)
         addThread(coding.environmentId, coding.threadId);
