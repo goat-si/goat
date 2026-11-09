@@ -1,0 +1,218 @@
+import { EnvironmentId, ProjectId, type ScopedProjectRef } from "@goat/contracts";
+import { scopeProjectRef } from "@goat/client-runtime/environment";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import { act, render } from "../../../test/render";
+
+const state = vi.hoisted(() => {
+  const projects = new Map<string, unknown>();
+  const listeners = new Map<string, Set<() => void>>();
+  const keyOf = (ref: ScopedProjectRef) => `${ref.environmentId}:${ref.projectId}`;
+  return {
+    projects,
+    listeners,
+    keyOf,
+    addProjectToMachine: vi.fn(),
+    toast: vi.fn(),
+    setProject(ref: ScopedProjectRef, project: unknown) {
+      projects.set(keyOf(ref), project);
+      for (const listener of listeners.get(keyOf(ref)) ?? []) listener();
+    },
+  };
+});
+
+vi.mock(import("../../lib/addProjectToMachine"), async (original) => ({
+  ...(await original()),
+  addProjectToMachine: state.addProjectToMachine,
+}));
+vi.mock(import("../../lib/utils"), async (original) => ({
+  ...(await original()),
+  newProjectId: () => ProjectId.make("cloned"),
+}));
+vi.mock(import("../../state/entities"), async (original) => ({
+  ...(await original()),
+  useProjects: (() => [...state.projects.values()]) as never,
+  readProject: ((ref: ScopedProjectRef) => state.projects.get(state.keyOf(ref)) ?? null) as never,
+  subscribeProject: ((ref: ScopedProjectRef, listener: (project: unknown) => void) => {
+    const key = state.keyOf(ref);
+    const set = state.listeners.get(key) ?? new Set<() => void>();
+    state.listeners.set(key, set);
+    const notify = () => listener(state.projects.get(key) ?? null);
+    set.add(notify);
+    return () => set.delete(notify);
+  }) as never,
+}));
+vi.mock(import("../../hooks/useLoadBalancedEnvironment"), () => ({
+  useLoadBalancedEnvironment: (() => ({
+    pending: false,
+    failed: false,
+    environmentId: null,
+    refresh: () => undefined,
+  })) as never,
+}));
+vi.mock(import("../ui/toast"), async (original) => ({
+  ...(await original()),
+  toastManager: { add: state.toast } as never,
+}));
+
+import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
+import type { MachineWithoutProject } from "../../lib/runOnArrival";
+import { useDraftEnvironmentRouting } from "./useDraftEnvironmentRouting";
+
+const laptop = EnvironmentId.make("laptop");
+const studio = EnvironmentId.make("studio");
+const macmini = EnvironmentId.make("macmini");
+const draftId = DraftId.make("draft");
+const source = scopeProjectRef(laptop, ProjectId.make("source"));
+const onMacmini = scopeProjectRef(macmini, ProjectId.make("on-macmini"));
+const cloned = scopeProjectRef(studio, ProjectId.make("cloned"));
+const SOURCE = {
+  environmentId: laptop,
+  id: source.projectId,
+  title: "direction-board",
+  workspaceRoot: "/Users/jun/direction-board",
+  repositoryIdentity: null,
+};
+const STUDIO: MachineWithoutProject = {
+  environmentId: studio,
+  projectId: null,
+  label: "Mac Studio",
+  isPrimary: false,
+  machine: "desktop",
+  arrival: {
+    kind: "clone",
+    remoteUrl: "git@github.com:goat-si/direction-board.git",
+    destinationPath: "~/code/direction-board",
+  },
+};
+
+type Routing = ReturnType<typeof useDraftEnvironmentRouting>;
+
+async function setup() {
+  state.projects.clear();
+  state.listeners.clear();
+  state.addProjectToMachine.mockReset().mockResolvedValue(undefined);
+  state.toast.mockReset();
+  state.setProject(source, SOURCE);
+  state.setProject(onMacmini, { ...SOURCE, environmentId: macmini, id: onMacmini.projectId });
+  useComposerDraftStore.setState({
+    draftsByThreadKey: {},
+    draftThreadsByThreadKey: {},
+    logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+  });
+  useComposerDraftStore
+    .getState()
+    .setLogicalProjectDraftThreadId("direction-board", source, draftId, { envMode: "worktree" });
+  const routing: { current: Routing | null } = { current: null };
+  const capture = (value: Routing) => {
+    routing.current = value;
+  };
+  function Harness(props: { capture: (value: Routing) => void }) {
+    const value = useDraftEnvironmentRouting({
+      draftId,
+      draftThread: useComposerDraftStore((store) => store.getDraftSession(draftId)),
+      envLocked: false,
+      automaticEnvironment: false,
+      logicalProjectEnvironments: [
+        {
+          environmentId: laptop,
+          projectId: source.projectId,
+          label: "Laptop",
+          isPrimary: true,
+          machine: "laptop",
+        },
+        {
+          environmentId: macmini,
+          projectId: onMacmini.projectId,
+          label: "macmini",
+          isPrimary: false,
+          machine: "desktop",
+        },
+      ],
+      machinesWithoutProject: [STUDIO],
+      activeProject: SOURCE as never,
+      environmentById: new Map(),
+      providersByEnvironment: new Map() as never,
+      loadBalancingSettings: { loadBalancingWeights: {} },
+      referencedThreadContexts: [],
+      activeProviderInstanceId: null,
+      selectedProvider: "codex" as never,
+      composerHasAttachments: false,
+      activeProjectKey: "laptop:source",
+      activeProjectIsScratch: false,
+      projectGroupingSettings: {} as never,
+      sendInFlightRef: { current: false },
+    });
+    props.capture(value);
+    return null;
+  }
+  // router: false — the hook reads no route; the harness renders nothing.
+  const screen = await render(<Harness capture={capture} />, { router: false });
+  const draft = () => useComposerDraftStore.getState().getDraftSession(draftId);
+  return Object.assign(screen, { routing, draft });
+}
+
+describe("useDraftEnvironmentRouting: machines without the project", () => {
+  it("clones to the picked machine and moves the draft there once its project arrives, keeping New worktree", async () => {
+    await using screen = await setup();
+
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
+
+    expect(state.addProjectToMachine).toHaveBeenCalledTimes(1);
+    expect(state.addProjectToMachine.mock.calls[0]?.[0]).toMatchObject({
+      target: { environmentId: studio, label: "Mac Studio" },
+      projectId: cloned.projectId,
+      remoteUrl: "git@github.com:goat-si/direction-board.git",
+      destinationPath: "~/code/direction-board",
+      files: [],
+    });
+    // The clone started, but this client has not seen the project yet.
+    expect(screen.draft()?.environmentId).toBe(laptop);
+    expect(screen.routing.current?.isEnvironmentChanging).toBe(true);
+
+    await act(() =>
+      state.setProject(cloned, { ...SOURCE, environmentId: studio, id: cloned.projectId }),
+    );
+
+    expect(screen.draft()).toMatchObject({
+      environmentId: studio,
+      projectId: cloned.projectId,
+      envMode: "worktree",
+      environmentSelection: "manual",
+    });
+    expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
+  });
+
+  it("keeps the draft where it was and says why when the clone cannot start", async () => {
+    await using screen = await setup();
+    state.addProjectToMachine.mockRejectedValue(new Error("Destination already exists."));
+
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
+
+    expect(screen.draft()?.environmentId).toBe(laptop);
+    expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title: "Could not clone direction-board to Mac Studio",
+        description: "Destination already exists.",
+      }),
+    );
+  });
+
+  it("a newer machine pick wins over a clone still waiting for its project", async () => {
+    await using screen = await setup();
+
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(macmini));
+    await act(() =>
+      state.setProject(cloned, { ...SOURCE, environmentId: studio, id: cloned.projectId }),
+    );
+
+    expect(screen.draft()).toMatchObject({
+      environmentId: macmini,
+      projectId: onMacmini.projectId,
+    });
+    expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
+  });
+});

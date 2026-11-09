@@ -2,11 +2,6 @@ import { resolvePastedPath } from "@goat/shared/path";
 import { useParams } from "@tanstack/react-router";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import {
-  getAddProjectInitialQuery,
-  getCloneDestinationPath,
-  getCloneDirectoryPath,
-} from "@goat/client-runtime/operations/projects";
-import {
   type EnvironmentId,
   type ProjectIgnoredFile,
   type ScopedProjectRef,
@@ -24,7 +19,9 @@ import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnviron
 import {
   COPYABLE_FILE_MAX_BYTES,
   addProjectToMachine,
+  defaultCloneDestination,
   isDefaultCopiedFile,
+  projectRemoteUrl,
 } from "../lib/addProjectToMachine";
 import { formatBytes } from "../lib/formatBytes";
 import { newProjectId } from "../lib/utils";
@@ -95,10 +92,7 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
   const [targetId, setTargetId] = useState(request.targetEnvironmentId);
   const target = targets.find((t) => t.environmentId === targetId) ?? targets[0] ?? null;
   const source = environments.find((env) => env.environmentId === request.projectRef.environmentId);
-  const sourceUrl =
-    project?.repositoryIdentity?.origin?.remoteUrl ??
-    project?.repositoryIdentity?.locator.remoteUrl ??
-    "";
+  const sourceUrl = projectRemoteUrl(project) ?? "";
   const [protocol, setProtocol] = useState<CloneProtocol | null>(() => cloneUrlProtocol(sourceUrl));
   const sshUrl = cloneUrlForProtocol(sourceUrl, "ssh");
   const httpsUrl = cloneUrlForProtocol(sourceUrl, "https");
@@ -106,13 +100,7 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
     (protocol === "ssh" ? sshUrl : protocol === "https" ? httpsUrl : null) ?? sourceUrl;
 
   const targetEnvironment = environments.find((env) => env.environmentId === target?.environmentId);
-  const defaultPath = getCloneDestinationPath(
-    getAddProjectInitialQuery(targetEnvironment?.serverConfig?.settings.addProjectBaseDirectory),
-    getCloneDirectoryPath(
-      sourceUrl,
-      targetEnvironment?.serverConfig?.settings.ghqCloneLayout === true,
-    ),
-  );
+  const defaultPath = defaultCloneDestination(sourceUrl, targetEnvironment?.serverConfig?.settings);
   const [pathOverride, setPathOverride] = useState<string | null>(null);
   const destinationPath = pathOverride ?? defaultPath;
 

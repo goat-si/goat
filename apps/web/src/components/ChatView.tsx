@@ -302,7 +302,6 @@ import { canOpenSideChat } from "./sideChat/sideChat.logic";
 
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
-  type EnvironmentOption,
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
   shouldShowComposerContextStrip,
@@ -310,7 +309,8 @@ import {
 } from "./BranchToolbar.logic";
 import { environmentCatalog } from "../connection/catalog";
 import { isPdfFindShortcut } from "./files/pdf/pdfShortcuts";
-import { resolveEnvironmentMachineKind } from "@goat/contracts";
+import { useMachinesWithoutProject } from "../hooks/useMachinesWithoutProject";
+import { resolveMachineArrivals } from "../lib/runOnArrival";
 import { useThreadShell } from "../state/entities";
 import {
   getProviderStatusBannerKey,
@@ -1241,24 +1241,11 @@ export default function ChatView(props: ChatViewProps) {
     activeProjectIsScratch && draftId !== null,
   );
   const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
-  // Connected machines without this project. Run on lists them disabled so a
-  // missing machine reads as "no copy here" instead of disappearing.
-  const listedEnvironmentIds = new Set(
-    logicalProjectEnvironments.map(({ environmentId }) => environmentId),
+  const environmentsWithoutProject = useMachinesWithoutProject(
+    activeProject,
+    activeProjectIsScratch,
+    logicalProjectEnvironments,
   );
-  const environmentsWithoutProject: EnvironmentOption[] =
-    !activeProject || activeProjectIsScratch
-      ? []
-      : environments
-          .filter(({ environmentId }) => !listedEnvironmentIds.has(environmentId))
-          .map((environment) => ({
-            environmentId: environment.environmentId,
-            projectId: null,
-            label: environment.label,
-            isPrimary: environment.environmentId === primaryEnvironmentId,
-            machine: resolveEnvironmentMachineKind(environment.serverConfig ?? null),
-          }))
-          .toSorted((a, b) => a.label.localeCompare(b.label));
   // Run on opens when there is a choice or a machine to explain; keyboard cycling
   // and auto balance still need two machines with the project.
   const canPickEnvironment = hasMultipleEnvironments || environmentsWithoutProject.length > 0;
@@ -1898,6 +1885,11 @@ export default function ChatView(props: ChatViewProps) {
   });
   // Host selection is available before the user removes text-only transfer blockers.
   const sshDisabledReason = sshWorktreeSelectionBlockReason(sshGuardInput);
+  const machinesWithoutProject = resolveMachineArrivals(
+    environmentsWithoutProject,
+    sshOptions,
+    sshDisabledReason,
+  );
 
   const canHandoffSsh = useAtomValue(sshWorkspaceLaunchCommand.permissionAtom(environmentId));
   const sshHandoffGuard = {
@@ -2004,6 +1996,8 @@ export default function ChatView(props: ChatViewProps) {
     envLocked,
     automaticEnvironment,
     logicalProjectEnvironments,
+    machinesWithoutProject,
+    activeProject,
     environmentById,
     providersByEnvironment,
     loadBalancingSettings,
@@ -4052,7 +4046,7 @@ export default function ChatView(props: ChatViewProps) {
                                     : undefined
                                 }
                                 availableEnvironments={logicalProjectEnvironments}
-                                environmentsWithoutProject={environmentsWithoutProject}
+                                environmentsWithoutProject={machinesWithoutProject}
                                 composerControlsHostRef={setRestingComposerControlsHost}
                                 contextStripVisible={showComposerContextStrip}
                               />
@@ -4125,7 +4119,7 @@ export default function ChatView(props: ChatViewProps) {
                 isGitRepo={isGitRepo && !isGlobalAgentActive && !isCloudThread}
                 envLocked={envLocked}
                 availableEnvironments={logicalProjectEnvironments}
-                environmentsWithoutProject={environmentsWithoutProject}
+                environmentsWithoutProject={machinesWithoutProject}
                 autoEnvironmentLabel={autoEnvironmentLabel}
                 onAutoEnvironment={
                   draftId &&
