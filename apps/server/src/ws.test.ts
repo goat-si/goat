@@ -147,6 +147,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as SourceControlStarPrompt from "./sourceControl/SourceControlStarPrompt.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import { ThreadWorkspaceService } from "./orchestration-v2/goat/ThreadWorkspaceService.ts";
@@ -902,6 +903,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SessionStore.SessionStore)({ cookieName: "config-test", legacyCookieName: undefined }),
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
+  Layer.mock(SourceControlStarPrompt.SourceControlStarPrompt)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
   Layer.mock(ThreadWorkspaceService)({}),
   Layer.mock(DecisionService.DecisionService)({}),
@@ -1291,10 +1293,8 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
   ),
 );
 
-// Compaction keeps the oldest and newest event per message, so a cursor older
-// than the deleted rows still replays each message where the client would
-// first have seen it (reducers append on first sight) and reaches the same
-// final state. No snapshot fallback is needed.
+// Retained oldest and newest events replay each message in its original position,
+// so a cursor older than the deleted rows still reaches the same final state.
 it.effect("thread resume across compacted history keeps message order and final state", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

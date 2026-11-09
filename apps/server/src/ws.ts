@@ -306,6 +306,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as SourceControlStarPrompt from "./sourceControl/SourceControlStarPrompt.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import { storageRpcHandlers } from "./storage/storageRpc.ts";
@@ -1237,8 +1238,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           .readApplicationEvents({
             afterSequence: input.afterSequence,
             throughSequence: highWater,
-            // A row a newer build wrote (e.g. after a downgrade) must not fail
-            // every shell resubscribe. The live tail below resumes from
+            // Ignore rows from newer builds; the live tail resumes from
             // highWater, so a dropped row never hides later events.
             skipUnknownEventTypes: true,
           })
@@ -1457,6 +1457,7 @@ export const layerWsRpc = (
       const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
+      const sourceControlStarPrompt = yield* SourceControlStarPrompt.SourceControlStarPrompt;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
@@ -2974,6 +2975,7 @@ export const layerWsRpc = (
           withPullRequestViewer(input, pullRequests.setLabels(input)),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           sourceControlRepositories.lookupRepository(input),
+        ...SourceControlStarPrompt.handlers(sourceControlStarPrompt),
         [WS_METHODS.sourceControlCloneRepository]: (input) =>
           sourceControlRepositories.cloneRepository(input),
         [WS_METHODS.projectCloneStart]: (input) =>
@@ -3006,8 +3008,7 @@ export const layerWsRpc = (
                   }),
                 ),
                 Effect.andThen(refreshGitStatus(project.workspaceRoot)),
-                // The folder was empty when the project was created, so the cached
-                // enrichment says "no repository" and clients cannot group it yet.
+                // Refresh the empty-folder cache so clients can group the new repository.
                 Effect.andThen(projectEnrichment.invalidate([project.workspaceRoot])),
                 Effect.andThen(projectEnrichment.request(project.workspaceRoot)),
                 Effect.ignoreCause({ log: true }),
@@ -3591,6 +3592,7 @@ export const layerWsRpc = (
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
+    const starPromptLayer = yield* SourceControlStarPrompt.makeLayer;
     const connectionCatalogBroker = yield* ConnectionCatalogBroker.ConnectionCatalogBroker;
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
@@ -3632,8 +3634,7 @@ export const layer = Layer.unwrap(
             Effect.provide(
               Layer.merge(
                 RpcAuthorization.layer(session.scopes, (method, payload) => {
-                  // Anonymous product signal: the feature and its enum variant,
-                  // credited to the connecting client's surface only.
+                  // Anonymous feature and variant signal for the connecting surface.
                   const usage = featureUsage(method, payload);
                   return usage === undefined
                     ? Effect.void
@@ -3668,7 +3669,7 @@ export const layer = Layer.unwrap(
               Layer.provide(DefectReporter.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
-              Layer.provide(ProviderMaintenanceRunner.layer),
+              Layer.provide(Layer.merge(ProviderMaintenanceRunner.layer, starPromptLayer)),
               Layer.provide(
                 Layer.mergeAll(
                   Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate),
