@@ -258,6 +258,9 @@ func TestDialRaceClosesTheLosersWith1000BeforeAnyByte(t *testing.T) {
 	id := newID(t)
 	ua, _, _ := startUplink(t, ctx, a, id)
 	ub, _, _ := startUplink(t, ctx, b, id)
+	settled := make(chan []string, 1)
+	relay.RaceSettled = func(closed []string) { settled <- closed }
+	defer func() { relay.RaceSettled = nil }()
 	c, used, err := relay.DialRace(ctx, []string{a.URL, b.URL}, id.NodeID())
 	if err != nil {
 		t.Fatal(err)
@@ -271,8 +274,41 @@ func TestDialRaceClosesTheLosersWith1000BeforeAnyByte(t *testing.T) {
 	if p, err := w.Recv(ctx); err != nil || len(p) != 1 {
 		t.Fatalf("winner got %x, %v", p, err)
 	}
+	closed := <-settled
+	loserURL := b.URL
+	if used == b.URL {
+		loserURL = a.URL
+	}
+	if len(closed) != 1 || closed[0] != loserURL {
+		t.Fatalf("closed %v, want the loser %s", closed, loserURL)
+	}
+	// The loser's OPEN and CLOSE precede the race settling, so Accept has them.
 	l, _ := loser.Accept(ctx)
 	if p, err := l.Recv(ctx); relay.CodeOf(err) != wire.CodeNormal {
 		t.Fatalf("loser got %x, %v; want CLOSE 1000 and no byte", p, err)
+	}
+}
+
+func TestDialRaceGivesUpAtItsOwnDeadlineWhenARelayNeverAnswers(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // accepted and never answered
+		}
+	}()
+	old := relay.DialRaceTimeout
+	relay.DialRaceTimeout = 200 * time.Millisecond
+	defer func() { relay.DialRaceTimeout = old }()
+	id := newID(t)
+	if _, _, err := relay.DialRace(context.Background(), []string{"http://" + ln.Addr().String()}, id.NodeID()); err == nil {
+		t.Fatal("a relay that never answered won the race")
 	}
 }

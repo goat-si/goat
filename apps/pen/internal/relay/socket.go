@@ -68,19 +68,31 @@ func statusCode(err error) uint16 {
 	return 1006
 }
 
+// DialRaceTimeout bounds a whole race, whatever the caller's context allows.
+var DialRaceTimeout = 15 * time.Second
+
+// RaceSettled, when set, is called once every socket of a race is resolved, with the relays whose
+// sockets connected and were closed with 1000. It is a test hook, read when a race starts.
+var RaceSettled func(closed []string)
+
+var errLost = errors.New("relay: another relay answered first")
+
 // DialRace opens one client socket per relay in parallel, sends ping on each and keeps the first
-// that answers pong; the others close with 1000 before any other byte is sent. A relay where the
-// node is offline closes 4404 before any pong, so it never wins. It reports the relay it used.
+// that answers pong; every other socket that connects is closed with 1000 before any other byte.
+// A relay where the node is offline closes 4404 before any pong, so it never wins. Losers finish
+// their dial (an aborted handshake would reach the node as 1006) within DialRaceTimeout.
 func DialRace(ctx context.Context, relays []string, nodeID string) (Conn, string, error) {
 	if len(relays) == 0 {
 		return nil, "", errors.New("relay: no relays")
 	}
+	settled := RaceSettled
 	type result struct {
 		c   *clientConn
 		url string
 		err error
 	}
-	rctx, cancel := context.WithCancel(ctx)
+	rctx, cancel := context.WithTimeout(ctx, DialRaceTimeout)
+	decided := make(chan struct{})
 	results := make(chan result, len(relays))
 	for _, u := range relays {
 		go func() {
@@ -90,7 +102,10 @@ func DialRace(ctx context.Context, relays []string, nodeID string) (Conn, string
 				return
 			}
 			cc := c.(*clientConn)
-			cc.ws.Write(rctx, websocket.MessageText, []byte("ping"))
+			if err := cc.ws.Write(rctx, websocket.MessageText, []byte("ping")); err != nil {
+				results <- result{c: cc, url: u, err: err}
+				return
+			}
 			select {
 			case <-cc.pong:
 				results <- result{c: cc, url: u}
@@ -100,31 +115,41 @@ func DialRace(ctx context.Context, relays []string, nodeID string) (Conn, string
 					err = &CloseError{Code: 1006}
 				}
 				results <- result{url: u, err: err}
+			case <-decided:
+				results <- result{c: cc, url: u, err: errLost}
 			case <-rctx.Done():
-				cc.Close(wire.CodeNormal)
-				results <- result{url: u, err: rctx.Err()}
+				results <- result{c: cc, url: u, err: rctx.Err()}
 			}
 		}()
 	}
+	finish := func(left int, closed []string) {
+		for range left {
+			if r := <-results; r.c != nil {
+				r.c.Close(wire.CodeNormal)
+				closed = append(closed, r.url)
+			}
+		}
+		cancel()
+		if settled != nil {
+			settled(closed)
+		}
+	}
 	var errs []error
+	var closed []string
 	for i := range relays {
 		r := <-results
-		if r.err != nil {
-			errs = append(errs, r.err)
-			continue
+		if r.err == nil {
+			close(decided)
+			go finish(len(relays)-i-1, closed)
+			return r.c, r.url, nil
 		}
-		// Late winners and dials still running end without a byte past their ping.
-		cancel()
-		go func(left int) {
-			for range left {
-				if late := <-results; late.c != nil {
-					late.c.Close(wire.CodeNormal)
-				}
-			}
-		}(len(relays) - i - 1)
-		return r.c, r.url, nil
+		if r.c != nil {
+			r.c.Close(wire.CodeNormal)
+			closed = append(closed, r.url)
+		}
+		errs = append(errs, r.err)
 	}
-	cancel()
+	finish(0, closed)
 	for _, err := range errs {
 		if CodeOf(err) == wire.CodeOffline {
 			return nil, "", err
