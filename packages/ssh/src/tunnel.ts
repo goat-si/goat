@@ -827,10 +827,10 @@ NODE
 }
 wait_ready() {
   if [ "$GOAT_ARCHIVE_MODE" = "1" ]; then
-    "$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@"
+    launch_bounded $(( ($1 + 999) / 1000 + 10 )) "$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@"
     return
   fi
-  node - "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@" <<'NODE'
+  launch_bounded $(( ($1 + 999) / 1000 + 10 )) node - "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@" <<'NODE'
 @@GOAT_WAIT_READY_SCRIPT@@
 NODE
 }
@@ -1088,8 +1088,7 @@ while [ -z "$REMOTE_PORT" ]; do
     else
       printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
     fi
-    if launch_server_alive "$REMOTE_PID"; then server_kill "$REMOTE_PID" || true; fi
-    launch_wait_exit "$REMOTE_PID"
+    launch_stop_server "$REMOTE_PID"
     rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
     if [ "$database_ahead" = 1 ]; then
       printf '%s\\n' "$SELECTED_VERSION" >"$DATABASE_AHEAD_FILE.next.$$"
