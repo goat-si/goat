@@ -21,6 +21,17 @@ const question: UserInputQuestion = {
 };
 
 describe("shared user input drafts", () => {
+  it.each([false, true])("preserves __proto__ answers through JSON (multi=%s)", (multiSelect) => {
+    const protoQuestion = { ...question, id: "__proto__", multiSelect };
+    const answers = buildPendingUserInputAnswers([protoQuestion], {
+      ["__proto__"]: { selectedOptionValues: ["two"] },
+    });
+    expect(answers).not.toBeNull();
+    expect(Object.hasOwn(answers ?? {}, "__proto__")).toBe(true);
+    expect(JSON.parse(JSON.stringify(answers))).toEqual({
+      ["__proto__"]: multiSelect ? ["two"] : "two",
+    });
+  });
   it("rejects unanswered questions, stale options, and forbidden custom answers", () => {
     const optionsOnly = { ...question, allowCustomAnswer: false };
     expect(buildPendingUserInputAnswers([question], {})).toBeNull();

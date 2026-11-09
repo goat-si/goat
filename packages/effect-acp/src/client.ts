@@ -12,7 +12,6 @@ import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-
 import * as AcpError from "./errors.ts";
 import * as AcpProtocol from "./protocol.ts";
 import * as AcpRpcs from "./rpc.ts";
@@ -28,7 +27,6 @@ import {
   runHandler,
 } from "./_internal/shared.ts";
 import { makeChildStdio, makeTerminationError } from "./_internal/stdio.ts";
-
 const decodeElicitationRequest = Schema.decodeUnknownEffect(
   Schema.Union([AcpSchemaV2.CreateElicitationRequest, AcpSchemaV1.CreateElicitationRequest]),
 );
@@ -60,6 +58,7 @@ export interface AcpClientOptions {
 }
 
 type AcpClientRaw = {
+  /** Unread notifications retain the newest 32 fitting 16Mi JSON characters, always including the latest; end on disconnect. */
   readonly notifications: Stream.Stream<AcpProtocol.AcpIncomingNotification>;
   readonly request: (method: string, payload: unknown) => Effect.Effect<unknown, AcpError.AcpError>;
   readonly notify: (method: string, payload: unknown) => Effect.Effect<void, AcpError.AcpError>;
