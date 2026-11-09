@@ -239,7 +239,7 @@ describe("ssh tunnel scripts", () => {
     );
     assert.isBelow(
       script.indexOf('exec node "$GOAT_NODE_SCRIPT_PATH" "$@"'),
-      script.indexOf("GOAT_ARCHIVE_VERSION="),
+      script.indexOf('if [ -z "$GOAT_ARCHIVE_VERSION" ]; then'),
     );
 
     const launch = SshTunnel.buildRemoteLaunchScript({

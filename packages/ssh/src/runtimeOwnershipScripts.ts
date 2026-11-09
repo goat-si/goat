@@ -16,7 +16,7 @@ const REMOTE_REPLACEMENT_WAIT_ATTEMPTS = 50;
 // host, Git Bash and Cygwin list only their own processes in /proc and ps, while the server is a
 // native process: PowerShell reads its identity, and the identity's Windows paths are mapped back
 // to the POSIX form the launch script records.
-export const REMOTE_HOST_PROCESS_SCRIPT = String.raw`case "$(uname -s)" in
+export const REMOTE_HOST_PROCESS_SCRIPT = String.raw`case "${"${fact_uname-$(uname -s)}"}" in
   MINGW* | MSYS* | CYGWIN*)
     GOAT_HOST_WINDOWS=1
     # By default ln -s copies, so the lock's dangling owner link could not be created.
@@ -266,9 +266,8 @@ check_live_protocol() {
     if ! valid_live_tokens "$@"; then printf 'Malformed live protocol output.\n' >&2; exit 1; fi
     LIVE_STATUS="$1"; LIVE_VERSION="$2"; LIVE_PID="$5"; LIVE_PORT="$6"
     if [ "$LIVE_STATUS" = live ] && valid_positive "$LIVE_PID" &&
-       [ "$(cat "$MANAGED_FILE" 2>/dev/null || true)" = managed ] &&
-       [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$LIVE_PID" ] &&
-       [ "$(cat "$PORT_FILE" 2>/dev/null || true)" = "$LIVE_PORT" ]; then LIVE_OWNED=1; fi
+       fact_file_is "$MANAGED_FILE" managed && fact_file_is "$PID_FILE" "$LIVE_PID" &&
+       fact_file_is "$PORT_FILE" "$LIVE_PORT"; then LIVE_OWNED=1; fi
     if [ "$LIVE_STATUS" = live ]; then read_live_compat "$2" "$3" "$4"; fi
     if [ "$LIVE_STATUS" = live ] && [ "$LIVE_OWNED" = 0 ] && adopt_managed_orphan; then LIVE_OWNED=1; fi
   else
@@ -276,7 +275,7 @@ check_live_protocol() {
   fi
   DRAIN_UNCERTAIN=0
   if [ -e "$STATE_DIR/draining" ] || [ -L "$STATE_DIR/draining" ]; then
-    draining_instance="$(cat "$STATE_DIR/draining" 2>/dev/null || true)"
+    fact_slurp "$STATE_DIR/draining" || FACT_TEXT=; draining_instance="$FACT_TEXT"
     if [ "$LIVE_STATUS" = none ] ||
        { [ -n "$draining_instance" ] && [ -n "$LIVE_INSTANCE_ID" ] && [ "$draining_instance" != "$LIVE_INSTANCE_ID" ]; }; then
       # Only an owner can retire a fence after the live helper proves its start is gone.
@@ -299,8 +298,8 @@ check_live_protocol() {
   if [ "$ALLOW_OWNED_UPGRADE" = 1 ] && [ "$LIVE_OWNED" = 1 ] && [ "$LEGACY_PENDING" != 1 ] &&
      [ ! -e "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ]; then LIVE_STATUS=unknown; fi
   if [ "$LIVE_STATUS" = unknown ]; then
-    recorded_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-    recorded_port="$(cat "$PORT_FILE" 2>/dev/null || true)"
+    fact_slurp "$PID_FILE" || FACT_TEXT=; recorded_pid="$FACT_TEXT"
+    fact_slurp "$PORT_FILE" || FACT_TEXT=; recorded_port="$FACT_TEXT"
     valid_positive "$recorded_pid" || recorded_pid=unknown
     valid_positive "$recorded_port" || recorded_port=unknown
     stop_pid="$recorded_pid"
@@ -398,7 +397,7 @@ recheck_selected_before_use() {
   # Never let a vanished ready selection become a network install.
   if [ "$REQUIRE_INSTALLED" = 1 ] && [ -n "$SELECTED_VERSION" ]; then
     selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
-    if [ ! -x "$selected_dir/goat" ] || [ "$(cat "$selected_dir/.install-complete" 2>/dev/null)" != "$SELECTED_VERSION" ]; then
+    if [ ! -x "$selected_dir/goat" ] || ! fact_file_is "$selected_dir/.install-complete" "$SELECTED_VERSION"; then
       printf 'Selected GOAT runtime disappeared before use.\\n' >&2; exit 1
     fi
   fi
@@ -497,7 +496,7 @@ FACT_MEMO="$RUNNER_CANDIDATE_FILE.facts"; fact_memo_drop
 @@GOAT_CAPTURE_RUNNING_RUNNER@@
 if [ "$REQUIRE_INSTALLED" = 1 ] && [ -n "$SELECTED_VERSION" ]; then
   selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
-  if [ ! -x "$selected_dir/goat" ] || [ "$(cat "$selected_dir/.install-complete" 2>/dev/null)" != "$SELECTED_VERSION" ]; then
+  if [ ! -x "$selected_dir/goat" ] || ! fact_file_is "$selected_dir/.install-complete" "$SELECTED_VERSION"; then
     printf 'Selected GOAT %s disappeared; reconnect to prepare again.\\n' "$SELECTED_VERSION" >&2; exit 1
   fi
 fi
@@ -505,8 +504,8 @@ check_retained_runner
 if [ "$PRESERVE_SELECTED_RUNNER" = 1 ]; then
   # Use copied retained bytes and verify the parsed selected version again.
   if [ ! -f "$RUNNER_FILE" ] ||
-     [ "$(read_runner_hint "$RUNNER_FILE" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})" != "$SELECTED_VERSION" ] ||
-     [ -n "$(read_runner_hint "$RUNNER_FILE" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})" ]; then
+     { runner_hint_set "$RUNNER_FILE" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY} GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} || :
+       [ "$RUNNER_HINT" != "$SELECTED_VERSION" ] || [ -n "$RUNNER_HINT2" ]; }; then
     printf 'Selected retained runner changed; reconnect to prepare again.\\n' >&2; exit 1
   fi
   cp "$RUNNER_FILE" "$RUNNER_NEXT"
@@ -533,7 +532,7 @@ TARGET_VERSION="\${RUNNER_VERSION_OUTPUT#goat v}"
 if [ -n "$SELECTED_VERSION" ]; then
   # Cold mirrors installed this exact archive during validation; pin future use too.
   selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
-  if [ ! -x "$selected_dir/goat" ] || [ "$(cat "$selected_dir/.install-complete" 2>/dev/null)" != "$SELECTED_VERSION" ]; then
+  if [ ! -x "$selected_dir/goat" ] || ! fact_file_is "$selected_dir/.install-complete" "$SELECTED_VERSION"; then
     printf 'Validated selected archive is not complete.\\n' >&2; exit 1
   fi
   REQUIRE_INSTALLED=1
@@ -823,12 +822,12 @@ export const REMOTE_OWNED_IDENTITY_SCRIPT = `verify_owned_identity() {
 verify_owned_identity_now() {
   owned_pid="$1"; owned_port="$2"
   valid_positive "$owned_pid" && valid_positive "$owned_port" && valid_port "$owned_port" || return 1
-  [ "$(cat "$MANAGED_FILE" 2>/dev/null || true)" = managed ] || return 1
+  fact_file_is "$MANAGED_FILE" managed || return 1
   [ -f "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ] || return 1
   server_snapshot "$owned_pid" || return 1
   owned_uid="$(server_uid "$owned_pid")" || return 1
   [ "$(printf '%s\\n' "$owned_uid" | awk 'NF==1 { print $1 }')" = "$(id -u)" ] || return 1
-  owned_identity="$(cat "$STATE_DIR/identity" 2>/dev/null)" || return 1
+  fact_slurp "$STATE_DIR/identity" || return 1; owned_identity="$FACT_TEXT"
   [ -n "$owned_identity" ] || return 1
   case "$owned_identity" in
     *" --port $owned_port --base-dir $DEFAULT_SERVER_HOME") ;;
@@ -844,10 +843,8 @@ verify_owned_identity_now() {
       case "$owned_command" in *" $owned_identity") ;; *) return 1 ;; esac ;;
   esac
   # Ownership and the running server's identity must still match after inspection.
-  [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$owned_pid" ] &&
-    [ "$(cat "$PORT_FILE" 2>/dev/null || true)" = "$owned_port" ] &&
-    [ "$(cat "$MANAGED_FILE" 2>/dev/null || true)" = managed ] &&
-    [ "$(cat "$STATE_DIR/identity" 2>/dev/null || true)" = "$owned_identity" ]
+  fact_file_is "$PID_FILE" "$owned_pid" && fact_file_is "$PORT_FILE" "$owned_port" &&
+    fact_file_is "$MANAGED_FILE" managed && fact_file_is "$STATE_DIR/identity" "$owned_identity"
 }
 `;
 
@@ -860,6 +857,18 @@ fi`;
 
 // Retained archives have a port-only wait-ready helper. Inspect the kernel's socket owner
 // in the launch shell instead, without adding helper arguments or starts on reconnect.
+const WINDOWS_AWAIT_LISTENER_POWERSHELL = String.raw`$ErrorActionPreference = 'Stop'
+$id = [int]$env:GOAT_PROCESS_ID
+$port = [int]$env:GOAT_LISTEN_PORT
+$until = [long]$env:GOAT_WAIT_UNTIL_MS
+while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $until) {
+  if (-not (Get-Process -Id $id -ErrorAction SilentlyContinue)) { exit 1 }
+  $connections = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+  if ($connections | Where-Object { $_.OwningProcess -eq $id -and $_.LocalAddress -eq '127.0.0.1' }) { exit 0 }
+  Start-Sleep -Milliseconds 100
+}
+exit 1`;
+
 export const REMOTE_LAUNCH_LISTENER_SCRIPT = String.raw`# macOS login shells often omit /usr/sbin, which is where lsof lives, and archive
 # launches never call ensure_remote_node_path. Resolve lsof without that PATH.
 ensure_listener_path() {
@@ -906,10 +915,36 @@ server_owns_listener() (
     "$lsof_bin" -nP -a -p "$1" -iTCP@127.0.0.1:"$2" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$1"
   fi
 )
+# Windows: each PowerShell start costs about 1.5 s, so one waits for server $1 to own the listener on
+# port $2, checking as often as the loop below, until it exits or the epoch second $3 arrives. Run in
+# the background, the job is PowerShell itself.
+server_awaits_listener() {
+  GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" GOAT_WAIT_UNTIL_MS="${"${"}3}000" MSYS2_ARG_CONV_EXCL='*' exec powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_AWAIT_LISTENER_POWERSHELL)}' </dev/null >/dev/null 2>&1
+}
+# True while job $1 still runs: a job this shell lists cannot have been reaped, so its PID is its own.
+listen_running() {
+  case " $(jobs -pr 2>/dev/null | tr '\n' ' ') " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
 wait_launched_listener() {
   listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
   while server_alive "$REMOTE_PID" && [ "$(date +%s)" -lt "$listen_deadline" ]; do
-    server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0
+    if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
+      # PowerShell can start, poll and answer late, so this shell holds it to the deadline and the
+      # server's life: at either it ends PowerShell and reports no listener.
+      server_awaits_listener "$REMOTE_PID" "$REMOTE_PORT" "$listen_deadline" &
+      listen_ps=$!
+      while listen_running "$listen_ps"; do
+        if [ "$(date +%s)" -ge "$listen_deadline" ] || ! server_alive "$REMOTE_PID"; then
+          if listen_running "$listen_ps"; then kill "$listen_ps" 2>/dev/null; fi
+          wait "$listen_ps" 2>/dev/null
+          return 1
+        fi
+        sleep 0.1
+      done
+      wait "$listen_ps" && [ "$(date +%s)" -lt "$listen_deadline" ] && server_alive "$REMOTE_PID" && return 0
+    else
+      server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0
+    fi
     sleep 0.1
   done
   return 1

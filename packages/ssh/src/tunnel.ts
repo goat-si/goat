@@ -602,10 +602,13 @@ ensure_remote_node_path() {
 
 const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
 set -eu
-${REMOTE_RUNTIME_PUBLISH_SCRIPT}@@GOAT_NODE_ENV_SCRIPT@@
 GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
 # Older clients inspect these literal declarations without evaluating the runner.
 ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY}=@@GOAT_NODE_SCRIPT_PATH@@
+GOAT_ARCHIVE_VERSION=@@GOAT_ARCHIVE_VERSION@@
+${LEGACY_SSH_ARCHIVE_VERSION_KEY}=@@GOAT_ARCHIVE_VERSION@@
+# End of the declarations GOAT reads without running this runner.
+${REMOTE_RUNTIME_PUBLISH_SCRIPT}@@GOAT_NODE_ENV_SCRIPT@@
 if [ -n "$GOAT_NODE_SCRIPT_PATH" ]; then
   # Dev mode: a source checkout on the remote. This is the only path that
   # needs Node, so Node discovery runs here and nowhere else.
@@ -616,8 +619,6 @@ if [ -n "$GOAT_NODE_SCRIPT_PATH" ]; then
   fi
   exec node "$GOAT_NODE_SCRIPT_PATH" "$@"
 fi
-GOAT_ARCHIVE_VERSION=@@GOAT_ARCHIVE_VERSION@@
-${LEGACY_SSH_ARCHIVE_VERSION_KEY}=@@GOAT_ARCHIVE_VERSION@@
 if [ -z "$GOAT_ARCHIVE_VERSION" ]; then
   printf 'No GOAT release version was provided for the remote runtime.\\n' >&2
   exit 1
@@ -1133,9 +1134,9 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 acquire_replacement_lock || { printf 'Another client is replacing the remote runtime.\\n' >&2; exit 1; }; [ -e "$STATE_DIR/run-t3.sh" ] || rm -f "$STATE_DIR/run-goat.sh" || :
-REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
-REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-REMOTE_PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
+fact_slurp "$MANAGED_FILE" || FACT_TEXT=; REMOTE_MANAGED="$FACT_TEXT"
+fact_slurp "$PID_FILE" || FACT_TEXT=; REMOTE_PID="$FACT_TEXT"
+fact_slurp "$PORT_FILE" || FACT_TEXT=; REMOTE_PORT="$FACT_TEXT"
 # Forget may stop only an owned runtime; external/unknown state belongs to another owner.
 if [ @@GOAT_STOP_OWNED_ONLY@@ = 1 ] && [ "$REMOTE_MANAGED" != managed ]; then
   printf '{"stopped":false,"activity":"unknown"}\\n'

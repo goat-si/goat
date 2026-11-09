@@ -28,7 +28,7 @@ ${WINDOWS_MANIFEST_SUPPORT_SCRIPT}
 prune_removed_facts
 ready_version() {
   valid_version "$1" && [ -x "$HOME/.goat/runtime/goat/versions/$1/goat" ] &&
-    [ "$(cat "$HOME/.goat/runtime/goat/versions/$1/.install-complete" 2>/dev/null)" = "$1" ]
+    fact_file_is "$HOME/.goat/runtime/goat/versions/$1/.install-complete" "$1"
 }
 signals_json() {
   # Positional parameters are scoped to this function, not the enclosing script.
@@ -98,10 +98,8 @@ retained_version=
 retained_sha256=
 if [ -n "$state_key" ] && [ -f "$state/run-t3.sh" ]; then
   retained_sha256="$(runner_sha256 "$state/run-t3.sh")" || exit 1
-  node_path="$(read_runner_hint "$state/run-t3.sh" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})"
-  if [ -z "$node_path" ]; then
-    retained_version="$(read_runner_hint "$state/run-t3.sh" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})"
-  fi
+  runner_hint_set "$state/run-t3.sh" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY} || exit 1
+  [ -n "$RUNNER_HINT" ] || retained_version="$RUNNER_HINT2"
 fi
 retained_fields=
 # A published fallback that has not yet served (pending) or failed verification (rejected).
@@ -226,9 +224,8 @@ probe_live() {
   live_status="$1"
   live_fields="$(printf ',"liveStatus":"%s"' "$1")"
   if [ "$1" = live ] && valid_positive "$5" &&
-     [ "$(cat "$state/managed" 2>/dev/null || true)" = managed ] &&
-     [ "$(cat "$state/pid" 2>/dev/null || true)" = "$5" ] &&
-     [ "$(cat "$state/port" 2>/dev/null || true)" = "$6" ]; then live_owned=true; fi
+     fact_file_is "$state/managed" managed && fact_file_is "$state/pid" "$5" &&
+     fact_file_is "$state/port" "$6"; then live_owned=true; fi
   if [ "$1" = live ] && [ "$live_owned" = false ] && [ -n "$state_key" ] &&
      managed_orphan "$5" "$6" "$2" "$state"; then
     live_fields="$live_fields,\\"liveAdoptable\\":true"
@@ -268,7 +265,7 @@ if [ "$live_answered" = 0 ]; then
   done
 fi
 [ "$live_status" != none ] || collect_installed_candidates
-case "$(uname -s)" in
+case "\${fact_uname-$(uname -s)}" in
   Darwin) platform=darwin ;; Linux) platform=linux ;; MINGW*|MSYS*|CYGWIN*) platform=win32 ;;
   *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -s)" >&2; exit 1 ;;
 esac

@@ -19,11 +19,15 @@ FACT_NAME=; FACT_KEY=; FACT_TEXT=; FACT_START=; FILE_SIG=; RUNNER_DIGEST=
 FACT_MEMO="\${FACT_MEMO:-}"
 fact_nl='
 '
-case "$(uname -s 2>/dev/null)" in
+# Later blocks read the system name from here instead of starting uname again.
+fact_uname="$(uname -s 2>/dev/null)" || fact_uname=
+case "$fact_uname" in
   MINGW*|MSYS*|CYGWIN*) fact_windows=1; fact_stat=gnu ;;
   Darwin|*BSD|DragonFly) fact_windows=0; fact_stat=bsd ;;
   *) fact_windows=0; fact_stat=gnu ;;
 esac
+# True when file $1 reads as $2, as [ "$(cat "$1" 2>/dev/null || true)" = "$2" ] tests it.
+fact_file_is() { fact_slurp "$1" || FACT_TEXT=; [ "$FACT_TEXT" = "$2" ]; }
 # Sets FACT_TEXT to file $1 as $(cat "$1") would read it, without starting cat.
 fact_slurp() {
   FACT_TEXT=; slurp_sep=; slurp_line=
@@ -97,9 +101,10 @@ exec_fact_key() {
   case "$1" in
     "$fact_versions"/*/goat) fact_exe="$1"; fact_via=exe ;;
     *)
-      [ -n "\${runner_hint_awk:-}" ] || return 1
-      [ -z "$(awk -v want=GOAT_NODE_SCRIPT_PATH -v fallback=${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} "$runner_hint_awk" "$1" 2>/dev/null)" ] || return 1
-      fact_exe="$fact_versions/$(awk -v want=GOAT_ARCHIVE_VERSION -v fallback=${LEGACY_SSH_ARCHIVE_VERSION_KEY} "$runner_hint_awk" "$1" 2>/dev/null)/goat"
+      command -v runner_key_hints >/dev/null 2>&1 || return 1
+      runner_key_hints "$1"
+      [ -z "$RUNNER_NODE_DECLARED" ] || return 1
+      fact_exe="$fact_versions/$RUNNER_ARCHIVE_VERSION/goat"
       runner_digest "$1" 2>/dev/null || return 1
       fact_via="$RUNNER_DIGEST" ;;
   esac
@@ -249,13 +254,47 @@ live_fact_key() {
 fact_bound() {
   [ "$1" = "$fact_pid" ] && [ "$2" = "$fact_record_port" ]
 }
+# True when none of files $1-$3 exists, even as a dangling link.
+live_none_absent() {
+  for live_none_file in "$1" "$2" "$3"; do
+    [ ! -e "$live_none_file" ] && [ ! -L "$live_none_file" ] || return 1
+  done
+}
+# Prints the no-server answer this script's memo keeps for exec key $1. Its records have an empty
+# path, which no exec key lookup matches.
+live_none_get() {
+  [ -n "$FACT_MEMO" ] && [ -f "$FACT_MEMO" ] && [ -r "$FACT_MEMO" ] || return 1
+  while IFS= read -r memo_path && IFS= read -r memo_name && IFS= read -r memo_key &&
+    IFS= read -r memo_answer && IFS= read -r memo_sig && IFS= read -r memo_path_sig; do
+    [ -z "$memo_path" ] && [ "$memo_name" = live-none ] && [ "$memo_key" = "$1" ] || continue
+    printf '%s\\n' "$memo_answer"; return 0
+  done <"$FACT_MEMO"
+  return 1
+}
 # Live protocol tokens from goat $1 for runtime record $2, port file $3 and PID file $4.
 # Only a live answer from the record's own process is recorded; anything else is asked again.
+# With no record, port or PID file goat can only find no server: that answer is kept for this
+# script under the executable's key, and given again while all three stay absent and the key holds.
 live_fact() {
-  live_fact_key "$1" "$2" "$3" "$4" || FACT_KEY=
-  fact_name="live.$FACT_NAME"; fact_key="$FACT_KEY"
-  if fact_get "$fact_name" "$fact_key"; then return 0; fi
+  live_none_key=; fact_key=
+  if live_none_absent "$2" "$3" "$4"; then
+    if [ -n "$FACT_MEMO" ] && exec_fact_key "$1"; then
+      live_none_key="$FACT_NAME $FACT_KEY"
+      if live_none_get "$live_none_key"; then return 0; fi
+    fi
+  else
+    live_fact_key "$1" "$2" "$3" "$4" || FACT_KEY=
+    fact_name="live.$FACT_NAME"; fact_key="$FACT_KEY"
+    if fact_get "$fact_name" "$fact_key"; then return 0; fi
+  fi
   fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1
+  if [ -n "$live_none_key" ] && (set -f; set -- $fact_out; [ "$1" = none ] && valid_live_tokens "$@") &&
+     live_none_absent "$2" "$3" "$4" && exec_fact_key "$1" && [ "$FACT_NAME $FACT_KEY" = "$live_none_key" ]; then
+    case "$live_none_key$fact_out" in
+      *"$fact_nl"*) ;;
+      *) printf '\\n%s\\n%s\\n%s\\n\\n\\n' live-none "$live_none_key" "$fact_out" >>"$FACT_MEMO" 2>/dev/null || : ;;
+    esac
+  fi
   fact_answer="$(set -f; set -- $fact_out; printf '%s %s' "\${5:-}" "\${6:-}")"
   if [ -n "$fact_key" ] && live_fact_key "$1" "$2" "$3" "$4" && [ "$FACT_KEY" = "$fact_key" ] &&
      fact_valid live "$fact_out" && fact_bound "\${fact_answer% *}" "\${fact_answer#* }"; then
@@ -406,14 +445,66 @@ ${REMOTE_FACTS_SCRIPT}
 `;
 
 // Retained runners are data: inspect either declaration spelling without sourcing shell code.
-export const REMOTE_RUNNER_HINT_SCRIPT = String.raw`# One awk reads a declaration: key $2 when any line declares it, else key $3; quoted values only.
-runner_hint_awk='
-  function quoted(key) {
-    return index($0, key "=\047") == 1 && length($0) > length(key) + 2 && substr($0, length($0)) == "\047"
-  }
-  index($0, want "=") == 1 { named = 1 }
-  quoted(want) { by_want = by_want substr($0, length(want) + 3, length($0) - length(want) - 3) "\n" }
-  quoted(fallback) { by_fallback = by_fallback substr($0, length(fallback) + 3, length($0) - length(fallback) - 3) "\n" }
-  END { printf "%s", named ? by_want : by_fallback }'
-read_runner_hint() { awk -v want="$2" -v fallback="$3" "$runner_hint_awk" "$1"; }
+// Runners built from now on end their declarations with this line (see runner_hint_set).
+export const RUNNER_HINT_END = "# End of the declarations GOAT reads without running this runner.";
+
+export const REMOTE_RUNNER_HINT_SCRIPT = String.raw`# Key $2 counts when any line declares it, else key $3; quoted values only. Builtins only: an
+# MSYS fork costs about 50 ms. The comparison test pins this against the grep and sed reader.
+hint_nl='
+'
+hint_end='${RUNNER_HINT_END}'
+# Adds line $1 to the declarations of keys $2/$3 and, with five arguments, $4/$5.
+hint_take() {
+  case "$1" in "$2="*) hint_named=1 ;; esac
+  case "$1" in "$2='"*"'") hint_value="${"${"}1#"$2='"}"; hint_want="$hint_want${"${"}hint_value%"'"}$hint_nl" ;; esac
+  case "$1" in "$3='"*"'") hint_value="${"${"}1#"$3='"}"; hint_back="$hint_back${"${"}hint_value%"'"}$hint_nl" ;; esac
+  if [ "$#" -ge 5 ]; then
+    case "$1" in "$4="*) hint_named2=1 ;; esac
+    case "$1" in "$4='"*"'") hint_value="${"${"}1#"$4='"}"; hint_want2="$hint_want2${"${"}hint_value%"'"}$hint_nl" ;; esac
+    case "$1" in "$5='"*"'") hint_value="${"${"}1#"$5='"}"; hint_back2="$hint_back2${"${"}hint_value%"'"}$hint_nl" ;; esac
+  fi
+}
+# Sets RUNNER_HINT for key $2 (else $3) and, when $4 is given, RUNNER_HINT2 for key $4 (else $5),
+# as $(...) would keep them, from every line of runner $1. bash reads the file in one call and,
+# when no line after the end-of-declarations line starts with a key, parses only the lines
+# before it, which give the same answer; other shells and files with NUL bytes read each line.
+runner_hint_set() {
+  RUNNER_HINT=; RUNNER_HINT2=; hint_line=
+  hint_named=; hint_want=; hint_back=; hint_named2=; hint_want2=; hint_back2=
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  hint_file="$1"; shift
+  if [ -n "${"${"}BASH_VERSION:-}" ] && ! IFS= read -r -d '' hint_all <"$hint_file" 2>/dev/null; then
+    hint_rest="$hint_all"; hint_cut="$hint_nl$hint_end$hint_nl"; hint_all="$hint_nl$hint_all$hint_nl"
+    case "$hint_all" in
+      *"$hint_cut"*)
+        case "$hint_nl${"${"}hint_all#*"$hint_cut"}" in
+          *"$hint_nl$1="* | *"$hint_nl$2="* | *"$hint_nl${"${"}3:-$1}="* | *"$hint_nl${"${"}4:-$1}="*) ;;
+          *) hint_rest="${"${"}hint_all%%"$hint_cut"*}"; hint_rest="${"${"}hint_rest#"$hint_nl"}" ;;
+        esac ;;
+    esac
+    while [ -n "$hint_rest" ]; do
+      hint_line="${"${"}hint_rest%%"$hint_nl"*}"
+      case "$hint_rest" in *"$hint_nl"*) hint_rest="${"${"}hint_rest#*"$hint_nl"}" ;; *) hint_rest= ;; esac
+      hint_take "$hint_line" "$@"
+    done
+  else
+    while IFS= read -r hint_line || [ -n "$hint_line" ]; do
+      hint_take "$hint_line" "$@"; hint_line=
+    done <"$hint_file"
+  fi
+  if [ -n "$hint_named" ]; then RUNNER_HINT="$hint_want"; else RUNNER_HINT="$hint_back"; fi
+  if [ -n "$hint_named2" ]; then RUNNER_HINT2="$hint_want2"; else RUNNER_HINT2="$hint_back2"; fi
+  while :; do case "$RUNNER_HINT" in *"$hint_nl") RUNNER_HINT="${"${"}RUNNER_HINT%"$hint_nl"}" ;; *) break ;; esac; done
+  while :; do case "$RUNNER_HINT2" in *"$hint_nl") RUNNER_HINT2="${"${"}RUNNER_HINT2%"$hint_nl"}" ;; *) return 0 ;; esac; done
+}
+read_runner_hint() { runner_hint_set "$1" "$2" "$3" || return 1; printf '%s' "$RUNNER_HINT"; }
+# Sets RUNNER_NODE_DECLARED (1 or empty) and RUNNER_ARCHIVE_VERSION, the two declarations an
+# exec key reads.
+runner_key_hints() {
+  RUNNER_NODE_DECLARED=; RUNNER_ARCHIVE_VERSION=
+  runner_hint_set "$1" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY} ||
+    return 0
+  [ -z "$RUNNER_HINT" ] || RUNNER_NODE_DECLARED=1
+  RUNNER_ARCHIVE_VERSION="$RUNNER_HINT2"
+}
 `;
