@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeHttp from "node:http";
 import { listenForCallback } from "./codexChatGptCallbackServer.ts";
+import * as Reg from "./CodexChatGptRegistration.ts";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import {
   ProviderSetupError,
@@ -65,27 +66,6 @@ const sessionLocks = new WeakMap<
   typeof ServerSecretStore.ServerSecretStore.Service,
   Map<string, Semaphore.Semaphore>
 >();
-const Registration = Schema.Struct({
-  clientId: Schema.String.check(Schema.isPattern(/^oaiapp_/u)),
-  subject: Schema.optionalKey(Schema.String),
-  connectionLabel: Schema.optionalKey(Schema.String),
-  sharingEnabled: Schema.optionalKey(Schema.Boolean),
-  email: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  redirectUri: Schema.optionalKey(
-    Schema.String.check(
-      Schema.isPattern(/^http:\/\/(?:127\.0\.0\.1|localhost):[1-9]\d{0,4}\/auth\/callback$/u),
-    ),
-  ),
-});
-const RegistrationProfiles = Schema.Struct({
-  profiles: Schema.Array(Registration),
-  lastClientId: Schema.NullOr(Schema.String),
-});
-const decodeRegistration = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Union([RegistrationProfiles, Registration])),
-);
-const encodeRegistration = Schema.encodeEffect(Schema.fromJsonString(RegistrationProfiles));
-const profileMethodId = (clientId: string) => `chatgpt-profile:${clientId}`;
 const Discovery = Schema.Struct({
   issuer: Schema.String,
   authorization_endpoint: Schema.String,
@@ -248,8 +228,8 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
     ),
     Effect.flatMap((bytes) =>
       Option.isNone(bytes)
-        ? Effect.succeed<typeof RegistrationProfiles.Type>({ profiles: [], lastClientId: null })
-        : decodeRegistration(new TextDecoder().decode(bytes.value)).pipe(
+        ? Effect.succeed<Reg.RegistrationProfiles>({ profiles: [], lastClientId: null })
+        : Reg.decodeRegistration(new TextDecoder().decode(bytes.value)).pipe(
             Effect.map((record) => {
               const saved =
                 "profiles" in record
@@ -293,8 +273,8 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       const registrations = yield* ProviderCredentialStore.make("codex-chatgpt-registration", id);
       const registrationBytes = yield* registrations.get;
       if (Option.isSome(registrationBytes)) {
-        const saved = yield* decodeRegistration(new TextDecoder().decode(registrationBytes.value));
-        for (const profile of "profiles" in saved ? saved.profiles : [saved]) {
+        const s = yield* Reg.decodeRegistration(new TextDecoder().decode(registrationBytes.value));
+        for (const profile of "profiles" in s ? s.profiles : [s]) {
           savedConnections.add(profile.clientId);
         }
       }
@@ -322,16 +302,19 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
     Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
     Effect.provideService(Crypto.Crypto, crypto),
   );
-  const saveRegistration = Effect.fnUntraced(function* (profile: typeof Registration.Type) {
+  const saveRegistration = Effect.fnUntraced(function* (profile: Reg.Registration) {
     const saved = yield* readRegistrations;
+    let connectionNumber = saved.profiles.length + 1;
+    while (saved.profiles.some((e) => e.connectionLabel === `Connection ${connectionNumber}`))
+      connectionNumber++;
     profile = {
       ...profile,
       connectionLabel:
         saved.profiles.find((entry) => entry.clientId === profile.clientId)?.connectionLabel ??
         profile.connectionLabel ??
-        `Connection ${saved.profiles.length + 1}`,
+        `Connection ${connectionNumber}`,
     };
-    yield* encodeRegistration({
+    yield* Reg.encodeRegistration({
       profiles: [profile, ...saved.profiles.filter((entry) => entry.clientId !== profile.clientId)],
       lastClientId: profile.clientId,
     }).pipe(
@@ -362,6 +345,17 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
         ),
       );
   });
+  const sessionClientIds = Effect.map(
+    readSessions,
+    (s) => new Set(s.sessions.map((x) => x.clientId)),
+  );
+  const removeRegistration = (m: string) =>
+    Reg.removeIncompleteRegistration({
+      readRegistrations,
+      readSessionClientIds: sessionClientIds,
+      registrationStore,
+      failure,
+    })(m);
   const remove = Effect.gen(function* () {
     const credentials = yield* read;
     if (Option.isSome(credentials)) {
@@ -844,6 +838,7 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
     methods: Effect.gen(function* () {
       const saved = yield* readRegistrations;
       const active = Option.getOrUndefined(yield* read);
+      const sessions = (yield* readSessions).sessions;
       const current = saved.profiles.find(
         (profile) => profile.clientId === (active?.clientId ?? saved.lastClientId),
       );
@@ -865,7 +860,10 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
           type: "agent" as const,
         },
         ...profiles.slice(0, 30).map((profile) => ({
-          id: profileMethodId(profile.clientId),
+          id: Reg.profileMethodId(profile.clientId),
+          canRemove:
+            profile.subject === undefined &&
+            !sessions.some((session) => session.clientId === profile.clientId),
           name: `${profile.email ?? "ChatGPT account"} · ${profile.connectionLabel}`,
           ...(profile.email ? { accountEmail: profile.email } : {}),
           description: "Reuse this account's original sign-in registration.",
@@ -895,6 +893,8 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
           context.expiresAt,
         ),
       ),
+    removeMethod: (methodId: string) =>
+      lock.withPermit(withSessionLock(removeRegistration(methodId))),
     logout: lock.withPermit(withSessionLock(logout)),
   });
   const reconnectProfile = Effect.fnUntraced(function* (methodId: string) {

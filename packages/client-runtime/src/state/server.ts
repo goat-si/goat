@@ -39,6 +39,7 @@ import {
 } from "./runtime.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import { createProviderRpc } from "./providerRpc.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
@@ -1421,6 +1422,7 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 5_000,
     }),
     ...createDecisionEnvironmentAtoms(runtime),
+    ...createProviderRpc(runtime),
     ...createHubDeviceCommands(runtime),
     /** Asks this machine's managed OpenCodex update to check now, from the update dialog. */
     checkOpenCodexUpdate: createEnvironmentRpcCommand(runtime, {
