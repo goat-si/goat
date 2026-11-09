@@ -458,6 +458,48 @@ describe("the first probe's facts in one start", () => {
     }).pipe(Effect.scoped),
   );
 
+  // A record GOAT cannot key (here, no PID) names inputs that can change without any key noticing.
+  it.effect.each([
+    { name: "live", lines: [GOOD[0]!, GOOD[1]!, "live fail error"] },
+    { name: "compat", lines: [...GOOD.slice(0, 3), "compat fail changed"] },
+  ])("a $name failure read without a live key is asked again by its own call", ({ lines }) =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.supporting();
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          f.record,
+          JSON.stringify({ port: 4343, startedAt: "2026-11-10T00:00:00.000Z" }),
+        ),
+      );
+      yield* f.write("frame", frame(lines));
+      assert.deepEqual(yield* f.run(), ANSWERED);
+      assert.deepEqual(yield* f.asks(), [CAPS, FACTS, LIVE_ASK, COMPAT_ASK]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { name: "while the files stay absent", appear: false },
+    { name: "unless a launch file appears", appear: true },
+  ])("a live failure with no server files holds $name", ({ appear }) =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.supporting();
+      yield* Effect.promise(() => NodeFSP.rm(f.record));
+      yield* f.write("frame", frame([GOOD[0]!, GOOD[1]!, "live fail error"]));
+      const tail = [
+        ...TAIL.split("\n").slice(0, 2),
+        appear ? 'mkdir -p "$state"; printf \'4343\\n\' > "$state/port"' : ":",
+        TAIL.split("\n")[2]!,
+      ].join("\n");
+      assert.deepEqual(yield* f.run(tail), [
+        ...ANSWERED.slice(0, 2),
+        appear ? LIVE : "live-failed",
+      ]);
+      assert.deepEqual(yield* f.asks(), appear ? [CAPS, FACTS, LIVE_ASK] : [CAPS, FACTS]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("a recorded capability answer must parse, and goes with its removed version", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

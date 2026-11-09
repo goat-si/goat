@@ -387,7 +387,7 @@ live_fact() {
   if live_none_absent "$2" "$3" "$4"; then
     if [ -n "$FACT_MEMO" ] && exec_fact_key "$1"; then
       live_none_key="$FACT_NAME $FACT_KEY"
-      if frame_memo_get frame-live "$1|$2|$3|$4|$live_none_key|"; then frame_memo_answer || return 1; return 0; fi
+      if frame_memo_get frame-live "$1|$2|$3|$4|$live_none_key|absent"; then frame_memo_answer || return 1; return 0; fi
       if live_none_get "$live_none_key"; then return 0; fi
     fi
   else

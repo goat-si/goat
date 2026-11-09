@@ -110,11 +110,16 @@ facts_frame_ask() {
   case "$FRAME_COMMIT" in "ok "*) valid_positive "\${FRAME_COMMIT#ok }" || FRAME_COMMIT="fail error" ;; esac
   case "$FRAME_COMMIT" in "ok "*) fact_put "commit.$frame_name" "$frame_key" "\${FRAME_COMMIT#ok }" ;; esac
   frame_memo_put frame-commit "$1|commit.$frame_name|$frame_key" "$FRAME_COMMIT"
-  # A failed live question stays failed for this probe, as a failed separate call would.
-  if [ "$frame_live" = "$frame_after" ] && [ "$frame_absent" = "$frame_absent_after" ]; then
+  # A failed live question stays failed for this probe, as a failed separate call would, but only
+  # under inputs that are named again where it is used: a live key that held, or no files at all.
+  frame_held=
+  if [ -n "$frame_live" ] && [ "$frame_live" = "$frame_after" ]; then frame_held="$frame_live"
+  elif [ -z "$frame_live$frame_after" ] && [ -n "$frame_absent" ] && [ -n "$frame_absent_after" ]; then frame_held=absent
+  fi
+  if [ -n "$frame_held" ]; then
     case "$FRAME_LIVE" in "ok "*) (set -f; set -- \${FRAME_LIVE#ok }; valid_live_tokens "$@") || FRAME_LIVE="fail error" ;; esac
     case "$FRAME_LIVE" in "fail "*)
-      frame_memo_put frame-live "$1|$runtime_file|$state/port|$state/pid|$frame_exec|$frame_live" fail ;;
+      frame_memo_put frame-live "$1|$runtime_file|$state/port|$state/pid|$frame_exec|$frame_held" fail ;;
     esac
   fi
   if [ "$frame_live" = "$frame_after" ] && facts_frame_live_server "$FRAME_LIVE"; then
@@ -130,7 +135,7 @@ facts_frame_ask() {
     fi
     # A server replaced between the frame's live and compat reads must not be asked afresh.
     case "$FRAME_COMPAT" in "ok "*) ! facts_frame_compat_valid "\${FRAME_COMPAT#ok }" || FRAME_COMPAT= ;; esac
-    [ -z "$FRAME_COMPAT" ] ||
+    [ -z "$FRAME_COMPAT" ] || [ -z "$frame_live" ] ||
       frame_memo_put frame-compat "$1|$runtime_file|$state/port|$state/pid|$frame_exec|$frame_live|$frame_port" fail
   fi
   if [ -n "$frame_absent" ] && [ -n "$frame_absent_after" ] &&
