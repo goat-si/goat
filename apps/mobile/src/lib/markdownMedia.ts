@@ -11,6 +11,7 @@ import {
   mediaReferenceFileName,
 } from "@goat/client-runtime/media-reference";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
+import type { ResolveMediaSourceInput } from "@goat/client-runtime/media-source";
 import { normalizeNativeMarkdownUrl, resolveMarkdownLinkPresentation } from "./markdownLinks";
 import { resolveMobileMarkdownMediaSource } from "./markdownMediaSource";
 
@@ -38,6 +39,8 @@ export function resolveMarkdownMediaPreview(
     readonly workspaceRoot: string | null | undefined;
     readonly captured?: boolean;
     readonly imageEmbed?: boolean;
+    /** Routes direct URLs from the environment; their loopback servers live on that machine. */
+    readonly environmentConnection?: ResolveMediaSourceInput["environmentConnection"];
   },
 ):
   | { readonly kind: "image"; readonly source: FilePreviewSource }

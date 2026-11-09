@@ -8,6 +8,7 @@ const reactTests = [
   "src/features/settings/ClaudeAccountControls.test.tsx",
   "src/features/settings/ScheduledTaskContextSections.test.tsx",
   "src/features/threads/CustomAnswerInput.test.tsx",
+  "src/features/threads/MessageImageGalleryScope.test.tsx",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/notes/live-editor/note-editor-images.dom.test.ts",
   "src/features/notes/useNoteFiles.test.tsx",

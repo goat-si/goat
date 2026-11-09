@@ -1,5 +1,7 @@
 import { createContext, useContext } from "react";
+import type { EnvironmentId } from "@goat/contracts";
 import { MediaVideoPlayer } from "../../components/MediaVideoPlayer";
+import { useEnvironmentMediaUri } from "../../lib/environmentMediaUri";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
 import {
   mediaVideoPreviewUri,
@@ -11,6 +13,8 @@ export const ThreadMediaVisibleContext = createContext(false);
 
 export function ThreadMarkdownVideo(props: {
   readonly source: MediaVideoPreviewSource;
+  /** The environment a URL source came from, so its loopback address resolves to that machine. */
+  readonly environmentId?: EnvironmentId | undefined;
   readonly thumbnailVisible?: boolean;
   readonly onPlaybackStart?: () => void;
 }) {
@@ -26,7 +30,14 @@ export function ThreadMarkdownVideo(props: {
     "environmentId" in source ? source.environmentId : null,
     "resource" in source ? source.resource : null,
   );
-  const uri = mediaVideoPreviewUri(source, asset._tag === "Success" ? asset.url : null);
+  const routed = useEnvironmentMediaUri(
+    props.environmentId ?? null,
+    "uri" in source ? source.uri : "",
+  );
+  const uri =
+    "uri" in source
+      ? routed.uri
+      : mediaVideoPreviewUri(source, asset._tag === "Success" ? asset.url : null);
   return (
     <MediaVideoPlayer
       key={thumbnailKey}
@@ -41,7 +52,7 @@ export function ThreadMarkdownVideo(props: {
       thumbnailVisible={visible}
       visible={visible}
       onPlaybackStart={props.onPlaybackStart}
-      unavailable={"resource" in source && asset._tag === "Failure"}
+      unavailable={"resource" in source ? asset._tag === "Failure" : routed.uri === null}
       actionsSource={source.actionsSource}
     />
   );

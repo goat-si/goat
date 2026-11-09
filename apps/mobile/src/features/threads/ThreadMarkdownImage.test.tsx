@@ -1,4 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
+import { BearerConnectionTarget, SshConnectionTarget } from "@goat/client-runtime/connection";
+import * as Option from "effect/Option";
 import { AtomRegistry } from "effect/reactivity";
 import { fetch } from "expo/fetch";
 import { parse } from "react-native-svg";
@@ -12,6 +14,31 @@ const state = vi.hoisted(() => ({
   load: (_event: { source: { width: number; height: number } }) => {},
   refresh: vi.fn<() => Promise<string | null>>(),
 }));
+// A prepared connection that changes like the real atom: subscribers re-render on reconnect.
+const connection = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  return {
+    value: undefined as unknown,
+    set(next: unknown) {
+      this.value = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+});
+vi.mock("../../state/session", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    usePreparedConnection: () =>
+      useSyncExternalStore(
+        (listener) => connection.subscribe(listener),
+        () => connection.value,
+      ),
+  };
+});
 vi.mock("../../state/assets", () => ({
   useAssetUrlState: () => ({ _tag: "Success", url: state.url }),
   useRefreshAssetUrl: () => state.refresh,
@@ -57,6 +84,7 @@ vi.mock("../../state/mediaActions", () => ({ useMediaActions: () => ({ actions: 
 
 import {
   MarkdownImageAvailableWidthContext,
+  ThreadMarkdownDirectImage,
   ThreadMarkdownImage,
   ThreadMarkdownImageView,
 } from "./ThreadMarkdownImage";
@@ -248,4 +276,36 @@ it("does not parse an obsolete SVG response after its last reader unmounts", asy
     await act(async () => root.unmount());
     registry.dispose();
   }
+});
+it("follows a reconnect for a remote environment's localhost image, both ways", () => {
+  const environmentId = EnvironmentId.make("remote");
+  const remote = { environmentId, label: "Build box" };
+  const tailnet = Option.some({
+    httpBaseUrl: "http://100.65.180.100:3773",
+    target: new BearerConnectionTarget({ ...remote, connectionId: "saved:box" }),
+  });
+  const ssh = Option.some({
+    httpBaseUrl: "http://127.0.0.1:41234",
+    target: new SshConnectionTarget({ ...remote, connectionId: "ssh:box" }),
+  });
+  connection.value = ssh;
+  act(() =>
+    root.render(
+      <ThreadMarkdownDirectImage
+        environmentId={environmentId}
+        uri="http://localhost:5173/shot.png"
+        alt={null}
+        onPressPreview={() => undefined}
+      />,
+    ),
+  );
+  expect(container.querySelector("img")).toBeNull();
+  expect(container.textContent).toContain("localhost:5173 is on Build box");
+  act(() => connection.set(tailnet));
+  expect(container.querySelector("img")?.getAttribute("src")).toBe(
+    "http://100.65.180.100:5173/shot.png",
+  );
+  act(() => connection.set(ssh));
+  expect(container.querySelector("img")).toBeNull();
+  expect(container.textContent).toContain("localhost:5173 is on Build box");
 });
