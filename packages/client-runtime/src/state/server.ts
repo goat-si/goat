@@ -39,6 +39,7 @@ import {
 } from "./runtime.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import { createProviderAuthCommands } from "./providerAuthCommands.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
@@ -1318,22 +1319,6 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.providerAuthSubscribe,
       idleTtlMs: 0,
     }),
-    startProviderAuth: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:provider:auth-start",
-      tag: WS_METHODS.providerAuthStart,
-      concurrency: {
-        mode: "singleFlight",
-        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
-      },
-    }),
-    respondProviderAuth: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:provider:auth-respond",
-      tag: WS_METHODS.providerAuthRespond,
-    }),
-    completeProviderAuth: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:provider:auth-complete",
-      tag: WS_METHODS.providerAuthComplete,
-    }),
     chatGptReconnectProfile: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:chatgpt:reconnect-profile",
       tag: WS_METHODS.chatGptReconnectProfile,
@@ -1354,14 +1339,6 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:codex:auth-callback",
       tag: WS_METHODS.codexAuthCallbackSubscribe,
       idleTtlMs: 0,
-    }),
-    cancelProviderAuth: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:provider:auth-cancel",
-      tag: WS_METHODS.providerAuthCancel,
-    }),
-    logoutProviderAuth: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:provider:auth-logout",
-      tag: WS_METHODS.providerAuthLogout,
     }),
     providerInstallState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:provider:install-state",
@@ -1421,6 +1398,7 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 5_000,
     }),
     ...createDecisionEnvironmentAtoms(runtime),
+    ...createProviderAuthCommands(runtime),
     ...createHubDeviceCommands(runtime),
     /** Asks this machine's managed OpenCodex update to check now, from the update dialog. */
     checkOpenCodexUpdate: createEnvironmentRpcCommand(runtime, {

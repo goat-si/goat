@@ -124,6 +124,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.codexAuthCallbackSubscribe]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthRespond]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthCancel]: AuthProvidersManageScope,
+  [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthLogout]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthSubscribe]: AuthProvidersManageScope,
   [WS_METHODS.providerInstallStart]: AuthProvidersManageScope,

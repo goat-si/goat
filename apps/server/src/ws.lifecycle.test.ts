@@ -81,6 +81,7 @@ import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
+import * as ProviderInstallation from "./provider/providerInstallation.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
@@ -192,6 +193,7 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
   Layer.mock(AnalyticsService.AnalyticsService)({}),
   Layer.mock(AntigravityInstallation.AntigravityInstallation)({ managedDirectory: "/unused" }),
+  Layer.mock(ProviderInstallation.ProviderInstallation)({}),
   Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
   Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
   Layer.mock(NativeChildWorkQuery.NativeChildWorkQuery)({}),
