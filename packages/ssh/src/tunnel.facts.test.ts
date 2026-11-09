@@ -104,6 +104,67 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
   it.live(
+    "a launch over a killed server's record asks again only where a server could have appeared",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: false,
+          kind: "managed",
+          oldVersion: "1.2.2",
+          commitTime: 1_700_000_000,
+          drain: true,
+          ...current,
+        });
+        yield* f.shiftHostClock(60);
+        // A server ended outright (taskkill /F on Windows) leaves its record, naming a PID that is
+        // gone and a port nothing listens on, so goat answers "none" only after probing the port.
+        const gone = NodeChildProcess.spawnSync(process.execPath, ["-e", ""]).pid;
+        const free = Number(
+          NodeChildProcess.execFileSync(
+            process.execPath,
+            [
+              "-e",
+              "const s = require('node:net').createServer().listen(0, '127.0.0.1', () => { console.log(s.address().port); s.close(); })",
+            ],
+            { encoding: "utf8" },
+          ),
+        );
+        yield* f.fs.makeDirectory(f.home + "/.goat/userdata", { recursive: true });
+        yield* f.fs.writeFileString(
+          f.home + "/.goat/userdata/server-runtime.json",
+          JSON.stringify({
+            version: 1,
+            pid: gone,
+            port: free,
+            origin: "http://127.0.0.1:" + free,
+            startedAt: "2026-01-01T00:00:00.000Z",
+            serverVersion: "1.2.2",
+            sshRuntimeProtocolVersion: current.ssh,
+            orchestrationProtocolVersion: current.orchestration,
+          }),
+        );
+        yield* f.fs.writeFileString(f.test + "/events", "");
+        const result = yield* f.run("launch");
+        if (Result.isFailure(result)) throw result.failure;
+        assert.equal(result.success.status, "ready");
+        const answers = (yield* f.fs.readFileString(f.test + "/events"))
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as { type: string; live?: boolean; status?: string })
+          .filter((event) => event.type === "protocol" && event.live === true)
+          .map((event) => event.status);
+        // The probe asks, then the launch script at validation, under the replacement lock, for the
+        // decisions it acts on, and after pick-port writes the port file. Each can see a server the
+        // one before could not; a check that would repeat the last one with nothing between is gone.
+        assert.deepEqual(
+          answers.filter((status) => status === "none"),
+          ["none", "none", "none", "none", "none"],
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    LAUNCHES_TIMEOUT_MS,
+  );
+  it.live(
     "a reconnect to an unchanged runtime starts goat only for readiness",
     () =>
       Effect.gen(function* () {
