@@ -1,4 +1,5 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import { act } from "react";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import {
   createNativeMemoryHarness,
@@ -36,6 +37,7 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
 }));
 vi.mock("./useMobileGoatBotSession", () => ({ useMobileGoatBotSession: () => ({}) }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
     themeAppearance: appearance.mode,
@@ -43,6 +45,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   }),
 }));
 import { GoatBotTimelineRow } from "./GoatBotScreen";
+import { GoatBotActivityLine, GoatBotQuestionCard } from "./GoatBotMessageParts";
 
 let h: NativeMemoryHarness;
 let view: ReturnType<typeof renderNative>;
@@ -222,4 +225,63 @@ it("shows a bot event as a centered note line", async () => {
   );
   await view.render();
   expect(view.container.textContent).toBe("Routine Check in paused");
+});
+
+it("counts how long followed work has run a second at a time and opens to the work's title", async () => {
+  const since = "2026-10-12T09:40:00Z";
+  vi.useFakeTimers({ now: Date.parse(since) + 12_000, toFake: ["setInterval", "Date"] });
+  using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
+  h = createNativeMemoryHarness();
+  view = renderNative(
+    h,
+    <GoatBotActivityLine
+      botName="GOAT Bot"
+      activity={{ state: "working", text: "Copying files", title: "Check the disks" }}
+      since={since}
+    />,
+  );
+  await view.render();
+  expect(view.container.textContent).toContain("Copying files · 12s");
+  expect(view.container.textContent).not.toContain("Check the disks");
+  await act(async () => vi.advanceTimersByTime(60_000));
+  expect(view.container.textContent).toContain("Copying files · 1m");
+  await view.click("Show work details");
+  expect(view.container.textContent).toContain("Check the disks");
+  await view.click("Hide work details");
+  expect(view.container.textContent).not.toContain("Check the disks");
+});
+
+it("asks a question with answers as one card and sends the picked answer to its task", async () => {
+  h = createNativeMemoryHarness();
+  const onSend = vi.fn(() => true);
+  view = renderNative(
+    h,
+    <GoatBotTimelineRow
+      {...props}
+      onSend={onSend}
+      row={bot({
+        tone: "question",
+        text: "Deploy now?",
+        options: ["Yes", "Later"],
+        answerTaskId: "task-1",
+      })}
+    />,
+  );
+  await view.render();
+  expect(view.container.textContent).toContain("Deploy now?");
+  await view.click("Later");
+  expect(onSend).toHaveBeenCalledWith("Later", "task-1");
+});
+
+it("folds an answered question to the answer that was picked", async () => {
+  h = createNativeMemoryHarness();
+  view = renderNative(
+    h,
+    <GoatBotQuestionCard options={["Yes", "Later"]} answered="Later" canAnswer onPick={vi.fn()}>
+      {null}
+    </GoatBotQuestionCard>,
+  );
+  await view.render();
+  expect(view.container.textContent).toContain("You answered: Later");
+  expect(view.container.querySelectorAll("button")).toHaveLength(0);
 });

@@ -85,6 +85,7 @@ vi.mock("react-native", () => ({
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({

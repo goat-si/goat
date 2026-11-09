@@ -45,6 +45,7 @@ import {
   GoatBotGroupHeader,
   GoatBotPersonCaption,
   GoatBotPersonPill,
+  GoatBotQuestionCard,
   GoatBotReplyQuote,
   goatBotRowGap,
   goatBotTime,
@@ -159,17 +160,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       </View>
     );
   }
-  return (
-    <View className="gap-1.5" style={{ marginTop }}>
-      {row.firstInGroup ? (
-        <GoatBotGroupHeader
-          at={row.createdAt}
-          name={botName}
-          emoji={props.botEmoji}
-          update={row.proactive}
-        />
-      ) : null}
-      {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
+  const prose = (
+    <>
       {hasGoatBotMarkdown(row.text) ? (
         <GoatBotMarkdown
           text={row.text}
@@ -188,27 +180,35 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         </Text>
       )}
       {row.memory ? <MemoryReportLink reference={row.memory} /> : null}
-      {row.options.length > 0 ? (
-        <View accessibilityLabel="Suggested answers" className="flex-row flex-wrap gap-2">
-          {row.options.map((answer) => (
-            <Pressable
-              key={answer}
-              accessibilityRole="button"
-              disabled={!props.canSend}
-              onPress={() =>
-                props.onSend(
-                  answer,
-                  row.answerTaskId === undefined ? undefined : ChannelTaskId.make(row.answerTaskId),
-                )
-              }
-              // 44pt touch target; min-h-11 is only 38.5pt at the app's 14pt rem.
-              className="min-h-[44px] justify-center rounded-full border border-border bg-card px-3 py-2"
-            >
-              <Text className="text-sm text-foreground">{answer}</Text>
-            </Pressable>
-          ))}
-        </View>
+    </>
+  );
+  return (
+    <View className="gap-1.5" style={{ marginTop }}>
+      {row.firstInGroup ? (
+        <GoatBotGroupHeader
+          at={row.createdAt}
+          name={botName}
+          emoji={props.botEmoji}
+          update={row.proactive}
+        />
       ) : null}
+      {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
+      {row.options.length > 0 ? (
+        <GoatBotQuestionCard
+          options={row.options}
+          canAnswer={props.canSend}
+          onPick={(answer) =>
+            props.onSend(
+              answer,
+              row.answerTaskId === undefined ? undefined : ChannelTaskId.make(row.answerTaskId),
+            )
+          }
+        >
+          {prose}
+        </GoatBotQuestionCard>
+      ) : (
+        prose
+      )}
     </View>
   );
 });
