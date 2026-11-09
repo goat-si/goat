@@ -365,7 +365,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact age gate 
         NodeFS.writeFileSync(dir + "/goat", "#!/bin/sh\n", { mode: 0o755 });
         NodeFS.writeFileSync(dir + "/.install-complete", "1.2.3");
         // stat reports the executable's ctime as $HOME/age seconds ago; date counts its starts and
-        // fails while $HOME/date-fails exists.
+        // fails while $HOME/date-fails exists, after printing the time while $HOME/date-prints does.
         NodeFS.writeFileSync(
           home + "/bin/stat",
           [
@@ -380,16 +380,18 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact age gate 
           [
             "#!/bin/sh",
             'echo date >>"$HOME/dates"',
+            '[ ! -e "$HOME/date-prints" ] || { /bin/date "$@"; exit 1; }',
             '[ ! -e "$HOME/date-fails" ] || exit 1',
             'exec /bin/date "$@"',
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
-        const key = (age: number, dateFails = false) => {
+        const key = (age: number, dateFails: "" | "date-fails" | "date-prints" = "") => {
           NodeFS.writeFileSync(home + "/age", String(age));
           NodeFS.writeFileSync(home + "/dates", "");
-          if (dateFails) NodeFS.writeFileSync(home + "/date-fails", "");
-          else NodeFS.rmSync(home + "/date-fails", { force: true });
+          for (const mode of ["date-fails", "date-prints"])
+            NodeFS.rmSync(home + "/" + mode, { force: true });
+          if (dateFails) NodeFS.writeFileSync(home + "/" + dateFails, "");
           const result = NodeChildProcess.spawnSync(
             shell,
             [
@@ -416,7 +418,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact age gate 
         assert.deepEqual(key(1), { verdict: "unkeyed", dates: reads });
         assert.deepEqual(key(0), { verdict: "unkeyed", dates: reads });
         // A clock that cannot be read keys nothing, as before; EPOCHSECONDS needs no date.
-        assert.deepEqual(key(10, true), { verdict: epoch ? "keyed" : "unkeyed", dates: reads });
+        assert.deepEqual(key(10, "date-fails"), {
+          verdict: epoch ? "keyed" : "unkeyed",
+          dates: reads,
+        });
+        // A date that prints a time but fails is unread too.
+        assert.deepEqual(key(10, "date-prints"), {
+          verdict: epoch ? "keyed" : "unkeyed",
+          dates: reads,
+        });
       } finally {
         NodeFS.rmSync(home, { recursive: true, force: true });
       }

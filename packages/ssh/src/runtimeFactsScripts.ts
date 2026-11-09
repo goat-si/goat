@@ -125,7 +125,7 @@ exec_fact_key() {
   valid_version "$fact_version" && [ "$fact_exe" = "$fact_versions/$fact_version/goat" ] || return 1
   file_sig_set "$fact_exe" || return 1
   fact_sig="$FILE_SIG"
-  fact_clock
+  fact_clock || return 1
   [ "$(( fact_now - \${fact_sig##*:} ))" -ge 2 ] || return 1
   # A runner installs a version without its marker instead of running it.
   fact_slurp "$fact_versions/$fact_version/.install-complete" && [ "$FACT_TEXT" = "$fact_version" ] || return 1
