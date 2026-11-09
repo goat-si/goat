@@ -43,6 +43,7 @@ interface CodexHome {
 const STATE_DATABASE_NAMES = ["state_5.sqlite", "state_4.sqlite", "state.sqlite"] as const;
 const MAX_CODEX_SESSION_INDEX_BYTES = 1024 * 1024;
 const MAX_CODEX_STATE_THREADS = 20_000;
+const MAX_CODEX_PROJECT_ROOTS = 20_000;
 const MAX_DATE_MS = 8.64e15;
 const ROLLOUT_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
@@ -157,11 +158,16 @@ function readSnapshot(databasePath: string): CodexStateSnapshot {
     if (rows.length > MAX_CODEX_STATE_THREADS) complete = false;
     const projects = new Map<string, { roots: Array<string> }>();
     const collectProjects = () => {
-      const rows = database
+      const allRows = database
         .prepare(
-          "SELECT p.id AS id, r.path AS path FROM projects p JOIN project_roots r ON r.project_id = p.id",
+          "SELECT p.id AS id, r.path AS path FROM projects p JOIN project_roots r ON r.project_id = p.id LIMIT ?",
         )
-        .all() as unknown as ReadonlyArray<{ id: unknown; path: unknown }>;
+        .all(MAX_CODEX_PROJECT_ROOTS + 1) as unknown as ReadonlyArray<{
+        id: unknown;
+        path: unknown;
+      }>;
+      const rows = allRows.slice(0, MAX_CODEX_PROJECT_ROOTS);
+      if (allRows.length > MAX_CODEX_PROJECT_ROOTS) complete = false;
       for (const row of rows) {
         if (typeof row.id !== "string" || typeof row.path !== "string" || row.path.length === 0) {
           continue;

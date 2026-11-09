@@ -20,7 +20,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
-import { resolveCodexProjectCwd } from "./CodexStateDatabase.ts";
+import { readCodexProjectState, resolveCodexProjectCwd } from "./CodexStateDatabase.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
@@ -458,6 +458,42 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex projects", (it) => {
       const scan = yield* runScan({ claudeHomePath, codexHomePath, piAgentDir });
       expect(scan.candidates).toHaveLength(1);
       expect(scan.truncated).toBe(true);
+    }),
+  );
+
+  it.effect("marks the state snapshot incomplete when project roots exceed the cap", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const codexHomePath = yield* makeTempDir("goat-codex-home-");
+      const database = new NodeSqlite.DatabaseSync(path.join(codexHomePath, "state_5.sqlite"));
+      try {
+        database.exec(`
+          CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, updated_at_ms INTEGER NOT NULL);
+          CREATE TABLE project_roots (project_id TEXT NOT NULL, position INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY (project_id, position));
+          CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT NOT NULL, updated_at INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT '');
+        `);
+        database
+          .prepare("INSERT INTO projects (id, name, updated_at_ms) VALUES (?, ?, ?)")
+          .run("project-1", "Project", 1_790_000_000_000);
+        database.exec(`
+          WITH RECURSIVE roots(position) AS (
+            SELECT 0 UNION ALL SELECT position + 1 FROM roots WHERE position < 20000
+          )
+          INSERT INTO project_roots (project_id, position, path)
+          SELECT 'project-1', position, '/repo/root-' || position FROM roots;
+        `);
+      } finally {
+        database.close();
+      }
+
+      const state = yield* readCodexProjectState([
+        {
+          homePath: codexHomePath,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+      ]);
+      expect(state.complete).toBe(false);
+      expect(state.stateByHome.get(codexHomePath)?.projectRoots).toHaveLength(20_000);
     }),
   );
 });
