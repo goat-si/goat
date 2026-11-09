@@ -1,0 +1,33 @@
+# pen-relay
+
+The Pen relay: one Cloudflare Worker and one SQLite-backed Durable Object per node, using the
+WebSocket Hibernation API. It forwards sealed Noise records between a node's uplink and its clients
+under `packages/pen-protocol/CONTRACT.md`.
+
+## Dev
+
+`pnpm run dev` starts `wrangler dev` on this directory. The timeouts default to the contract's values;
+`wrangler dev --var AUTH_TIMEOUT_MS:300` (also `PENDING_TIMEOUT_MS`, `IDLE_TIMEOUT_MS`) lowers one for
+testing, never above its default.
+
+## Test
+
+`pnpm test` runs the contract suite: each describe block starts its own `wrangler dev` in a process
+group and drives it with fake nodes and clients over a small raw WebSocket client, which can send close
+codes a browser WebSocket refuses and reports a close code as soon as the close frame arrives. Under
+`wrangler dev` the ProxyWorker in front of the Worker negotiates `permessage-deflate` itself, so the
+compression check runs in `scripts/smoke.ts` against the deployed Worker.
+
+## Deploy
+
+`pnpm run deploy` publishes to workers.dev on the account in `wrangler.jsonc` (log in with
+`wrangler login` first). Then run `node scripts/smoke.ts <url>`: it checks `/healthz` and that the
+101 carries no `Sec-WebSocket-Extensions`, moves 1 MiB each way between a fresh node and a client with
+SHA-256 comparison, and prints close latency.
+
+## What the relay sees
+
+The relay never decrypts and never logs payloads, and Worker observability is off. It does see which
+node ids accept uplinks, which addresses open client sessions to them and when, and the size and
+timing of every record it forwards. It cannot read, forge, replay or splice records, because the Noise
+layer authenticates both ends.

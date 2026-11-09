@@ -1,0 +1,104 @@
+{
+  "encoding": "hex",
+  "signSeed": "0101010101010101010101010101010101010101010101010101010101010101",
+  "nodeId": "gr2q7gf5lh6pzfdnurnkvputhm",
+  "relayOrigin": "wss://pen-relay.example.workers.dev",
+  "challenge": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "challengeMessage": "70656e2d72656c61792d76317773733a2f2f70656e2d72656c61792e6578616d706c652e776f726b6572732e64657667723271376766356c6836707a66646e75726e6b76707574686d000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "signature": "2ff843710938292891a1cc64dd2a132bdf165aba739437d95d3cf4930f8cac31adbad56de81185cc5a67c79824d0c280be8de44aefdf09bfe3100d33c3731c0e",
+  "answer": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c2ff843710938292891a1cc64dd2a132bdf165aba739437d95d3cf4930f8cac31adbad56de81185cc5a67c79824d0c280be8de44aefdf09bfe3100d33c3731c0e",
+  "origins": [
+    {
+      "url": "wss://Pen-Relay.Example.workers.dev:443/v1/node/x",
+      "origin": "wss://pen-relay.example.workers.dev"
+    },
+    {
+      "url": "wss://pen-relay.example.workers.dev:8443/v1/node/x",
+      "origin": "wss://pen-relay.example.workers.dev:8443"
+    },
+    {
+      "url": "ws://127.0.0.1:8787/v1/node/x",
+      "origin": "ws://127.0.0.1:8787"
+    },
+    {
+      "url": "ws://localhost:80/v1/node/x",
+      "origin": "ws://localhost"
+    },
+    {
+      "url": "https://pen-relay.example.workers.dev/v1/node/x",
+      "origin": "wss://pen-relay.example.workers.dev"
+    }
+  ],
+  "frames": [
+    {
+      "type": 1,
+      "sid": 1,
+      "payload": "",
+      "hex": "0101000000"
+    },
+    {
+      "type": 2,
+      "sid": 2,
+      "payload": "68656c6c6f2070656e",
+      "hex": "020200000068656c6c6f2070656e"
+    },
+    {
+      "type": 3,
+      "sid": 3,
+      "payload": "3411",
+      "hex": "03030000003411"
+    },
+    {
+      "type": 2,
+      "sid": 4294967295,
+      "payload": "00ff",
+      "hex": "02ffffffff00ff"
+    }
+  ],
+  "acks": [
+    {
+      "text": "a:0",
+      "value": 0
+    },
+    {
+      "text": "a:65536",
+      "value": 65536
+    },
+    {
+      "text": "a:9007199254740991",
+      "value": 9007199254740991
+    },
+    {
+      "text": "a:",
+      "value": null
+    },
+    {
+      "text": "a:-1",
+      "value": null
+    },
+    {
+      "text": "a:01",
+      "value": null
+    },
+    {
+      "text": "a:1.5",
+      "value": null
+    },
+    {
+      "text": "a: 1",
+      "value": null
+    },
+    {
+      "text": "b:1",
+      "value": null
+    },
+    {
+      "text": "a:1e3",
+      "value": null
+    },
+    {
+      "text": "a:9007199254740992",
+      "value": null
+    }
+  ]
+}
