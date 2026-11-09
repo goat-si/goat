@@ -20,6 +20,7 @@ import { HttpClient, HttpClientResponse, HttpClientRequest } from "effect/http";
 import { GraphQLClient } from "effect/graphql";
 
 import * as GitHubRest from "./GitHubRest.ts";
+import { driver } from "./driver.ts";
 import * as GitHubHttpClient from "./GitHubHttpClient.ts";
 import * as GitHubGraphQlClient from "./gitHubGraphQlClient.ts";
 import { PullRequestBatchesGraphQLGroup } from "./pullRequestBatches.graphql.ts";
@@ -292,6 +293,23 @@ describe("GitHubRest", () => {
         );
         expect(loopError._tag).toBe("GitHubApiResponseError");
         expect(requests.filter((request) => request.path === "/loop")).toHaveLength(11);
+        const instance = yield* driver.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              host,
+              fallback,
+              NodeServices.layer,
+              NodeCrypto.layer,
+              SourceControlRateLimit.layer,
+            ),
+          ),
+        );
+        const reference = yield* instance.sourceControl.getChangeRequest({
+          cwd: directory,
+          reference: "https://github.com/acme/web/pull/7",
+        });
+        expect(reference.number).toBe(7);
+        expect(requests.at(-1)?.body).toContain("query PullRequestByNumber");
         const http = yield* HttpClient.HttpClient;
         for (const status of [303, 307]) {
           const response = yield* http.execute(
@@ -320,6 +338,16 @@ describe("GitHubRest", () => {
           expect(requests.slice(before)).toHaveLength(1);
           expect(requests.at(-1)?.headers.host).toBe("api.github.com");
         }
+        yield* Effect.promise(() => NodeFSP.unlink(socketPath));
+        const error = yield* Effect.flip(
+          rest.rest({ host: "github.com", operation: "user", path: "user" }),
+        );
+        expect(error._tag).toBe("GitHubApiRequestError");
+        expect(directRequests).toEqual([]);
+        const mediaUrl = "https://objects.githubusercontent.com/proof.png";
+        const media = yield* instance.fetchMedia!({ url: mediaUrl, headers: {} });
+        expect(media?.status).toBe(401);
+        expect(directRequests).toEqual([mediaUrl]);
       }).pipe(Effect.provide(layer), Effect.provideService(HostProcess.Environment, {}));
     }).pipe(Effect.scoped),
   );

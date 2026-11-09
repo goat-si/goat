@@ -4,6 +4,7 @@ import {
 } from "@goat/source-control-core/server/driver";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { HttpClient } from "effect/http";
 
 import { definition } from "../shared/definition.ts";
 
@@ -70,17 +71,25 @@ export const makeStarRepository = Effect.gen(function* () {
   );
 });
 
-const makeInstance = Effect.all({
-  sourceControl: GitHubSourceControlProvider.make,
-  discovery: GitHubSourceControlProvider.makeDiscovery,
-  pullRequests: GitHubPullRequestProvider.make,
-  fetchMedia: GitHubMediaFetch.make,
-  isRepositoryStarred: makeIsRepositoryStarred,
-  starRepository: makeStarRepository,
+const makeInstance = Effect.gen(function* () {
+  const mediaHttpClient = yield* HttpClient.HttpClient;
+  return yield* withOwnServices(
+    Effect.all({
+      sourceControl: GitHubSourceControlProvider.make,
+      discovery: GitHubSourceControlProvider.makeDiscovery,
+      pullRequests: GitHubPullRequestProvider.make,
+      fetchMedia: GitHubMediaFetch.make.pipe(
+        Effect.provideService(HttpClient.HttpClient, mediaHttpClient),
+      ),
+      isRepositoryStarred: makeIsRepositoryStarred,
+      starRepository: makeStarRepository,
+    }),
+    services,
+  );
 });
 
 export const driver = defineSourceControlDriver({
   kind: definition.kind,
   definition,
-  make: withOwnServices(makeInstance, services),
+  make: makeInstance,
 });
