@@ -187,6 +187,119 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
       NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
+  // ps -W as Git Bash prints it, plus rows awk read differently from a shell if at all.
+  it.each(["dash", "bash"])(
+    "key a Windows process by the ps -W row awk picked, without starting awk (%s)",
+    (shell) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-fact-ps-"));
+      try {
+        const bin = dir + "/bin";
+        NodeFS.mkdirSync(bin);
+        // ps prints $GOAT_TEST_PS and exits $GOAT_TEST_PS_STATUS; awk logs each start.
+        NodeFS.writeFileSync(
+          bin + "/ps",
+          '#!/bin/sh\nprintf "%s" "$GOAT_TEST_PS"\nexit "$GOAT_TEST_PS_STATUS"\n',
+          { mode: 0o755 },
+        );
+        const realAwk = NodeChildProcess.spawnSync("sh", ["-c", "command -v awk"], {
+          encoding: "utf8",
+        }).stdout.trim();
+        NodeFS.writeFileSync(
+          bin + "/awk",
+          `#!/bin/sh\necho awk >>"${dir}/awk-starts"\nexec ${realAwk} "$@"\n`,
+          { mode: 0o755 },
+        );
+        // The awk program fact_process_starts ran before.
+        const before = [
+          "awk_process_starts() {",
+          "  FACT_START=; FACT_START2=",
+          '  ps_rows="$(ps -W 2>/dev/null | awk -v a="$1" -v b="$2" \'',
+          "    NR > 1 {",
+          '      if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 }',
+          '      if ($4 == a && ra == "") { $1 = $1; ra = $0 }',
+          '      if (b != "" && $4 == b && rb == "") { $1 = $1; rb = $0 }',
+          "    }",
+          "    END { print ra; print rb }')\" || return 0",
+          '  FACT_START="${ps_rows%%"$fact_nl"*}"',
+          '  case "$ps_rows" in *"$fact_nl"*) FACT_START2="${ps_rows#*"$fact_nl"}" ;; esac',
+          "}",
+        ].join("\n");
+        const header = "      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND\n";
+        const rows =
+          header +
+          "     1234       1    1234       5678  ?         197609 10:01:02 /usr/bin/bash\n" +
+          "S    2222    1234    2222       9012  pty0      197609 10:02:03 /usr/bin/sleep\n" +
+          "       4321       0       0       4321  ?              0   Nov 8 C:\\Windows\\System32\\svchost.exe\n" +
+          "I    3333       1    3333       7777  ?         197609   Nov 8 C:\\Program Files\\goat\\goat.exe  --serve\n" +
+          "\t4444\t1\t4444\t6666\t?\t197609\t10:03:04\t/tab/separated\n" +
+          "    5555       1    5555       5678  ?         197609 10:04:05 /second/match\n" +
+          "garbage\n  \nS\n1 2 3\nS T 1 2 3333 x\n";
+        const outputs = {
+          rows,
+          headerOnly: header,
+          headerNoNewline: header.trimEnd(),
+          empty: "",
+          noTrailingNewline: rows.trimEnd(),
+          rowsIntoHeaderSpot: rows.slice(header.length),
+        };
+        const pairs = [
+          ["5678", ""],
+          ["9012", "4321"],
+          ["7777", "5678"],
+          ["6666", "9012"],
+          ["99999", ""],
+          ["99999", "7777"],
+          ["3333", "3"],
+        ];
+        const body = [
+          before,
+          "fact_windows=1",
+          "for pair in " + pairs.map((pair) => quote(pair.join(" "))).join(" ") + "; do",
+          '  set -- $pair; a="$1"; b="${2:-}"',
+          '  awk_process_starts "$a" "$b"; old="$FACT_START|$FACT_START2"',
+          '  : >"$GOAT_TEST_DIR/awk-starts"',
+          '  fact_process_starts "$a" "$b"; new="$FACT_START|$FACT_START2"',
+          '  [ ! -s "$GOAT_TEST_DIR/awk-starts" ] || new="$new (awk started)"',
+          '  printf \'%s=%s=%s\\n\' "$a $b" "$old" "$new"',
+          "done",
+        ].join("\n");
+        let matched = 0;
+        for (const [name, output] of Object.entries(outputs)) {
+          for (const status of ["0", "1"]) {
+            const out = runIn(shell, body, {
+              PATH: bin + ":" + (process.env.PATH ?? ""),
+              GOAT_TEST_PS: output,
+              GOAT_TEST_PS_STATUS: status,
+              GOAT_TEST_DIR: dir,
+            });
+            const lines = out.trim().split("\n");
+            assert.lengthOf(lines, pairs.length);
+            for (const line of lines) {
+              const [pair, oldValue, newValue] = line.split("=");
+              assert.equal(newValue, oldValue, `${name}, ps exit ${status}, pids ${pair}`);
+              if (oldValue !== "|") matched++;
+            }
+          }
+        }
+        // The corpus exercises matches, not only misses.
+        assert.isAbove(matched, 20);
+        // A WINPID spelled with a leading zero matched awk numerically; as text it misses the key.
+        const zero = runIn(
+          shell,
+          'fact_windows=1\nfact_process_starts 5678 ""\necho "[$FACT_START]"',
+          {
+            PATH: bin + ":" + (process.env.PATH ?? ""),
+            GOAT_TEST_PS: header + "  1  1  1  05678  ?  0  10:00:00 /zero\n",
+            GOAT_TEST_PS_STATUS: "0",
+          },
+        );
+        assert.equal(zero.trim(), "[]");
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("reads a built runner in one call and parses only the lines before its end line", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-hint-reads-"));
     try {

@@ -179,6 +179,10 @@ fact_put() {
 # (column 4 after an optional status letter), with a start shown to the second today and to the
 # day before; the whole row, executable path included, is the key. A server GOAT restarts still
 # misses: it rewrites the runtime record, whose startedAt and instanceId are in the key.
+# Rows are read with shell builtins, as the awk program they replace read them: ps's status is
+# ignored, a leading status letter is dropped and fields join with one space. WINPIDs compare as
+# text, where awk also matched numerically equal spellings such as 05678 that ps -W never prints;
+# that difference can only miss a key.
 fact_process_starts() {
   FACT_START=; FACT_START2=
   if [ "$fact_windows" = 0 ]; then
@@ -186,15 +190,19 @@ fact_process_starts() {
     [ -z "$2" ] || FACT_START2="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$2" 2>/dev/null)" || FACT_START2=
     return 0
   fi
-  ps_rows="$(ps -W 2>/dev/null | awk -v a="$1" -v b="$2" '
-    NR > 1 {
-      if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 }
-      if ($4 == a && ra == "") { $1 = $1; ra = $0 }
-      if (b != "" && $4 == b && rb == "") { $1 = $1; rb = $0 }
-    }
-    END { print ra; print rb }')" || return 0
-  FACT_START="\${ps_rows%%"$fact_nl"*}"
-  case "$ps_rows" in *"$fact_nl"*) FACT_START2="\${ps_rows#*"$fact_nl"}" ;; esac
+  ps_a="$1"; ps_b="$2"
+  ps_rows="$(ps -W 2>/dev/null)" || :
+  case "$ps_rows" in *"$fact_nl"*) ps_rows="\${ps_rows#*"$fact_nl"}" ;; *) return 0 ;; esac
+  case "$-" in *f*) ps_glob= ;; *) ps_glob=1; set -f ;; esac
+  ps_ifs="$IFS"; IFS="$fact_nl"
+  for ps_row in $ps_rows; do
+    IFS=" 	"
+    set -- $ps_row
+    case "\${1:-}" in ''|*[!0123456789]*) [ "$#" = 0 ] || shift ;; esac
+    [ -n "$FACT_START" ] || [ "\${4:-}" != "$ps_a" ] || FACT_START="$*"
+    [ -z "$ps_b" ] || [ -n "$FACT_START2" ] || [ "\${4:-}" != "$ps_b" ] || FACT_START2="$*"
+  done
+  IFS="$ps_ifs"; [ -z "$ps_glob" ] || set +f
 }
 # Sets FACT_TEXT to the digits after the last JSON name $1 (quoted) in $2 that a colon and a
 # number follow, as sed -n 's/.*NAME[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' finds them.
