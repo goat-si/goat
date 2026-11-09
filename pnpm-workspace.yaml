@@ -401,6 +401,7 @@ patchedDependencies:
   react-native-reanimated@4.7.1: patches/react-native-reanimated@4.7.1.patch
   react-native-keyboard-controller@1.22.8: patches/react-native-keyboard-controller@1.22.8.patch
   # Android: a nested WebView hands a vertical drag to its scrolling parent at the page's edge.
+  react-native-pdf-jsi@6.1.0: patches/react-native-pdf-jsi@6.1.0.patch
   react-native-webview@14.0.1: patches/react-native-webview@14.0.1.patch
   "@expo/ui@58.0.20": patches/@expo__ui@58.0.20.patch
   # iOS: native modules register permission requesters from several threads during reloads.
