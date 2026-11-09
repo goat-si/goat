@@ -11,6 +11,7 @@ import * as SourceControlBuiltInDrivers from "./builtInDrivers.ts";
 
 /** The prompt always names GOAT's repository, regardless of what a client sends. */
 const GOAT_REPOSITORY = "goat-si/goat";
+const GITHUB_HOST = "github.com";
 
 export class SourceControlStarPrompt extends Context.Service<
   SourceControlStarPrompt,
@@ -30,12 +31,12 @@ export const make = Effect.gen(function* () {
       const isStarred = drivers.find(({ driver }) => driver.kind === input.provider)?.instance
         .isRepositoryStarred;
       if (isStarred === undefined) return null;
-      return yield* isStarred(input.host, GOAT_REPOSITORY);
+      return yield* isStarred(GITHUB_HOST, GOAT_REPOSITORY);
     }),
     star: Effect.fn("SourceControlStarPrompt.star")(function* (input: SourceControlStarredInput) {
       const star = drivers.find(({ driver }) => driver.kind === input.provider)?.instance
         .starRepository;
-      return star === undefined ? false : yield* star(input.host, GOAT_REPOSITORY);
+      return star === undefined ? false : yield* star(GITHUB_HOST, GOAT_REPOSITORY);
     }),
   };
 });

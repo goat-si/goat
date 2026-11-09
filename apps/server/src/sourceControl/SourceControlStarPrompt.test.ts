@@ -14,6 +14,10 @@ it.effect("pins the repository even when the RPC input contains a different repo
     {
       driver: { kind: SourceControlProviderKind.make("github") },
       instance: {
+        isRepositoryStarred: (host: string, repository: string) => {
+          calls.push([host, repository]);
+          return Effect.succeed(false);
+        },
         starRepository: (host: string, repository: string) => {
           calls.push([host, repository]);
           return Effect.succeed(true);
@@ -23,12 +27,16 @@ it.effect("pins the repository even when the RPC input contains a different repo
   ] as unknown as ReadonlyArray<SourceControlBuiltInDrivers.SourceControlDriverEntry>;
   const input = decodeInput({
     provider: "github",
-    host: "github.com",
+    host: "attacker.example",
     repository: "attacker/repo",
   });
   return Effect.gen(function* () {
     const service = yield* SourceControlStarPrompt.make;
+    assert.isFalse(yield* service.starred(input));
     assert.isTrue(yield* service.star(input));
-    assert.deepStrictEqual(calls, [["github.com", "goat-si/goat"]]);
+    assert.deepStrictEqual(calls, [
+      ["github.com", "goat-si/goat"],
+      ["github.com", "goat-si/goat"],
+    ]);
   }).pipe(Effect.provideService(SourceControlBuiltInDrivers.SourceControlDrivers, entries));
 });
