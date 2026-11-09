@@ -57,7 +57,9 @@ file_sig_set() {
 }
 file_sig() { file_sig_set "$1" && printf '%s' "$FILE_SIG"; }
 # A remembered key holds only while its executable keeps the signature and install marker it had,
-# and a remembered runner keeps its own.
+# and a remembered runner keeps its own. Their age gates hold again on a fresh clock: one stepped
+# back makes a same-second rewrite look unchanged. The clock is read after the signatures, so a
+# step back between them can only refuse.
 fact_memo_get() {
   [ -n "$FACT_MEMO" ] && [ -f "$FACT_MEMO" ] && [ -r "$FACT_MEMO" ] || return 1
   while IFS= read -r memo_path && IFS= read -r memo_name && IFS= read -r memo_key &&
@@ -67,6 +69,9 @@ fact_memo_get() {
       file_sig_set "$memo_path" && [ "$FILE_SIG" = "$memo_path_sig" ] || return 1
     fi
     file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] || return 1
+    fact_clock || return 1
+    [ "$memo_path" = "$memo_exe" ] || [ "\${memo_path_sig##*:}" -lt "$fact_now" ] || return 1
+    [ "$(( fact_now - \${memo_sig##*:} ))" -ge 2 ] || return 1
     fact_slurp "\${memo_exe%/goat}/.install-complete" && [ "$FACT_TEXT" = "\${memo_name%.*}" ] || return 1
     FACT_NAME="$memo_name"; FACT_KEY="$memo_key"; return 0
   done <"$FACT_MEMO"
@@ -90,6 +95,14 @@ fact_memo_put() {
 pin_runner() { cp "$1" "\${RUNNER_CANDIDATE_FILE:?}.pin" || return 1; fact_memo_drop; }
 # Forgets every remembered key; a memo that cannot be emptied is not used again.
 fact_memo_drop() { [ -z "$FACT_MEMO" ] || true >"$FACT_MEMO" 2>/dev/null || FACT_MEMO=; }
+# Sets fact_now to the wall clock in seconds, read afresh for each check: bash 5's EPOCHSECONDS,
+# which starts no process, else date with its own status.
+fact_clock() {
+  case "\${EPOCHSECONDS:-}" in
+    ''|*[!0123456789]*) fact_now="$(date +%s)" ;;
+    *) fact_now="$EPOCHSECONDS" ;;
+  esac
+}
 # Sets FACT_NAME and FACT_KEY for running goat as $1: an installed executable, or an archive
 # runner, which execs one. An executable changed less than 2 s ago is not keyed: a second write
 # within the same second would leave its ctime unchanged.
@@ -112,7 +125,7 @@ exec_fact_key() {
   valid_version "$fact_version" && [ "$fact_exe" = "$fact_versions/$fact_version/goat" ] || return 1
   file_sig_set "$fact_exe" || return 1
   fact_sig="$FILE_SIG"
-  fact_now="$(date +%s)"
+  fact_clock || return 1
   [ "$(( fact_now - \${fact_sig##*:} ))" -ge 2 ] || return 1
   # A runner installs a version without its marker instead of running it.
   fact_slurp "$fact_versions/$fact_version/.install-complete" && [ "$FACT_TEXT" = "$fact_version" ] || return 1
