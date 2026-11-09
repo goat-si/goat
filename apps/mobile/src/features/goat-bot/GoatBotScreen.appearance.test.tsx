@@ -226,7 +226,7 @@ it("marks a failed answer as danger and prefixes its accessibility label", async
   await view.unmount();
 });
 
-it("keeps answer chips neutral and uses the selected appearance for the send button", async () => {
+it("keeps answer chips and the send button off the retired blue message palette", async () => {
   appearance.mode = "dark";
   const rowView = await render(<GoatBotTimelineRow {...props} row={{ ...bot, tone: "reply" }} />);
   const chip = rowView.container.querySelector("button");
@@ -254,9 +254,7 @@ it("keeps answer chips neutral and uses the selected appearance for the send but
     height: 28,
     borderRadius: 14,
   });
-  expect(
-    JSON.parse(send?.querySelector("div")?.getAttribute("data-style") ?? "null").backgroundColor,
-  ).toBe("#2B66C6");
+  expect(screenView.container.innerHTML).not.toMatch(/#2B66C6|#1466D0/i);
   await screenView.unmount();
 });
 

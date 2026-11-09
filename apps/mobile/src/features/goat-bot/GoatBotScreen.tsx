@@ -50,7 +50,6 @@ import {
   goatBotTime,
 } from "./GoatBotMessageParts";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
-import { GOAT_BOT_BUBBLE_COLORS } from "./goatBotBubbleStyle";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -238,7 +237,6 @@ export function GoatBotScreen(props: {
   const moveTarget = homeSettings.moveTarget;
   const { themeAppearance } = useAppearancePreferences();
   const bodyText = useScaledTextRole("body");
-  const outgoingColor = GOAT_BOT_BUBBLE_COLORS[themeAppearance].out;
   const selectDetail = useSelectWorkspaceDetail();
   const navigation = useNavigation();
   const selectThread = useCallback(
@@ -548,8 +546,8 @@ export function GoatBotScreen(props: {
             }}
           >
             <View
-              className="items-center justify-center"
-              style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: outgoingColor }}
+              className="items-center justify-center bg-composer-send"
+              style={{ width: 28, height: 28, borderRadius: 14 }}
             >
               <Text className="text-xl font-semibold text-white">↑</Text>
             </View>
