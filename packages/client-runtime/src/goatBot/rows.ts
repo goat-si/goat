@@ -520,34 +520,42 @@ export function buildGoatBotTimeline(input: {
   const ordered = [...committed, ...pending];
   // Choices answer the question they came with. The task's card says when that question closed,
   // and it stays open until then; without a card, anything the user sent since answers it. A send
-  // that failed answers nothing.
-  for (const [index, row] of ordered.entries()) {
-    if (row.kind !== "bot" || !askedQuestions.has(row.id) || openOnCard.has(row.id)) continue;
+  // that failed answers nothing. A later question of the same conversation takes the replies after
+  // it. One walk back keeps the nearest later send and question, overall and per task.
+  let nearestSend: number | undefined;
+  let nearestQuestion: number | undefined;
+  const nearestSendByTask = new Map<string | null | undefined, number>();
+  const nearestQuestionByTask = new Map<string | null | undefined, number>();
+  for (let index = ordered.length - 1; index >= 0; index--) {
+    const row = ordered[index]!;
+    if (row.kind === "user") {
+      if (row.delivery.state === "failed") continue;
+      nearestSend = index;
+      nearestSendByTask.set(sentTasks.get(row.id), index);
+      continue;
+    }
+    if (row.kind !== "bot" || !askedQuestions.has(row.id)) continue;
     const taskId = askedQuestions.get(row.id) ?? null;
-    const decidedByCard = cardDecidesOptions.has(row.id);
-    let answer: string | undefined;
-    let retired = false;
-    for (const next of ordered.slice(index + 1)) {
-      // A later question of the same conversation takes the replies after it.
-      if (
-        next.kind === "bot" &&
-        askedQuestions.has(next.id) &&
-        (!decidedByCard || askedQuestions.get(next.id) === taskId)
-      )
-        break;
-      if (next.kind !== "user" || next.delivery.state === "failed") continue;
-      if (decidedByCard && (taskId === null || sentTasks.get(next.id) !== taskId)) continue;
-      answer = next.text.trim() || (next.attachments ?? []).map((file) => file.name).join(", ");
-      retired = true;
-      break;
+    if (!openOnCard.has(row.id)) {
+      const decidedByCard = cardDecidesOptions.has(row.id);
+      const send = decidedByCard
+        ? taskId === null
+          ? undefined
+          : nearestSendByTask.get(taskId)
+        : nearestSend;
+      const until = decidedByCard ? nearestQuestionByTask.get(taskId) : nearestQuestion;
+      const reply = send !== undefined && (until === undefined || send < until) ? send : undefined;
+      const answered = reply === undefined ? undefined : ordered[reply];
+      if (answered?.kind === "user") {
+        const answer =
+          answered.text.trim() || (answered.attachments ?? []).map((file) => file.name).join(", ");
+        ordered[index] = { ...row, options: NO_OPTIONS, answer };
+      } else if (!decidedByCard && send !== undefined) {
+        ordered[index] = { ...row, options: NO_OPTIONS };
+      }
     }
-    if (!decidedByCard && !retired) {
-      retired = ordered
-        .slice(index + 1)
-        .some((next) => next.kind === "user" && next.delivery.state !== "failed");
-    }
-    if (answer !== undefined) ordered[index] = { ...row, options: NO_OPTIONS, answer };
-    else if (retired) ordered[index] = { ...row, options: NO_OPTIONS };
+    nearestQuestion = index;
+    nearestQuestionByTask.set(askedQuestions.get(row.id), index);
   }
 
   const rows: GoatBotRow[] = [];

@@ -12,6 +12,7 @@ import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import * as Effect from "effect/Effect";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { botRowListedUntil, botRowRetiresAt } from "../goatBot/taskVisibility.ts";
 import { goatBotListedWork, type GoatBotWorkRef } from "../goatBot/visibility.ts";
 import {
   createEnvironmentRpcCommand,
@@ -21,6 +22,8 @@ import {
 import { createEnvironmentSessionAtoms } from "./session.ts";
 
 const NO_WORK: ReadonlyArray<GoatBotWorkRef> = Object.freeze([]);
+// setTimeout's longest delay; a later expiry re-arms when this one fires.
+const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * Commands and queries for the GOAT bot, the channel ledger, and Slack settings. Bot messages
@@ -31,6 +34,36 @@ export function createChannelEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   const sessions = createEnvironmentSessionAtoms(runtime);
+  // Bumped when this client changes a task's view, or a listed row's retention ends, so every
+  // reader of that environment's bot rows reads them again.
+  const botThreadsRevision = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(0).pipe(
+      Atom.keepAlive,
+      Atom.withLabel(`environment-data:channel:bot-threads-revision:${environmentId}`),
+    ),
+  );
+  const bumpBotThreads = (
+    { environmentId }: { readonly environmentId: EnvironmentId },
+    registry: AtomRegistry.AtomRegistry,
+  ) => Effect.sync(() => registry.update(botThreadsRevision(environmentId), (n) => n + 1));
+  // The thread shell's work signal, installed by `listedBotWork` when the shell is built.
+  let shellWorkSignal: ((environmentId: EnvironmentId) => Atom.Atom<string>) | undefined;
+  const botThreadsSignal = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get) =>
+        `${get(botThreadsRevision(environmentId))}|${
+          shellWorkSignal === undefined ? "" : get(shellWorkSignal(environmentId))
+        }`,
+    ).pipe(Atom.withLabel(`environment-data:channel:bot-threads-signal:${environmentId}`)),
+  );
+  // The bot's rows and the thread lists that hide its work read this one query, so a row the
+  // bot can no longer show stops hiding its thread on the same answer.
+  const listBotThreads = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:channel:list-bot-threads",
+    tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
+    staleTimeMs: 2_000,
+    refreshTrigger: ({ environmentId }) => botThreadsSignal(environmentId),
+  });
   const listBots = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:channel:list-bots",
     tag: CHANNEL_GATEWAY_WS_METHODS.listBots,
@@ -73,20 +106,15 @@ export function createChannelEnvironmentAtoms<R, E>(
     ).pipe(Atom.withLabel(`environment-data:channel:remote-work-openable:${environmentId}`)),
   );
   /**
-   * The threads every bot's rows open as its own work, in the given environments. A bot's
-   * rows are read again when its environment's signal changes; until they load, nothing is
-   * listed, so thread lists keep showing the work.
+   * The threads the rows each bot shows open as its own work. A row aged out of the bot's lists
+   * stops hiding its thread, and the rows are read again when the next one's retention ends.
+   * Until they load, nothing is listed, so thread lists keep showing the work.
    */
   const listedBotWork = (source: {
     readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
     readonly signal: (environmentId: EnvironmentId) => Atom.Atom<string>;
   }) => {
-    const rowsQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:channel:goat-bot-listed-work",
-      tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
-      staleTimeMs: 2_000,
-      refreshTrigger: ({ environmentId }) => source.signal(environmentId),
-    });
+    shellWorkSignal = source.signal;
     const forEnvironment = Atom.family((environmentId: EnvironmentId) =>
       Atom.make((get): ReadonlyArray<GoatBotWorkRef> => {
         const capabilities = get(sessions.initialConfigValueAtom(environmentId))?.environment
@@ -101,16 +129,46 @@ export function createChannelEnvironmentAtoms<R, E>(
           }
         }
         const listed: GoatBotWorkRef[] = [];
+        // @effect-diagnostics-next-line globalDate:off - Retention is wall-clock, as the bot's lists read it.
+        const now = Date.now();
+        let nextExpiry = Infinity;
         for (const input of inputs) {
-          const result = get(rowsQuery({ environmentId, input }));
+          const result = get(listBotThreads({ environmentId, input }));
           if (!AsyncResult.isSuccess(result)) continue;
+          const shown = [];
+          const retiredTasks = new Set<string>();
+          for (const row of result.value.rows) {
+            const retiresAt = botRowRetiresAt(row);
+            const listedUntil = botRowListedUntil(row);
+            if (listedUntil > now) nextExpiry = Math.min(nextExpiry, listedUntil);
+            if (now >= retiresAt) {
+              if (row.kind === "task") retiredTasks.add(row.task.taskId);
+              continue;
+            }
+            nextExpiry = Math.min(nextExpiry, retiresAt);
+            shown.push(row);
+          }
           listed.push(
-            ...goatBotListedWork(result.value.rows, {
+            ...goatBotListedWork(shown, {
               originEnvironmentId: environmentId,
-              items: result.value.remoteWork ?? [],
+              // A retired task's remote work opens only from that task, so it shows again too.
+              items: (result.value.remoteWork ?? []).filter(
+                (item) => !retiredTasks.has(item.taskId),
+              ),
               isOpenable: (destination) => get(remoteWorkOpenable(destination)),
             }),
           );
+        }
+        if (nextExpiry !== Infinity) {
+          // @effect-diagnostics-next-line globalTimers:off - One bounded timer per read, cleared on the next.
+          const handle = setTimeout(
+            () => {
+              get.registry.update(botThreadsRevision(environmentId), (n) => n + 1);
+              get.refreshSelf();
+            },
+            Math.min(nextExpiry - now, MAX_TIMER_MS),
+          );
+          get.addFinalizer(() => clearTimeout(handle));
         }
         return listed.length === 0 ? NO_WORK : listed;
       }).pipe(Atom.withLabel(`environment-data:channel:goat-bot-listed-work:${environmentId}`)),
@@ -161,11 +219,7 @@ export function createChannelEnvironmentAtoms<R, E>(
       tag: CHANNEL_GATEWAY_WS_METHODS.getBotStatus,
       staleTimeMs: 2_000,
     }),
-    listBotThreads: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:channel:list-bot-threads",
-      tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
-      staleTimeMs: 2_000,
-    }),
+    listBotThreads,
     listBotNotes: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-bot-notes",
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotNotes,
@@ -186,6 +240,7 @@ export function createChannelEnvironmentAtoms<R, E>(
     updateTaskView: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:update-task-view",
       tag: CHANNEL_GATEWAY_WS_METHODS.updateTaskView,
+      onSuccess: bumpBotThreads,
     }),
     /** A person runs failed or stopped work again; a resent clientRequestId returns the first result. */
     retryTask: createEnvironmentRpcCommand(runtime, {

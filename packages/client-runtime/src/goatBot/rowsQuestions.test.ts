@@ -487,3 +487,66 @@ describe("a question the person answered", () => {
     expect(row).not.toHaveProperty("answer");
   });
 });
+
+describe("a long chat of questions", () => {
+  it("gives each of hundreds of questions its own reply, in the chat and per task", () => {
+    const start = Date.parse("2026-10-12T12:00:00Z");
+    let clock = 0;
+    const at = () => DateTime.formatIso(DateTime.makeUnsafe(start + clock++ * 1_000));
+    const closed = (key: string): GoatBotTaskCard => ({
+      ...card(key, 1, "Waiting for your answer"),
+      askInChat: true,
+      openQuestionIds: [],
+    });
+    const question = (taskId: string | null, questionId: string): GoatBotMessagePresentation => ({
+      tone: "question",
+      readAt: null,
+      requestKey: null,
+      taskId,
+      questionId,
+      options: ["Yes", "No"],
+    });
+    const sentTo = (taskId: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      taskId,
+    });
+    const items: OrchestrationV2TurnItem[] = [notice("na", at()), notice("nb", at())];
+    const messages: Record<string, GoatBotMessagePresentation> = {};
+    const expected: Array<readonly [string, ReadonlyArray<string>, string | undefined]> = [];
+    const rounds = 200;
+    for (let round = 0; round < rounds; round++) {
+      // Two tasks ask, the chat asks, then the replies come back in another order.
+      items.push(bot(`qa${round}`, at(), `A asks ${round}`));
+      messages[`qa${round}`] = question("a", `qa${round}`);
+      items.push(bot(`qb${round}`, at(), `B asks ${round}`));
+      messages[`qb${round}`] = question("b", `qb${round}`);
+      items.push(bot(`qc${round}`, at(), `Chat asks ${round}`));
+      messages[`qc${round}`] = question(null, `qc${round}`);
+      if (round === rounds - 1) {
+        expected.push([`qa${round}`, [], undefined], [`qb${round}`, [], undefined]);
+        expected.push([`qc${round}`, ["Yes", "No"], undefined]);
+        continue;
+      }
+      items.push(user(`uc${round}`, at(), `chat ${round}`));
+      items.push(user(`ub${round}`, at(), `b ${round}`));
+      messages[`ub${round}`] = sentTo("b");
+      items.push(user(`ua${round}`, at(), `a ${round}`));
+      messages[`ua${round}`] = sentTo("a");
+      expected.push([`qa${round}`, [], `a ${round}`], [`qb${round}`, [], `b ${round}`]);
+      expected.push([`qc${round}`, [], `chat ${round}`]);
+    }
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf(items),
+        pendingInputs: [],
+        readers: readers(messages, { na: closed("a"), nb: closed("b") }),
+        taskId: null,
+      }),
+    );
+    expect(
+      rows.flatMap((row) => (row.kind === "bot" ? [[row.id, row.options, row.answer]] : [])),
+    ).toEqual(expected);
+  });
+});

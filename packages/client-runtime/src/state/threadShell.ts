@@ -434,7 +434,12 @@ export function createEnvironmentThreadShellAtoms(input: {
     Atom.make((get) => {
       const parts: string[] = [];
       for (const thread of get(quietThreadShellsAtom)) {
-        if (thread.environmentId !== environmentId) continue;
+        // Work the bot launched on another machine changes this environment's rows too.
+        if (
+          thread.environmentId !== environmentId &&
+          thread.source.launchedBy?.environmentId !== environmentId
+        )
+          continue;
         if (isGoatBotConversationThreadId(thread.id))
           parts.push(thread.id + "@" + thread.updatedAt);
         else if (
