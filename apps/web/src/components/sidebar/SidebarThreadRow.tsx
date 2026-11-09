@@ -1257,7 +1257,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               ) : null}
               {draftIndicator}
               {title}
-              {externalLauncherBadge}
               {historyArchiveHint}
               {pinIndicator}
               {terminalStatusIcon}
