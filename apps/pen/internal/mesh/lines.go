@@ -72,10 +72,14 @@ func (c *Lines) Write(v any) error {
 func (c *Lines) Read(ctx context.Context) (*Msg, error) {
 	for {
 		if i := bytes.IndexByte(c.buf, '\n'); i >= 0 {
+			if i+1 > MaxLine {
+				c.L.Close(wire.CodeCrypto)
+				return nil, errLine
+			}
 			line := c.buf[:i]
 			c.buf = append([]byte(nil), c.buf[i+1:]...)
 			var m Msg
-			if err := json.Unmarshal(line, &m); err != nil || m.T == "" || len(m.Have) > maxHave {
+			if err := json.Unmarshal(line, &m); err != nil || m.T == "" || len(m.Have) > maxHave || len(m.Records) > LineRecords {
 				c.L.Close(wire.CodeCrypto)
 				return nil, errLine
 			}

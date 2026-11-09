@@ -404,9 +404,19 @@ func TestThreeHundredRecordsSyncAcrossSeveralLinesAndPushIsTakenOnDone(t *testin
 }
 
 func TestOversizedLineAndOverlongHaveClose4400(t *testing.T) {
+	f := detID(1)
+	_, found := newMesh(t, f)
+	many := Msg{T: "records"}
+	for range LineRecords + 1 {
+		many.Records = append(many.Records, found)
+	}
+	manyLine, _ := json.Marshal(many)
+	bigLine, _ := json.Marshal(Msg{T: "refused", Reason: string(bytes.Repeat([]byte("x"), MaxLine))})
 	for _, line := range [][]byte{
 		bytes.Repeat([]byte("x"), MaxLine+1),
 		[]byte(`{"t":"hello","have":[` + string(bytes.Repeat([]byte(`"a",`), maxHave)) + `"a"]}` + "\n"),
+		append(bigLine, '\n'),
+		append(manyLine, '\n'),
 	} {
 		a, b := relay.Pipe()
 		for len(line) > 0 {
