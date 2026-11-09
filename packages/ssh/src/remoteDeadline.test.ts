@@ -242,7 +242,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadlin
           '[ "$n" = 1 ] || exit 0',
           'echo $$ > "$GOAT_TEST_DIR/tick.pid"; echo $PPID > "$GOAT_TEST_DIR/watchdog.pid"',
           'printf x > "$GOAT_TEST_DIR/ticking"',
-          midTick ? 'exec 3>&- /bin/cat "$GOAT_TEST_DIR/release" >/dev/null' : UNTIL_DONE,
+          // Two statements: bash 3.2 (macOS /bin/sh) keeps a saved copy of fd 3 open in the command
+          // that `exec 3>&- cmd` starts, so the test's pipe would never close.
+          midTick ? 'exec 3>&-\nexec /bin/cat "$GOAT_TEST_DIR/release" >/dev/null' : UNTIL_DONE,
         ].join("\n") + "\n",
         { mode: 0o755 },
       );
