@@ -453,6 +453,7 @@ describe("Windows launch listener wait", () => {
         "an extra field": [HEADER + row("127.0.0.1:3773", "0.0.0.0:0", "LISTENING", "1234 9")],
         "a final line with no newline": [HEADER + LISTENING.replace("\r\n", "")],
         "a final line cut before its CR": [HEADER + LISTENING.replace("\n", "")],
+        "a matching row before a cut final line": [HEADER + LISTENING + "  TCP    127.0.0.1:3773"],
         "a second row for the same address": [
           HEADER + LISTENING + row("127.0.0.1:3773", "0.0.0.0:0", "LISTENING", "4321"),
         ],

@@ -42,7 +42,8 @@ listener_probe_available() {
 # netstat answers in about 0.15 s where a PowerShell start takes 1.5 s, but its state word is
 # localized on some display languages. It proves server $1 owns 127.0.0.1:$2 only after it exited
 # 0 within 5 s and its whole output has a row TCP 127.0.0.1:$2 0.0.0.0:0 LISTENING $1 and no other
-# row from 127.0.0.1:$2 to 0.0.0.0:0; a final line with no newline is not a row. Bash only.
+# row from 127.0.0.1:$2 to 0.0.0.0:0. Output that ends mid-line was cut short and proves nothing.
+# Bash only.
 listener_netstat_owns() {
   listener_netstat="$(launch_bounded 5 netstat.exe -ano -p TCP </dev/null 2>/dev/null && printf .)" || return 1
   listener_netstat="${"${"}listener_netstat%.}"
@@ -50,7 +51,7 @@ listener_netstat_owns() {
   printf -v listener_cr '\r'; printf -v IFS ' \t'; set -f
   while :; do
     case "$listener_netstat" in *"
-"*) ;; *) break ;; esac
+"*) ;; *) [ -z "$listener_netstat" ] || return 1; break ;; esac
     listener_line="${"${"}listener_netstat%%"
 "*}"
     listener_netstat="${"${"}listener_netstat#*"
