@@ -802,6 +802,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 
 @utility goat-message-row {
   border-radius: 12px;
+  /* Room for the inset focus ring without moving the text off the column edge. */
+  margin-inline: -8px;
+  padding: 4px 8px;
 }
 
 @utility goat-task-title {

@@ -174,10 +174,10 @@ export function GoatBotTimeline({
         <ol
           ref={listRef}
           aria-label={`Conversation with ${botName}`}
-          className="mx-auto flex w-full max-w-[52rem] flex-col px-4 py-4"
+          className="mx-auto flex w-full max-w-3xl flex-col px-4 py-4"
         >
           {rows.map((row, index) => {
-            const gap = index > 0 && row.kind !== "day" && (row.firstInGroup ? "mt-6" : "mt-2");
+            const gap = index > 0 && row.kind !== "day" && (row.firstInGroup ? "mt-6" : "mt-3");
             switch (row.kind) {
               case "day": {
                 const stamp = goatBotStampParts(row.at, nowMs, time);
