@@ -22,7 +22,7 @@ const HTML_RENDER_LAYOUT_GUIDE = [
 ].join(" ");
 
 const PAGE_RULES =
-  'Write one self-contained document with inline <style> and <script>. Local images written as absolute file paths (src="/abs/shot.png", CSS url(/abs/bg.webp), or a JS string) are inlined automatically; remote http(s) URLs, such as a CDN chart library, load as-is.';
+  'Write one self-contained document with inline <style> and <script>. Local images written as absolute file paths (src="/abs/shot.png", CSS url(/abs/bg.webp), or a JS string) are inlined automatically; remote http(s) URLs, such as a CDN chart library, load as-is. A page already on disk can be passed as `path` to an absolute .html file instead of being retyped; only a full-access thread may pass a path.';
 
 /** What html_preview lists: under the description budget; the rest is in its guide. */
 export const htmlPreviewDescription =

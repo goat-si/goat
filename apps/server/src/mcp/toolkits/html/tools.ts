@@ -16,13 +16,18 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { withClientRequestId } from "../keyedParameters.ts";
 
 const Html = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512_000)).annotate({
-  description: "A complete, self-contained HTML document.",
+  description: "Inline HTML.",
+});
+
+const HtmlPath = Schema.String.annotate({
+  description: "Absolute .html file path.",
 });
 
 export const HtmlPreviewTool = Tool.make(agentSurfaceRegistry["html.preview"].name, {
   description: agentSurfaceRegistry["html.preview"].description,
   parameters: Schema.Struct({
-    html: Html,
+    path: Schema.optional(HtmlPath),
+    html: Schema.optional(Html),
     width: Schema.optional(
       Schema.Int.annotate({
         description: `CSS pixels, 240 to 1600. Default ${HTML_RENDER_COLUMN_WIDTH}. Use about 390 for phones.`,
@@ -66,7 +71,8 @@ const HtmlRenderTool = Tool.make(agentSurfaceRegistry["html.render"].name, {
   description: agentSurfaceRegistry["html.render"].description,
   parameters: withClientRequestId(
     Schema.Struct({
-      html: Html,
+      path: Schema.optional(HtmlPath),
+      html: Schema.optional(Html),
       title: Schema.String.check(
         Schema.isMinLength(1),
         Schema.isMaxLength(HTML_RENDER_MAX_TITLE_LENGTH),

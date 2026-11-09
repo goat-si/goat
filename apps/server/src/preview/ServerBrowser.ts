@@ -1996,7 +1996,7 @@ const make = Effect.gen(function* () {
             ServerBrowserPage.snapshot({
               ...tab,
               renderScale: tab.desktop ? "display" : RENDER_SCALE,
-              ...(input as PreviewAutomationSnapshotInput),
+              ...(input as PreviewAutomationSnapshotInput & { fullScreenshot?: boolean }),
               agentSessionId: request.agentSessionId,
               actionChannel: actionGate().channel,
               captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
