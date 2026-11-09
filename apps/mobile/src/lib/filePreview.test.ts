@@ -157,7 +157,6 @@ vi.mock("../features/threads/ThreadMarkdownVideo", async (importOriginal) => {
       createElement(actual.ThreadMarkdownVideo, { ...props, thumbnailVisible: true }),
   };
 });
-
 vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goat/client-runtime/state/runtime")>()),
   executeAtomQuery: (...args: unknown[]) => audio.query(...args),
@@ -172,8 +171,9 @@ vi.mock("../state/server", () => ({ serverEnvironment: {} }));
 vi.mock("../state/session", () => ({
   readEnvironmentScope: () => true,
   usePreparedConnection: () => ({ _tag: "Some", value: { httpBaseUrl: "https://example.com" } }),
+  environmentSession: { preparedConnectionValueAtom: () => null },
 }));
-vi.mock("../state/atom-registry", () => ({ appAtomRegistry: {} }));
+vi.mock("../state/atom-registry", () => ({ appAtomRegistry: { get: () => ({ _tag: "None" }) } }));
 vi.mock("../state/threads", () => ({ environmentThreadShells: {}, threadEnvironment: {} }));
 vi.mock("../state/entities", () => ({
   useLiveThreadLinkLabels: (text: string) => text,
