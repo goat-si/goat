@@ -13,10 +13,10 @@ import { OLD_HELPER_CAPS_STDERR } from "./runtimeFactsScripts.ts";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 export const version = "1.2.3";
-export const MANIFEST = version + " 1 1 1700000000 has";
+const MANIFEST = version + " 1 1 1700000000 has";
 export const LIVE = "live " + version + " 1 1 4242 4343";
 export const COMPAT = "compatible 1 inst-1";
-export const SIGNALS = {
+const SIGNALS = {
   serverVersion: version,
   sshRuntimeProtocolVersion: 1,
   orchestrationProtocolVersion: 1,
@@ -39,7 +39,7 @@ export const FACTS =
 // The direct call the probe makes for the client's own runtime version.
 export const DIRECT = FACTS.replace("facts ", "facts --with-caps ");
 export const MANIFEST_ASK = "__ssh-helper runtime-manifest --shell";
-export const COMMIT_ASK = "__ssh-helper commit-time";
+const COMMIT_ASK = "__ssh-helper commit-time";
 export const LIVE_ASK =
   "__ssh-helper protocol --runtime-file HOME/.goat/userdata/server-runtime.json" +
   " --port-file HOME/.goat/ssh-launch//port --pid-file HOME/.goat/ssh-launch//pid --shell";
@@ -48,7 +48,7 @@ export const SEPARATE = [MANIFEST_ASK, COMMIT_ASK, LIVE_ASK, COMPAT_ASK];
 
 // Every answer comes from a file in HOME, so a test changes behaviour without changing the
 // executable's bytes, which would change its key.
-export const STAND_IN = [
+const STAND_IN = [
   "#!/bin/sh",
   'printf \'%s\\n\' "$*" >> "$HOME/calls"',
   'case "$*" in',
@@ -72,7 +72,7 @@ export const REPLACE_SELF = "printf '\\n# replaced\\n' >> \"$0\"; ";
 // Git Bash stand-ins: uname, a clock past every age gate unless HOME/now names another time,
 // a SHA-256 that logs each file it hashes and then runs a one-shot HOME/digest-hook, and ps -W
 // listing the server.
-export const PREFIX =
+const PREFIX =
   "uname() { printf 'MINGW64_NT\\n'; }\n" +
   'date() { if [ -f "$HOME/now" ]; then cat "$HOME/now"; else printf \'4102444800\\n\'; fi; }\n' +
   "shasum() {\n" +
