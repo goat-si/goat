@@ -57,7 +57,8 @@ facts_frame_live_server() {
 # line that counts the answers with nothing after it. The capability line \`facts --with-caps\`
 # prints may follow the begin line, well formed and uncounted; with $4 "caps" it must, listing facts.
 frame_parse() {
-  FRAME_MANIFEST=; FRAME_COMMIT=; FRAME_READY=; FRAME_LIVE=; FRAME_COMPAT=; frame_count=0
+  FRAME_MANIFEST=; FRAME_COMMIT=; FRAME_READY=; FRAME_LIVE=; FRAME_COMPAT=; FRAME_VERSION=; FRAME_OWN=
+  frame_count=0
   case "$3" in "begin v1 $1$fact_nl"*) frame_rest="\${3#*"$fact_nl"}" ;; *) return 1 ;; esac
   frame_caps=
   case "$frame_rest" in "caps v1$fact_nl"*|"caps v1 "*)
@@ -80,6 +81,8 @@ frame_parse() {
       ready) [ -z "$FRAME_READY" ] || return 1; FRAME_READY="$frame_answer" ;;
       live) [ -z "$FRAME_LIVE" ] || return 1; FRAME_LIVE="$frame_answer" ;;
       compat) [ -z "$FRAME_COMPAT" ] || return 1; FRAME_COMPAT="$frame_answer" ;;
+      version) [ -z "$FRAME_VERSION" ] || return 1; FRAME_VERSION="$frame_answer" ;;
+      own) [ -z "$FRAME_OWN" ] || return 1; FRAME_OWN="$frame_answer" ;;
       *) return 1 ;;
     esac
     frame_count=$((frame_count + 1))
@@ -91,10 +94,25 @@ frame_parse() {
       commit) [ -n "$FRAME_COMMIT" ] ;;
       ready) [ -n "$FRAME_READY" ] ;;
       live) [ -n "$FRAME_LIVE" ] ;;
+      version) [ -n "$FRAME_VERSION" ] ;;
+      own) [ -n "$FRAME_OWN" ] ;;
       *) false ;;
     esac || return 1
   done
   if facts_frame_live_server "$FRAME_LIVE"; then [ -n "$FRAME_COMPAT" ]; else [ -z "$FRAME_COMPAT" ]; fi
+}
+# Runs goat $1 with arguments $2... and sets frame_out to its reply. Succeeds only for exit status
+# 0 with nothing on stderr: reads stdout to a bound (1024 characters are at most 4096 bytes) as
+# lines a NUL breaks and x ends, keeps one byte of stderr, and takes the status from a file only it
+# writes.
+frame_direct_call() {
+  : >"$FACT_MEMO.facts-status" || return 1
+  frame_out="$({ { "$@" 2>&1 1>&3 3>&-
+      printf '%s\\n' "$?" >"$FACT_MEMO.facts-status"; } | head -c 1 >"$FACT_MEMO.facts-err" 3>&-; } 3>&1 |
+    head -c 4097 | tr '\\000' '\\n'; printf x)"
+  IFS= read -r frame_status <"$FACT_MEMO.facts-status" && [ "$frame_status" = 0 ] &&
+    [ ! -s "$FACT_MEMO.facts-err" ] && [ "\${#frame_out}" -le 1025 ] || return 1
+  case "$frame_out" in *"$fact_nl"x) frame_out="\${frame_out%"$fact_nl"x}" ;; *) return 1 ;; esac
 }
 # Sets frame_pid and frame_port from live tokens $1.
 facts_frame_live_ids() { set -f; set -- $1; frame_pid="\${5:-}"; frame_port="\${6:-}"; }
@@ -112,20 +130,13 @@ facts_frame_compat_valid() {
 // and state.
 export const REMOTE_FACTS_FRAME_SCRIPT = `${REMOTE_COMBINED_CALL_SCRIPT}
 # Makes goat $1's combined call and succeeds when its key is unchanged after it and the reply is
-# valid in full; it records nothing. With $2 "caps" it requires the capability line, reads stdout
-# to a bound (1024 characters are at most 4096 bytes) as lines a NUL breaks and x ends, fails on
-# any stderr, keeping one byte of it, and takes the status from a file only it writes.
+# valid in full; it records nothing. With $2 "caps" it requires the capability line and calls as
+# frame_direct_call does.
 facts_frame_call() {
   frame_absent=; ! live_none_absent "$runtime_file" "$state/port" "$state/pid" || frame_absent=1
   frame_live=; ! live_fact_key "$1" "$runtime_file" "$state/port" "$state/pid" || frame_live="$FACT_KEY"
   if [ "\${2:-}" = caps ]; then
-    : >"$FACT_MEMO.facts-status" || return 1
-    frame_out="$({ { "$1" __ssh-helper facts --with-caps --runtime-file "$runtime_file" --port-file "$state/port" --pid-file "$state/pid" 2>&1 1>&3 3>&-
-        printf '%s\\n' "$?" >"$FACT_MEMO.facts-status"; } | head -c 1 >"$FACT_MEMO.facts-err" 3>&-; } 3>&1 |
-      head -c 4097 | tr '\\000' '\\n'; printf x)"
-    IFS= read -r frame_status <"$FACT_MEMO.facts-status" && [ "$frame_status" = 0 ] &&
-      [ ! -s "$FACT_MEMO.facts-err" ] && [ "\${#frame_out}" -le 1025 ] || return 1
-    case "$frame_out" in *"$fact_nl"x) frame_out="\${frame_out%"$fact_nl"x}" ;; *) return 1 ;; esac
+    frame_direct_call "$1" __ssh-helper facts --with-caps --runtime-file "$runtime_file" --port-file "$state/port" --pid-file "$state/pid" || return 1
   else
     frame_out="$("$1" __ssh-helper facts --runtime-file "$runtime_file" --port-file "$state/port" --pid-file "$state/pid" 2>/dev/null)" || return 1
   fi

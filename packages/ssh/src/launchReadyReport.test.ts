@@ -7,6 +7,7 @@ import * as NodeUtil from "node:util";
 import { it } from "@effect/vitest";
 import { assert, describe } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import { REMOTE_COMBINED_CALL_SCRIPT } from "./runtimeFactsFrameScripts.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
 import { buildRemoteLaunchScript } from "./tunnel.ts";
 
@@ -81,8 +82,13 @@ const VARIABLES = [
   "REMOTE_PORT=4343; REMOTE_PID=4242",
   "",
 ].join("\n");
-const COMMON =
-  PREFIX + REMOTE_PROTOCOL_TOKEN_SCRIPT + "\n" + REMOTE_RUNNER_HINT_SCRIPT + "\n" + VARIABLES;
+// The combined-call functions come from the launch's runner setup, before these definitions.
+const COMMON = [
+  PREFIX + REMOTE_PROTOCOL_TOKEN_SCRIPT,
+  REMOTE_RUNNER_HINT_SCRIPT,
+  REMOTE_COMBINED_CALL_SCRIPT,
+  VARIABLES,
+].join("\n");
 // The bound is the listener wait's concern; here every command runs as on a host without one. The
 // server starts after the capability lookup ends, as a server's start outlasts one goat start.
 const STUBS = [
