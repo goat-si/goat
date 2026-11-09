@@ -67,7 +67,10 @@ vi.mock("@effect/atom-react", async (original) => ({
   useAtomValue: () => true,
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => actions.update }));
-vi.mock("~/localApi", () => ({ readLocalApi: () => ({ contextMenu: { show: actions.show } }) }));
+vi.mock("~/localApi", () => {
+  const api = () => ({ contextMenu: { show: actions.show } });
+  return { readLocalApi: api, ensureLocalApi: api };
+});
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
     updateTaskView: { permissionAtom: () => null },
@@ -77,6 +80,7 @@ vi.mock("~/state/channels", () => ({
   },
 }));
 vi.mock("../ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children, render }: { children: ReactNode; render?: ReactElement }) =>
     render ? cloneElement(render, {}, children) : <>{children}</>,
