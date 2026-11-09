@@ -29,6 +29,7 @@ import type { MediaActionsSource } from "../../lib/mediaActionsSource";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
 import { WorkspaceMutationIdContext } from "./workspaceMutationIdContext";
 import { assetImageCacheKey } from "../../lib/assetImageSource";
+import { routedActionsSource, useEnvironmentMediaUri } from "../../lib/environmentMediaUri";
 import {
   MARKDOWN_IMAGE_MAX_WIDTH,
   type MarkdownImageDisplaySize,
@@ -397,6 +398,33 @@ export function ThreadMarkdownImageUnavailable(props: { readonly alt: string | n
       unavailable
       alt={props.alt}
       onPressPreview={() => undefined}
+    />
+  );
+}
+/** A URL image. A loopback address means the environment's machine, so it loads from there or says why it can't. */
+export function ThreadMarkdownDirectImage(props: {
+  readonly environmentId: EnvironmentId;
+  readonly uri: string;
+  readonly alt: string | null;
+  readonly actionsSource?: MediaActionsSource | undefined;
+  readonly onPressPreview: (source: FilePreviewSource) => void;
+}) {
+  const routed = useEnvironmentMediaUri(props.environmentId, props.uri);
+  const actionsSource = routedActionsSource(props.actionsSource, routed.uri);
+  return (
+    <ThreadMarkdownImageView
+      uri={routed.uri}
+      sourceKey={routed.uri ?? props.uri}
+      format={
+        /\.svg(?:[?#]|$)/i.test(props.uri) || props.uri.startsWith("data:image/svg+xml")
+          ? "svg"
+          : undefined
+      }
+      unavailable={routed.uri === null}
+      unavailableDetail={routed.reason}
+      alt={props.alt}
+      actionsSource={actionsSource}
+      onPressPreview={props.onPressPreview}
     />
   );
 }

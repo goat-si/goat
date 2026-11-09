@@ -36,12 +36,15 @@ export interface MarkdownImageRequest {
 /** Host apps resolve workspace-relative images. Return null to retain Enriched's native media rendering. */
 export type MarkdownImageRenderer = (image: MarkdownImageRequest) => import("react").ReactNode;
 
-export type MarkdownImageSourceResolver = (
+export type MarkdownImageSourceResolver = ((
   image: MarkdownImageRequest,
 ) =>
   | { uri: string; headers?: Record<string, string> }
   | null
-  | Promise<{ uri: string; headers?: Record<string, string> } | null>;
+  | Promise<{ uri: string; headers?: Record<string, string> } | null>) & {
+  /** Where an image source's address leads now, or null when it loads where it points. */
+  readonly routeKey?: (href: string) => string | null;
+};
 
 export interface MarkdownFileContextMenuAction {
   readonly id: string;

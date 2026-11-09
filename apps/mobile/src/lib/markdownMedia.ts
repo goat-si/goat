@@ -11,6 +11,8 @@ import {
   mediaReferenceFileName,
 } from "@goat/client-runtime/media-reference";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
+import type { ResolveMediaSourceInput } from "@goat/client-runtime/media-source";
+import { resolveEnvironmentLoopbackUrl } from "@goat/client-runtime/connection";
 import { normalizeNativeMarkdownUrl, resolveMarkdownLinkPresentation } from "./markdownLinks";
 import { resolveMobileMarkdownMediaSource } from "./markdownMediaSource";
 
@@ -38,6 +40,8 @@ export function resolveMarkdownMediaPreview(
     readonly workspaceRoot: string | null | undefined;
     readonly captured?: boolean;
     readonly imageEmbed?: boolean;
+    /** Routes direct URLs from the environment; their loopback servers live on that machine. */
+    readonly environmentConnection?: ResolveMediaSourceInput["environmentConnection"];
   },
 ):
   | { readonly kind: "image"; readonly source: FilePreviewSource }
@@ -84,7 +88,16 @@ export function resolveMarkdownMediaPreview(
         mimeType,
       };
       if (classified._tag === "Direct") {
-        const uri = normalizeNativeMarkdownUrl(path);
+        const environment = input.environmentConnection;
+        const routed = environment
+          ? resolveEnvironmentLoopbackUrl({
+              connection: environment.connection,
+              isDesktopRenderer: environment.isDesktopRenderer,
+              url: environment.normalizeUri(path),
+            })
+          : ({ _tag: "Open", url: normalizeNativeMarkdownUrl(path) } as const);
+        if (routed._tag === "Unreachable") return null;
+        const uri = routed.url;
         return {
           kind,
           source: {

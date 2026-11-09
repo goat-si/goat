@@ -1,3 +1,4 @@
+import type { EnvironmentLoopbackUrl } from "@goat/client-runtime/connection";
 import { mediaKindFromPath } from "@goat/shared/mediaPreview";
 import { mediaUrlReference } from "@goat/client-runtime/media-reference";
 import type { ExpandedImageItem, ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -9,6 +10,7 @@ export const markdownImageItems = new WeakMap<Element, ExpandedImageItem>();
 export function markdownImageGallery(
   element: Element,
   selected: ExpandedImageItem,
+  routeUrl?: ((url: string) => EnvironmentLoopbackUrl) | null,
 ): ExpandedImagePreview {
   const scope = element.closest("[data-image-gallery]") ?? element.closest(".chat-markdown");
   const images: ExpandedImageItem[] = [];
@@ -19,8 +21,14 @@ export function markdownImageGallery(
     const link = image.closest("a");
     const href = link?.getAttribute("href") ?? "";
     if (link && mediaKindFromPath(href) !== "image") continue;
-    const linkedSource =
-      resolveExternalWebLinkHost(href) !== null ? resolveProtocolRelativeMediaUrl(href) : null;
+    // A link the environment's device cannot reach keeps the image it wraps, never this device's localhost.
+    const routed =
+      resolveExternalWebLinkHost(href) === null
+        ? null
+        : routeUrl
+          ? routeUrl(href)
+          : ({ _tag: "Open", url: resolveProtocolRelativeMediaUrl(href) } as const);
+    const linkedSource = routed?._tag === "Open" ? routed.url : null;
     const reference = mediaUrlReference(href);
     const item = linkedSource
       ? {

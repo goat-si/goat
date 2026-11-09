@@ -11,6 +11,12 @@ export type EnvironmentLoopbackUrl =
   | { readonly _tag: "Open"; readonly url: string }
   | { readonly _tag: "Unreachable"; readonly reason: string };
 
+export interface EnvironmentLoopbackUrlInput {
+  readonly url: string;
+  readonly connection: { readonly target: ConnectionTarget; readonly httpBaseUrl: string } | null;
+  readonly isDesktopRenderer: boolean;
+}
+
 // URL parsing turns [::ffff:127.0.0.1] into [::ffff:7f00:1].
 const IPV4_MAPPED_LOOPBACK = /^::ffff:7f[\da-f]{2}:[\da-f]{1,4}$/u;
 
@@ -30,11 +36,9 @@ const isLoopbackAddress = (hostname: string): boolean => {
  * a thread link). A loopback address means the environment's machine, so it is moved onto the
  * environment's direct LAN or tailnet host, or refused with a reason when no such route exists.
  */
-export function resolveEnvironmentLoopbackUrl(input: {
-  readonly url: string;
-  readonly connection: { readonly target: ConnectionTarget; readonly httpBaseUrl: string } | null;
-  readonly isDesktopRenderer: boolean;
-}): EnvironmentLoopbackUrl {
+export function resolveEnvironmentLoopbackUrl(
+  input: EnvironmentLoopbackUrlInput,
+): EnvironmentLoopbackUrl {
   const open = { _tag: "Open", url: input.url } as const;
   let parsed: URL;
   try {

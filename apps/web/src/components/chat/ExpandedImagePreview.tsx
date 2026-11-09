@@ -9,7 +9,10 @@ import type {
   ScopedThreadRef,
 } from "@goat/contracts";
 import { videoMimeType } from "@goat/shared/video";
-import { resolveMediaSource } from "@goat/client-runtime/media-source";
+import {
+  resolveMediaSource,
+  type ResolveMediaSourceInput,
+} from "@goat/client-runtime/media-source";
 import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
 import {
   squashAtomCommandFailure,
@@ -44,6 +47,7 @@ export async function resolveMarkdownMediaPreview(input: {
   cwd?: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
   httpBaseUrl?: string | undefined;
+  environmentConnection?: ResolveMediaSourceInput["environmentConnection"];
   onOpenFile?: ((path: string) => void) | undefined;
   createAssetUrl: (input: {
     environmentId: EnvironmentId;
@@ -54,6 +58,7 @@ export async function resolveMarkdownMediaPreview(input: {
     threadId: input.threadRef?.threadId,
     workspaceRoot: input.cwd,
     resolvedFilePath: input.resolvedFilePath,
+    environmentConnection: input.environmentConnection,
   });
   if (media === null) return null;
   const { kind, name, reference } = media;
@@ -66,6 +71,7 @@ export async function resolveMarkdownMediaPreview(input: {
   if (media.access === "direct") {
     src = resolveProtocolRelativeMediaUrl(media.uri);
   } else {
+    if (media.access === "unavailable" && media.reason) throw new Error(media.reason);
     if (media.access === "unavailable" || !input.threadRef || !input.httpBaseUrl) {
       throw new Error("Reconnect to this environment and open the media again.");
     }

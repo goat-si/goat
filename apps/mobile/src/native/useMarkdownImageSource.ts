@@ -2,11 +2,12 @@ import { resolveFilesystemReadAccess } from "@goat/client-runtime/state/filesyst
 import { useEnvironmentPresentation } from "../state/presentation";
 import { useEnvironmentQuery } from "../state/query";
 import { resolveMobileMarkdownMediaSource } from "../lib/markdownMediaSource";
+import { loopbackRouteKey, mobileMediaConnection } from "../lib/environmentMediaUri";
 import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import type { MarkdownImageSourceResolver } from "./SelectableMarkdownText.types";
 import { normalizeNativeMarkdownUrl } from "../lib/markdownLinks";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import * as Option from "effect/Option";
 
 import { assetEnvironment } from "../state/assets";
@@ -32,14 +33,16 @@ export function useMarkdownImageSource(props: {
   });
   const httpBaseUrl = Option.isSome(connection) ? connection.value.httpBaseUrl : null;
   const createUrl = useAtomQueryRunner(assetEnvironment.createUrl, { reportFailure: false });
-  return useCallback(
+  const resolve = useCallback<MarkdownImageSourceResolver>(
     async (image) => {
       const media = resolveMobileMarkdownMediaSource(image.href, {
         threadId: threadId ?? undefined,
         workspaceRoot,
         imageEmbed: true,
+        environmentConnection: mobileMediaConnection(connection),
       });
       if (media?.access === "direct") return { uri: normalizeNativeMarkdownUrl(media.uri) };
+      if (media?.access === "unavailable" && media.reason) throw new Error(media.reason);
       if (
         captured ||
         !fileAccess.canReadFiles ||
@@ -60,6 +63,7 @@ export function useMarkdownImageSource(props: {
     },
     [
       captured,
+      connection,
       fileAccess.canReadFiles,
       connectionPhase,
       createUrl,
@@ -68,5 +72,12 @@ export function useMarkdownImageSource(props: {
       threadId,
       workspaceRoot,
     ],
+  );
+  return useMemo(
+    () =>
+      Object.assign((image: Parameters<MarkdownImageSourceResolver>[0]) => resolve(image), {
+        routeKey: (href: string) => loopbackRouteKey(mobileMediaConnection(connection), href),
+      }),
+    [connection, resolve],
   );
 }

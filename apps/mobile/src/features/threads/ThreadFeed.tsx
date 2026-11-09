@@ -135,10 +135,11 @@ import {
 import { Image as ExpoImage } from "expo-image";
 import { useResolveClassNames } from "uniwind";
 import { useReduceMotionEnabled } from "../../lib/appState";
-import { useFilePreviewGallery, FilePreviewGallery } from "../../components/FilePreviewGallery";
+import { useFilePreviewGallery } from "../../components/FilePreviewGallery";
 import { assetImageSource } from "../../lib/assetImageSource";
 import { composerImageGallery } from "../../lib/composerImageGallery";
-import { messageImageGallery } from "./messageImageGallery";
+import { MessageImageGalleryScope } from "./MessageImageGalleryScope";
+import { readMobileMediaConnection, routeMobileMediaUrl } from "../../lib/environmentMediaUri";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import { inlineFilePreviewKind, isPdfFile } from "../../lib/filePreview";
 import { ThreadInlineFilePreview } from "./ThreadInlineFilePreview";
@@ -190,10 +191,7 @@ import { uuidv4 } from "../../lib/uuid";
 import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
-import {
-  normalizeNativeMarkdownUrl,
-  resolveMarkdownLinkPresentation,
-} from "../../lib/markdownLinks";
+import { resolveMarkdownLinkPresentation } from "../../lib/markdownLinks";
 import {
   createThreadFeedCache,
   threadFeedCompactionLabels,
@@ -278,7 +276,7 @@ import {
   MarkdownImageAvailableWidthContext,
   ThreadMarkdownImage,
   ThreadMarkdownImageUnavailable,
-  ThreadMarkdownImageView,
+  ThreadMarkdownDirectImage,
 } from "./ThreadMarkdownImage";
 import { openSettings } from "../settings/settings-navigation";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
@@ -2309,6 +2307,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       threadId: props.threadId,
       workspaceRoot: props.workspaceRoot,
       imageEmbed,
+      environmentConnection: readMobileMediaConnection(props.environmentId),
     });
     if (media && media.kind !== "file") {
       void Haptics.selectionAsync();
@@ -2418,8 +2417,13 @@ export const ThreadFeed = memo(function ThreadFeed({
 
     if (presentation.href) {
       if (/^https?:\/\//i.test(presentation.href) && isPdfFile({ name: presentation.href })) {
+        const routed = routeMobileMediaUrl(props.environmentId, presentation.href);
+        if (routed._tag === "Unreachable") {
+          Dialog.alert("Unable to open link", routed.reason);
+          return;
+        }
         openPreview(markdownLinkScope, {
-          file: { kind: "pdf", uri: presentation.href, name: "Document.pdf" },
+          file: { kind: "pdf", uri: routed.url, name: "Document.pdf" },
         });
         return;
       }
@@ -2518,6 +2522,7 @@ export const ThreadFeed = memo(function ThreadFeed({
         <ThreadMarkdownVideo
           key={image.href}
           source={{ ...media.source, name: image.alt ?? media.source.name }}
+          environmentId={props.environmentId}
           onPlaybackStart={onInlinePlaybackStart}
         />
       );
@@ -2556,16 +2561,9 @@ export const ThreadFeed = memo(function ThreadFeed({
     const imageSource = classifyMarkdownImageSource(image.href, props.workspaceRoot ?? null);
     if (imageSource._tag === "Direct") {
       return (
-        <ThreadMarkdownImageView
-          uri={normalizeNativeMarkdownUrl(imageSource.uri)}
-          sourceKey={imageSource.uri}
-          format={
-            /\.svg(?:[?#]|$)/i.test(imageSource.uri) ||
-            imageSource.uri.startsWith("data:image/svg+xml")
-              ? "svg"
-              : undefined
-          }
-          unavailable={false}
+        <ThreadMarkdownDirectImage
+          environmentId={props.environmentId}
+          uri={imageSource.uri}
           alt={image.alt}
           actionsSource={media?.source.actionsSource}
           onPressPreview={onPressPreview}
@@ -3452,22 +3450,4 @@ function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
       ) : null}
     </View>
   );
-}
-
-function MessageImageGalleryScope(props: {
-  entry: ThreadFeedRow;
-  environmentId: EnvironmentId;
-  threadId: ThreadId;
-  workspaceRoot: string | null | undefined;
-  children: ReactNode;
-}) {
-  const { entry, environmentId, threadId, workspaceRoot } = props;
-  const images =
-    entry.type === "message"
-      ? [
-          ...messageImageGallery(entry.message, { environmentId, threadId, workspaceRoot }),
-          ...composerImageGallery(entry.pendingMessage?.attachments ?? [], environmentId),
-        ]
-      : [];
-  return <FilePreviewGallery value={images}>{props.children}</FilePreviewGallery>;
 }

@@ -1,3 +1,5 @@
+import { SshConnectionTarget } from "@goat/client-runtime/connection";
+import { EnvironmentId } from "@goat/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { buildExpandedImagePreview, resolveMarkdownMediaPreview } from "./ExpandedImagePreview";
@@ -34,6 +36,28 @@ describe("resolveMarkdownMediaPreview", () => {
       });
     },
   );
+
+  it("refuses a remote environment's localhost media this device cannot reach, with the reason", async () => {
+    const preview = resolveMarkdownMediaPreview({
+      source: "http://localhost:5173/full.png",
+      environmentConnection: {
+        connection: {
+          target: new SshConnectionTarget({
+            environmentId: EnvironmentId.make("environment-1"),
+            label: "Build box",
+            connectionId: "ssh:box",
+          }),
+          httpBaseUrl: "http://127.0.0.1:41234",
+        },
+        isDesktopRenderer: false,
+        normalizeUri: (uri) => uri,
+      },
+      createAssetUrl: async () => {
+        throw new Error("Remote media must not request a local asset URL.");
+      },
+    });
+    await expect(preview).rejects.toThrow(/localhost:5173 is on Build box/);
+  });
 });
 
 describe("buildExpandedImagePreview", () => {

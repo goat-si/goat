@@ -1,4 +1,5 @@
 import type { ChatAttachment, EnvironmentId, ThreadId } from "@goat/contracts";
+import type { ResolveMediaSourceInput } from "@goat/client-runtime/media-source";
 import { imageMimeType } from "@goat/shared/image";
 import type { FilePreviewItem } from "../../components/FilePreviewModal.types";
 import { markdownImageSources } from "../../lib/markdownImageSources";
@@ -10,6 +11,7 @@ export function messageImageGallery(
     environmentId: EnvironmentId;
     threadId: ThreadId;
     workspaceRoot: string | null | undefined;
+    environmentConnection?: ResolveMediaSourceInput["environmentConnection"];
   },
 ): FilePreviewItem[] {
   const images: FilePreviewItem[] = [];

@@ -54,7 +54,6 @@ import {
   classifyMarkdownImageSource,
   markdownImageSourceFragment,
 } from "@goat/client-runtime/markdown-images";
-import { mediaUrlReference } from "@goat/client-runtime/media-reference";
 import { mediaKindFromPath, mediaMimeTypeFromExtension } from "@goat/shared/mediaPreview";
 import { InlineAudioPreview } from "./files/InlineAudioPreview";
 import * as Cause from "effect/Cause";
@@ -100,7 +99,6 @@ import {
 } from "./chat/ExpandedImagePreview";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { markdownImageGallery } from "./chat/markdownImageGallery";
-import { type MediaActionSource } from "./media/MediaActions";
 import { resolveProtocolRelativeMediaUrl } from "./media/mediaContent";
 import {
   revealInFileExplorerLabelForKind,
@@ -167,6 +165,10 @@ import { useOpenLink } from "../browser/useOpenLink";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import {
+  readEnvironmentMediaConnection,
+  readEnvironmentMediaRoute,
+} from "../browser/openEnvironmentUrl";
+import {
   isBrowserPreviewFile,
   openFileInPreview,
   openUrlInPreview,
@@ -185,18 +187,24 @@ import { MarkdownDetails } from "./chat/MarkdownDetails";
 import {
   authoredImageSizeStyle,
   ChatMarkdownAssetImage,
-  ChatMarkdownImage,
+  ChatMarkdownDirectMedia,
   ChatMarkdownImageFallback,
-  ChatMarkdownVideo,
   MarkdownLinkContext,
+  MarkdownEnvironmentContext,
   markdownImageCopy,
+  withLinkedImagePage,
 } from "./chat/ChatMarkdownMedia";
 import { MarkdownExternalLinkContent } from "./chat/MarkdownExternalLink";
 import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
 import { handleMarkdownFragmentClick, rehypeHeadingIds } from "./chat/markdownFragments";
 import { rehypeTextDirection } from "./chat/markdownTextDirection";
-import { hastHasText, hastPlainTextDeep, plainHastText } from "./chat/markdownHast.logic";
+import {
+  hastHasImage,
+  hastHasText,
+  hastPlainTextDeep,
+  plainHastText,
+} from "./chat/markdownHast.logic";
 import {
   extractCodeBlock,
   extractFenceLanguage,
@@ -542,6 +550,8 @@ function useChatMarkdownState({
       // context.
       httpBaseUrl:
         environmentId === null ? undefined : readPreparedConnection(environmentId)?.httpBaseUrl,
+      environmentConnection:
+        environmentId === null ? undefined : readEnvironmentMediaConnection(environmentId),
       createAssetUrl,
       onOpenFile: threadRef
         ? (path) => useRightPanelStore.getState().openFile(threadRef, path)
@@ -552,7 +562,9 @@ function useChatMarkdownState({
           const selected = preview.images[preview.index];
           expandMedia(
             selected && selected.type !== "video" && markdownRef.current
-              ? markdownImageGallery(clickedImage ?? markdownRef.current, selected)
+              ? markdownImageGallery(clickedImage ?? markdownRef.current, selected, (url) =>
+                  readEnvironmentMediaRoute(environmentId, url),
+                )
               : preview,
           );
         }
@@ -1252,11 +1264,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
           )}
         </a>
       );
+      const openInPreview = canOpenInPreview ? openExternalLinkInPreview : undefined;
+      const withPage = (element: ReactNode) =>
+        withLinkedImagePage(element, { node, environmentId, openInPreview });
       if (!faviconHost || !href) {
-        return link;
+        return withPage(link);
       }
       if (pullRequestPreviewTarget !== null) {
-        return (
+        return withPage(
           <PullRequestLinkPreview
             link={link}
             originalUrl={href}
@@ -1276,14 +1291,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
               )
             }
             onOpenFallback={openDeferredMarkdownLink}
-          />
+          />,
         );
       }
-      return (
+      return withPage(
         <Tooltip>
           <TooltipTrigger render={link} />
           <TooltipPopup side="top">{href}</TooltipPopup>
-        </Tooltip>
+        </Tooltip>,
       );
     }
 
@@ -1296,7 +1311,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
         ? source
         : `[${(label || fileLinkMeta.basename).replace(/[\\[\]]/g, "\\$&")}](${normalizedHref})`;
     const chip = fileLinkChip(fileLinkMeta, copyMarkdown, normalizedHref);
-    return isMarkdownFileLinkLabel(label, normalizedHref) ? (
+    const hasImage = hastHasImage(node);
+    return isMarkdownFileLinkLabel(label, normalizedHref) && !hasImage ? (
       chip
     ) : (
       <span data-markdown-copy={copyMarkdown}>
@@ -1344,8 +1360,10 @@ const CHAT_MARKDOWN_COMPONENTS = {
   img: function MarkdownImage({ node, title, src, alt, ...props }) {
     const {
       expandMedia,
+      canOperatePreview,
       cwd,
       environmentId,
+      openExternalLinkInPreview,
       sourceControlMedia,
       sourceControlMediaRepository,
       imageBaseDir,
@@ -1456,41 +1474,21 @@ const CHAT_MARKDOWN_COMPONENTS = {
       );
     }
     if (imageSource._tag === "Direct") {
-      const mediaSrc = resolveProtocolRelativeMediaUrl(imageSource.uri);
-      const originalUrl =
-        resolveExternalWebLinkHost(imageSource.uri) !== null ? imageSource.uri : undefined;
-      const reference = mediaUrlReference(imageSource.uri);
-      const actionsSource: MediaActionSource = {
-        kind,
-        name: altText || kind,
-        src: mediaSrc,
-        ...(reference ? { reference } : {}),
-      };
-      if (kind === "video") {
-        return (
-          <ChatMarkdownVideo
-            src={mediaSrc}
-            alt={altText}
-            copyMarkdown={copyMarkdown}
-            originalUrl={originalUrl}
-            style={authoredSizeStyle}
-            actionsSource={actionsSource}
-          />
-        );
-      }
+      const canPreview =
+        canOperatePreview && threadRef && isPreviewAvailableFor(threadRef.environmentId);
       return (
-        <ChatMarkdownImage
-          key={mediaSrc}
-          src={mediaSrc}
+        <ChatMarkdownDirectMedia
+          environmentId={environmentId}
+          uri={imageSource.uri}
+          kind={kind}
           alt={altText}
           copyMarkdown={copyMarkdown}
           standalone={standalone}
           className={className}
           style={authoredSizeStyle}
           imageProps={imageProps}
-          actionsSource={actionsSource}
-          originalUrl={originalUrl}
           onImageExpand={imageExpand}
+          openInPreview={canPreview ? openExternalLinkInPreview : undefined}
         />
       );
     }
@@ -1724,22 +1722,24 @@ function ChatMarkdown({
       onCopy={handleCopy}
     >
       <ChatMarkdownRendererContext value={componentState}>
-        {blocks.map((source, index) => (
-          <MarkdownSource
-            // oxlint-disable-next-line react/no-array-index-key -- streamed blocks only change at the end
-            key={index}
-            text={source}
-            remarkPlugins={remarkPlugins}
-            rehypePlugins={
-              parseRawHtml
-                ? CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
-                : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
-            }
-            shared={!uncachedPlugins}
-            // Every block before the last is finished, so its parse can be reused.
-            cache={!props.isStreaming || index < blocks.length - 1}
-          />
-        ))}
+        <MarkdownEnvironmentContext value={componentState.environmentId}>
+          {blocks.map((source, index) => (
+            <MarkdownSource
+              // oxlint-disable-next-line react/no-array-index-key -- streamed blocks only change at the end
+              key={index}
+              text={source}
+              remarkPlugins={remarkPlugins}
+              rehypePlugins={
+                parseRawHtml
+                  ? CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
+                  : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
+              }
+              shared={!uncachedPlugins}
+              // Every block before the last is finished, so its parse can be reused.
+              cache={!props.isStreaming || index < blocks.length - 1}
+            />
+          ))}
+        </MarkdownEnvironmentContext>
       </ChatMarkdownRendererContext>
       {localMediaPreview ? (
         <ExpandedImageDialog preview={localMediaPreview} onClose={closeLocalMediaPreview} />

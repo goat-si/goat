@@ -13,10 +13,11 @@ import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import {
   ThreadMarkdownImage,
-  ThreadMarkdownImageView,
+  ThreadMarkdownDirectImage,
   ThreadMarkdownImageUnavailable,
 } from "../threads/ThreadMarkdownImage";
 import { ThreadMarkdownVideo } from "../threads/ThreadMarkdownVideo";
+import { readMobileMediaConnection } from "../../lib/environmentMediaUri";
 import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import {
   normalizeNativeMarkdownUrl,
@@ -143,16 +144,15 @@ export function FileMarkdownPreview(props: {
               actionsSource: preview?.source.actionsSource,
             }}
             thumbnailVisible
+            environmentId={props.environmentId}
           />
         );
       }
       return (
-        <ThreadMarkdownImageView
-          uri={normalizeNativeMarkdownUrl(media.uri)}
-          sourceKey={media.uri}
-          unavailable={false}
+        <ThreadMarkdownDirectImage
+          environmentId={props.environmentId}
+          uri={media.uri}
           alt={image.alt}
-          format={media.mimeType === "image/svg+xml" ? "svg" : undefined}
           actionsSource={preview?.source.actionsSource}
           onPressPreview={setExpandedFile}
         />
@@ -193,6 +193,7 @@ export function FileMarkdownPreview(props: {
       workspaceRoot: markdownDirectory,
       captured: props.captured,
       imageEmbed,
+      environmentConnection: readMobileMediaConnection(props.environmentId),
     });
     if (!media || media.kind === "file") {
       const fileLink = resolveMarkdownLinkPresentation(href);

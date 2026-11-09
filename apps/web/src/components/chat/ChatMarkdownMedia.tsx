@@ -1,10 +1,18 @@
 import { MISSING_FILE_ACCESS_MESSAGE } from "@goat/client-runtime/state/assets";
+import {
+  type AtomCommandResult,
+  isAtomCommandInterrupted,
+} from "@goat/client-runtime/state/runtime";
+import type { EnvironmentLoopbackUrl } from "@goat/client-runtime/connection";
 import { mediaFileReference, mediaUrlReference } from "@goat/client-runtime/media-reference";
-import { TriangleAlertIcon } from "~/components/solar";
+import { ExternalLinkIcon, TriangleAlertIcon } from "~/components/solar";
 import type { AssetResource, EnvironmentId, SOURCE_CONTROL_MEDIA_ASSET } from "@goat/contracts";
+import type { Element as HastElement } from "hast";
+import { normalizeMarkdownLinkDestination } from "@goat/shared/markdownLinks";
 import {
   createContext,
   memo,
+  type ReactNode,
   use,
   useState,
   type ComponentProps,
@@ -14,11 +22,18 @@ import {
 } from "react";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "../../assets/assetUrls";
+import { useRenderedAppearance } from "../../hooks/useTheme";
+import {
+  readEnvironmentMediaRoute,
+  useEnvironmentMediaRoute,
+} from "../../browser/openEnvironmentUrl";
 import { cn } from "../../lib/utils";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { MediaActions, type MediaActionSource } from "../media/MediaActions";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { resolveExternalWebLinkHost } from "./externalLinkContextMenu";
+import { reportMarkdownActionFailure } from "./markdownActionFailure";
 import { markdownImageGallery, markdownImageItems } from "./markdownImageGallery";
 import { Button } from "../ui/button";
 import { RotateCwIcon } from "~/components/solar";
@@ -76,10 +91,17 @@ const CHAT_MARKDOWN_WORKSPACE_IMAGE_CLASS_NAME = cn(
 export const MarkdownLinkContext = createContext(false);
 /** The thread's workspace mutation id, so a host image the agent rewrites gets a fresh URL. */
 export const WorkspaceMutationIdContext = createContext<string | null | undefined>(undefined);
+/** The environment Markdown media came from; the gallery routes its links there when it opens. */
+export const MarkdownEnvironmentContext = createContext<EnvironmentId | null>(null);
+/** Lets an image inside a link report a failed load to the link, which offers the page beside it. */
+const LinkedImageFailureContext = createContext<((url: string, loaded: boolean) => void) | null>(
+  null,
+);
 
 function expandableMarkdownImageProps(
   onImageExpand: ((preview: ExpandedImagePreview) => void) | undefined,
   alt: string,
+  routeUrl: ((url: string) => EnvironmentLoopbackUrl) | null,
 ) {
   if (!onImageExpand) return {};
   const previewName = alt.trim() || "image";
@@ -88,7 +110,7 @@ function expandableMarkdownImageProps(
     event.preventDefault();
     event.stopPropagation();
     const item = markdownImageItems.get(event.currentTarget);
-    if (item) onImageExpand(markdownImageGallery(event.currentTarget, item));
+    if (item) onImageExpand(markdownImageGallery(event.currentTarget, item, routeUrl));
   };
   return {
     role: "button" as const,
@@ -120,6 +142,49 @@ function ChatMarkdownMediaUnavailableLabel(props: {
   );
 }
 
+/** Opens a page in the preview sidebar; it never falls back to the system browser. */
+type OpenPage = () => Promise<AtomCommandResult<unknown, unknown>>;
+export type OpenUrlInPreview = (url: string) => Promise<AtomCommandResult<unknown, unknown>>;
+
+/** An image URL the preview sidebar can open as a page when no image comes back. */
+function isWebPageUrl(uri: string): boolean {
+  return /^(?:https?:)?\/\//i.test(uri);
+}
+
+function linkedWebImageUrls(node: HastElement | undefined, theme: "light" | "dark"): string[] {
+  return (node?.children ?? []).flatMap((child) => {
+    if (child.type !== "element") return [];
+    if (child.tagName !== "img") return linkedWebImageUrls(child, theme);
+    // The source MarkdownImage renders: this theme's <picture> source, then the authored src.
+    const themeSrc = child.properties[theme === "dark" ? "dataDarkSrc" : "dataLightSrc"];
+    const src = typeof themeSrc === "string" ? themeSrc : child.properties.src;
+    if (typeof src !== "string") return [];
+    const url = normalizeMarkdownLinkDestination(src);
+    return isWebPageUrl(url) ? [url] : [];
+  });
+}
+
+function OpenPageButton(props: { readonly onOpenPage: OpenPage }) {
+  return (
+    <Button
+      size="sm"
+      variant="secondary"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void props.onOpenPage().then((result) => {
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            reportMarkdownActionFailure({ operation: "open-link-in-preview" }, result.cause);
+          }
+        });
+      }}
+    >
+      <ExternalLinkIcon />
+      Open page
+    </Button>
+  );
+}
+
 export function ChatMarkdownImageFallback(props: {
   readonly alt: string;
   readonly copyMarkdown?: string | undefined;
@@ -128,6 +193,7 @@ export function ChatMarkdownImageFallback(props: {
   readonly detail?: string | undefined;
   readonly onRetry?: (() => void) | undefined;
   readonly retrying?: boolean | undefined;
+  readonly onOpenPage?: OpenPage | undefined;
 }) {
   const content = (
     <span
@@ -144,6 +210,7 @@ export function ChatMarkdownImageFallback(props: {
           {props.retrying ? "Retrying…" : "Retry image"}
         </Button>
       )}
+      {props.onOpenPage && <OpenPageButton onOpenPage={props.onOpenPage} />}
     </span>
   );
   return props.actionsSource ? (
@@ -164,7 +231,7 @@ const CHAT_MARKDOWN_IMAGE_FRAME_CLASS_NAME = cn(
  * the same file keeps the decoded image on screen while the new bytes arrive,
  * and a different file starts from the slot again.
  */
-export function ChatMarkdownImage(props: {
+function ChatMarkdownImage(props: {
   readonly src: string | null;
   readonly srcFragment?: string | undefined;
   readonly sourceFailed?: boolean | undefined;
@@ -181,11 +248,15 @@ export function ChatMarkdownImage(props: {
   readonly originalUrl?: string | undefined;
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   readonly onRetry?: (() => Promise<unknown>) | undefined;
+  /** Offered once the image fails, for a URL that is a web page rather than an image. */
+  readonly onOpenPage?: OpenPage | undefined;
+  readonly onLoadResult?: ((loaded: boolean) => void) | undefined;
 }) {
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const environmentId = use(MarkdownEnvironmentContext);
   const src = props.src ?? loadedSrc;
   const failed = props.sourceFailed === true || (src !== null && failedSrc === src);
   const settled = src !== null && !failed && (!props.standalone || loadedSrc !== null);
@@ -205,10 +276,12 @@ export function ChatMarkdownImage(props: {
     onLoad: () => {
       setLoadedSrc(loadingSrc);
       setFailedSrc(null);
+      props.onLoadResult?.(true);
     },
     onError: () => {
       setFailedSrc(loadingSrc);
       setLoadedSrc(null);
+      props.onLoadResult?.(false);
     },
   });
   const retry = async () => {
@@ -248,7 +321,9 @@ export function ChatMarkdownImage(props: {
             props.onImageExpand && "cursor-zoom-in",
           )}
           style={props.style}
-          {...expandableMarkdownImageProps(props.onImageExpand, props.alt)}
+          {...expandableMarkdownImageProps(props.onImageExpand, props.alt, (url) =>
+            readEnvironmentMediaRoute(environmentId, url),
+          )}
           {...imageEvents(src)}
         />
       </MediaActions>
@@ -263,6 +338,7 @@ export function ChatMarkdownImage(props: {
         detail={props.unavailableDetail}
         onRetry={props.onRetry ? () => void retry() : undefined}
         retrying={retrying}
+        onOpenPage={props.onOpenPage}
       />
     ) : (
       <span
@@ -303,6 +379,7 @@ export function ChatMarkdownImage(props: {
                 {retrying ? "Retrying…" : "Retry image"}
               </Button>
             )}
+            {props.onOpenPage && <OpenPageButton onOpenPage={props.onOpenPage} />}
           </span>
         ) : src !== null ? (
           <img
@@ -322,7 +399,7 @@ export function ChatMarkdownImage(props: {
   );
 }
 
-export function ChatMarkdownVideo(props: {
+function ChatMarkdownVideo(props: {
   readonly src: string | null;
   readonly alt: string;
   readonly copyMarkdown: string | undefined;
@@ -496,3 +573,145 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
     />
   );
 });
+/**
+ * A Markdown image or video with a URL source. A loopback URL means the thread's environment, so it
+ * loads from that machine's address, or explains why this device cannot reach it.
+ */
+export function ChatMarkdownDirectMedia(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly uri: string;
+  readonly kind: "image" | "video";
+  readonly alt: string;
+  readonly copyMarkdown: string | undefined;
+  readonly standalone: boolean;
+  readonly className?: string | undefined;
+  readonly style?: CSSProperties | undefined;
+  readonly imageProps?:
+    | Omit<ComponentProps<"img">, "src" | "alt" | "className" | "style">
+    | undefined;
+  readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  /** Set when this client may open pages in the preview sidebar. */
+  readonly openInPreview?: OpenUrlInPreview | undefined;
+}) {
+  const routed = useEnvironmentMediaRoute(props.environmentId)(props.uri);
+  const inLink = use(MarkdownLinkContext);
+  const reportLinkedResult = use(LinkedImageFailureContext);
+  const openInPreview = props.openInPreview;
+  const onOpenPage =
+    openInPreview && props.kind === "image" && !inLink && isWebPageUrl(props.uri)
+      ? () => openInPreview(props.uri)
+      : undefined;
+  const src = routed._tag === "Open" ? routed.url : null;
+  const originalUrl = resolveExternalWebLinkHost(props.uri) !== null ? props.uri : undefined;
+  const reference = mediaUrlReference(props.uri);
+  const actionsSource: MediaActionSource = {
+    kind: props.kind,
+    name: props.alt || props.kind,
+    src,
+    ...(reference ? { reference } : {}),
+  };
+  if (props.kind === "video") {
+    return (
+      <ChatMarkdownVideo
+        src={src}
+        sourceFailed={src === null}
+        alt={props.alt}
+        copyMarkdown={props.copyMarkdown}
+        originalUrl={originalUrl}
+        style={props.style}
+        mediaIdentity={src ?? `unavailable:${props.uri}`}
+        actionsSource={actionsSource}
+      />
+    );
+  }
+  return (
+    <ChatMarkdownImage
+      key={src ?? props.uri}
+      src={src}
+      sourceFailed={src === null}
+      unavailableDetail={routed._tag === "Unreachable" ? routed.reason : undefined}
+      alt={props.alt}
+      copyMarkdown={props.copyMarkdown}
+      standalone={props.standalone}
+      className={props.className}
+      style={props.style}
+      imageProps={props.imageProps}
+      actionsSource={actionsSource}
+      originalUrl={originalUrl}
+      onImageExpand={props.onImageExpand}
+      onOpenPage={onOpenPage}
+      onLoadResult={
+        reportLinkedResult ? (loaded) => reportLinkedResult(props.uri, loaded) : undefined
+      }
+    />
+  );
+}
+
+/**
+ * Wraps a link around URL images. A button cannot sit inside the link, so the page of an image that
+ * fails, or that this device cannot reach, is offered beside the link instead.
+ */
+function LinkedImageOpenPage(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly node: HastElement | undefined;
+  readonly openInPreview: OpenUrlInPreview;
+  readonly children: ReactNode;
+}) {
+  const imageUrls = linkedWebImageUrls(props.node, useRenderedAppearance());
+  const route = useEnvironmentMediaRoute(props.environmentId);
+  const routeOf = (url: string) => {
+    const routed = route(url);
+    return routed._tag === "Open" ? routed.url : null;
+  };
+  // Each failure remembers its route, so a reconnect that moves the address tries the image again.
+  const [failures, setFailures] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const failedUrls = new Set([
+    ...imageUrls.filter((url) => routeOf(url) === null),
+    ...[...failures]
+      .filter(([url, failedRoute]) => imageUrls.includes(url) && routeOf(url) === failedRoute)
+      .map(([url]) => url),
+  ]);
+  const reportResult = (url: string, loaded: boolean) => {
+    const route = routeOf(url);
+    setFailures((current) => {
+      const next = new Map(current);
+      if (loaded || route === null) next.delete(url);
+      else next.set(url, route);
+      return next;
+    });
+  };
+  return (
+    <>
+      <LinkedImageFailureContext value={reportResult}>{props.children}</LinkedImageFailureContext>
+      {[...failedUrls].map((url) => (
+        <span key={url} data-thread-find-ignore className="ms-2 inline-flex align-middle">
+          <OpenPageButton onOpenPage={() => props.openInPreview(url)} />
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** Wraps a link holding URL images, so a failed image offers its page beside the link. */
+export function withLinkedImagePage(
+  link: ReactNode,
+  input: {
+    readonly node: HastElement | undefined;
+    readonly environmentId: EnvironmentId | null;
+    readonly openInPreview: OpenUrlInPreview | undefined;
+  },
+): ReactNode {
+  const hasWebImage = (["light", "dark"] as const).some(
+    (theme) => linkedWebImageUrls(input.node, theme).length > 0,
+  );
+  if (!input.openInPreview || !hasWebImage) return link;
+  return (
+    <LinkedImageOpenPage
+      environmentId={input.environmentId}
+      node={input.node}
+      openInPreview={input.openInPreview}
+    >
+      {link}
+    </LinkedImageOpenPage>
+  );
+}
