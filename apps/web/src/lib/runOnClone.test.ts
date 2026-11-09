@@ -2,7 +2,7 @@ import { EnvironmentId, ProjectId, type ScopedProjectRef } from "@goat/contracts
 import { describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
-  addProjectToMachine: vi.fn(() => Promise.resolve()),
+  addProjectToMachine: vi.fn((_input: { readonly projectId: string }) => Promise.resolve()),
   arrive: new Map<string, (project: unknown) => void>(),
 }));
 
