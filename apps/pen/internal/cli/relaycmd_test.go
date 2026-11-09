@@ -41,6 +41,7 @@ func TestRelayServeFlagsAreValidatedWithoutACME(t *testing.T) {
 		"cert without an origin":  {"--cert", "c", "--key", "k", "--listen", ":8443"},
 		"plain on every address":  {"--plain", "--listen", ":8080"},
 		"autocert origin differs": {"--autocert", "a.sslip.io", "--cache", "/tmp/x", "--public-origin", "wss://b.sslip.io"},
+		"autocert off port 443":   {"--autocert", "a.sslip.io", "--cache", "/tmp/x", "--listen", ":8443"},
 	}
 	for name, args := range bad {
 		if _, err := parseServe(args, &bytes.Buffer{}); err == nil {
@@ -220,5 +221,30 @@ func TestUpgradedSocketsOutliveTheHTTPServersReadTimeout(t *testing.T) {
 	// timeout; 4404 or 1006 would mean the uplink or the client died at the HTTP deadline.
 	if _, err := conn.Recv(ctx); relay.CodeOf(err) != wire.CodeTimeout {
 		t.Fatalf("pending session ended with %v, want 4408", err)
+	}
+}
+
+func TestAutocertCacheIsAPrivateDirectory(t *testing.T) {
+	loose := filepath.Join(t.TempDir(), "acme")
+	if err := os.Mkdir(loose, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareCache(loose); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(loose); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("cache mode %v, want 0700", fi.Mode().Perm())
+	}
+	fresh := filepath.Join(t.TempDir(), "new", "acme")
+	if err := prepareCache(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(fresh); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("new cache: %v %v", fi, err)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(file, nil, 0o600)
+	if err := prepareCache(file); err == nil {
+		t.Fatal("a file was accepted as the cache directory")
 	}
 }

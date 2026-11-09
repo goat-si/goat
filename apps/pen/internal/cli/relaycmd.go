@@ -168,6 +168,10 @@ func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
 		if strings.ContainsAny(c.autocertHost, ":/") || net.ParseIP(c.autocertHost) != nil || !strings.Contains(c.autocertHost, ".") {
 			return c, fmt.Errorf("--autocert wants a DNS name such as 203-0-113-7.sslip.io, not %q", c.autocertHost)
 		}
+		// TLS-ALPN-01 validates on port 443 only.
+		if _, port, err := net.SplitHostPort(c.listen); err != nil || port != "443" {
+			return c, errors.New("--autocert needs --listen on port 443 (TLS-ALPN-01)")
+		}
 		origin := "wss://" + strings.ToLower(c.autocertHost)
 		if c.publicOrigin != "" && c.publicOrigin != origin {
 			return c, fmt.Errorf("--autocert %s serves %s; --public-origin %s differs", c.autocertHost, origin, c.publicOrigin)
@@ -195,6 +199,26 @@ func parseServe(args []string, stderr io.Writer) (serveConfig, error) {
 		}
 	}
 	return c, nil
+}
+
+// prepareCache makes the autocert cache a 0700 directory: it holds the TLS private key.
+func prepareCache(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("--cache %s is not a directory", dir)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("--cache %s is open to other users and cannot be made private: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // autocertManager issues certificates for exactly one host.
@@ -233,6 +257,10 @@ func serveOn(ctx context.Context, c serveConfig, ln net.Listener, ready func(add
 		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	switch {
 	case c.autocertHost != "":
+		if err := prepareCache(c.cacheDir); err != nil {
+			ln.Close()
+			return err
+		}
 		srv.TLSConfig = autocertManager(c).TLSConfig()
 	case c.certFile != "":
 		cert, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
