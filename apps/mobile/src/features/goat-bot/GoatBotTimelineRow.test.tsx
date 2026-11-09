@@ -1,6 +1,14 @@
-import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import {
+  buildGoatBotTimeline,
+  type GoatBotMessagePresentation,
+  type GoatBotPendingInput,
+  type GoatBotRow,
+  type GoatBotTaskCard,
+} from "@goat/client-runtime/goatBot";
+import { MessageId, type OrchestrationV2TurnItem, ThreadId, TurnItemId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import { act } from "react";
-import { afterEach, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createNativeMemoryHarness,
   renderNative,
@@ -284,4 +292,177 @@ it("folds an answered question to the answer that was picked", async () => {
   await view.render();
   expect(view.container.textContent).toContain("You answered: Later");
   expect(view.container.querySelectorAll("button")).toHaveLength(0);
+});
+
+// Turn items for the shared timeline, so these tests read the answered state the way the screen does.
+const at = (second: number) => `2026-10-12T12:00:0${second}Z`;
+function turnBase(id: string, second: number) {
+  const time = DateTime.makeUnsafe(at(second));
+  return {
+    id: TurnItemId.make(id),
+    threadId: ThreadId.make("thread-bot"),
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 0,
+    status: "completed" as const,
+    title: null,
+    startedAt: time,
+    completedAt: time,
+    updatedAt: time,
+  };
+}
+const askedItem = {
+  ...turnBase("b1", 1),
+  type: "assistant_message",
+  messageId: MessageId.make("m-b1"),
+  text: "Which one?",
+  streaming: false,
+} satisfies OrchestrationV2TurnItem;
+const sentItem = (text: string) =>
+  ({
+    ...turnBase("u1", 2),
+    type: "user_message",
+    messageId: MessageId.make("m-u1"),
+    inputIntent: "turn_start",
+    text,
+    attachments: [],
+    createdBy: "user",
+    creationSource: "mobile",
+  }) satisfies OrchestrationV2TurnItem;
+const cardItem = {
+  ...turnBase("n1", 0),
+  type: "notification",
+  source: { kind: "background_task" },
+  outcome: "updated",
+  summary: "Work updated",
+} satisfies OrchestrationV2TurnItem;
+const question: GoatBotMessagePresentation = {
+  tone: "question",
+  readAt: null,
+  requestKey: null,
+  options: ["CI fix", "Release"],
+};
+const taskQuestion: GoatBotMessagePresentation = {
+  ...question,
+  taskId: "proposal",
+  questionId: "q-pick",
+};
+const taskCard = (openQuestionIds: ReadonlyArray<string>): GoatBotTaskCard => ({
+  key: "proposal",
+  revision: 2,
+  updatedAt: at(0),
+  title: "Pick a fix",
+  statusLabel: "Working",
+  tone: "active",
+  sourceLabel: null,
+  summary: null,
+  attentionLabel: null,
+  pullRequests: [],
+  target: { kind: "none", label: "Pick a fix" },
+  askInChat: true,
+  openQuestionIds,
+});
+const sending = (text: string, state: GoatBotPendingInput["state"]): GoatBotPendingInput => ({
+  clientKey: "c1",
+  text,
+  createdAt: at(2),
+  state,
+  requestKey: null,
+});
+
+function questionFrom(input: {
+  readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly pending?: ReadonlyArray<GoatBotPendingInput>;
+  readonly messages?: Record<string, GoatBotMessagePresentation>;
+  readonly cards?: Record<string, GoatBotTaskCard>;
+}): GoatBotRow {
+  const messages = input.messages ?? { b1: question };
+  const rows = buildGoatBotTimeline({
+    visibleTurnItems: input.items.map((item, position) => ({
+      position,
+      visibility: "local",
+      sourceThreadId: item.threadId,
+      sourceItemId: item.id,
+      item,
+    })),
+    pendingInputs: [...(input.pending ?? [])],
+    readers: {
+      message: (item) => messages[item.id] ?? null,
+      taskCard: (item) => input.cards?.[item.id] ?? null,
+    },
+    taskId: null,
+  });
+  const row = rows.find((entry) => entry.id === "b1");
+  if (row === undefined) throw new Error("The question row is missing.");
+  return row;
+}
+
+describe("a question in the chat folds to the answer the person sent", () => {
+  const shown = async (row: GoatBotRow) => {
+    h = createNativeMemoryHarness();
+    view = renderNative(h, <GoatBotTimelineRow {...props} row={row} />);
+    await view.render();
+    return {
+      text: view.container.textContent ?? "",
+      buttons: [...view.container.querySelectorAll("button")].map((button) => button.textContent),
+    };
+  };
+
+  it("names a picked answer while it is on its way", async () => {
+    const { text, buttons } = await shown(
+      questionFrom({ items: [askedItem], pending: [sending("Release", "sending")] }),
+    );
+    expect(text).toContain("Which one?");
+    expect(text).toContain("You answered: Release");
+    expect(buttons).not.toContain("CI fix");
+  });
+
+  it("names a typed reply as the answer", async () => {
+    const { text, buttons } = await shown(
+      questionFrom({ items: [askedItem, sentItem("Neither, wait for Monday")] }),
+    );
+    expect(text).toContain("You answered: Neither, wait for Monday");
+    expect(buttons).not.toContain("Release");
+  });
+
+  it("keeps the choices when the answer failed to send", async () => {
+    const { text, buttons } = await shown(
+      questionFrom({ items: [askedItem], pending: [sending("Release", "failed")] }),
+    );
+    expect(text).not.toContain("You answered");
+    expect(buttons).toEqual(expect.arrayContaining(["CI fix", "Release"]));
+  });
+
+  it("still names the answer after a reload, once the task closed the question", async () => {
+    const { text } = await shown(
+      questionFrom({
+        items: [cardItem, askedItem, sentItem("Release")],
+        messages: {
+          b1: taskQuestion,
+          u1: { tone: "reply", readAt: at(2), requestKey: "in-1", taskId: "proposal" },
+        },
+        cards: { n1: taskCard([]) },
+      }),
+    );
+    expect(text).toContain("You answered: Release");
+  });
+
+  it("keeps a task's question open while its card still lists it, though an answer was sent", async () => {
+    const { text, buttons } = await shown(
+      questionFrom({
+        items: [cardItem, askedItem, sentItem("Release")],
+        messages: {
+          b1: taskQuestion,
+          u1: { tone: "reply", readAt: null, requestKey: "in-1", taskId: "proposal" },
+        },
+        cards: { n1: taskCard(["q-pick"]) },
+      }),
+    );
+    expect(text).not.toContain("You answered");
+    expect(buttons).toEqual(expect.arrayContaining(["CI fix", "Release"]));
+  });
 });
