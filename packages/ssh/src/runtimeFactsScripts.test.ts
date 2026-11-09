@@ -307,6 +307,28 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
           },
         );
         assert.deepEqual(odd.trim().split("\n"), ["[1 1 1 5678.0 ? 0 10:00:00 /odd]", "[]"]);
+        // awk compares doubles, so beyond 15 digits two WINPIDs can compare equal: also a miss.
+        const big = runIn(
+          shell,
+          [
+            before,
+            "fact_windows=1",
+            'awk_process_starts 9007199254740993 ""; echo "[$FACT_START]"',
+            'fact_process_starts 9007199254740993 ""; echo "[$FACT_START]"',
+          ].join("\n"),
+          {
+            PATH: bin + ":" + (process.env.PATH ?? ""),
+            GOAT_TEST_PS:
+              header +
+              "  1  1  1  9007199254740992  ?  0  10:00:00 /old\n" +
+              "  2  2  2  9007199254740993  ?  0  10:00:01 /new\n",
+            GOAT_TEST_PS_STATUS: "0",
+          },
+        );
+        assert.deepEqual(big.trim().split("\n"), [
+          "[1 1 1 9007199254740992 ? 0 10:00:00 /old]",
+          "[]",
+        ]);
       } finally {
         NodeFS.rmSync(dir, { recursive: true, force: true });
       }

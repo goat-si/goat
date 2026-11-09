@@ -182,7 +182,8 @@ fact_put() {
 # Rows are read with shell builtins, as the awk program they replace read them: ps's status is
 # ignored, a leading status letter is dropped and fields join with one space. WINPIDs compare as
 # numbers, as awk compared them: digits without their leading zeros. Any other numeric spelling
-# (5678.0, +5678), which ps -W never prints, makes the lookup a miss.
+# (5678.0, +5678) or more than 15 digits, beyond which awk's doubles can equate two of them, makes
+# the lookup a miss; ps -W prints neither.
 fact_process_starts() {
   FACT_START=; FACT_START2=
   if [ "$fact_windows" = 0 ]; then
@@ -190,7 +191,9 @@ fact_process_starts() {
     [ -z "$2" ] || FACT_START2="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$2" 2>/dev/null)" || FACT_START2=
     return 0
   fi
-  fact_pid_number "$1" || :; ps_a="$FACT_TEXT"; fact_pid_number "$2" || :; ps_b="$FACT_TEXT"; ps_odd=
+  ps_odd=
+  fact_pid_number "$1" || ps_odd=1; ps_a="$FACT_TEXT"
+  fact_pid_number "$2" || ps_odd=1; ps_b="$FACT_TEXT"
   ps_rows="$(ps -W 2>/dev/null)" || :
   case "$ps_rows" in *"$fact_nl"*) ps_rows="\${ps_rows#*"$fact_nl"}" ;; *) return 0 ;; esac
   case "$-" in *f*) ps_glob= ;; *) ps_glob=1; set -f ;; esac
@@ -207,7 +210,8 @@ fact_process_starts() {
   [ -z "$ps_odd" ] || { FACT_START=; FACT_START2=; }
 }
 # Sets FACT_TEXT to $1 as awk compares it with a PID: digits lose their leading zeros, and other
-# text stays as it is. False for text awk might read as another number.
+# text stays as it is. False for text awk might read as another number, and for more than 15
+# digits, which a double may not hold exactly.
 fact_pid_number() {
   FACT_TEXT="$1"
   case "$1" in
@@ -218,6 +222,7 @@ fact_pid_number() {
   esac
   FACT_TEXT="\${1#"\${1%%[!0]*}"}"
   [ -n "$FACT_TEXT" ] || FACT_TEXT=0
+  case "$FACT_TEXT" in ????????????????*) return 1 ;; esac
 }
 # Sets FACT_TEXT to the digits after the last JSON name $1 (quoted) in $2 that a colon and a
 # number follow, as sed -n 's/.*NAME[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' finds them.
