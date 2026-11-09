@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off - Node's typed junction API avoids Windows symlink privileges while keeping the probe isolated.
+import { MAC_COMMAND_USAGE_DESCRIPTIONS } from "./lib/mac-command-usage-descriptions.ts";
 import { makeMacPackagedPayloadValidator } from "./desktop-artifact-mac.ts";
 import { countWindowsPayloadFiles } from "./desktop-artifact-windows-payload.ts";
 
@@ -3155,8 +3156,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       extendInfo: {
         // macOS 26 offers Messages/Mail codes in every text field unless opted out.
         NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true,
-        NSLocalNetworkUsageDescription:
-          "GOAT connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
+        ...MAC_COMMAND_USAGE_DESCRIPTIONS,
         NSScreenCaptureUsageDescription:
           "GOAT captures the active window when you use the window capture shortcut.",
         NSMicrophoneUsageDescription:
