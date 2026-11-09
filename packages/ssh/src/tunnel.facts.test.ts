@@ -181,6 +181,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         const runs = new Map<string, string[]>();
         const lines: string[] = [];
         for (const line of all) {
+          // The deadline wrapper reads its job's IDs with ps only where /proc is missing (macOS);
+          // that probe belongs to the wrapper, not to the script these bounds are about.
+          if (line.startsWith("ps -o ppid=,pgid= ")) continue;
           const run = /^runner:(\d+) (.*)$/.exec(line);
           if (run?.[1] === undefined || run[2] === undefined) lines.push(line);
           else runs.set(run[1], [...(runs.get(run[1]) ?? []), run[2]]);
