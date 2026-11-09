@@ -289,11 +289,14 @@ function useGoatBotWorking(visibleTurnItems: ReadonlyArray<OrchestrationV2Projec
       : scopeThreadRef(worker.environmentId, worker.threadId);
   const shell = useThreadShell(workerRef);
   const projection = useResidentThreadProjection(workerRef);
-  return goatBotActivity({
+  const activity = goatBotActivity({
     reading: false,
     task,
     worker: workerRef === null ? null : { shell: shell?.source ?? null, projection },
   });
+  return activity === null || task === null
+    ? activity
+    : { ...activity, since: task.chip.createdAt, title: task.chip.title };
 }
 
 /**

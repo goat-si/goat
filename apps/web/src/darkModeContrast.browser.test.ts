@@ -322,10 +322,10 @@ const DARK_PAIRS: ReadonlyArray<Pair> = [
     minimum: 4.5,
   },
   {
-    label: "bot bubble text / bubble",
+    label: "person message text / pill",
     scope: "root",
-    foreground: "var(--goat-bubble-in-foreground)",
-    background: ["var(--goat-bubble-in)"],
+    foreground: "var(--goat-person-message-foreground)",
+    background: ["var(--goat-person-message)"],
     minimum: 4.5,
   },
   {

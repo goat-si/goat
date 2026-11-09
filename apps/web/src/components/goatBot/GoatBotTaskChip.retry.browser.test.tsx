@@ -64,7 +64,7 @@ function Chip(props: { readonly retryEnvironmentId: EnvironmentId | null }) {
   const registry = { refresh: state.refresh } as never;
   return (
     <RegistryContext value={registry}>
-      <GoatBotTaskChip card={card} tail={false} retryEnvironmentId={props.retryEnvironmentId} />
+      <GoatBotTaskChip card={card} retryEnvironmentId={props.retryEnvironmentId} />
     </RegistryContext>
   );
 }

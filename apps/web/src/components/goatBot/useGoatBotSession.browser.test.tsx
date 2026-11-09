@@ -445,7 +445,7 @@ it("sends a second message while a running chip has no reply, with independent k
   });
   expect(calls[0]![1].externalMessageId).toBe(calls[0]![1].idempotencyKey);
   expect(textarea().disabled).toBe(false);
-  expect(container.textContent).toContain("Sent");
+  expect(container.textContent).not.toMatch(/Sending|Not Delivered/);
   expect(container.textContent).toContain("Running job");
 });
 
@@ -590,13 +590,14 @@ it("retries the exact input and drops the optimistic bubble when projection prec
   ).toHaveLength(1);
 });
 
-it("keeps server reply order, quotes distant input and uses readAt rather than the sent time", async () => {
+it("keeps server reply order and quotes distant input, without read receipts", async () => {
+  const readB = "2026-10-12T12:09:00.000Z";
   items = [
     projected("user_message", "A", {
       channel: channel("input-A", { readAt: "2026-10-12T12:07:00.000Z" }),
     }),
     projected("user_message", "B", {
-      channel: channel("input-B", { readAt: "2026-10-12T12:09:00.000Z" }),
+      channel: channel("input-B", { readAt: readB }),
     }),
     projected("assistant_message", "Reply B", {
       channel: channel("reply-B", { kind: "receipt", inReplyToInputId: "input-B" }),
@@ -617,10 +618,7 @@ it("keeps server reply order, quotes distant input and uses readAt rather than t
   expect(rows.findIndex((row) => row?.includes("Reply B"))).toBeLessThan(
     rows.findIndex((row) => row?.includes("Reply A")),
   );
-  // Messages shows one receipt, under the latest outgoing bubble, timed by when the bot read it.
-  const receipt = `Read ${formatShortTimestamp("2026-10-12T12:09:00.000Z", "24-hour")}`;
-  expect(container.textContent).toContain(receipt);
-  expect(container.textContent?.split("Read ").length).toBe(2);
+  expect(container.textContent).not.toContain(`Read ${formatShortTimestamp(readB, "24-hour")}`);
   expect(container.textContent).toContain("Intake failed");
 });
 
