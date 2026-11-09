@@ -158,6 +158,26 @@ describe("the first probe asks the client's own runtime for its facts directly",
     }).pipe(Effect.scoped),
   );
 
+  // The direct reply is read to a bound; past it, or with any byte after its end line, it is refused.
+  it.effect.each([
+    {
+      name: "a flood of blank lines after the end",
+      noise: 'head -c 300000 /dev/zero | tr "\\\\0" "\\\\n"',
+    },
+    { name: "one blank line after the end", noise: "printf '\\n'" },
+    { name: "a flood of text after the end", noise: 'head -c 300000 /dev/zero | tr "\\\\0" y' },
+  ])("$name on stdout refuses the direct frame", ({ noise }) =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ own: version });
+      yield* f.supporting();
+      yield* f.write("frame-direct", directFrame(DIRECT_ONLY));
+      yield* f.write("facts.sh", onDirect('cat "$HOME/frame-direct"; ' + noise));
+      assert.deepEqual(yield* f.run(), ANSWERED);
+      assert.deepEqual(yield* f.asks(), [DIRECT, CAPS, FACTS]);
+      assert.equal((yield* f.fact("commit." + version + ".exe")).split("\n")[1], "1700000000");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("an executable replaced during the direct call leaves nothing from that call", () =>
     Effect.gen(function* () {
       const f = yield* fixture({ own: version });
