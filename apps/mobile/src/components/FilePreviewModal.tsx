@@ -18,7 +18,12 @@ import {
   shareLocalAttachment,
 } from "../lib/attachmentDownload";
 import { useRefreshAssetUrl } from "../state/assets";
-import { filePreviewGallery, filePreviewKey, filePreviewName } from "../lib/filePreviewGallery";
+import {
+  filePreviewGallery,
+  filePreviewKey,
+  filePreviewName,
+  pdfActionsSource,
+} from "../lib/filePreviewGallery";
 import { FilePreviewGallery } from "./FilePreviewGallery";
 import { FilePreview } from "./FilePreview";
 import type {
@@ -101,7 +106,13 @@ function PreviewItemResolver(props: {
 
   const onResolved = useEffectEvent(props.onResolved);
   useEffect(() => {
-    if (uri !== null) onResolved({ ...source, name: filePreviewName(source), uri });
+    if (uri !== null)
+      onResolved({
+        ...source,
+        name: filePreviewName(source),
+        uri,
+        ...(source.kind === "pdf" ? { actionsSource: pdfActionsSource(source) } : {}),
+      });
   }, [uri, source]);
   return null;
 }
