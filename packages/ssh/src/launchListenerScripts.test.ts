@@ -45,6 +45,7 @@ describe("Windows launch listener wait", () => {
     "taskkillHang",
     "tasklistFails",
     "noFifo",
+    "termAfterFifo",
   ] as const;
   // Every Windows stand-in logs whether it ran as the bounded job, then its arguments.
   const record = (name: string) =>
@@ -112,7 +113,13 @@ describe("Windows launch listener wait", () => {
       sleep: 'echo sleep >>"$TEST_ROOT/forks"',
       tr: counted("tr"),
       rm: counted("rm"),
-      mkfifo: ['[ ! -e "$TEST_ROOT/noFifo" ] || exit 1', counted("mkfifo")].join("\n"),
+      // termAfterFifo: the shell dies of TERM once its FIFO exists, before it removes the name.
+      mkfifo: [
+        '[ ! -e "$TEST_ROOT/noFifo" ] || exit 1',
+        'echo mkfifo >>"$TEST_ROOT/forks"',
+        'PATH="$TEST_REAL_PATH" mkfifo "$@" || exit',
+        '[ ! -e "$TEST_ROOT/termAfterFifo" ] || kill -TERM "$PPID"',
+      ].join("\n"),
       // A command that ends at once, and one that ends once the test opens release for writing.
       quick: [record("quick"), "exit 7"].join("\n"),
       slow: [record("slow"), 'exec /bin/cat "$TEST_ROOT/release" >/dev/null'].join("\n"),
@@ -295,6 +302,31 @@ describe("Windows launch listener wait", () => {
       assert.equal(fallback.stdout, "7", fallback.stderr);
       assert.include(fallback.forks, "tr");
       assert.notInclude(fallback.forks, "mkfifo");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("a FIFO name a killed launch left is removed by the next, a live script's never", () =>
+    Effect.gen(function* () {
+      const { run, root, fs } = yield* makeHarness;
+      const fifos = () =>
+        fs
+          .readDirectory(root + "/state")
+          .pipe(Effect.map((names) => names.filter((name) => name.startsWith("launch-tick."))));
+      const killed = yield* run({ termAfterFifo: true }, "launch_bounded 30 quick", false, true);
+      // bash before 4 makes no FIFO, so nothing ends it early and it has none to leave.
+      assert.equal(killed.code, bashMajor >= 4 ? null : 7);
+      assert.lengthOf(yield* fifos(), bashMajor >= 4 ? 1 : 0);
+      // This test's own process is alive, so a FIFO named for it is a live script's.
+      const live = "launch-tick." + process.pid;
+      NodeChildProcess.execFileSync("mkfifo", [root + "/state/" + live]);
+      const next = yield* run(
+        {},
+        'if launch_bounded 30 quick; then echo 0; else echo "$?"; fi',
+        false,
+        true,
+      );
+      assert.equal(next.stdout, "7", next.stderr);
+      assert.deepEqual(yield* fifos(), [live]);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 

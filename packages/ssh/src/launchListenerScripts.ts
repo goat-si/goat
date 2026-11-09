@@ -81,7 +81,19 @@ launch_now() {
 LAUNCH_FIFO=
 launch_fifo_open() {
   LAUNCH_FIFO=0
-  if [ "${"${"}BASH_VERSINFO:-0}" -ge 4 ] && mkfifo "$STATE_DIR/launch-tick.$$" 2>/dev/null; then
+  [ "${"${"}BASH_VERSINFO:-0}" -ge 4 ] || return 0
+  # A killed script can leave its name behind. Only names of shells kill -0 finds gone are removed:
+  # a live script's name stays, and one that loses its name before opening it falls back to sleep.
+  case "$-" in *f*) launch_fifo_glob=1; set +f ;; *) launch_fifo_glob= ;; esac
+  for launch_fifo_stale in "$STATE_DIR"/launch-tick.*; do
+    launch_fifo_pid="${"${"}launch_fifo_stale##*.}"
+    case "$launch_fifo_pid" in ''|*[!0123456789]*) continue ;; esac
+    if [ -p "$launch_fifo_stale" ] && ! kill -0 "$launch_fifo_pid" 2>/dev/null; then
+      rm -f "$launch_fifo_stale" || :
+    fi
+  done
+  [ -z "$launch_fifo_glob" ] || set -f
+  if mkfifo "$STATE_DIR/launch-tick.$$" 2>/dev/null; then
     if { command exec 7<>"$STATE_DIR/launch-tick.$$"; } 2>/dev/null; then LAUNCH_FIFO=1; fi
     rm -f "$STATE_DIR/launch-tick.$$" || :
   fi
