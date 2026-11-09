@@ -21,6 +21,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import { openCodexThreadHistory } from "./CodexThreadHistory.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
@@ -636,6 +637,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex thread history", (it) =>
 
       const scan = yield* runScan({ claudeHomePath, codexHomePath, piAgentDir, windowDays: 30 });
       expect(scan.candidates[0]?.threadCount).toBe(0);
+      expect(scan.truncated).toBe(true);
       const outcomes = yield* runRecentThreads({
         claudeHomePath,
         codexHomePath,
@@ -644,6 +646,33 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex thread history", (it) =>
         windowDays: 30,
       });
       expect(outcomes).toEqual([]);
+    }),
+  );
+
+  it.effect("classifies missing, oversized and closed history reads", () =>
+    Effect.gen(function* () {
+      const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+      const home = yield* makeTempDir("goat-codex-history-reader-");
+      yield* writeCodexHistory({
+        homePath: home,
+        threads: [
+          {
+            id: "99999999-9999-4999-8999-999999999999",
+            messages: [{ role: "user", text: "Hello", createdAtMs: nowMs }],
+          },
+        ],
+      });
+
+      const reader = openCodexThreadHistory(home);
+      expect(reader).not.toBeNull();
+      if (reader === null) return;
+      expect(reader.read("00000000-0000-4000-8000-000000000000")._tag).toBe("Empty");
+      reader.close();
+      expect(reader.read("99999999-9999-4999-8999-999999999999")._tag).toBe("Failed");
+
+      const limited = openCodexThreadHistory(home, 10);
+      expect(limited?.read("99999999-9999-4999-8999-999999999999")._tag).toBe("TooLarge");
+      limited?.close();
     }),
   );
 });

@@ -65,35 +65,24 @@ function historyDatabasePath(homePath: string): string | undefined {
   }
 }
 
-export function hasCodexThreadHistory(homePath: string): boolean {
-  const databasePath = historyDatabasePath(homePath);
-  if (databasePath === undefined) return false;
-  let database: NodeSqlite.DatabaseSync | undefined;
-  try {
-    database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true, timeout: 1000 });
-    database.prepare("SELECT 1 FROM thread_items LIMIT 1").get();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    try {
-      database?.close();
-    } catch {
-      // The database is unusable either way.
-    }
-  }
+export interface CodexHistoryThreadIds {
+  readonly ids: ReadonlySet<string>;
+  readonly complete: boolean;
+  readonly error?: unknown;
 }
 
-export function readCodexHistoryThreadIds(homePath: string): ReadonlySet<string> | null {
+export function readCodexHistoryThreadIds(homePath: string): CodexHistoryThreadIds {
+  const empty = { ids: new Set<string>(), complete: true } as const;
   const databasePath = historyDatabasePath(homePath);
-  if (databasePath === undefined) return null;
+  if (databasePath === undefined) return empty;
   let database: NodeSqlite.DatabaseSync;
   try {
     database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true, timeout: 1000 });
-  } catch {
-    return null;
+  } catch (error) {
+    return { ids: new Set(), complete: false, error };
   }
   try {
+    // Presence check only: oversized or text-less threads drop out at import, so this count is an upper bound.
     const rows = database
       .prepare(
         "SELECT DISTINCT thread_id FROM thread_items WHERE item_type = 'userMessage' LIMIT ?",
@@ -101,12 +90,17 @@ export function readCodexHistoryThreadIds(homePath: string): ReadonlySet<string>
       .all(MAX_CODEX_HISTORY_THREAD_IDS + 1) as unknown as ReadonlyArray<{
       thread_id?: unknown;
     }>;
-    if (rows.length > MAX_CODEX_HISTORY_THREAD_IDS) return null;
-    return new Set(
-      rows.flatMap((row) => (typeof row.thread_id === "string" ? [row.thread_id] : [])),
-    );
-  } catch {
-    return null;
+    if (rows.length > MAX_CODEX_HISTORY_THREAD_IDS) {
+      return { ids: new Set(), complete: false, error: "too-many-history-threads" };
+    }
+    return {
+      ids: new Set(
+        rows.flatMap((row) => (typeof row.thread_id === "string" ? [row.thread_id] : [])),
+      ),
+      complete: true,
+    };
+  } catch (error) {
+    return { ids: new Set(), complete: false, error };
   } finally {
     database.close();
   }
@@ -160,7 +154,10 @@ export interface CodexThreadHistoryReader {
   readonly close: () => void;
 }
 
-export function openCodexThreadHistory(homePath: string): CodexThreadHistoryReader | null {
+export function openCodexThreadHistory(
+  homePath: string,
+  maxBytes = MAX_CODEX_HISTORY_BYTES,
+): CodexThreadHistoryReader | null {
   const databasePath = historyDatabasePath(homePath);
   if (databasePath === undefined) return null;
   let database: NodeSqlite.DatabaseSync;
@@ -182,6 +179,9 @@ export function openCodexThreadHistory(homePath: string): CodexThreadHistoryRead
     const firstUser = database.prepare(
       "SELECT item_type, item_json, created_at_ms, rollout_ordinal, LENGTH(CAST(item_json AS BLOB)) AS bytes FROM thread_items WHERE thread_id = ? AND item_type = 'userMessage' ORDER BY rollout_ordinal ASC LIMIT 1",
     );
+    const firstUserBytes = database.prepare(
+      "SELECT rollout_ordinal, LENGTH(CAST(item_json AS BLOB)) AS bytes FROM thread_items WHERE thread_id = ? AND item_type = 'userMessage' ORDER BY rollout_ordinal ASC LIMIT 1",
+    );
     return {
       read: (threadId) => {
         try {
@@ -195,7 +195,7 @@ export function openCodexThreadHistory(homePath: string): CodexThreadHistoryRead
                 | undefined
             )?.bytes ?? 0,
           );
-          if (bytesBeforeRows > MAX_CODEX_HISTORY_BYTES) return { _tag: "TooLarge" as const };
+          if (bytesBeforeRows > maxBytes) return { _tag: "TooLarge" as const };
           const rows = recent.all(
             threadId,
             MAX_CODEX_HISTORY_MESSAGES,
@@ -219,12 +219,18 @@ export function openCodexThreadHistory(homePath: string): CodexThreadHistoryRead
           if (parsed.length === 0) return { _tag: "Empty" as const };
           const oldest = parsed[0]?.ordinal;
           let retained = parsed;
-          const first = firstUser.get(threadId) as HistoryRow | undefined;
-          if (first !== undefined && Number(first.rollout_ordinal) !== oldest) {
+          const firstMeta = firstUserBytes.get(threadId) as
+            | { readonly rollout_ordinal?: unknown; readonly bytes?: unknown }
+            | undefined;
+          if (firstMeta !== undefined && Number(firstMeta.rollout_ordinal) !== oldest) {
+            if (bytes + Number(firstMeta.bytes ?? 0) > maxBytes) {
+              return { _tag: "TooLarge" as const };
+            }
+            const first = firstUser.get(threadId) as HistoryRow | undefined;
+            if (first === undefined) return { _tag: "Empty" as const };
             const firstText = messageText(first.item_type, first.item_json);
             if (firstText.length > 0) {
               bytes += Number(first.bytes ?? 0);
-              if (bytes > MAX_CODEX_HISTORY_BYTES) return { _tag: "TooLarge" as const };
               retained = [
                 {
                   role: "user" as const,

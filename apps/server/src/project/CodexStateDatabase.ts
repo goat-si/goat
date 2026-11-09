@@ -12,7 +12,6 @@ import * as Schema from "effect/Schema";
 
 import {
   codexHistorySourcePath,
-  hasCodexThreadHistory,
   readCodexHistoryThreadIds,
   type CodexHistoryThreadRef,
 } from "./CodexThreadHistory.ts";
@@ -41,7 +40,6 @@ interface CodexCandidateGroup {
   readonly cwd: string;
   readonly providerInstanceId: ProviderInstanceId;
   readonly homePath: string;
-  readonly threadCount: number;
   readonly lastActiveAtMs: number | null;
   readonly transcripts: ReadonlyArray<{
     readonly filePath: string;
@@ -305,12 +303,11 @@ function buildCodexCandidateGroups(
   states: ReadonlyMap<string, CodexStateSnapshot>,
   fileThreads: ReadonlySet<string>,
   cwdByThread: ReadonlyMap<string, string>,
-): ReadonlyArray<CodexCandidateGroup> {
+): { readonly groups: ReadonlyArray<CodexCandidateGroup>; readonly complete: boolean } {
   type MutableGroup = {
     cwd: string;
     providerInstanceId: ProviderInstanceId;
     homePath: string;
-    threadCount: number;
     lastActiveAtMs: number | null;
     transcripts: Array<{
       filePath: string;
@@ -320,6 +317,7 @@ function buildCodexCandidateGroups(
   };
   const byCwd = new Map<string, MutableGroup>();
   const seenThreads = new Set<string>();
+  let complete = true;
   for (const home of homes) {
     const state = states.get(home.homePath);
     if (state === undefined) continue;
@@ -332,17 +330,14 @@ function buildCodexCandidateGroups(
             cwd: root,
             providerInstanceId: home.providerInstanceId,
             homePath: home.homePath,
-            threadCount: 0,
             lastActiveAtMs: null,
             transcripts: [],
           });
         }
       }
     }
-    const historyAvailable = hasCodexThreadHistory(home.homePath);
-    const importableHistoryThreads = historyAvailable
-      ? readCodexHistoryThreadIds(home.homePath)
-      : null;
+    const history = readCodexHistoryThreadIds(home.homePath);
+    if (!history.complete) complete = false;
     const projectRootKeys = new Set(state.projectRoots.map(comparisonPath));
     for (const thread of state.threads) {
       const threadKey = `${home.providerInstanceId}\0${thread.id}`;
@@ -357,18 +352,16 @@ function buildCodexCandidateGroups(
         existing.lastActiveAtMs === null
           ? thread.updatedAtMs
           : Math.max(existing.lastActiveAtMs, thread.updatedAtMs);
-      if (!historyAvailable || seenThreads.has(threadKey)) continue;
-      if (importableHistoryThreads !== null && !importableHistoryThreads.has(thread.id)) continue;
+      if (seenThreads.has(threadKey) || !history.ids.has(thread.id)) continue;
       seenThreads.add(threadKey);
       existing.transcripts.push({
         filePath: codexHistorySourcePath(thread.id),
         mtimeMs: thread.updatedAtMs,
         historyThread: { ...thread, homePath: home.homePath },
       });
-      existing.threadCount = existing.transcripts.length;
     }
   }
-  return [...byCwd.values()];
+  return { groups: [...byCwd.values()], complete };
 }
 
 export const readCodexProjectState = Effect.fn("CodexStateDatabase.readProjectState")(function* (
@@ -391,7 +384,7 @@ export function codexStateOnlyCandidateGroups(
     readonly providerInstanceId: ProviderInstanceId;
   }>,
   cwdByThread: ReadonlyMap<string, string>,
-): ReadonlyArray<CodexCandidateGroup> {
+): { readonly groups: ReadonlyArray<CodexCandidateGroup>; readonly complete: boolean } {
   const fileThreads = new Set<string>();
   for (const transcript of transcripts) {
     const threadId = codexThreadIdFromRolloutPath(transcript.filePath);

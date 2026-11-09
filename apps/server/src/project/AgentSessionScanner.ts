@@ -193,7 +193,6 @@ interface RawCandidate {
   readonly source: AgentSessionSource;
   readonly providerInstanceId: ProviderInstanceId;
   readonly homePath: string;
-  readonly threadCount: number;
   readonly lastActiveAtMs: number | null;
   readonly transcripts: ReadonlyArray<{
     readonly filePath: string;
@@ -1140,15 +1139,6 @@ export const make = Effect.gen(function* () {
       source,
       providerInstanceId: group.providerInstanceId,
       homePath: group.homePath,
-      threadCount:
-        source === "codex"
-          ? new Set(
-              group.transcripts.map(
-                (transcript) =>
-                  codexThreadIdFromRolloutPath(transcript.filePath) ?? transcript.filePath,
-              ),
-            ).size
-          : group.transcripts.length,
       lastActiveAtMs: group.lastActiveAtMs,
       transcripts: group.transcripts,
     }));
@@ -1305,13 +1295,20 @@ export const make = Effect.gen(function* () {
         )),
       );
       if (codexState !== null) {
+        const historyGroups = codexStateOnlyCandidateGroups(
+          stateHomes,
+          codexState.stateByHome,
+          selectedTranscripts,
+          codexState.cwdByThread,
+        );
+        truncated ||= !historyGroups.complete;
+        if (!historyGroups.complete) {
+          yield* Effect.logWarning("Could not read the Codex thread history while scanning", {
+            source: "codex",
+          });
+        }
         raw.push(
-          ...codexStateOnlyCandidateGroups(
-            stateHomes,
-            codexState.stateByHome,
-            selectedTranscripts,
-            codexState.cwdByThread,
-          ).map((group): RawCandidate => ({ ...group, source: "codex" })),
+          ...historyGroups.groups.map((group): RawCandidate => ({ ...group, source: "codex" })),
         );
       }
       truncated ||= metadataBudget.truncated;
