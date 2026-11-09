@@ -158,7 +158,8 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   is not circular.
 - A node stores a record only if it is well formed, its signature verifies, its card (if any) verifies and matches,
   and it belongs to this mesh. A record whose `prev` is all present is stored at once only if its signer is the card
-  subject of a `found` or `admit` in its past (records signed by any other key are dropped); it never enters the pool.
+  subject of a `found` or `admit` in its past (records signed by any other key are dropped), and a `revoke` only if
+  each of its subjects is too; it never enters the pool.
   A record whose `prev` is not all present waits in an in-memory pool of at most 256 records and at most 16 per signer
   key, the oldest dropped first; the pool is not persisted. A node's own records never enter the pool. A mesh holds at
   most 4096 records: a record that is not a `revoke` is refused once 3840 are stored, and a `revoke` once 4096 are

@@ -220,6 +220,13 @@ func (s *Store) store(r *Record) (bool, error) {
 	if !s.introduced(r) {
 		return false, nil
 	}
+	if r.B.Type == TypeRevoke {
+		for _, k := range r.B.Subjects {
+			if !s.introducedIn(k, r.B.Prev) {
+				return false, nil
+			}
+		}
+	}
 	s.recs[r.Hash] = r
 	s.mark(r.B.By, r.Hash)
 	if (r.B.Type == TypeFound || r.B.Type == TypeAdmit) && r.B.Card != nil {
@@ -242,11 +249,16 @@ func (s *Store) introduced(r *Record) bool {
 	if r.B.Type == TypeFound {
 		return r.B.Card != nil && r.B.Card.C.SignPub == r.B.By
 	}
-	reach := s.reach[r.B.By]
+	return s.introducedIn(r.B.By, r.B.Prev)
+}
+
+// introducedIn reports whether a found or admit whose card subject is key is in the past named by prev.
+func (s *Store) introducedIn(key string, prev []string) bool {
+	reach := s.reach[key]
 	if reach == nil {
 		return false
 	}
-	queue := append([]string(nil), r.B.Prev...)
+	queue := append([]string(nil), prev...)
 	seen := map[string]bool{}
 	for len(queue) > 0 {
 		h := queue[0]
