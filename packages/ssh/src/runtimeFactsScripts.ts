@@ -218,6 +218,11 @@ fact_put() {
 # (column 4 after an optional status letter), with a start shown to the second today and to the
 # day before; the whole row, executable path included, is the key. A server GOAT restarts still
 # misses: it rewrites the runtime record, whose startedAt and instanceId are in the key.
+# Rows are read with shell builtins, as the awk program they replace read them: ps's status is
+# ignored, a leading status letter is dropped and fields join with one space. WINPIDs compare as
+# numbers, as awk compared them: digits without their leading zeros. Any other numeric spelling
+# (5678.0, +5678) or more than 15 digits, beyond which awk's doubles can equate two of them, makes
+# the lookup a miss; ps -W prints neither.
 fact_process_starts() {
   FACT_START=; FACT_START2=
   if [ "$fact_windows" = 0 ]; then
@@ -225,15 +230,38 @@ fact_process_starts() {
     [ -z "$2" ] || FACT_START2="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$2" 2>/dev/null)" || FACT_START2=
     return 0
   fi
-  ps_rows="$(ps -W 2>/dev/null | awk -v a="$1" -v b="$2" '
-    NR > 1 {
-      if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 }
-      if ($4 == a && ra == "") { $1 = $1; ra = $0 }
-      if (b != "" && $4 == b && rb == "") { $1 = $1; rb = $0 }
-    }
-    END { print ra; print rb }')" || return 0
-  FACT_START="\${ps_rows%%"$fact_nl"*}"
-  case "$ps_rows" in *"$fact_nl"*) FACT_START2="\${ps_rows#*"$fact_nl"}" ;; esac
+  ps_odd=
+  fact_pid_number "$1" || ps_odd=1; ps_a="$FACT_TEXT"
+  fact_pid_number "$2" || ps_odd=1; ps_b="$FACT_TEXT"
+  ps_rows="$(ps -W 2>/dev/null)" || :
+  case "$ps_rows" in *"$fact_nl"*) ps_rows="\${ps_rows#*"$fact_nl"}" ;; *) return 0 ;; esac
+  case "$-" in *f*) ps_glob= ;; *) ps_glob=1; set -f ;; esac
+  ps_ifs="$IFS"; IFS="$fact_nl"
+  for ps_row in $ps_rows; do
+    IFS=" 	"
+    set -- $ps_row
+    case "\${1:-}" in ''|*[!0123456789]*) [ "$#" = 0 ] || shift ;; esac
+    fact_pid_number "\${4:-}" || ps_odd=1
+    [ -n "$FACT_START" ] || [ "$FACT_TEXT" != "$ps_a" ] || FACT_START="$*"
+    [ -z "$ps_b" ] || [ -n "$FACT_START2" ] || [ "$FACT_TEXT" != "$ps_b" ] || FACT_START2="$*"
+  done
+  IFS="$ps_ifs"; [ -z "$ps_glob" ] || set +f
+  [ -z "$ps_odd" ] || { FACT_START=; FACT_START2=; }
+}
+# Sets FACT_TEXT to $1 as awk compares it with a PID: digits lose their leading zeros, and other
+# text stays as it is. False for text awk might read as another number, and for more than 15
+# digits, which a double may not hold exactly.
+fact_pid_number() {
+  FACT_TEXT="$1"
+  case "$1" in
+    '') return 0 ;;
+    *[!0123456789]*)
+      case "$1" in *[0123456789]*|[+-]*) return 1 ;; esac
+      return 0 ;;
+  esac
+  FACT_TEXT="\${1#"\${1%%[!0]*}"}"
+  [ -n "$FACT_TEXT" ] || FACT_TEXT=0
+  case "$FACT_TEXT" in ????????????????*) return 1 ;; esac
 }
 # Sets FACT_TEXT to the digits after the last JSON name $1 (quoted) in $2 that a colon and a
 # number follow, as sed -n 's/.*NAME[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' finds them.
