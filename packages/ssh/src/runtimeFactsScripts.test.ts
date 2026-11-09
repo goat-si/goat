@@ -412,11 +412,12 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact age gate 
             .filter(Boolean);
           return { verdict: result.stdout.trim(), dates: dates.length };
         };
-        // A fresh read for every check: each keying reads the clock once.
+        // A fresh read for every check: each keying reads the clock once. stat and the gate read the
+        // real clock separately, so only ages a tick cannot cross are asserted here; the 2 s boundary
+        // is the fixed-clock test's below.
         const reads = epoch ? 0 : 1;
         assert.deepEqual(key(10), { verdict: "keyed", dates: reads });
-        assert.deepEqual(key(1), { verdict: "unkeyed", dates: reads });
-        assert.deepEqual(key(0), { verdict: "unkeyed", dates: reads });
+        assert.deepEqual(key(-100), { verdict: "unkeyed", dates: reads });
         // A clock that cannot be read keys nothing, as before; EPOCHSECONDS needs no date.
         assert.deepEqual(key(10, "date-fails"), {
           verdict: epoch ? "keyed" : "unkeyed",
