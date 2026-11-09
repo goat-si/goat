@@ -256,8 +256,10 @@ describe("cuaDriverManifest", () => {
     expect(text).toContain(
       [
         '    - bundle_id: "com.apple.TextEdit"',
+        "      launch: true",
         '      terminate: "driver_launched"',
         '    - executable: "/usr/bin/gedit" # names: ["gedit"]',
+        "      launch: true",
         '      terminate: "driver_launched"',
       ].join("\n"),
     );

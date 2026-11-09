@@ -376,34 +376,76 @@ export function cuaAppKey(id: string): string {
 
 const EXECUTABLE_LINE = /^ {4}- executable: ("(?:[^"\\]|\\.)*")(?: # names: (\[.*\]))?$/u;
 
+/** The identities one app line of cuaDriverCapabilityManifest names; undefined for any other line. */
+function entryIdentities(line: string): ReadonlyArray<string> | undefined {
+  const prefix = "    - bundle_id: ";
+  if (line.startsWith(prefix)) {
+    const id: unknown = JSON.parse(line.slice(prefix.length));
+    if (typeof id !== "string") throw new Error("Invalid capability manifest app id.");
+    return [id];
+  }
+  if (!line.startsWith("    - executable: ")) return undefined;
+  const match = EXECUTABLE_LINE.exec(line);
+  if (match === null) throw new Error("Invalid capability manifest executable.");
+  const executable: unknown = JSON.parse(match[1] ?? "");
+  const names: unknown = match[2] === undefined ? [] : JSON.parse(match[2]);
+  if (
+    typeof executable !== "string" ||
+    !Array.isArray(names) ||
+    !names.every((name) => typeof name === "string")
+  )
+    throw new Error("Invalid capability manifest executable.");
+  return [executable, ...names];
+}
+
 /**
  * Reads only the JSON-quoted app lines written by cuaDriverCapabilityManifest: each bundle id,
  * and each executable grant's path followed by the names its comment records.
  */
 export function cuaDriverManifestApplications(text: string): ReadonlyArray<string> {
-  const prefix = "    - bundle_id: ";
-  const ids: Array<string> = [];
+  return text.split("\n").flatMap((line) => entryIdentities(line) ?? []);
+}
+
+const LAUNCH_GRANT = "      launch: ";
+
+/**
+ * Identities whose own app entry carries launch: true, the only grant the driver launches through
+ * (session_manifest.rs authorize_launch). Launch data GOAT never writes fails closed: another value,
+ * a repeated or stray grant, or one identity in entries that disagree.
+ */
+export function cuaDriverManifestLaunchGrants(text: string): ReadonlyArray<string> {
+  const invalid = () => new Error("Invalid capability manifest launch grant.");
+  const entries: Array<{ readonly ids: ReadonlyArray<string>; launch?: boolean }> = [];
+  let entry: (typeof entries)[number] | undefined;
   for (const line of text.split("\n")) {
-    if (line.startsWith(prefix)) {
-      const id: unknown = JSON.parse(line.slice(prefix.length));
-      if (typeof id !== "string") throw new Error("Invalid capability manifest app id.");
-      ids.push(id);
-      continue;
-    }
-    if (!line.startsWith("    - executable: ")) continue;
-    const match = EXECUTABLE_LINE.exec(line);
-    if (match === null) throw new Error("Invalid capability manifest executable.");
-    const executable: unknown = JSON.parse(match[1] ?? "");
-    const names: unknown = match[2] === undefined ? [] : JSON.parse(match[2]);
-    if (
-      typeof executable !== "string" ||
-      !Array.isArray(names) ||
-      !names.every((name) => typeof name === "string")
-    )
-      throw new Error("Invalid capability manifest executable.");
-    ids.push(executable, ...names);
+    const ids = entryIdentities(line);
+    if (ids !== undefined) {
+      entry = { ids };
+      entries.push(entry);
+    } else if (line.startsWith(LAUNCH_GRANT)) {
+      const value = line.slice(LAUNCH_GRANT.length);
+      if (
+        entry === undefined ||
+        entry.launch !== undefined ||
+        (value !== "true" && value !== "false")
+      )
+        throw invalid();
+      entry.launch = value === "true";
+    } else if (!line.startsWith("      ")) entry = undefined;
   }
-  return ids;
+  const granted = new Map<string, boolean>();
+  for (const { ids, launch } of entries)
+    for (const id of ids) {
+      const key = cuaAppKey(id);
+      if (granted.get(key) === (launch !== true)) throw invalid();
+      granted.set(key, launch === true);
+    }
+  return entries.flatMap(({ ids, launch }) => (launch === true ? ids : []));
+}
+
+/** Whether the allow list names a tool; only that list holds quoted items at this depth. */
+export function cuaDriverManifestAllowsTool(text: string, tool: string): boolean {
+  return text.split("\n").includes("    - " + JSON.stringify(tool));
 }
 
 /** Approved identities not yet admitted by the manifest, with driver path normalization. */
@@ -442,11 +484,14 @@ export function cuaDriverCapabilityManifest(input: {
     ...(input.tools ?? CUA_DRIVER_ALLOWED_TOOLS),
     ...(browser === undefined ? [] : CUA_DRIVER_CLAIM_TOOLS),
   ];
+  // The driver launches an app only through its own entry's grant (session_manifest.rs authorize_launch).
+  const launch = tools.includes("launch_app") ? [LAUNCH_GRANT + "true"] : [];
   const terminate = tools.includes("kill_app") ? ['      terminate: "driver_launched"'] : [];
   const app = (entry: CuaDriverAdmittedApp) => [
     typeof entry === "string"
       ? "    - bundle_id: " + q(entry)
       : "    - executable: " + q(entry.executable) + " # names: " + JSON.stringify(entry.names),
+    ...launch,
     ...terminate,
   ];
   return [

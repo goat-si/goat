@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/33";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/34";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
@@ -19,10 +19,10 @@ type Target = ElementHandle | number | string | { window: [x: number, y: number]
 // Linux and Windows apps take points only in click: [x, y] pixels of a screenshot whose window position the driver proved (otherwise unsupported, nothing sent). They stay usable after input until the window moves, resizes or changes scale (stale_reference: take a new screenshot); other app actions there use element numbers from observe().
 type Done = { ok: true; verdict: "confirmed" | "unverifiable" | "suspected_noop"; note?: string; warnings?: string[]; result?: { debug: { value?: unknown; evidence: string[] } } };
 // suspected_noop: input was sent but its effect was not seen; later inputs still run; observe when the next step depends on it.
-// warnings: driver notes that may change what you should believe, including focus restoration and disabled actions.
-// Set screen.debug = true for diagnostic details on every input in this cell, or pass verify: true on supported app inputs to read evidence and include details for that call.
+// warnings: driver notes that may change what you believe, such as focus restoration and disabled actions.
+// screen.debug = true adds diagnostic details to every input in this cell; verify: true on a supported app input reads evidence and adds details for that call.
 type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; renderMs: number; bridgeMs: number } };
-// Observation targetRef, targetGeneration, surfaceGeneration and phases remain directly readable but are non-enumerable (lost in spread, JSON and screen.values copies); screen.debug = true makes them enumerable.
+// Observation targetRef, targetGeneration, surfaceGeneration and phases remain readable but are non-enumerable (lost in spread, JSON and screen.values copies); screen.debug = true makes them enumerable.
 // With screen.debug, app reads also include phases.hops when proxy timing is available.
 // ReadTime on observe and screenshot: host time of the read (the driver call, for a tab the browser's snapshot; tree parsing; rendering; the rest); absent when it would not fit the reply.
 type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted?: boolean; [k: string]: unknown };
@@ -58,9 +58,9 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // a diff after the first; app numbers from the latest full read remain valid until rows are added, removed or renumbered; then apply diffs and use the latest observation, or diff: false for the whole tree
   screenshot(): Promise<ReadTime & Shot>; // tabs: the image of observe({ screenshot: true }), no options; element numbers then need a new observe()
-  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action and modifiers are apps only; tabs refuse modifiers. Tab verify includes diagnostics without extra reads. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it; with no new window it lists them up to three more times, 100 ms apart (four for one that opens or closes a window). Element changes are evidence only; a window it proves opened or closed makes the verdict confirmed. A suspected_noop right after a whole observe gets one more read of the window, and changed rows confirm it (never a close); that read replaces earlier numbers
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action and modifiers are apps only. Tab verify includes diagnostics without extra reads. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it; with no new window it lists them up to three more times, 100 ms apart (four for one that opens or closes a window). Element changes are evidence only; a window it proves opened or closed makes the verdict confirmed. A suspected_noop right after a whole observe gets one more read of the window, and changed rows confirm it (never a close); that read replaces earlier numbers
   type(text: string, t?: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>; // verify: as on click
-  press(key: string, t?: Target, o?: { send?: boolean; verify?: boolean; holdMs?: number }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first; holdMs 0..30000 needs a supporting app driver; tabs refuse it
+  press(key: string, t?: Target, o?: { send?: boolean; verify?: boolean; holdMs?: number; delivery_mode?: "foreground" }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first; apps only: holdMs 0..30000 (driver support), foreground after a non-menu backgroundUnavailable refusal, not with send
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;
   drag(from: Target, to: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>;
@@ -109,7 +109,7 @@ const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?
   openTab(q: { url: string }): Promise<Tab>; // http(s) only; serve local files over http://127.0.0.1; an address that does not connect throws and closes its tab, or names it if it could not`;
 const SCREEN_APP = `  // Native apps and browser dialogs only; web pages in any browser go through tab()/openTab(), never app().
   // app() without window_id: a running app with one window on screen binds it, never opening another; several
-  // windows or processes are ambiguous; for a minimized or hidden window, check screen.discover() for its window_id and title and pass window_id explicitly instead of opening a new window.
+  // windows or processes are ambiguous; for a minimized or hidden window, check screen.discover() for its window_id and title and pass that window_id instead of opening a new window.
   // A closed app is launched in the background and bound to its first window in the same call; a running
   // one is never launched again, so with no window yet it throws: call app() again once it shows one. It is looked for during 5 s, and a
   // last check started then may take 2 s more; no window then throws, with the app still running. Several

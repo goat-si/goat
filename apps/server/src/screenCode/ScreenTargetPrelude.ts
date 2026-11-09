@@ -535,11 +535,17 @@ const __target = (binding, note, owner, extraProps = {}) => {
         target !== null && typeof target === 'object' && !Array.isArray(target) && !__winPt(target) &&
         !('name' in target) && !('role' in target) && !('id' in target) && !('elementHandle' in target) && !__legacy(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
-      const actualOpts = __only('press options', targetIsSendOpts ? target : options, ['send', 'verify', 'holdMs']);
+      const actualOpts = __only('press options', targetIsSendOpts ? target : options, ['send', 'verify', 'holdMs', 'delivery_mode']);
       if (actualOpts.holdMs !== undefined && (!Number.isInteger(actualOpts.holdMs) || actualOpts.holdMs < 0 || actualOpts.holdMs > 30000))
         throw new ScreenError('invalid_argument', 'holdMs must be an integer from 0 to 30000; nothing was sent.', true);
       if (tab && actualOpts.holdMs !== undefined)
         throw new ScreenError('unsupported', 'Held keys are unavailable for tabs; nothing was sent.', true, { nextStep: 'Use an app target for held keys.' });
+      if (actualOpts.delivery_mode !== undefined && actualOpts.delivery_mode !== 'background' && actualOpts.delivery_mode !== 'foreground')
+        throw new ScreenError('invalid_argument', 'delivery_mode is "background" or "foreground"; nothing was sent.', true);
+      if (actualOpts.delivery_mode === 'foreground' && actualOpts.send === true)
+        throw new ScreenError('invalid_argument', 'delivery_mode "foreground" cannot be combined with send; nothing was sent.', true);
+      if (tab && actualOpts.delivery_mode !== undefined)
+        throw new ScreenError('unsupported', 'delivery_mode is for app targets; tabs take keys from the browser. Nothing was sent.', true, { nextStep: 'Leave delivery_mode out for tabs.' });
       if (!tab && (Array.isArray(actualTarget) || __winPt(actualTarget)))
         throw new ScreenError('invalid_argument', 'Click the point first, then press the key without a target.', true);
       if (actualTarget !== undefined && needsImplicitObserve(actualTarget)) await ensureObserved();
@@ -550,10 +556,13 @@ const __target = (binding, note, owner, extraProps = {}) => {
         ...(!tab && actualOpts && actualOpts.send === true ? { send: true } : {}),
         ...(!tab && actualOpts && actualOpts.verify === true ? { verify: true } : {}),
         ...(!tab && actualOpts.holdMs !== undefined ? { holdMs: actualOpts.holdMs } : {}),
+        ...(!tab && actualOpts.delivery_mode === 'foreground' ? { delivery_mode: 'foreground' } : {}),
       }, actualOpts.verify === true);
     },
     scroll: (target, direction, amount = 3) => {
       if (typeof direction !== 'string') { checkEmptyTarget(target); return call('scroll', target); }
+      if (!Number.isInteger(amount) || amount < 1 || amount > 50)
+        throw new ScreenError('invalid_argument', 'scroll amount must be an integer from 1 to 50; nothing was sent.', true);
       const sign = direction === 'up' || direction === 'left' ? -1 : 1;
       if (tab) {
         const delta = sign * amount * 100;

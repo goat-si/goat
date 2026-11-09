@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
+import type { ComputerUsePrimitiveReply } from "@goat/contracts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
@@ -751,3 +752,215 @@ it.live("a screenshot-only read succeeds while the screen is locked", () => {
     ),
   );
 });
+
+const launchArgs = { bundle_id: "com.apple.calculator" };
+const outsideManifest =
+  "launch_app bundle_id 'com.apple.calculator' is outside the capability manifest";
+const notGranted = "Accessibility access is not granted.";
+const notApproved = "com.apple.calculator is not approved for computer use in this thread.";
+const manifestNote =
+  "GOAT: this is outside what GOAT lets agents do with computer use on this host, not a missing macOS permission.";
+const genericNextStep = "Observe the desktop and try again.";
+const failedCall = (
+  structuredContent: NonNullable<ComputerUsePrimitiveReply["result"]>,
+  ...texts: ReadonlyArray<string>
+) => ({
+  ...replyIdentity,
+  status: "settled" as const,
+  result: {
+    isError: true,
+    structuredContent,
+    ...(texts.length === 0 ? {} : { content: texts.map((text) => ({ type: "text", text })) }),
+  },
+});
+
+it.each([
+  {
+    shape: "an outer code with text",
+    reply: failedCall({ code: "permission_denied" }, notGranted),
+    nextStep: notGranted,
+  },
+  {
+    shape: "a nested refusal message",
+    reply: failedCall({ refusal: { code: "permission_denied", message: notGranted } }),
+    nextStep: notGranted,
+  },
+  {
+    shape: "no words",
+    reply: failedCall({ code: "permission_denied" }),
+    nextStep: "The driver refused permission; read the receipt and request the required admission.",
+  },
+])(
+  "a driver permission refusal with no effect stays permission_denied and unsent: $shape",
+  ({ reply, nextStep }) => {
+    expect(driverError(reply, "launch_app", launchArgs)).toEqual({
+      code: "permission_denied",
+      effectStarted: false,
+      nextStep,
+      evidence: ["driver:code=permission_denied"],
+    });
+  },
+);
+
+it("a driver permission refusal keeps the refusal fields it was given", () => {
+  const fields = {
+    refused: "appNotAllowed",
+    detail: "app_not_approved",
+    app: "com.apple.calculator",
+  };
+  expect(
+    driverError(
+      failedCall({ code: "permission_denied", ...fields }, notApproved),
+      "launch_app",
+      launchArgs,
+    ),
+  ).toEqual({
+    code: "permission_denied",
+    effectStarted: false,
+    nextStep: notApproved,
+    evidence: ["driver:code=permission_denied"],
+    ...fields,
+  });
+});
+
+it("a manifest denial typed outside_manifest stays unsupported with the driver's words, never a permission to ask for", () => {
+  const fields = { refused: "targetRefused", detail: "outside_manifest" };
+  expect(
+    driverError(
+      failedCall({ code: "permission_denied", ...fields }, outsideManifest, manifestNote),
+      "launch_app",
+      launchArgs,
+    ),
+  ).toEqual({
+    code: "unsupported",
+    effectStarted: false,
+    nextStep: outsideManifest,
+    evidence: ["driver:code=permission_denied"],
+    ...fields,
+  });
+});
+
+const launchFailed = "Launch failed: The application “Calculator” could not be launched.";
+
+it.each([
+  {
+    shape: "a launch error named under error",
+    structured: { error: "NSWORKSPACE_LAUNCH_FAILED" },
+    texts: [launchFailed],
+    expected: { nextStep: launchFailed },
+  },
+  {
+    shape: "an unknown code",
+    structured: { code: "app_launch_blocked" },
+    texts: ["Launch blocked by policy."],
+    expected: {
+      nextStep: "Launch blocked by policy.",
+      evidence: ["driver:code=app_launch_blocked"],
+    },
+  },
+  {
+    shape: "permission_denied with an unknown effect",
+    structured: { code: "permission_denied", effect: "unknown" },
+    texts: [outsideManifest],
+    expected: {
+      nextStep: outsideManifest,
+      evidence: ["driver:effect=unknown", "driver:code=permission_denied"],
+    },
+  },
+  {
+    shape: "permission_denied that may have run",
+    structured: { code: "permission_denied", safety: { possibleCommit: true } },
+    texts: [outsideManifest],
+    expected: { nextStep: outsideManifest, evidence: ["driver:code=permission_denied"] },
+  },
+  {
+    shape: "a manifest denial that may have run",
+    structured: {
+      code: "permission_denied",
+      refused: "targetRefused",
+      detail: "outside_manifest",
+      safety: { possibleCommit: true },
+    },
+    texts: [outsideManifest],
+    expected: {
+      nextStep: outsideManifest,
+      evidence: ["driver:code=permission_denied"],
+      refused: "targetRefused",
+      detail: "outside_manifest",
+    },
+  },
+])(
+  "a failed driver call with any other code stays downstream_failure and keeps the driver's words: $shape",
+  ({ structured, texts, expected }) => {
+    expect(driverError(failedCall(structured, ...texts), "launch_app", launchArgs)).toEqual({
+      code: "downstream_failure",
+      effectStarted: false,
+      ...expected,
+    });
+  },
+);
+
+it("an unverifiable driver failure stays unknown_outcome and may have acted", () => {
+  expect(
+    driverError(
+      failedCall({ code: "permission_denied", effect: "unverifiable" }, outsideManifest),
+      "launch_app",
+      launchArgs,
+    ),
+  ).toMatchObject({ code: "unknown_outcome", effectStarted: true, nextStep: genericNextStep });
+});
+
+it("a failed driver call with no code or words keeps the generic next step", () => {
+  for (const reply of [
+    failedCall({}),
+    { ...replyIdentity, status: "settled" as const, error: { code: -32603 } },
+  ])
+    expect(driverError(reply, "launch_app", launchArgs)).toEqual({
+      code: "downstream_failure",
+      effectStarted: false,
+      nextStep: genericNextStep,
+    });
+});
+
+it.live(
+  "screen.launch reports a manifest refusal as unsupported with the driver's words and nothing sent",
+  () => {
+    const { host, sent } = fixture({
+      launch_app: new DriverError(
+        { code: "permission_denied", refused: "targetRefused", detail: "outside_manifest" },
+        outsideManifest,
+      ),
+    });
+    return Effect.gen(function* () {
+      const result = yield* (yield* ScreenRunService).runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation: context.invocation,
+        source: `try { await screen.launch({bundle_id: 'com.apple.calculator'}); return 'launched'; }
+        catch (e) { return { code: e.code, nothingSent: e.nothingSent, message: e.message, refused: e.refused, detail: e.detail, evidence: e.evidence }; }`,
+      });
+      expect(result.value).toEqual({
+        code: "unsupported",
+        nothingSent: true,
+        message: outsideManifest,
+        refused: "targetRefused",
+        detail: "outside_manifest",
+        evidence: ["driver:code=permission_denied"],
+      });
+      expect(sent.map((entry) => entry.tool)).toEqual(["launch_app"]);
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ app: host }),
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  },
+);
