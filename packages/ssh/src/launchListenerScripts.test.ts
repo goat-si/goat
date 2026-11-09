@@ -395,6 +395,8 @@ describe("Windows launch listener wait", () => {
       assert.equal(result.code, 0, result.stderr);
       // Both run as the bounded job; netstat with its documented arguments.
       for (const call of result.calls) assert.match(call, /^1 (netstat -ano -p TCP|powershell )/);
+      // netstat's capture is removed whatever it held.
+      assert.deepEqual(yield* fs.readDirectory(root + "/state"), ["server.log"]);
       return { status: result.stdout, commands: result.calls.map((call) => call.split(" ")[1]) };
     });
   const HEADER =
@@ -454,6 +456,9 @@ describe("Windows launch listener wait", () => {
         "a final line with no newline": [HEADER + LISTENING.replace("\r\n", "")],
         "a final line cut before its CR": [HEADER + LISTENING.replace("\n", "")],
         "a matching row before a cut final line": [HEADER + LISTENING + "  TCP    127.0.0.1:3773"],
+        "a NUL byte inside a matching row": [
+          HEADER + LISTENING.replace("LISTENING", "LISTEN\0ING"),
+        ],
         "a second row for the same address": [
           HEADER + LISTENING + row("127.0.0.1:3773", "0.0.0.0:0", "LISTENING", "4321"),
         ],

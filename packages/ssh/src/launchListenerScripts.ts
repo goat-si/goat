@@ -43,10 +43,15 @@ listener_probe_available() {
 # localized on some display languages. It proves server $1 owns 127.0.0.1:$2 only after it exited
 # 0 within 5 s and its whole output has a row TCP 127.0.0.1:$2 0.0.0.0:0 LISTENING $1 and no other
 # row from 127.0.0.1:$2 to 0.0.0.0:0. Output that ends mid-line was cut short and proves nothing.
-# Bash only.
+# Bash only. read -d '' takes the file whole and succeeds only at a NUL byte, which netstat never
+# prints (a command substitution would drop it).
 listener_netstat_owns() {
-  listener_netstat="$(launch_bounded 5 netstat.exe -ano -p TCP </dev/null 2>/dev/null && printf .)" || return 1
-  listener_netstat="${"${"}listener_netstat%.}"
+  if launch_bounded 5 netstat.exe -ano -p TCP </dev/null >"$STATE_DIR/netstat.$$" 2>/dev/null; then
+    listener_status=0; else listener_status=1; fi
+  listener_netstat=
+  if IFS= read -r -d '' listener_netstat 2>/dev/null <"$STATE_DIR/netstat.$$"; then listener_status=1; fi
+  rm -f "$STATE_DIR/netstat.$$" || :
+  [ "$listener_status" = 0 ] || return 1
   listener_pid="$1"; listener_port="$2"; listener_found=1
   printf -v listener_cr '\r'; printf -v IFS ' \t'; set -f
   while :; do
