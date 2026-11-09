@@ -12,8 +12,8 @@ export const REMOTE_LAUNCH_FACTS_SCRIPT = `${REMOTE_COMBINED_CALL_SCRIPT}
 # version and own under the pin's exec key, which holds its digest, so a young pin rewritten within
 # its second misses; live only as live_fact would keep it, bound to a live key that held across the
 # call or, for no server, in this script's memo, which live_fact reads only while all three files
-# stay absent. Any other runner, a key that changed or any invalid answer records nothing, leaves
-# no marker, and the separate calls run as before.
+# stay absent. Any other runner, a changed exec key or live input, or any invalid answer records
+# nothing, leaves no marker, and the separate calls run as before.
 launch_want() { launch_asks="$launch_asks --$1"; launch_tags="$launch_tags $1"; launch_count=$((launch_count + 1)); }
 launch_facts_ask() {
   [ -n "$OWN_RUNTIME_VERSION" ] && [ "$PRESERVE_SELECTED_RUNNER" = 0 ] && [ -n "$FACT_MEMO" ] || return 0
@@ -42,6 +42,7 @@ launch_facts_ask() {
        [ "$FACT_KEY" = "$launch_live" ]; then
     launch_held=live
   fi
+  case " $launch_tags " in *" live "*) [ -n "$launch_held" ] || return 0 ;; esac
   frame_parse facts "$launch_tags" "$frame_out" caps || return 0
   case " $launch_tags " in *" version "*) [ "$FRAME_VERSION" = "ok goat v$OWN_RUNTIME_VERSION" ] || return 0 ;; esac
   case " $launch_tags " in *" own "*)

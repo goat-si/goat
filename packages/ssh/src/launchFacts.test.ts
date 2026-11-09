@@ -388,17 +388,26 @@ describe("a fresh own-version launch asks its pinned candidate runner once", () 
 });
 
 describe("the frame's live answer is used only while its inputs hold", () => {
+  // Live inputs that change during the call void the whole frame, like a changed exec key.
   it.effect.each([
-    { name: "a launch file appearing during the call", file: "during-facts.sh" },
-    { name: "a launch file appearing before the live check", file: "between.sh" },
-  ])("$name makes the live check ask goat", ({ file }) =>
+    {
+      name: "a launch file appearing during the call",
+      file: "during-facts.sh",
+      asked: ["facts", "version", "own", "live", "live"],
+    },
+    {
+      name: "a launch file appearing before the live check",
+      file: "between.sh",
+      asked: ["facts", "live", "live"],
+    },
+  ])("$name makes the live check ask goat", ({ file, asked }) =>
     Effect.gen(function* () {
       const f = yield* fixture();
       // The hook runs in goat's process or the launch's; it names the port file by its path.
       yield* f.write(file, 'printf "4343\\n" >"$HOME/.goat/ssh-launch/key/port"\n');
       const launch = yield* f.launch();
       assert.equal(launch.code, 0, launch.err);
-      assert.deepEqual(launch.asked, ["facts", "live", "live"]);
+      assert.deepEqual(launch.asked, asked);
     }).pipe(Effect.scoped),
   );
 
@@ -416,15 +425,22 @@ describe("the frame's live answer is used only while its inputs hold", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect("a bound server restarted before the live check makes it ask goat", () =>
+  it.effect.each([
+    {
+      name: "during the call",
+      file: "during-facts.sh",
+      asked: ["facts", "version", "own", "live", "compat"],
+    },
+    { name: "before the live check", file: "between.sh", asked: ["facts", "live", "compat"] },
+  ])("a bound server restarted $name makes the live check ask goat", ({ file, asked }) =>
     Effect.gen(function* () {
       const f = yield* fixture();
       yield* f.serve();
       yield* f.write("ps-rows-next", PS_HEADER + psRow("10:00:05"));
-      yield* f.write("between.sh", 'cp "$HOME/ps-rows-next" "$HOME/ps-rows"\n');
+      yield* f.write(file, 'cp "$HOME/ps-rows-next" "$HOME/ps-rows"\n');
       const launch = yield* f.launch();
       assert.equal(launch.code, 0, launch.err);
-      assert.deepEqual(launch.asked, ["facts", "live", "compat"]);
+      assert.deepEqual(launch.asked, asked);
     }).pipe(Effect.scoped),
   );
 
