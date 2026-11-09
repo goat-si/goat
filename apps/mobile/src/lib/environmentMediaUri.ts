@@ -48,3 +48,12 @@ export function routedActionsSource(
   if (source === undefined || !("uri" in source)) return source;
   return routedUri === null ? undefined : { ...source, uri: routedUri };
 }
+/** Routes a tapped URL from the environment with the connection at this moment. */
+export function routeMobileMediaUrl(environmentId: EnvironmentId, url: string) {
+  const environment = readMobileMediaConnection(environmentId);
+  return resolveEnvironmentLoopbackUrl({
+    connection: environment.connection,
+    isDesktopRenderer: false,
+    url: environment.normalizeUri(url),
+  });
+}

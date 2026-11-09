@@ -139,7 +139,7 @@ import { useFilePreviewGallery } from "../../components/FilePreviewGallery";
 import { assetImageSource } from "../../lib/assetImageSource";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { MessageImageGalleryScope } from "./MessageImageGalleryScope";
-import { readMobileMediaConnection } from "../../lib/environmentMediaUri";
+import { readMobileMediaConnection, routeMobileMediaUrl } from "../../lib/environmentMediaUri";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import { inlineFilePreviewKind, isPdfFile } from "../../lib/filePreview";
 import { ThreadInlineFilePreview } from "./ThreadInlineFilePreview";
@@ -2417,8 +2417,13 @@ export const ThreadFeed = memo(function ThreadFeed({
 
     if (presentation.href) {
       if (/^https?:\/\//i.test(presentation.href) && isPdfFile({ name: presentation.href })) {
+        const routed = routeMobileMediaUrl(props.environmentId, presentation.href);
+        if (routed._tag === "Unreachable") {
+          Dialog.alert("Unable to open link", routed.reason);
+          return;
+        }
         openPreview(markdownLinkScope, {
-          file: { kind: "pdf", uri: presentation.href, name: "Document.pdf" },
+          file: { kind: "pdf", uri: routed.url, name: "Document.pdf" },
         });
         return;
       }
