@@ -15,6 +15,7 @@ import {
   AgentSessionScanError,
   ClaudeSettings,
   CodexSettings,
+  DEFAULT_AGENT_SESSION_WINDOW_DAYS,
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
@@ -68,7 +69,7 @@ const MAX_METADATA_BYTES_PER_SOURCE = 64 * 1024 * 1024;
 const MAX_METADATA_OPERATIONS_PER_SOURCE = MAX_TRANSCRIPTS_PER_SOURCE * 4;
 const MAX_METADATA_RECORDS_PER_SOURCE = 100_000;
 const MAX_METADATA_RECORDS_PER_TRANSCRIPT = 1_000;
-const RECENT_THREAD_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 // Screenshot-heavy transcripts can reach GiB; select fields while streaming to avoid allocating payloads.
 const MAX_IMPORTED_TRANSCRIPT_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_IMPORTED_MESSAGES = 200;
@@ -1583,7 +1584,8 @@ export const make = Effect.gen(function* () {
     if (isExcludedProjectPath(root) || isExcludedProjectPath(realRoot)) return Stream.empty;
     const rootIdentity = yield* directoryIdentity(root);
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-    const cutoffMs = nowMs - RECENT_THREAD_WINDOW_MS;
+    const windowDays = input.windowDays ?? DEFAULT_AGENT_SESSION_WINDOW_DAYS;
+    const cutoffMs = nowMs - windowDays * MS_PER_DAY;
 
     const candidates = cachedCandidates ?? (yield* collectCandidates()).candidates;
 

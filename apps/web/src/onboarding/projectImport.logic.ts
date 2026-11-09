@@ -1,15 +1,21 @@
 import { findProjectByPath } from "@goat/client-runtime/state/projects";
-import type { AgentSessionProjectCandidate, EnvironmentId, ProjectId } from "@goat/contracts";
+import {
+  DEFAULT_AGENT_SESSION_WINDOW_DAYS,
+  type AgentSessionProjectCandidate,
+  type EnvironmentId,
+  type ProjectId,
+} from "@goat/contracts";
 
-const RECENT_PROJECT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_SELECTION_MIN_THREADS = 3;
 
 /** Treat candidates missing git as repositories for servers predating git scans. */
 export function partitionOnboardingProjects<T extends AgentSessionProjectCandidate>(
   candidates: ReadonlyArray<T>,
   now = Date.now(),
+  windowDays = DEFAULT_AGENT_SESSION_WINDOW_DAYS,
 ) {
-  const cutoff = now - RECENT_PROJECT_WINDOW_MS;
+  const cutoff = now - windowDays * MS_PER_DAY;
 
   return {
     available: candidates,

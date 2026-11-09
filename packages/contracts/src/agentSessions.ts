@@ -5,6 +5,13 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 export const AgentSessionSource = Schema.Literals(["claudeAgent", "codex", "pi"]);
 export type AgentSessionSource = typeof AgentSessionSource.Type;
 
+/** Conversations and projects older than this stay out of the import when a caller sends no window. */
+export const DEFAULT_AGENT_SESSION_WINDOW_DAYS = 30;
+export const AgentSessionWindowDays = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: 3650 }),
+);
+export type AgentSessionWindowDays = typeof AgentSessionWindowDays.Type;
+
 export const AgentSessionImportSource = Schema.Struct({
   provider: AgentSessionSource,
   providerInstanceId: ProviderInstanceId,
@@ -23,6 +30,8 @@ export type AgentSessionImportSource = typeof AgentSessionImportSource.Type;
 export const AgentSessionScanInput = Schema.Struct({
   // Older clients cannot decode Pi in the response's closed source union.
   includePi: Schema.optionalKey(Schema.Boolean),
+  // How far back to import conversations. Omitted means today's 30-day default.
+  windowDays: Schema.optionalKey(AgentSessionWindowDays),
 });
 export type AgentSessionScanInput = typeof AgentSessionScanInput.Type;
 
@@ -54,6 +63,7 @@ export type AgentSessionScanResult = typeof AgentSessionScanResult.Type;
 export const AgentSessionImportInput = Schema.Struct({
   projectId: ProjectId,
   includePi: AgentSessionScanInput.fields.includePi,
+  windowDays: AgentSessionScanInput.fields.windowDays,
   expectedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
 });
 export type AgentSessionImportInput = typeof AgentSessionImportInput.Type;
