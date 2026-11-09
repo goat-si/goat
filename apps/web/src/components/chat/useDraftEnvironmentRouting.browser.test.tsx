@@ -21,27 +21,13 @@ const state = vi.hoisted(() => {
   };
 });
 
-vi.mock(import("../../lib/addProjectToMachine"), async (original) => ({
-  ...(await original()),
+// Plain factories: the real modules reach the RPC runtime, which this hook test does not need.
+vi.mock("../../lib/addProjectToMachine", () => ({
   addProjectToMachine: state.addProjectToMachine,
 }));
-vi.mock(import("../../lib/utils"), async (original) => ({
-  ...(await original()),
-  newProjectId: () => ProjectId.make("cloned"),
-}));
-vi.mock(import("../../state/entities"), async (original) => ({
-  ...(await original()),
-  useProjects: (() => [...state.projects.values()]) as never,
-  readProject: ((ref: ScopedProjectRef) => state.projects.get(state.keyOf(ref)) ?? null) as never,
-  subscribeProject: ((ref: ScopedProjectRef, listener: (project: unknown) => void) => {
-    const key = state.keyOf(ref);
-    const set = state.listeners.get(key) ?? new Set<() => void>();
-    state.listeners.set(key, set);
-    const notify = () => listener(state.projects.get(key) ?? null);
-    set.add(notify);
-    return () => set.delete(notify);
-  }) as never,
-  waitForProject: ((ref: ScopedProjectRef) =>
+vi.mock("../../state/entities", () => ({
+  useProjects: () => [...state.projects.values()],
+  waitForProject: (ref: ScopedProjectRef) =>
     new Promise((resolve) => {
       const key = state.keyOf(ref);
       const existing = state.projects.get(key);
@@ -55,20 +41,20 @@ vi.mock(import("../../state/entities"), async (original) => ({
         resolve(project);
       };
       set.add(notify);
-    })) as never,
+    }),
 }));
-vi.mock(import("../../hooks/useLoadBalancedEnvironment"), () => ({
-  useLoadBalancedEnvironment: (() => ({
+vi.mock("../../hooks/useScratchProject", () => ({
+  useScratchProject: () => ({ openScratchProject: () => Promise.resolve(null) }),
+}));
+vi.mock("../../hooks/useLoadBalancedEnvironment", () => ({
+  useLoadBalancedEnvironment: () => ({
     pending: false,
     failed: false,
     environmentId: null,
     refresh: () => undefined,
-  })) as never,
+  }),
 }));
-vi.mock(import("../ui/toast"), async (original) => ({
-  ...(await original()),
-  toastManager: { add: state.toast } as never,
-}));
+vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import type { MachineWithoutProject } from "../../lib/runOnArrival";
@@ -80,7 +66,6 @@ const macmini = EnvironmentId.make("macmini");
 const draftId = DraftId.make("draft");
 const source = scopeProjectRef(laptop, ProjectId.make("source"));
 const onMacmini = scopeProjectRef(macmini, ProjectId.make("on-macmini"));
-const cloned = scopeProjectRef(studio, ProjectId.make("cloned"));
 const SOURCE = {
   environmentId: laptop,
   id: source.projectId,
@@ -102,6 +87,10 @@ const STUDIO: MachineWithoutProject = {
 };
 
 type Routing = ReturnType<typeof useDraftEnvironmentRouting>;
+
+/** The project the clone was started for; the client mints its id. */
+const clonedRef = (): ScopedProjectRef =>
+  scopeProjectRef(studio, state.addProjectToMachine.mock.calls[0]?.[0].projectId);
 
 async function setup() {
   state.projects.clear();
@@ -125,7 +114,8 @@ async function setup() {
   function Harness(props: { capture: (value: Routing) => void }) {
     const value = useDraftEnvironmentRouting({
       draftId,
-      draftThread: useComposerDraftStore((store) => store.getDraftSession(draftId)),
+      // Read only for automatic routing, which these tests leave off.
+      draftThread: null,
       envLocked: false,
       automaticEnvironment: false,
       logicalProjectEnvironments: [
@@ -173,10 +163,10 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
 
     await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
 
-    expect(state.addProjectToMachine).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(state.addProjectToMachine).toHaveBeenCalledTimes(1));
+    const cloned = clonedRef();
     expect(state.addProjectToMachine.mock.calls[0]?.[0]).toMatchObject({
       target: { environmentId: studio, label: "Mac Studio" },
-      projectId: cloned.projectId,
       remoteUrl: "git@github.com:goat-si/direction-board.git",
       destinationPath: "~/code/direction-board",
       files: [],
@@ -189,13 +179,15 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
       state.setProject(cloned, { ...SOURCE, environmentId: studio, id: cloned.projectId }),
     );
 
-    expect(screen.draft()).toMatchObject({
-      environmentId: studio,
-      projectId: cloned.projectId,
-      envMode: "worktree",
-      environmentSelection: "manual",
-    });
-    expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
+    await vi.waitFor(() =>
+      expect(screen.draft()).toMatchObject({
+        environmentId: studio,
+        projectId: cloned.projectId,
+        envMode: "worktree",
+        environmentSelection: "manual",
+      }),
+    );
+    await vi.waitFor(() => expect(screen.routing.current?.isEnvironmentChanging).toBe(false));
   });
 
   it("keeps the draft where it was and says why when the clone cannot start", async () => {
@@ -204,8 +196,9 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
 
     await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
 
+    await vi.waitFor(() => expect(state.toast).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(screen.routing.current?.isEnvironmentChanging).toBe(false));
     expect(screen.draft()?.environmentId).toBe(laptop);
-    expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
     expect(state.toast).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
@@ -219,15 +212,20 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
     await using screen = await setup();
 
     await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
+    await vi.waitFor(() => expect(state.addProjectToMachine).toHaveBeenCalledTimes(1));
     await act(() => screen.routing.current?.onEnvironmentChangeStable(macmini));
+    const cloned = clonedRef();
     await act(() =>
       state.setProject(cloned, { ...SOURCE, environmentId: studio, id: cloned.projectId }),
     );
 
+    // The late project has been seen (its wait unsubscribed) and its retarget has run.
+    await vi.waitFor(() => expect(state.listeners.get(state.keyOf(cloned))?.size ?? 0).toBe(0));
+    await act(async () => undefined);
+    expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
     expect(screen.draft()).toMatchObject({
       environmentId: macmini,
       projectId: onMacmini.projectId,
     });
-    expect(screen.routing.current?.isEnvironmentChanging).toBe(false);
   });
 });

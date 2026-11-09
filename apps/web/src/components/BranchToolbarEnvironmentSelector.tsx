@@ -6,7 +6,7 @@ import { shortcutLabelForCommand } from "../keybindings";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import type { EnvironmentId } from "@goat/contracts";
 import { PlusIcon, ScaleIcon } from "~/components/solar";
-import { memo } from "react";
+import { memo, useState } from "react";
 
 import { ADD_TO_MACHINE_LABEL_CLASS, type EnvironmentOption } from "./BranchToolbar.logic";
 import { type MachineWithoutProject, machineArrivalLabel } from "../lib/runOnArrival";
@@ -51,6 +51,8 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   onAddToMachine,
 }: BranchToolbarEnvironmentSelectorProps) {
   const composerFloatingLayerProps = useComposerMenuProps();
+  // Picking a machine without the project leaves the selected value unchanged, so close explicitly.
+  const [open, setOpen] = useState(false);
   const shortcutLabel = shortcutLabelForCommand(
     useAtomValue(primaryServerKeybindingsAtom),
     "composer.host",
@@ -99,6 +101,8 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   return (
     <Select
       modal={false}
+      open={open}
+      onOpenChange={setOpen}
       value={autoEnvironmentLabel ? AUTO_VALUE : environmentValue(environmentId)}
       onValueChange={(value) => {
         if (value === ADD_MACHINE_VALUE) {
@@ -111,6 +115,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           const machine = environmentsWithoutProject.find(
             (env) => arrivalValue(env.environmentId) === value,
           );
+          setOpen(false);
           if (machine) onArriveOnMachine?.(machine);
         }
       }}
