@@ -1276,6 +1276,9 @@ export const CODEX_THREAD_CONFIG = {
   ...codexThreadMcpEnvironment(undefined),
   "tools.update_plan.enabled": true,
   mcp_optional_startup_grace_ms: 10_000,
+  // Tool calls stop waiting on the detailed reasoning summary. Codex applies it only to its
+  // built-in OpenAI provider and sends each summary section whole, not as token deltas.
+  "features.concurrent_reasoning_summaries": true,
 } as const;
 
 // Keep Codex MCP calls longer than GOAT's hour-long wait tools.
