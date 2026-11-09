@@ -41,6 +41,21 @@ vi.mock(import("../../state/entities"), async (original) => ({
     set.add(notify);
     return () => set.delete(notify);
   }) as never,
+  waitForProject: ((ref: ScopedProjectRef) =>
+    new Promise((resolve) => {
+      const key = state.keyOf(ref);
+      const existing = state.projects.get(key);
+      if (existing) return resolve(existing);
+      const set = state.listeners.get(key) ?? new Set<() => void>();
+      state.listeners.set(key, set);
+      const notify = () => {
+        const project = state.projects.get(key);
+        if (!project) return;
+        set.delete(notify);
+        resolve(project);
+      };
+      set.add(notify);
+    })) as never,
 }));
 vi.mock(import("../../hooks/useLoadBalancedEnvironment"), () => ({
   useLoadBalancedEnvironment: (() => ({

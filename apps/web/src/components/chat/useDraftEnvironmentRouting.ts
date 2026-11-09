@@ -2,11 +2,16 @@ import { useLoadBalancedEnvironment } from "../../hooks/useLoadBalancedEnvironme
 import { useLogicalProjectEnvironments } from "../../hooks/useLogicalProjectEnvironments";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { addProjectToMachine } from "../../lib/addProjectToMachine";
+import type { MachineWithoutProject } from "../../lib/runOnArrival";
+import { newProjectId } from "../../lib/utils";
+import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import {
   type EnvironmentId,
   type ProviderDriverKind,
   ProviderInstanceId,
   resolveProjectProviderInstanceEnabled,
+  type ScopedProjectRef,
   type ThreadContextRecord,
 } from "@goat/contracts";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
@@ -18,7 +23,7 @@ import {
 } from "../../logicalProject";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import { type EnvironmentPresentation, useEnvironmentProviders } from "../../state/environments";
-import { useProjects } from "../../state/entities";
+import { useProjects, waitForProject } from "../../state/entities";
 import type { DraftSessionState } from "../../composerDraftStore";
 
 interface DraftEnvironmentRoutingInput {
@@ -27,6 +32,9 @@ interface DraftEnvironmentRoutingInput {
   readonly envLocked: boolean;
   readonly automaticEnvironment: boolean;
   readonly logicalProjectEnvironments: ReturnType<typeof useLogicalProjectEnvironments>;
+  /** Machines without the project; picking one that can clone it brings the project there. */
+  readonly machinesWithoutProject: readonly MachineWithoutProject[];
+  readonly activeProject: EnvironmentProject | null;
   readonly environmentById: ReadonlyMap<EnvironmentId, EnvironmentPresentation>;
   readonly providersByEnvironment: ReturnType<typeof useEnvironmentProviders>;
   readonly loadBalancingSettings: {
@@ -45,7 +53,7 @@ interface DraftEnvironmentRoutingInput {
 /**
  * Which machine an unsent draft runs on: automatic load balancing across the
  * project's machines, or a manual switch, which may first open a scratch
- * project on the target machine.
+ * project on the target machine or clone the project there.
  */
 export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) {
   const {
@@ -54,6 +62,8 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     envLocked,
     automaticEnvironment,
     logicalProjectEnvironments,
+    machinesWithoutProject,
+    activeProject,
     environmentById,
     providersByEnvironment,
     loadBalancingSettings,
@@ -203,11 +213,15 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     const target = logicalProjectEnvironments.find(
       (env) => env.environmentId === nextEnvironmentId,
     );
-    if (!target) return;
-    const request = { environmentId: target.environmentId, scope: environmentChangeScope };
+    const cloneTarget = target
+      ? null
+      : (machinesWithoutProject.find((machine) => machine.environmentId === nextEnvironmentId) ??
+        null);
+    if (!target && cloneTarget?.arrival.kind !== "clone") return;
+    const request = { environmentId: nextEnvironmentId, scope: environmentChangeScope };
     environmentChangeRef.current = request;
     setBusyEnvironmentChange(null);
-    const retarget = (project: (typeof allProjects)[number]) => {
+    const retarget = (project: EnvironmentProject) => {
       const currentDraft = getDraftSession(draftId);
       if (
         environmentChangeRef.current !== request ||
@@ -219,7 +233,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
         currentDraft.projectId !== originalDraft.projectId
       )
         return;
-      const projectRef = scopeProjectRef(target.environmentId, project.id);
+      const projectRef = scopeProjectRef(project.environmentId, project.id);
       if (activeProjectIsScratch) {
         setLogicalProjectDraftThreadId(
           deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings),
@@ -244,6 +258,39 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
       if (environmentChangeRef.current === request) environmentChangeRef.current = null;
       setBusyEnvironmentChange((busy) => (busy === request ? null : busy));
     };
+    if (!target) {
+      if (cloneTarget?.arrival.kind !== "clone" || !activeProject) {
+        finish();
+        return;
+      }
+      const { arrival } = cloneTarget;
+      setBusyEnvironmentChange(request);
+      const clonedRef: ScopedProjectRef = scopeProjectRef(nextEnvironmentId, newProjectId());
+      const name = activeProject.repositoryIdentity?.displayName ?? activeProject.title;
+      // The clone is registered on its machine before the reply, but this client may not
+      // have the project yet; the draft moves once it does, and its composer shows the clone.
+      void addProjectToMachine({
+        source: { environmentId: activeProject.environmentId, cwd: activeProject.workspaceRoot },
+        subdirectory: "",
+        target: { environmentId: nextEnvironmentId, label: cloneTarget.label },
+        projectId: clonedRef.projectId,
+        title: activeProject.title,
+        remoteUrl: arrival.remoteUrl,
+        destinationPath: arrival.destinationPath,
+        files: [],
+      })
+        .then(() => waitForProject(clonedRef))
+        .then(retarget, (cause: unknown) => {
+          if (environmentChangeRef.current !== request) return;
+          toastManager.add({
+            type: "error",
+            title: `Could not clone ${name} to ${cloneTarget.label}`,
+            description: cause instanceof Error ? cause.message : "An error occurred.",
+          });
+        })
+        .finally(finish);
+      return;
+    }
     if (target.projectId !== null) {
       const project = allProjects.find(
         (project) =>

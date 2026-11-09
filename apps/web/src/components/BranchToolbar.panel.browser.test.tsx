@@ -76,6 +76,8 @@ import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import type { SavedSshWorktreeOption } from "../lib/sshWorktree";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
+import type { MachineWithoutProject } from "../lib/runOnArrival";
 
 import { act, render } from "../../test/render";
 
@@ -482,3 +484,123 @@ it.each(LAYOUTS)("keeps blocked SSH hosts visible with the reason in %s", async 
     await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
   }
 });
+
+const MACHINES_WITHOUT_PROJECT: MachineWithoutProject[] = [
+  {
+    environmentId: EnvironmentId.make("studio"),
+    projectId: null,
+    label: "Mac Studio",
+    isPrimary: false,
+    machine: "desktop",
+    arrival: {
+      kind: "clone",
+      remoteUrl: "git@github.com:goat-si/direction-board.git",
+      destinationPath: "~/code/direction-board",
+    },
+  },
+  {
+    environmentId: EnvironmentId.make("ssh"),
+    projectId: null,
+    label: "macmini",
+    isPrimary: false,
+    machine: "server",
+    arrival: { kind: "ssh", destination: sshOption.destination },
+  },
+  {
+    environmentId: EnvironmentId.make("lidge"),
+    projectId: null,
+    label: "lidge-ai",
+    isPrimary: false,
+    machine: "server",
+    arrival: { kind: "unavailable", reason: "No git remote to clone from" },
+  },
+];
+
+it.each(LAYOUTS)(
+  "Run on brings the project to a machine without it, or says why not, in %s",
+  async (layout) => {
+    await using screen = await setup();
+    state.serverThread = false;
+    const onEnvironmentChange = vi.fn();
+    const onSshDestinationChange = vi.fn();
+    const local = EnvironmentId.make("local");
+    const props = {
+      availableEnvironments: [
+        {
+          environmentId: local,
+          projectId: ProjectId.make("source"),
+          label: "MacBook Pro",
+          isPrimary: true,
+          machine: "laptop" as const,
+        },
+      ],
+      environmentsWithoutProject: MACHINES_WITHOUT_PROJECT,
+      onEnvironmentChange,
+      onSshDestinationChange,
+    };
+    await act(
+      async () =>
+        await screen.rerender(
+          layout === "wide" ? (
+            <BranchToolbarEnvironmentSelector
+              envLocked={false}
+              environmentId={local}
+              {...props}
+              onArriveOnMachine={(machine) =>
+                machine.arrival.kind === "clone"
+                  ? onEnvironmentChange(machine.environmentId)
+                  : machine.arrival.kind === "ssh"
+                    ? onSshDestinationChange(machine.arrival.destination)
+                    : undefined
+              }
+            />
+          ) : (
+            <BranchToolbar
+              projectId={ProjectId.make("source")}
+              worktreePath={null}
+              isServerThread={false}
+              layout={layout}
+              panelSection="workspace"
+              environmentId={local}
+              threadId={ThreadId.make("thread")}
+              showGitControls
+              envMode="worktree"
+              envLocked={false}
+              startFromOrigin={false}
+              onStartFromOriginChange={vi.fn()}
+              onEnvModeChange={vi.fn()}
+              {...props}
+            />
+          ),
+        ),
+    );
+    const role = layout === "wide" ? "option" : "menuitem";
+    const open = () =>
+      userEvent.click(
+        layout === "wide"
+          ? screen.container.querySelector<HTMLElement>('[aria-label="Run on"]')!
+          : screen.workspaceTrigger(layout),
+      );
+    const row = (text: string) =>
+      [...document.querySelectorAll<HTMLElement>(`[role="${role}"]`)].find(
+        (node) => node.textContent === text,
+      );
+
+    await open();
+    await vi.waitFor(() => expect(row("Mac StudioClone to ~/code/direction-board")).toBeDefined());
+    const blocked = row("lidge-aiNo git remote to clone from")!;
+    expect(blocked.getAttribute("aria-disabled")).toBe("true");
+    blocked.click();
+    await userEvent.click(row("Mac StudioClone to ~/code/direction-board")!);
+    expect(onEnvironmentChange).toHaveBeenCalledWith(EnvironmentId.make("studio"));
+
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="listbox"], [role="menu"]')).toBeNull(),
+    );
+    await open();
+    await vi.waitFor(() => expect(row("macminiCopy over SSH")).toBeDefined());
+    await userEvent.click(row("macminiCopy over SSH")!);
+    expect(onSshDestinationChange).toHaveBeenCalledWith(sshOption.destination);
+    expect(onEnvironmentChange).toHaveBeenCalledTimes(1);
+  },
+);
