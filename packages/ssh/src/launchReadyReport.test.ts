@@ -63,6 +63,9 @@ const PREFIX = [
   "uname() { printf 'MINGW64_NT\\n'; }",
   "date() { printf '4102444800\\n'; }",
   'ps() { cat "$HOME/ps-rows"; }',
+  // The runner's digest is the first step of each live key; with hide-record-once the record is
+  // moved aside at the first one, the key read before the report call.
+  'shasum() { if [ -e "$HOME/hide-record-once" ]; then rm "$HOME/hide-record-once"; mv "$HOME/.goat/userdata/server-runtime.json" "$HOME/held-record"; fi; command shasum "$@" 2>/dev/null || sha256sum "$3"; }',
   'cygpath() { echo "cygpath $*" >>"$HOME/calls"; return 1; }',
   "",
 ].join("\n");
@@ -279,6 +282,12 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
 
   it.effect.each([
     {
+      // Present for the record wait, gone at the key read before the call, back during the call.
+      name: "the record absent at the key read before the call and written during it",
+      hide: true,
+      during: 'mv "$HOME/held-record" "$HOME/.goat/userdata/server-runtime.json"; ',
+    },
+    {
       name: "the record's start key absent before the call and appearing during it",
       rows: PS_HEADER,
       during: "printf '%s' '" + PS_ROW + '\' >>"$HOME/ps-rows"; ',
@@ -315,12 +324,19 @@ describe("the launch's readiness wait reports the first pairing's facts", () => 
   ])("$name: the server is ready and nothing is recorded", (c) =>
     Effect.gen(function* () {
       const f = yield* fixture();
+      if (c.hide === true) yield* f.write("hide-record-once", "");
       if (c.rows !== undefined) yield* f.write("ps-rows", c.rows);
       if (c.lines !== undefined) yield* f.write("report", report(c.lines));
       if (c.during !== undefined) yield* f.write("report.sh", c.during + 'cat "$HOME/report"');
       assert.deepEqual(yield* f.launch(), ["launch-ready"]);
       assert.deepEqual(yield* f.asked(), ["caps", "report"]);
       assert.deepEqual(yield* f.facts(), ["caps." + version + ".exe"]);
+      // The record was moved aside at the key read and restored by the call.
+      if (c.hide === true) {
+        assert.notInclude(yield* f.list("."), "hide-record-once");
+        assert.notInclude(yield* f.list("."), "held-record");
+        assert.include(yield* f.list(".goat/userdata"), "server-runtime.json");
+      }
     }).pipe(Effect.scoped),
   );
 
