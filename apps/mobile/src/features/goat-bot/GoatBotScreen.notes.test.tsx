@@ -184,6 +184,9 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
 }));
 vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
+// A member's model menu reads server config and native menus this test does not load.
+vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (atom: string | null) =>

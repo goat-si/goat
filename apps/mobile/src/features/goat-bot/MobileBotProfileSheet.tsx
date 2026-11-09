@@ -13,6 +13,8 @@ export function MobileBotProfileSheet(props: {
   readonly onClose: () => void;
   /** More fields after the profile, such as a new bot's model. */
   readonly children?: ReactNode;
+  /** One of those fields changed, so a save goes through with no profile change. */
+  readonly extraChanged?: boolean;
 }) {
   const [name, setName] = useState(props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
@@ -25,7 +27,7 @@ export function MobileBotProfileSheet(props: {
   const save = async () => {
     if (saveDisabled) return;
     const changes = botProfileChanges(props.mode, props.initial, { name, avatar, purpose });
-    if (Object.keys(changes).length === 0) return props.onClose();
+    if (Object.keys(changes).length === 0 && props.extraChanged !== true) return props.onClose();
     setBusy(true);
     setError(null);
     const failure = await props.onSubmit(changes);

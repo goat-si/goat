@@ -21,7 +21,11 @@ const state = vi.hoisted(() => ({
   sheet: null as null | {
     mode: string;
     onSubmit: (changes: object) => Promise<string | null>;
+    onClose: () => void;
+    extraChanged?: boolean;
   },
+  modelEditable: true,
+  pickModel: null as null | ((model: object | null) => void),
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -53,15 +57,26 @@ vi.mock("./MobileBotRosterView", () => ({
   },
 }));
 vi.mock("./useMobileBotManage", () => ({ useMobileBotManage: () => state.manage }));
-vi.mock("./MobileNewBotModel", () => ({ MobileNewBotModel: () => null }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({
+  useMobileGoatBotMemberModelEditable: () => ({ editable: state.modelEditable }),
+}));
+vi.mock("./MobileNewBotModel", () => ({
+  MobileNewBotModel: (props: { onChange: (model: object | null) => void }) => {
+    state.pickModel = props.onChange;
+    return null;
+  },
+}));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "request-1" }));
 vi.mock("./MobileBotProfileSheet", () => ({
   MobileBotProfileSheet: (props: {
     mode: string;
     onSubmit: (changes: object) => Promise<string | null>;
+    onClose: () => void;
+    extraChanged?: boolean;
+    children?: React.ReactNode;
   }) => {
     state.sheet = props;
-    return null;
+    return <>{props.children}</>;
   },
 }));
 import { MobileBotRoster } from "./MobileBotRosterPanel";
@@ -166,5 +181,45 @@ it("creates a bot from New bot with one request id and opens its conversation", 
     kind: "member",
     profile: { botId: "research", name: "Research" },
   });
+  await act(async () => root.unmount());
+});
+
+it("changes a member's model from Edit only where its server takes the change", async () => {
+  state.alert.mockClear();
+  state.manage.update.mockClear();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () =>
+    root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} onOpenChild={() => {}} />),
+  );
+  const members = state.members as { onLongPressBot: (entry: object) => void };
+  const profile = { ...member, role: "member", defaultModelSelection: null };
+  const luna = { instanceId: "codex", model: "luna" };
+  const edit = async () => {
+    state.pickModel = null;
+    await act(async () => members.onLongPressBot({ kind: "member", profile }));
+    await act(async () => choose("Edit"));
+  };
+
+  await edit();
+  expect(state.sheet?.extraChanged).toBe(false);
+  await act(async () => state.pickModel?.(luna));
+  // A model alone is a change worth saving.
+  expect(state.sheet?.extraChanged).toBe(true);
+  await act(async () => {
+    await state.sheet?.onSubmit({});
+  });
+  expect(state.manage.update).toHaveBeenLastCalledWith(profile, {}, luna);
+  await act(async () => state.sheet?.onClose());
+
+  // An older server drops the model, so the sheet neither offers nor sends one.
+  state.modelEditable = false;
+  await edit();
+  expect(state.pickModel).toBeNull();
+  await act(async () => {
+    await state.sheet?.onSubmit({ name: "Research 2" });
+  });
+  expect(state.manage.update).toHaveBeenLastCalledWith(profile, { name: "Research 2" }, undefined);
+  state.modelEditable = true;
   await act(async () => root.unmount());
 });

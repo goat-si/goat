@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  goatBotName,
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
@@ -45,6 +46,12 @@ import { MobileBotComputer } from "./MobileBotComputer";
 import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
+import { GoatBotMemberModelAndroidMenu } from "./GoatBotMemberModelAndroidMenu";
+import {
+  goatBotMemberModelHeaderItem,
+  goatBotMemberModelHeaderKey,
+} from "./goatBotMemberModelHeader";
+import { useMobileGoatBotMemberModelMenu } from "./useMobileGoatBotMemberModel";
 
 const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
 
@@ -95,6 +102,7 @@ export function MobileBotWork(props: {
   /** A member bot's work; the main bot's when absent. */
   readonly member?: {
     readonly botId: BotId;
+    readonly environmentId: EnvironmentId;
     readonly threadId: ThreadId;
     readonly name: string;
     readonly defaultModelSelection: BotProfile["defaultModelSelection"];
@@ -120,6 +128,8 @@ export function MobileBotWork(props: {
   const enabled = selected?.connected === true && capabilities?.goatBotTaskThreads === true;
   const member = props.member ?? null;
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
+  // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
+  const memberModel = useMobileGoatBotMemberModelMenu(member, goatBotName(props.main ?? null));
   const threads = useEnvironmentQuery(
     environmentId && enabled && (member === null || capabilities?.goatBotMembers === true)
       ? channelEnvironment.listBotThreads({
@@ -278,7 +288,7 @@ export function MobileBotWork(props: {
       ) : Platform.OS === "ios" ? (
         // The chat's header carries Work on its trailing side, like the web header's button.
         <NativeStackScreenOptions
-          optionsVersion={botName}
+          optionsVersion={`${botName}:${goatBotMemberModelHeaderKey(memberModel)}`}
           options={{
             unstable_headerRightItems: () => [
               withNativeGlassHeaderItem({
@@ -288,18 +298,22 @@ export function MobileBotWork(props: {
                 onPress: () => setOpen(true),
                 type: "button" as const,
               }),
+              ...(memberModel ? [goatBotMemberModelHeaderItem(memberModel)] : []),
             ],
           }}
         />
       ) : (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Open ${botName} work`}
-          onPress={() => setOpen(true)}
-          className="min-h-[44px] self-end justify-center px-4 py-2"
-        >
-          <Text className="text-foreground">Work</Text>
-        </Pressable>
+        <View className="flex-row items-center justify-end">
+          {memberModel ? <GoatBotMemberModelAndroidMenu menu={memberModel} /> : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${botName} work`}
+            onPress={() => setOpen(true)}
+            className="min-h-[44px] justify-center px-4 py-2"
+          >
+            <Text className="text-foreground">Work</Text>
+          </Pressable>
+        </View>
       )}
       <Modal
         visible={open}

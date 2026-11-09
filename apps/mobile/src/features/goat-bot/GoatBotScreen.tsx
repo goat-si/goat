@@ -380,6 +380,7 @@ export function GoatBotScreen(props: {
             member
               ? {
                   botId: member.botId,
+                  environmentId: member.environmentId,
                   threadId: member.sessionThreadId,
                   name: member.name,
                   defaultModelSelection: member.defaultModelSelection,

@@ -63,12 +63,20 @@ export function useMobileBotManage(environmentId: EnvironmentId | null, botName 
         ? result.value.bot
         : botManageFailure(squashAtomCommandFailure(result));
     },
-    /** Resolves to null when saved, else the message to show in the sheet. */
-    update: async (bot: BotProfile, changes: Partial<BotProfileValues>) => {
+    /** Resolves to null when saved, else the message to show in the sheet. A model is sent only when given. */
+    update: async (
+      bot: BotProfile,
+      changes: Partial<BotProfileValues>,
+      model?: BotProfile["defaultModelSelection"],
+    ) => {
       if (environmentId === null) return `${botName}'s computer isn't connected.`;
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.updateBot, {
         environmentId,
-        input: { botId: bot.botId, ...changes },
+        input: {
+          botId: bot.botId,
+          ...changes,
+          ...(model === undefined ? {} : { defaultModelSelection: model }),
+        },
       });
       return result._tag === "Success" ? null : botManageFailure(squashAtomCommandFailure(result));
     },
