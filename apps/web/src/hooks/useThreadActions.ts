@@ -35,7 +35,7 @@ import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
-import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
+import { clearThreadDraftsDeletedWith, readThreadsDeletedWith } from "../lib/threadChildDrafts";
 import { readLocalApi } from "../localApi";
 import {
   readEnvironmentSupportsAutoSettleOptOut,
@@ -331,13 +331,16 @@ export function useThreadActions() {
     reportFailure: false,
     refresh: true,
   });
+  const loadThreadFamily = useAtomQueryRunner(orchestrationEnvironment.threadFamily, {
+    reportFailure: false,
+    refresh: true,
+  });
   const refreshVcsStatus = useAtomCommand(vcsEnvironment.refreshStatus, {
     reportFailure: false,
   });
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
   const confirmThreadUnpin = useClientSettings((settings) => settings.confirmThreadUnpin);
-  const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
   );
@@ -447,16 +450,23 @@ export function useThreadActions() {
     if (permissionFailure) return permissionFailure;
     const resolved = resolveThreadTarget(target);
     if (!resolved) {
+      // Read the family before the delete, while the side chats still exist.
+      const deletedWith = await readThreadsDeletedWith(target, async () => {
+        const family = await loadThreadFamily({
+          environmentId: target.environmentId,
+          input: { threadId: target.threadId },
+        });
+        return family._tag === "Success" ? family.value.threads : null;
+      });
       const result = await deleteThreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId },
       });
       if (result._tag === "Success") {
+        clearThreadDraftsDeletedWith(target, deletedWith);
         expireThreadUndos(target, [...LIST_PLACEMENT_UNDO_KINDS, "archive"]);
         refreshArchivedThreadsForEnvironment(target.environmentId);
         useGlobalAgentStore.getState().clearIfThread(target);
-        releaseComposerDraftUploads(target);
-        clearComposerDraftForThread(target);
         clearTerminalUiState(target);
         clearDeletedThreadPanelState(target);
       }
@@ -577,8 +587,8 @@ export function useThreadActions() {
     expireThreadUndos(threadRef, [...LIST_PLACEMENT_UNDO_KINDS, "archive"]);
     refreshArchivedThreadsForEnvironment(threadRef.environmentId);
     useGlobalAgentStore.getState().clearIfThread(threadRef);
-    releaseComposerDraftUploads(threadRef);
-    clearComposerDraftForThread(threadRef);
+    // The server deletes the thread's side chats with it.
+    clearThreadDraftsDeletedWith(threadRef, threads);
     clearProjectDraftThreadById(
       scopeProjectRef(threadRef.environmentId, thread.projectId),
       threadRef,
