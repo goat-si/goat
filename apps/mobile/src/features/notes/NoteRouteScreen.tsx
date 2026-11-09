@@ -530,6 +530,7 @@ function NoteContent(props: NoteParams) {
             </View>
           ) : (
             <NativeScrollView
+              contentInsetAdjustmentBehavior="automatic"
               style={{ flexGrow: 0, maxHeight: "45%" }}
               keyboardShouldPersistTaps="handled"
               contentContainerClassName="gap-3 p-4"

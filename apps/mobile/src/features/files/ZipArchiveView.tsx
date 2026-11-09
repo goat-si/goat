@@ -811,7 +811,10 @@ function ZipEntryView(props: {
         </Toolbar>
       )}
       {content.status === "failed" ? (
-        <ScrollView contentContainerClassName="flex-grow items-center justify-center px-6">
+        <ScrollView
+          contentInsetAdjustmentBehavior="automatic"
+          contentContainerClassName="flex-grow items-center justify-center px-6"
+        >
           <EmptyState
             variant="plain"
             title={content.title}
