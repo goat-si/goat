@@ -4,11 +4,18 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import { scopedProjectKey } from "@goat/client-runtime/environment";
+import {
+  getAddProjectInitialQuery,
+  getCloneDestinationPath,
+  getCloneDirectoryPath,
+} from "@goat/client-runtime/operations/projects";
+import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import type {
   EnvironmentId,
   ProjectCloneSnapshot,
   ProjectId,
   ScopedProjectRef,
+  ServerSettings,
 } from "@goat/contracts";
 import { create } from "zustand";
 
@@ -16,6 +23,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjectClonesAtom, silenceProjectCloneToasts } from "../state/projectClones";
 import { projectEnvironment } from "../state/projects";
 import { sourceControlEnvironment } from "../state/sourceControl";
+import { vcsEnvironment } from "../state/vcs";
 
 /** Matches the server's read cap: a larger file would arrive truncated. */
 export const COPYABLE_FILE_MAX_BYTES = 1024 * 1024;
@@ -26,6 +34,26 @@ const DEFAULT_COPIED_FILE_NAME = /^(?:\.env(?:\..+)?|\.envrc|\.dev\.vars)$/;
 export function isDefaultCopiedFile(path: string): boolean {
   const name = path.split("/").at(-1) ?? path;
   return DEFAULT_COPIED_FILE_NAME.test(name);
+}
+
+/** The remote another machine clones the project from, or null without one. */
+export function projectRemoteUrl(project: EnvironmentProject | null): string | null {
+  return (
+    project?.repositoryIdentity?.origin?.remoteUrl ??
+    project?.repositoryIdentity?.locator.remoteUrl ??
+    null
+  );
+}
+
+/** Where a clone lands on the target unless the user picks a folder: its add-project folder. */
+export function defaultCloneDestination(
+  remoteUrl: string,
+  settings: Pick<ServerSettings, "addProjectBaseDirectory" | "ghqCloneLayout"> | undefined,
+): string {
+  return getCloneDestinationPath(
+    getAddProjectInitialQuery(settings?.addProjectBaseDirectory),
+    getCloneDirectoryPath(remoteUrl, settings?.ghqCloneLayout === true),
+  );
 }
 
 export interface AddProjectToMachineInput {
@@ -143,7 +171,6 @@ export async function addProjectToMachine(input: AddProjectToMachineInput): Prom
     setFileCopy(copyKey, null);
     throw new Error(failureMessage(started));
   }
-  if (reads.length === 0) return;
 
   void (async () => {
     const clone = await waitForClone(input.target.environmentId, input.projectId);
@@ -151,6 +178,14 @@ export async function addProjectToMachine(input: AddProjectToMachineInput): Prom
       setFileCopy(copyKey, null);
       return;
     }
+    // Branch lists read while the folder was still empty are cached; New worktree needs the real ones.
+    await runAtomCommand(
+      appAtomRegistry,
+      vcsEnvironment.refreshStatus,
+      { environmentId: input.target.environmentId, input: { cwd: started.value.cwd } },
+      { label: "Refresh cloned project", reportFailure: false },
+    );
+    if (reads.length === 0) return;
     const failed: Array<string> = [];
     for (const read of reads) {
       if (!("contents" in read)) {

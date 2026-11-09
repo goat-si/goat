@@ -166,6 +166,15 @@ under **Settings → Threads** (or **Source control** on mobile). Clones then de
 `<host>/<owner>/<repo>` under **Add project starts in**, so set that to `~/ghq` to share ghq's
 folders. You can still change the destination before cloning.
 
+To work on a project on another connected machine, pick that machine under **Run on** in a new
+thread. Machines without the project say what picking them does: **Clone to** a folder clones the
+project's Git remote into that machine's **Add project starts in** folder, and the draft moves there
+with what you typed and your Workspace choice, so **New worktree** starts from the fresh clone.
+Sending waits for the clone, which you can cancel or retry from the banner above the composer. To
+choose another folder or bring ignored files such as `.env`, use **Add to another machine** in the
+same menu instead. A project without a remote shows **Copy over SSH** when that machine has a saved
+SSH connection; that is the same as choosing it under **Work on SSH**, which needs the desktop app.
+
 For a local Git repository without a remote, **Publish Repository** creates a hosted repository,
 adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
 make your first commit before pushing.
