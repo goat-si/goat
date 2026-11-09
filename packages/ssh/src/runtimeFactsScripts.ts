@@ -64,6 +64,29 @@ file_sig_set() {
   esac
 }
 file_sig() { file_sig_set "$1" && printf '%s' "$FILE_SIG"; }
+# Sets FILE_SIG and FILE_SIG2 for regular files $1 and $2 as file_sig_set does, from one stat
+# start; anything but two valid lines sets neither.
+file_sigs_set() {
+  FILE_SIG=; FILE_SIG2=
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -f "$2" ] && [ ! -L "$2" ] || return 1
+  if [ "$fact_stat" = bsd ]; then
+    sig_value="$(stat -f '%d:%i:%z:%m:%c' "$1" "$2" 2>/dev/null)" ||
+      sig_value="$(stat -c '%d:%i:%s:%Y:%Z' "$1" "$2" 2>/dev/null)" || return 1
+  else
+    sig_value="$(stat -c '%d:%i:%s:%Y:%Z' "$1" "$2" 2>/dev/null)" ||
+      sig_value="$(stat -f '%d:%i:%z:%m:%c' "$1" "$2" 2>/dev/null)" || return 1
+  fi
+  case "$sig_value" in *"$fact_nl"*) ;; *) return 1 ;; esac
+  sig_first="\${sig_value%%"$fact_nl"*}"; sig_second="\${sig_value#*"$fact_nl"}"
+  for sig_value in "$sig_first" "$sig_second"; do
+    case "$sig_value" in
+      *[!0123456789:]*|:*|*:|*::*|*:*:*:*:*:*) return 1 ;;
+      *:*:*:*:*) ;;
+      *) return 1 ;;
+    esac
+  done
+  FILE_SIG="$sig_first"; FILE_SIG2="$sig_second"
+}
 # A remembered key holds only while its executable keeps the signature and install marker it had,
 # and a remembered runner keeps its own. Their age gates hold again on a fresh clock: one stepped
 # back makes a same-second rewrite look unchanged. The clock is read after the signatures, so a
@@ -74,9 +97,11 @@ fact_memo_get() {
     IFS= read -r memo_exe && IFS= read -r memo_sig && IFS= read -r memo_path_sig; do
     [ "$memo_path" = "$1" ] || continue
     if [ "$memo_path" != "$memo_exe" ]; then
-      file_sig_set "$memo_path" && [ "$FILE_SIG" = "$memo_path_sig" ] || return 1
+      file_sigs_set "$memo_path" "$memo_exe" && [ "$FILE_SIG" = "$memo_path_sig" ] &&
+        [ "$FILE_SIG2" = "$memo_sig" ] || return 1
+    else
+      file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] || return 1
     fi
-    file_sig_set "$memo_exe" && [ "$FILE_SIG" = "$memo_sig" ] || return 1
     fact_clock || return 1
     [ "$memo_path" = "$memo_exe" ] || [ "\${memo_path_sig##*:}" -lt "$fact_now" ] || return 1
     [ "$(( fact_now - \${memo_sig##*:} ))" -ge 2 ] || return 1
@@ -231,6 +256,11 @@ fact_put() {
 # (column 4 after an optional status letter), with a start shown to the second today and to the
 # day before; the whole row, executable path included, is the key. A server GOAT restarts still
 # misses: it rewrites the runtime record, whose startedAt and instanceId are in the key.
+# Rows are read with shell builtins, as the awk program they replace read them: ps's status is
+# ignored, a leading status letter is dropped and fields join with one space. WINPIDs compare as
+# numbers, as awk compared them: digits without their leading zeros. Any other numeric spelling
+# (5678.0, +5678) or more than 15 digits, beyond which awk's doubles can equate two of them, makes
+# the lookup a miss; ps -W prints neither.
 fact_process_starts() {
   FACT_START=; FACT_START2=
   if [ "$fact_windows" = 0 ]; then
@@ -238,15 +268,38 @@ fact_process_starts() {
     [ -z "$2" ] || FACT_START2="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$2" 2>/dev/null)" || FACT_START2=
     return 0
   fi
-  ps_rows="$(ps -W 2>/dev/null | awk -v a="$1" -v b="$2" '
-    NR > 1 {
-      if ($1 !~ /^[0-9]+$/) { $1 = ""; $0 = $0 }
-      if ($4 == a && ra == "") { $1 = $1; ra = $0 }
-      if (b != "" && $4 == b && rb == "") { $1 = $1; rb = $0 }
-    }
-    END { print ra; print rb }')" || return 0
-  FACT_START="\${ps_rows%%"$fact_nl"*}"
-  case "$ps_rows" in *"$fact_nl"*) FACT_START2="\${ps_rows#*"$fact_nl"}" ;; esac
+  ps_odd=
+  fact_pid_number "$1" || ps_odd=1; ps_a="$FACT_TEXT"
+  fact_pid_number "$2" || ps_odd=1; ps_b="$FACT_TEXT"
+  ps_rows="$(ps -W 2>/dev/null)" || :
+  case "$ps_rows" in *"$fact_nl"*) ps_rows="\${ps_rows#*"$fact_nl"}" ;; *) return 0 ;; esac
+  case "$-" in *f*) ps_glob= ;; *) ps_glob=1; set -f ;; esac
+  ps_ifs="$IFS"; IFS="$fact_nl"
+  for ps_row in $ps_rows; do
+    IFS=" 	"
+    set -- $ps_row
+    case "\${1:-}" in ''|*[!0123456789]*) [ "$#" = 0 ] || shift ;; esac
+    fact_pid_number "\${4:-}" || ps_odd=1
+    [ -n "$FACT_START" ] || [ "$FACT_TEXT" != "$ps_a" ] || FACT_START="$*"
+    [ -z "$ps_b" ] || [ -n "$FACT_START2" ] || [ "$FACT_TEXT" != "$ps_b" ] || FACT_START2="$*"
+  done
+  IFS="$ps_ifs"; [ -z "$ps_glob" ] || set +f
+  [ -z "$ps_odd" ] || { FACT_START=; FACT_START2=; }
+}
+# Sets FACT_TEXT to $1 as awk compares it with a PID: digits lose their leading zeros, and other
+# text stays as it is. False for text awk might read as another number, and for more than 15
+# digits, which a double may not hold exactly.
+fact_pid_number() {
+  FACT_TEXT="$1"
+  case "$1" in
+    '') return 0 ;;
+    *[!0123456789]*)
+      case "$1" in *[0123456789]*|[+-]*) return 1 ;; esac
+      return 0 ;;
+  esac
+  FACT_TEXT="\${1#"\${1%%[!0]*}"}"
+  [ -n "$FACT_TEXT" ] || FACT_TEXT=0
+  case "$FACT_TEXT" in ????????????????*) return 1 ;; esac
 }
 # Sets FACT_TEXT to the digits after the last JSON name $1 (quoted) in $2 that a colon and a
 # number follow, as sed -n 's/.*NAME[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' finds them.
