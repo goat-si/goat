@@ -161,6 +161,8 @@ type Record struct {
 	Sig  []byte
 	B    Body
 	Hash string
+	// Sum is the raw SHA-256 of Body; canonical order compares it as unsigned bytes.
+	Sum [32]byte
 }
 
 func (r *Record) MarshalJSON() ([]byte, error) {
@@ -213,7 +215,8 @@ func (r *Record) Verify() error {
 		return errors.New("mesh: record signature")
 	}
 	r.B = b
-	r.Hash = HashOf(r.Body)
+	r.Sum = sha256.Sum256(r.Body)
+	r.Hash = ident.B64.EncodeToString(r.Sum[:])
 	return nil
 }
 

@@ -184,6 +184,29 @@ func TestSameSetInAnyArrivalOrderGivesTheSameView(t *testing.T) {
 	}
 }
 
+func TestCanonicalOrderComparesRawHashBytesNotBase64Text(t *testing.T) {
+	f := detID(1)
+	b, found := newMesh(t, f)
+	// Find two siblings whose base64url text order disagrees with their raw byte order.
+	var x, y *Record
+	for i := 0; x == nil; i++ {
+		r1 := b.signN(f, 2, TypeName, []*Record{found}, Fields{Subject: pub(f), Name: fmt.Sprintf("a%d", i)})
+		r2 := b.signN(f, 2, TypeName, []*Record{found}, Fields{Subject: pub(f), Name: fmt.Sprintf("b%d", i)})
+		b.recs = b.recs[:1]
+		raw1, _ := ident.B64.DecodeString(r1.Hash)
+		raw2, _ := ident.B64.DecodeString(r2.Hash)
+		if (r1.Hash < r2.Hash) != (bytes.Compare(raw1, raw2) < 0) {
+			x, y = r1, r2
+		}
+	}
+	order := CanonicalOrder([]*Record{found, x, y})
+	first, _ := ident.B64.DecodeString(order[1].Hash)
+	second, _ := ident.B64.DecodeString(order[2].Hash)
+	if bytes.Compare(first, second) > 0 {
+		t.Fatalf("ready records ordered by text: %s before %s", order[1].Hash, order[2].Hash)
+	}
+}
+
 func TestNonMembersAdmitHasNoEffect(t *testing.T) {
 	f, x, y := detID(1), detID(2), detID(3)
 	b, found := newMesh(t, f)
@@ -261,7 +284,7 @@ func TestForkSameSignerAndCounterHasNoEffect(t *testing.T) {
 	r1 := b.signN(f, 2, TypeName, []*Record{found}, Fields{Subject: pub(f), Name: "left"})
 	r2 := b.signN(f, 2, TypeName, []*Record{found}, Fields{Subject: pub(f), Name: "right"})
 	first, second := r1, r2
-	if r2.Hash < r1.Hash {
+	if bytes.Compare(r2.Sum[:], r1.Sum[:]) < 0 {
 		first, second = r2, r1
 	}
 	v := b.view()

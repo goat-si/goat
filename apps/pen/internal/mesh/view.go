@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"bytes"
 	"container/heap"
 	"sort"
 
@@ -74,7 +75,7 @@ func sortMembers(m map[string]Member) []Member {
 type hashHeap []*Record
 
 func (h hashHeap) Len() int           { return len(h) }
-func (h hashHeap) Less(i, j int) bool { return h[i].Hash < h[j].Hash }
+func (h hashHeap) Less(i, j int) bool { return bytes.Compare(h[i].Sum[:], h[j].Sum[:]) < 0 }
 func (h hashHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 func (h *hashHeap) Push(x any)        { *h = append(*h, x.(*Record)) }
 func (h *hashHeap) Pop() any {
@@ -84,7 +85,7 @@ func (h *hashHeap) Pop() any {
 	return r
 }
 
-// CanonicalOrder is Kahn's topological order over prev edges, smallest hash string first among
+// CanonicalOrder is Kahn's topological order over prev edges, smallest raw SHA-256 first among
 // ready records. Records whose prev is not all in the set are left out.
 func CanonicalOrder(recs []*Record) []*Record {
 	byHash := make(map[string]*Record, len(recs))
