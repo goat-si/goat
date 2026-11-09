@@ -122,7 +122,6 @@ import {
 } from "./runtimeMaintenanceScripts.ts";
 import {
   KEEP_EXISTING_RUNNER_INSTALL,
-  REMOTE_LAUNCH_LISTENER_SCRIPT,
   REMOTE_LEGACY_IDENTITY_SCRIPT,
   REMOTE_OWNED_IDENTITY_SCRIPT,
   REMOTE_PROTOCOL_GUARD_SCRIPT,
@@ -131,6 +130,7 @@ import {
   REPLACE_RUNNER_INSTALL,
   VERIFY_OWNED_BEFORE_PUBLICATION,
 } from "./runtimeOwnershipScripts.ts";
+import { REMOTE_LAUNCH_LISTENER_SCRIPT } from "./launchListenerScripts.ts";
 import {
   baseSshArgs,
   buildSshHostSpecEffect,
@@ -835,14 +835,6 @@ wait_ready() {
 NODE
 }
 ${REMOTE_LAUNCH_LISTENER_SCRIPT}
-wait_for_pid_exit() {
-  PID_TO_WAIT="$1"
-  WAIT_COUNT=0
-  while server_alive "$PID_TO_WAIT" && [ "$WAIT_COUNT" -lt 20 ]; do
-    WAIT_COUNT=$((WAIT_COUNT + 1))
-    sleep 0.1
-  done
-}
 reuse_live_server() {
     REMOTE_PORT="$LIVE_PORT"
     if ! wait_ready "@@GOAT_READY_TIMEOUT_MS@@"; then
@@ -1069,7 +1061,7 @@ while [ -z "$REMOTE_PORT" ]; do
      ! server_owns_listener "$REMOTE_PID" "$REMOTE_PORT"; then
     # Only this attempt's exited child and bind error authorize another port selection.
     # Never signal the listener that won the race between pick-port and serve.
-    if ! server_alive "$REMOTE_PID" &&
+    if ! launch_server_alive "$REMOTE_PID" &&
        tail -c "+$((LAUNCH_LOG_OFFSET + 1))" "$LOG_FILE" | grep -q EADDRINUSE; then
       wait "$REMOTE_PID" 2>/dev/null || true
       rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
@@ -1080,7 +1072,7 @@ while [ -z "$REMOTE_PORT" ]; do
       fi
     fi
     database_ahead=0
-    if ! server_alive "$REMOTE_PID"; then
+    if ! launch_server_alive "$REMOTE_PID"; then
       launch_exit=0
       if [ "$GOAT_HOST_WINDOWS" = 0 ]; then wait "$REMOTE_PID" 2>/dev/null || launch_exit=$?; fi
       # Windows launches and runtimes that predate the exit code only leave these errors in the log.
@@ -1096,8 +1088,8 @@ while [ -z "$REMOTE_PORT" ]; do
     else
       printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
     fi
-    if server_alive "$REMOTE_PID"; then server_kill "$REMOTE_PID" || true; fi
-    wait_for_pid_exit "$REMOTE_PID"
+    if launch_server_alive "$REMOTE_PID"; then server_kill "$REMOTE_PID" || true; fi
+    launch_wait_exit "$REMOTE_PID"
     rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
     if [ "$database_ahead" = 1 ]; then
       printf '%s\\n' "$SELECTED_VERSION" >"$DATABASE_AHEAD_FILE.next.$$"
