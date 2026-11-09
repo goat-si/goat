@@ -474,6 +474,10 @@ cleanup_runner_next() {
   release_recovery_lock
   release_replacement_lock
   rm -f "$RUNNER_CANDIDATE_FILE" "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_CANDIDATE_FILE.restore" "$RUNNER_CANDIDATE_FILE.facts"
+  # The launch's capability lookup and readiness report keep their files beside the memo.
+  rm -f "$RUNNER_CANDIDATE_FILE.facts.caps-status" "$RUNNER_CANDIDATE_FILE.facts.caps-out" \\
+    "$RUNNER_CANDIDATE_FILE.facts.caps-answer" "$RUNNER_CANDIDATE_FILE.facts.caps-answer.next" \\
+    "$RUNNER_CANDIDATE_FILE.facts.report"
   rm -f "$STATE_DIR/run-goat.next.$$" || :
   [ -z "$LEGACY_IDENTITY_LINK" ] || rm -f "$LEGACY_IDENTITY_LINK"
   [ -z "$RETAINED_SNAPSHOT_FILE" ] || rm -f "$RETAINED_SNAPSHOT_FILE"
