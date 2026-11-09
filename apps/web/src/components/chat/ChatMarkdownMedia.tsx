@@ -92,7 +92,7 @@ export const WorkspaceMutationIdContext = createContext<string | null | undefine
 /** The environment Markdown media came from; the gallery routes its links there when it opens. */
 export const MarkdownEnvironmentContext = createContext<EnvironmentId | null>(null);
 /** Lets an image inside a link report a failed load to the link, which offers the page beside it. */
-const LinkedImageFailureContext = createContext<(() => void) | null>(null);
+const LinkedImageFailureContext = createContext<((url: string) => void) | null>(null);
 
 function expandableMarkdownImageProps(
   onImageExpand: ((preview: ExpandedImagePreview) => void) | undefined,
@@ -148,10 +148,13 @@ function isWebPageUrl(uri: string): boolean {
 }
 
 /** The web URL of the image a Markdown link wraps. */
-function linkedWebImageUrl(node: HastElement | undefined): string | null {
-  const image = node?.children.find((child) => child.type === "element" && child.tagName === "img");
-  const src = image?.type === "element" ? image.properties.src : undefined;
-  return typeof src === "string" && isWebPageUrl(src) ? src : null;
+/** The web URLs of the images inside a Markdown link, at any depth. */
+function linkedWebImageUrls(node: HastElement | undefined): string[] {
+  return (node?.children ?? []).flatMap((child) => {
+    if (child.type !== "element") return [];
+    const src = child.tagName === "img" ? child.properties.src : undefined;
+    return typeof src === "string" && isWebPageUrl(src) ? [src] : linkedWebImageUrls(child);
+  });
 }
 
 function OpenPageButton(props: { readonly onOpenPage: OpenPage }) {
@@ -240,13 +243,13 @@ function ChatMarkdownImage(props: {
   readonly onRetry?: (() => Promise<unknown>) | undefined;
   /** Offered once the image fails, for a URL that is a web page rather than an image. */
   readonly onOpenPage?: OpenPage | undefined;
+  readonly onLoadError?: (() => void) | undefined;
 }) {
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const environmentId = use(MarkdownEnvironmentContext);
-  const reportLinkedFailure = use(LinkedImageFailureContext);
   const src = props.src ?? loadedSrc;
   const failed = props.sourceFailed === true || (src !== null && failedSrc === src);
   const settled = src !== null && !failed && (!props.standalone || loadedSrc !== null);
@@ -270,7 +273,7 @@ function ChatMarkdownImage(props: {
     onError: () => {
       setFailedSrc(loadingSrc);
       setLoadedSrc(null);
-      reportLinkedFailure?.();
+      props.onLoadError?.();
     },
   });
   const retry = async () => {
@@ -584,6 +587,7 @@ export function ChatMarkdownDirectMedia(props: {
 }) {
   const routed = useEnvironmentMediaRoute(props.environmentId)(props.uri);
   const inLink = use(MarkdownLinkContext);
+  const reportLinkedFailure = use(LinkedImageFailureContext);
   const openInPreview = props.openInPreview;
   const onOpenPage =
     openInPreview && props.kind === "image" && !inLink && isWebPageUrl(props.uri)
@@ -607,6 +611,7 @@ export function ChatMarkdownDirectMedia(props: {
         copyMarkdown={props.copyMarkdown}
         originalUrl={originalUrl}
         style={props.style}
+        mediaIdentity={src ?? `unavailable:${props.uri}`}
         actionsSource={actionsSource}
       />
     );
@@ -627,39 +632,48 @@ export function ChatMarkdownDirectMedia(props: {
       originalUrl={originalUrl}
       onImageExpand={props.onImageExpand}
       onOpenPage={onOpenPage}
+      onLoadError={reportLinkedFailure ? () => reportLinkedFailure(props.uri) : undefined}
     />
   );
 }
 
 /**
- * Wraps a link around a URL image. A button cannot sit inside the link, so when the image fails the
- * page it names is offered beside the link instead.
+ * Wraps a link around URL images. A button cannot sit inside the link, so the page of an image that
+ * fails, or that this device cannot reach, is offered beside the link instead.
  */
 function LinkedImageOpenPage(props: {
   readonly environmentId: EnvironmentId | null;
-  readonly imageUrl: string;
-  readonly onOpenPage: OpenPage;
+  readonly imageUrls: ReadonlyArray<string>;
+  readonly openInPreview: OpenUrlInPreview;
   readonly children: ReactNode;
 }) {
-  const routed = useEnvironmentMediaRoute(props.environmentId)(props.imageUrl);
-  // Keyed by the route, so a reconnect that moves the address tries the image again.
-  const routeKey = routed._tag === "Open" ? routed.url : null;
-  const [failedRoute, setFailedRoute] = useState<string | null>(null);
-  const failed = routeKey === null || failedRoute === routeKey;
+  const route = useEnvironmentMediaRoute(props.environmentId);
+  const routeOf = (url: string) => {
+    const routed = route(url);
+    return routed._tag === "Open" ? routed.url : null;
+  };
+  // Remembers the route it failed on, so a reconnect that moves the address tries the image again.
+  const [failure, setFailure] = useState<{ url: string; route: string } | null>(null);
+  const failedUrl =
+    props.imageUrls.find((url) => routeOf(url) === null) ??
+    (failure !== null && routeOf(failure.url) === failure.route ? failure.url : undefined);
+  const reportFailure = (url: string) => {
+    const failedRoute = routeOf(url);
+    if (failedRoute !== null) setFailure({ url, route: failedRoute });
+  };
   return (
     <>
-      <LinkedImageFailureContext value={() => setFailedRoute(routeKey)}>
-        {props.children}
-      </LinkedImageFailureContext>
-      {failed && (
+      <LinkedImageFailureContext value={reportFailure}>{props.children}</LinkedImageFailureContext>
+      {failedUrl !== undefined && (
         <span data-thread-find-ignore className="ms-2 inline-flex align-middle">
-          <OpenPageButton onOpenPage={props.onOpenPage} />
+          <OpenPageButton onOpenPage={() => props.openInPreview(failedUrl)} />
         </span>
       )}
     </>
   );
 }
-/** Wraps a link that holds only a web image, so a failed image offers its page beside the link. */
+
+/** Wraps a link holding URL images, so a failed image offers its page beside the link. */
 export function withLinkedImagePage(
   link: ReactNode,
   input: {
@@ -668,14 +682,13 @@ export function withLinkedImagePage(
     readonly openInPreview: OpenUrlInPreview | undefined;
   },
 ): ReactNode {
-  const open = input.openInPreview;
-  const imageUrl = open ? linkedWebImageUrl(input.node) : null;
-  if (!open || imageUrl === null) return link;
+  const imageUrls = input.openInPreview ? linkedWebImageUrls(input.node) : [];
+  if (!input.openInPreview || imageUrls.length === 0) return link;
   return (
     <LinkedImageOpenPage
       environmentId={input.environmentId}
-      imageUrl={imageUrl}
-      onOpenPage={() => open(imageUrl)}
+      imageUrls={imageUrls}
+      openInPreview={input.openInPreview}
     >
       {link}
     </LinkedImageOpenPage>

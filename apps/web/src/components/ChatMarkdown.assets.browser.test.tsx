@@ -248,3 +248,38 @@ it("offers a captioned linked image's page beside the link", async () => {
   await vi.waitFor(() => expect(state.openPreview).toHaveBeenCalledWith(PAGE_IMAGE));
   expect(state.openExternal).not.toHaveBeenCalled();
 });
+it("offers the page of the image that failed, among several or nested in a link", async () => {
+  using test = setup({ connection: sshConnection(), previewAllowed: true });
+  await using screen = await renderRemoteMarkdown(
+    test.registry,
+    `[![thumb](https://cdn.test/thumb.png) *![page](${PAGE_IMAGE})*](https://example.test/)`,
+  );
+  const openPage = screen.getByRole("button", { name: "Open page" });
+  await expect.element(openPage).toBeInTheDocument();
+  expect(openPage.element().closest("a")).toBeNull();
+  await openPage.click();
+  await vi.waitFor(() => expect(state.openPreview).toHaveBeenCalledWith(PAGE_IMAGE));
+});
+
+it("drops a playing localhost video's old address when a reconnect leaves it out of reach", async () => {
+  using test = setup({ connection: tailnetConnection() });
+  const markdown = () => (
+    <RegistryContext.Provider value={test.registry}>
+      <ChatMarkdown
+        cwd="/repo"
+        threadRef={{ environmentId: remoteEnvironment, threadId: ThreadId.make("remote-thread") }}
+        text="![clip](http://localhost:5173/clip.mp4)"
+      />
+    </RegistryContext.Provider>
+  );
+  await using screen = await render(markdown());
+  const routed = "http://100.65.180.100:5173/clip.mp4";
+  await vi.waitFor(() =>
+    expect(screen.container.querySelector("video")?.getAttribute("src")).toBe(routed),
+  );
+  await act(async () => screen.container.querySelector("video")!.dispatchEvent(new Event("play")));
+  state.connection = sshConnection();
+  await screen.rerender(markdown());
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Video unavailable"));
+  expect(screen.container.querySelector(`video[src="${routed}"]`)).toBeNull();
+});
