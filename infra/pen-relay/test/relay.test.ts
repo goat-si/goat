@@ -117,7 +117,7 @@ describe("pen relay contract (default limits)", () => {
     silent.close(1000);
   });
 
-  it("a newer authenticated uplink replaces the old one with 4409 and closes its sessions 4404", async () => {
+  it("a newer authenticated uplink replaces the old one with 4409, closes its sessions 4404, and never reuses a sid", async () => {
     const seed = randomSeed();
     const old = await fakeNode(relay.url, seed);
     await old.ready();
@@ -126,8 +126,9 @@ describe("pen relay contract (default limits)", () => {
     expect(await old.closed).toBe(CloseCode.Replaced);
     expect(await c.closed).toBe(CloseCode.Offline);
     await replacement.ready();
+    const seen = [...old.openedSids, ...replacement.openedSids];
     const next = await session(relay, replacement);
-    expect(next.sid).toBeGreaterThan(0);
+    expect(next.sid).toBeGreaterThan(Math.max(...seen));
   });
 
   it("a ninth pending session closes the oldest pending one 4429", async () => {

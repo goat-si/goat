@@ -200,6 +200,8 @@ export interface FakeNode extends Peer {
   readonly nodeId: string;
   readonly frames: Queue<Frame>;
   readonly texts: Queue<string>;
+  /** Every sid this uplink got an OPEN for, readiness probes included. */
+  readonly openedSids: Array<number>;
   /** Resolves once the relay routes clients to this uplink. */
   ready(): Promise<void>;
   send(type: number, sid: number, payload?: Uint8Array): void;
@@ -236,6 +238,7 @@ export async function fakeNode(
   const path = `/v1/node/${options.pathNodeId ?? nodeId}`;
   const url = wsUrl(relay, path);
   const frames = new Queue<Frame>();
+  const openedSids: Array<number> = [];
   const texts = new Queue<string>();
   let challenged = false;
   const peer = connect(
@@ -244,6 +247,7 @@ export async function fakeNode(
     (bytes) => {
       if (challenged) {
         const frame = decodeFrame(bytes);
+        if (frame?.type === FrameType.Open) openedSids.push(frame.sid);
         if (frame) frames.push({ ...frame, payload: frame.payload.slice() });
         return;
       }
@@ -265,6 +269,7 @@ export async function fakeNode(
     ...peer,
     nodeId,
     frames,
+    openedSids,
     texts,
     send: (type, sid, payload) => peer.sendNow(encodeFrame(type, sid, payload)),
     sendRaw: (data) => peer.sendNow(data),

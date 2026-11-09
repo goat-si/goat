@@ -5,27 +5,6 @@ export { Room } from "./room.ts";
 
 const ROUTE = /^\/v1\/(node|client)\/([^/]*)$/;
 
-// A room is created where its first request lands unless hinted. Workers on workers.dev can be
-// served far from the caller (Korea is often routed to LAX), so place it by the caller's continent.
-function locationHint(
-  cf: IncomingRequestCfProperties | undefined,
-): DurableObjectLocationHint | undefined {
-  switch (cf?.continent) {
-    case "AS":
-    case "OC":
-      return "apac";
-    case "EU":
-    case "AF":
-      return "weur";
-    case "SA":
-      return "sam";
-    case "NA":
-      return Number(cf.longitude) < -100 ? "wnam" : "enam";
-    default:
-      return undefined;
-  }
-}
-
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
@@ -42,8 +21,6 @@ export default {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("websocket upgrade required", { status: 426 });
     }
-    const hint = locationHint(request.cf);
-    const id = env.ROOM.idFromName(nodeId);
-    return env.ROOM.get(id, hint === undefined ? undefined : { locationHint: hint }).fetch(request);
+    return env.ROOM.get(env.ROOM.idFromName(nodeId)).fetch(request);
   },
 } satisfies ExportedHandler<Env>;
