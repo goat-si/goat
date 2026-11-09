@@ -46,6 +46,8 @@ describe("Windows launch listener wait", () => {
     "tasklistFails",
     "noFifo",
     "termAfterFifo",
+    "owns",
+    "netstatHang",
   ] as const;
   // Every Windows stand-in logs whether it ran as the bounded job, then its arguments.
   const record = (name: string) =>
@@ -69,8 +71,8 @@ describe("Windows launch listener wait", () => {
       uname: "echo MINGW64_NT-10.0-26200",
       "powershell.exe": [
         record("powershell"),
-        // Without a deadline it is the one-shot listener check, which finds none.
-        '[ -n "$GOAT_WAIT_UNTIL_MS" ] || exit 1',
+        // Without a deadline it is the one-shot listener check, which finds one only when owns is set.
+        'if [ -z "$GOAT_WAIT_UNTIL_MS" ]; then [ -e "$TEST_ROOT/owns" ]; exit; fi',
         'if [ -e "$TEST_ROOT/hang" ]; then',
         "  if [ -e \"$TEST_ROOT/stubborn\" ]; then trap '' TERM; fi",
         '  echo "$$" >"$TEST_ROOT/powershell-pid"; exec /bin/sleep 600',
@@ -96,6 +98,13 @@ describe("Windows launch listener wait", () => {
       "taskkill.exe": [record("taskkill"), 'rm -f "$TEST_ROOT/alive"', hangs("taskkill")].join(
         "\n",
       ),
+      // Prints netstat-out byte for byte, then may stall, then exits with netstat-status.
+      "netstat.exe": [
+        record("netstat"),
+        '[ ! -e "$TEST_ROOT/netstat-out" ] || cat "$TEST_ROOT/netstat-out"',
+        hangs("netstat"),
+        'exit "$(cat "$TEST_ROOT/netstat-status" 2>/dev/null || echo 0)"',
+      ].join("\n"),
       runner: [record("runner"), '[ -e "$TEST_ROOT/ready" ]'].join("\n"),
       // Once the launch's failure path starts (probing) the clock moves only while a hanging
       // stand-in runs, so no bound can run out before a slow host has started or answered one.
@@ -105,7 +114,8 @@ describe("Windows launch listener wait", () => {
         '[ ! -e "$TEST_ROOT/late-fired" ] || { echo 2000; exit 0; }',
         'if [ -e "$TEST_ROOT/probing" ] &&',
         '  ! { [ -e "$TEST_ROOT/tasklistHang" ] && [ -s "$TEST_ROOT/tasklist-pid" ]; } &&',
-        '  ! { [ -e "$TEST_ROOT/taskkillHang" ] && [ -s "$TEST_ROOT/taskkill-pid" ]; }; then',
+        '  ! { [ -e "$TEST_ROOT/taskkillHang" ] && [ -s "$TEST_ROOT/taskkill-pid" ]; } &&',
+        '  ! { [ -e "$TEST_ROOT/netstatHang" ] && [ -s "$TEST_ROOT/netstat-pid" ]; }; then',
         '  cat "$TEST_ROOT/clock"; exit 0',
         "fi",
         'n="$(cat "$TEST_ROOT/clock")"; echo "$((n + 1))" >"$TEST_ROOT/clock"; echo "$n"',
@@ -154,6 +164,7 @@ describe("Windows launch listener wait", () => {
           "tasklist-pid",
           "taskkill-pid",
           "powershell-pid",
+          "netstat-pid",
           "late-fired",
           "end",
         ])
@@ -338,7 +349,8 @@ describe("Windows launch listener wait", () => {
           yield* fs.writeFile(root + "/tasklist-out", bytes);
           const result = yield* run(
             { alive: true },
-            'if launch_server_alive "$REMOTE_PID"; then echo alive; else echo gone; fi',
+            // probing holds the clock, so only a stall could reach tasklist's bound.
+            ': >"$TEST_ROOT/probing"; if launch_server_alive "$REMOTE_PID"; then echo alive; else echo gone; fi',
           );
           yield* fs.remove(root + "/tasklist-out");
           assert.equal(result.code, 0, result.stderr);
@@ -355,6 +367,137 @@ describe("Windows launch listener wait", () => {
       assert.equal(yield* answer(text('"goat.exe","4242","Services","0","1 K"\r\n')), "alive");
       assert.equal(yield* answer(text(info + info)), "alive");
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  // The one-shot ownership check after readiness, as server_owns_listener runs it: netstat's
+  // output (bytes), its exit status and whether it stalls; PowerShell's answer is owns.
+  const ownership = (
+    harness: Effect.Success<typeof makeHarness>,
+    output: string | Uint8Array,
+    options: { pid?: number; port?: number; status?: number; hang?: boolean; owns?: boolean } = {},
+  ) =>
+    Effect.gen(function* () {
+      const { run, root, fs } = harness;
+      yield* fs.writeFile(
+        root + "/netstat-out",
+        typeof output === "string" ? new TextEncoder().encode(output) : output,
+      );
+      yield* fs.writeFileString(root + "/netstat-status", String(options.status ?? 0));
+      const result = yield* run(
+        { netstatHang: options.hang ?? false, owns: options.owns ?? false },
+        [
+          // probing holds the clock, so only the stalled netstat reaches its bound.
+          ': >"$TEST_ROOT/probing"',
+          "REMOTE_PID=" + (options.pid ?? 1234) + "; REMOTE_PORT=" + (options.port ?? 3773),
+          'if server_owns_listener "$REMOTE_PID" "$REMOTE_PORT"; then echo 0; else echo "$?"; fi',
+        ].join("\n"),
+      );
+      assert.equal(result.code, 0, result.stderr);
+      // Both run as the bounded job; netstat with its documented arguments.
+      for (const call of result.calls) assert.match(call, /^1 (netstat -ano -p TCP|powershell )/);
+      return { status: result.stdout, commands: result.calls.map((call) => call.split(" ")[1]) };
+    });
+  const HEADER =
+    "\r\nActive Connections\r\n\r\n  Proto  Local Address          Foreign Address        State           PID\r\n";
+  const row = (local: string, foreign: string, state: string, pid: string, end = "\r\n") =>
+    "  TCP    " + local.padEnd(23) + foreign.padEnd(23) + state.padEnd(16) + pid + end;
+  const LISTENING = row("127.0.0.1:3773", "0.0.0.0:0", "LISTENING", "1234");
+  // Recorded with netstat -ano -p TCP on a Korean Windows 11 host (CP949 header, CRLF lines),
+  // with its non-loopback addresses mapped to documentation ranges and stored with LF endings.
+  const korean = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const lf = yield* fs.readFile(import.meta.dirname + "/fixtures/netstat-ano-tcp-ko.txt");
+    const crlf = Buffer.from(Buffer.from(lf).toString("latin1").replaceAll("\n", "\r\n"), "latin1");
+    return { lf, crlf };
+  });
+
+  it.effect(
+    "a LISTENING row for the server's port and PID proves ownership without PowerShell",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const recorded = yield* korean;
+        const owned = { status: "0", commands: ["netstat"] };
+        // The recorded host's own listener: PID 12308 on 127.0.0.1:2640, among 238 lines.
+        for (const output of [recorded.crlf, recorded.lf])
+          assert.deepEqual(yield* ownership(harness, output, { pid: 12308, port: 2640 }), owned);
+        assert.deepEqual(yield* ownership(harness, HEADER + LISTENING), owned);
+        assert.deepEqual(
+          yield* ownership(harness, HEADER + LISTENING.replace("\r\n", "\n")),
+          owned,
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("netstat output that does not prove ownership leaves the answer to PowerShell", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const recorded = yield* korean;
+      const rejected = {
+        "the recorded output, for another server": [recorded.crlf, { pid: 4242, port: 3773 }],
+        "another PID": [HEADER + row("127.0.0.1:3773", "0.0.0.0:0", "LISTENING", "4321")],
+        "every interface": [HEADER + row("0.0.0.0:3773", "0.0.0.0:0", "LISTENING", "1234")],
+        "IPv6 loopback": [HEADER + row("[::1]:3773", "[::]:0", "LISTENING", "1234")],
+        "a connection": [HEADER + row("127.0.0.1:3773", "127.0.0.1:50000", "ESTABLISHED", "1234")],
+        "ESTABLISHED to 0.0.0.0:0": [
+          HEADER + row("127.0.0.1:3773", "0.0.0.0:0", "ESTABLISHED", "1234"),
+        ],
+        CLOSED: [HEADER + row("127.0.0.1:3773", "0.0.0.0:0", "CLOSED", "1234")],
+        BOUND: [HEADER + row("127.0.0.1:3773", "0.0.0.0:0", "BOUND", "1234")],
+        "a longer port": [HEADER + row("127.0.0.1:37730", "0.0.0.0:0", "LISTENING", "1234")],
+        "a shorter port": [HEADER + row("127.0.0.1:377", "0.0.0.0:0", "LISTENING", "1234")],
+        "a PID the server's is a prefix of": [HEADER + LISTENING, { pid: 123 }],
+        "a PID that is a prefix of the server's": [
+          HEADER + row("127.0.0.1:3773", "0.0.0.0:0", "LISTENING", "123"),
+        ],
+        "an extra field": [HEADER + row("127.0.0.1:3773", "0.0.0.0:0", "LISTENING", "1234 9")],
+        "a final line with no newline": [HEADER + LISTENING.replace("\r\n", "")],
+        "a final line cut before its CR": [HEADER + LISTENING.replace("\n", "")],
+        "a second row for the same address": [
+          HEADER + LISTENING + row("127.0.0.1:3773", "0.0.0.0:0", "LISTENING", "4321"),
+        ],
+      } as const;
+      for (const [name, [output, options = {}]] of Object.entries(rejected)) {
+        assert.deepEqual(
+          yield* ownership(harness, output, options),
+          { status: "1", commands: ["netstat", "powershell"] },
+          name,
+        );
+      }
+      // PowerShell's answer is the answer.
+      assert.deepEqual(yield* ownership(harness, rejected["another PID"][0], { owns: true }), {
+        status: "0",
+        commands: ["netstat", "powershell"],
+      });
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect(
+    "netstat that fails, stalls or answers in another language falls back to PowerShell",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const fallback = { status: "0", commands: ["netstat", "powershell"] };
+        // German Windows prints ABHÖREN for LISTENING (CP850, Ö is 0x99).
+        const german = Buffer.from(
+          "\r\nAktive Verbindungen\r\n\r\n  Proto  Lokale Adresse         Remoteadresse          Status           PID\r\n" +
+            row("127.0.0.1:3773", "0.0.0.0:0", "ABH\x99REN", "1234"),
+          "latin1",
+        );
+        assert.deepEqual(yield* ownership(harness, german, { owns: true }), fallback);
+        assert.deepEqual(yield* ownership(harness, "", { owns: true }), fallback);
+        // A matching row from a netstat that then failed, or stalled and was ended at its bound.
+        assert.deepEqual(
+          yield* ownership(harness, HEADER + LISTENING, { status: 1, owns: true }),
+          fallback,
+        );
+        assert.deepEqual(
+          yield* ownership(harness, HEADER + LISTENING, { hang: true, owns: true }),
+          fallback,
+        );
+        const stalled = yield* harness.pid("netstat-pid");
+        assert.throws(() => process.kill(stalled, 0));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect("a failed launch runs every Windows command bounded and never hangs on one", () =>
@@ -420,7 +563,13 @@ describe("Windows launch listener wait", () => {
       // A ready server that does not own its listener is stopped, with each command bounded.
       const stopped = yield* launchRun({ listening: true, alive: true, ready: true });
       assert.isFalse(stopped.unconfirmed);
-      assert.includeMembers(stopped.commands, ["powershell", "runner", "tasklist", "taskkill"]);
+      assert.includeMembers(stopped.commands, [
+        "powershell",
+        "runner",
+        "netstat",
+        "tasklist",
+        "taskkill",
+      ]);
       assert.deepEqual(yield* fs.readDirectory(root + "/state"), ["server.log"]);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
