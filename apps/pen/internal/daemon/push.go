@@ -118,7 +118,7 @@ func Join(ctx context.Context, st *state.Store, id *ident.Identity, tok mesh.Tok
 	payload := session.Payload{V: 1, Stream: "join", Invite: session.InviteID(tok.Secret), Name: name}
 	var sec *session.Secure
 	for attempt := 0; ; attempt++ {
-		conn, err := relay.Dial(ctx, tok.Relay, nodeID)
+		conn, err := relay.Dial(ctx, tok.Relays[0], nodeID)
 		if err != nil {
 			return nil, fmt.Errorf("relay: %w", err)
 		}

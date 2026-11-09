@@ -235,7 +235,7 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 		fail(err)
 		return
 	}
-	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relay: d.relayURL()}
+	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relays: []string{d.relayURL()}}
 	var wait chan mesh.Member
 	if req.Wait {
 		wait = make(chan mesh.Member, 1)
@@ -248,7 +248,7 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 			d.mu.Unlock()
 		}()
 	}
-	reply(map[string]any{"token": tok.String(), "relay": tok.Relay, "expiresAt": inv.ExpiresAt})
+	reply(map[string]any{"token": tok.String(), "relay": tok.Relays[0], "expiresAt": inv.ExpiresAt})
 	if wait == nil {
 		return
 	}

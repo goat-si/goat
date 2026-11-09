@@ -121,7 +121,7 @@ func (n *node) ls(t *testing.T) LsReply {
 func joiner(t *testing.T, ctx context.Context, rs *relaytest.Server, tok mesh.Token, name string) *node {
 	t.Helper()
 	st := shortDir(t)
-	id := identity(t, st, tok.Relay, name)
+	id := identity(t, st, tok.Relays[0], name)
 	s, err := Join(ctx, st, id, tok, name)
 	if err != nil {
 		t.Fatal(err)

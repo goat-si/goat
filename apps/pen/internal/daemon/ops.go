@@ -118,8 +118,8 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 		return err
 	}
 	d.cfgMu.Lock()
-	changed := d.cfg.Relay != tok.Relay
-	d.cfg.Relay, d.cfg.Name = tok.Relay, name
+	changed := d.cfg.Relay != tok.Relays[0]
+	d.cfg.Relay, d.cfg.Name = tok.Relays[0], name
 	cfg := d.cfg
 	d.cfgMu.Unlock()
 	if err := d.st.SaveConfig(cfg); err != nil {
