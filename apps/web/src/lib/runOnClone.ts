@@ -15,10 +15,11 @@ const pending = new Map<string, Promise<RunOnClone>>();
 
 /**
  * Starts a clone picked under Run on. Until its project reaches this client, another pick of
- * the same machine and folder shares it instead of starting a second clone into that folder.
+ * the same repository, machine and folder shares it. Anything else goes to the server, which
+ * refuses a second clone into a folder it is still cloning into.
  */
 export function cloneForRunOn(input: AddProjectToMachineInput): Promise<RunOnClone> {
-  const key = `${input.target.environmentId}\n${input.destinationPath}`;
+  const key = [input.target.environmentId, input.destinationPath, input.remoteUrl].join("\n");
   const existing = pending.get(key);
   if (existing) return existing;
   const ref = scopeProjectRef(input.target.environmentId, input.projectId);
