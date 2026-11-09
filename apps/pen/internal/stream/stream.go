@@ -236,9 +236,9 @@ func (s *splice) writer(w io.Writer, closeWrite func() error) error {
 		}
 		consumed += len(p)
 		if consumed >= CreditEvery {
-			if err := s.sendCredit(consumed); err != nil {
-				return err
-			}
+			// Best effort: a peer that finished may close before our CREDIT; a dead link surfaces
+			// in the reader, which sees the peer's FIN or the close in order.
+			_ = s.sendCredit(consumed)
 			consumed = 0
 		}
 	}
