@@ -83,7 +83,8 @@ func (d *Daemon) spawn(f func()) {
 type live struct {
 	remote string // Noise static, base64url
 	sec    *session.Secure
-	// deferred sessions (mesh sync) close themselves after their done.
+	// deferred is set on the mesh session that carried its own peer's revoke; it closes itself
+	// after its done.
 	deferred bool
 }
 
@@ -355,12 +356,18 @@ func (d *Daemon) viewChanged() {
 	d.writeKnownHosts(v)
 }
 
-func (d *Daemon) register(l *live) uint64 {
+// register records a live session unless its peer is no longer a member. The check runs under d.mu,
+// which viewChanged's sweep also holds, so a revoke cannot slip between the check and the sweep.
+func (d *Daemon) register(l *live) (uint64, bool) {
+	pub, _ := ident.DecodeKey(l.remote)
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if _, ok := d.view().MemberByNoise(pub); !ok {
+		return 0, false
+	}
 	d.nextLive++
 	d.sessions[d.nextLive] = l
-	return d.nextLive
+	return d.nextLive, true
 }
 
 func (d *Daemon) unregister(k uint64) {

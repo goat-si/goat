@@ -4,9 +4,9 @@ package relaytest
 
 import (
 	"context"
-	"errors"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
