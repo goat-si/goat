@@ -41,7 +41,7 @@ const compatLine = async (port: number, liveInstance: unknown) => {
  * `protocol --shell` for the live server, then `compat` on the port that live answer named.
  * The host script validates the whole frame before it uses or records any line.
  */
-export const readSshRuntimeFactsFrame = async (input: {
+const readSshRuntimeFactsFrame = async (input: {
   readonly runtimeFile: string;
   readonly portFile: string;
   readonly pidFile: string;
