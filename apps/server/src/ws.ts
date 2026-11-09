@@ -289,7 +289,7 @@ import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
-import { makeProviderInstallation } from "./provider/providerInstallation.ts";
+import * as ProviderInstallation from "./provider/providerInstallation.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
@@ -1413,7 +1413,7 @@ export const layerWsRpc = (
         yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const providerAuth = yield* ProviderAuthService.ProviderAuthService;
-      const providerInstallation = yield* makeProviderInstallation();
+      const providerInstallation = yield* ProviderInstallation.ProviderInstallation;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;

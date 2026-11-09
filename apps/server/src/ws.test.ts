@@ -125,6 +125,7 @@ import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
+import * as ProviderInstallation from "./provider/providerInstallation.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
@@ -220,7 +221,6 @@ it.effect("resends a file manager reveal kind that missed the snapshot", () =>
     }
   }),
 );
-
 it.effect("sends a Defender result that missed the snapshot, once", () =>
   Effect.gen(function* () {
     const health = {
@@ -236,7 +236,6 @@ it.effect("sends a Defender result that missed the snapshot, once", () =>
       },
       Stream.make(health, health),
     ).pipe(Stream.runCollect);
-
     const snapshots = Array.from(events).filter((event) => event.type === "snapshot");
     assert.equal(snapshots.length, 1);
     const [late] = snapshots;
@@ -259,14 +258,12 @@ it.effect("tells config subscribers when a held copy's automation is resumed, on
       // The hold stream replays the state the snapshot already carries, then the release.
       Stream.make(hold, null, null),
     ).pipe(Stream.runCollect);
-
     const snapshots = Array.from(events).filter((event) => event.type === "snapshot");
     assert.equal(snapshots.length, 1);
     const [late] = snapshots;
     if (late?.type === "snapshot") assert.equal(late.config.automationHold, null);
   }),
 );
-
 it.effect("SSH workspace handlers delegate once and preserve typed errors", () =>
   Effect.gen(function* () {
     const group = WsRpcGroup.omit(
@@ -858,6 +855,8 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
   Layer.mock(AnalyticsService.AnalyticsService)({}),
   Layer.mock(AntigravityInstallation.AntigravityInstallation)({ managedDirectory: "/unused" }),
+  Layer.mock(ProviderInstallation.ProviderInstallation)({}),
+  Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
   Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
   Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
   Layer.mock(CloudProviderAutoSetup.CloudProviderAutoSetup)({ apply: Effect.succeed([]) }),
