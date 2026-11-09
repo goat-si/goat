@@ -364,14 +364,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact age gate 
         NodeFS.mkdirSync(home + "/bin");
         NodeFS.writeFileSync(dir + "/goat", "#!/bin/sh\n", { mode: 0o755 });
         NodeFS.writeFileSync(dir + "/.install-complete", "1.2.3");
-        // stat reports the executable's ctime as $HOME/age seconds ago; date counts its starts and
-        // fails while $HOME/date-fails exists, after printing the time while $HOME/date-prints does.
+        // stat reports the executable's ctime as the fixed second in $HOME/ctime; date counts its
+        // starts and fails while $HOME/date-fails exists, after printing the time while
+        // $HOME/date-prints does.
         NodeFS.writeFileSync(
           home + "/bin/stat",
           [
             "#!/bin/sh",
             'sig="$(/usr/bin/stat "$@")" || exit 1',
-            'echo "${sig%:*}:$(( $(/bin/date +%s) - $(cat "$HOME/age") ))"',
+            'echo "${sig%:*}:$(cat "$HOME/ctime")"',
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
@@ -386,8 +387,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact age gate 
           ].join("\n") + "\n",
           { mode: 0o755 },
         );
-        const key = (age: number, dateFails: "" | "date-fails" | "date-prints" = "") => {
-          NodeFS.writeFileSync(home + "/age", String(age));
+        const key = (ctime: number, dateFails: "" | "date-fails" | "date-prints" = "") => {
+          NodeFS.writeFileSync(home + "/ctime", String(ctime));
           NodeFS.writeFileSync(home + "/dates", "");
           for (const mode of ["date-fails", "date-prints"])
             NodeFS.rmSync(home + "/" + mode, { force: true });
@@ -412,19 +413,20 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact age gate 
             .filter(Boolean);
           return { verdict: result.stdout.trim(), dates: dates.length };
         };
-        // A fresh read for every check: each keying reads the clock once. stat and the gate read the
-        // real clock separately, so only ages a tick cannot cross are asserted here; the 2 s boundary
-        // is the fixed-clock test's below.
+        // A fresh read for every check: each keying reads the clock once. Bash 5's EPOCHSECONDS
+        // cannot be set, so the ctimes are fixed far from any real clock: January 1970 keys and the
+        // year 2096 does not. The 2 s boundary is the fixed-clock test's below.
         const reads = epoch ? 0 : 1;
-        assert.deepEqual(key(10), { verdict: "keyed", dates: reads });
-        assert.deepEqual(key(-100), { verdict: "unkeyed", dates: reads });
+        const past = 1_000_000;
+        assert.deepEqual(key(past), { verdict: "keyed", dates: reads });
+        assert.deepEqual(key(4_000_000_000), { verdict: "unkeyed", dates: reads });
         // A clock that cannot be read keys nothing, as before; EPOCHSECONDS needs no date.
-        assert.deepEqual(key(10, "date-fails"), {
+        assert.deepEqual(key(past, "date-fails"), {
           verdict: epoch ? "keyed" : "unkeyed",
           dates: reads,
         });
         // A date that prints a time but fails is unread too.
-        assert.deepEqual(key(10, "date-prints"), {
+        assert.deepEqual(key(past, "date-prints"), {
           verdict: epoch ? "keyed" : "unkeyed",
           dates: reads,
         });
