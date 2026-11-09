@@ -24,7 +24,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
-import { GoatBotSessionAvatar } from "./GoatBotAvatar";
+import { GoatBotSessionAvatar, goatBotMemberPicture } from "./GoatBotAvatar";
 import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { useBotManage } from "./useBotManage";
@@ -179,7 +179,7 @@ function GoatBotMemberRow({
           size="sm"
           place="list"
           waitingCount={count}
-          emoji={bot.avatar}
+          emoji={goatBotMemberPicture(bot)}
           threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
         />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
