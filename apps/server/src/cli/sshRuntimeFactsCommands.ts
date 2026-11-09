@@ -77,7 +77,10 @@ export const facts = Command.make("facts", {
   runtimeFile: Flag.String("runtime-file"),
   portFile: Flag.String("port-file"),
   pidFile: Flag.String("pid-file"),
-  withCaps: Flag.Boolean("with-caps").pipe(Flag.withDefault(false)),
+  withCaps: Flag.Boolean("with-caps").pipe(
+    Flag.withDescription("Print the capabilities line after the begin line."),
+    Flag.withDefault(false),
+  ),
 }).pipe(
   Command.withHandler((input) =>
     Effect.promise(async () => {
