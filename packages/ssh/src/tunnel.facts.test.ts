@@ -1,6 +1,7 @@
 // Validator checks run shells synchronously; the Effect spawner adds nothing to them.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
+import * as NodeNet from "node:net";
 
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
@@ -28,6 +29,27 @@ const current = {
 const LAUNCHES_TIMEOUT_MS = 180_000;
 
 type Fixture = Effect.Success<ReturnType<typeof makeProtocolFixture>>;
+
+// Above every PID limit (Linux 2^22, macOS 99999), so no process can have it.
+const NO_SUCH_PID = 2_147_483_646;
+// A connected client's own port is bound and never listens: a connection to it is refused, and no
+// server can bind it while the client holds it.
+const holdUnlistenedPort = Effect.acquireRelease(
+  Effect.callback<{ server: NodeNet.Server; client: NodeNet.Socket }>((resume) => {
+    const server = NodeNet.createServer();
+    server.once("error", (error) => resume(Effect.die(error)));
+    server.listen({ port: 0, host: "127.0.0.1" }, () => {
+      const client = NodeNet.connect((server.address() as NodeNet.AddressInfo).port, "127.0.0.1");
+      client.once("error", (error) => resume(Effect.die(error)));
+      client.once("connect", () => resume(Effect.succeed({ server, client })));
+    });
+  }),
+  ({ server, client }) =>
+    Effect.callback<void>((resume) => {
+      client.destroy();
+      server.close(() => resume(Effect.void));
+    }),
+).pipe(Effect.map(({ client }) => client));
 
 // How many times each launch started goat to ask a question whose answer could be recorded.
 const recordableAsks = (f: Fixture) =>
@@ -118,23 +140,14 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         yield* f.shiftHostClock(60);
         // A server ended outright (taskkill /F on Windows) leaves its record, naming a PID that is
         // gone and a port nothing listens on, so goat answers "none" only after probing the port.
-        const gone = NodeChildProcess.spawnSync(process.execPath, ["-e", ""]).pid;
-        const free = Number(
-          NodeChildProcess.execFileSync(
-            process.execPath,
-            [
-              "-e",
-              "const s = require('node:net').createServer().listen(0, '127.0.0.1', () => { console.log(s.address().port); s.close(); })",
-            ],
-            { encoding: "utf8" },
-          ),
-        );
+        const free = (yield* holdUnlistenedPort).localPort ?? 0;
+        assert.isAbove(free, 0);
         yield* f.fs.makeDirectory(f.home + "/.goat/userdata", { recursive: true });
         yield* f.fs.writeFileString(
           f.home + "/.goat/userdata/server-runtime.json",
           JSON.stringify({
             version: 1,
-            pid: gone,
+            pid: NO_SUCH_PID,
             port: free,
             origin: "http://127.0.0.1:" + free,
             startedAt: "2026-01-01T00:00:00.000Z",
