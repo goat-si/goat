@@ -248,5 +248,5 @@ verified by Go now and by later TS clients).
 ## Change log
 
 - v1.0 (2026-11-09): first Pen contract, derived from Doriterm transport v1.10.
-- v1.0 (2026-11-10): "Several relays": an uplink per relay, the ping race with fallback, invite token v2, and
+- v1.0 (2026-11-09): "Several relays": an uplink per relay, the ping race with fallback, invite token v2, and
   `pen relay serve` parity.
