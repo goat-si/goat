@@ -148,7 +148,9 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   - `admit`: `card` (the joiner's card, `card.mesh` = this mesh, `card.inviter` = signer nodeId).
   - `revoke`: `subjects` (1 to 16 distinct signPubs), `compromised` (bool).
   - `name`: `subject` (signPub), `name`.
-  - `hostkeys`: `keys` (0 to 8 OpenSSH public key lines of the signer's own sshd, from `/etc/ssh/ssh_host_*_key.pub`).
+  - `hostkeys`: `keys` (0 to 8 OpenSSH public key lines of the signer's own sshd, from `/etc/ssh/ssh_host_*_key.pub`)
+    and optionally `user` (the login name of the account running pen there, `[a-z_][a-z0-9_.-]{0,31}`), which members use
+    as the SSH user for that node.
     A node signs a new one when its sshd keys differ from its latest `hostkeys` record.
 - A member card is `{"body":"<b64url>","sig":"<b64url>"}` signed by its subject over `"pen-mesh/1 card" || SHA-256(body)`;
   body `{"v":1,"mesh","inviter","nonce","nodeId","signPub","noisePub","name"}`. A card nonce admits once. The
