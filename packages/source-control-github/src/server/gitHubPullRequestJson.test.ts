@@ -1,5 +1,12 @@
 import { toReviewerCandidates } from "./gitHubReviewerCandidates.ts";
-import { through, user, row, listPage } from "./gitHubPullRequestJsonTestFixtures.ts";
+import {
+  LAST_PAGE,
+  listJson,
+  listPage,
+  through,
+  user,
+  withReviewDefaults,
+} from "./gitHubPullRequestJsonTestFixtures.ts";
 import { toRepositoryReferences, referenceSearchQuery } from "./gitHubReferenceSearch.ts";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -44,119 +51,6 @@ const decodePullRequestActivityJson = through(
   toPullRequestActivityPage,
 );
 const decodePullRequestCoreJson = through(PullRequestCore.result, toPullRequestCore);
-type Json = Record<string, any>;
-const LAST_PAGE = { hasNextPage: false, endCursor: null };
-const nodesIn = (connection: Json | null | undefined): ReadonlyArray<Json> =>
-  connection?.["nodes"] ?? [];
-const actor = (raw: Json | null | undefined) =>
-  raw === null || raw === undefined ? null : { __typename: "User", avatarUrl: "", ...raw };
-const reactionGroups = (groups: ReadonlyArray<Json> | undefined) =>
-  (groups ?? []).map(({ reactors, ...group }) => ({
-    viewerHasReacted: false,
-    ...group,
-    reactors: {
-      totalCount: 0,
-      ...reactors,
-      nodes: nodesIn(reactors).map((node) => ({ __typename: "User", ...node })),
-    },
-  }));
-const remark = ({ author, reactionGroups: groups, ...raw }: Json) => ({
-  body: "",
-  lastEditedAt: null,
-  url: "https://github.com/acme/web/pull/1#discussion",
-  ...raw,
-  author: actor(author),
-  reactionGroups: reactionGroups(groups),
-});
-const threadCommentsOf = ({ nodes, ...connection }: Json) => ({
-  totalCount: (nodes ?? []).length,
-  pageInfo: LAST_PAGE,
-  ...connection,
-  nodes: (nodes ?? []).map(remark),
-});
-const requestedReviewer = (raw: Json | null) =>
-  raw === null
-    ? null
-    : "login" in raw
-      ? { name: null, ...actor(raw) }
-      : { __typename: "Team", ...raw };
-const reviewCommit = ({ commit: { authors, ...commit } }: Json) => ({
-  commit: {
-    messageHeadline: "",
-    committedDate: "",
-    ...commit,
-    authors: {
-      nodes: nodesIn(authors).map((author) => ({
-        name: null,
-        avatarUrl: "",
-        user: null,
-        ...author,
-      })),
-    },
-  },
-});
-const withReviewDefaults = (raw: string): string => {
-  const { data } = JSON.parse(raw) as { data: Json };
-  const pr = data["repository"]?.["pullRequest"];
-  if (pr?.["reviewThreads"] !== undefined) {
-    const {
-      reviewThreads,
-      author,
-      reactionGroups: groups,
-      comments,
-      reviews,
-      reviewRequests,
-      latestReviews,
-      commits,
-      ...rest
-    } = pr;
-    data["repository"]["pullRequest"] = {
-      viewerCanUpdate: true,
-      viewerDidAuthor: false,
-      reviewDismissals: { pageInfo: LAST_PAGE, nodes: [] },
-      ...rest,
-      author: actor(author),
-      reactionGroups: reactionGroups(groups),
-      comments: { nodes: nodesIn(comments).map(remark) },
-      reviews: { nodes: nodesIn(reviews).map(remark) },
-      reviewRequests: {
-        nodes: nodesIn(reviewRequests).map((node) => ({
-          requestedReviewer: requestedReviewer(node["requestedReviewer"]),
-        })),
-      },
-      latestReviews: {
-        nodes: nodesIn(latestReviews).map((node) => ({
-          state: "COMMENTED",
-          ...node,
-          author: actor(node["author"]),
-        })),
-      },
-      commits: { nodes: nodesIn(commits).map(reviewCommit) },
-      reviewThreads: {
-        totalCount: nodesIn(reviewThreads).length,
-        pageInfo: LAST_PAGE,
-        ...reviewThreads,
-        nodes: nodesIn(reviewThreads).map((thread) => ({
-          isResolved: false,
-          isOutdated: false,
-          line: null,
-          diffSide: "RIGHT",
-          ...thread,
-          comments: threadCommentsOf(thread["comments"]),
-        })),
-      },
-    };
-  }
-  if (data["node"] !== undefined && data["node"] !== null) {
-    data["node"] = {
-      __typename: "PullRequestReviewThread",
-      ...data["node"],
-      comments: threadCommentsOf(data["node"]["comments"]),
-    };
-  }
-  data["viewer"] ??= { login: "viewer" };
-  return JSON.stringify({ data });
-};
 const decodeReviewThreadsJson = (raw: string) =>
   through(ReviewThreads.result, toReviewThreadPage)(withReviewDefaults(raw));
 const decodeReviewThreadCommentsJson = (raw: string) =>
@@ -168,38 +62,6 @@ const decodePullRequestFilesViewedJson = through(
   PullRequestFilesViewed.result,
   toPullRequestFilesViewedPage,
 );
-
-function listJson(entries: ReadonlyArray<Record<string, unknown>>): string {
-  return JSON.stringify({
-    data: {
-      repository: {
-        pullRequests: {
-          pageInfo: { hasNextPage: false, endCursor: null },
-          nodes: entries.map(({ reviewRequests, latestReviews, checks, ...entry }) =>
-            row({
-              ...(reviewRequests === undefined
-                ? {}
-                : {
-                    reviewRequests: {
-                      nodes: (reviewRequests as ReadonlyArray<unknown>).map(
-                        (requestedReviewer) => ({
-                          requestedReviewer,
-                        }),
-                      ),
-                    },
-                  }),
-              ...(latestReviews === undefined ? {} : { latestReviews: { nodes: latestReviews } }),
-              ...(checks === undefined
-                ? {}
-                : { commits: { nodes: [{ commit: { statusCheckRollup: { state: checks } } }] } }),
-              ...entry,
-            }),
-          ),
-        },
-      },
-    },
-  });
-}
 
 function expectSuccess<A>(result: Result.Result<A, unknown>): A {
   expect(Result.isSuccess(result)).toBe(true);
@@ -238,6 +100,13 @@ describe("pull request list decoding", () => {
             reviewDecision: null,
             latestReviews: [{ author: user("octocat"), state: "COMMENTED" }],
           },
+          {
+            reviewDecision: null,
+            latestReviews: [
+              { author: user("octocat"), state: "APPROVED" },
+              { author: user("drive-by"), state: "CHANGES_REQUESTED", isMinimized: true },
+            ],
+          },
         ]),
       ),
     );
@@ -246,6 +115,7 @@ describe("pull request list decoding", () => {
       "changes-requested",
       "approved",
       null,
+      "approved",
     ]);
   });
 
@@ -407,6 +277,7 @@ describe("pull request detail decoding", () => {
                 (comment) => ({
                   lastEditedAt: null,
                   url: "https://github.com/c",
+                  isMinimized: false,
                   author: null,
                   ...comment,
                 }),
@@ -418,6 +289,7 @@ describe("pull request detail decoding", () => {
                 (review) => ({
                   lastEditedAt: null,
                   url: "https://github.com/r",
+                  isMinimized: false,
                   author: null,
                   submittedAt: null,
                   ...review,
@@ -572,6 +444,29 @@ describe("pull request detail decoding", () => {
     );
 
     expect(detail.comments.map((comment) => comment.id)).toEqual(["c1", "r5"]);
+  });
+
+  it("leaves out the comments and reviews a maintainer hid", () => {
+    const detail = expectSuccess(
+      activity({
+        comments: [
+          { id: "c1", body: "kept", createdAt: "2026-07-04T00:00:00Z" },
+          { id: "c2", body: "spam", createdAt: "2026-07-05T00:00:00Z", isMinimized: true },
+        ],
+        reviews: [
+          {
+            id: "r1",
+            body: "spam",
+            state: "CHANGES_REQUESTED",
+            submittedAt: "2026-07-03T00:00:00Z",
+            isMinimized: true,
+          },
+          { id: "r2", body: "", state: "APPROVED", submittedAt: "2026-07-06T00:00:00Z" },
+        ],
+      }),
+    );
+
+    expect(detail.comments.map((comment) => comment.id)).toEqual(["c1", "r2"]);
   });
 
   it.each(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"])(
@@ -813,6 +708,37 @@ describe("review thread decoding", () => {
     expect(comments.map((comment) => comment.id)).toEqual(["t1", "t2"]);
   });
 
+  it("leaves out hidden thread comments, and a thread with none left", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        threadsJson([
+          {
+            id: "PRRT_hidden_root",
+            path: "apps/server/src/ws.ts",
+            comments: {
+              nodes: [
+                { id: "t1", createdAt: "2026-07-01T00:00:00Z", isMinimized: true },
+                { id: "t2", createdAt: "2026-07-01T01:00:00Z" },
+              ],
+            },
+          },
+          {
+            id: "PRRT_all_hidden",
+            path: "apps/web/src/main.tsx",
+            comments: {
+              nodes: [{ id: "t3", createdAt: "2026-07-01T00:00:00Z", isMinimized: true }],
+            },
+          },
+        ]),
+      ),
+    );
+
+    expect(result.threads.map((entry) => [entry.thread.id, entry.commentCount])).toEqual([
+      ["PRRT_hidden_root", 1],
+    ]);
+    expect(result.threads[0]?.thread.comments.map((comment) => comment.id)).toEqual(["t2"]);
+  });
+
   it("keeps GitHub's own count of a thread whose comments were not all read", () => {
     const result = expectSuccess(
       decodeReviewThreadsJson(
@@ -836,7 +762,7 @@ describe("review thread decoding", () => {
     });
   });
 
-  it("ends a thread's walk on the last page, which still names a cursor", () => {
+  it("ends a thread's walk on the last page, which still names a cursor, counting what it hid", () => {
     const decoded = expectSuccess(
       decodeReviewThreadCommentsJson(
         JSON.stringify({
@@ -846,7 +772,10 @@ describe("review thread decoding", () => {
               pullRequest: { id: "PR_1" },
               comments: {
                 pageInfo: { hasNextPage: false, endCursor: "Y3Vyc29yOjk" },
-                nodes: [{ id: "t9", body: "last", createdAt: "2026-07-01T00:00:00Z" }],
+                nodes: [
+                  { id: "t8", body: "spam", createdAt: "2026-07-01T00:00:00Z", isMinimized: true },
+                  { id: "t9", body: "last", createdAt: "2026-07-01T00:00:00Z" },
+                ],
               },
             },
           },
@@ -854,6 +783,7 @@ describe("review thread decoding", () => {
       ),
     );
     expect(decoded.comments.map((comment) => comment.id)).toEqual(["t9"]);
+    expect(decoded.hiddenCount).toBe(1);
     expect(decoded.nextCursor).toBeNull();
   });
 });

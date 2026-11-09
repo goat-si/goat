@@ -48,3 +48,159 @@ export const listPage = (page: ReturnType<typeof toPullRequestRows>) => ({
   })),
   rawCount: page.rawCount,
 });
+
+export type Json = Record<string, any>;
+export const LAST_PAGE = { hasNextPage: false, endCursor: null };
+export const nodesIn = (connection: Json | null | undefined): ReadonlyArray<Json> =>
+  connection?.["nodes"] ?? [];
+export const actor = (raw: Json | null | undefined) =>
+  raw === null || raw === undefined ? null : { __typename: "User", avatarUrl: "", ...raw };
+export const reactionGroups = (groups: ReadonlyArray<Json> | undefined) =>
+  (groups ?? []).map(({ reactors, ...group }) => ({
+    viewerHasReacted: false,
+    ...group,
+    reactors: {
+      totalCount: 0,
+      ...reactors,
+      nodes: nodesIn(reactors).map((node) => ({ __typename: "User", ...node })),
+    },
+  }));
+export const remark = ({ author, reactionGroups: groups, ...raw }: Json) => ({
+  body: "",
+  lastEditedAt: null,
+  isMinimized: false,
+  url: "https://github.com/acme/web/pull/1#discussion",
+  ...raw,
+  author: actor(author),
+  reactionGroups: reactionGroups(groups),
+});
+export const threadCommentsOf = ({ nodes, ...connection }: Json) => ({
+  totalCount: (nodes ?? []).length,
+  pageInfo: LAST_PAGE,
+  ...connection,
+  nodes: (nodes ?? []).map(remark),
+});
+export const requestedReviewer = (raw: Json | null) =>
+  raw === null
+    ? null
+    : "login" in raw
+      ? { name: null, ...actor(raw) }
+      : { __typename: "Team", ...raw };
+export const reviewCommit = ({ commit: { authors, ...commit } }: Json) => ({
+  commit: {
+    messageHeadline: "",
+    committedDate: "",
+    ...commit,
+    authors: {
+      nodes: nodesIn(authors).map((author) => ({
+        name: null,
+        avatarUrl: "",
+        user: null,
+        ...author,
+      })),
+    },
+  },
+});
+export const withReviewDefaults = (raw: string): string => {
+  const { data } = JSON.parse(raw) as { data: Json };
+  const pr = data["repository"]?.["pullRequest"];
+  if (pr?.["reviewThreads"] !== undefined) {
+    const {
+      reviewThreads,
+      author,
+      reactionGroups: groups,
+      comments,
+      reviews,
+      reviewRequests,
+      latestReviews,
+      commits,
+      ...rest
+    } = pr;
+    data["repository"]["pullRequest"] = {
+      viewerCanUpdate: true,
+      viewerDidAuthor: false,
+      reviewDismissals: { pageInfo: LAST_PAGE, nodes: [] },
+      ...rest,
+      author: actor(author),
+      reactionGroups: reactionGroups(groups),
+      comments: { nodes: nodesIn(comments).map(remark) },
+      reviews: { nodes: nodesIn(reviews).map(remark) },
+      reviewRequests: {
+        nodes: nodesIn(reviewRequests).map((node) => ({
+          requestedReviewer: requestedReviewer(node["requestedReviewer"]),
+        })),
+      },
+      latestReviews: {
+        nodes: nodesIn(latestReviews).map((node) => ({
+          state: "COMMENTED",
+          isMinimized: false,
+          ...node,
+          author: actor(node["author"]),
+        })),
+      },
+      commits: { nodes: nodesIn(commits).map(reviewCommit) },
+      reviewThreads: {
+        totalCount: nodesIn(reviewThreads).length,
+        pageInfo: LAST_PAGE,
+        ...reviewThreads,
+        nodes: nodesIn(reviewThreads).map((thread) => ({
+          isResolved: false,
+          isOutdated: false,
+          line: null,
+          diffSide: "RIGHT",
+          ...thread,
+          comments: threadCommentsOf(thread["comments"]),
+        })),
+      },
+    };
+  }
+  if (data["node"] !== undefined && data["node"] !== null) {
+    data["node"] = {
+      __typename: "PullRequestReviewThread",
+      ...data["node"],
+      comments: threadCommentsOf(data["node"]["comments"]),
+    };
+  }
+  data["viewer"] ??= { login: "viewer" };
+  return JSON.stringify({ data });
+};
+export function listJson(entries: ReadonlyArray<Record<string, unknown>>): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequests: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: entries.map(({ reviewRequests, latestReviews, checks, ...entry }) =>
+            row({
+              ...(reviewRequests === undefined
+                ? {}
+                : {
+                    reviewRequests: {
+                      nodes: (reviewRequests as ReadonlyArray<unknown>).map(
+                        (requestedReviewer) => ({
+                          requestedReviewer,
+                        }),
+                      ),
+                    },
+                  }),
+              ...(latestReviews === undefined
+                ? {}
+                : {
+                    latestReviews: {
+                      nodes: (latestReviews as ReadonlyArray<Json>).map((review) => ({
+                        isMinimized: false,
+                        ...review,
+                      })),
+                    },
+                  }),
+              ...(checks === undefined
+                ? {}
+                : { commits: { nodes: [{ commit: { statusCheckRollup: { state: checks } } }] } }),
+              ...entry,
+            }),
+          ),
+        },
+      },
+    },
+  });
+}
