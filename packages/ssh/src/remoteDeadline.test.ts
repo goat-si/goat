@@ -783,6 +783,32 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       });
     });
 
+    it("hangs up at the clock's deadline when a read stalls past its tick", async () => {
+      await inDir(async (dir, bin) => {
+        NodeFS.writeFileSync(NodePath.join(dir, "clock"), "1000000000\n");
+        // The first read is held up 5 s, longer than any tick; later reads take what they ask for.
+        const ticks = {
+          now: '        read -r goat_deadline_t < "$GOAT_TEST_DIR/clock"',
+          read: [
+            'echo "$(cat "$GOAT_TEST_DIR/clock") $1" >> "$GOAT_TEST_DIR/asked"',
+            'if [ -p "$GOAT_TEST_DIR/gate" ]; then cat "$GOAT_TEST_DIR/gate" >/dev/null; rm -f "$GOAT_TEST_DIR/gate"; us=5000000',
+            'else case "$1" in *.*) us=$((${1%.*} * 1000000 + 1${1#*.} - 1000000)) ;; *) us=$(($1 * 1000000)) ;; esac; fi',
+            'echo "$(($(cat "$GOAT_TEST_DIR/clock") + us))" > "$GOAT_TEST_DIR/clock"; (exit 142)',
+          ].join("\n"),
+        };
+        const result = await runShell(
+          withRemoteDeadline(STUCK, 1_000, undefined, undefined, ticks),
+          [dir],
+          env(dir, bin),
+          { shell: "bash", sessionLeader: true },
+        );
+        expect(result.code).toBe(129);
+        // The stall counts in full and the next read asks only for the second left, so the clock
+        // meets the 6 s deadline. A grace read may follow the hang-up before the script ends.
+        expect(lines(dir, "asked").slice(0, 2)).toEqual(["1000000000 2", "1005000000 1.000000"]);
+      });
+    });
+
     it("falls back to sleeping when a read fails, and still hangs up", async () => {
       await inDir(async (dir, bin) => {
         shim(bin, "tick", GATED_SLEEP);
@@ -799,7 +825,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     });
 
     it.each([
-      ["mktemp fails", "mktemp", "exit 1"],
+      ["its directory cannot be made", "mkdir", "exit 1"],
       ["mkfifo fails", "mkfifo", "exit 1"],
       ["the FIFO cannot be opened", "mkfifo", 'mkdir "$1"'],
     ])("sleeps and still hangs up when %s", async (_, tool, body) => {
@@ -822,15 +848,16 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       });
     });
 
-    it.each(["setup", "read"])(
+    it.each(["directory", "FIFO", "read"])(
       "removes its FIFO directory when stopped during its %s",
       async (stage) => {
         await inDir(async (dir, bin) => {
           NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "stopping")]);
           // The watchdog is stopped once the script knows it reached that stage.
           const stop = 'printf x > "$GOAT_TEST_DIR/stopping"; kill -TERM "$PPID"';
-          if (stage === "setup")
-            shim(bin, "mkfifo", 'PATH="$' + '{PATH#*:}" mkfifo "$@" && ' + stop);
+          const tools = { directory: ["mkdir", "mktemp"], FIFO: ["mkfifo"], read: [] }[stage] ?? [];
+          for (const tool of tools)
+            shim(bin, tool, 'PATH="$' + '{PATH#*:}" ' + tool + ' "$@" && ' + stop);
           const ticks = {
             now: READ_TICK.now,
             read:
