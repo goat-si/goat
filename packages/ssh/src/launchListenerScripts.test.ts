@@ -49,7 +49,14 @@ exit 0`,
       "tasklist.exe": String.raw`echo "$*" >>"$TEST_ROOT/tasklist-calls"
 if [ -e "$TEST_ROOT/tasklistHang" ]; then trap '' TERM; echo "$$" >"$TEST_ROOT/tasklist-pid"; exec /bin/sleep 600; fi
 if [ -e "$TEST_ROOT/alive" ] && [ ! -e "$TEST_ROOT/dies" ]; then echo '"goat.exe","4242","Services","0","1 K"'; fi`,
-      date: 'n="$(cat "$TEST_ROOT/clock")"; echo "$((n + 1))" >"$TEST_ROOT/clock"; echo "$n"',
+      // In the failure path (probing) the clock moves only once a hanging tasklist has started, so no
+      // tasklist's 5 s run out before a slow host has started or answered it.
+      date: [
+        'if [ -e "$TEST_ROOT/probing" ] && { [ ! -e "$TEST_ROOT/tasklistHang" ] || [ ! -s "$TEST_ROOT/tasklist-pid" ]; }; then',
+        '  cat "$TEST_ROOT/clock"; exit 0',
+        "fi",
+        'n="$(cat "$TEST_ROOT/clock")"; echo "$((n + 1))" >"$TEST_ROOT/clock"; echo "$n"',
+      ].join("\n"),
       sleep: ":",
     })) {
       yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
@@ -72,6 +79,8 @@ if [ -e "$TEST_ROOT/alive" ] && [ ! -e "$TEST_ROOT/dies" ]; then echo '"goat.exe
         yield* fs.writeFileString(`${root}/clock`, "1000\n");
         yield* fs.writeFileString(`${root}/powershell-calls`, "");
         yield* fs.writeFileString(`${root}/tasklist-calls`, "");
+        for (const name of ["probing", "tasklist-pid", "powershell-pid"])
+          yield* fs.remove(`${root}/${name}`, { force: true });
         // Git Bash's sh is bash, whose job list the wait reads.
         const result = NodeChildProcess.spawnSync(
           "bash",
@@ -81,7 +90,7 @@ if [ -e "$TEST_ROOT/alive" ] && [ ! -e "$TEST_ROOT/dies" ]; then echo '"goat.exe
               REMOTE_HOST_PROCESS_SCRIPT,
               REMOTE_LAUNCH_LISTENER_SCRIPT.replaceAll("@@GOAT_READY_TIMEOUT_MS@@", "60000"),
               'REMOTE_PID=4242; REMOTE_PORT=3773; STATE_DIR="$TEST_ROOT/state"',
-              'wait_launched_listener; echo "$?"; cat "$TEST_ROOT/clock"',
+              'wait_launched_listener; echo "$?"; cat "$TEST_ROOT/clock"; : >"$TEST_ROOT/probing"',
               ...after,
             ].join("\n"),
           ],
