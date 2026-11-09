@@ -265,6 +265,23 @@ describe("computer use action review regressions", () => {
     ).toMatchObject({ outcome: "refused", reason: "staleElement" });
   });
 
+  it("reads bounded_resource_outside_manifest as a refusal before dispatch with the default reason", () => {
+    const { request } = setup();
+    const said = "launch_app: com.apple.calculator is outside this session's bounded resources";
+    for (const structured of [
+      { code: "bounded_resource_outside_manifest" },
+      { refusal: { code: "bounded_resource_outside_manifest" } },
+    ]) {
+      const result = actionResultFromDriver(request({ action: "pressKey", key: "a" }), {
+        isError: true,
+        text: said,
+        structured,
+      });
+      expect(result).toEqual({ outcome: "refused", reason: "targetRefused", message: said });
+      expect(classifyComputerUseActionOutcome(result)).toMatchObject({ possibleCommit: false });
+    }
+  });
+
   it("checks the window and observation before keyboard input too", () => {
     const { observations, first, context, request } = setup();
     const press = (overrides: Record<string, unknown> = {}) => {

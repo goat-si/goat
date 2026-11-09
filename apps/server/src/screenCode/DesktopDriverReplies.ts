@@ -119,11 +119,13 @@ const classifyDriverError = (
     };
   if (reply.status === "unknown_outcome")
     return { ...fail("unknown_outcome"), effectStarted: true };
-  // GOAT's proxy refused a call this driver cannot take as asked; its words say what to do.
+  // A call outside GOAT's manifest, refused by GOAT's proxy or by the driver as permission_denied:
+  // its words say what to do, never a permission to ask for. A write that may have run is not unsent.
+  const mayHaveRun = () => driverOutcomeSafety(tool, reply, args).possibleCommit;
   if (
     structured?.detail === "outside_manifest" &&
     structured.effect === undefined &&
-    driverCode === undefined
+    (driverCode === undefined || (driverCode === "permission_denied" && !mayHaveRun()))
   )
     return { ...fail("unsupported", said), ...refusalOf(structured) };
   if (
@@ -240,10 +242,21 @@ const classifyDriverError = (
       ...refusalOf(structured),
     };
   }
-  if (result?.isError === true || reply.error !== undefined)
-    return structured?.effect === "unverifiable"
-      ? { ...fail("unknown_outcome"), effectStarted: true }
-      : fail("downstream_failure");
+  if (result?.isError === true || reply.error !== undefined) {
+    if (structured?.effect === "unverifiable")
+      return { ...fail("unknown_outcome"), effectStarted: true };
+    // An effect of "refused" never gets here: the refused branch above answers it.
+    if (structured?.effect === undefined && driverCode === "permission_denied" && !mayHaveRun())
+      return {
+        ...fail(
+          "permission_denied",
+          said ??
+            "The driver refused permission; read the receipt and request the required admission.",
+        ),
+        ...refusalOf(structured),
+      };
+    return { ...fail("downstream_failure", said), ...refusalOf(structured) };
+  }
   return undefined;
 };
 
