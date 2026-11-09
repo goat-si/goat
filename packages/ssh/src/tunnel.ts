@@ -815,7 +815,6 @@ if [ "$GOAT_ARCHIVE_MODE" = 0 ]; then
   ensure_remote_node_path || true
   [ "$NODE_RESTORE_NOGLOB" = 0 ] || set -f
 fi
-recheck_selected_before_use
 pick_port() {
   if [ "$GOAT_ARCHIVE_MODE" = "1" ]; then
     "$RUNNER_FILE" __ssh-helper pick-port "$PORT_FILE" "@@GOAT_DEFAULT_REMOTE_PORT@@" "@@GOAT_REMOTE_PORT_SCAN_WINDOW@@"
