@@ -1306,7 +1306,10 @@ const CHAT_MARKDOWN_COMPONENTS = {
         ? source
         : `[${(label || fileLinkMeta.basename).replace(/[\\[\]]/g, "\\$&")}](${normalizedHref})`;
     const chip = fileLinkChip(fileLinkMeta, copyMarkdown, normalizedHref);
-    return isMarkdownFileLinkLabel(label, normalizedHref) ? (
+    const hasImage = node?.children.some(
+      (child) => child.type === "element" && child.tagName === "img",
+    );
+    return isMarkdownFileLinkLabel(label, normalizedHref) && !hasImage ? (
       chip
     ) : (
       <span data-markdown-copy={copyMarkdown}>

@@ -324,3 +324,11 @@ it("withdraws a linked image's page once the image loads after a reconnect", asy
   await act(async () => image!.dispatchEvent(new Event("load")));
   await vi.waitFor(() => expect(buttons()).toHaveLength(0));
 });
+it("keeps an image that labels a file link, with its page", async () => {
+  using test = setup({ connection: tailnetConnection(), previewAllowed: true });
+  await using screen = await renderRemoteMarkdown(
+    test.registry,
+    `[![page](${PAGE_IMAGE})](README.md)`,
+  );
+  await expect.element(screen.getByRole("button", { name: "Open page" })).toBeInTheDocument();
+});
