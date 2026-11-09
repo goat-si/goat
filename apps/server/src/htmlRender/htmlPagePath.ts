@@ -53,7 +53,8 @@ const firstLink = Effect.fn("HtmlRender.firstLink")(function* (
 /**
  * Resolves a page path without ever reaching a network share: a link's target is read, not
  * followed, so a share is refused before the filesystem opens it. Returns undefined when the
- * path names a share or links to one.
+ * path names a share or links to one. Best effort: a full-access caller can already read any
+ * file and reach the network through its own shell.
  */
 export const resolveLocalPagePath = Effect.fn("HtmlRender.resolveLocalPagePath")(function* (
   services: PagePathServices,

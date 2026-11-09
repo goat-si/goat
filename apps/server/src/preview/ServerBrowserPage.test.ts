@@ -903,11 +903,14 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
     const frame = page.frames()[1]!;
     await frame.waitForLoadState();
     // Headless Chromium has no authenticator, so the ceremony fails; the prompt still counted.
-    void frame.evaluate(
+    const ceremony = frame.evaluate(
       "navigator.credentials.get({ publicKey: { challenge: new Uint8Array(16), timeout: 1000 } }).catch(() => {})",
     );
     expect(await nextChange()).toBe(true);
     expect(await nextChange()).toBe(false);
+    // The settle report can outrun this call's own response, and closing the context would
+    // reject the call after the test passed.
+    await ceremony;
   });
 });
 
