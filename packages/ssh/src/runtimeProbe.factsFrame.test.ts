@@ -199,6 +199,13 @@ describe("the first probe's facts in one start", () => {
     },
     { name: "extra stderr line", err: OLD_HELPER_CAPS_STDERR + "more\n", status: "1" },
     { name: "stderr over 4096 bytes", err: OLD_HELPER_CAPS_STDERR + "x".repeat(5000), status: "1" },
+    // The exact old answer, but its stdout was cut at the bound: a capture that did not arrive whole.
+    {
+      name: "stdout over 4096 bytes",
+      out: "x".repeat(5000) + "\n",
+      err: OLD_HELPER_CAPS_STDERR,
+      status: "1",
+    },
     { name: "exit 2", err: OLD_HELPER_CAPS_STDERR, status: "2" },
     { name: "two stdout lines", out: "caps v1 facts\ncaps v1 facts\n", status: "0" },
     { name: "unknown name", out: "caps v1 facts teleport\n", status: "0" },
@@ -298,24 +305,6 @@ describe("the first probe's facts in one start", () => {
       output: "no-commit",
     },
     {
-      name: "compat ok compatible 2 inst-1",
-      line: 3,
-      answer: "compat ok compatible 2 inst-1",
-      output: "compat-failed",
-    },
-    {
-      name: "compat ok compatible 1 -",
-      line: 3,
-      answer: "compat ok compatible 1 -",
-      output: "compat-failed",
-    },
-    {
-      name: "compat fail changed",
-      line: 3,
-      answer: "compat fail changed",
-      output: "compat-failed",
-    },
-    {
       name: "manifest fail error",
       line: 0,
       answer: "manifest fail error",
@@ -341,34 +330,57 @@ describe("the first probe's facts in one start", () => {
       }).pipe(Effect.scoped),
   );
 
+  it.effect.each([
+    "compat ok compatible 2 inst-1",
+    "compat ok compatible 1 -",
+    "compat fail changed",
+  ])("%s is not recorded and compat is asked by its own call", (answer) =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.supporting();
+      yield* f.write("frame", frame([...GOOD.slice(0, 3), answer]));
+      assert.deepEqual(yield* f.run(), ANSWERED);
+      assert.deepEqual(yield* f.asks(), [CAPS, FACTS, COMPAT_ASK]);
+      // What is recorded is the separate call's answer.
+      assert.equal((yield* f.fact("compat." + version + ".exe")).split("\n")[1], COMPAT);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect.each(["live ok live " + version + " 1 1 4242", "live fail error"])(
-    "%s is the live question's failure and leaves compat to its own call",
+    "%s is not recorded and live and compat are asked by their own calls",
     (answer) =>
       Effect.gen(function* () {
         const f = yield* fixture();
         yield* f.supporting();
         yield* f.write("frame", frame([GOOD[0]!, GOOD[1]!, answer]));
-        assert.deepEqual(yield* f.run(), [...ANSWERED.slice(0, 2), "live-failed", COMPAT]);
-        assert.deepEqual(yield* f.asks(), [CAPS, FACTS, COMPAT_ASK]);
+        assert.deepEqual(yield* f.run(), ANSWERED);
+        assert.deepEqual(yield* f.asks(), [CAPS, FACTS, LIVE_ASK, COMPAT_ASK]);
       }).pipe(Effect.scoped),
   );
 
-  it.effect("an unbound live answer is used by this probe and never recorded", () =>
+  // The live key names the record's process, not an external or historical listener on its port,
+  // which can be replaced without changing the key: such an answer is asked again where it is used.
+  it.effect("an unbound live answer is never reused, even within the probe", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
       yield* f.supporting();
       const unbound = "live " + version + " 1 1 0 4343";
       yield* f.write("frame", frame([GOOD[0]!, GOOD[1]!, "live ok " + unbound, GOOD[3]!]));
+      // By the time the probe's own check runs, another listener answers on that port.
+      const replaced = "live 9.9.9 1 1 0 4343";
+      yield* f.write("live", replaced + "\n");
+      yield* f.write("compat", "client-too-old 1 inst-2\n");
       const tail = TAIL.replace(" 4242 ||", " 0 ||");
-      assert.deepEqual(yield* f.run(tail), [...ANSWERED.slice(0, 2), unbound, COMPAT]);
-      assert.deepEqual(yield* f.asks(), [CAPS, FACTS]);
+      assert.deepEqual(yield* f.run(tail), [
+        ...ANSWERED.slice(0, 2),
+        replaced,
+        "client-too-old 1 inst-2",
+      ]);
+      assert.deepEqual(yield* f.asks(), [CAPS, FACTS, LIVE_ASK, COMPAT_ASK]);
       assert.deepEqual(
         yield* f.facts(),
         ["caps", "commit", "own", "version"].map((kind) => kind + "." + version + ".exe"),
       );
-      // The next probe asks the server again.
-      yield* f.run(tail);
-      assert.deepEqual(yield* f.asks(), [CAPS, FACTS, LIVE_ASK, COMPAT_ASK]);
     }).pipe(Effect.scoped),
   );
 

@@ -15,15 +15,19 @@ helper_caps() {
   if caps_line="$(fact_get "$caps_name" "$caps_key")"; then
     HELPER_CAPS="\${caps_line#caps v1}"; HELPER_CAPS="\${HELPER_CAPS# }"; return 0
   fi
-  # stderr comes first, then the mark, the status and stdout; head bounds what is kept.
-  caps_mark="$fact_nl:goat-caps-exit:"
-  caps_raw="$({ caps_out="$(caps_s=0; "$1" __ssh-helper capabilities 2>&3 || caps_s=$?; printf '.%s' "$caps_s")"
-    printf '%s%s\\n%s.' "$caps_mark" "\${caps_out##*.}" "\${caps_out%.*}"; } 3>&1 | head -c 4096)" || caps_raw=
-  case "$caps_raw" in *"$caps_mark"*"$caps_mark"*) return 0 ;; *"$caps_mark"*) ;; *) return 0 ;; esac
+  # Read as stderr, a mark, stdout, then the exit mark and status, each stream bounded while it is
+  # read. A capture is whole only when it ends in the exit mark and a status: head keeps a prefix.
+  caps_mark="$fact_nl:goat-caps-out:"; caps_exit="$fact_nl:goat-caps-exit:"
+  caps_raw="$({ caps_out="$({ caps_s=0; "$1" __ssh-helper capabilities 2>&3 || caps_s=$?
+      printf '%s%s:' "$caps_exit" "$caps_s"; } | head -c 4096)"
+    printf '%s%s' "$caps_mark" "$caps_out"; } 3>&1 | head -c 8192)" || caps_raw=
+  case "$caps_raw" in *"$caps_mark"*"$caps_mark"*) return 0 ;; *"$caps_mark"*"$caps_exit"*:) ;; *) return 0 ;; esac
   caps_err="\${caps_raw%%"$caps_mark"*}"; caps_rest="\${caps_raw#*"$caps_mark"}"
-  caps_status="\${caps_rest%%"$fact_nl"*}"; caps_out="\${caps_rest#*"$fact_nl"}"
+  caps_status="\${caps_rest##*"$caps_exit"}"; caps_status="\${caps_status%:}"
+  caps_out="\${caps_rest%"$caps_exit"*}"
+  case "$caps_status" in ''|*[!0123456789]*) return 0 ;; esac
   if [ "$caps_status" = 0 ] && [ -z "$caps_err" ]; then
-    case "$caps_out" in *"$fact_nl"*"$fact_nl"*) return 0 ;; *"$fact_nl.") caps_line="\${caps_out%"$fact_nl."}" ;; *) return 0 ;; esac
+    case "$caps_out" in *"$fact_nl"*"$fact_nl"*) return 0 ;; *"$fact_nl") caps_line="\${caps_out%"$fact_nl"}" ;; *) return 0 ;; esac
     caps_valid "$caps_line" || return 0
   elif [ "$caps_status" = 1 ] && [ "$caps_err" = "$helper_caps_old" ]; then
     caps_line="caps v1"
@@ -71,20 +75,12 @@ facts_frame_parse() {
 }
 # Sets frame_pid and frame_port from live tokens $1.
 facts_frame_live_ids() { set -f; set -- $1; frame_pid="\${5:-}"; frame_port="\${6:-}"; }
-# The compat tokens a separate compat call may print for a server with an instance id.
-facts_frame_compat_valid() {
-  set -f; set -- $1
-  [ "$#" = 3 ] || return 1
-  case "$1" in compatible|update-required|client-too-old|unknown) ;; *) return 1 ;; esac
-  case "$2" in 0|1) ;; *) return 1 ;; esac
-  case "$3" in ''|-|*[!$token_chars]*) return 1 ;; esac
-}
 # Asks installed goat $1, once per executable and script, its manifest, its commit time, the live
 # server behind the probe's record and launch files, and that server's compatibility, in one start.
 # Succeeds, with FRAME_MANIFEST set, only when the reply may be used: the executable supports the
 # call, its key was present before the capability lookup and is unchanged after the call, and the
-# frame is valid in full. Then commit, live and compat are recorded under their usual rules, and
-# kept in the memo for this script's own later checks while the live key they were read under holds.
+# frame is valid in full. Then commit, live and compat are recorded under their usual rules. A
+# live or compat answer that is not recorded is dropped: the probe's own check asks it again.
 facts_frame_ask() {
   [ -n "$FACT_MEMO" ] && exec_fact_key "$1" || return 1
   frame_name="$FACT_NAME"; frame_key="$FACT_KEY"; frame_exec="$FACT_NAME $FACT_KEY"
@@ -92,7 +88,6 @@ facts_frame_ask() {
   helper_caps "$1"
   case " $HELPER_CAPS " in *" facts "*) ;; *) return 1 ;; esac
   frame_memo_put frame-asked "$1|$frame_exec" ok
-  frame_files="$runtime_file|$state/port|$state/pid"
   frame_absent=; ! live_none_absent "$runtime_file" "$state/port" "$state/pid" || frame_absent=1
   frame_live=; ! live_fact_key "$1" "$runtime_file" "$state/port" "$state/pid" || frame_live="$FACT_KEY"
   frame_out="$("$1" __ssh-helper facts --runtime-file "$runtime_file" --port-file "$state/port" --pid-file "$state/pid" 2>/dev/null)" || return 1
@@ -104,25 +99,18 @@ facts_frame_ask() {
   case "$FRAME_COMMIT" in "ok "*) fact_put "commit.$frame_name" "$frame_key" "\${FRAME_COMMIT#ok }" ;; esac
   frame_memo_put frame-commit "$1|commit.$frame_name|$frame_key" "$FRAME_COMMIT"
   if [ -n "$frame_live" ] && [ "$frame_live" = "$frame_after" ]; then
-    frame_tokens=; frame_pid=; frame_port=
-    case "$FRAME_LIVE" in "ok "*) frame_tokens="\${FRAME_LIVE#ok }" ;; esac
-    if [ -n "$frame_tokens" ] && (set -f; set -- $frame_tokens; valid_live_tokens "$@"); then
+    # Only the record's own server is recorded; compat with it, on the port live named.
+    frame_tokens="\${FRAME_LIVE#ok }"
+    if [ "$FRAME_LIVE" = "ok $frame_tokens" ] && fact_valid live "$frame_tokens"; then
       facts_frame_live_ids "$frame_tokens"
-      if fact_valid live "$frame_tokens" && fact_bound "$frame_pid" "$frame_port"; then
+      if fact_bound "$frame_pid" "$frame_port"; then
         fact_put "live.$frame_name" "$frame_live" "$frame_tokens"
+        case "$FRAME_COMPAT" in "ok "*)
+          if fact_valid compat "\${FRAME_COMPAT#ok }"; then
+            fact_put "compat.$frame_name" "$frame_live|$frame_port" "\${FRAME_COMPAT#ok }"
+          fi ;;
+        esac
       fi
-    else
-      FRAME_LIVE="fail error"
-    fi
-    frame_memo_put frame-live "$1|$frame_files|$frame_exec|$frame_live" "$FRAME_LIVE"
-    if [ -n "$FRAME_COMPAT" ]; then
-      case "$FRAME_COMPAT" in "ok "*) facts_frame_compat_valid "\${FRAME_COMPAT#ok }" || FRAME_COMPAT="fail error" ;; esac
-      case "$FRAME_COMPAT" in "ok "*)
-        if fact_valid compat "\${FRAME_COMPAT#ok }" && fact_bound "$frame_pid" "$frame_port"; then
-          fact_put "compat.$frame_name" "$frame_live|$frame_port" "\${FRAME_COMPAT#ok }"
-        fi ;;
-      esac
-      frame_memo_put frame-compat "$1|$frame_files|$frame_exec|$frame_live|$frame_port" "$FRAME_COMPAT"
     fi
   elif [ -n "$frame_absent" ] && [ -n "$frame_absent_after" ] &&
        [ "$FRAME_LIVE" = "ok none unknown unknown unknown 0 0" ]; then

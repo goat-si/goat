@@ -339,9 +339,6 @@ live_fact() {
     live_fact_key "$1" "$2" "$3" "$4" || FACT_KEY=
     fact_name="live.$FACT_NAME"; fact_key="$FACT_KEY"
     if fact_get "$fact_name" "$fact_key"; then return 0; fi
-    if frame_memo_get frame-live "$1|$2|$3|$4|\${FACT_NAME:+$FACT_NAME $fact_live}|$fact_key"; then
-      frame_memo_answer || return 1; return 0
-    fi
   fi
   fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1
   if [ -n "$live_none_key" ] && (set -f; set -- $fact_out; [ "$1" = none ] && valid_live_tokens "$@") &&
@@ -362,11 +359,9 @@ live_fact() {
 # $6 is the PID the live answer named; it is recorded only for the record's own process.
 compat_fact() {
   live_fact_key "$1" "$3" "$4" "$5" || FACT_KEY=
-  compat_frame_key="$1|$3|$4|$5|\${FACT_NAME:+$FACT_NAME $fact_live}|$FACT_KEY|$2"
   fact_name="compat.$FACT_NAME"; fact_key="$FACT_KEY"
   [ -z "$fact_key" ] || fact_key="$fact_key|$2"
   if fact_get "$fact_name" "$fact_key"; then return 0; fi
-  if frame_memo_get frame-compat "$compat_frame_key"; then frame_memo_answer || return 1; return 0; fi
   fact_out="$("$1" __ssh-helper compat --port "$2")" || return 1
   if [ -n "$fact_key" ] && live_fact_key "$1" "$3" "$4" "$5" && [ "$FACT_KEY|$2" = "$fact_key" ] &&
      fact_valid compat "$fact_out" && fact_bound "$6" "$2"; then
