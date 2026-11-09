@@ -306,6 +306,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as SourceControlStarPrompt from "./sourceControl/SourceControlStarPrompt.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import { storageRpcHandlers } from "./storage/storageRpc.ts";
@@ -1457,6 +1458,7 @@ export const layerWsRpc = (
       const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
+      const sourceControlStarPrompt = yield* SourceControlStarPrompt.SourceControlStarPrompt;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
@@ -2973,6 +2975,7 @@ export const layerWsRpc = (
           withPullRequestViewer(input, pullRequests.setLabels(input)),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           sourceControlRepositories.lookupRepository(input),
+        [WS_METHODS.sourceControlStarred]: (input) => sourceControlStarPrompt.starred(input),
         [WS_METHODS.sourceControlCloneRepository]: (input) =>
           sourceControlRepositories.cloneRepository(input),
         [WS_METHODS.projectCloneStart]: (input) =>

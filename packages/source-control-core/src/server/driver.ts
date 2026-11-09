@@ -32,6 +32,8 @@ export interface SourceControlDriverInstance {
    * Fetches media the definition's `mediaUrl` claimed, with the credential the host serves it
    * to. Null when the fetch went nowhere a response could come from, such as a redirect loop.
    */
+  /** Whether the server's account on `host` starred `repository` (`owner/name`). */
+  readonly isRepositoryStarred?: (host: string, repository: string) => Effect.Effect<boolean>;
   readonly fetchMedia?: (
     request: SourceControlMediaRequest,
   ) => Effect.Effect<

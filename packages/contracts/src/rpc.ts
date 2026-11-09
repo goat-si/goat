@@ -468,6 +468,7 @@ import {
 } from "./projectClone.ts";
 import {
   SourceControlCloneRepositoryInput,
+  SourceControlStarredInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
   SourceControlPublishRepositoryInput,
@@ -774,6 +775,7 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+  sourceControlStarred: "sourceControl.starred",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1514,6 +1516,14 @@ const WsSourceControlLookupRepositoryRpc = Rpc.make(WS_METHODS.sourceControlLook
   payload: SourceControlRepositoryLookupInput,
   success: SourceControlRepositoryInfo,
   error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+});
+
+// Reports whether the server's GitHub account has starred goat-si/goat; the repository is
+// server-pinned so a client cannot use this as a general star check.
+const WsSourceControlStarredRpc = Rpc.make(WS_METHODS.sourceControlStarred, {
+  payload: SourceControlStarredInput,
+  success: Schema.NullOr(Schema.Boolean),
+  error: EnvironmentAuthorizationError,
 });
 
 const WsSourceControlCloneRepositoryRpc = Rpc.make(WS_METHODS.sourceControlCloneRepository, {
@@ -2612,6 +2622,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
 
 export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
+  WsSourceControlStarredRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
   WsProjectCloneStartRpc,

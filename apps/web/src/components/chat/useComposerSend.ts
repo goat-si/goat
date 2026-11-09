@@ -2,7 +2,6 @@ import {
   mergeDirectPreviewAnnotation,
   shouldDockDraftHeroForSubmission,
   restorePlanFollowUpComposer,
-  buildExpiredTerminalContextToastCopy,
   deriveComposerSendState,
   boundAttachmentIds,
   formatOutgoingPrompt,
@@ -54,6 +53,7 @@ import {
 import { resolvePlanFollowUpSubmission } from "../../proposedPlan";
 import { type ChatMessage } from "../../types";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { recordPromptSent } from "../GitHubStarPrompt";
 import { newMessageId, newThreadId } from "~/lib/utils";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { buildThreadRouteParams } from "../../threadRoutes";
@@ -83,6 +83,7 @@ import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/u
 import { environmentPresentations } from "../../state/presentation";
 import {
   approvalRedirectNotice,
+  expiredTerminalContextToast,
   loadBalancingSendWarning,
   multipleModelSendBlock,
   referencedThreadContexts,
@@ -1110,17 +1111,7 @@ export function useComposerSend(input: ComposerSendInput) {
     }
     if (!hasSendableContent) {
       if (expiredTerminalContextCount > 0) {
-        const toastCopy = buildExpiredTerminalContextToastCopy(
-          expiredTerminalContextCount,
-          "empty",
-        );
-        toastManager.add(
-          stackedThreadToast({
-            type: "warning",
-            title: toastCopy.title,
-            description: toastCopy.description,
-          }),
-        );
+        toastManager.add(expiredTerminalContextToast(expiredTerminalContextCount, "empty"));
       }
       return;
     }
@@ -1519,17 +1510,7 @@ export function useComposerSend(input: ComposerSendInput) {
     setOptimisticUserMessages((existing) => [...existing, optimisticMessage]);
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
-      const toastCopy = buildExpiredTerminalContextToastCopy(
-        expiredTerminalContextCount,
-        "omitted",
-      );
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: toastCopy.title,
-          description: toastCopy.description,
-        }),
-      );
+      toastManager.add(expiredTerminalContextToast(expiredTerminalContextCount, "omitted"));
     }
     const sentDraftThreadRef = isLocalDraftThread
       ? scopeThreadRef(environmentId, threadIdForSend)
@@ -1728,6 +1709,7 @@ export function useComposerSend(input: ComposerSendInput) {
         ) {
           handleNewThreadInActiveProject();
         }
+        void recordPromptSent(environmentId);
       }
     }
 
