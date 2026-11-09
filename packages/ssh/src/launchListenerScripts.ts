@@ -92,6 +92,8 @@ launch_bounded() {
   done
   wait "$launch_bound_job"
 }
+# The launch runs under set -u; these start empty, before any check reads them.
+LISTEN_GONE=; LAUNCH_TASKLIST_STALLED=
 wait_launched_listener() {
   listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
   LISTEN_GONE=
@@ -120,19 +122,20 @@ wait_launched_listener() {
   return 2
 }
 # After the listener wait. Windows: PowerShell's word that the server is gone stands; otherwise
-# tasklist runs bounded to 5 s. Only a clean answer without a process line ("INFO: No tasks...")
-# means gone; a failed, empty or odd answer counts as alive, and after a timeout later checks in
-# this script do not run tasklist again.
+# tasklist runs bounded to 5 s. Gone is only its localized "INFO: no tasks" answer: exit 0 and one
+# line that is no CSV row but holds ": ". Anything else counts as alive, and after a timeout later
+# checks in this script do not run tasklist again.
 launch_server_alive() {
   [ "$GOAT_HOST_WINDOWS" = 1 ] || { server_alive "$1"; return; }
-  [ "$LISTEN_GONE" != "$1" ] || return 1
-  [ -z "$LAUNCH_TASKLIST_STALLED" ] || return 0
+  [ "${"${"}LISTEN_GONE:-}" != "$1" ] || return 1
+  [ -z "${"${"}LAUNCH_TASKLIST_STALLED:-}" ] || return 0
   if launch_bounded 5 tasklist.exe /FI "PID eq $1" /NH /FO CSV </dev/null >"$STATE_DIR/alive.$$" 2>/dev/null; then
     launch_probe=0; else launch_probe=$?; fi
   if [ "$launch_probe" = 124 ]; then LAUNCH_TASKLIST_STALLED=1; rm -f "$STATE_DIR/alive.$$"; return 0; fi
   launch_alive=0
-  if [ "$launch_probe" = 0 ] && [ -s "$STATE_DIR/alive.$$" ] &&
-    ! grep -q '^"' "$STATE_DIR/alive.$$" 2>/dev/null; then launch_alive=1; fi
+  if [ "$launch_probe" = 0 ] && LC_ALL=C awk '{ sub(/\r$/, "") } $0 != "" { n++; line = $0 }
+    END { exit !(n == 1 && substr(line, 1, 1) != "\"" && index(line, ": ") > 0) }' \
+    "$STATE_DIR/alive.$$" 2>/dev/null; then launch_alive=1; fi
   rm -f "$STATE_DIR/alive.$$"
   return "$launch_alive"
 }

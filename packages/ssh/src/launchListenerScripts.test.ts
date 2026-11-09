@@ -76,6 +76,8 @@ describe("Windows launch listener wait", () => {
       ].join("\n"),
       "tasklist.exe": [
         record("tasklist"),
+        // A recorded answer, byte for byte, when a test gives one.
+        'if [ -e "$TEST_ROOT/tasklist-out" ]; then cat "$TEST_ROOT/tasklist-out"; exit 0; fi',
         hangs("tasklist"),
         '[ ! -e "$TEST_ROOT/tasklistFails" ] || exit 1',
         'if [ -e "$TEST_ROOT/alive" ]; then echo \'"goat.exe","4242","Services","0","1 K"\'',
@@ -132,8 +134,11 @@ describe("Windows launch listener wait", () => {
         const result = NodeChildProcess.spawnSync(
           "bash",
           [
+            "--posix",
             "-c",
             [
+              // As in the launch script, which Git Bash runs as sh: POSIX mode, set -eu.
+              "set -eu",
               REMOTE_HOST_PROCESS_SCRIPT,
               REMOTE_LAUNCH_LISTENER_SCRIPT.replaceAll("@@GOAT_READY_TIMEOUT_MS@@", "60000"),
               "launch_bounded_job() { GOAT_TEST_BOUNDED=1 MSYS2_ARG_CONV_EXCL='*' exec \"$@\"; }",
@@ -171,7 +176,10 @@ describe("Windows launch listener wait", () => {
       Effect.gen(function* () {
         const { run, pid } = yield* makeHarness;
         const wait = (state: Parameters<typeof run>[0]) =>
-          run(state, 'wait_launched_listener; echo "$?"; cat "$TEST_ROOT/clock"').pipe(
+          run(
+            state,
+            'if wait_launched_listener; then s=0; else s=$?; fi; echo "$s"; cat "$TEST_ROOT/clock"',
+          ).pipe(
             Effect.map(({ code, stdout, stderr, calls }) => {
               assert.equal(code, 0, stderr);
               const [status = "", clock = ""] = stdout.split("\n");
@@ -214,6 +222,33 @@ describe("Windows launch listener wait", () => {
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
+  it.effect("reads tasklist as gone only from its one-line localized no-match answer", () =>
+    Effect.gen(function* () {
+      const { run, root, fs } = yield* makeHarness;
+      const answer = (bytes: Uint8Array) =>
+        Effect.gen(function* () {
+          yield* fs.writeFile(root + "/tasklist-out", bytes);
+          const result = yield* run(
+            { alive: true },
+            'if launch_server_alive "$REMOTE_PID"; then echo alive; else echo gone; fi',
+          );
+          yield* fs.remove(root + "/tasklist-out");
+          assert.equal(result.code, 0, result.stderr);
+          return result.stdout;
+        });
+      const text = (value: string) => new TextEncoder().encode(value);
+      const info = "INFO: No tasks are running which match the specified criteria.\r\n";
+      assert.equal(yield* answer(text(info)), "gone");
+      // Korean Windows answers in CP949, as measured on a Git Bash host.
+      const korean =
+        "c1a4bab83a20bdc7c7e020c1dfc0ce20c0dbbef720c1df20c1f6c1a4b5c820c1b6b0c7bfa120c0cfc4a1c7cfb4c220c0dbbef7c0cc20bef8bdc0b4cfb4d92e0d0a";
+      assert.equal(yield* answer(Buffer.from(korean, "hex")), "gone");
+      assert.equal(yield* answer(text("unexpected output\r\n")), "alive");
+      assert.equal(yield* answer(text('"goat.exe","4242","Services","0","1 K"\r\n')), "alive");
+      assert.equal(yield* answer(text(info + info)), "alive");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("a failed launch runs every Windows command bounded and never hangs on one", () =>
     Effect.gen(function* () {
       const { run, pid, clockAt, root, fs } = yield* makeHarness;
@@ -231,6 +266,7 @@ describe("Windows launch listener wait", () => {
       const launchRun = (state: Parameters<typeof run>[0]) =>
         Effect.gen(function* () {
           const result = yield* run(state, body, true);
+          assert.notInclude(result.stderr, "unbound variable");
           assert.equal(result.code, 1, result.stderr);
           assert.include(result.stderr, "did not become ready");
           // Every Windows command the launch ran after its listener wait started was the bounded job.
