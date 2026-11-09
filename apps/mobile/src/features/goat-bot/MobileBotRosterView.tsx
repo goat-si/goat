@@ -174,29 +174,16 @@ export function MobileBotRosterView(props: {
                 emoji={mainEmoji}
               />
             ) : (
-              <MemberFace bot={bot.profile} />
+              <MemberRowContent bot={bot.profile} />
             )}
-            <View className="min-w-0 flex-1">
-              <Text className="font-semibold text-foreground">
-                {bot.profile?.name ?? "GOAT Bot"}
-                {bot.kind === "main" ? "  ·  Main" : ""}
-                {bot.kind === "main" && props.slackEnabled ? "  ·  Slack" : ""}
-              </Text>
-              {bot.kind === "main" && props.unread ? (
-                <View className="flex-row items-center gap-1">
-                  <View
-                    accessibilityElementsHidden
-                    className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
-                  />
-                  <Text className="text-xs text-foreground-muted">Unread</Text>
-                </View>
-              ) : null}
-              {bot.kind === "main" && props.preview ? (
-                <Text numberOfLines={1} className="text-foreground-muted">
-                  {props.preview}
-                </Text>
-              ) : null}
-            </View>
+            {bot.kind === "main" ? (
+              <BotRowText
+                name={bot.profile?.name ?? "GOAT Bot"}
+                tags={props.slackEnabled ? ["Main", "Slack"] : ["Main"]}
+                unread={props.unread === true}
+                preview={props.preview}
+              />
+            ) : null}
           </Pressable>
           {bot.kind === "main"
             ? props.rows.map((row) => {
@@ -321,8 +308,7 @@ export function MobileBotRosterView(props: {
                   onLongPress={() => props.members?.onLongPressBot({ kind: "member", profile })}
                   className="flex-row items-center gap-3 px-4 py-3"
                 >
-                  <MemberFace bot={profile} />
-                  <Text className="text-foreground">{profile.name}</Text>
+                  <MemberRowContent bot={profile} />
                 </Pressable>
               ))
             : null}
@@ -387,10 +373,60 @@ export function MobileBotRosterView(props: {
 }
 
 /**
- * A member's face from its own conversation shell and waiting count, with the count beside it;
- * still, since only the main row and headers move.
+ * Every bot row's text: the name with what waits on the person at the end, then one quiet line
+ * of tags, unread state and the latest message.
  */
-function MemberFace({ bot }: { readonly bot: BotProfile }) {
+function BotRowText(props: {
+  readonly name: string;
+  readonly tags?: ReadonlyArray<string>;
+  readonly waitingCount?: number;
+  readonly unread?: boolean;
+  readonly preview?: string | undefined;
+}) {
+  const waiting = props.waitingCount ?? 0;
+  const tags = props.tags ?? [];
+  const detail = [
+    ...tags,
+    ...(props.unread ? ["Unread"] : []),
+    ...(props.preview ? [props.preview] : []),
+  ];
+  return (
+    <View className="min-w-0 flex-1">
+      <View className="flex-row items-center gap-2">
+        <Text numberOfLines={1} className="shrink font-semibold text-foreground">
+          {props.name}
+        </Text>
+        {waiting > 0 ? (
+          <Text
+            accessibilityLabel={`${waiting} waiting for you`}
+            className="text-xs font-semibold text-foreground"
+          >
+            {waiting}
+          </Text>
+        ) : null}
+      </View>
+      {detail.length > 0 ? (
+        <View className="flex-row items-center gap-1">
+          {props.unread ? (
+            <View
+              accessibilityElementsHidden
+              className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
+            />
+          ) : null}
+          <Text numberOfLines={1} className="shrink text-xs text-foreground-muted">
+            {detail.join(" · ")}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * A member's face from its own conversation shell and waiting count, then its row text; still,
+ * since only the main row and headers move.
+ */
+function MemberRowContent({ bot }: { readonly bot: BotProfile }) {
   const waitingCount = useMobileMemberWaitingCount(bot);
   const face = useMobileGoatBotFace(
     null,
@@ -398,17 +434,10 @@ function MemberFace({ bot }: { readonly bot: BotProfile }) {
     { waitingCount },
   );
   return (
-    <View className="flex-row items-center gap-1">
+    <>
       <GoatBotFaceAvatar state={face.state} size={40} motion={null} emoji={bot.avatar} />
-      {waitingCount > 0 ? (
-        <Text
-          accessibilityLabel={`${waitingCount} waiting for you`}
-          className="text-xs font-semibold text-foreground"
-        >
-          {waitingCount}
-        </Text>
-      ) : null}
-    </View>
+      <BotRowText name={bot.name} waitingCount={waitingCount} />
+    </>
   );
 }
 

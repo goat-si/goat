@@ -199,7 +199,7 @@ it("renders the main bot, child task and disabled creation action", async () => 
       />,
     ),
   );
-  expect(container.textContent).toContain("GOAT Bot  ·  Main  ·  Slack");
+  expect(container.textContent).toContain("GOAT BotMain · Slack");
   expect(container.textContent).toContain("Review");
   expect(container.textContent).toContain("Needs your input");
   expect(container.textContent).toContain("Show more");
