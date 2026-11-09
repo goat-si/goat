@@ -164,6 +164,15 @@ describe("goatBotConversationPreview", () => {
     expect(preview([])).toBeNull();
   });
 
+  it("previews a Markdown reply or message as plain text", () => {
+    expect(
+      preview([bot("b", answer, "## Done\n\n**Merged** [#42](https://x.test/42)")])?.text,
+    ).toBe("Done Merged #42");
+    expect(preview([user("u", first, "fix `rows.ts`\n- please")])?.text).toBe(
+      "You: fix rows.ts please",
+    );
+  });
+
   it("shows the latest user message without making it unread", () => {
     expect(preview([user("u", first, "Hello")])).toEqual({
       text: "You: Hello",

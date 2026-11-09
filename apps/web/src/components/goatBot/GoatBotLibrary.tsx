@@ -19,6 +19,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { useGoatBotName } from "./goatBotMemberContext";
+import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
 import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
 
 const TEXT_TYPES = new Set(["application/json", "text/markdown", "text/csv"]);
@@ -139,7 +140,10 @@ export function GoatBotLibrary({ environmentId }: { environmentId: EnvironmentId
       </div>
     );
   if (files.data === null) return <p className="text-muted-foreground">Loading files…</p>;
-  if (files.data.artifacts.length === 0) return <p>Files {botName} saves will appear here.</p>;
+  if (files.data.artifacts.length === 0)
+    return (
+      <GoatBotPanelEmpty title="No files yet" next={`Files ${botName} saves will appear here.`} />
+    );
   return (
     <div className="space-y-3">
       {files.data.truncated && (

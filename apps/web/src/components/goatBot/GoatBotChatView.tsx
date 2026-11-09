@@ -10,7 +10,6 @@ import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { isElectron } from "~/env";
-import { ChevronRightIcon } from "~/components/solar";
 import { GOAT_BOT_PATH, type GlobalAgentLegacyRoute } from "~/globalAgentRoute";
 import { useStableCallback } from "~/hooks/useStableCallback";
 
@@ -31,6 +30,8 @@ import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
 import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
+import { GoatBotHeaderName } from "./GoatBotHeaderName";
+import { GoatBotMemberModelPicker } from "./GoatBotMemberModelPicker";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotReading } from "./useGoatBotFace";
@@ -184,22 +185,14 @@ export function GoatBotChatView({
               />
             )}
             <div className="flex min-w-0 items-center gap-2">
-              <h1 className="goat-name-capsule truncate text-foreground">
-                {title} <ChevronRightIcon aria-hidden className="size-3" />
-              </h1>
+              <GoatBotHeaderName title={title} />
               {headerStatus ? (
                 <p className="truncate text-2xs text-muted-foreground">{headerStatus}</p>
               ) : null}
             </div>
           </div>
           <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
-            {member ? (
-              <span className="text-xs text-muted-foreground">
-                {member.defaultModelSelection?.model ?? `${mainName}'s model`}
-              </span>
-            ) : (
-              <GoatBotModelPicker />
-            )}
+            {member ? <GoatBotMemberModelPicker member={member} /> : <GoatBotModelPicker />}
             {bot && (
               <Button
                 variant="ghost"
@@ -561,7 +554,8 @@ function GoatBotNotice({
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
-      {availability.kind === "ready" && onSelectExample ? (
+      {/* The examples are coding requests for the main bot; a member's purpose says what it does. */}
+      {availability.kind === "ready" && onSelectExample && member === null ? (
         <EmptyContent>
           <div className="flex flex-col items-center gap-2">
             {EXAMPLES.map((example) => (

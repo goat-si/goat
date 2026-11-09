@@ -224,10 +224,17 @@ const make = Effect.gen(function* () {
           if (listed === undefined || record === undefined || listed.state === "deleted") {
             return yield* new ChannelGatewayError({ reason: "not_found" });
           }
+          // The main bot's model is the GOAT Bot model setting, which modelFor reads instead.
+          if (input.defaultModelSelection !== undefined && record.role === "main") {
+            return yield* new ChannelGatewayError({ reason: "invalid_input" });
+          }
           const changes = {
             ...(input.name === undefined ? {} : { name: input.name }),
             ...(input.avatar === undefined ? {} : { avatar: input.avatar }),
             ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
+            ...(input.defaultModelSelection === undefined
+              ? {}
+              : { defaultModelSelection: input.defaultModelSelection }),
             updatedAt: now,
           };
           const next: ProfileRecord = { ...record, ...changes };

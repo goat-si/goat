@@ -1,4 +1,5 @@
 export * from "./rows.ts";
+export * from "./previewText.ts";
 export * from "./labels.ts";
 export * from "./readers.ts";
 export * from "./activity.ts";

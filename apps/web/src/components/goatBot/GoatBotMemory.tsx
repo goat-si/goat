@@ -18,6 +18,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
+import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
 
 /** GOAT Bot's notes, read only; changing or forgetting one is a message the person sends. */
 export function GoatBotMemory({
@@ -100,7 +101,10 @@ function NoteList({
         <p className="text-xs text-muted-foreground">{GOAT_BOT_NOTES_TRUNCATED_COPY}</p>
       )}
       {view.empty === "none" ? (
-        <p>No notes yet. Ask {botName} to remember a standing rule.</p>
+        <GoatBotPanelEmpty
+          title="No notes yet"
+          next={`Ask ${botName} to remember a standing rule.`}
+        />
       ) : view.empty === "none_in_window" ? (
         <p>No complete note fits in the newest 64 KB of memory.md.</p>
       ) : view.empty === "no_current" ? (

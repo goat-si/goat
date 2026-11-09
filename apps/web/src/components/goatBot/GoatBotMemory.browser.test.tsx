@@ -87,9 +87,7 @@ it("lists notes newest first with their date and says how GOAT Bot uses them", a
 it("says when there are no notes yet", async () => {
   setup({ data: { revision: null, notes: [], truncated: false } });
   await using screen = await render(<GoatBotMemory environmentId={environmentId} />);
-  await expect
-    .element(screen.getByText("No notes yet. Ask GOAT Bot to remember a standing rule."))
-    .toBeVisible();
+  await expect.element(screen.getByText("No notes yet")).toBeVisible();
 });
 
 it("a member's tab says the notes are shared and a long file says only the newest show", async () => {
@@ -356,9 +354,7 @@ it.each([
     )
     .toBeVisible();
   await expect.element(screen.getByText(body)).toBeVisible();
-  expect(
-    screen.getByText("No notes yet. Ask GOAT Bot to remember a standing rule.").query(),
-  ).toBeNull();
+  expect(screen.getByText("No notes yet").query()).toBeNull();
 });
 
 it("says when every note has been replaced", async () => {

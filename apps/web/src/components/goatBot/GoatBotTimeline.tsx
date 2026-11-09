@@ -8,7 +8,12 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { CircleAlertIcon, MessageCircleQuestionIcon } from "~/components/solar";
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  CircleAlertIcon,
+  MessageCircleQuestionIcon,
+} from "~/components/solar";
 import {
   createContext,
   type UIEvent,
@@ -341,7 +346,23 @@ export function GoatBotTimeline({
                         <span className="block truncate">{row.replyTo}</span>
                       </blockquote>
                     ) : null}
-                    {row.options.length > 0 ? (
+                    {row.answer !== undefined ? (
+                      <details className="group max-w-[44rem] rounded-xl border border-border">
+                        <summary className="flex min-h-9 cursor-default list-none items-center gap-2 px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [&::-webkit-details-marker]:hidden">
+                          <CheckIcon
+                            aria-hidden
+                            className="size-4 shrink-0 text-muted-foreground"
+                          />
+                          <span className="shrink-0 text-muted-foreground">Answered:</span>
+                          <span className="min-w-0 truncate font-medium">{row.answer}</span>
+                          <ChevronRightIcon
+                            aria-hidden
+                            className="ms-auto size-4 shrink-0 text-muted-foreground group-open:rotate-90"
+                          />
+                        </summary>
+                        <div className="border-t border-border px-3 py-3">{prose}</div>
+                      </details>
+                    ) : row.options.length > 0 ? (
                       <div className="max-w-[44rem] rounded-xl border border-border p-3">
                         {prose}
                         <div

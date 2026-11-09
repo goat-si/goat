@@ -209,9 +209,7 @@ it("the open Memory tab reads the notes again after the answer and after the tas
   state.notes = [];
   await screen.rerender(view([botRow("On it."), taskRow(2, "Done")]));
   expect(state.refresh).toHaveBeenCalledTimes(opened + 3);
-  await expect
-    .element(screen.getByText("No notes yet. Ask GOAT Bot to remember a standing rule."))
-    .toBeVisible();
+  await expect.element(screen.getByText("No notes yet")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Tasks" }));
   await userEvent.click(screen.getByRole("tab", { name: "Memory" }));
   expect(state.refresh).toHaveBeenCalledTimes(opened + 4);
