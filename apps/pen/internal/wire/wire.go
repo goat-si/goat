@@ -154,10 +154,13 @@ func WebSocketURL(relayURL, path string) (string, error) {
 // FormatAck is the cumulative ack text.
 func FormatAck(total uint64) string { return "a:" + strconv.FormatUint(total, 10) }
 
-// ParseAck parses "a:<decimal>".
+// maxAck is the largest ack the relay accepts (2^53 - 1, a JavaScript safe integer).
+const maxAck = 1<<53 - 1
+
+// ParseAck parses "a:<decimal>" (no sign, no leading zeros, at most 2^53 - 1).
 func ParseAck(s string) (uint64, bool) {
 	rest, ok := strings.CutPrefix(s, "a:")
-	if !ok || rest == "" {
+	if !ok || rest == "" || len(rest) > 1 && rest[0] == '0' {
 		return 0, false
 	}
 	for _, c := range rest {
@@ -166,6 +169,6 @@ func ParseAck(s string) (uint64, bool) {
 		}
 	}
 	n, err := strconv.ParseUint(rest, 10, 64)
-	return n, err == nil
+	return n, err == nil && n <= maxAck
 }
 
