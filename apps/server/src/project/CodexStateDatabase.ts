@@ -81,7 +81,7 @@ function resolveProjectRoot(cwd: string, roots: ReadonlyMap<string, string>): st
   while (true) {
     const root = roots.get(current);
     if (root !== undefined) return root;
-    const parent = dirname(current);
+    const parent = comparisonPath(dirname(current));
     if (parent === current) return undefined;
     current = parent;
   }

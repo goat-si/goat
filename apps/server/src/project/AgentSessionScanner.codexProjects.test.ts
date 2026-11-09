@@ -380,6 +380,12 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex projects", (it) => {
 
     expect(resolveCodexProjectCwd("/repo-0/nested/pkg", roots)).toBe("/repo-0/nested");
     expect(resolveCodexProjectCwd("/repo-0/pkg", roots)).toBe("/repo-0");
+
+    const uncRoots = ["\\\\server\\share", "\\\\server\\share\\repo"];
+    expect(resolveCodexProjectCwd("\\\\server\\share\\repo\\src", uncRoots)).toBe(
+      "\\\\server\\share\\repo",
+    );
+    expect(resolveCodexProjectCwd("\\\\server\\share\\other", uncRoots)).toBe("\\\\server\\share");
   });
 
   it.effect("reads the Codex state database from a shadow home", () =>
