@@ -5,7 +5,7 @@ import type { toastManager } from "./ui/toast";
 
 const { add, starred } = vi.hoisted(() => ({
   add: vi.fn<typeof toastManager.add>(),
-  starred: { value: false, duringCheck: () => {} },
+  starred: { value: false, failed: false, unavailable: false, duringCheck: () => {} },
 }));
 vi.mock("./ui/toast", () => ({ toastManager: { add, close: vi.fn() } }));
 vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
@@ -13,6 +13,8 @@ vi.mock("../state/sourceControl", () => ({ sourceControlEnvironment: { checkStar
 vi.mock("@goat/client-runtime/state/runtime", () => ({
   runAtomCommand: async () => {
     starred.duringCheck();
+    if (starred.failed) return { _tag: "Failure" };
+    if (starred.unavailable) return { _tag: "Success", value: null };
     return { _tag: "Success", value: starred.value };
   },
 }));
@@ -22,6 +24,8 @@ const environmentId = EnvironmentId.make("environment-1");
 function setup({ sent = 0, writable = true, alreadyStarred = false } = {}) {
   add.mockReset();
   starred.value = alreadyStarred;
+  starred.failed = false;
+  starred.unavailable = false;
   starred.duringCheck = () => {};
   const store = new Map([["goat:github-star-prompt:sent", String(sent)]]);
   vi.stubGlobal("window", {
@@ -78,6 +82,27 @@ describe("recordPromptSent", () => {
     starred.value = false;
     await (await startSession()).send();
     expect(add).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("skips an unavailable server check without permanently dismissing", async () => {
+    const store = setup({ sent: 5 });
+    starred.failed = true;
+    await (await startSession()).send();
+    expect(add).not.toHaveBeenCalled();
+    expect(store.has("goat:github-star-prompt:dismissed")).toBe(false);
+    starred.failed = false;
+    await (await startSession()).send();
+    expect(add).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  it("treats a missing driver as unavailable, not as not starred", async () => {
+    const store = setup({ sent: 5 });
+    starred.unavailable = true;
+    await (await startSession()).send();
+    expect(add).not.toHaveBeenCalled();
+    expect(store.has("goat:github-star-prompt:dismissed")).toBe(false);
     vi.unstubAllGlobals();
   });
 

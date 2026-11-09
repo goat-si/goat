@@ -54,10 +54,7 @@ describe("makeIsRepositoryStarred", () => {
     return Effect.gen(function* () {
       const isStarred = yield* makeIsRepositoryStarred;
       const exit = yield* Effect.exit(isStarred("github.com", "goat-si/goat"));
-      const tag: unknown = (exit as { _tag?: unknown })._tag;
-      assert.strictEqual(tag, "Failure");
-      const failed = exit._tag === "Failure" ? exit : null;
-      assert.isTrue(failed !== null && failed.cause !== undefined);
+      assert.strictEqual(exit._tag, "Failure");
     }).pipe(Effect.provide(api));
   });
 });
