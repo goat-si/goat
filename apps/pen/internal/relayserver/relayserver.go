@@ -47,11 +47,13 @@ type Limits struct {
 	AuthTimeout    time.Duration
 	PendingTimeout time.Duration
 	IdleTimeout    time.Duration
+	// WriteTimeout bounds one write and a closing handshake; a socket that stalls longer is dropped.
+	WriteTimeout time.Duration
 }
 
 // DefaultLimits are the contract's: 10 s auth, 10 s pending, 90 s idle.
 func DefaultLimits() Limits {
-	return Limits{AuthTimeout: 10 * time.Second, PendingTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
+	return Limits{AuthTimeout: 10 * time.Second, PendingTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, WriteTimeout: 10 * time.Second}
 }
 
 // Hooks let tests and wrappers observe the relay.
@@ -62,6 +64,8 @@ type Hooks struct {
 	OnAck func(nodeID string, total uint64)
 	// OnBadAck is called when an ack closes a socket 4402.
 	OnBadAck func()
+	// OnSocketDone is called when a socket's handler, reader and writer have all ended.
+	OnSocketDone func(nodeID, role string)
 }
 
 // Server is a relay. It is an http.Handler.
@@ -132,7 +136,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		origin, _ = wire.RelayOrigin(scheme + "://" + r.Host)
 	}
-	k := &sock{srv: s, ws: ws, nodeID: nodeID, out: newOutq(ws)}
+	k := &sock{srv: s, ws: ws, nodeID: nodeID, out: newOutq(ws, s.Limits.WriteTimeout)}
 	s.mu.Lock()
 	s.socks[k] = struct{}{}
 	rm := s.rooms[nodeID]
@@ -144,6 +148,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	k.room = rm
 	defer s.release(k)
+	if f := s.Hooks.OnSocketDone; f != nil {
+		defer func() {
+			role := "client"
+			if k.role == roleNode {
+				role = "node"
+			}
+			f(nodeID, role)
+		}()
+	}
 	if role == "node" {
 		k.role = roleNode
 		rm.acceptUplink(k, origin)
@@ -578,13 +591,14 @@ func sendable(code uint16) uint16 {
 // outq sends a socket's messages in order from one goroutine, so the room never blocks on a slow
 // peer. The contract windows bound what it holds; past them plus slack the socket is aborted.
 type outq struct {
-	ws    *websocket.Conn
-	mu    sync.Mutex
-	items []outItem
-	bytes int
-	done  bool
-	wake  chan struct{}
-	ended chan struct{}
+	ws      *websocket.Conn
+	timeout time.Duration
+	mu      sync.Mutex
+	items   []outItem
+	bytes   int
+	done    bool
+	wake    chan struct{}
+	ended   chan struct{}
 }
 
 type outItem struct {
@@ -593,8 +607,8 @@ type outItem struct {
 	close uint16
 }
 
-func newOutq(ws *websocket.Conn) *outq {
-	q := &outq{ws: ws, wake: make(chan struct{}, 1), ended: make(chan struct{})}
+func newOutq(ws *websocket.Conn, timeout time.Duration) *outq {
+	q := &outq{ws: ws, timeout: timeout, wake: make(chan struct{}, 1), ended: make(chan struct{})}
 	go q.run()
 	return q
 }
@@ -623,10 +637,21 @@ func (q *outq) push(it outItem) {
 	}
 }
 
-func (q *outq) binary(b []byte)   { q.push(outItem{data: b}) }
-func (q *outq) text(s string)     { q.push(outItem{data: []byte(s), text: true}) }
-func (q *outq) close(code uint16) { q.push(outItem{close: code}) }
-func (q *outq) wait()             { <-q.ended }
+func (q *outq) binary(b []byte) { q.push(outItem{data: b}) }
+func (q *outq) text(s string)   { q.push(outItem{data: []byte(s), text: true}) }
+
+// close queues the close frame; a writer still busy after the write timeout is aborted.
+func (q *outq) close(code uint16) {
+	q.push(outItem{close: code})
+	time.AfterFunc(q.timeout, func() {
+		select {
+		case <-q.ended:
+		default:
+			q.ws.CloseNow()
+		}
+	})
+}
+func (q *outq) wait() { <-q.ended }
 
 func (q *outq) run() {
 	defer close(q.ended)
@@ -647,7 +672,7 @@ func (q *outq) run() {
 		q.bytes -= len(it.data)
 		q.mu.Unlock()
 		if it.close != 0 {
-			cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			cctx, cancel := context.WithTimeout(ctx, q.timeout)
 			done := make(chan struct{})
 			go func() {
 				q.ws.Close(websocket.StatusCode(it.close), "")
@@ -665,7 +690,10 @@ func (q *outq) run() {
 		if it.text {
 			typ = websocket.MessageText
 		}
-		if err := q.ws.Write(ctx, typ, it.data); err != nil {
+		wctx, cancel := context.WithTimeout(ctx, q.timeout)
+		err := q.ws.Write(wctx, typ, it.data)
+		cancel()
+		if err != nil {
 			q.ws.CloseNow()
 			q.mu.Lock()
 			q.done, q.items = true, nil

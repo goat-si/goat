@@ -1,10 +1,12 @@
 package relayserver_test
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"encoding/binary"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -528,6 +530,52 @@ func TestAnyOtherTextCloses1003(t *testing.T) {
 	n.sendText("hello")
 	if code := <-n.closed; code != int(relayserver.CodeUnsupported) {
 		t.Fatalf("uplink closed %d, want 1003", code)
+	}
+}
+
+// stuckClient upgrades a client session by hand over raw TCP with a tiny receive buffer, then
+// never reads again.
+func stuckClient(t *testing.T, rs *relaytest.Server, nodeID string) net.Conn {
+	t.Helper()
+	addr := strings.TrimPrefix(rs.URL, "http://")
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	c.(*net.TCPConn).SetReadBuffer(4096)
+	req := "GET /v1/client/" + nodeID + " HTTP/1.1\r\nHost: " + addr + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+	if _, err := c.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	res, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil || res.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade: %v %v", res, err)
+	}
+	return c
+}
+
+func TestAPeerThatStopsReadingIsDroppedWithItsGoroutines(t *testing.T) {
+	l := relayserver.DefaultLimits()
+	l.WriteTimeout = 300 * time.Millisecond
+	rs := relaytest.NewWithLimits(l)
+	done := make(chan string, 16)
+	rs.Relay.Hooks.OnSocketDone = func(nodeID, role string) { done <- role }
+	rs.Start()
+	t.Cleanup(rs.Close)
+	n := ready(t, rs, nodeOpts{})
+	stuckClient(t, rs, n.nodeID)
+	sid := n.expect(t, wire.FrameOpen, 0).SID
+	chunk := make([]byte, 64<<10)
+	for range relayserver.SocketWindow/len(chunk) - 1 {
+		n.frameOut(wire.FrameData, sid, chunk)
+	}
+	if role := <-done; role != "client" {
+		t.Fatalf("socket done: %s, want the stuck client", role)
+	}
+	if code := n.closeOf(t, sid); code == 0 {
+		t.Fatal("the node was not told the session ended")
 	}
 }
 
