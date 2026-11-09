@@ -661,3 +661,26 @@ func TestUplinkReturnSyncsRecordsSignedWhileOffline(t *testing.T) {
 	})
 	_ = bID
 }
+
+func TestLeaveThatNoMemberTookKeepsTheKeysAndTheNodeRunning(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	actx, stopA := context.WithCancel(ctx)
+	a := founder(t, actx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	stopA()
+	a.done <- <-a.done // Cleanup reads it again
+	var res struct{ Results []PushResult }
+	err := Call(b.st, Request{Op: "leave"}, &res)
+	if err == nil {
+		t.Fatalf("leave with every member unreachable reported success: %+v", res.Results)
+	}
+	if _, err := b.st.LoadIdentity(); err != nil {
+		t.Fatalf("keys deleted although no member learned of the leave: %v", err)
+	}
+	if _, err := os.Stat(b.st.Path(LeftMarker)); !os.IsNotExist(err) {
+		t.Fatalf("left marker written although the leave did not reach the mesh: %v", err)
+	}
+}

@@ -31,17 +31,29 @@ func (d *Daemon) revoke(ctx context.Context, subject string, compromised bool) (
 // leave revokes this node's own key, pushes the revoke to the members it had, and deletes its keys.
 // The caller stops the daemon after replying.
 func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
-	before := d.view().SortedMembers()
-	if _, err := d.mesh().Append(d.id, mesh.TypeRevoke, d.now().UnixMilli(), mesh.Fields{Subjects: []string{d.selfKey()}}); err != nil {
-		return nil, err
+	v := d.view()
+	before := v.SortedMembers()
+	// A retried leave finds its own revoke already signed and only pushes it again.
+	if _, revoked := v.Revoked[d.selfKey()]; !revoked {
+		if _, err := d.mesh().Append(d.id, mesh.TypeRevoke, d.now().UnixMilli(), mesh.Fields{Subjects: []string{d.selfKey()}}); err != nil {
+			return nil, err
+		}
+		d.viewChanged()
 	}
-	d.viewChanged()
 	res := d.pushTo(ctx, before)
+	taken := 0
 	for i := range res {
 		// A member that refuses this key already holds a revoke of it (another push carried it).
 		if res[i].Result == "refused" {
 			res[i].Result = "taken"
 		}
+		if res[i].Result == "taken" {
+			taken++
+		}
+	}
+	if len(res) > 0 && taken == 0 {
+		// Deleting the keys now would leave the mesh counting this node as a member for good.
+		return res, errors.New("no member took the leave; this node keeps running so its next sync delivers it, or run pen leave again")
 	}
 	d.upMu.Lock()
 	if d.upCancel != nil {
