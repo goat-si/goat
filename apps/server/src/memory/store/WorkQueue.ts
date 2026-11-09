@@ -24,6 +24,9 @@ import {
 } from "./StoreModel.ts";
 import type { ThreadLineage } from "./StoreModel.ts";
 
+// Bounds the per-read walk over app-owned task results; past it the lineage is too large to trust.
+const MAX_TASK_RESULT_SOURCES = 100;
+
 export const makeWorkQueue = (
   kernel: Pick<StoreKernel, "sql" | "transact">,
   itemWrites: Pick<ItemWrites, "enqueueWork">,
@@ -37,7 +40,8 @@ export const makeWorkQueue = (
     );
     return (yield* workRows(rows))[0];
   });
-  const readThreadLineage = Effect.fn("MemoryStore.readThreadLineage")(function* (
+  // Runs inside readThreadLineage's span, once per task result source.
+  const readOwnLineage = Effect.fnUntraced(function* (
     thread: M.ScopedThreadRef,
     space: M.MemorySpaceId,
   ) {
@@ -61,8 +65,8 @@ export const makeWorkQueue = (
           state: "tracked",
           revisions: [],
         };
-    // App-owned delegation sends a task, not parent history; its node/spawn links
-    // alone do not fence writes. Provider-native children cannot prove non-inheritance.
+    // App-owned tasks get a task, not parent history, and their results are merged in
+    // readThreadLineage from the child's own lineage. Native children cannot prove non-inheritance.
     // An active provider pointer alone also says nothing about inherited context.
     // Same-thread handoffs/compaction keep the cumulative set; rollback cannot clear it.
     const unknown = yield* stored(
@@ -81,12 +85,66 @@ export const makeWorkQueue = (
         OR (event_type='provider-thread.updated' AND json_extract(payload_json,'$.status')='not_loaded' AND json_extract(payload_json,'$.nativeThreadRef') IS NOT NULL AND json_extract(payload_json,'$.providerSessionId') IS NULL)
         OR (event_type IN ('context-transfer.created','context-transfer.updated')
           AND json_extract(payload_json,'$.type') IS NOT 'subagent_spawn'
+          AND json_extract(payload_json,'$.type') IS NOT 'subagent_result'
           AND json_extract(payload_json,'$.targetThreadId')=${thread.threadId}
           AND json_extract(payload_json,'$.sourceThreadId')!=${thread.threadId})) LIMIT 1`,
     );
     return lineage.memorySpaceId !== space || unknown.length
       ? { ...lineage, state: "unknown" as const }
       : lineage;
+  });
+  const taskResultSources = (threadId: M.ThreadId) =>
+    stored(
+      "thread-lineage-results",
+      sql<{ source: string | null; linked: number }>`
+      SELECT DISTINCT json_extract(t.payload_json,'$.sourceThreadId') AS source,
+        (EXISTS(SELECT 1 FROM orchestration_events s
+          WHERE s.application_event_version=2 AND s.aggregate_kind='thread' AND s.stream_id=${threadId}
+          AND s.event_type='subagent.updated' AND json_extract(s.payload_json,'$.origin')='app_owned'
+          AND json_extract(s.payload_json,'$.childThreadId')=json_extract(t.payload_json,'$.sourceThreadId'))
+        AND EXISTS(SELECT 1 FROM orchestration_events c
+          WHERE c.application_event_version=2 AND c.aggregate_kind='thread'
+          AND c.stream_id=json_extract(t.payload_json,'$.sourceThreadId') AND c.event_type='thread.created'
+          AND json_extract(c.payload_json,'$.lineage.parentThreadId')=${threadId}
+          AND json_extract(c.payload_json,'$.lineage.relationshipToParent')='subagent'
+          AND json_extract(c.payload_json,'$.creationSource') IS NOT 'provider')
+        AND NOT EXISTS(SELECT 1 FROM orchestration_events d
+          WHERE d.application_event_version=2 AND d.aggregate_kind='thread'
+          AND d.stream_id=json_extract(t.payload_json,'$.sourceThreadId') AND d.event_type='thread.deleted')) AS linked
+      FROM orchestration_events t
+      WHERE t.application_event_version=2 AND t.aggregate_kind='thread' AND t.stream_id=${threadId}
+      AND t.event_type IN ('context-transfer.created','context-transfer.updated')
+      AND json_extract(t.payload_json,'$.type')='subagent_result'
+      AND json_extract(t.payload_json,'$.targetThreadId')=${threadId}
+      AND json_extract(t.payload_json,'$.sourceThreadId') IS NOT ${threadId}`,
+    );
+  // A missing row reads as empty, so only a linked, undeleted app-owned child is merged;
+  // its lineage was recorded before any body reached it and never shrinks.
+  const readThreadLineage = Effect.fn("MemoryStore.readThreadLineage")(function* (
+    thread: M.ScopedThreadRef,
+    space: M.MemorySpaceId,
+  ) {
+    const own = yield* readOwnLineage(thread, space);
+    if (own.state !== "tracked") return own;
+    const revisions = new Set(own.revisions);
+    const visited = new Set<string>([thread.threadId]);
+    const pending = [thread.threadId];
+    for (let next = pending.shift(); next !== undefined; next = pending.shift()) {
+      for (const { source, linked } of yield* taskResultSources(next)) {
+        if (!source || !linked || visited.has(source)) return { ...own, state: "unknown" as const };
+        visited.add(source);
+        if (visited.size > MAX_TASK_RESULT_SOURCES + 1)
+          return { ...own, state: "overflow" as const };
+        const child = M.ThreadId.make(source);
+        const lineage = yield* readOwnLineage({ ...thread, threadId: child }, space);
+        if (lineage.state !== "tracked") return { ...own, state: lineage.state };
+        for (const revision of lineage.revisions) revisions.add(revision);
+        pending.push(child);
+      }
+    }
+    return revisions.size > 100
+      ? { ...own, state: "overflow" as const }
+      : { ...own, revisions: [...revisions] };
   });
   const appendThreadLineage = Effect.fn("MemoryStore.appendThreadLineage")(function* (
     thread: M.ScopedThreadRef,
