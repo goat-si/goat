@@ -165,7 +165,28 @@ it("re-reads the rows when the server's three-day cutoff passes a finished task"
   const { registry, listed } = setup();
   expect(listed()).toEqual([worker]);
 
-  vi.advanceTimersByTime(HOUR);
+  vi.advanceTimersByTime(HOUR + 1_000);
+  expect(listed()).toEqual([]);
+  registry.dispose();
+});
+
+it("keeps re-reading when the server still lists a task at or just past its cutoff", () => {
+  const completedAt = START - 71 * HOUR;
+  const cutoff = completedAt + 72 * HOUR;
+  // The server keeps the task at its cutoff and its clock trails ours by thirty seconds.
+  server.answer = () => ({
+    rows:
+      (vi.getMockedSystemTime()?.valueOf() ?? START) - 30_000 <= cutoff
+        ? [taskRow({ completedAt })]
+        : [],
+    mainMessageCount: 0,
+  });
+  const { registry, listed } = setup();
+  expect(listed()).toEqual([worker]);
+
+  vi.advanceTimersByTime(HOUR + 1_000);
+  expect(listed()).toEqual([worker]);
+  vi.advanceTimersByTime(60_000);
   expect(listed()).toEqual([]);
   registry.dispose();
 });

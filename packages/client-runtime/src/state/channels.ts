@@ -24,6 +24,9 @@ import { createEnvironmentSessionAtoms } from "./session.ts";
 const NO_WORK: ReadonlyArray<GoatBotWorkRef> = Object.freeze([]);
 // setTimeout's longest delay; a later expiry re-arms when this one fires.
 const MAX_TIMER_MS = 2_147_483_647;
+const CUTOFF_MARGIN_MS = 1_000;
+const CUTOFF_RETRY_MS = 60_000;
+const CUTOFF_RETRY_WINDOW_MS = 10 * 60_000;
 
 /**
  * Commands and queries for the GOAT bot, the channel ledger, and Slack settings. Bot messages
@@ -140,7 +143,12 @@ export function createChannelEnvironmentAtoms<R, E>(
           for (const row of result.value.rows) {
             const retiresAt = botRowRetiresAt(row);
             const listedUntil = botRowListedUntil(row);
-            if (listedUntil > now) nextExpiry = Math.min(nextExpiry, listedUntil);
+            // The server still lists a task at its cutoff, and its clock may trail ours: re-read
+            // just after the cutoff, and again for a bounded while if the row is still there.
+            if (listedUntil >= now)
+              nextExpiry = Math.min(nextExpiry, listedUntil + CUTOFF_MARGIN_MS);
+            else if (now - listedUntil < CUTOFF_RETRY_WINDOW_MS)
+              nextExpiry = Math.min(nextExpiry, now + CUTOFF_RETRY_MS);
             if (now >= retiresAt) {
               if (row.kind === "task") retiredTasks.add(row.task.taskId);
               continue;
