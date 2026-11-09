@@ -7,6 +7,13 @@ import {
 import type { BotRemoteWork, BotThreadRow, EnvironmentId, ThreadId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
+import {
+  BrainIcon,
+  CalendarClockIcon,
+  FolderIcon,
+  ListChecksIcon,
+  MonitorIcon,
+} from "~/components/solar";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
@@ -25,8 +32,14 @@ import {
 } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
 
-const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
-type Tab = (typeof tabs)[number];
+const tabs = [
+  { name: "Tasks", Icon: ListChecksIcon },
+  { name: "Routines", Icon: CalendarClockIcon },
+  { name: "Memory", Icon: BrainIcon },
+  { name: "Library", Icon: FolderIcon },
+  { name: "Computer", Icon: MonitorIcon },
+] as const;
+type Tab = (typeof tabs)[number]["name"];
 
 export function GoatBotWorkPanel({
   environmentId,
@@ -60,14 +73,11 @@ export function GoatBotWorkPanel({
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         {/* In a sheet the close button sits at the top right, beside the tabs. */}
         <div className={onShowChat ? "pr-10" : undefined}>
-          {/* Five labels do not always fit, so the row scrolls sideways and never wraps. Base UI
-          scrolls the active tab into view by offsetLeft, which needs the list positioned. */}
-          <TabsList
-            aria-label={`${botName} work`}
-            className="relative max-w-full overflow-x-auto [scrollbar-width:none]"
-          >
-            {tabs.map((name) => (
-              <TabsTab key={name} value={name} className="flex-none">
+          {/* Every destination stays in view: five equal columns, each an icon over its label. */}
+          <TabsList aria-label={`${botName} work`} className="grid grid-cols-5">
+            {tabs.map(({ name, Icon }) => (
+              <TabsTab key={name} value={name} variant="stacked">
+                <Icon aria-hidden />
                 {name}
               </TabsTab>
             ))}
