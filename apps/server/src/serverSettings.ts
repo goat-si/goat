@@ -1759,6 +1759,7 @@ const make = Effect.gen(function* () {
       });
       const changes: SecretChange[] = [];
       const nextSecretNames = new Set<string>();
+      const keptSecretNames = new Set<string>();
       const writtenSecretNames = new Set<string>();
       const inlineWrites = new Map<string, SecretChange>();
       const settings = mapSettingsSecrets(next, (secret) => {
@@ -1776,6 +1777,7 @@ const make = Effect.gen(function* () {
           return { value: secret.value, redacted: false };
         }
         if (secret.redacted) {
+          keptSecretNames.add(secret.secretName);
           nextSecretNames.add(secret.secretName);
           const inlineValue = inlineValues.get(secret.secretName);
           if (inlineValue !== undefined) {
@@ -1814,11 +1816,19 @@ const make = Effect.gen(function* () {
             : {}),
         });
       }
+      const effectiveChanges = changes.filter(
+        (change) => change.kind === "write" || !keptSecretNames.has(change.secretName),
+      );
+      const finalOperations = new Map(
+        effectiveChanges.map((change) => [change.secretName, change.kind]),
+      );
       return {
-        settings,
-        changes: changes.filter(
-          (change) => change.kind === "write" || !nextSecretNames.has(change.secretName),
+        settings: mapSettingsSecrets(settings, (secret) =>
+          secret.redacted && finalOperations.get(secret.secretName) === "remove"
+            ? { value: "", redacted: false }
+            : secret,
         ),
+        changes: effectiveChanges,
       };
     });
 

@@ -135,7 +135,7 @@ it.layer(NodeServices.layer)("server settings duplicate secrets", (it) => {
       },
     ].map((testCase) => [testCase.label, testCase] as const),
   )(
-    "preserves a newly written secret alongside a duplicate row (%s)",
+    "keeps duplicate rows consistent with the last secret operation (%s)",
     ([, { duplicate, writeLast }]) =>
       Effect.gen(function* () {
         const service = yield* ServerSettingsModule.ServerSettingsService;
@@ -143,7 +143,7 @@ it.layer(NodeServices.layer)("server settings duplicate secrets", (it) => {
         const instanceId = ProviderInstanceId.make("codex_personal");
         const written = { name: "FOO", value: "new-foo", sensitive: true };
         const copy = { name: "FOO", ...duplicate };
-        yield* service.updateSettings({
+        const saved = yield* service.updateSettings({
           providerInstances: {
             [instanceId]: {
               driver: ProviderDriverKind.make("codex"),
@@ -153,7 +153,7 @@ it.layer(NodeServices.layer)("server settings duplicate secrets", (it) => {
           },
         });
         const stored = yield* store.get("provider-env-Y29kZXhfcGVyc29uYWw-Rk9P");
-        assert.isTrue(Option.isSome(stored));
+        assert.equal(Option.isSome(stored), writeLast);
         if (Option.isSome(stored)) assert.equal(new TextDecoder().decode(stored.value), "new-foo");
         const fresh = yield* Effect.gen(function* () {
           const reloaded = yield* ServerSettingsModule.ServerSettingsService;
@@ -163,9 +163,13 @@ it.layer(NodeServices.layer)("server settings duplicate secrets", (it) => {
             Layer.fresh(ServerSettingsModule.layer).pipe(Layer.provide(ServerSecretStore.layer)),
           ),
         );
-        const rows = fresh.providerInstances[instanceId]?.environment;
-        assert.equal(rows?.[writeLast ? 1 : 0]?.value, "new-foo");
-        assert.equal(rows?.[writeLast ? 0 : 1]?.value, duplicate.value);
+        for (const settings of [saved, fresh]) {
+          const rows = settings.providerInstances[instanceId]?.environment;
+          const secret = rows?.[writeLast ? 1 : 0];
+          assert.equal(secret?.value, writeLast ? "new-foo" : "");
+          assert.equal(secret?.valueRedacted === true, writeLast);
+          assert.equal(rows?.[writeLast ? 0 : 1]?.value, duplicate.value);
+        }
       }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 
