@@ -214,6 +214,7 @@ const seedWorkerTask = Effect.gen(function* () {
 
 interface LaunchCapture {
   readonly correlationId: string | undefined;
+  readonly launchedBy: SshRemoteDispatch.SshLaunchInput["launchedBy"];
 }
 
 interface LaunchFailures {
@@ -227,6 +228,14 @@ interface LaunchFailures {
   readonly stopDuringLaunchOnCalls?: ReadonlyArray<number>;
   readonly failCorrelateOnCalls?: ReadonlyArray<number>;
   readonly maxLanes?: number;
+  /** The workspace each launch asks for; the folder itself when absent. */
+  readonly workspace?:
+    | { readonly type: "cwd" }
+    | { readonly type: "worktree"; readonly branch: string };
+  /** The destination's identity as goat_environment_read reported it; null when that read failed. */
+  readonly sourceEnvironmentId?: string | null;
+  /** 0-based coordinator.launch call indexes whose remote write went out but never answered. */
+  readonly uncertainLaunchOnCalls?: ReadonlyArray<number>;
 }
 
 /** Runs goat_ssh_thread_launch with a channel-owned caller over one shared in-memory database. */
@@ -253,6 +262,12 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
         deletedAt: null,
       } as OrchestrationV2ThreadShell;
       const remoteResult: SshRemoteDispatch.SshLaunchResult = {
+        sourceEnvironmentId:
+          failures.sourceEnvironmentId === undefined
+            ? EnvironmentId.make("remote-environment")
+            : failures.sourceEnvironmentId === null
+              ? null
+              : EnvironmentId.make(failures.sourceEnvironmentId),
         host: "box",
         cwd: "/remote/project",
         projectId: "remote-project",
@@ -384,7 +399,10 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
           launch: (input, beforeLaunch) => {
             const call = launchCalls;
             launchCalls += 1;
-            launches.push({ correlationId: input.correlationId });
+            launches.push({
+              correlationId: input.correlationId,
+              launchedBy: input.launch.launchedBy,
+            });
             if (failures.failAuthorizeOnCalls?.includes(call) === true) {
               return Effect.fail(
                 new RemoteDispatchCoordinator.RemoteDispatchError({
@@ -406,6 +424,13 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
               );
             }
             return Effect.gen(function* () {
+              if (failures.uncertainLaunchOnCalls?.includes(call) === true) {
+                yield* beforeLaunch;
+                return yield* new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "ssh_failed",
+                  message: "box stopped answering after the launch was sent",
+                });
+              }
               if (failures.stopDuringLaunchOnCalls?.includes(call) === true) {
                 const taskId = yield* stopForCaller.pipe(Effect.orDie);
                 yield* move(taskId, {
@@ -478,6 +503,7 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
             cwd: "/remote/project",
             title: "Audit",
             message,
+            ...(failures.workspace === undefined ? {} : { workspace: failures.workspace }),
           })
           .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(deps), Effect.exit);
         responses.push(Exit.isSuccess(collected) ? collected.value.at(-1)?.result : undefined);
@@ -503,8 +529,78 @@ it.effect("a channel-owned launch persists its record and binds the supplied cor
     expect(record.destination).toEqual({
       correlationId: childWorkCorrelationIdFor(record.childWorkId),
       host: "box",
+      threadId: "remote-thread",
+      environmentId: "remote-environment",
+      workKind: "chore",
     });
   }),
+);
+
+it.effect("a channel-owned launch in the folder itself is a chore, and the remote is told so", () =>
+  Effect.gen(function* () {
+    const { launches, records } = yield* launchFromWorker(["Restart the dev server"], {
+      workspace: { type: "cwd" },
+    });
+    expect(records[0]!.destination?.workKind).toBe("chore");
+    expect(launches[0]!.launchedBy).toMatchObject({
+      threadId: callerThreadId,
+      environmentId: "launcher-environment",
+      via: "ssh_thread_launch",
+      workKind: "chore",
+    });
+  }),
+);
+
+it.effect("a channel-owned launch in its own worktree is coding work", () =>
+  Effect.gen(function* () {
+    const { launches, records } = yield* launchFromWorker(["Fix the flaky test"], {
+      workspace: { type: "worktree", branch: "fix/flaky" },
+    });
+    expect(records[0]!.destination).toMatchObject({
+      threadId: "remote-thread",
+      environmentId: "remote-environment",
+      workKind: "coding",
+    });
+    expect(launches[0]!.launchedBy?.workKind).toBe("coding");
+  }),
+);
+
+it.effect(
+  "a launch whose destination identity could not be read keeps its thread but no environment",
+  () =>
+    Effect.gen(function* () {
+      const { records } = yield* launchFromWorker(["Audit the release"], {
+        sourceEnvironmentId: null,
+      });
+      const destination = records[0]!.destination;
+      expect(destination).toMatchObject({
+        host: "box",
+        threadId: "remote-thread",
+        workKind: "chore",
+      });
+      expect(destination).not.toHaveProperty("environmentId");
+    }),
+);
+
+it.effect(
+  "a launch whose acknowledgement never came stays unbound with no thread and is not sent again",
+  () =>
+    Effect.gen(function* () {
+      const { responses, launches, records } = yield* launchFromWorker(
+        ["Audit the release", "Audit the release"],
+        { uncertainLaunchOnCalls: [0] },
+      );
+      expect(responses[0]).toMatchObject({ code: "orchestration_error" });
+      expect(responses[1]).toMatchObject({ code: "conflict" });
+      expect(launches).toHaveLength(1);
+      expect(records).toHaveLength(1);
+      expect(records[0]!.state).toBe("launched");
+      expect(records[0]!.destination).toEqual({
+        correlationId: childWorkCorrelationIdFor(records[0]!.childWorkId),
+        host: "box",
+        workKind: "chore",
+      });
+    }),
 );
 
 it.effect("an identical retry answers with the first attempt instead of launching twice", () =>

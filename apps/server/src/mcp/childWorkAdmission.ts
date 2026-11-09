@@ -8,6 +8,7 @@
  */
 import {
   type ChannelChildWorkDestination,
+  type GoatBotWorkKind,
   OrchestratorMcpFailure,
   type SshLaunchWorkspace,
   type RunId,
@@ -174,17 +175,22 @@ export const launchChildWork = Effect.fn("childWorkAdmission.launchChildWork")(f
   });
 });
 
-/** A remote launch's destination is always the record-derived correlation id plus its host. */
+/**
+ * A remote launch's destination is always the record-derived correlation id plus its host, with
+ * the work kind decided at admission so it survives a launch whose acknowledgement is lost.
+ */
 export const launchRemoteChildWork = (
   childWork: Option.Option<ChannelChildWork.ChannelChildWork["Service"]>,
   admission: ChannelChildAdmission | undefined,
   host: string,
+  workKind?: GoatBotWorkKind,
 ) =>
   launchChildWork(childWork, admission, {
     ...(admission === undefined
       ? {}
       : { correlationId: childWorkCorrelationIdFor(admission.record.childWorkId) }),
     host,
+    ...(workKind === undefined ? {} : { workKind }),
   });
 
 /** The destination accepted the work; without one, the launch-time destination stands. */
@@ -209,13 +215,20 @@ export const existingChildWorkConflict = (admission: ChannelChildAdmission) => {
   const record = admission.record;
   const destination = record.destination;
   const pointer =
-    destination?.threadId !== undefined
-      ? ", thread " + destination.threadId
-      : destination?.correlationId !== undefined
-        ? ", correlation id " + destination.correlationId
-        : record.destinationHint === undefined
+    destination?.host !== undefined
+      ? ", host " +
+        destination.host +
+        (destination.threadId === undefined ? "" : ", thread " + destination.threadId) +
+        (destination.correlationId === undefined
           ? ""
-          : ", destination " + record.destinationHint;
+          : ", correlation id " + destination.correlationId)
+      : destination?.threadId !== undefined
+        ? ", thread " + destination.threadId
+        : destination?.correlationId !== undefined
+          ? ", correlation id " + destination.correlationId
+          : record.destinationHint === undefined
+            ? ""
+            : ", destination " + record.destinationHint;
   return new OrchestratorMcpFailure({
     code: "conflict",
     message:

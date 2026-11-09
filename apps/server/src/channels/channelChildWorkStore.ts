@@ -15,6 +15,7 @@ import {
   type ChannelChildWorkState,
   type ChannelTaskId,
   isChannelChildWorkActive,
+  localChildThreadId,
   type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -163,7 +164,7 @@ const make = Effect.gen(function* () {
         AND value_json LIKE ${"%" + threadId + "%"}
     `.pipe(
       Effect.map((rows) =>
-        readRows(rows).find((record) => record.destination?.threadId === threadId),
+        readRows(rows).find((record) => localChildThreadId(record.destination) === threadId),
       ),
       Effect.mapError(toStoreError("findByDestinationThread")),
     );
