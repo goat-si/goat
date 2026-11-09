@@ -48,13 +48,18 @@ Command.runWith(root, {version: "test"})(["__ssh-helper", "capabilities"]).pipe(
     const result = await runModule(`const {sshHelperCommand} = await import(${helperModule});
 const root = Command.make("goat").pipe(Command.withSubcommands([sshHelperCommand]));
 Command.runWith(root, {version: "test"})(["__ssh-helper", "capabilities"]).pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain);`);
-    expect(result).toEqual({ status: 0, stdout: "caps v1 facts\n", stderr: "" });
+    expect(result).toEqual({ status: 0, stdout: "caps v1 facts wait-ready-report\n", stderr: "" });
   });
 });
 
 const startDescriptor = async (instanceIds: ReadonlyArray<string | undefined>) => {
   let requests = 0;
   const server = NodeHttp.createServer((request, response) => {
+    // The root answers as a ready server's does, for wait-ready.
+    if (request.url === "/") {
+      response.end("ok");
+      return;
+    }
     if (request.url !== "/.well-known/goat/environment") {
       response.writeHead(404);
       response.end();
@@ -143,16 +148,17 @@ const helper = Effect.fn("sshRuntimeFactsCommands.test.helper")(function* (
     return {
       stdout: write.mock.calls.map(([value]) => String(value)).join(""),
       failed: process.exitCode === 1,
+      exitCode: process.exitCode ?? 0,
     };
   } finally {
     process.exitCode = exitCode;
   }
 });
 
-const frameOf = (stdout: string) => {
+const frameOf = (stdout: string, call = "facts") => {
   const lines = stdout.split("\n");
   expect(lines.at(-1)).toBe("");
-  expect(lines[0]).toBe("begin v1 facts");
+  expect(lines[0]).toBe(`begin v1 ${call}`);
   const questions = lines.slice(1, -2);
   expect(lines.at(-2)).toBe(`end ${questions.length}`);
   return new Map(questions.map((line) => [line.split(" ")[0], line.slice(line.indexOf(" ") + 1)]));
@@ -211,6 +217,74 @@ describe("SSH helper facts frame", () => {
       );
       expect([...frame.keys()]).toEqual(["manifest", "commit", "live"]);
       expect(frame.get("live")).toBe("ok none unknown unknown unknown 0 0");
+    }),
+  );
+});
+describe("SSH helper wait-ready report", () => {
+  it.effect("a ready server's report answers live and compat as the separate subcommands do", () =>
+    Effect.gen(function* () {
+      const { files, port } = yield* liveRecord(["start-1"]);
+      const report = yield* helper([
+        "wait-ready",
+        String(port),
+        "2000",
+        "1000",
+        "--report",
+        ...files,
+      ]);
+      const live = yield* helper(["protocol", ...files, "--shell"]);
+      const compat = yield* helper(["compat", "--port", String(port)]);
+      expect(report.exitCode).toBe(0);
+      const frame = frameOf(report.stdout, "wait-ready");
+      expect([...frame.keys()]).toEqual(["ready", "live", "compat"]);
+      expect(frame.get("ready")).toBe(`ok ${port}`);
+      expect(frame.get("live")).toBe("ok " + live.stdout.trim());
+      expect(frame.get("compat")).toBe("ok " + compat.stdout.trim());
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { reads: ["start-1", "start-2"], compat: "fail changed" },
+    { reads: [undefined], compat: "fail unavailable" },
+  ])("refuses compat unless live and compat read one instance id: $compat", ({ reads, compat }) =>
+    Effect.gen(function* () {
+      const { files, port } = yield* liveRecord(reads);
+      const report = yield* helper([
+        "wait-ready",
+        String(port),
+        "2000",
+        "1000",
+        "--report",
+        ...files,
+      ]);
+      const frame = frameOf(report.stdout, "wait-ready");
+      expect(frame.get("live")).toMatch(/^ok live /u);
+      expect(frame.get("compat")).toBe(compat);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a server that is not ready by the deadline is reported, with nothing else asked", () =>
+    Effect.gen(function* () {
+      const { files, port, server } = yield* liveRecord(["start-1"]);
+      // A zero timeout ends the wait before its first request.
+      const report = yield* helper(["wait-ready", String(port), "0", "1000", "--report", ...files]);
+      expect(report.exitCode).toBe(0);
+      const frame = frameOf(report.stdout, "wait-ready");
+      expect([...frame.entries()]).toEqual([
+        ["ready", "fail timeout"],
+        ["live", "fail unavailable"],
+      ]);
+      expect(server.requests()).toBe(0);
+      const plain = yield* helper(["wait-ready", String(port), "0", "1000"]);
+      expect(plain).toEqual({ stdout: "", failed: true, exitCode: 1 });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a report without its three files prints nothing and fails", () =>
+    Effect.gen(function* () {
+      const report = yield* helper(["wait-ready", "1", "0", "1000", "--report"]);
+      expect(report.stdout).toBe("");
+      expect(report.exitCode).toBe(2);
     }),
   );
 });

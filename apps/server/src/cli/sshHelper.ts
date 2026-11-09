@@ -7,7 +7,9 @@ import * as NodeNet from "node:net";
 
 import { guardErrors } from "@goat/shared/errorGuards";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { Argument, Command } from "effect/cli";
+import { waitReadyReportFlags, waitReadyReportFrame } from "./sshRuntimeFactsCommands.ts";
 import { sshRuntimeHelperCommands } from "./sshRuntimeHelperCommands.ts";
 
 export * from "./sshRuntimeHelperCommands.ts";
@@ -82,15 +84,37 @@ const waitReady = Command.make("wait-ready", {
   port: Argument.Int("port"),
   timeoutMs: Argument.Int("timeout-ms"),
   probeTimeoutMs: Argument.Int("probe-timeout-ms"),
+  ...waitReadyReportFlags,
 }).pipe(
-  Command.withHandler(({ port, timeoutMs, probeTimeoutMs }) =>
+  Command.withHandler(({ port, timeoutMs, probeTimeoutMs, report, ...files }) =>
     Effect.promise(async () => {
+      const runtimeFile = Option.getOrUndefined(files.runtimeFile);
+      const portFile = Option.getOrUndefined(files.portFile);
+      const pidFile = Option.getOrUndefined(files.pidFile);
+      if (
+        report &&
+        (runtimeFile === undefined || portFile === undefined || pidFile === undefined)
+      ) {
+        process.exitCode = 2;
+        return;
+      }
       const deadline = Date.now() + timeoutMs;
+      let ready = false;
       while (Date.now() < deadline) {
-        if (await probe(port, probeTimeoutMs)) return;
+        if (await probe(port, probeTimeoutMs)) {
+          ready = true;
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      process.exitCode = 1;
+      if (report && runtimeFile !== undefined && portFile !== undefined && pidFile !== undefined) {
+        // The launch reads readiness from the frame's ready line, so a whole frame exits 0.
+        process.stdout.write(
+          await waitReadyReportFrame(port, ready, { runtimeFile, portFile, pidFile }),
+        );
+        return;
+      }
+      if (!ready) process.exitCode = 1;
     }),
   ),
 );
