@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
@@ -101,10 +102,23 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	revoked, stopWatch := daemon.WatchRevoked(st, m.NodeID)
+	defer stopWatch()
 	sec, err := daemon.OpenTCP(ctx, p.relay, p.id, m, port)
 	if err != nil {
 		return die(openErr(err, m, port, false))
 	}
+	var wasRevoked atomic.Bool
+	spliced := make(chan struct{})
+	defer close(spliced)
+	go func() {
+		select {
+		case <-revoked:
+			wasRevoked.Store(true)
+			sec.Close(wire.CodeNotAdmitted)
+		case <-spliced:
+		}
+	}()
 	closeOut := func() error {
 		if c, ok := stdout.(io.Closer); ok {
 			return c.Close()
@@ -112,7 +126,14 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 		return nil
 	}
 	if err := stream.Splice(ctx, sec, Stdin, stdout, closeOut); err != nil {
+		if wasRevoked.Load() {
+			return die(revokedErr(m))
+		}
 		return die(openErr(err, m, port, true))
 	}
 	return 0
+}
+
+func revokedErr(m mesh.Member) error {
+	return fmt.Errorf("%s (%s) was revoked from the mesh; session closed", m.Name, short(m.NodeID))
 }

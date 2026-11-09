@@ -114,6 +114,10 @@ func startService(mode string, st *state.Store) error {
 			return err
 		}
 		exec.Command("launchctl", "bootout", guiDomain()+"/"+launchdLabel).Run()
+		// pen leave disables the job; starting again re-enables it.
+		if err := run("launchctl", "enable", guiDomain()+"/"+launchdLabel); err != nil {
+			return err
+		}
 		if err := run("launchctl", "bootstrap", guiDomain(), plistPath()); err != nil {
 			return err
 		}
@@ -131,20 +135,27 @@ func stopService(mode string) error {
 	return nil
 }
 
-// removeService stops, disables and deletes the installed service (after pen leave).
-func removeService(mode string) error {
+// detachService disables the service and deletes its file without stopping the running daemon.
+func detachService(mode string) error {
 	switch mode {
 	case "systemd":
-		exec.Command("systemctl", "--user", "disable", "--now", "pen.service").Run()
+		if err := run("systemctl", "--user", "disable", "pen.service"); err != nil {
+			return err
+		}
 		if err := os.Remove(unitPath()); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return run("systemctl", "--user", "daemon-reload")
 	case "launchd":
-		exec.Command("launchctl", "bootout", guiDomain()+"/"+launchdLabel).Run()
+		if err := run("launchctl", "disable", guiDomain()+"/"+launchdLabel); err != nil {
+			return err
+		}
 		if err := os.Remove(plistPath()); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
 	return nil
 }
+
+// unloadLaunchd drops the (already exited) launchd job after leave.
+func unloadLaunchd() { exec.Command("launchctl", "bootout", guiDomain()+"/"+launchdLabel).Run() }

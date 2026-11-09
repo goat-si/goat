@@ -368,6 +368,126 @@ func TestTCPStreamCarriesBytesToALocalPortAndRefusedPortCloses4404(t *testing.T)
 	}
 }
 
+// gate holds a link's second send (the key confirmation) until release is closed.
+type gate struct {
+	relay.Conn
+	n       int
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (g *gate) Send(p []byte) error {
+	if g.n++; g.n == 2 {
+		close(g.reached)
+		<-g.release
+	}
+	return g.Conn.Send(p)
+}
+
+func TestMemberRevokedBeforeItConfirmsGets4401AndNoDial(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var dialed atomic.Int64
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dialed.Add(1)
+			go func() { io.Copy(c, c); c.Close() }()
+		}
+	}()
+	am := memberNamed(t, b, "a")
+	noise, _ := ident.DecodeKey(am.NoisePub)
+	conn, err := relay.Dial(ctx, rs.URL, am.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &gate{Conn: conn, reached: make(chan struct{}), release: make(chan struct{})}
+	type res struct {
+		sec *session.Secure
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		sec, err := session.Initiate(ctx, g, session.KindSession, am.NodeID, noise, b.id, nil,
+			session.Payload{V: 1, Stream: "tcp", Port: ln.Addr().(*net.TCPAddr).Port})
+		done <- res{sec, err}
+	}()
+	<-g.reached // a admitted b at message 1 and answered; b has not confirmed yet
+	var out struct{ Results []PushResult }
+	if err := Call(a.st, Request{Op: "revoke", Subject: memberNamed(t, a, "b").SignPub}, &out); err != nil {
+		t.Fatal(err)
+	}
+	close(g.release)
+	r := <-done
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	r.sec.Send(append([]byte{stream.TypeData}, "x"...))
+	r.sec.Send([]byte{stream.TypeFin})
+	if p, err := r.sec.Recv(ctx); relay.CodeOf(err) != wire.CodeNotAdmitted {
+		t.Fatalf("revoked member's session got %x, %v; want 4401", p, err)
+	}
+	if n := dialed.Load(); n != 0 {
+		t.Fatalf("a dialed the port %d time(s) for a revoked member", n)
+	}
+}
+
+func TestRevokeCarriedElsewhereClosesTheSubjectsOpenMeshSessionAtOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	c := joiner(t, ctx, rs, a.invite(t, time.Minute), "c")
+	// c holds a mesh session open at a: a has sent its hello, c has sent nothing yet.
+	am := memberNamed(t, c, "a")
+	noise, _ := ident.DecodeKey(am.NoisePub)
+	conn, err := relay.Dial(ctx, rs.URL, am.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := session.Initiate(ctx, conn, session.KindSession, am.NodeID, noise, c.id, nil, session.Payload{V: 1, Stream: "mesh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := &mesh.Lines{L: sec}
+	if m, err := lines.Read(ctx); err != nil || m.T != "hello" {
+		t.Fatalf("first line %+v, %v", m, err)
+	}
+	// b revokes c and pushes to a over a different session; a stores it before answering b's done.
+	var out struct{ Results []PushResult }
+	if err := Call(b.st, Request{Op: "revoke", Subject: memberNamed(t, b, "c").SignPub}, &out); err != nil {
+		t.Fatal(err)
+	}
+	lines.Write(mesh.Msg{T: "hello", Have: nil})
+	lines.Write(mesh.Msg{T: "done"})
+	for {
+		m, err := lines.Read(ctx)
+		if err != nil {
+			if relay.CodeOf(err) != wire.CodeNotAdmitted {
+				t.Fatalf("got %v, want 4401", err)
+			}
+			return
+		}
+		if m.T == "done" {
+			t.Fatal("a finished a sync with a key revoked on another session instead of closing it at once")
+		}
+	}
+}
+
 func TestRevokeClosesTheRevokedMembersLiveSessions4401(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -396,6 +516,27 @@ func TestRevokeClosesTheRevokedMembersLiveSessions4401(t *testing.T) {
 	}
 }
 
+func TestInvitesMadeAfterARunningNodeJoinsArePersisted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := founder(t, ctx, rs, "b", nil)
+	var ls LsReply
+	if err := Call(b.st, Request{Op: "join", Token: a.invite(t, time.Minute).String(), Name: "b"}, &ls); err != nil {
+		t.Fatal(err)
+	}
+	if len(ls.Members) != 2 || ls.MeshID != a.ls(t).MeshID {
+		t.Fatalf("b after join: %+v", ls)
+	}
+	tok := b.invite(t, time.Minute)
+	var saved []mesh.Invite
+	if ok, err := b.st.ReadJSON("offers.json", &saved); err != nil || !ok || len(saved) != 1 || saved[0].ID != session.InviteID(tok.Secret) {
+		t.Fatalf("offers.json after join: present=%v %v, %d invites", ok, err, len(saved))
+	}
+}
+
 func TestLeavePushReportsTakenAndDeletesKeys(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -421,6 +562,9 @@ func TestLeavePushReportsTakenAndDeletesKeys(t *testing.T) {
 	b.done <- nil
 	if _, err := b.st.LoadIdentity(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("identity still present: %v", err)
+	}
+	if _, err := os.Stat(b.st.Path(LeftMarker)); err != nil {
+		t.Fatalf("no left marker after leave: %v", err)
 	}
 }
 

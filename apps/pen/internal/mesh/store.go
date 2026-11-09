@@ -13,8 +13,9 @@ import (
 const (
 	// MaxRecords caps a mesh's record set.
 	MaxRecords = 4096
-	// MaxPool caps records waiting for their prev.
-	MaxPool = 256
+	// MaxPool caps records waiting for their prev; MaxPoolPerSigner caps one signer's share.
+	MaxPool          = 256
+	MaxPoolPerSigner = 16
 )
 
 // ErrFull is returned when a merge would take the set past MaxRecords.
@@ -27,9 +28,22 @@ type Store struct {
 
 	mu    sync.Mutex
 	recs  map[string]*Record
-	pool  map[string]*Record
 	selfN uint64
 	view  *View
+	// self is this node's signPub; its own records never wait in the pool.
+	self string
+
+	// pool holds records whose prev is incomplete, in memory only.
+	pool    map[string]pooled
+	poolSeq uint64
+	poolBy  map[string]int
+	// reach[k] holds stored records whose past (or self) has a found or admit introducing k.
+	reach map[string]map[string]bool
+}
+
+type pooled struct {
+	r   *Record
+	seq uint64
 }
 
 type storeFile struct {
@@ -41,7 +55,15 @@ type storeFile struct {
 
 // NewStore is an empty set for meshID; st may be nil for an unpersisted set.
 func NewStore(st *state.Store, meshID string) *Store {
-	return &Store{st: st, MeshID: meshID, recs: map[string]*Record{}, pool: map[string]*Record{}}
+	return &Store{st: st, MeshID: meshID, recs: map[string]*Record{}, pool: map[string]pooled{},
+		poolBy: map[string]int{}, reach: map[string]map[string]bool{}}
+}
+
+// SetSelf names this node's signing key (base64url), whose records are never pooled.
+func (s *Store) SetSelf(signPub string) {
+	s.mu.Lock()
+	s.self = signPub
+	s.mu.Unlock()
 }
 
 // Load reads mesh.json, re-verifying every record; os.ErrNotExist when there is no mesh.
@@ -55,7 +77,7 @@ func Load(st *state.Store) (*Store, error) {
 		return nil, os.ErrNotExist
 	}
 	s := NewStore(st, f.MeshID)
-	if _, err := s.merge(append(f.Records, f.Pool...)); err != nil && !errors.Is(err, ErrFull) {
+	if _, err := s.merge(f.Records); err != nil && !errors.Is(err, ErrFull) {
 		return nil, err
 	}
 	s.selfN = f.SelfN
@@ -78,6 +100,7 @@ func Found(st *state.Store, id *ident.Identity, name string, at int64) (*Store, 
 		return nil, err
 	}
 	s := NewStore(st, MeshIDOf(r))
+	s.self = ident.B64.EncodeToString(id.SignPub)
 	if _, err := s.Merge([]*Record{r}); err != nil {
 		return nil, err
 	}
@@ -110,8 +133,9 @@ func (s *Store) belongs(r *Record) bool {
 	return r.B.Mesh == s.MeshID
 }
 
-// Merge verifies and stores records (contract "Records"): unverifiable or foreign ones are dropped,
-// ones whose prev is incomplete wait in the pool. It returns the records newly stored.
+// Merge verifies and stores records (contract "Records"). Unverifiable or foreign records are
+// dropped; a record whose prev is all present is stored only if its signer was introduced (found or
+// admit) in its past; one whose prev is incomplete waits in the pool. It returns the stored records.
 func (s *Store) Merge(recs []*Record) ([]*Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -122,47 +146,151 @@ func (s *Store) Merge(recs []*Record) ([]*Record, error) {
 	return added, err
 }
 
+func (s *Store) prevPresent(r *Record) bool {
+	for _, p := range r.B.Prev {
+		if s.recs[p] == nil {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Store) merge(recs []*Record) ([]*Record, error) {
+	var added []*Record
+	var full error
+	store := func(r *Record) {
+		ok, err := s.store(r)
+		if err != nil {
+			full = err
+		}
+		if ok {
+			added = append(added, r)
+		}
+	}
 	for _, r := range recs {
 		if r == nil || r.Verify() != nil || !s.belongs(r) {
 			continue
 		}
-		if s.recs[r.Hash] != nil || s.pool[r.Hash] != nil {
+		if s.recs[r.Hash] != nil {
 			continue
 		}
-		if len(s.pool) >= MaxPool {
+		if _, waiting := s.pool[r.Hash]; waiting {
 			continue
 		}
-		s.pool[r.Hash] = r
+		if s.prevPresent(r) {
+			store(r)
+		} else if r.B.By != s.self {
+			s.poolAdd(r)
+		}
 	}
-	var added []*Record
-	for progress := true; progress; {
+	for progress := len(added) > 0; progress; {
 		progress = false
-		ready := make([]*Record, 0)
-		for _, r := range s.pool {
-			ok := true
-			for _, p := range r.B.Prev {
-				if s.recs[p] == nil {
-					ok = false
-					break
-				}
-			}
-			if ok {
-				ready = append(ready, r)
+		var ready []pooled
+		for _, e := range s.pool {
+			if s.prevPresent(e.r) {
+				ready = append(ready, e)
 			}
 		}
-		sort.Slice(ready, func(i, j int) bool { return ready[i].Hash < ready[j].Hash })
-		for _, r := range ready {
-			if len(s.recs) >= MaxRecords {
-				return added, ErrFull
-			}
-			delete(s.pool, r.Hash)
-			s.recs[r.Hash] = r
-			added = append(added, r)
-			progress = true
+		sort.Slice(ready, func(i, j int) bool { return ready[i].seq < ready[j].seq })
+		for _, e := range ready {
+			s.poolRemove(e.r)
+			before := len(added)
+			store(e.r)
+			progress = progress || len(added) > before
 		}
 	}
-	return added, nil
+	return added, full
+}
+
+// store keeps a record whose prev is present, if its signer was introduced in its past and the cap
+// allows it (revokes are kept past the cap so a full set can still revoke).
+func (s *Store) store(r *Record) (bool, error) {
+	if len(s.recs) >= MaxRecords && r.B.Type != TypeRevoke {
+		return false, ErrFull
+	}
+	if !s.introduced(r) {
+		return false, nil
+	}
+	s.recs[r.Hash] = r
+	s.mark(r.B.By, r.Hash)
+	if (r.B.Type == TypeFound || r.B.Type == TypeAdmit) && r.B.Card != nil {
+		s.mark(r.B.Card.C.SignPub, r.Hash)
+	}
+	return true, nil
+}
+
+func (s *Store) mark(key, hash string) {
+	m := s.reach[key]
+	if m == nil {
+		m = map[string]bool{}
+		s.reach[key] = m
+	}
+	m[hash] = true
+}
+
+// introduced reports whether a found or admit whose card subject is r's signer is in r's past.
+func (s *Store) introduced(r *Record) bool {
+	if r.B.Type == TypeFound {
+		return r.B.Card != nil && r.B.Card.C.SignPub == r.B.By
+	}
+	reach := s.reach[r.B.By]
+	if reach == nil {
+		return false
+	}
+	queue := append([]string(nil), r.B.Prev...)
+	seen := map[string]bool{}
+	for len(queue) > 0 {
+		h := queue[0]
+		queue = queue[1:]
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		if reach[h] {
+			return true
+		}
+		if p := s.recs[h]; p != nil {
+			queue = append(queue, p.B.Prev...)
+		}
+	}
+	return false
+}
+
+// poolAdd keeps an orphan, dropping the signer's oldest past 16 and the oldest overall past 256.
+func (s *Store) poolAdd(r *Record) {
+	if s.poolBy[r.B.By] >= MaxPoolPerSigner {
+		s.poolRemove(s.oldest(r.B.By))
+	}
+	if len(s.pool) >= MaxPool {
+		s.poolRemove(s.oldest(""))
+	}
+	s.poolSeq++
+	s.pool[r.Hash] = pooled{r: r, seq: s.poolSeq}
+	s.poolBy[r.B.By]++
+}
+
+func (s *Store) oldest(by string) *Record {
+	var best *pooled
+	for _, e := range s.pool {
+		if by != "" && e.r.B.By != by {
+			continue
+		}
+		if best == nil || e.seq < best.seq {
+			e := e
+			best = &e
+		}
+	}
+	return best.r
+}
+
+func (s *Store) poolRemove(r *Record) {
+	if _, ok := s.pool[r.Hash]; !ok {
+		return
+	}
+	delete(s.pool, r.Hash)
+	if s.poolBy[r.B.By]--; s.poolBy[r.B.By] <= 0 {
+		delete(s.poolBy, r.B.By)
+	}
 }
 
 // Save writes mesh.json under the state lock (no-op without a state directory).
@@ -171,12 +299,9 @@ func (s *Store) Save() error {
 		return nil
 	}
 	s.mu.Lock()
+	// The pool is not persisted (contract "Records").
 	f := storeFile{MeshID: s.MeshID, Records: CanonicalOrder(s.all()), SelfN: s.selfN, Pool: []*Record{}}
-	for _, r := range s.pool {
-		f.Pool = append(f.Pool, r)
-	}
 	s.mu.Unlock()
-	sort.Slice(f.Pool, func(i, j int) bool { return f.Pool[i].Hash < f.Pool[j].Hash })
 	unlock, err := s.st.Lock()
 	if err != nil {
 		return err
@@ -308,7 +433,9 @@ func (s *Store) Append(id *ident.Identity, typ string, at int64, f Fields) (*Rec
 		return nil, err
 	}
 	added, err := s.merge([]*Record{r})
-	if err == nil && len(added) != 1 {
+	if len(added) == 1 {
+		err = nil
+	} else if err == nil {
 		err = errors.New("mesh: own record was not stored")
 	}
 	if err != nil {

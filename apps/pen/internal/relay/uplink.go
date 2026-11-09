@@ -127,7 +127,7 @@ func (u *Uplink) runOnce(ctx context.Context) error {
 		defer u.OnState(false)
 	}
 	go pinger(lctx, ws)
-	err = m.readLoop(u.accept)
+	err = m.readLoop(u.accept, len(challenge))
 	code := statusCode(err)
 	m.failAll(&CloseError{Code: wire.CodeOffline})
 	if code == wire.CodeReplaced {
@@ -153,8 +153,10 @@ func (m *mux) protocolError(err error) error {
 	return err
 }
 
-func (m *mux) readLoop(accept chan Conn) error {
-	var ack acker
+// readLoop demuxes relay frames. received is what already arrived (the challenge): acks count every
+// binary message the relay sent on this socket.
+func (m *mux) readLoop(accept chan Conn, received int) error {
+	ack := acker{total: uint64(received)}
 	for {
 		typ, p, err := m.ws.Read(m.ctx)
 		if err != nil {

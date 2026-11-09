@@ -49,7 +49,7 @@ func (d *Daemon) admit(kind byte, remote []byte, p session.Payload) ([]byte, err
 		if p.Stream != "join" {
 			return nil, errNotAdmitted
 		}
-		inv, ok := d.invites.Lookup(p.Invite, d.now())
+		inv, ok := d.inviteBook().Lookup(p.Invite, d.now())
 		if !ok {
 			return nil, errNotAdmitted
 		}
@@ -64,16 +64,21 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 		return
 	}
 	switch sec.Payload.Stream {
-	case "tcp":
-		d.markSeen(sec.RemoteStatic, true)
-		k := d.register(&live{remote: ident.B64.EncodeToString(sec.RemoteStatic), sec: sec})
+	case "tcp", "mesh":
+		// The peer may have been revoked between message 1 and its confirmation.
+		l := &live{remote: ident.B64.EncodeToString(sec.RemoteStatic), sec: sec}
+		k, ok := d.register(l)
+		if !ok {
+			sec.Close(wire.CodeNotAdmitted)
+			return
+		}
 		defer d.unregister(k)
-		d.serveTCP(ctx, sec)
-	case "mesh":
 		d.markSeen(sec.RemoteStatic, true)
-		k := d.register(&live{remote: ident.B64.EncodeToString(sec.RemoteStatic), sec: sec, deferred: true})
-		defer d.unregister(k)
-		d.serveMesh(ctx, sec)
+		if sec.Payload.Stream == "tcp" {
+			d.serveTCP(ctx, sec)
+		} else {
+			d.serveMesh(ctx, sec, l)
+		}
 	case "join":
 		d.serveJoin(ctx, sec)
 	default:
@@ -95,10 +100,20 @@ func (d *Daemon) serveTCP(ctx context.Context, sec *session.Secure) {
 	stream.Splice(ctx, sec, tc, tc, tc.CloseWrite)
 }
 
-func (d *Daemon) serveMesh(ctx context.Context, sec *session.Secure) {
+func (d *Daemon) serveMesh(ctx context.Context, sec *session.Secure, l *live) {
 	ctx, cancel := context.WithTimeout(ctx, meshSessionTimeout)
 	defer cancel()
-	if err := mesh.SyncRespond(ctx, sec, d.mesh(), d.onMerged); err != nil {
+	merged := func(added []*mesh.Record) {
+		// Records on this session that remove its own peer: keep it open until our done so the
+		// peer learns its push was taken. Every other session of a revoked key closes at once.
+		if _, ok := d.view().MemberByNoise(sec.RemoteStatic); !ok {
+			d.mu.Lock()
+			l.deferred = true
+			d.mu.Unlock()
+		}
+		d.onMerged(added)
+	}
+	if err := mesh.SyncRespond(ctx, sec, d.mesh(), merged); err != nil {
 		if relay.CodeOf(err) == 0 {
 			sec.Close(wire.CodeTimeout)
 		}
@@ -117,7 +132,7 @@ func (d *Daemon) serveJoin(ctx context.Context, sec *session.Secure) {
 	inviteID := sec.Payload.Invite
 	joiner := ident.B64.EncodeToString(sec.RemoteStatic)
 	member, err := mesh.ServeJoin(ctx, sec, sec.RemoteStatic, mesh.Admission{
-		ID: d.id, Store: d.mesh(), Invites: d.invites, InviteID: inviteID, Now: d.now,
+		ID: d.id, Store: d.mesh(), Invites: d.inviteBook(), InviteID: inviteID, Now: d.now,
 		// The other members hear of the joiner before its join returns.
 		OnAdmit: func(*mesh.Record) {
 			d.viewChanged()

@@ -65,6 +65,8 @@ type Daemon struct {
 	inviteWait map[string]chan mesh.Member
 	lastView   *mesh.View
 
+	khMu sync.Mutex
+
 	stopOnce sync.Once
 	stopCh   chan struct{}
 	exitErr  error
@@ -83,7 +85,8 @@ func (d *Daemon) spawn(f func()) {
 type live struct {
 	remote string // Noise static, base64url
 	sec    *session.Secure
-	// deferred sessions (mesh sync) close themselves after their done.
+	// deferred is set on the mesh session that carried its own peer's revoke; it closes itself
+	// after its done.
 	deferred bool
 }
 
@@ -91,6 +94,9 @@ type seenInfo struct {
 	At     time.Time
 	Online bool
 }
+
+// LeftMarker is written by pen leave; pen up --foreground (a service restart) then refuses to start.
+const LeftMarker = "left"
 
 // ErrNoIdentity means pen up has not run in this state directory.
 var ErrNoIdentity = errors.New("no identity in this state directory; run pen up")
@@ -141,6 +147,7 @@ func New(opt Options) (*Daemon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mesh: %w", err)
 	}
+	store.SetSelf(ident.B64.EncodeToString(id.SignPub))
 	invites, err := mesh.LoadInvites(st)
 	if err != nil {
 		return nil, err
@@ -168,6 +175,12 @@ func (d *Daemon) mesh() *mesh.Store {
 }
 
 func (d *Daemon) view() *mesh.View { return d.mesh().View() }
+
+func (d *Daemon) inviteBook() *mesh.Invites {
+	d.meshMu.RLock()
+	defer d.meshMu.RUnlock()
+	return d.invites
+}
 
 func (d *Daemon) relayURL() string {
 	d.cfgMu.Lock()
@@ -202,7 +215,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.spawn(func() { d.acceptLoop(ctx) })
 	d.spawn(func() { d.every(ctx, d.opt.SyncEvery, func() { d.pushAll(ctx) }) })
 	d.spawn(func() { d.hostKeysLoop(ctx) })
-	d.writeKnownHosts(d.view())
+	d.writeKnownHosts()
 	if d.opt.Ready != nil {
 		d.opt.Ready()
 	}
@@ -351,15 +364,21 @@ func (d *Daemon) viewChanged() {
 	for _, l := range doomed {
 		l.sec.Close(4401)
 	}
-	d.writeKnownHosts(v)
+	d.writeKnownHosts()
 }
 
-func (d *Daemon) register(l *live) uint64 {
+// register records a live session unless its peer is no longer a member. The check runs under d.mu,
+// which viewChanged's sweep also holds, so a revoke cannot slip between the check and the sweep.
+func (d *Daemon) register(l *live) (uint64, bool) {
+	pub, _ := ident.DecodeKey(l.remote)
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if _, ok := d.view().MemberByNoise(pub); !ok {
+		return 0, false
+	}
 	d.nextLive++
 	d.sessions[d.nextLive] = l
-	return d.nextLive
+	return d.nextLive, true
 }
 
 func (d *Daemon) unregister(k uint64) {

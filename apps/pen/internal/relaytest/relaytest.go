@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,7 +35,10 @@ type sock struct {
 	ws    *websocket.Conn
 	sent  atomic.Uint64
 	acked uint64
+	acks  chan uint64
 }
+
+func newSock(ws *websocket.Conn) *sock { return &sock{ws: ws, acks: make(chan uint64, 64)} }
 
 func (k *sock) send(ctx context.Context, p []byte) error {
 	k.sent.Add(uint64(len(p)))
@@ -60,6 +64,10 @@ func (s *Server) text(ctx context.Context, k *sock, p []byte) bool {
 		return false
 	}
 	k.acked = n
+	select {
+	case k.acks <- n:
+	default:
+	}
 	return true
 }
 
@@ -137,6 +145,22 @@ func (s *Server) DropUplink(nodeID string) bool {
 	return true
 }
 
+// NextUplinkAck returns the next cumulative ack nodeID's uplink sent.
+func (s *Server) NextUplinkAck(ctx context.Context, nodeID string) (uint64, error) {
+	s.mu.Lock()
+	u := s.nodes[nodeID]
+	s.mu.Unlock()
+	if u == nil {
+		return 0, errors.New("relaytest: node offline")
+	}
+	select {
+	case n := <-u.k.acks:
+		return n, nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
 // Online reports whether nodeID has an authenticated uplink.
 func (s *Server) Online(nodeID string) bool {
 	s.mu.Lock()
@@ -168,7 +192,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws.SetReadLimit(wire.MaxMessage)
-	k := &sock{ws: ws}
+	k := newSock(ws)
 	if role == "node" {
 		s.serveNode(k, "ws://"+strings.ToLower(r.Host), nodeID)
 	} else {
@@ -180,7 +204,8 @@ func (s *Server) serveNode(k *sock, origin, nodeID string) {
 	ctx := context.Background()
 	challenge := make([]byte, 32)
 	rand.Read(challenge)
-	if err := k.ws.Write(ctx, websocket.MessageBinary, challenge); err != nil {
+	// Like the relay, the challenge counts toward the bytes the node must ack.
+	if err := k.send(ctx, challenge); err != nil {
 		return
 	}
 	actx, acancel := context.WithTimeout(ctx, 10*time.Second)

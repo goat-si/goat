@@ -54,6 +54,10 @@ func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 		return res, err
 	}
 	defer unlock()
+	// Written before the keys go, so a service manager restarting pen up --foreground finds it.
+	if err := d.st.WriteAtomic(LeftMarker, nil, 0o600); err != nil {
+		return res, err
+	}
 	for _, f := range []string{"identity.json", "mesh.json", "offers.json"} {
 		if err := os.Remove(d.st.Path(f)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return res, err
@@ -85,7 +89,11 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 	if err := store.Save(); err != nil {
 		return err
 	}
-	invites, err := mesh.LoadInvites(nil)
+	// The old mesh's invites go; new ones persist in offers.json as before.
+	if err := os.Remove(d.st.Path("offers.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	invites, err := mesh.LoadInvites(d.st)
 	if err != nil {
 		return err
 	}
@@ -97,7 +105,6 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 	if err := store.Save(); err != nil {
 		return err
 	}
-	os.Remove(d.st.Path("offers.json"))
 	d.cfgMu.Lock()
 	changed := d.cfg.Relay != tok.Relay
 	d.cfg.Relay, d.cfg.Name = tok.Relay, name

@@ -281,6 +281,7 @@ func CheckJoined(st *state.Store, id *ident.Identity, meshID string, recs []*Rec
 	if err != nil {
 		return nil, err
 	}
+	s.SetSelf(ident.B64.EncodeToString(id.SignPub))
 	if _, ok := s.View().Members[ident.B64.EncodeToString(id.SignPub)]; !ok {
 		return nil, errors.New("join: the mesh view does not make this node a member")
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 
@@ -161,6 +162,8 @@ type Record struct {
 	Sig  []byte
 	B    Body
 	Hash string
+	// Sum is the raw SHA-256 of Body; canonical order compares it as unsigned bytes.
+	Sum [32]byte
 }
 
 func (r *Record) MarshalJSON() ([]byte, error) {
@@ -213,7 +216,8 @@ func (r *Record) Verify() error {
 		return errors.New("mesh: record signature")
 	}
 	r.B = b
-	r.Hash = HashOf(r.Body)
+	r.Sum = sha256.Sum256(r.Body)
+	r.Hash = ident.B64.EncodeToString(r.Sum[:])
 	return nil
 }
 
@@ -323,9 +327,11 @@ func validHostKey(k string) bool {
 	return len(f) >= 2 && (strings.HasPrefix(f[0], "ssh-") || strings.HasPrefix(f[0], "ecdsa-") || strings.HasPrefix(f[0], "sk-"))
 }
 
-// strictUnmarshal decodes one JSON object, rejecting unknown fields, duplicate keys and trailing data.
+// strictUnmarshal decodes one JSON object into the struct v points to. Member names must match v's
+// JSON names exactly (encoding/json alone matches them case-insensitively); unknown, case-variant
+// and duplicate names and trailing data are rejected.
 func strictUnmarshal(b []byte, v any) error {
-	if err := noDuplicateKeys(b); err != nil {
+	if err := exactKeys(b, jsonNames(v)); err != nil {
 		return err
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
@@ -339,7 +345,20 @@ func strictUnmarshal(b []byte, v any) error {
 	return nil
 }
 
-func noDuplicateKeys(b []byte) error {
+// jsonNames lists the JSON member names of the struct v points to.
+func jsonNames(v any) map[string]bool {
+	t := reflect.TypeOf(v).Elem()
+	names := map[string]bool{}
+	for i := 0; i < t.NumField(); i++ {
+		tag, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if tag != "" && tag != "-" {
+			names[tag] = true
+		}
+	}
+	return names
+}
+
+func exactKeys(b []byte, allowed map[string]bool) error {
 	d := json.NewDecoder(bytes.NewReader(b))
 	t, err := d.Token()
 	if err != nil {
@@ -355,8 +374,11 @@ func noDuplicateKeys(b []byte) error {
 			return err
 		}
 		ks, _ := k.(string)
+		if !allowed[ks] {
+			return fmt.Errorf("unknown member %q", ks)
+		}
 		if seen[ks] {
-			return fmt.Errorf("duplicate key %q", ks)
+			return fmt.Errorf("duplicate member %q", ks)
 		}
 		seen[ks] = true
 		var skip json.RawMessage
