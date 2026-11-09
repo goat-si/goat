@@ -33,15 +33,110 @@ it("reads the signed-in Azure account and says when az is signed out", () => {
   assert.strictEqual(parseAuth(processOutput("\n")).status, "unknown");
 });
 
-it.effect("names the remote's repository when reading the default branch", () => {
+it.effect(
+  "names the remote's organization, project, and repository when reading the default branch",
+  () => {
+    const run = vi.fn<SourceControlHost.SourceControlHost["Service"]["process"]["run"]>(() =>
+      Effect.succeed(
+        processOutput(
+          JSON.stringify({
+            name: "My Repo",
+            webUrl: "https://dev.azure.com/acme/project/_git/My%20Repo",
+            remoteUrl: "https://dev.azure.com/acme/project/_git/My%20Repo",
+            sshUrl: "git@ssh.dev.azure.com:v3/acme/project/My%20Repo",
+            defaultBranch: "refs/heads/master",
+          }),
+        ),
+      ),
+    );
+    const support = Layer.mergeAll(
+      TestSourceControlHost.layer({ process: { run } }),
+      NodeServices.layer,
+    );
+    return Effect.gen(function* () {
+      const provider = yield* AzureDevOpsSourceControlProvider.make;
+      for (const [remoteUrl, repository, project, organization] of [
+        [
+          "https://acme@dev.azure.com/acme/project/_git/My%20Repo",
+          "My Repo",
+          "project",
+          "https://dev.azure.com/acme",
+        ],
+        [
+          "https://dev.azure.com/acme/project/_git/My%20Repo?view=x#readme",
+          "My Repo",
+          "project",
+          "https://dev.azure.com/acme",
+        ],
+        [
+          "https://acme.visualstudio.com/DefaultCollection/project/_git/My%20Repo/",
+          "My Repo",
+          "project",
+          "https://acme.visualstudio.com",
+        ],
+        [
+          "git@ssh.dev.azure.com:v3/acme/project/My%20Repo",
+          "My Repo",
+          "project",
+          "https://dev.azure.com/acme",
+        ],
+        [
+          "ssh://git@ssh.dev.azure.com/v3/acme/project/My%20Repo",
+          "My Repo",
+          "project",
+          "https://dev.azure.com/acme",
+        ],
+        [
+          "https://dev.azure.com/acme/project/_git/service.git",
+          "service.git",
+          "project",
+          "https://dev.azure.com/acme",
+        ],
+        [
+          "https://dev.azure.com/acme/project/_git/-repo",
+          "-repo",
+          "project",
+          "https://dev.azure.com/acme",
+        ],
+        ["https://dev.azure.com/acme/project/_git/%40.env", null, null, null],
+      ] as const) {
+        run.mockClear();
+        const branch = yield* provider.getDefaultBranch({
+          cwd: "/repo",
+          context: {
+            provider: {
+              kind: SourceControlProviderKind.make("azure-devops"),
+              name: "Azure DevOps",
+              baseUrl: "https://dev.azure.com",
+            },
+            remoteName: "origin",
+            remoteUrl,
+          },
+        });
+        if (repository === null) {
+          assert.strictEqual(branch, null, remoteUrl);
+          assert.strictEqual(run.mock.calls.length, 0, remoteUrl);
+          continue;
+        }
+        assert.strictEqual(branch, "master", remoteUrl);
+        const args = [...(run.mock.calls[0]?.[0].args ?? [])];
+        assert.include(args, `--repository=${repository}`, remoteUrl);
+        assert.include(args.join(" "), `--project ${project}`, remoteUrl);
+        assert.include(args.join(" "), `--organization ${organization}`, remoteUrl);
+      }
+    }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provide(support))));
+  },
+);
+
+it.effect("follows the selected remote's project when another one is detected", () => {
   const run = vi.fn<SourceControlHost.SourceControlHost["Service"]["process"]["run"]>(() =>
     Effect.succeed(
       processOutput(
         JSON.stringify({
           name: "My Repo",
-          webUrl: "https://dev.azure.com/acme/project/_git/My%20Repo",
-          remoteUrl: "https://dev.azure.com/acme/project/_git/My%20Repo",
-          sshUrl: "git@ssh.dev.azure.com:v3/acme/project/My%20Repo",
+          webUrl: "https://dev.azure.com/acme/selected/_git/My%20Repo",
+          remoteUrl: "https://dev.azure.com/acme/selected/_git/My%20Repo",
+          sshUrl: "git@ssh.dev.azure.com:v3/acme/selected/My%20Repo",
           defaultBranch: "refs/heads/master",
         }),
       ),
@@ -53,18 +148,10 @@ it.effect("names the remote's repository when reading the default branch", () =>
   );
   return Effect.gen(function* () {
     const provider = yield* AzureDevOpsSourceControlProvider.make;
-    for (const [remoteUrl, repository] of [
-      ["https://acme@dev.azure.com/acme/project/_git/My%20Repo", "My Repo"],
-      ["https://dev.azure.com/acme/project/_git/My%20Repo?view=x#readme", "My Repo"],
-      ["https://acme.visualstudio.com/DefaultCollection/project/_git/My%20Repo/", "My Repo"],
-      ["git@ssh.dev.azure.com:v3/acme/project/My%20Repo", "My Repo"],
-      ["ssh://git@ssh.dev.azure.com/v3/acme/project/My%20Repo", "My Repo"],
-      ["https://dev.azure.com/acme/project/_git/service.git", "service.git"],
-      ["https://dev.azure.com/acme/project/_git/-repo", "-repo"],
-      ["https://dev.azure.com/acme/project/_git/%40.env", null],
-    ] as const) {
+    // The same repository name in two projects: only the selected remote says which one.
+    for (const project of ["selected", "detected"]) {
       run.mockClear();
-      const branch = yield* provider.getDefaultBranch({
+      yield* provider.getDefaultBranch({
         cwd: "/repo",
         context: {
           provider: {
@@ -72,21 +159,12 @@ it.effect("names the remote's repository when reading the default branch", () =>
             name: "Azure DevOps",
             baseUrl: "https://dev.azure.com",
           },
-          remoteName: "origin",
-          remoteUrl,
+          remoteName: "upstream",
+          remoteUrl: `https://dev.azure.com/acme/${project}/_git/My%20Repo`,
         },
       });
-      if (repository === null) {
-        assert.strictEqual(branch, null, remoteUrl);
-        assert.strictEqual(run.mock.calls.length, 0, remoteUrl);
-        continue;
-      }
-      assert.strictEqual(branch, "master", remoteUrl);
-      assert.include(
-        [...(run.mock.calls[0]?.[0].args ?? [])],
-        `--repository=${repository}`,
-        remoteUrl,
-      );
+      const args = [...(run.mock.calls[0]?.[0].args ?? [])];
+      assert.include(args.join(" "), `--project ${project}`, project);
     }
   }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provide(support))));
 });

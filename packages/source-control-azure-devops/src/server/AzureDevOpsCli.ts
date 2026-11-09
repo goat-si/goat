@@ -257,6 +257,8 @@ export class AzureDevOpsCli extends Context.Service<
     readonly getDefaultBranch: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly project?: string;
+      readonly organization?: string;
     }) => Effect.Effect<string | null, AzureDevOpsCliError>;
 
     readonly checkoutPullRequest: (input: {
@@ -554,6 +556,7 @@ export const make = Effect.gen(function* () {
     }),
     getDefaultBranch: Effect.fn("AzureDevOpsCli.getDefaultBranch")(function (input) {
       const repository = parseRepositorySpecifier(input.repository);
+      const project = input.project ?? repository.project;
       return executeJson({
         cwd: input.cwd,
         args: [
@@ -563,7 +566,8 @@ export const make = Effect.gen(function* () {
           "true",
           // Joined so a name starting with `-` stays the option's value.
           `--repository=${repository.name}`,
-          ...(repository.project ? ["--project", repository.project] : []),
+          ...(project === null ? [] : ["--project", project]),
+          ...(input.organization === undefined ? [] : ["--organization", input.organization]),
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),

@@ -53,20 +53,44 @@ export const discovery = {
     "Install the Azure command-line tools (`az`), then enable Azure DevOps support with `az extension add --name azure-devops`.",
 } satisfies SourceControlCliDiscoverySpec;
 
+interface AzureDevOpsRemote {
+  readonly organization: string | null;
+  readonly project: string | null;
+  readonly name: string;
+}
+
 /**
- * The repository name a remote ends in; `az` takes it decoded and finds org and project itself.
- * Azure clone URLs carry no `.git` suffix, so a trailing `.git` is part of the name.
+ * The organization, project, and repository a clone URL names. `az --detect` reads the working
+ * directory's git config, which is another project on a fork checkout, so the selected remote
+ * has to say which one it means. Azure clone URLs carry no `.git` suffix, so a trailing `.git`
+ * is part of the name.
  */
-function repositoryNameFromRemote(remoteUrl: string): string | null {
-  const path = URL.parse(remoteUrl.trim())?.pathname ?? remoteUrl.trim();
-  const encoded = path.replace(/\/+$/u, "").split(/[/:]/u).at(-1);
-  if (!encoded) return null;
-  let name = encoded;
-  try {
-    name = decodeURIComponent(encoded);
-  } catch {}
+function remoteRepository(remoteUrl: string): AzureDevOpsRemote | null {
+  const url = URL.parse(remoteUrl.trim());
+  const segments = (url?.pathname ?? remoteUrl.trim()).split(/[/:]/u).flatMap((segment) => {
+    if (segment.length === 0) return [];
+    try {
+      return [decodeURIComponent(segment)];
+    } catch {
+      return [segment];
+    }
+  });
+  const name = segments.at(-1);
+  if (name === undefined || name.length === 0) return null;
   // `az` replaces any argument value starting with `@` by the contents of that local file.
-  return name.startsWith("@") ? null : name;
+  if (name.startsWith("@")) return null;
+  const gitIndex = segments.at(-2) === "_git" ? segments.length - 2 : null;
+  const project = gitIndex === null ? (segments.at(-2) ?? null) : (segments.at(-3) ?? null);
+  const organizationSegment =
+    gitIndex === null ? (segments.at(-3) ?? null) : (segments.at(-4) ?? null);
+  const host = url?.hostname.toLowerCase() ?? null;
+  const organization =
+    host !== null && host.endsWith(".visualstudio.com")
+      ? `https://${host}`
+      : organizationSegment === null
+        ? null
+        : `https://dev.azure.com/${organizationSegment}`;
+  return { organization, project, name };
 }
 
 function toChangeRequest(summary: NormalizedAzureDevOpsPullRequestRecord): ChangeRequest {
@@ -221,22 +245,29 @@ export const make = Effect.gen(function* () {
     ),
     getDefaultBranch: Effect.fn("AzureDevOpsSourceControlProvider.getDefaultBranch")(
       function (input) {
-        const repository =
-          input.context === undefined ? null : repositoryNameFromRemote(input.context.remoteUrl);
-        if (repository === null) return Effect.succeed(null);
-        return azure.getDefaultBranch({ cwd: input.cwd, repository }).pipe(
-          Effect.mapError(
-            (error) =>
-              new SourceControlProviderError({
-                provider: SourceControlProviderKind.make("azure-devops"),
-                operation: "getDefaultBranch",
-                command: error.command,
-                cwd: input.cwd,
-                detail: error.detail,
-                cause: error,
-              }),
-          ),
-        );
+        const remote =
+          input.context === undefined ? null : remoteRepository(input.context.remoteUrl);
+        if (remote === null) return Effect.succeed(null);
+        return azure
+          .getDefaultBranch({
+            cwd: input.cwd,
+            repository: remote.name,
+            ...(remote.project === null ? {} : { project: remote.project }),
+            ...(remote.organization === null ? {} : { organization: remote.organization }),
+          })
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new SourceControlProviderError({
+                  provider: SourceControlProviderKind.make("azure-devops"),
+                  operation: "getDefaultBranch",
+                  command: error.command,
+                  cwd: input.cwd,
+                  detail: error.detail,
+                  cause: error,
+                }),
+            ),
+          );
       },
     ),
     checkoutChangeRequest: Effect.fn("AzureDevOpsSourceControlProvider.checkoutChangeRequest")(
