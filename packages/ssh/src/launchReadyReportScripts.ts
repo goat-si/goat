@@ -12,6 +12,7 @@ LAUNCH_CAPS_FILE=
 launch_caps_begin() {
   [ -z "$LAUNCH_CAPS_FILE" ] || return 0
   [ "$GOAT_HOST_WINDOWS" = 1 ] && [ "$GOAT_ARCHIVE_MODE" = 1 ] && [ -n "$FACT_MEMO" ] || return 0
+  launch_report_paths || return 0
   launch_caps_sweep
   LAUNCH_CAPS_FILE="$FACT_MEMO.caps-answer"
   # An earlier process with this PID may have left one behind.
@@ -25,6 +26,20 @@ launch_caps_begin() {
     printf '%s\\n%s\\n' "$caps_key" "$HELPER_CAPS" >"$LAUNCH_CAPS_FILE.next" &&
       mv -f "$LAUNCH_CAPS_FILE.next" "$LAUNCH_CAPS_FILE"
   ) </dev/null >/dev/null 2>&1 &
+}
+# The report runs as a bounded job, which turns off MSYS's argument conversion, so goat.exe is given
+# native paths. They are converted here, before the listener wait, after which every command the
+# launch runs is bounded. Sets LAUNCH_REPORT_RUNTIME, _PORT and _PID, or fails unless cygpath
+# printed exactly three nonempty lines.
+launch_report_paths() {
+  LAUNCH_REPORT_RUNTIME=; LAUNCH_REPORT_PORT=; LAUNCH_REPORT_PID=
+  report_paths="$(cygpath -w "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE")" || return 1
+  report_first="\${report_paths%%"$fact_nl"*}"; report_paths="\${report_paths#*"$fact_nl"}"
+  case "$report_paths" in *"$fact_nl"*) ;; *) return 1 ;; esac
+  report_second="\${report_paths%%"$fact_nl"*}"; report_third="\${report_paths#*"$fact_nl"}"
+  case "$report_third" in *"$fact_nl"*) return 1 ;; esac
+  [ -n "$report_first" ] && [ -n "$report_second" ] && [ -n "$report_third" ] || return 1
+  LAUNCH_REPORT_RUNTIME="$report_first"; LAUNCH_REPORT_PORT="$report_second"; LAUNCH_REPORT_PID="$report_third"
 }
 # Removes what the lookup and report of launches no longer running left beside their memos.
 launch_caps_sweep() {
@@ -74,13 +89,8 @@ launch_ready_report() {
   exec_fact_key "$report_exe" && [ "$FACT_KEY" = "$report_caps_key" ] || return 1
   launch_record_wait || return 1
   report_before=; ! live_fact_key "$RUNNER_FILE" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" || report_before="$FACT_KEY"
-  # The bounded job turns off MSYS's argument conversion, so goat.exe is given native paths.
-  report_files="$(cygpath -w "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE")" || return 1
-  report_runtime="\${report_files%%"$fact_nl"*}"; report_files="\${report_files#*"$fact_nl"}"
-  report_port="\${report_files%%"$fact_nl"*}"; report_pid="\${report_files#*"$fact_nl"}"
-  case "$report_runtime$report_port$report_pid" in ''|*"$fact_nl"*) return 1 ;; esac
   launch_bounded $(( ($1 + 999) / 1000 + 10 )) "$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@" \\
-    --report --runtime-file "$report_runtime" --port-file "$report_port" --pid-file "$report_pid" >"$FACT_MEMO.report" 2>/dev/null || return 1
+    --report --runtime-file "$LAUNCH_REPORT_RUNTIME" --port-file "$LAUNCH_REPORT_PORT" --pid-file "$LAUNCH_REPORT_PID" >"$FACT_MEMO.report" 2>/dev/null || return 1
   fact_slurp "$FACT_MEMO.report" || return 1
   frame_parse wait-ready "ready live" "$FACT_TEXT" || return 1
   case "$FRAME_READY" in "ok $REMOTE_PORT") LAUNCH_READY=0 ;; "fail "*) ;; *) return 1 ;; esac

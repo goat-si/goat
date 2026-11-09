@@ -63,7 +63,7 @@ const PREFIX = [
   "uname() { printf 'MINGW64_NT\\n'; }",
   "date() { printf '4102444800\\n'; }",
   'ps() { cat "$HOME/ps-rows"; }',
-  'cygpath() { [ "$1" = -w ] || return 1; shift; for cygpath_arg in "$@"; do printf \'C:%s\\n\' "$cygpath_arg"; done; }',
+  'cygpath() { echo cygpath >>"$HOME/order"; [ ! -e "$HOME/cygpath.sh" ] || { . "$HOME/cygpath.sh"; return; }; [ "$1" = -w ] || return 1; shift; for cygpath_arg in "$@"; do printf \'C:%s\\n\' "$cygpath_arg"; done; }',
   "",
 ].join("\n");
 const PS_HEADER = "      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND\n";
@@ -89,7 +89,7 @@ const STUBS = [
   // 10 s ends the script, so an unbounded wait fails instead of hanging.
   'launch_now() { if [ -e "$HOME/clock-back" ]; then launch_now_us=0; else launch_now_us="$(cat "$HOME/clock-us")"; fi; }',
   'launch_pause() { echo $(( $(cat "$HOME/clock-us") + $1 )) >"$HOME/clock-us"; [ "$(cat "$HOME/clock-us")" -le 10000000 ] || exit 97; [ ! -e "$HOME/on-pause.sh" ] || . "$HOME/on-pause.sh"; }',
-  'wait_launched_listener() { [ -e "$HOME/no-wait" ] || wait; [ ! -e "$HOME/after-caps.sh" ] || . "$HOME/after-caps.sh"; }',
+  'wait_launched_listener() { echo listener >>"$HOME/order"; [ -e "$HOME/no-wait" ] || wait; [ ! -e "$HOME/after-caps.sh" ] || . "$HOME/after-caps.sh"; }',
   "server_owns_listener() { :; }",
   "",
 ].join("\n");
@@ -447,6 +447,31 @@ describe("the launch's background capability lookup", () => {
         kept.filter((name) => name.startsWith("run-t3.next." + process.pid + ".")),
         5,
       );
+    }).pipe(Effect.scoped),
+  );
+});
+describe("the report's native paths", () => {
+  it.effect("are converted once, before the listener wait, whose commands are all bounded", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      assert.deepEqual(yield* f.launch(), ["launch-ready"]);
+      assert.deepEqual((yield* f.read("order")).trim().split("\n"), ["cygpath", "listener"]);
+      assert.deepEqual(yield* f.asked(), ["caps", "report"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { name: "a failed conversion", script: "return 1" },
+    { name: "an empty middle path", script: "printf 'C:a\\n\\nC:c\\n'" },
+    { name: "two paths", script: "printf 'C:a\\nC:b\\n'" },
+    { name: "four paths", script: "printf 'C:a\\nC:b\\nC:c\\nC:d\\n'" },
+  ])("$name: the launch keeps today's separate wait and asks nothing more", (c) =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.write("cygpath.sh", c.script);
+      assert.deepEqual(yield* f.launch(), ["launch-ready"]);
+      assert.deepEqual(yield* f.asked(), ["wait"]);
+      assert.deepEqual(yield* f.facts(), []);
     }).pipe(Effect.scoped),
   );
 });
