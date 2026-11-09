@@ -35,7 +35,7 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
 vi.mock("./useMobileGoatBotSession", () => ({ useMobileGoatBotSession: () => ({}) }));
-vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
+vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
     themeAppearance: appearance.mode,
@@ -99,24 +99,24 @@ it("shows time in a same-day pause stamp", async () => {
   expect(view.container.textContent).toMatch(/\d/);
 });
 
-it("keeps the receipt on only the marked user row", async () => {
+it("ends a person's group with its time and keeps read receipts out of the transcript", async () => {
   h = createNativeMemoryHarness();
   view = renderNative(
     h,
     <GoatBotTimelineRow
       {...props}
-      row={user({ state: "read", readAt: "2026-10-12T09:41:00Z" }, false)}
+      row={user({ state: "read", readAt: "2026-10-12T09:41:00Z" }, true)}
     />,
   );
   await view.render();
   expect(view.container.textContent).not.toContain("Read");
-  await view.rerender(
-    <GoatBotTimelineRow
-      {...props}
-      row={user({ state: "read", readAt: "2026-10-12T09:41:00Z" }, true)}
-    />,
-  );
-  expect(view.container.textContent).toContain("Read");
+  expect(view.container.textContent).toMatch(/^Hello.*\d/);
+  await view.rerender(<GoatBotTimelineRow {...props} row={user({ state: "delivered" }, true)} />);
+  expect(view.container.textContent).not.toContain("Delivered");
+  await view.rerender(<GoatBotTimelineRow {...props} row={user({ state: "sending" }, true)} />);
+  expect(view.container.textContent).toContain("Sending…");
+  await view.rerender(<GoatBotTimelineRow {...props} row={user({ state: "queued" }, true)} />);
+  expect(view.container.textContent).toContain("Waiting to send");
 });
 
 it("offers retry only for a recoverable failure", async () => {
@@ -138,12 +138,13 @@ it("offers retry only for a recoverable failure", async () => {
   expect(view.container.textContent).toContain("Retry");
 });
 
-it("labels only the first proactive bubble in a group", async () => {
+it("heads only the first bot message of a group with the bot's name and marks updates", async () => {
   h = createNativeMemoryHarness();
   view = renderNative(h, <GoatBotTimelineRow {...props} row={bot({ proactive: true })} />);
   await view.render();
   expect(view.container.textContent).toContain("GOAT Bot · Update");
   await view.rerender(<GoatBotTimelineRow {...props} row={bot({ proactive: false })} />);
+  expect(view.container.textContent).toMatch(/^GOAT Bot · \d/);
   expect(view.container.textContent).not.toContain("GOAT Bot · Update");
   await view.rerender(
     <GoatBotTimelineRow
@@ -151,7 +152,7 @@ it("labels only the first proactive bubble in a group", async () => {
       row={bot({ proactive: true, firstInGroup: false, groupPosition: "last" })}
     />,
   );
-  expect(view.container.textContent).not.toContain("GOAT Bot · Update");
+  expect(view.container.textContent).not.toContain("GOAT Bot");
 });
 
 it("names a member bot on its update and leaves a reply unlabeled", async () => {
@@ -169,7 +170,7 @@ it("names a member bot on its update and leaves a reply unlabeled", async () => 
   expect(view.container.textContent).not.toContain("· Update");
 });
 
-it("opens the task represented by a task thread pill", async () => {
+it("opens the task represented by a task row", async () => {
   h = createNativeMemoryHarness();
   const onSelectTask = vi.fn();
   view = renderNative(
@@ -200,7 +201,7 @@ it("opens the task represented by a task thread pill", async () => {
     />,
   );
   await view.render();
-  await view.click("Task thread · Check disks · Running");
+  await view.click("Check disks. Running. Open task");
   expect(onSelectTask).toHaveBeenCalledWith("task-1");
 });
 it("shows a bot event as a centered note line", async () => {
