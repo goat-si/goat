@@ -13,15 +13,18 @@ vi.mock("react-native", () => ({
     accessibilityLabel,
     value,
     onChangeText,
+    onBlur,
   }: {
     accessibilityLabel: string;
     value: string;
     onChangeText: (text: string) => void;
+    onBlur?: () => void;
   }) => (
     <input
       aria-label={accessibilityLabel}
       value={value}
       onChange={(event) => onChangeText(event.target.value)}
+      onBlur={onBlur}
     />
   ),
   Pressable: ({
@@ -52,7 +55,11 @@ afterEach(async () => {
   container?.remove();
 });
 
-async function mount(onSubmit: (changes: object) => Promise<string | null>, canSubmit = true) {
+async function mount(
+  onSubmit: (changes: object) => Promise<string | null>,
+  canSubmit = true,
+  mode: "edit" | "create" = "edit",
+) {
   const onClose = vi.fn();
   container = document.createElement("div");
   document.body.append(container);
@@ -60,8 +67,8 @@ async function mount(onSubmit: (changes: object) => Promise<string | null>, canS
   await act(async () =>
     root?.render(
       <MobileBotProfileSheet
-        mode="edit"
-        initial={initial}
+        mode={mode}
+        initial={mode === "create" ? { name: "", avatar: null, purpose: "" } : initial}
         canSubmit={canSubmit}
         onSubmit={onSubmit}
         onClose={onClose}
@@ -81,11 +88,12 @@ async function type(label: string, value: string) {
   });
 }
 
-it("saves only the changed fields and closes, never with a blank name", async () => {
+it("saves only the changed fields and closes, and a blank name is pointed out on blur", async () => {
   const onSubmit = vi.fn(async (_changes: object) => null);
   const { onClose } = await mount(onSubmit);
   await type("Name", "  ");
-  expect(save().disabled).toBe(true);
+  expect(container.textContent).not.toContain("The bot needs a name.");
+  await act(async () => field("Name").dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   expect(container.textContent).toContain("The bot needs a name.");
   await type("Name", "Jarvis ");
   await type("Avatar", "");
@@ -97,6 +105,20 @@ it("saves only the changed fields and closes, never with a blank name", async ()
     purpose: "Watch the deploys.",
   });
   expect(onClose).toHaveBeenCalled();
+});
+
+it("opens a new bot without an error and points out the missing name only when Save is pressed", async () => {
+  const onSubmit = vi.fn(async (_changes: object) => null);
+  const { onClose } = await mount(onSubmit, true, "create");
+  expect(container.textContent).not.toContain("The bot needs a name.");
+  await act(async () => save().click());
+  expect(container.textContent).toContain("The bot needs a name.");
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+  await type("Name", "Scout");
+  expect(container.textContent).not.toContain("The bot needs a name.");
+  await act(async () => save().click());
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ name: "Scout", avatar: null, purpose: "" });
 });
 
 it("keeps the sheet open with the reason when the save is refused", async () => {
