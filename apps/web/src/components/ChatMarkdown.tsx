@@ -1259,14 +1259,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
           )}
         </a>
       );
-      const openInPreview = canOpenInPreview && !hasText ? openExternalLinkInPreview : undefined;
+      const openInPreview = canOpenInPreview ? openExternalLinkInPreview : undefined;
       const withPage = (element: ReactNode) =>
         withLinkedImagePage(element, { node, environmentId, openInPreview });
       if (!faviconHost || !href) {
         return withPage(link);
       }
       if (pullRequestPreviewTarget !== null) {
-        return (
+        return withPage(
           <PullRequestLinkPreview
             link={link}
             originalUrl={href}
@@ -1286,7 +1286,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
               )
             }
             onOpenFallback={openDeferredMarkdownLink}
-          />
+          />,
         );
       }
       return withPage(

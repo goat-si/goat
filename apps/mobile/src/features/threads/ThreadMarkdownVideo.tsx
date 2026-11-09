@@ -21,7 +21,6 @@ export function ThreadMarkdownVideo(props: {
   const { source } = props;
   const feedVisible = useContext(ThreadMediaVisibleContext);
   const visible = props.thumbnailVisible ?? feedVisible;
-  const thumbnailKey = mediaVideoThumbnailKey(source);
   const asset = useAssetUrlState(
     "environmentId" in source ? source.environmentId : null,
     "resource" in source ? source.resource : null,
@@ -34,13 +33,19 @@ export function ThreadMarkdownVideo(props: {
     props.environmentId ?? null,
     "uri" in source ? source.uri : "",
   );
+  // A reconnect can move or remove the address, so the thumbnail and an open player start over.
+  const thumbnailKey = mediaVideoThumbnailKey(
+    "uri" in source && routed.uri !== null ? { ...source, uri: routed.uri } : source,
+  );
+  const playerKey =
+    "uri" in source ? `${thumbnailKey}|${routed.uri ?? "unavailable"}` : thumbnailKey;
   const uri =
     "uri" in source
       ? routed.uri
       : mediaVideoPreviewUri(source, asset._tag === "Success" ? asset.url : null);
   return (
     <MediaVideoPlayer
-      key={thumbnailKey}
+      key={playerKey}
       uri={uri}
       resolvePlaybackUri={
         "resource" in source

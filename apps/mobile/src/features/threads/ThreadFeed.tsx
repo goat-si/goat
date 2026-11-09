@@ -139,6 +139,7 @@ import { useFilePreviewGallery } from "../../components/FilePreviewGallery";
 import { assetImageSource } from "../../lib/assetImageSource";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { MessageImageGalleryScope } from "./MessageImageGalleryScope";
+import { readMobileMediaConnection } from "../../lib/environmentMediaUri";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import { inlineFilePreviewKind, isPdfFile } from "../../lib/filePreview";
 import { ThreadInlineFilePreview } from "./ThreadInlineFilePreview";
@@ -2306,6 +2307,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       threadId: props.threadId,
       workspaceRoot: props.workspaceRoot,
       imageEmbed,
+      environmentConnection: readMobileMediaConnection(props.environmentId),
     });
     if (media && media.kind !== "file") {
       void Haptics.selectionAsync();

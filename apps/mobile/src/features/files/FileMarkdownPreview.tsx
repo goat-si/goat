@@ -17,6 +17,7 @@ import {
   ThreadMarkdownImageUnavailable,
 } from "../threads/ThreadMarkdownImage";
 import { ThreadMarkdownVideo } from "../threads/ThreadMarkdownVideo";
+import { readMobileMediaConnection } from "../../lib/environmentMediaUri";
 import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import {
   normalizeNativeMarkdownUrl,
@@ -192,6 +193,7 @@ export function FileMarkdownPreview(props: {
       workspaceRoot: markdownDirectory,
       captured: props.captured,
       imageEmbed,
+      environmentConnection: readMobileMediaConnection(props.environmentId),
     });
     if (!media || media.kind === "file") {
       const fileLink = resolveMarkdownLinkPresentation(href);

@@ -235,3 +235,16 @@ it("opens host media through server authorization before the client grant loads"
   const [preview] = onImageExpand.mock.calls[0]!;
   expect(preview.images[0].actionsSource.onOpenFile).toBeTypeOf("function");
 });
+it("offers a captioned linked image's page beside the link", async () => {
+  using test = setup({ connection: tailnetConnection(), previewAllowed: true });
+  await using screen = await renderRemoteMarkdown(
+    test.registry,
+    `[Caption ![page](${PAGE_IMAGE})](https://example.test/)`,
+  );
+  const openPage = screen.getByRole("button", { name: "Open page" });
+  await expect.element(openPage).toBeInTheDocument();
+  expect(openPage.element().closest("a")).toBeNull();
+  await openPage.click();
+  await vi.waitFor(() => expect(state.openPreview).toHaveBeenCalledWith(PAGE_IMAGE));
+  expect(state.openExternal).not.toHaveBeenCalled();
+});

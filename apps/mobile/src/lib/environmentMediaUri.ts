@@ -3,7 +3,8 @@ import type { ResolveMediaSourceInput } from "@goat/client-runtime/media-source"
 import type { EnvironmentId } from "@goat/contracts";
 import * as Option from "effect/Option";
 
-import { usePreparedConnection } from "../state/session";
+import { appAtomRegistry } from "../state/atom-registry";
+import { environmentSession, usePreparedConnection } from "../state/session";
 import { normalizeNativeMarkdownUrl } from "./markdownLinks";
 
 type PreparedConnection = ReturnType<typeof usePreparedConnection>;
@@ -31,4 +32,10 @@ export function useEnvironmentMediaUri(
   if (environmentId === null) return { uri: url };
   const routed = resolveEnvironmentLoopbackUrl({ ...environment, url });
   return routed._tag === "Open" ? { uri: routed.url } : { uri: null, reason: routed.reason };
+}
+/** The connection at this moment, for taps; rendering subscribes through usePreparedConnection. */
+export function readMobileMediaConnection(environmentId: EnvironmentId) {
+  return mobileMediaConnection(
+    appAtomRegistry.get(environmentSession.preparedConnectionValueAtom(environmentId)),
+  );
 }
