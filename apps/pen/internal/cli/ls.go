@@ -43,6 +43,8 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 			seen = "uplink " + ls.Uplink
 		} else if m.Online {
 			seen = "online, " + seen
+		} else if m.LastSeen == 0 {
+			seen = "not seen yet"
 		} else {
 			seen = "offline, last seen " + seen
 		}

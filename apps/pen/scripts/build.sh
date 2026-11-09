@@ -39,12 +39,20 @@ modcache="$(cd "$here" && "$GO" env GOMODCACHE)"
 	echo "================================================================"
 	cat "$repo/LICENSE"
 	echo
-	for mod in $(cd "$here" && "$GO" list -deps -f '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}}{{end}}{{end}}' . | sort -u); do
+	mods="$(for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
+		(cd "$here" && GOOS="${target%/*}" GOARCH="${target#*/}" "$GO" list -deps -f '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}}{{end}}{{end}}' .)
+	done | sort -u)"
+	for mod in $mods; do
 		dir="$modcache/$(echo "$mod" | sed 's/[A-Z]/!&/g' | tr 'A-Z' 'a-z')"
+		lic="$(ls "$dir"/LICENSE* 2>/dev/null | head -n 1)"
+		if [ -z "$lic" ]; then
+			echo "build.sh: no license file for $mod in $dir" >&2
+			exit 1
+		fi
 		echo "================================================================"
 		echo "$mod"
 		echo "================================================================"
-		cat "$dir/LICENSE" 2>/dev/null || echo "(license file not found in $dir)"
+		cat "$lic"
 		echo
 	done
 } >NOTICE
