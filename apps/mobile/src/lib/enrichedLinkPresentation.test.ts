@@ -9,6 +9,12 @@ import {
 } from "./enrichedLinkPresentation";
 
 describe("Enriched link presentation", () => {
+  it("finds thread chips with angle-bracketed destinations", () => {
+    const here = "env-here" as EnvironmentId;
+    expect(threadChipTargets(here, "[A](<goat-thread://v1/thread_a>)")).toEqual([
+      { href: "goat-thread://v1/thread_a", environmentId: here, threadId: "thread_a", link: true },
+    ]);
+  });
   it("recognizes file-shaped code without turning commands or URLs into links", () => {
     for (const path of [
       "src/app.tsx",

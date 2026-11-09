@@ -9,7 +9,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as EffectAcpAgent from "effect-acp/agent";
 import * as AcpError from "effect-acp/errors";
-import type * as AcpSchema from "effect-acp/schema";
+import * as AcpSchema from "effect-acp/schema";
 import type * as AcpCompat from "effect-acp/compat";
 import { mockSessionNotices } from "./acpMockNotices.ts";
 import { mockSessionPage } from "./acpMockSessions.ts";
@@ -36,6 +36,11 @@ const emitBackgroundToolDuringAnswer =
   process.env.GOAT_ACP_EMIT_BACKGROUND_TOOL_DURING_ANSWER === "1";
 const emitAskQuestion = process.env.GOAT_ACP_EMIT_ASK_QUESTION === "1";
 const emitElicitation = process.env.GOAT_ACP_EMIT_ELICITATION === "1";
+const elicitationSchema = process.env.GOAT_ACP_ELICITATION_SCHEMA;
+const elicitationResponseLogPath = process.env.GOAT_ACP_ELICITATION_RESPONSE_LOG_PATH;
+const decodeElicitationSchema = Schema.decodeUnknownSync(
+  Schema.fromJsonString(AcpSchema.ElicitationSchema),
+);
 const emitMcpToolApprovalElicitation =
   process.env.GOAT_ACP_EMIT_MCP_TOOL_APPROVAL_ELICITATION === "1";
 const emitUrlElicitation = process.env.GOAT_ACP_EMIT_URL_ELICITATION === "1";
@@ -99,6 +104,14 @@ const emitStaleXAiPromptCompleteBeforeSecondHang =
 const emitOverlappingXAiPromptCompleteOutOfOrder =
   process.env.GOAT_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
 const failPrompt = process.env.GOAT_ACP_FAIL_PROMPT === "1";
+// JSON for the `data` of an "Internal error" response to `session/new`, as
+// Antigravity sends when its runtime cannot reach its local harness.
+const newSessionErrorData =
+  process.env.GOAT_ACP_NEW_SESSION_ERROR_DATA === undefined
+    ? undefined
+    : Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(
+        process.env.GOAT_ACP_NEW_SESSION_ERROR_DATA,
+      );
 const failPromptOrdinal = Number(process.env.GOAT_ACP_FAIL_PROMPT_ORDINAL);
 const compactionPromptOrdinals = new Set(
   (process.env.GOAT_ACP_COMPACTION_PROMPT_ORDINALS ?? "").split(",").map(Number),
@@ -134,9 +147,8 @@ const permissionRequestCount = Math.max(
   Number(process.env.GOAT_ACP_PERMISSION_REQUEST_COUNT ?? "1") || 1,
 );
 const sessionId = "mock-session-1";
-
 let currentModeId = antigravityProfile
-  ? "default"
+  ? (process.env.GOAT_ACP_INITIAL_MODE ?? "default")
   : copilotModesProfile
     ? copilotModeId("agent")
     : "ask";
@@ -151,7 +163,6 @@ let promptCount = 0;
 let overlappingFirstPromptId: string | undefined;
 const cancelledSessions = new Set<string>();
 let configuredProvider: AcpSchema.ProviderCurrentConfig | null = null;
-
 function promptIdFromRequestMeta(
   request: Pick<AcpSchema.PromptRequest, "_meta">,
 ): string | undefined {
@@ -162,44 +173,36 @@ function promptIdFromRequestMeta(
   const promptId = meta.promptId ?? meta.requestId;
   return typeof promptId === "string" && promptId.length > 0 ? promptId : undefined;
 }
-
 function logExit(reason: string): void {
   if (!exitLogPath) {
     return;
   }
   NodeFS.appendFileSync(exitLogPath, `${reason}\n`, "utf8");
 }
-
 function writeJsonRpcNotification(method: string, params: unknown): void {
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
 }
-
 function logResidualCallbackResponse(kind: string): void {
   if (!residualCallbackResponseLogPath) return;
   NodeFS.appendFileSync(residualCallbackResponseLogPath, `${kind}\n`, "utf8");
 }
-
 process.once("SIGTERM", () => {
   logExit("SIGTERM");
   process.exit(0);
 });
-
 process.once("SIGINT", () => {
   logExit("SIGINT");
   process.exit(0);
 });
-
 process.once("exit", (code) => {
   logExit(`exit:${code}`);
 });
-
 // Tests own this agent through its stdio. Exit when stdin ends so a test worker
 // that dies before closing its scope cannot leave the agent running under PID 1.
 process.stdin.once("end", () => {
   logExit("stdin-end");
   process.exit(0);
 });
-
 function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   if (omitModelConfigOption) {
     return [];
@@ -252,7 +255,6 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
         ],
       },
     ];
-
     switch (currentModelId) {
       case "gpt-5.4":
         return [
@@ -336,7 +338,6 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
         return baseOptions;
     }
   }
-
   return [
     // Mirrors GitHub Copilot, whose default agent is the empty-valued choice.
     ...(emitEmptyDefaultAgentOption
@@ -381,7 +382,6 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
     },
   ];
 }
-
 function modelConfigOptionsFor(modelId: string): ReadonlyArray<AcpSchema.SessionConfigOption> {
   const previousModelId = currentModelId;
   try {
@@ -393,7 +393,6 @@ function modelConfigOptionsFor(modelId: string): ReadonlyArray<AcpSchema.Session
     currentModelId = previousModelId;
   }
 }
-
 function availableModels(): ReadonlyArray<{
   readonly value: string;
   readonly name: string;
@@ -664,6 +663,9 @@ const program = Effect.gen(function* () {
   yield* agent.handleCreateSession(() =>
     Effect.gen(function* () {
       yield* requireAuthentication();
+      if (newSessionErrorData !== undefined) {
+        return yield* AcpError.AcpRequestError.internalError("Internal error", newSessionErrorData);
+      }
       if (antigravityProfile) {
         yield* publishAntigravityCommands(sessionId);
       }
@@ -2111,20 +2113,24 @@ const program = Effect.gen(function* () {
       }
 
       if (emitElicitation || emitMcpToolApprovalElicitation) {
-        yield* agent.client.elicit({
+        const response = yield* agent.client.elicit({
           sessionId: requestedSessionId,
           message: "Approve this request?",
           mode: "form",
-          requestedSchema: {
-            type: "object",
-            properties: {
-              approved: { type: "boolean", title: "Approved" },
-            },
-          },
+          requestedSchema: elicitationSchema
+            ? decodeElicitationSchema(elicitationSchema)
+            : {
+                type: "object",
+                properties: {
+                  approved: { type: "boolean", title: "Approved" },
+                },
+              },
           ...(emitMcpToolApprovalElicitation
             ? { _meta: { codex_approval_kind: "mcp_tool_call" } }
             : {}),
         });
+        if (elicitationResponseLogPath)
+          NodeFS.appendFileSync(elicitationResponseLogPath, `${encodeJson(response)}\n`, "utf8");
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
@@ -2547,7 +2553,6 @@ const program = Effect.gen(function* () {
         });
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
-
       if (emitXAiExitPlanMode) {
         const result = yield* agent.client.extRequest("_x.ai/exit_plan_mode", {
           method: "x.ai/exit_plan_mode",
@@ -2571,7 +2576,6 @@ const program = Effect.gen(function* () {
         }
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
-
       if (emitForeignSessionUpdates) {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
@@ -2610,7 +2614,6 @@ const program = Effect.gen(function* () {
         });
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
-
       yield* agent.client.sessionUpdate({
         sessionId: requestedSessionId,
         update: {
@@ -2633,7 +2636,6 @@ const program = Effect.gen(function* () {
           },
         },
       });
-
       yield* agent.client.sessionUpdate({
         sessionId: requestedSessionId,
         update: {
@@ -2642,11 +2644,9 @@ const program = Effect.gen(function* () {
           content: { type: "text", text: promptResponseText ?? "hello from mock" },
         },
       });
-
       return yield* finishPrompt(requestedSessionId, "end_turn");
     }),
   );
-
   yield* agent.handleUnknownExtRequest((method, params) => {
     if (method === "_test/environment") {
       return Effect.succeed({
@@ -2708,11 +2708,9 @@ const program = Effect.gen(function* () {
         models: availableModels(),
       });
     }
-
     if (method !== "session/mode/set") {
       return Effect.fail(AcpError.AcpRequestError.methodNotFound(method));
     }
-
     const nextModeId =
       typeof params === "object" &&
       params !== null &&
@@ -2732,7 +2730,6 @@ const program = Effect.gen(function* () {
       typeof params.sessionId === "string"
         ? params.sessionId
         : sessionId;
-
     if (typeof nextModeId === "string" && nextModeId.trim()) {
       currentModeId = nextModeId.trim();
       return agent.client
@@ -2745,10 +2742,8 @@ const program = Effect.gen(function* () {
         })
         .pipe(Effect.as({}));
     }
-
     return Effect.succeed({});
   });
-
   yield* agent.handleUnknownExtNotification((method, params) =>
     method === "_test/exit"
       ? Effect.sync(() => {
@@ -2758,7 +2753,6 @@ const program = Effect.gen(function* () {
         })
       : Effect.void,
   );
-
   return yield* Effect.never;
 }).pipe(
   Effect.provide(
@@ -2789,5 +2783,4 @@ const program = Effect.gen(function* () {
   Effect.scoped,
   Effect.provide(NodeServices.layer),
 );
-
 NodeRuntime.runMain(program);

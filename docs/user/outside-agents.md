@@ -16,8 +16,9 @@ example:
 https://<environment-address>/mcp
 ```
 
-The copied URL uses the route this device is connected over, so an agent on the
-same device can reach it.
+When GOAT Connect serves the environment, the copied URL is its GOAT Connect
+address. Otherwise it uses the route this device is connected over, so an agent on
+the same device can reach it.
 
 - **An agent on your own computers** can use `localhost` on the host or any
   `https` address, such as

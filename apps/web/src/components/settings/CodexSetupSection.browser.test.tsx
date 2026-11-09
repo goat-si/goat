@@ -47,6 +47,7 @@ vi.mock("../../state/server", () => ({
     chatGptImportProfile: mocks.importProfile,
     refreshProviders: mocks.refresh,
     logoutProviderAuth: mocks.logout,
+    removeProviderAuthMethod: Object.assign(vi.fn(), { permissionAtom: () => Atom.make(true) }),
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));

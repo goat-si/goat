@@ -54,6 +54,7 @@ import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirect
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
 import { makeSubmoduleRemoval } from "./storageCleanupSubmodules.ts";
+import { makeNestedWorktrees } from "./storageNestedWorktrees.ts";
 import { makeWorktreeRemovalGate } from "./storageCleanupRemoval.ts";
 import { rankWorktrees, retentionReason } from "./storageCleanupRetention.ts";
 import { makeWorktreeCleanupRun } from "./storageCleanupRun.ts";
@@ -447,6 +448,8 @@ const make = Effect.gen(function* () {
       },
       Effect.orElseSucceed(() => undefined),
     );
+    const lookup = { fs, path, git, projectRoots, pathKey, inside, inProject };
+    const nestedWorktrees = makeNestedWorktrees(lookup);
     for (const root of roots) {
       // Worktrees can be <root>/<repository>/<branch> or explicitly <root>/<name>.
       for (const projectDirectory of yield* directories(root, root)) {
@@ -458,7 +461,8 @@ const make = Effect.gen(function* () {
             return;
           }
           for (const worktreePath of yield* directories(projectDirectory, root)) {
-            yield* report(worktreePath);
+            const nested = yield* nestedWorktrees(worktreePath, root);
+            for (const target of nested.length > 0 ? nested : [worktreePath]) yield* report(target);
           }
         }).pipe(Effect.orElseSucceed(() => undefined));
       }

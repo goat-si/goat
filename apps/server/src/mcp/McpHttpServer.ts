@@ -195,7 +195,7 @@ import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
-import { artifactSiteSlug } from "../preview/browserArtifacts.ts";
+import { saveScreenshot } from "./previewScreenshotFile.ts";
 
 const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
   HttpServerRequest.toURL(request).pipe(
@@ -371,34 +371,6 @@ export const layerLlmsTxtRoute = Layer.unwrap(
 export { MAX_SNAPSHOT_TEXT_BYTES } from "./toolkits/preview/snapshotTransport.ts";
 const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-export class PreviewScreenshotSaveError extends Schema.TaggedError<PreviewScreenshotSaveError>()(
-  "PreviewScreenshotSaveError",
-  { screenshotPath: Schema.String, cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return `Could not save preview screenshot to ${this.screenshotPath}.`;
-  }
-}
-
-const saveScreenshot = Effect.fn("McpHttpServer.saveScreenshot")(function* (
-  pageUrl: string,
-  data: Uint8Array,
-) {
-  const config = yield* ServerConfig.ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const millis = yield* Clock.currentTimeMillis;
-  const crypto = yield* Crypto.Crypto;
-  const unique = (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).slice(0, 8);
-  const fileName = `browser-screenshot-${artifactSiteSlug(pageUrl)}-${millis.toString(36)}-${unique}.png`;
-  const screenshotPath = path.join(config.browserArtifactsDir, fileName);
-  yield* fileSystem.makeDirectory(config.browserArtifactsDir, { recursive: true }).pipe(
-    Effect.andThen(fileSystem.writeFile(screenshotPath, data)),
-    Effect.mapError((cause) => new PreviewScreenshotSaveError({ screenshotPath, cause })),
-  );
-  return screenshotPath;
-});
-
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
@@ -448,12 +420,20 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
               const snapshot = encodedResult as SnapshotMetadata & {
                 readonly url: string;
                 readonly screenshot: PreviewAutomationSnapshot["screenshot"];
+                readonly fullScreenshot?: { readonly data: string };
               };
-              const { screenshot, ...page } = snapshot;
+              const { screenshot, fullScreenshot, ...page } = snapshot;
               const { data = "", ...screenshotMetadata } = screenshot ?? {};
               const png = new Uint8Array(Buffer.from(data, "base64"));
               const saving = payload?.save === true && screenshot !== undefined;
-              const screenshotPath = saving ? yield* saveScreenshot(snapshot.url, png) : undefined;
+              const screenshotPath = saving
+                ? yield* saveScreenshot(
+                    snapshot.url,
+                    fullScreenshot === undefined
+                      ? png
+                      : new Uint8Array(Buffer.from(fullScreenshot.data, "base64")),
+                  )
+                : undefined;
               const deliveryKey = snapshotDeliveryKey(invocation, snapshot.tabId);
               // Images stay out of tool history unless asked for: providers replay them on every
               // later request, and some reject inline images outright.

@@ -217,12 +217,12 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
 
       let generation = yield* Ref.get(accountGeneration);
       yield* Ref.set(refreshGeneration, generation);
-      yield* SubscriptionRef.set(state, {
-        environments: new Map(),
+      yield* SubscriptionRef.update(state, (current) => ({
+        ...current,
         refreshing: true,
         offline: false,
         error: Option.none(),
-      });
+      }));
 
       // Sign-out triggers credentials-changed refreshes and must settle to an empty list.
       // Only session-level missing credentials are benign; relay-side auth failures must surface.
@@ -235,6 +235,7 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
           }
           yield* SubscriptionRef.update(state, (current) => ({
             ...current,
+            environments: new Map(),
             refreshing: false,
           }));
           return;
@@ -248,11 +249,16 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
       const accountId = relayAccountId(clerkToken);
       const previousAccountId = yield* Ref.get(activeAccountId);
       if (
-        Option.isSome(previousAccountId) &&
-        (!Option.isSome(accountId) || previousAccountId.value !== accountId.value)
+        Option.isNone(previousAccountId) ||
+        Option.isNone(accountId) ||
+        previousAccountId.value !== accountId.value
       ) {
         generation = yield* Ref.updateAndGet(accountGeneration, (current) => current + 1);
         yield* Ref.set(refreshGeneration, generation);
+        yield* SubscriptionRef.update(state, (current) => ({
+          ...current,
+          environments: new Map(),
+        }));
       }
       yield* Ref.set(activeAccountId, accountId);
 
@@ -300,6 +306,7 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
           }
           yield* SubscriptionRef.update(state, (current) => ({
             ...current,
+            environments: new Map(),
             refreshing: false,
             error: Option.some(error),
           }));

@@ -228,6 +228,10 @@ function ProviderAccount({
   const complete = useAtomCommand(serverEnvironment.completeProviderAuth, options);
   const cancel = useAtomCommand(serverEnvironment.cancelProviderAuth, options);
   const logout = useAtomCommand(serverEnvironment.logoutProviderAuth, options);
+  const removeMethod = useAtomCommand(serverEnvironment.removeProviderAuthMethod, options);
+  const canRemoveMethod = useAtomValue(
+    serverEnvironment.removeProviderAuthMethod.permissionAtom(environmentId),
+  );
   const [pending, setPending] = useState(false);
   const [choosingMethod, setChoosingMethod] = useState(false);
   const pendingRef = useRef(false);
@@ -301,6 +305,12 @@ function ProviderAccount({
         onChangeText={(value) => setDraft({ id: draftId, values: { ...values, [name]: value } })}
       />
     );
+  }
+  const removableMethods = (state?.methods ?? []).filter((method) => method.canRemove);
+  function removeIncomplete(methodId: string) {
+    if (active || !canRemoveMethod) return;
+    if (!removableMethods.some((method) => method.id === methodId)) return;
+    void run(() => removeMethod({ environmentId, input: { instanceId, methodId } }));
   }
   function chooseMethod() {
     const methods = state?.methods ?? [];
@@ -487,6 +497,20 @@ function ProviderAccount({
             )
           }
         />
+      ) : null}
+      {!active && removableMethods.length > 0 ? (
+        <View>
+          {removableMethods.map((method) => (
+            <SettingsActionRow
+              key={method.id}
+              icon="xmark"
+              label={`Remove incomplete connection · ${method.name}`}
+              tone="danger"
+              disabled={disabled || !canRemoveMethod}
+              onPress={() => removeIncomplete(method.id)}
+            />
+          ))}
+        </View>
       ) : null}
     </View>
   );

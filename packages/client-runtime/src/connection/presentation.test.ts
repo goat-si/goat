@@ -11,6 +11,7 @@ import {
   BearerConnectionTarget,
   ConnectionTransientError,
   connectionProjectionPhase,
+  HubProxyConnectionTarget,
   RelayConnectionTarget,
   type SupervisorConnectionState,
   ConnectionBlockedError,
@@ -64,7 +65,7 @@ function supervisorState(overrides: Partial<SupervisorConnectionState>): Supervi
 }
 
 describe("connection presentation", () => {
-  it("copies the MCP address of the route this device is connected over", () => {
+  it("prefers the relay MCP address over the connected route", () => {
     const route = (connectionId: string, httpBaseUrl: string): ConnectionRoute => {
       const target = new BearerConnectionTarget({ ...TARGET, connectionId });
       return {
@@ -94,6 +95,34 @@ describe("connection presentation", () => {
       "http://100.115.1.44:3773/mcp",
     );
     expect(environmentMcpUrl({ entry })).toBe("http://192.168.4.53:3773/mcp");
+    expect(
+      environmentMcpUrl({
+        entry,
+        connectedTarget: lan.target,
+        relayHttpBaseUrl: "https://tunnel.example.test",
+      }),
+    ).toBe("https://tunnel.example.test/mcp");
+  });
+
+  it("does not expose an MCP URL for a connected hub proxy", () => {
+    const target = new HubProxyConnectionTarget({
+      environmentId: TARGET.environmentId,
+      label: TARGET.label,
+      connectionId: "hub:fixture",
+    });
+    const entry: ConnectionCatalogEntry = {
+      ...ENTRY,
+      target,
+      profile: Option.none(),
+      alternateRoutes: [{ target: ENTRY.target, profile: ENTRY.profile }],
+    };
+    expect(
+      environmentMcpUrl({
+        entry,
+        connectedTarget: target,
+        relayHttpBaseUrl: "https://tunnel.example.test",
+      }),
+    ).toBeNull();
   });
 
   // regression: #16909 Copy MCP URL falls back to an alternate route when the relay route has no address

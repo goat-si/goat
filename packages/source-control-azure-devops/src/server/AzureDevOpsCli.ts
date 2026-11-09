@@ -256,6 +256,9 @@ export class AzureDevOpsCli extends Context.Service<
 
     readonly getDefaultBranch: (input: {
       readonly cwd: string;
+      readonly repository: string;
+      readonly project?: string;
+      readonly organization?: string;
     }) => Effect.Effect<string | null, AzureDevOpsCliError>;
 
     readonly checkoutPullRequest: (input: {
@@ -312,6 +315,11 @@ function normalizeRepositoryCloneUrls(
     url: raw.remoteUrl,
     sshUrl: raw.sshUrl,
   };
+}
+
+/** `az` reads a value starting with `@` as a file and one starting with `-` as an option. */
+function isSafeArgument(value: string): boolean {
+  return value.length > 0 && !value.startsWith("@") && !value.startsWith("-");
 }
 
 function parseRepositorySpecifier(repository: string): {
@@ -552,9 +560,28 @@ export const make = Effect.gen(function* () {
       }).pipe(Effect.asVoid);
     }),
     getDefaultBranch: Effect.fn("AzureDevOpsCli.getDefaultBranch")(function (input) {
+      const repository = parseRepositorySpecifier(input.repository);
+      const project = input.project ?? repository.project;
+      const organization = input.organization ?? null;
+      // Every value comes from a remote URL, so none may reach `az` as a file or an option.
+      if (
+        !isSafeArgument(repository.name) ||
+        (project !== null && !isSafeArgument(project)) ||
+        (organization !== null && !isSafeArgument(organization))
+      ) {
+        return Effect.succeed(null);
+      }
       return executeJson({
         cwd: input.cwd,
-        args: ["repos", "show", "--detect", "true"],
+        args: [
+          "repos",
+          "show",
+          "--detect",
+          "true",
+          `--repository=${repository.name}`,
+          ...(project === null ? [] : [`--project=${project}`]),
+          ...(organization === null ? [] : [`--organization=${organization}`]),
+        ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>

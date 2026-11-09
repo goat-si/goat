@@ -1,3 +1,6 @@
+import { ManagedRelay } from "@goat/client-runtime/relay";
+import * as Schema from "effect/Schema";
+import { CloudEnvironmentLinkError } from "./linkEnvironment";
 import { useConnectReverification } from "./useConnectReverification";
 import { useAtomValue } from "@effect/atom-react";
 import { useAuth } from "@clerk/react";
@@ -17,6 +20,8 @@ import {
 import { useState } from "react";
 
 import { toastManager } from "../components/ui/toast";
+import { stackedThreadToast } from "../components/ui/toastHelpers";
+import { relayFailureReason } from "./relayFailureReason";
 import { relayEnvironmentDiscovery } from "../state/relay";
 import { readEnvironmentScope } from "../state/session";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -47,6 +52,8 @@ function isManagedTunnelActive(
   );
 }
 
+const isManagedRelayClientError = Schema.is(ManagedRelay.ManagedRelayClientError);
+
 export function useCloudLinkController() {
   const { getToken, isSignedIn } = useAuth();
   const reverify = useConnectReverification();
@@ -71,25 +78,29 @@ export function useCloudLinkController() {
     : undefined;
   const [operationError, setOperationError] = useState<string | null>(null);
 
-  const reportUpdateFailure = (cause: unknown) => {
+  const reportUpdateFailure = (cause: unknown, reason?: string) => {
     const message =
       cause instanceof Error ? cause.message : "Could not update GOAT Connect access.";
     const traceId = findErrorTraceId(cause);
     console.error("[goat-connect] Could not update GOAT Connect", { message, traceId, cause });
     setOperationError(traceId ? `${message} Trace ID: ${traceId}` : message);
-    toastManager.add({
-      type: "error",
-      title: "Could not update GOAT Connect",
-      description: message,
-      data: traceId
-        ? {
-            secondaryActionProps: {
-              children: "Copy trace ID",
-              onClick: () => void navigator.clipboard?.writeText(traceId),
-            },
-          }
-        : undefined,
-    });
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Could not update GOAT Connect",
+        description: reason ?? relayFailureReason(cause) ?? message,
+        ...(traceId
+          ? {
+              actionProps: {
+                children: "Copy trace ID",
+                onClick: () => void navigator.clipboard?.writeText(traceId),
+              },
+              actionVariant: "outline",
+            }
+          : {}),
+        data: { hideCopyButton: true },
+      }),
+    );
   };
 
   const linkData = primaryCloudLinkState.data;
@@ -143,9 +154,19 @@ export function useCloudLinkController() {
       });
       if (unlinkResult._tag === "Failure") {
         if (!isAtomCommandInterrupted(unlinkResult)) {
-          reportUpdateFailure(squashAtomCommandFailure(unlinkResult));
+          const cause = squashAtomCommandFailure(unlinkResult);
+          // Only the relay delete fails with a relay error, and it runs after the local unlink.
+          const relayKeptLink =
+            cause instanceof CloudEnvironmentLinkError && isManagedRelayClientError(cause.cause);
+          reportUpdateFailure(
+            cause,
+            relayKeptLink
+              ? "Disconnected here, but GOAT Connect did not confirm removal. Check Account."
+              : undefined,
+          );
         }
         primaryCloudLinkState.refresh();
+        await refreshRelayEnvironments();
         return false;
       }
     } else {

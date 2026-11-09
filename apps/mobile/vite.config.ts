@@ -38,6 +38,7 @@ const reactTests = [
   "src/features/threads/useThreadListV2.test.tsx",
   "src/features/threads/use-thread-list-v2-launch-groups.test.tsx",
   "src/components/MediaVideoPlayer.test.tsx",
+  "src/components/PdfFilePreview.test.tsx",
   "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
   "src/features/cloud/AccountDeletionSection.test.tsx",
   "src/features/cloud/CloudAuthProvider.test.ts",

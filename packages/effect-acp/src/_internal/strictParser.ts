@@ -1,4 +1,11 @@
+import * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
+
+/** A decoded wire message and the length of the JSON line it arrived on. */
+export interface AcpDecodedWireMessage {
+  readonly message: RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded;
+  readonly lineLength: number;
+}
 
 // ndJsonRpc skips lines that are not JSON. A malformed agent line has to end the
 // session, so frames are split here and each one goes through the strict codec.
@@ -9,10 +16,11 @@ export const makeStrictNdJsonRpcParser = () => {
   let fragments: Array<string> = [];
   let pendingCharacters = 0;
   return {
-    decode: (bytes: Uint8Array | string): ReadonlyArray<unknown> => {
+    // Every message in a batch line is charged the whole line.
+    decode: (bytes: Uint8Array | string): ReadonlyArray<AcpDecodedWireMessage> => {
       const chunk = typeof bytes === "string" ? bytes : decoder.decode(bytes, { stream: true });
       const lines = chunk.split("\n");
-      const decoded: Array<unknown> = [];
+      const decoded: Array<AcpDecodedWireMessage> = [];
       for (const [index, fragment] of lines.entries()) {
         pendingCharacters += fragment.length;
         if (pendingCharacters > maxFrameCharacters) {
@@ -20,14 +28,21 @@ export const makeStrictNdJsonRpcParser = () => {
         }
         if (fragment.length > 0) fragments.push(fragment);
         if (index < lines.length - 1) {
-          decoded.push(...codec.decode(fragments.join("")));
+          const line = fragments.join("");
+          // Every message in a batch line is charged the whole line.
+          decoded.push(
+            ...codec.decode(line).map((message) => ({
+              message: message as RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
+              lineLength: line.length,
+            })),
+          );
           fragments = [];
           pendingCharacters = 0;
         }
       }
       return decoded;
     },
-    end: (): ReadonlyArray<unknown> => {
+    end: (): ReadonlyArray<AcpDecodedWireMessage> => {
       const suffix = decoder.decode();
       if (pendingCharacters + suffix.length > maxFrameCharacters)
         throw new Error("ACP frame exceeds the maximum size");
@@ -35,7 +50,13 @@ export const makeStrictNdJsonRpcParser = () => {
       fragments = [];
       pendingCharacters = 0;
       try {
-        return line.trim() === "" ? [] : codec.decode(line);
+        // Every message in a batch line is charged the whole line.
+        return line.trim() === ""
+          ? []
+          : codec.decode(line).map((message) => ({
+              message: message as RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
+              lineLength: line.length,
+            }));
       } catch {
         return [];
       }

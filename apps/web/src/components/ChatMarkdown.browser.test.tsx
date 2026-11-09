@@ -475,6 +475,24 @@ describe("ChatMarkdown headings", () => {
   });
 });
 
+describe("ChatMarkdown file chip tooltips", () => {
+  it("wraps a long path so its file name stays inside the tooltip", async () => {
+    setup();
+    const path =
+      "/tmp/project/packages/client-runtime/src/state/generated/environment-connection-handshake-retry-policy-fixtures.ts";
+    await using screen = await renderText(`See [the fixtures](${path}).`);
+    await userEvent.hover(screen.container.querySelector(".chat-markdown-file-link")!);
+    const tooltip = page.getByText(path);
+    await expect.element(tooltip).toBeVisible();
+    const popup = tooltip.element().closest("[data-side]")!;
+    const pathEnd = document.createRange();
+    pathEnd.selectNodeContents(tooltip.element());
+    expect(pathEnd.getBoundingClientRect().right).toBeLessThanOrEqual(
+      popup.getBoundingClientRect().right,
+    );
+  });
+});
+
 describe("ChatMarkdown inline code selection", () => {
   it("selects the whole inline code span on double-click, but only a word in fenced code", async () => {
     setup();
@@ -488,6 +506,31 @@ describe("ChatMarkdown inline code selection", () => {
     const fenced = screen.container.querySelector("pre code")!;
     await userEvent.dblClick(fenced, { position: { x: 4, y: 4 } });
     expect(window.getSelection()?.toString()).toBe("fenced");
+  });
+});
+
+describe("ChatMarkdown editor deep links", () => {
+  const hrefs = (container: HTMLElement) =>
+    [...container.querySelectorAll("a")].map((link) => link.getAttribute("href"));
+
+  it("keeps local editor file links", async () => {
+    setup();
+    await using screen = await renderText(
+      "[file.md line 3](cursor://file/Users/me/repo/file.md:3) and [same](vscode://file/Users/me/repo/file.md:3:7)",
+    );
+    expect(hrefs(screen.container)).toEqual([
+      "cursor://file/Users/me/repo/file.md:3",
+      "vscode://file/Users/me/repo/file.md:3:7",
+    ]);
+  });
+
+  it("still drops other editor links and unknown schemes", async () => {
+    setup();
+    await using screen = await renderText(
+      "[prompt](cursor://anysphere.cursor-deeplink/prompt?text=hi) [user](cursor://me@file/Users/me/file.md) [unknown](foo://file/Users/me/file.md)",
+    );
+    expect(screen.container.innerHTML).not.toContain("://");
+    expect(hrefs(screen.container).filter(Boolean)).toEqual([]);
   });
 });
 

@@ -1,3 +1,8 @@
+import {
+  SOURCE_CONTROL_STAR_METHODS,
+  WsSourceControlStarredRpc,
+  WsSourceControlStarRpc,
+} from "./sourceControlStarRpc.ts";
 import { GlobalSkillsRpcs } from "./globalSkillsRpc.ts";
 import * as AuthAccessRpc from "./authAccessRpc.ts";
 import { WsComputerUseHistoryRpc, WsComputerUseStatusChangesRpc } from "./computerUseHistoryRpc.ts";
@@ -84,6 +89,7 @@ import {
   ProviderAuthCompleteInput,
   ProviderAuthState,
   ProviderAuthStartInput,
+  ProviderAuthRemoveMethodInput,
   ProviderAuthRespondInput,
   ProviderInstallCancelInput,
   ProviderInstallState,
@@ -567,6 +573,7 @@ export const WS_METHODS = {
   codexAuthCallbackSubscribe: "provider.codex.auth-callback.subscribe",
   providerAuthRespond: "provider.auth.respond",
   providerAuthCancel: "provider.auth.cancel",
+  providerAuthRemoveMethod: "provider.auth.removeMethod",
   providerAuthLogout: "provider.auth.logout",
   providerAuthSubscribe: "provider.auth.subscribe",
   providerInstallStart: "provider.install.start",
@@ -774,6 +781,7 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+  ...SOURCE_CONTROL_STAR_METHODS,
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -961,6 +969,12 @@ const WsCodexAuthCallbackSubscribeRpc = Rpc.make(WS_METHODS.codexAuthCallbackSub
 
 const WsProviderAuthCancelRpc = Rpc.make(WS_METHODS.providerAuthCancel, {
   payload: ProviderAuthCancelInput,
+  success: ProviderAuthState,
+  error: ProviderSetupRpcError,
+});
+
+const WsProviderAuthRemoveMethodRpc = Rpc.make(WS_METHODS.providerAuthRemoveMethod, {
+  payload: ProviderAuthRemoveMethodInput,
   success: ProviderAuthState,
   error: ProviderSetupRpcError,
 });
@@ -2477,6 +2491,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsCodexAuthCallbackSubscribeRpc,
   WsProviderAuthRespondRpc,
   WsProviderAuthCancelRpc,
+  WsProviderAuthRemoveMethodRpc,
   WsProviderAuthLogoutRpc,
   WsProviderAuthSubscribeRpc,
   WsProviderInstallStartRpc,
@@ -2612,6 +2627,8 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
 
 export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
+  WsSourceControlStarredRpc,
+  WsSourceControlStarRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
   WsProjectCloneStartRpc,
