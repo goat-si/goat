@@ -51,6 +51,7 @@ describe("Windows launch listener wait", () => {
     "netstatHang",
     "stopHang",
     "spawnDies",
+    "spawnParentGone",
     "failSpawn",
     "addrInUse",
     "recordFails",
@@ -92,6 +93,7 @@ describe("Windows launch listener wait", () => {
         'if [ -n "${GOAT_SPAWN_ARGS:-}" ]; then',
         '  echo "${GOAT_SPAWN_RECORD:-detached}" >>"$TEST_ROOT/spawns"',
         '  [ ! -e "$TEST_ROOT/spawnDies" ] || exit 1',
+        '  [ ! -e "$TEST_ROOT/spawnParentGone" ] || exit 4',
         '  if [ -z "${GOAT_WAIT_UNTIL_MS:-}" ]; then echo 4242; exit 0; fi',
         '  [ ! -e "$TEST_ROOT/recordFails" ] || exit 6',
         '  [ ! -e "$TEST_ROOT/recordFailsUnconfirmed" ] || exit 7',
@@ -747,6 +749,11 @@ describe("Windows launch listener wait", () => {
       assert.deepEqual(died.stops, []);
       assert.notInclude(died.commands, "taskkill");
       assert.deepEqual(died.state, ["server.log"]);
+      // cmd.exe gone before its child was found proves nothing about the child either.
+      const orphaned = yield* attempt(harness, { alive: true, spawnParentGone: true });
+      assert.equal(orphaned.code, 1, orphaned.stderr);
+      assert.isTrue(orphaned.unconfirmed);
+      assert.deepEqual(orphaned.stops, []);
       // A record it could not write: the PowerShell ended the server through its own handle.
       const unwritten = yield* attempt(harness, { alive: true, recordFails: true });
       assert.equal(unwritten.code, 1, unwritten.stderr);

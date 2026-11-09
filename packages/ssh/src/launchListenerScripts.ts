@@ -225,9 +225,10 @@ windows_launch_server() {
   rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
   printf 'Could not start the GOAT server outside the SSH session on this Windows host.\n' >&2
   tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
-  # Without a record the PowerShell made no server (2-4) or ended the one it made (6); any other
-  # answer, a stall or its death may leave one running that no record names, so none is stopped.
-  case "$LAUNCH_SPAWN_STATUS" in 2|3|4|6) ;; *)
+  # Without a record the PowerShell made no server (2, 3) or ended the one it made (6). Any other
+  # answer, a stall or its death (4 included: cmd.exe gone proves nothing about its child) may
+  # leave one running that no record names, so none is stopped.
+  case "$LAUNCH_SPAWN_STATUS" in 2|3|6) ;; *)
     printf 'GOAT could not confirm that the server it started stopped; it may still be running on this host.\n' >&2 ;;
   esac
   exit 1
