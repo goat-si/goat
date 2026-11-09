@@ -187,6 +187,52 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
       NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
+  it.each(["dash", "bash"])(
+    "store a fact without starting mkdir once its directory exists (%s)",
+    (shell) => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-fact-put-"));
+      try {
+        const bin = NodePath.join(dir, "bin");
+        NodeFS.mkdirSync(bin);
+        const realMkdir = NodeChildProcess.spawnSync("sh", ["-c", "command -v mkdir"], {
+          encoding: "utf8",
+        }).stdout.trim();
+        NodeFS.writeFileSync(
+          NodePath.join(bin, "mkdir"),
+          `#!/bin/sh\necho mkdir >>"$HOME/mkdirs"\nexec ${realMkdir} "$@"\n`,
+          { mode: 0o755 },
+        );
+        const facts = NodePath.join(dir, ".goat/ssh-launch/facts");
+        const put = (name: string) =>
+          runIn(
+            shell,
+            [
+              ': >"$HOME/mkdirs"',
+              `fact_put commit.${name} key 12345`,
+              `got="$(fact_get commit.${name} key)" || got=missing`,
+              'printf "%s %s\\n" "$got" "$(wc -l <"$HOME/mkdirs" | tr -d " ")"',
+            ].join("\n"),
+            { HOME: dir, PATH: bin + ":" + (process.env.PATH ?? "") },
+          ).trim();
+        // A missing directory is created, and an existing one is used without another mkdir.
+        assert.equal(put("first"), "12345 1");
+        assert.equal(put("second"), "12345 0");
+        // A file or a link where the directory belongs stores nothing, as before.
+        NodeFS.rmSync(facts, { recursive: true });
+        NodeFS.writeFileSync(facts, "");
+        assert.equal(put("third"), "missing 1");
+        NodeFS.rmSync(facts);
+        const elsewhere = NodePath.join(dir, "elsewhere");
+        NodeFS.mkdirSync(elsewhere);
+        NodeFS.symlinkSync(elsewhere, facts);
+        assert.equal(put("fourth"), "missing 0");
+        assert.deepEqual(NodeFS.readdirSync(elsewhere), []);
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("reads a built runner in one call and parses only the lines before its end line", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-hint-reads-"));
     try {
