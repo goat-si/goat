@@ -19,11 +19,13 @@ import { buildRemoteGoatRunnerScript } from "./tunnel.ts";
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers", () => {
   const scripts = REMOTE_RUNNER_HINT_SCRIPT + "\n" + REMOTE_PROTOCOL_TOKEN_SCRIPT;
   const quote = (token: string) => "'" + token.replaceAll("'", "'\\''") + "'";
+  // These tests set the clock with a date stand-in; bash 5 would read EPOCHSECONDS instead.
   const runIn = (shell: string, body: string, env: Record<string, string> = {}) => {
-    const result = NodeChildProcess.spawnSync(shell, ["-c", "set -eu\n" + scripts + "\n" + body], {
-      encoding: "utf8",
-      env: { ...process.env, ...env },
-    });
+    const result = NodeChildProcess.spawnSync(
+      shell,
+      ["-c", "unset EPOCHSECONDS 2>/dev/null || :\nset -eu\n" + scripts + "\n" + body],
+      { encoding: "utf8", env: { ...process.env, ...env } },
+    );
     assert.equal(result.status, 0, result.stderr);
     return result.stdout;
   };
@@ -338,6 +340,166 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
         ]);
       } finally {
         NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact age gate clock", () => {
+  // The harness's bash: 5+ has EPOCHSECONDS.
+  const bashMajor = Number(
+    NodeChildProcess.spawnSync("bash", ["-c", "echo $BASH_VERSINFO"], { encoding: "utf8" }).stdout,
+  );
+  it.each([
+    { shell: "dash", prefix: "", epoch: false },
+    { shell: "bash", prefix: "", epoch: bashMajor >= 5 },
+    { shell: "bash", prefix: "unset EPOCHSECONDS\n", epoch: false },
+  ])(
+    "keys an executable changed at least 2 s ago, as date decides, without date where bash has EPOCHSECONDS ($shell, epoch $epoch)",
+    ({ shell, prefix, epoch }) => {
+      const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-fact-clock-"));
+      try {
+        const dir = home + "/.goat/runtime/goat/versions/1.2.3";
+        NodeFS.mkdirSync(dir, { recursive: true });
+        NodeFS.mkdirSync(home + "/bin");
+        NodeFS.writeFileSync(dir + "/goat", "#!/bin/sh\n", { mode: 0o755 });
+        NodeFS.writeFileSync(dir + "/.install-complete", "1.2.3");
+        // stat reports the executable's ctime as $HOME/age seconds ago; date counts its starts and
+        // fails while $HOME/date-fails exists.
+        NodeFS.writeFileSync(
+          home + "/bin/stat",
+          [
+            "#!/bin/sh",
+            'sig="$(/usr/bin/stat "$@")" || exit 1',
+            'echo "${sig%:*}:$(( $(/bin/date +%s) - $(cat "$HOME/age") ))"',
+          ].join("\n") + "\n",
+          { mode: 0o755 },
+        );
+        NodeFS.writeFileSync(
+          home + "/bin/date",
+          [
+            "#!/bin/sh",
+            'echo date >>"$HOME/dates"',
+            '[ ! -e "$HOME/date-fails" ] || exit 1',
+            'exec /bin/date "$@"',
+          ].join("\n") + "\n",
+          { mode: 0o755 },
+        );
+        const key = (age: number, dateFails = false) => {
+          NodeFS.writeFileSync(home + "/age", String(age));
+          NodeFS.writeFileSync(home + "/dates", "");
+          if (dateFails) NodeFS.writeFileSync(home + "/date-fails", "");
+          else NodeFS.rmSync(home + "/date-fails", { force: true });
+          const result = NodeChildProcess.spawnSync(
+            shell,
+            [
+              "-c",
+              prefix +
+                "set -u\n" +
+                REMOTE_PROTOCOL_TOKEN_SCRIPT +
+                '\nif exec_fact_key "$HOME/.goat/runtime/goat/versions/1.2.3/goat"; then echo keyed; else echo unkeyed; fi',
+            ],
+            {
+              encoding: "utf8",
+              env: { HOME: home, PATH: home + "/bin:/usr/bin:/bin", LC_ALL: "C" },
+            },
+          );
+          assert.equal(result.status, 0, result.stderr);
+          const dates = NodeFS.readFileSync(home + "/dates", "utf8")
+            .split("\n")
+            .filter(Boolean);
+          return { verdict: result.stdout.trim(), dates: dates.length };
+        };
+        // A fresh read for every check: each keying reads the clock once.
+        const reads = epoch ? 0 : 1;
+        assert.deepEqual(key(10), { verdict: "keyed", dates: reads });
+        assert.deepEqual(key(1), { verdict: "unkeyed", dates: reads });
+        assert.deepEqual(key(0), { verdict: "unkeyed", dates: reads });
+        // A clock that cannot be read keys nothing, as before; EPOCHSECONDS needs no date.
+        assert.deepEqual(key(10, true), { verdict: epoch ? "keyed" : "unkeyed", dates: reads });
+      } finally {
+        NodeFS.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+  // The clock is EPOCHSECONDS as a plain variable (dash, or bash once it is unset), and stat
+  // reports the executable's mtime and ctime as $HOME/ctime.
+  it.each([
+    { shell: "dash", prefix: "" },
+    { shell: "bash", prefix: "unset EPOCHSECONDS\n" },
+  ])(
+    "never keys an executable changed within 2 s of the clock, remembered or not ($shell)",
+    ({ shell, prefix }) => {
+      const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-fact-clock-"));
+      try {
+        const dir = home + "/.goat/runtime/goat/versions/1.2.3";
+        NodeFS.mkdirSync(dir, { recursive: true });
+        NodeFS.mkdirSync(home + "/bin");
+        NodeFS.writeFileSync(dir + "/goat", "#!/bin/sh\n", { mode: 0o755 });
+        NodeFS.writeFileSync(dir + "/.install-complete", "1.2.3");
+        NodeFS.writeFileSync(home + "/ctime", "1000000");
+        NodeFS.writeFileSync(
+          home + "/bin/stat",
+          [
+            "#!/bin/sh",
+            'sig="$(/usr/bin/stat "$@")" || exit 1',
+            'sig="${sig%:*}"; c="$(cat "$HOME/ctime")"',
+            'echo "${sig%:*}:$c:$c"',
+          ].join("\n") + "\n",
+          { mode: 0o755 },
+        );
+        NodeFS.writeFileSync(
+          home + "/bin/date",
+          ["#!/bin/sh", 'echo date >>"$HOME/dates"', 'exec /bin/date "$@"'].join("\n") + "\n",
+          { mode: 0o755 },
+        );
+        const result = NodeChildProcess.spawnSync(
+          shell,
+          [
+            "-c",
+            prefix +
+              "set -u\n" +
+              REMOTE_PROTOCOL_TOKEN_SCRIPT +
+              "\n" +
+              [
+                'exe="$HOME/.goat/runtime/goat/versions/1.2.3/goat"',
+                'check() { if exec_fact_key "$exe"; then echo keyed; else echo unkeyed; fi; }',
+                // Empty or not a number: the clock comes from date, decades after the ctime.
+                "EPOCHSECONDS=; check",
+                "EPOCHSECONDS=abc; check",
+                // Behind the ctime, as after a clock step back, and 1 s after it.
+                "EPOCHSECONDS=999990; check",
+                "EPOCHSECONDS=1000001; check",
+                'FACT_MEMO="$HOME/memo"; : >"$FACT_MEMO"',
+                "EPOCHSECONDS=1000002; check",
+                "EPOCHSECONDS=1000005; check",
+                // Stepped back to the ctime and rewritten in place in that second at the same size:
+                // the signature is unchanged, so only the gate on the remembered key refuses it.
+                "printf '#!/bin/sh\\n' >\"$exe\"",
+                "EPOCHSECONDS=1000000; check",
+              ].join("\n"),
+          ],
+          { encoding: "utf8", env: { HOME: home, PATH: home + "/bin:/usr/bin:/bin", LC_ALL: "C" } },
+        );
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(result.stdout.trim().split("\n"), [
+          "keyed",
+          "keyed",
+          "unkeyed",
+          "unkeyed",
+          "keyed",
+          "keyed",
+          "unkeyed",
+        ]);
+        assert.lengthOf(
+          NodeFS.readFileSync(home + "/dates", "utf8")
+            .split("\n")
+            .filter(Boolean),
+          2,
+        );
+        assert.notEqual(NodeFS.readFileSync(home + "/memo", "utf8"), "");
+      } finally {
+        NodeFS.rmSync(home, { recursive: true, force: true });
       }
     },
   );

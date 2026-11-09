@@ -1,9 +1,6 @@
 // Validator checks run shells synchronously; the Effect spawner adds nothing to them.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
 
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
@@ -244,10 +241,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
       );
       assert.equal(Number(yield* stop.exitCode), 0);
       const stopCounts = yield* counts;
-      // goat starts only for the pairing itself, readiness and the activity check. Measured on
-      // eefc2a1f: pairing awk 20, cat 18, date 9, uname 9; probe cat 7, uname 7; launch awk 43,
-      // cat 81, date 17, uname 17; stop cat 17, uname 3.
-      // These count each script's own commands; what the runner starts is bounded per run below.
+      // goat starts only for the pairing, readiness and the activity check. These are each script's
+      // own commands; the runner's are bounded per run below. date is every age-gate clock read,
+      // one per key computed and one per remembered key used; bash 5 reads EPOCHSECONDS instead,
+      // which the fixture unsets to keep its clock.
       const bounds = {
         pairing: [
           pairingCounts,
@@ -255,7 +252,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             goat: 1,
             awk: 0,
             cat: 0,
-            date: 9,
+            date: 19,
             uname: 3,
             grep: 0,
             sed: 1,
@@ -270,7 +267,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             goat: 0,
             awk: 0,
             cat: 0,
-            date: 1,
+            date: 10,
             uname: 2,
             grep: 0,
             sed: 1,
@@ -285,7 +282,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             goat: 1,
             awk: 0,
             cat: 0,
-            date: 17,
+            date: 45,
             uname: 6,
             grep: 0,
             sed: 2,
@@ -851,85 +848,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote token v
         ...integers.map((token) => (uint(token) ? "1" : "0")),
         ...integers.map((token) => (uint(token) && Number(token) <= 65535 ? "1" : "0")),
       ]);
-    },
-  );
-});
-
-describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact age gate clock", () => {
-  // The harness's bash: 5+ has EPOCHSECONDS.
-  const bashMajor = Number(
-    NodeChildProcess.spawnSync("bash", ["-c", "echo $BASH_VERSINFO"], { encoding: "utf8" }).stdout,
-  );
-  it.each([
-    { shell: "dash", prefix: "", epoch: false },
-    { shell: "bash", prefix: "", epoch: bashMajor >= 5 },
-    { shell: "bash", prefix: "unset EPOCHSECONDS\n", epoch: false },
-  ])(
-    "keys an executable changed at least 2 s ago, as date decides, without date where bash has EPOCHSECONDS ($shell, epoch $epoch)",
-    ({ shell, prefix, epoch }) => {
-      const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-fact-clock-"));
-      try {
-        const dir = home + "/.goat/runtime/goat/versions/1.2.3";
-        NodeFS.mkdirSync(dir, { recursive: true });
-        NodeFS.mkdirSync(home + "/bin");
-        NodeFS.writeFileSync(dir + "/goat", "#!/bin/sh\n", { mode: 0o755 });
-        NodeFS.writeFileSync(dir + "/.install-complete", "1.2.3");
-        // stat reports the executable's ctime as $HOME/age seconds ago; date counts its starts and
-        // fails while $HOME/date-fails exists.
-        NodeFS.writeFileSync(
-          home + "/bin/stat",
-          [
-            "#!/bin/sh",
-            'sig="$(/usr/bin/stat "$@")" || exit 1',
-            'echo "${sig%:*}:$(( $(/bin/date +%s) - $(cat "$HOME/age") ))"',
-          ].join("\n") + "\n",
-          { mode: 0o755 },
-        );
-        NodeFS.writeFileSync(
-          home + "/bin/date",
-          [
-            "#!/bin/sh",
-            'echo date >>"$HOME/dates"',
-            '[ ! -e "$HOME/date-fails" ] || exit 1',
-            'exec /bin/date "$@"',
-          ].join("\n") + "\n",
-          { mode: 0o755 },
-        );
-        const key = (age: number, dateFails = false) => {
-          NodeFS.writeFileSync(home + "/age", String(age));
-          NodeFS.writeFileSync(home + "/dates", "");
-          if (dateFails) NodeFS.writeFileSync(home + "/date-fails", "");
-          else NodeFS.rmSync(home + "/date-fails", { force: true });
-          const result = NodeChildProcess.spawnSync(
-            shell,
-            [
-              "-c",
-              prefix +
-                "set -u\n" +
-                REMOTE_PROTOCOL_TOKEN_SCRIPT +
-                '\nif exec_fact_key "$HOME/.goat/runtime/goat/versions/1.2.3/goat"; then echo keyed; else echo unkeyed; fi',
-            ],
-            {
-              encoding: "utf8",
-              env: { HOME: home, PATH: home + "/bin:/usr/bin:/bin", LC_ALL: "C" },
-            },
-          );
-          assert.equal(result.status, 0, result.stderr);
-          const dates = NodeFS.readFileSync(home + "/dates", "utf8")
-            .split("\n")
-            .filter(Boolean);
-          return { verdict: result.stdout.trim(), dates: dates.length };
-        };
-        // A fresh read for every check: each keying reads the clock once.
-        const reads = epoch ? 0 : 1;
-        assert.deepEqual(key(10), { verdict: "keyed", dates: reads });
-        assert.deepEqual(key(1), { verdict: "unkeyed", dates: reads });
-        assert.deepEqual(key(0), { verdict: "unkeyed", dates: reads });
-        // A clock that cannot be read keys nothing, as before; EPOCHSECONDS needs no date.
-        assert.deepEqual(key(10, true), { verdict: epoch ? "keyed" : "unkeyed", dates: reads });
-      } finally {
-        NodeFS.rmSync(home, { recursive: true, force: true });
-      }
     },
   );
 });
