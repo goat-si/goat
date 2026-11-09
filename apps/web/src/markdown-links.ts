@@ -1,3 +1,4 @@
+import { isLocalEditorFileUrl } from "@goat/contracts";
 import { fileBasename, isAbsolutePath, workspaceRelativeFilePath } from "@goat/shared/path";
 import {
   inlineCodeFilePathCandidate,
@@ -34,9 +35,18 @@ export function shouldOpenMarkdownFileLinkInBrowserByDefault(path: string): bool
 }
 
 export function rewriteMarkdownFileUriHref(href: string | undefined): string | null {
+  if (href && isLocalEditorFileHref(href)) return href;
   if (!href) return null;
   const target = parseFileUrlHref(normalizeMarkdownLinkDestination(href));
   return target ? `${target.path}${target.hash}` : null;
+}
+
+export function isLocalEditorFileHref(href: string): boolean {
+  try {
+    return isLocalEditorFileUrl(new URL(href));
+  } catch {
+    return false;
+  }
 }
 
 export function resolveInlineCodeFileLinkMeta(
