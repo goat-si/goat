@@ -119,6 +119,14 @@ HTTPS URL.</p>
 under <strong>Settings → Threads</strong> (or <strong>Source control</strong> on mobile). Clones then default to
 <code>&lt;host&gt;/&lt;owner&gt;/&lt;repo&gt;</code> under <strong>Add project starts in</strong>, so set that to <code>~/ghq</code> to share ghq’s
 folders. You can still change the destination before cloning.</p>
+<p>To work on a project on another connected machine, pick that machine under <strong>Run on</strong> in a new
+thread. Machines without the project say what picking them does: <strong>Clone to</strong> a folder clones the
+project’s Git remote into that machine’s <strong>Add project starts in</strong> folder, and the draft moves there
+with what you typed and your Workspace choice, so <strong>New worktree</strong> starts from the fresh clone.
+Sending waits for the clone, which you can cancel or retry from the banner above the composer. To
+choose another folder or bring ignored files such as <code>.env</code>, use <strong>Add to another machine</strong> in the
+same menu instead. A project without a remote shows <strong>Copy over SSH</strong> when that machine has a saved
+SSH connection; that is the same as choosing it under <strong>Work on SSH</strong>, which needs the desktop app.</p>
 <p>For a local Git repository without a remote, <strong>Publish Repository</strong> creates a hosted repository,
 adds it as <code>origin</code>, and pushes your commits. If there are no commits yet, it creates the remote;
 make your first commit before pushing.</p>
