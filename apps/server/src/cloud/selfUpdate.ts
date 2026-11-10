@@ -345,11 +345,20 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
             ),
           ),
     }).pipe(
-      Effect.mapError((error) =>
-        error._tag === "PinnedRuntimePreflightBlockedError"
-          ? failWith(error.reason, error)
-          : failWith(`Could not prepare goat@${targetVersion}.`, error),
-      ),
+      Effect.mapError((error) => {
+        if (error._tag === "PinnedRuntimePreflightBlockedError")
+          return failWith(error.reason, error);
+        const details = [
+          error.httpStatus === undefined ? undefined : `HTTP ${error.httpStatus}`,
+          error.downloadHost === undefined ? undefined : `from ${error.downloadHost}`,
+        ]
+          .filter((part) => part !== undefined)
+          .join(" ");
+        return failWith(
+          `Could not prepare goat@${targetVersion} while ${error.step}${details ? ` (${details})` : ""}.`,
+          error,
+        );
+      }),
     );
   });
 

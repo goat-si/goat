@@ -20,7 +20,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -48,6 +48,7 @@ interface HarnessOptions {
   readonly preflightStarted?: Deferred.Deferred<void>;
   readonly beforeDownload?: Effect.Effect<void>;
   readonly corruptChecksum?: boolean;
+  readonly httpClient?: HttpClient.HttpClient;
   readonly requestUpdate?: ServiceLauncherClient.ServiceLauncherClient["Service"]["requestUpdate"];
   readonly desktopAppUpdate?: DesktopAppUpdate.DesktopAppUpdate["Service"];
 }
@@ -180,7 +181,8 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
     ),
     Effect.provideService(
       HttpClient.HttpClient,
-      releaseHttpClient(order, options.beforeDownload, options.corruptChecksum),
+      options.httpClient ??
+        releaseHttpClient(order, options.beforeDownload, options.corruptChecksum),
     ),
     Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provideService(HostProcess.Architecture, "x64"),
@@ -313,6 +315,36 @@ it.effect.each([
 );
 
 it.layer(NodeServices.layer)("server self update", (it) => {
+  it.effect.each([
+    { asset: "checksums", status: 504 },
+    { asset: "archive", status: 503 },
+    { asset: "checksums", status: 403 },
+  ])("reports an HTTP $status downloading $asset and allows retry", ({ asset, status }) =>
+    Effect.gen(function* () {
+      let failDownload = true;
+      const { selfUpdate, order } = yield* makeHarness({
+        httpClient: releaseHttpClient([]).pipe(
+          HttpClient.transform((response, request) =>
+            failDownload && request.url.endsWith("/SHA256SUMS") === (asset === "checksums")
+              ? Effect.succeed(
+                  HttpClientResponse.fromWeb(
+                    HttpClientRequest.get("https://user:password@cdn.example/private?token=secret"),
+                    new Response("private response body", { status }),
+                  ),
+                )
+              : response,
+          ),
+        ),
+      });
+      const error = yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip);
+      expect(error.reason).toBe(
+        `Could not prepare goat@1.1.0 while downloading the GOAT release ${asset} (HTTP ${status} from cdn.example).`,
+      );
+      expect(order).toEqual([]);
+      failDownload = false;
+      expect((yield* selfUpdate.update({ targetVersion: "1.1.0" })).updateId).toBe("launcher-id");
+    }),
+  );
   it.effect(
     "prepares with checksum and preflight while busy, then reuses the download after idle refusal",
     () =>
