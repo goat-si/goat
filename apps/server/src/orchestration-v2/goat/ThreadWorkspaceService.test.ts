@@ -26,6 +26,7 @@ import { tryWithWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
+import { makeRestorePending } from "./restorePending.ts";
 import * as ThreadWorkspace from "./ThreadWorkspaceService.ts";
 
 const threadId = ThreadId.make("thread-1");
@@ -37,13 +38,14 @@ interface HarnessOptions {
 }
 
 const harness = Effect.fn("ThreadWorkspaceTest.harness")(function* (
-  thread: OrchestrationV2ThreadShell,
+  threadIn: OrchestrationV2ThreadShell | ((root: string) => OrchestrationV2ThreadShell),
   options: HarnessOptions = {},
 ) {
   const root = yield* Effect.acquireRelease(
     Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-fresh-test-"))),
     (dir) => Effect.sync(() => NodeFS.rmSync(dir, { recursive: true, force: true })),
   );
+  const thread = typeof threadIn === "function" ? threadIn(root) : threadIn;
   const repo = NodePath.join(root, "repo");
   const freshPath = NodePath.join(root, "fresh");
   const git = (cwd: string, ...args: Array<string>) =>
@@ -76,11 +78,11 @@ const harness = Effect.fn("ThreadWorkspaceTest.harness")(function* (
       getById: () => Effect.succeedSome({ id: "project-1" as ProjectId, workspaceRoot: repo }),
     } as unknown as ProjectService.ProjectService["Service"]),
     Layer.succeed(GitWorkflowService.GitWorkflowService, {
-      createWorktree: (input: { readonly newRefName?: string }) =>
+      createWorktree: (input: { readonly newRefName?: string; readonly refName: string }) =>
         Effect.sync(() => {
           const refName = input.newRefName ?? "";
           calls.created.push(refName);
-          git(repo, "worktree", "add", "-q", "-b", refName, freshPath, "HEAD");
+          git(repo, "worktree", "add", "-q", "-b", refName, freshPath, input.refName);
           return { worktree: { path: freshPath, refName } };
         }),
       removeWorktree: (input: { readonly path: string }) =>
@@ -143,10 +145,76 @@ const harness = Effect.fn("ThreadWorkspaceTest.harness")(function* (
     Layer.provide(fakes),
     Layer.provideMerge(NodeServices.layer),
   );
-  return { calls, layer, freshPath, git };
+  return { calls, layer, freshPath, git, repo, root };
 });
 
 const idle = storageShell({ branch: "feature", worktreePath: "/worktrees/feature" });
+const commit = ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q"] as const;
+const revParse = (cwd: string, revision: string) =>
+  NodeChildProcess.execFileSync("git", ["rev-parse", revision], { cwd, encoding: "utf8" }).trim();
+
+it.effect("starts a fresh worktree from the thread's branch, keeping its commits", () =>
+  Effect.gen(function* () {
+    const { layer, repo, git } = yield* harness(idle, { setupExitCode: 0 });
+    git(repo, "branch", "feature");
+    git(repo, "checkout", "-q", "feature");
+    git(repo, ...commit, "--allow-empty", "-m", "thread work");
+    git(repo, "checkout", "-q", "main");
+    const service = yield* ThreadWorkspace.ThreadWorkspaceService.pipe(Effect.provide(layer));
+    const result = yield* service.restore({ threadId, mode: "fresh" });
+    assert.equal(result.headSha, revParse(repo, "feature"));
+    assert.equal(result.startedFrom, "branch");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("starts a fresh worktree from the project base when the branch is gone", () =>
+  Effect.gen(function* () {
+    const { layer, repo } = yield* harness(idle, { setupExitCode: 0 });
+    const service = yield* ThreadWorkspace.ThreadWorkspaceService.pipe(Effect.provide(layer));
+    const result = yield* service.restore({ threadId, mode: "fresh" });
+    assert.equal(result.headSha, revParse(repo, "main"));
+    assert.equal(result.startedFrom, "base");
+  }).pipe(Effect.scoped),
+);
+
+const interrupted = (root: string) =>
+  storageShell({ branch: "feature", worktreePath: NodePath.join(root, "restored") });
+
+it.effect.each([
+  { label: "untouched since", committedSince: false, markedHead: "branch", state: "present" },
+  {
+    label: "with a commit made since",
+    committedSince: true,
+    markedHead: "branch",
+    state: "present",
+  },
+  { label: "on another history", committedSince: false, markedHead: "unrelated", state: "missing" },
+] as const)(
+  "reports a restore stopped after its folder came back by whether the folder checks out ($label)",
+  ({ committedSince, markedHead, state }) =>
+    Effect.gen(function* () {
+      const { layer, repo, root, git } = yield* harness(interrupted);
+      const worktreePath = NodePath.join(root, "restored");
+      git(repo, "worktree", "add", "-q", "-b", "feature", worktreePath);
+      const restoredHead = revParse(worktreePath, "HEAD");
+      git(repo, "checkout", "-q", "--orphan", "unrelated");
+      git(repo, ...commit, "--allow-empty", "-m", "unrelated");
+      const unrelated = revParse(repo, "HEAD");
+      git(repo, "checkout", "-q", "main");
+      if (committedSince) git(worktreePath, ...commit, "--allow-empty", "-m", "since");
+      const pending = yield* makeRestorePending.pipe(Effect.provide(layer));
+      yield* pending.write(worktreePath, {
+        restoredFrom: "branch",
+        headSha: markedHead === "branch" ? restoredHead : unrelated,
+        snapshotSha: null,
+        snapshotRef: null,
+      });
+      const service = yield* ThreadWorkspace.ThreadWorkspaceService.pipe(Effect.provide(layer));
+      const status = yield* service.status(threadId);
+      assert.equal(status.state, state);
+      assert.equal(status.setupIncomplete, state === "present" ? true : undefined);
+    }).pipe(Effect.scoped),
+);
 
 it.effect("will not replace the worktree of a thread that is running", () =>
   Effect.gen(function* () {
