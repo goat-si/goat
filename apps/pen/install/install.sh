@@ -34,6 +34,8 @@ done
 if [ -n "$RELAYS" ]; then
 	PEN_RELAYS="$RELAYS"
 fi
+# The relay lists split on spaces below and where $relay_flags expands; never as file globs.
+set -f
 relay_flags=""
 for r in $PEN_RELAYS; do
 	relay_flags="$relay_flags --relay $r"
