@@ -353,6 +353,8 @@ export const make = Effect.gen(function* () {
 
   // At most one queued request per thread, so a turn end's events share one lookup.
   // A request after that lookup starts queues another, so later host changes are still read.
+  // Each entry is one queued request for a stored thread, so the map and the queue's thread
+  // requests stay within the environment's thread count.
   const queuedThreadRequests = new Map<ThreadId, { threadId: ThreadId; refresh: boolean }>();
 
   const worker = yield* makeDrainableWorker((request: RefreshRequest) =>
