@@ -21,17 +21,61 @@ type Server struct {
 
 	// BadAcks counts sockets closed 4402 for an ack that decreased or exceeded what was sent.
 	BadAcks atomic.Int64
-	// ClientMessages counts binary messages client sockets sent through this relay.
-	ClientMessages atomic.Int64
 	// ForwardDelay holds each binary client message this long before the relay forwards it to the
-	// node; PongDelay does the same for client text (ping), so the relay answers pong late.
-	ForwardDelay, PongDelay atomic.Int64
+	// node; PongDelay does the same for client text (ping), so the relay answers pong late. Set
+	// them before the relay serves (the relaytest command's flags); tests use HoldForwarding and
+	// HoldPongs instead.
+	ForwardDelay, PongDelay time.Duration
 
-	mu      sync.Mutex
-	online  map[string]chan struct{}
-	acks    map[string]chan uint64
-	uplinks map[string]chan struct{}
+	forward, pongs gate
+
+	mu          sync.Mutex
+	online      map[string]chan struct{}
+	acks        map[string]chan uint64
+	uplinks     map[string]chan struct{}
+	uplinkPings map[string]chan struct{}
 }
+
+// gate blocks callers of wait while it is held.
+type gate struct {
+	mu sync.Mutex
+	ch chan struct{}
+}
+
+func (g *gate) hold() func() {
+	g.mu.Lock()
+	if g.ch == nil {
+		g.ch = make(chan struct{})
+	}
+	g.mu.Unlock()
+	return g.release
+}
+
+func (g *gate) release() {
+	g.mu.Lock()
+	if g.ch != nil {
+		close(g.ch)
+		g.ch = nil
+	}
+	g.mu.Unlock()
+}
+
+func (g *gate) wait() {
+	g.mu.Lock()
+	ch := g.ch
+	g.mu.Unlock()
+	if ch != nil {
+		<-ch
+	}
+}
+
+// HoldForwarding keeps the relay from forwarding any client message to the node until release
+// runs (or the relay closes); the client's socket stays open and pings still get pongs.
+func (s *Server) HoldForwarding() (release func()) { return s.forward.hold() }
+
+// HoldPongs keeps the relay from answering client pings until release runs (or the relay closes);
+// client messages are still forwarded.
+func (s *Server) HoldPongs() (release func()) { return s.pongs.hold() }
 
 // New starts a relay with the contract limits on 127.0.0.1.
 func New() *Server {
@@ -47,7 +91,7 @@ func NewUnstarted() *Server { return NewWithLimits(relayserver.DefaultLimits()) 
 // NewWithLimits builds an unstarted relay with custom timeouts.
 func NewWithLimits(l relayserver.Limits) *Server {
 	s := &Server{Relay: relayserver.New(l), online: map[string]chan struct{}{}, acks: map[string]chan uint64{},
-		uplinks: map[string]chan struct{}{}}
+		uplinks: map[string]chan struct{}{}, uplinkPings: map[string]chan struct{}{}}
 	s.Relay.Hooks = relayserver.Hooks{
 		OnUplink: func(nodeID string) {
 			s.mu.Lock()
@@ -68,15 +112,19 @@ func NewWithLimits(l relayserver.Limits) *Server {
 			}
 		},
 		OnBadAck: func() { s.BadAcks.Add(1) },
-		OnClientMessage: func(_ string, text bool) {
-			delay := &s.ForwardDelay
-			if text {
-				delay = &s.PongDelay
-			} else {
-				s.ClientMessages.Add(1)
-			}
-			if d := time.Duration(delay.Load()); d > 0 {
-				time.Sleep(d)
+		OnMessage: func(nodeID, role string, text bool) {
+			switch {
+			case role == "node" && text:
+				select {
+				case s.chanOf(s.uplinkPings, nodeID) <- struct{}{}:
+				default:
+				}
+			case role == "client" && text:
+				s.pongs.wait()
+				time.Sleep(s.PongDelay)
+			case role == "client":
+				s.forward.wait()
+				time.Sleep(s.ForwardDelay)
 			}
 		},
 	}
@@ -92,8 +140,10 @@ func (s *Server) Start() {
 // Handler serves the relay routes.
 func (s *Server) Handler() http.Handler { return s.Relay }
 
-// Close stops the relay and aborts its sockets.
+// Close releases any hold, stops the relay and aborts its sockets.
 func (s *Server) Close() {
+	s.forward.release()
+	s.pongs.release()
 	s.Relay.Close()
 	if s.http != nil {
 		s.http.CloseClientConnections()
@@ -150,13 +200,16 @@ func (s *Server) NextUplinkAck(ctx context.Context, nodeID string) (uint64, erro
 	}
 }
 
-func (s *Server) uplinkChan(nodeID string) chan struct{} {
+func (s *Server) uplinkChan(nodeID string) chan struct{} { return s.chanOf(s.uplinks, nodeID) }
+
+// chanOf returns m's event channel for nodeID, making it on first use.
+func (s *Server) chanOf(m map[string]chan struct{}, nodeID string) chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ch := s.uplinks[nodeID]
+	ch := m[nodeID]
 	if ch == nil {
 		ch = make(chan struct{}, 64)
-		s.uplinks[nodeID] = ch
+		m[nodeID] = ch
 	}
 	return ch
 }
@@ -166,6 +219,17 @@ func (s *Server) uplinkChan(nodeID string) chan struct{} {
 func (s *Server) NextUplink(ctx context.Context, nodeID string) error {
 	select {
 	case <-s.uplinkChan(nodeID):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// NextUplinkPing returns once an uplink of nodeID sent a ping (text) that no earlier call
+// returned for.
+func (s *Server) NextUplinkPing(ctx context.Context, nodeID string) error {
+	select {
+	case <-s.chanOf(s.uplinkPings, nodeID):
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

@@ -110,9 +110,9 @@ func TestHandshakeRacePicksTheRelayWhoseNodeAnswersFirst(t *testing.T) {
 	defer rb.Close()
 	a := founderOn(t, ctx, "a", ra, rb)
 	b := joiner(t, ctx, ra, a.invite(t, time.Minute), "b")
-	// ra answers pong at once but is slow to reach the node; rb pongs late but forwards at once.
-	ra.ForwardDelay.Store(int64(500 * time.Millisecond))
-	rb.PongDelay.Store(int64(500 * time.Millisecond))
+	// ra answers pong but holds what clients send for the node; rb forwards but answers no pong.
+	defer ra.HoldForwarding()()
+	defer rb.HoldPongs()()
 	tr := newRaceTrace()
 	sec, err := OpenTCP(relay.WithTrace(ctx, tr.trace), []string{ra.URL, rb.URL}, b.id, memberNamed(t, b, "a"), echoServer(t))
 	if err != nil {
@@ -196,8 +196,10 @@ func TestANodesRefusalOnOneRelayEndsTheRace(t *testing.T) {
 	defer ra.Close()
 	defer rb.Close()
 	a := founderOn(t, ctx, "a", ra, rb)
-	rb.ForwardDelay.Store(int64(time.Second))
-	rb.PongDelay.Store(int64(time.Second))
+	// rb reaches the node only once released, after the race ended.
+	release := rb.HoldForwarding()
+	defer release()
+	defer rb.HoldPongs()()
 	stranger := newcomer(t)
 	tr := newRaceTrace()
 	self := a.ls(t).Members[0].Member
@@ -205,6 +207,7 @@ func TestANodesRefusalOnOneRelayEndsTheRace(t *testing.T) {
 	if relay.CodeOf(err) != wire.CodeNotAdmitted {
 		t.Fatalf("got %v, want 4401", err)
 	}
+	release()
 	if ev := tr.waitFor(ctx, rb.URL, "loser closed", "closed 4401", "closed 4408"); ev != "loser closed" {
 		t.Fatalf("the slow relay ended with %q (trace %v), want the race to close it after the 4401", ev, tr.of(rb.URL))
 	}
@@ -220,9 +223,8 @@ func TestJoinAndAccountSessionsKeepThePingRace(t *testing.T) {
 	a := founderOn(t, ctx, "a", ra, rb)
 	bindTo(t, a, f, f.Key())
 	tok := a.invite(t, time.Minute)
-	// ra pongs first, so the ping race picks it although rb would reach the node first.
-	ra.ForwardDelay.Store(int64(200 * time.Millisecond))
-	rb.PongDelay.Store(int64(200 * time.Millisecond))
+	// rb answers no pong, so the ping race picks ra; a handshake race could pick either.
+	defer rb.HoldPongs()()
 
 	tr := newRaceTrace()
 	st := shortDir(t)

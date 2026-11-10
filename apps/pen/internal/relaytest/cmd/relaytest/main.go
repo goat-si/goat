@@ -25,8 +25,7 @@ func main() {
 		os.Exit(1)
 	}
 	s := relaytest.NewUnstarted()
-	s.ForwardDelay.Store(int64(*forwardDelay))
-	s.PongDelay.Store(int64(*pongDelay))
+	s.ForwardDelay, s.PongDelay = *forwardDelay, *pongDelay
 	var h http.Handler = s.Handler()
 	if *public != "" {
 		files := http.FileServer(http.Dir(*public))
