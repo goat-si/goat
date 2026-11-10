@@ -153,8 +153,6 @@ export function GoatBotTimeline({
   }, [rows, activityText, updateEdges]);
 
   const time = (iso: string) => formatShortTimestamp(iso, timestampFormat);
-  const activitySince = replying ? replyingSince : (activity?.since ?? null);
-
   return (
     <div
       ref={wrapperRef}
@@ -407,7 +405,7 @@ export function GoatBotTimeline({
           })}
           {activity !== null ? (
             <li className={cn("flex", rows.length > 0 && "mt-6")}>
-              <GoatBotActivityLine activity={activity} since={activitySince} />
+              <GoatBotActivityLine activity={activity} />
             </li>
           ) : null}
         </ol>

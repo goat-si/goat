@@ -145,3 +145,26 @@ it("draws both activity states without any running animation", async () => {
   );
   assertStill("Working");
 });
+
+it("shows the bot's still face and the step it is on, and only a new step changes the line", async () => {
+  using _timers = clock();
+  const line = (text: string) => (
+    <GoatBotActivityContext value={{ state: "working", text, title: "Fix the login flow" }}>
+      <GoatBotTimeline rows={[]} onRetry={() => {}} />
+    </GoatBotActivityContext>
+  );
+  // Router off: the timeline has no links and fake timers would stall the router's loader.
+  await using screen = await render(line("Running the tests"), { router: false });
+  const status = () => screen.container.querySelector('[role="status"]')?.textContent;
+  // The live region announces the step; the work's title sits beside it without repeating.
+  expect(status()).toBe("Running the tests");
+  await expect.element(screen.getByText("· Fix the login flow")).toBeVisible();
+  expect(screen.container.querySelector('[data-face="working"]')).not.toBeNull();
+  expect(screen.container.querySelector("button")).toBeNull();
+  // No elapsed timer: the line stays as it was while time passes.
+  await act(() => vi.advanceTimersByTime(90_000));
+  expect(status()).toBe("Running the tests");
+  expect(screen.container.textContent).not.toMatch(/\d+\s?[sm]\b/);
+  await screen.rerender(line("Opening a pull request"));
+  expect(status()).toBe("Opening a pull request");
+});
