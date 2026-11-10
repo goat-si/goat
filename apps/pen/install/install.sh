@@ -2,7 +2,7 @@
 # pen installer: downloads the pen binary for this machine from the relay, verifies it and starts it.
 #   curl -fsSL <relay>/install.sh | sh
 #   curl -fsSL <relay>/install.sh | sh -s -- --join <token>
-#   curl -fsSL <relay>/install.sh | sh -s -- --login     (sign in with Google)
+#   curl -fsSL <relay>/install.sh | sh -s -- --login     (sign in with Google; add --yes for scripts)
 set -eu
 
 PEN_RELAY="${PEN_RELAY:-__PEN_RELAY__}"
@@ -11,6 +11,7 @@ JOIN=""
 LOGIN=""
 NAME=""
 NO_SERVICE=""
+YES=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -19,6 +20,7 @@ while [ $# -gt 0 ]; do
 	--name) NAME="$2"; shift 2 ;;
 	--no-service) NO_SERVICE="--no-service"; shift ;;
 	--relay) PEN_RELAY="$2"; shift 2 ;;
+	--yes) YES="--yes"; shift ;;
 	*) echo "install.sh: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
@@ -72,7 +74,7 @@ if [ -n "$JOIN" ]; then
 	exec "$HOME/.local/bin/pen" join "$JOIN" $NO_SERVICE
 fi
 if [ -n "$LOGIN" ]; then
-	set -- login --relay "$PEN_RELAY" $NO_SERVICE
+	set -- login --relay "$PEN_RELAY" $NO_SERVICE $YES
 	if [ -n "$NAME" ]; then
 		set -- "$@" --name "$NAME"
 	fi
