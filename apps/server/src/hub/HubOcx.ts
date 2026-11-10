@@ -520,6 +520,23 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * A Pen member's alias: a Host block in Pen's own ssh config whose effective settings route
+   * through Pen's pipe and check Pen's own known_hosts. Pen is recognized by its files, never by
+   * a pen-* name.
+   */
+  const penMember = Effect.fn("HubOcx.penMember")(function* (alias: string) {
+    if (!SAFE_ALIAS.test(alias)) return undefined;
+    const directory = path.join(homeDirectory, ".ssh", "pen");
+    const config = yield* fs.readFileString(path.join(directory, "config"));
+    if (!penConfigHosts(config).includes(alias)) return undefined;
+    const output = yield* run(yield* resolveSshCommand, ["-G", alias], 10_000);
+    if (output.code !== 0 || output.timedOut) return undefined;
+    const settings = sshSettings(output.stdout);
+    const knownHosts = path.join(directory, "known_hosts");
+    return penKnownHostsFile(settings) === knownHosts ? { settings, knownHosts } : undefined;
+  });
+
   return HubOcx.of({
     connection,
     home,
@@ -592,16 +609,16 @@ const make = Effect.gen(function* () {
           return output.code === 0 && lines.length === 1 ? fingerprint : undefined;
         }
         if (keyType === undefined) return undefined;
-        const settings = yield* run(yield* resolveSshCommand, ["-G", alias], 10_000);
-        if (settings.code !== 0 || settings.timedOut) return undefined;
-        const penFile = penKnownHostsFile(sshSettings(settings.stdout));
-        if (penFile === undefined) return undefined;
+        const member = yield* penMember(alias);
+        if (member === undefined) return undefined;
         const keys = yield* run(
           "ssh-keygen",
-          ["-E", "sha256", "-l", "-F", alias, "-f", penFile],
+          ["-E", "sha256", "-l", "-F", alias, "-f", member.knownHosts],
           10_000,
         );
-        return keys.code === 0 ? fingerprintOfType(keys.stdout, keyType) : undefined;
+        return keys.code === 0 && !keys.timedOut
+          ? fingerprintOfType(keys.stdout, keyType)
+          : undefined;
       },
       Effect.orElseSucceed(() => undefined),
     ),
@@ -616,18 +633,12 @@ const make = Effect.gen(function* () {
     ),
     penAliasRevision: Effect.fn("HubOcx.penAliasRevision")(
       function* (alias) {
-        if (!SAFE_ALIAS.test(alias)) return undefined;
-        const directory = path.join(homeDirectory, ".ssh", "pen");
-        // Only a Host block Pen wrote names a member; a hand-made pen-* alias elsewhere does not.
-        const config = yield* fs.readFileString(path.join(directory, "config"));
-        if (!penConfigHosts(config).includes(alias)) return undefined;
-        const output = yield* run(yield* resolveSshCommand, ["-G", alias], 10_000);
-        if (output.code !== 0 || output.timedOut) return undefined;
-        const settings = sshSettings(output.stdout);
-        const knownHosts = path.join(directory, "known_hosts");
-        if (penKnownHostsFile(settings) !== knownHosts) return undefined;
-        const keys = yield* run("ssh-keygen", ["-F", alias, "-f", knownHosts], 10_000);
-        return keys.code === 0 && !keys.timedOut ? penRevision(settings, keys.stdout) : undefined;
+        const member = yield* penMember(alias);
+        if (member === undefined) return undefined;
+        const keys = yield* run("ssh-keygen", ["-F", alias, "-f", member.knownHosts], 10_000);
+        return keys.code === 0 && !keys.timedOut
+          ? penRevision(member.settings, keys.stdout)
+          : undefined;
       },
       // Unreadable is not proof of the same member, so consent given for it does not hold.
       Effect.orElseSucceed(() => undefined),
