@@ -145,6 +145,27 @@ it("peeks at a task in the panel with one link to its thread, and Back returns t
   await expect
     .element(screen.getByRole("button", { name: /Stop the port 3774 server/ }))
     .toHaveFocus();
+  // The return applies once: coming back to Home from Library leaves focus on the tab.
+  await userEvent.click(screen.getByRole("tab", { name: "Library" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Home" }));
+  await expect.element(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
+});
+
+it("steps back from a peek to its row with Escape", async () => {
+  setup([], [], [runningTask]);
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      peekRows={() => []}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await expect.element(screen.getByRole("button", { name: /Back to Home from/ })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  await expect
+    .element(screen.getByRole("button", { name: /Stop the port 3774 server/ }))
+    .toHaveFocus();
 });
 
 it("closes the peek when the task leaves the bot's work", async () => {
@@ -167,6 +188,8 @@ it("closes the peek when the task leaves the bot's work", async () => {
   );
   await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
   await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  // Focus was on Back, which is gone; it lands on Home instead of the page.
+  await expect.element(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
   // The task coming back does not reopen a peek nobody asked for.
   setup([], [], [runningTask]);
   await screen.rerender(

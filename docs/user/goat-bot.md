@@ -45,10 +45,11 @@ move when the window is hidden or when your system asks to reduce motion.
 
 ## Work
 
-**Work** in the bot's header opens the bot's home. **Home** is one page: a status note when
-something needs fixing, the machines its work runs on, its tasks, and its routines. Selecting a
-task shows its conversation right there, beside the chat; **Go to thread** opens it in full.
-**Library** holds the files the bot saved and its memory.
+On web and desktop, **Work** in the bot's header opens the bot's home. **Home** is one page: a
+status note when something needs fixing, the machines its work runs on, its tasks, and its
+routines. Selecting a task shows its conversation right there, beside the chat; **Go to thread**
+opens it in full. **Library** holds the files the bot saved and its memory. On mobile, **Work**
+opens a sheet of the bot's tasks, and a task opens in its own view.
 
 - The status note says why the bot can't work right now: the machine it answers on, its model,
   open and waiting work, or Slack. Each problem comes with the action that fixes it when you're
