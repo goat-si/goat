@@ -63,7 +63,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		for _, u := range relayURLs {
 			list = append(list, strings.TrimRight(u, "/"))
 		}
-		if err := relayList(list); err != nil {
+		if err := daemon.ValidRelays(list); err != nil {
 			return fail(stderr, err)
 		}
 		cfg.SetRelays(list)

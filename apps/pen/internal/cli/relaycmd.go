@@ -19,7 +19,6 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
-	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relayserver"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
@@ -40,16 +39,6 @@ func RunRelay(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stderr, "pen relay: unknown command %q\n", args[0])
 	return 2
-}
-
-// relayList validates a node's relay list: one relay may be any http(s)/ws(s) URL (a v1 token
-// carries it); several follow the token v2 rules.
-func relayList(relays []string) error {
-	if len(relays) == 1 {
-		_, err := wire.RelayOrigin(relays[0])
-		return err
-	}
-	return mesh.ValidRelayList(relays)
 }
 
 func runRelayEdit(verb string, args []string, stdout, stderr io.Writer) int {
@@ -82,16 +71,20 @@ func runRelayEdit(verb string, args []string, stdout, stderr io.Writer) int {
 		}
 		list = slices.DeleteFunc(list, func(x string) bool { return x == u })
 	}
-	if err := relayList(list); err != nil {
-		return fail(stderr, err)
-	}
-	cfg.SetRelays(list)
-	if err := st.SaveConfig(cfg); err != nil {
+	if err := daemon.ValidRelays(list); err != nil {
 		return fail(stderr, err)
 	}
 	var s daemon.Status
-	if err := daemon.Call(st, daemon.Request{Op: "reconnect"}, &s); err == nil {
+	switch err := daemon.Call(st, daemon.Request{Op: "relays", Relays: list}, &s); {
+	case err == nil:
 		fmt.Fprintln(stdout, "the running node now uses:")
+	case errors.Is(err, daemon.ErrNotRunning):
+		cfg.SetRelays(list)
+		if err := st.SaveConfig(cfg); err != nil {
+			return fail(stderr, err)
+		}
+	default:
+		return fail(stderr, err)
 	}
 	for _, r := range list {
 		fmt.Fprintln(stdout, r)

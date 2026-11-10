@@ -29,6 +29,8 @@ type Request struct {
 	// Account is a login-bind's binding; On is a lock's state.
 	Account *mesh.Account `json:"account,omitempty"`
 	On      bool          `json:"on,omitempty"`
+	// Relays is the new relay list of op "relays".
+	Relays []string `json:"relays,omitempty"`
 }
 
 // LsMember is a member as ls reports it.
@@ -230,6 +232,8 @@ func (d *Daemon) do(ctx context.Context, req Request) (any, error) {
 			return nil, err
 		}
 		return d.ls(), nil
+	case "relays":
+		return d.setRelays(req.Relays)
 	}
 	return nil, fmt.Errorf("unknown op %q", req.Op)
 }
@@ -287,6 +291,8 @@ type InviteReply struct {
 	Token     string `json:"token"`
 	Relay     string `json:"relay"`
 	ExpiresAt int64  `json:"expiresAt"`
+	// Command installs pen on the new machine and joins (from the download relay).
+	Command string `json:"command"`
 }
 
 func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
@@ -299,7 +305,8 @@ func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
 		return InviteReply{}, "", err
 	}
 	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relays: d.relays()}
-	return InviteReply{Token: tok.String(), Relay: tok.Relays[0], ExpiresAt: inv.ExpiresAt}, inv.ID, nil
+	s := tok.String()
+	return InviteReply{Token: s, Relay: tok.Relays[0], ExpiresAt: inv.ExpiresAt, Command: InstallCommand(d.downloadRelay(), s)}, inv.ID, nil
 }
 
 func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {

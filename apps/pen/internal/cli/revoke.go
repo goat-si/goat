@@ -46,9 +46,8 @@ func RunRevoke(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "revoked %s (%s); pushed to:\n", m.Name, short(m.NodeID))
 	printResults(stdout, res.Results)
-	if *compromised && ls.Account != nil {
-		fmt.Fprintf(stdout, "%s may still hold a Google sign-in for this mesh's account. Run pen lock on so new machines need approval, "+
-			"change the Google password, and reset the account's machine list at %s/device after signing in.\n", m.Name, ls.Account.LoginURL)
+	if next := daemon.CompromisedNextSteps(m.Name, ls.Account); *compromised && next != "" {
+		fmt.Fprintln(stdout, next)
 	}
 	return 0
 }

@@ -81,27 +81,22 @@ func RunApprove(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	arg := strings.Join(pos, " ")
-	switch len(normalize(arg)) {
+	switch len(daemon.NormalizeFingerprint(arg)) {
 	case 40:
 	case 8:
 		ps, err := pendingList(stderr)
 		if err != nil {
 			return fail(stderr, err)
 		}
-		var hits []daemon.Pending
-		for _, p := range ps {
-			if strings.HasPrefix(normalize(p.Fingerprint), normalize(arg)) {
-				hits = append(hits, p)
-			}
+		p, err := daemon.MatchPending(ps, arg)
+		if err != nil {
+			return fail(stderr, err)
 		}
-		if len(hits) != 1 {
-			return fail(stderr, fmt.Errorf("%d pending requests match %q; give the full fingerprint", len(hits), arg))
-		}
-		printPending(stdout, hits[0])
-		if !confirm(stdout, false, "Approve this machine? It gets full access to every machine in the mesh.") {
+		printPending(stdout, p)
+		if !confirm(stdout, false, daemon.ApproveQuestion) {
 			return fail(stderr, errors.New("not approved"))
 		}
-		arg = hits[0].Fingerprint
+		arg = p.Fingerprint
 	default:
 		return fail(stderr, fmt.Errorf("give the request id or the full fingerprint (8 or 40 hex characters), not %q", arg))
 	}
@@ -165,10 +160,6 @@ func RunAccount(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stderr, "usage: pen account [unbind]")
 	return 2
-}
-
-func normalize(s string) string {
-	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(s), " ", ""))
 }
 
 func printPending(w io.Writer, p daemon.Pending) {

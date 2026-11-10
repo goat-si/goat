@@ -1,11 +1,8 @@
 package daemon
 
 import (
-	"errors"
-	"fmt"
 	"slices"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -112,29 +109,9 @@ func (b *pendingBook) isDenied(signPub string, now time.Time) bool {
 	return ok && now.UnixMilli() < until
 }
 
-func normalizeFP(s string) string {
-	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(s), " ", ""))
-}
-
 // find resolves a full fingerprint, or an 8-character id that exactly one request matches.
 func (b *pendingBook) find(arg string, now time.Time) (Pending, error) {
-	want := normalizeFP(arg)
-	var hits []Pending
-	for _, p := range b.all(now) {
-		fp := normalizeFP(p.Fingerprint)
-		if len(want) == len(fp) && want == fp || len(want) == 8 && strings.HasPrefix(fp, want) {
-			hits = append(hits, p)
-		}
-	}
-	switch {
-	case len(hits) == 1:
-		return hits[0], nil
-	case len(hits) > 1:
-		return Pending{}, fmt.Errorf("%d pending requests match %q; give the full fingerprint", len(hits), arg)
-	case len(want) != 8 && len(want) != 40:
-		return Pending{}, errors.New("give the request id (8 characters) or the full fingerprint (40)")
-	}
-	return Pending{}, fmt.Errorf("no pending request matches %q", arg)
+	return MatchPending(b.all(now), arg)
 }
 
 // remove drops a request; deny also refuses its key for 24 hours.

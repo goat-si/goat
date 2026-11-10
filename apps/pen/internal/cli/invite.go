@@ -33,6 +33,7 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 		Token     string `json:"token"`
 		Relay     string `json:"relay"`
 		ExpiresAt int64  `json:"expiresAt"`
+		Command   string `json:"command"`
 	}
 	if err := cl.Next(&r); err != nil {
 		return fail(stderr, err)
@@ -41,8 +42,8 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, r.Token)
 		return 0
 	}
-	fmt.Fprintf(stdout, "invite (single use, expires %s):\n  %s\n\non the new machine:\n  curl -fsSL %s/install.sh | sh -s -- --join %s\n\nwaiting for the join (Ctrl-C leaves the invite valid)...\n",
-		time.UnixMilli(r.ExpiresAt).Format(time.Kitchen), r.Token, r.Relay, r.Token)
+	fmt.Fprintf(stdout, "invite (single use, expires %s):\n  %s\n\non the new machine:\n  %s\n\nwaiting for the join (Ctrl-C leaves the invite valid)...\n",
+		time.UnixMilli(r.ExpiresAt).Format(time.Kitchen), r.Token, r.Command)
 	var ev struct {
 		T      string      `json:"t"`
 		Member mesh.Member `json:"member"`
