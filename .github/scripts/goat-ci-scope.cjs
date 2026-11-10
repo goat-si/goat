@@ -54,6 +54,7 @@ const WINDOWS_SUITES = [
   "apps/desktop/src/cua/",
   "apps/server/src/cua/",
   "apps/server/src/memory/imports/MemoryImportReaderWindows",
+  "apps/server/src/terminal/nodePtyNativeKill",
   "packages/shared/src/cuaDriver",
   "packages/shared/src/computerUse",
   "packages/shared/src/path",
@@ -69,6 +70,7 @@ const WINDOWS_SUITES = [
 const WINDOWS_TRIGGERS = [
   "apps/server/src/memory/imports/MemoryImportReader",
   "apps/server/src/memory/imports/gitSupport",
+  "patches/node-pty@1.2.0-beta.15.patch",
 ];
 const WINDOWS_TASK = "test-windows";
 /** Every workspace package suite no other task owns, listed by packageSuites. */
