@@ -4,6 +4,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type Ref,
+  type ReactNode,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -39,6 +40,7 @@ export function GoatBotComposer({
   placeholder,
   initialText = "",
   attachmentSupport = null,
+  modelPicker,
   onSend,
 }: {
   readonly ref?: Ref<GoatBotComposerHandle>;
@@ -48,6 +50,7 @@ export function GoatBotComposer({
   readonly placeholder: string;
   readonly initialText?: string;
   readonly attachmentSupport?: GoatBotAttachmentSupport | null;
+  readonly modelPicker?: ReactNode;
   /** Returns false when the message was not taken, so the draft stays. */
   readonly onSend: (
     text: string,
@@ -171,13 +174,7 @@ export function GoatBotComposer({
             ))}
           </ul>
         ) : null}
-        <div className={cn("flex items-end gap-2", attachmentSupport === null ? "pl-3.5" : "pl-1")}>
-          {attachmentSupport !== null && !disabled ? (
-            <ComposerAttachAction
-              addComposerAttachments={addFiles}
-              focusComposer={() => textareaRef.current?.focus()}
-            />
-          ) : null}
+        <div className="flex flex-wrap items-end gap-2 pl-1">
           <textarea
             ref={textareaRef}
             rows={1}
@@ -189,8 +186,15 @@ export function GoatBotComposer({
             onChange={(event) => setText(event.currentTarget.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            className="field-sizing-content max-h-48 min-h-7 flex-1 resize-none self-center bg-transparent py-1 font-(family-name:--font-composer,var(--font-sans)) text-(length:--font-size-prompt,var(--text-sm)) text-foreground outline-none placeholder:text-muted-foreground max-sm:pointer-coarse:text-(length:--font-size-prompt-touch)"
+            className="field-sizing-content order-first max-h-48 min-h-7 w-full resize-none self-center bg-transparent px-2 py-1 sm:order-none sm:w-auto sm:min-w-0 sm:flex-1 font-(family-name:--font-composer,var(--font-sans)) text-(length:--font-size-prompt,var(--text-sm)) text-foreground outline-none placeholder:text-muted-foreground max-sm:pointer-coarse:text-(length:--font-size-prompt-touch)"
           />
+          {attachmentSupport !== null && !disabled ? (
+            <ComposerAttachAction
+              addComposerAttachments={addFiles}
+              focusComposer={() => textareaRef.current?.focus()}
+            />
+          ) : null}
+          <div className="min-w-0 flex-1 sm:flex-none">{modelPicker}</div>
           <button
             type="submit"
             aria-label="Send"

@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId, type BotProfile } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
@@ -7,6 +7,7 @@ import "~/index.css";
 import { render } from "../../../test/render";
 
 const mocks = vi.hoisted(() => ({
+  canEdit: false,
   tasks: [] as unknown[],
   routinesError: null as string | null,
   routinesLoaded: true,
@@ -16,6 +17,15 @@ const mocks = vi.hoisted(() => ({
   refreshRoutines: vi.fn(),
   setEnabled: vi.fn(),
   turnsWaiting: [] as string[],
+}));
+vi.mock("~/state/environments", () => ({
+  useEnvironment: () => ({
+    connection: { phase: "disconnected" },
+    serverConfig: { environment: { capabilities: { goatBotProfileEdit: true } } },
+  }),
+}));
+vi.mock("./GoatBotEditBotDialog", () => ({
+  GoatBotEditBotDialog: () => <div role="dialog">Edit profile</div>,
 }));
 vi.mock("./useBotRoster", () => ({
   useBotRoster: () => ({ rows: [] }),
@@ -60,6 +70,7 @@ vi.mock("~/state/use-atom-command", () => ({
 }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
+    updateBot: { permissionAtom: () => Atom.make(mocks.canEdit) },
     listBotNotes: () => null,
     listBotArtifacts: () => null,
     readBotArtifact: { execute: vi.fn() },
@@ -67,8 +78,10 @@ vi.mock("~/state/channels", () => ({
   },
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
+import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
 
 function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
+  mocks.canEdit = false;
   mocks.tasks = tasks;
   mocks.turnsWaiting = turnsWaiting;
   mocks.rows = rows;
@@ -102,6 +115,49 @@ const digest = {
   lastRunStatus: "never",
   lastRunError: null,
 };
+
+it.each(["main", "member"] as const)(
+  "offers profile editing in the panel for an authorized %s bot",
+  async (role) => {
+    setup([]);
+    mocks.canEdit = true;
+    const bot = {
+      botId: role,
+      role,
+      name: "Scout",
+      environmentId: EnvironmentId.make("env"),
+    } as BotProfile;
+    const panel = (
+      <GoatBotWorkPanel environmentId={bot.environmentId} threadId={ThreadId.make("bot")} />
+    );
+    await using screen = await render(
+      role === "main" ? (
+        <GoatBotMainProfileContext value={bot}>{panel}</GoatBotMainProfileContext>
+      ) : (
+        <GoatBotMemberContext value={bot}>{panel}</GoatBotMemberContext>
+      ),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Edit bot" }));
+    await expect.element(screen.getByRole("dialog", { name: "" })).toBeVisible();
+  },
+);
+
+it("does not offer profile editing without permission", async () => {
+  setup([]);
+  const bot = {
+    botId: "main",
+    role: "main",
+    name: "Scout",
+    environmentId: EnvironmentId.make("env"),
+  } as BotProfile;
+  await using screen = await render(
+    <GoatBotMainProfileContext value={bot}>
+      <GoatBotWorkPanel environmentId={bot.environmentId} threadId={ThreadId.make("bot")} />
+    </GoatBotMainProfileContext>,
+  );
+  expect(screen.container.querySelector("button[aria-label='Edit bot']")).toBeNull();
+  expect(screen.container.textContent).not.toContain("Edit bot");
+});
 
 it("Home shows work and routines on one scroll, and Library holds files and memory", async () => {
   setup([]);
