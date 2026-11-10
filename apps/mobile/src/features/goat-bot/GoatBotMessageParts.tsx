@@ -238,7 +238,7 @@ function GoatBotChoiceBadge(props: { readonly letter: string; readonly chosen?: 
       className={
         props.chosen
           ? "h-[26px] w-[26px] items-center justify-center rounded-full bg-goat-person-message"
-          : "h-[26px] w-[26px] items-center justify-center rounded-full border border-border"
+          : "h-[26px] w-[26px] items-center justify-center rounded-full border border-foreground-muted"
       }
     >
       <Text
