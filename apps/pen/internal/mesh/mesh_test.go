@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
+	"github.com/goat-si/goat/apps/pen/internal/login"
 	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
@@ -97,6 +98,8 @@ type viewSummary struct {
 	Members, Revoked []Member
 	Order            []string
 	Effective        []string
+	Account          *Account
+	Locked           bool
 }
 
 func summarize(v *View) viewSummary {
@@ -105,7 +108,7 @@ func summarize(v *View) viewSummary {
 		eff = append(eff, h)
 	}
 	sort.Strings(eff)
-	return viewSummary{v.SortedMembers(), v.SortedRevoked(), v.Order, eff}
+	return viewSummary{v.SortedMembers(), v.SortedRevoked(), v.Order, eff, v.Account, v.Locked}
 }
 
 // randomDAG generates a 30-record mesh history with concurrent branches and every record type.
@@ -142,7 +145,7 @@ func randomDAG(t *testing.T, rng *rand.Rand) *builder {
 		}
 		sort.Slice(ps, func(i, j int) bool { return ps[i].Hash < ps[j].Hash })
 		var r *Record
-		switch k := rng.IntN(10); {
+		switch k := rng.IntN(12); {
 		case k < 3 && len(waiting) > 0:
 			subject := waiting[0]
 			waiting = waiting[1:]
@@ -164,6 +167,16 @@ func randomDAG(t *testing.T, rng *rand.Rand) *builder {
 				sort.Slice(ps, func(i, j int) bool { return ps[i].Hash < ps[j].Hash })
 			}
 			r = b.sign(signer, TypeRevoke, ps, Fields{Subjects: []string{pub(subject)}, Compromised: rng.IntN(2) == 0})
+		case k == 10:
+			// Account records bind, rebind and unbind; lock records (k == 11) turn lock mode on and off.
+			var acct *Account
+			if s := rng.IntN(3); s > 0 {
+				key := LoginKey{Kid: login.Kid(signer.NoisePub), Pub: ident.B64.EncodeToString(signer.NoisePub)}
+				acct = &Account{LoginURL: "https://login.example", LoginKey: key, Sub: fmt.Sprintf("sub-%d", s)}
+			}
+			r = b.sign(signer, TypeAccount, ps, Fields{Bind: acct})
+		case k == 11:
+			r = b.sign(signer, TypeLock, ps, Fields{On: rng.IntN(2) == 0})
 		default:
 			r = b.sign(signer, TypeName, ps, Fields{Subject: pub(signer), Name: fmt.Sprintf("self-%d", len(b.recs))})
 		}
@@ -504,8 +517,8 @@ func TestRevokeFitsTheRoomReservedUnderTheCapSyncsAndReloads(t *testing.T) {
 	y.(relay.QueueLimiter).SetQueueLimit(relay.MaxQueued)
 	x.(relay.QueueLimiter).SetQueueLimit(relay.MaxQueued)
 	errc := make(chan error, 1)
-	go func() { errc <- SyncRespond(context.Background(), y, peer, nil) }()
-	if err := SyncInitiate(context.Background(), x, s, nil); err != nil {
+	go func() { errc <- SyncRespond(context.Background(), y, peer, nil, nil) }()
+	if err := SyncInitiate(context.Background(), x, s, nil, nil); err != nil {
 		t.Fatalf("sync of a capped set: %v", err)
 	}
 	if err := <-errc; err != nil {
@@ -631,8 +644,8 @@ func TestThreeHundredRecordsSyncAcrossSeveralLinesAndPushIsTakenOnDone(t *testin
 	a, b := relay.Pipe()
 	counter := &lineCounter{Conn: a}
 	errc := make(chan error, 1)
-	go func() { errc <- SyncRespond(context.Background(), b, peer, nil) }()
-	if err := SyncInitiate(context.Background(), counter, full, nil); err != nil {
+	go func() { errc <- SyncRespond(context.Background(), b, peer, nil, nil) }()
+	if err := SyncInitiate(context.Background(), counter, full, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if peer.Len() != 300 {

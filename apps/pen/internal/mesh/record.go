@@ -2,17 +2,18 @@
 package mesh
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
+	"github.com/goat-si/goat/apps/pen/internal/login"
+	"github.com/goat-si/goat/apps/pen/internal/strictjson"
 )
 
 // Record types.
@@ -22,7 +23,12 @@ const (
 	TypeRevoke   = "revoke"
 	TypeName     = "name"
 	TypeHostKeys = "hostkeys"
+	TypeAccount  = "account"
+	TypeLock     = "lock"
 )
+
+// ViaGoogle marks an admit made for a Google account assertion.
+const ViaGoogle = "google"
 
 const (
 	recordPrefix   = "pen-mesh/1"
@@ -35,6 +41,11 @@ const (
 	hashLen        = 43
 	nonceBytes     = 16
 	maxHostKeyLine = 1024
+	maxEmail       = 254
+	maxLoginURL    = 256
+	maxSub         = 255
+	// maxAccountAdmitPrev is how many heads an admit via google names.
+	maxAccountAdmitPrev = 8
 )
 
 // Card is a member card signed by its subject.
@@ -155,6 +166,39 @@ type Body struct {
 	Name        string   `json:"name,omitempty"`
 	Keys        []string `json:"keys,omitempty"`
 	User        *string  `json:"user,omitempty"`
+	// account: LoginURL, LoginKey and Sub (a string, or JSON null to unbind).
+	LoginURL *string         `json:"loginUrl,omitempty"`
+	LoginKey *LoginKey       `json:"loginKey,omitempty"`
+	Sub      json.RawMessage `json:"sub,omitempty"`
+	// lock
+	On *bool `json:"on,omitempty"`
+	// admit for a Google account: Via "google", the account's email and the assertion's hash.
+	Via       *string `json:"via,omitempty"`
+	Email     *string `json:"email,omitempty"`
+	Assertion *string `json:"assertion,omitempty"`
+}
+
+// LoginKey is a login service key an account record trusts.
+type LoginKey struct {
+	Kid string `json:"kid"`
+	Pub string `json:"pub"`
+}
+
+func (k *LoginKey) UnmarshalJSON(b []byte) error {
+	type plain LoginKey
+	var p plain
+	if err := strictUnmarshal(b, &p); err != nil {
+		return err
+	}
+	*k = LoginKey(p)
+	return nil
+}
+
+// Account is a mesh's binding to one Google account at one login service.
+type Account struct {
+	LoginURL string   `json:"loginUrl"`
+	LoginKey LoginKey `json:"loginKey"`
+	Sub      string   `json:"sub"`
 }
 
 // Record is a signed mesh record. Body holds the exact signed bytes.
@@ -165,6 +209,9 @@ type Record struct {
 	Hash string
 	// Sum is the raw SHA-256 of Body; canonical order compares it as unsigned bytes.
 	Sum [32]byte
+	// Opaque marks a record of an unknown type or with unknown members: stored and forwarded,
+	// without effect (contract "Accounts", "Mesh records").
+	Opaque bool
 }
 
 func (r *Record) MarshalJSON() ([]byte, error) {
@@ -202,6 +249,17 @@ func (r *Record) Verify() error {
 	if !utf8.Valid(r.Body) {
 		return errors.New("mesh: body is not UTF-8")
 	}
+	unknown, err := unknownMembers(r.Body)
+	if err != nil {
+		return fmt.Errorf("mesh: body: %w", err)
+	}
+	var head bodyHead
+	if err := json.Unmarshal(r.Body, &head); err != nil {
+		return fmt.Errorf("mesh: body: %w", err)
+	}
+	if unknown || !knownTypes[head.Type] {
+		return r.verifyOpaque(head)
+	}
 	var b Body
 	if err := strictUnmarshal(r.Body, &b); err != nil {
 		return fmt.Errorf("mesh: body: %w", err)
@@ -222,6 +280,59 @@ func (r *Record) Verify() error {
 	return nil
 }
 
+var knownTypes = map[string]bool{TypeFound: true, TypeAdmit: true, TypeRevoke: true, TypeName: true,
+	TypeHostKeys: true, TypeAccount: true, TypeLock: true}
+
+var bodyNames = strictjson.Names(&Body{})
+
+// unknownMembers reports a member name this version does not know. A duplicate name, or one that
+// differs from a known name only by case, is malformed.
+func unknownMembers(body []byte) (bool, error) {
+	keys, err := strictjson.Keys(body)
+	if err != nil {
+		return false, err
+	}
+	unknown := false
+	for _, k := range keys {
+		if bodyNames[k] {
+			continue
+		}
+		for known := range bodyNames {
+			if strings.EqualFold(k, known) {
+				return false, fmt.Errorf("member %q differs from %q only by case", k, known)
+			}
+		}
+		unknown = true
+	}
+	return unknown, nil
+}
+
+// verifyOpaque checks what every record shares (head and signature) for a record this version
+// gives no effect. A found is never opaque: the mesh id hashes it.
+func (r *Record) verifyOpaque(h bodyHead) error {
+	b := Body{V: h.V, Mesh: h.Mesh, Type: h.Type, By: h.By, N: h.N, Prev: h.Prev, At: h.At}
+	if h.Type == "" || h.Type == TypeFound {
+		return errors.New("mesh: unknown record with no type or a found")
+	}
+	if err := checkHead(&b); err != nil {
+		return err
+	}
+	if b.Mesh == foundMesh || b.Mesh == "" || len(b.Prev) < 1 || len(b.Prev) > maxPrev {
+		return errors.New("mesh: record mesh or prev count")
+	}
+	by, err := ident.DecodeKey(b.By)
+	if err != nil {
+		return err
+	}
+	if !ed25519.Verify(by, digest(recordPrefix, r.Body), r.Sig) {
+		return errors.New("mesh: record signature")
+	}
+	r.B, r.Opaque = b, true
+	r.Sum = sha256.Sum256(r.Body)
+	r.Hash = ident.B64.EncodeToString(r.Sum[:])
+	return nil
+}
+
 func validHash(h string) bool {
 	if len(h) != hashLen {
 		return false
@@ -230,7 +341,7 @@ func validHash(h string) bool {
 	return err == nil && len(b) == 32
 }
 
-func checkBody(b *Body, raw []byte) error {
+func checkHead(b *Body) error {
 	if b.V != 1 || b.N < 1 {
 		return errors.New("mesh: body v or n")
 	}
@@ -244,12 +355,22 @@ func checkBody(b *Body, raw []byte) error {
 		}
 		seen[h] = true
 	}
+	return nil
+}
+
+func checkBody(b *Body, raw []byte) error {
+	if err := checkHead(b); err != nil {
+		return err
+	}
 	hasCard := b.Card != nil
 	hasRevoke := b.Subjects != nil || b.Compromised != nil
 	hasName := b.Subject != "" || b.Name != ""
 	hasKeys := b.Keys != nil || b.User != nil
+	hasAccount := b.LoginURL != nil || b.LoginKey != nil || b.Sub != nil
+	hasLock := b.On != nil
+	hasVia := b.Via != nil || b.Email != nil || b.Assertion != nil
 	extras := 0
-	for _, x := range []bool{hasCard, hasRevoke, hasName, hasKeys} {
+	for _, x := range []bool{hasCard, hasRevoke, hasName, hasKeys, hasAccount, hasLock} {
 		if x {
 			extras++
 		}
@@ -285,6 +406,11 @@ func checkBody(b *Body, raw []byte) error {
 			if c.Mesh != b.Mesh || c.Inviter != ident.NodeID(by) {
 				return errors.New("mesh: admit card does not name this mesh and signer")
 			}
+			if hasVia {
+				if err := checkVia(b); err != nil {
+					return err
+				}
+			}
 		}
 	case TypeRevoke:
 		if b.Compromised == nil || len(b.Subjects) < 1 || len(b.Subjects) > maxSubjects {
@@ -313,14 +439,70 @@ func checkBody(b *Body, raw []byte) error {
 		if b.User != nil && !ValidUser(*b.User) {
 			return fmt.Errorf("mesh: bad hostkeys user %q", *b.User)
 		}
+	case TypeAccount:
+		if _, err := accountOf(b); err != nil {
+			return err
+		}
+	case TypeLock:
+		if b.On == nil {
+			return errors.New("mesh: lock needs on")
+		}
 	default:
 		return fmt.Errorf("mesh: unknown record type %q", b.Type)
 	}
 	isCardType := b.Type == TypeFound || b.Type == TypeAdmit
-	if (!isCardType && hasCard) || (b.Type != TypeRevoke && hasRevoke) || (b.Type != TypeName && hasName) || (b.Type != TypeHostKeys && hasKeys) {
+	if (!isCardType && hasCard) || (b.Type != TypeRevoke && hasRevoke) || (b.Type != TypeName && hasName) || (b.Type != TypeHostKeys && hasKeys) ||
+		(b.Type != TypeAccount && hasAccount) || (b.Type != TypeLock && hasLock) || (b.Type != TypeAdmit && hasVia) {
 		return errors.New("mesh: field does not belong to this record type")
 	}
 	return nil
+}
+
+func checkVia(b *Body) error {
+	if b.Via == nil || *b.Via != ViaGoogle || b.Email == nil || b.Assertion == nil {
+		return errors.New("mesh: an admit via google needs via, email and assertion")
+	}
+	if len(*b.Email) < 1 || len(*b.Email) > maxEmail || !validHash(*b.Assertion) {
+		return errors.New("mesh: admit email or assertion hash")
+	}
+	return nil
+}
+
+// accountOf parses an account record's binding; nil means unbind ({"sub":null}).
+func accountOf(b *Body) (*Account, error) {
+	if b.Sub == nil {
+		return nil, errors.New("mesh: account needs sub")
+	}
+	if string(b.Sub) == "null" {
+		if b.LoginURL != nil || b.LoginKey != nil {
+			return nil, errors.New("mesh: an unbind has only sub null")
+		}
+		return nil, nil
+	}
+	var sub string
+	if err := json.Unmarshal(b.Sub, &sub); err != nil || sub == "" || len(sub) > maxSub {
+		return nil, errors.New("mesh: account sub")
+	}
+	if b.LoginURL == nil || b.LoginKey == nil || !validLoginURL(*b.LoginURL) {
+		return nil, errors.New("mesh: account needs loginUrl and loginKey")
+	}
+	k, err := ident.DecodeKey(b.LoginKey.Pub)
+	if err != nil || login.Kid(k) != b.LoginKey.Kid {
+		return nil, errors.New("mesh: account loginKey kid does not match its key")
+	}
+	return &Account{LoginURL: *b.LoginURL, LoginKey: *b.LoginKey, Sub: sub}, nil
+}
+
+// validLoginURL accepts an https URL with no path beyond "/" (http only for loopback test services).
+func validLoginURL(s string) bool {
+	if len(s) > maxLoginURL {
+		return false
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil || (u.Path != "" && u.Path != "/") {
+		return false
+	}
+	return u.Scheme == "https" || u.Scheme == "http" && loopback(u.Hostname())
 }
 
 // ValidUser reports whether s is a hostkeys login name: [a-z_][a-z0-9_.-]{0,31}.
@@ -348,67 +530,7 @@ func validHostKey(k string) bool {
 	return len(f) >= 2 && (strings.HasPrefix(f[0], "ssh-") || strings.HasPrefix(f[0], "ecdsa-") || strings.HasPrefix(f[0], "sk-"))
 }
 
-// strictUnmarshal decodes one JSON object into the struct v points to. Member names must match v's
-// JSON names exactly (encoding/json alone matches them case-insensitively); unknown, case-variant
-// and duplicate names and trailing data are rejected.
-func strictUnmarshal(b []byte, v any) error {
-	if err := exactKeys(b, jsonNames(v)); err != nil {
-		return err
-	}
-	d := json.NewDecoder(bytes.NewReader(b))
-	d.DisallowUnknownFields()
-	if err := d.Decode(v); err != nil {
-		return err
-	}
-	if d.More() {
-		return errors.New("trailing data")
-	}
-	return nil
-}
-
-// jsonNames lists the JSON member names of the struct v points to.
-func jsonNames(v any) map[string]bool {
-	t := reflect.TypeOf(v).Elem()
-	names := map[string]bool{}
-	for i := 0; i < t.NumField(); i++ {
-		tag, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
-		if tag != "" && tag != "-" {
-			names[tag] = true
-		}
-	}
-	return names
-}
-
-func exactKeys(b []byte, allowed map[string]bool) error {
-	d := json.NewDecoder(bytes.NewReader(b))
-	t, err := d.Token()
-	if err != nil {
-		return err
-	}
-	if t != json.Delim('{') {
-		return errors.New("not an object")
-	}
-	seen := map[string]bool{}
-	for d.More() {
-		k, err := d.Token()
-		if err != nil {
-			return err
-		}
-		ks, _ := k.(string)
-		if !allowed[ks] {
-			return fmt.Errorf("unknown member %q", ks)
-		}
-		if seen[ks] {
-			return fmt.Errorf("duplicate member %q", ks)
-		}
-		seen[ks] = true
-		var skip json.RawMessage
-		if err := d.Decode(&skip); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+var strictUnmarshal = strictjson.Unmarshal
 
 // bodyHead is the common prefix of every record body, in field order.
 type bodyHead struct {
@@ -431,6 +553,12 @@ type Fields struct {
 	Keys        []string
 	// User is the hostkeys record's SSH login name (optional).
 	User string
+	// Bind is an account record's binding; nil signs an unbind.
+	Bind *Account
+	// On is a lock record's state.
+	On bool
+	// Via, Email and Assertion mark an admit made for a Google account assertion.
+	Via, Email, Assertion string
 }
 
 // Sign builds and signs a record body.
@@ -441,11 +569,38 @@ func Sign(id *ident.Identity, mesh, typ string, n uint64, prev []string, at int6
 	h := bodyHead{V: 1, Mesh: mesh, Type: typ, By: ident.B64.EncodeToString(id.SignPub), N: n, Prev: prev, At: at}
 	var v any
 	switch typ {
-	case TypeFound, TypeAdmit:
+	case TypeFound:
 		v = struct {
 			bodyHead
 			Card *Card `json:"card"`
 		}{h, f.Card}
+	case TypeAdmit:
+		v = struct {
+			bodyHead
+			Card      *Card  `json:"card"`
+			Via       string `json:"via,omitempty"`
+			Email     string `json:"email,omitempty"`
+			Assertion string `json:"assertion,omitempty"`
+		}{h, f.Card, f.Via, f.Email, f.Assertion}
+	case TypeAccount:
+		if f.Bind == nil {
+			v = struct {
+				bodyHead
+				Sub *string `json:"sub"`
+			}{h, nil}
+		} else {
+			v = struct {
+				bodyHead
+				LoginURL string   `json:"loginUrl"`
+				LoginKey LoginKey `json:"loginKey"`
+				Sub      string   `json:"sub"`
+			}{h, f.Bind.LoginURL, f.Bind.LoginKey, f.Bind.Sub}
+		}
+	case TypeLock:
+		v = struct {
+			bodyHead
+			On bool `json:"on"`
+		}{h, f.On}
 	case TypeRevoke:
 		v = struct {
 			bodyHead

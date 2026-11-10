@@ -26,6 +26,9 @@ type Request struct {
 	Compromised bool   `json:"compromised,omitempty"`
 	Token       string `json:"token,omitempty"`
 	Name        string `json:"name,omitempty"`
+	// Account is a login-bind's binding; On is a lock's state.
+	Account *mesh.Account `json:"account,omitempty"`
+	On      bool          `json:"on,omitempty"`
 }
 
 // LsMember is a member as ls reports it.
@@ -46,6 +49,11 @@ type LsReply struct {
 	Uplink  string        `json:"uplink"`
 	Members []LsMember    `json:"members"`
 	Revoked []mesh.Member `json:"revoked"`
+	// Account is the mesh's Google account binding (nil when unbound); Locked is lock mode;
+	// Pending counts requests waiting for this node's approval.
+	Account *mesh.Account `json:"account,omitempty"`
+	Locked  bool          `json:"locked"`
+	Pending int           `json:"pending"`
 }
 
 // WatchLine is one view change.
@@ -174,6 +182,49 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	case "stop":
 		reply(map[string]bool{"ok": true})
 		d.Stop()
+	case "login-bind", "account-unbind":
+		acct := req.Account
+		if req.Op == "account-unbind" {
+			acct = nil
+		} else if acct == nil {
+			fail(errors.New("login-bind needs an account"))
+			return
+		}
+		res, err := d.bindAccount(ctx, acct)
+		if err != nil {
+			fail(err)
+			return
+		}
+		reply(map[string]any{"results": res, "status": d.status()})
+	case "lock":
+		res, err := d.setLock(ctx, req.On)
+		if err != nil {
+			fail(err)
+			return
+		}
+		reply(map[string]any{"results": res, "locked": d.view().Locked})
+	case "pending":
+		reply(map[string]any{"pending": d.pending.all(d.now())})
+	case "approve":
+		res, err := d.approve(ctx, req.Subject)
+		if err != nil {
+			fail(err)
+			return
+		}
+		reply(res)
+	case "deny":
+		p, err := d.deny(req.Subject)
+		if err != nil {
+			fail(err)
+			return
+		}
+		reply(map[string]any{"denied": p})
+	case "adopt":
+		if err := d.adopt(ctx); err != nil {
+			fail(err)
+			return
+		}
+		reply(d.ls())
 	default:
 		fail(fmt.Errorf("unknown op %q", req.Op))
 	}
@@ -202,7 +253,8 @@ func (d *Daemon) status() Status {
 func (d *Daemon) ls() LsReply {
 	v := d.view()
 	s := d.uplinkState()
-	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s, Revoked: v.SortedRevoked()}
+	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s, Revoked: v.SortedRevoked(),
+		Account: v.Account, Locked: v.Locked, Pending: len(d.pending.all(d.now()))}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, m := range v.SortedMembers() {

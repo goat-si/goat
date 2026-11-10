@@ -23,6 +23,8 @@ import (
 const (
 	KindSession byte = 0x01
 	KindJoin    byte = 0x03
+	// KindAccount admits any initiator key for an account join (contract "Account join").
+	KindAccount byte = 0x04
 )
 
 const (
@@ -234,7 +236,7 @@ func respond(ctx context.Context, conn relay.Conn, local *ident.Identity, nodeID
 	if err != nil {
 		return timeoutOr(err)
 	}
-	if len(m1) < 1 || len(m1) > maxFirstMessage || (m1[0] != KindSession && m1[0] != KindJoin) {
+	if len(m1) < 1 || len(m1) > maxFirstMessage || (m1[0] != KindSession && m1[0] != KindJoin && m1[0] != KindAccount) {
 		return fail(wire.CodeCrypto)
 	}
 	kind := m1[0]
@@ -282,7 +284,10 @@ func respond(ctx context.Context, conn relay.Conn, local *ident.Identity, nodeID
 	if len(confirm) != 0 {
 		return fail(wire.CodeCrypto)
 	}
-	raiseQueue(conn)
+	// Kind 0x04 accepts any key, so its peer keeps the small receive queue.
+	if kind != KindAccount {
+		raiseQueue(conn)
+	}
 	return s, nil
 }
 

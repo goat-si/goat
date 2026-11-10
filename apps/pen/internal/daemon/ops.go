@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
+	"github.com/goat-si/goat/apps/pen/internal/login"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 )
 
@@ -57,6 +59,14 @@ func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 		return res, errors.New("no member took the leave; this node keeps running and pushes it when a member's uplink returns or at its 10-minute sync, or run pen leave again")
 	}
 	d.stopUplinks("left")
+	// The registry stops offering this node; the daemon stops right after, so this runs in line.
+	if b, ok := binding(d.view()); ok {
+		fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if err := login.New(b.LoginURL).Forget(fctx, d.id, d.nodeID, d.now()); err != nil {
+			d.opt.Logf("login forget on leave: %v", err)
+		}
+		cancel()
+	}
 	unlock, err := d.st.Lock()
 	if err != nil {
 		return res, err
@@ -94,6 +104,39 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 	if err != nil {
 		return err
 	}
+	return d.replaceMesh(store, tok.Relays, name)
+}
+
+// JoinedFile is where pen login leaves a mesh it joined for a running daemon to adopt.
+const JoinedFile = "joined.json"
+
+// adopt replaces a solo mesh with the set pen login joined (joined.json).
+func (d *Daemon) adopt(ctx context.Context) error {
+	store, err := mesh.LoadFile(d.st, JoinedFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return errors.New("no joined mesh to adopt")
+	}
+	if err != nil {
+		return err
+	}
+	store.SetSelf(d.selfKey())
+	self, ok := store.View().Members[d.selfKey()]
+	if !ok {
+		return errors.New("the joined mesh does not make this node a member")
+	}
+	if cur := d.view(); cur.MeshID != store.MeshID && len(cur.Members) > 1 {
+		return fmt.Errorf("this node is already in a mesh with %d members; pen leave first", len(cur.Members))
+	}
+	if err := d.replaceMesh(store, nil, self.Name); err != nil {
+		return err
+	}
+	os.Remove(d.st.Path(JoinedFile))
+	d.spawn(func() { d.pushAll(d.runCtx) })
+	return nil
+}
+
+// replaceMesh makes store this node's mesh; relays (when set) replace the relay list.
+func (d *Daemon) replaceMesh(store *mesh.Store, relays []string, name string) error {
 	if err := store.Save(); err != nil {
 		return err
 	}
@@ -114,8 +157,10 @@ func (d *Daemon) join(ctx context.Context, token, name string) error {
 		return err
 	}
 	d.cfgMu.Lock()
-	changed := !slices.Equal(d.cfg.RelayList(), tok.Relays)
-	d.cfg.SetRelays(tok.Relays)
+	changed := relays != nil && !slices.Equal(d.cfg.RelayList(), relays)
+	if changed {
+		d.cfg.SetRelays(relays)
+	}
 	d.cfg.Name = name
 	cfg := d.cfg
 	d.cfgMu.Unlock()
