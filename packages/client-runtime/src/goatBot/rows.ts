@@ -160,8 +160,12 @@ export type GoatBotRow =
       readonly replyTo: string | null;
       /** Answers to pick, only while nothing has been sent since the question. */
       readonly options: ReadonlyArray<string>;
+      /** Every answer the question offered, kept after it is answered; absent without choices. */
+      readonly choices?: ReadonlyArray<string>;
       /** What the person sent back to a question, picked from its answers or typed. */
       readonly answer?: string;
+      /** Which of `choices` the answer is, when the person picked one. */
+      readonly answerIndex?: number;
       /** The task a picked answer goes to, so it answers this question wherever it is pressed. */
       readonly answerTaskId?: string;
       readonly memory?: MemoryReportReference;
@@ -441,6 +445,7 @@ export function buildGoatBotTimeline(input: {
             ? (inputTexts.get(presentation.replyToKey)?.slice(0, 160) ?? null)
             : null,
         options: open === false ? NO_OPTIONS : (presentation?.options ?? NO_OPTIONS),
+        ...(hasOptions ? { choices: presentation?.options ?? NO_OPTIONS } : {}),
         // Only a server that names the question also routes an answer sent to its task.
         ...(open === true && presentation?.taskId ? { answerTaskId: presentation.taskId } : {}),
         ...(presentation?.memory === undefined ? {} : { memory: presentation.memory }),
@@ -525,6 +530,8 @@ export function buildGoatBotTimeline(input: {
   let nearestQuestion: number | undefined;
   const nearestSendByTask = new Map<string | null | undefined, number>();
   const nearestQuestionByTask = new Map<string | null | undefined, number>();
+  // A picked choice shows inside its question, so the person's message saying it again is left out.
+  const folded = new Set<string>();
   for (let index = ordered.length - 1; index >= 0; index--) {
     const row = ordered[index]!;
     if (row.kind === "user") {
@@ -548,7 +555,15 @@ export function buildGoatBotTimeline(input: {
       if (answered?.kind === "user") {
         const answer =
           answered.text.trim() || (answered.attachments ?? []).map((file) => file.name).join(", ");
-        ordered[index] = { ...row, options: NO_OPTIONS, answer };
+        const answerIndex =
+          (answered.attachments ?? []).length === 0 ? (row.choices ?? []).indexOf(answer) : -1;
+        if (answerIndex >= 0) folded.add(answered.id);
+        ordered[index] = {
+          ...row,
+          options: NO_OPTIONS,
+          answer,
+          ...(answerIndex >= 0 ? { answerIndex } : {}),
+        };
       } else if (!decidedByCard && send !== undefined) {
         ordered[index] = { ...row, options: NO_OPTIONS };
       }
@@ -556,11 +571,12 @@ export function buildGoatBotTimeline(input: {
     nearestQuestion = index;
     nearestQuestionByTask.set(askedQuestions.get(row.id), index);
   }
+  const shown = folded.size === 0 ? ordered : ordered.filter((row) => !folded.has(row.id));
 
   const rows: GoatBotRow[] = [];
-  const lastUserIndex = ordered.findLastIndex((row) => row.kind === "user");
-  const breaks = ordered.map((row, index) => {
-    const previous = index === 0 ? null : ordered[index - 1]!;
+  const lastUserIndex = shown.findLastIndex((row) => row.kind === "user");
+  const breaks = shown.map((row, index) => {
+    const previous = index === 0 ? null : shown[index - 1]!;
     const newDay =
       previous === null || localDayKey(previous.createdAt) !== localDayKey(row.createdAt);
     const gap =
@@ -576,7 +592,7 @@ export function buildGoatBotTimeline(input: {
       (row.kind === "bot" && row.proactive && !(previous?.kind === "bot" && previous.proactive));
     return { stamp, first };
   });
-  for (const [index, row] of ordered.entries()) {
+  for (const [index, row] of shown.entries()) {
     const { stamp, first } = breaks[index]!;
     if (stamp)
       rows.push({
@@ -584,7 +600,7 @@ export function buildGoatBotTimeline(input: {
         id: `day:${localDayKey(row.createdAt)}:${row.id}`,
         at: row.createdAt,
       });
-    const last = index === ordered.length - 1 || breaks[index + 1]!.first;
+    const last = index === shown.length - 1 || breaks[index + 1]!.first;
     const groupPosition = first ? (last ? "single" : "first") : last ? "last" : "middle";
     rows.push(
       row.kind === "user"
