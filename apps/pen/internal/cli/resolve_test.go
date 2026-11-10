@@ -28,3 +28,20 @@ func TestResolveAcceptsSshAliasNameNodeIDAndUniquePrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestAMemberWhoseNameStartsWithPenResolvesByNameAndAlias(t *testing.T) {
+	ms := []mesh.Member{
+		{Name: "pen-e2e-a", NodeID: "qms4f24hqqqqqqqqqqqqqqqqqq"},
+		{Name: "a", NodeID: "aaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{Name: "pen-a", NodeID: "bbbbbbbbbbbbbbbbbbbbbbbbbb"},
+	}
+	// ssh-config writes Host pen-<name>, so "pen-a" is the alias of "a" even when "pen-a" exists.
+	for arg, want := range map[string]string{
+		"pen-e2e-a": "pen-e2e-a", "pen-pen-e2e-a": "pen-e2e-a", "pen-a": "a", "pen-pen-a": "pen-a",
+	} {
+		m, err := Resolve(ms, arg)
+		if err != nil || m.Name != want {
+			t.Fatalf("%s: got %q, %v; want %q", arg, m.Name, err, want)
+		}
+	}
+}

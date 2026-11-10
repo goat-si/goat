@@ -29,6 +29,20 @@ func Resolve(members []mesh.Member, arg string) (mesh.Member, error) {
 	if len(byName) > 1 {
 		return mesh.Member{}, ambiguous(arg, byName)
 	}
+	// A name that itself starts with "pen-": the alias reading above wins, the literal name comes next.
+	if full := strings.ToLower(arg); full != q {
+		for _, m := range members {
+			if m.Name == full {
+				byName = append(byName, m)
+			}
+		}
+		if len(byName) == 1 {
+			return byName[0], nil
+		}
+		if len(byName) > 1 {
+			return mesh.Member{}, ambiguous(arg, byName)
+		}
+	}
 	if len(q) < 4 {
 		return mesh.Member{}, fmt.Errorf("no node named %q (a nodeId prefix needs at least 4 characters)", arg)
 	}
