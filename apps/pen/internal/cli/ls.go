@@ -34,8 +34,9 @@ func ago(ms int64) string {
 }
 
 func printMembers(w io.Writer, ls daemon.LsReply) {
+	printAccount(w, ls)
 	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tNODE\tFINGERPRINT\tPATH\tLAST SEEN\tADMITTED BY")
+	fmt.Fprintln(tw, "NAME\tNODE\tFINGERPRINT\tPATH\tLAST SEEN\tVIA\tADMITTED BY")
 	for _, m := range ls.Members {
 		name, seen := m.Name, ago(m.LastSeen)
 		if m.Self {
@@ -52,12 +53,42 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 		if m.AdmittedBy == "" {
 			by = "(founder)"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\trelay\t%s\t%s\n", name, short(m.NodeID), m.Fingerprint, seen, by)
+		fmt.Fprintf(tw, "%s\t%s\t%s\trelay\t%s\t%s\t%s\n", name, short(m.NodeID), m.Fingerprint, seen, via(m.Member), by)
 	}
 	for _, m := range ls.Revoked {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t-\trevoked\t-\n", orDash(m.Name), short(m.NodeID), fingerprintOf(m.NoisePub))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t-\trevoked\t%s\t-\n", orDash(m.Name), short(m.NodeID), fingerprintOf(m.NoisePub), via(m))
 	}
 	tw.Flush()
+	for _, m := range ls.Members {
+		if m.Via == mesh.ViaGoogle && time.Since(time.UnixMilli(m.Since)) < announceFor {
+			fmt.Fprintf(w, "%s joined via Google %s, fingerprint %s (%s)\n", m.Name, m.Email, m.Fingerprint, ago(m.Since))
+		}
+	}
+}
+
+// announceFor is how long pen ls announces a member admitted for a Google account.
+const announceFor = 7 * 24 * time.Hour
+
+func via(m mesh.Member) string {
+	switch {
+	case m.Via == mesh.ViaGoogle:
+		return "google " + m.Email
+	case m.AdmittedBy == "":
+		return "-"
+	}
+	return "invite"
+}
+
+// printAccount prints the mesh's account binding, lock mode and pending requests.
+func printAccount(w io.Writer, ls daemon.LsReply) {
+	if ls.Account == nil {
+		fmt.Fprintln(w, "account  none (machines join by invite)")
+	} else {
+		fmt.Fprintf(w, "account  Google sub %s via %s\n", ls.Account.Sub, ls.Account.LoginURL)
+	}
+	if ls.Locked {
+		fmt.Fprintf(w, "lock     on: new machines wait for pen approve (%d pending here)\n", ls.Pending)
+	}
 }
 
 func orDash(s string) string {
@@ -159,7 +190,7 @@ func lsMembers(ls daemon.LsReply) []mesh.Member {
 }
 
 func offlineLs(v *mesh.View, id *ident.Identity) daemon.LsReply {
-	ls := daemon.LsReply{MeshID: v.MeshID, Uplink: "daemon not running", Revoked: v.SortedRevoked()}
+	ls := daemon.LsReply{MeshID: v.MeshID, Uplink: "daemon not running", Revoked: v.SortedRevoked(), Account: v.Account, Locked: v.Locked}
 	if id != nil {
 		ls.Self = id.NodeID()
 	}

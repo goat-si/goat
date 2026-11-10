@@ -357,3 +357,40 @@ func SyncApproved(ctx context.Context, relays []string, id *ident.Identity, memb
 	}
 	return mesh.CheckJoined(nil, id, meshID, s.Records())
 }
+
+// SyncWith syncs s with every other member it lists (kind 0x01 mesh) and reports how many of the
+// others took part (contract "Account join": a joiner syncs before it serves tcp streams).
+func SyncWith(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store) (taken, others int) {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, m := range s.View().SortedMembers() {
+		if m.NodeID == id.NodeID() {
+			continue
+		}
+		others++
+		noise, err := ident.DecodeKey(m.NoisePub)
+		if err != nil {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pctx, cancel := context.WithTimeout(ctx, pushTimeout)
+			defer cancel()
+			sec, err := OpenAny(pctx, relays, m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
+				return session.Initiate(pctx, conn, session.KindSession, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "mesh"})
+			})
+			if err != nil {
+				return
+			}
+			defer sec.Close(wire.CodeNormal)
+			if mesh.SyncInitiate(pctx, sec, s, nil, nil) == nil {
+				mu.Lock()
+				taken++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return taken, others
+}

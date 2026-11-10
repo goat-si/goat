@@ -24,6 +24,12 @@ const usage = `usage: pen <command> [flags]
   down                                    stop this node
   invite [--ttl 10m] [--auto]             print a single-use join token
   join <token> [--name N]                 join the mesh a token invites to
+  login [--relay URL]... [--name N] [--yes]   sign in with Google: found and bind a mesh, or join the account's mesh
+  logout                                  forget this node at the login service (it stays in its mesh)
+  lock on|off                             make machines that sign in wait for pen approve
+  approve [<id>|'<fingerprint>']          list pending requests, or admit one
+  deny <id>|'<fingerprint>'               refuse a pending request for 24 hours
+  account [unbind]                        show or remove the mesh's Google account binding
   ls [--json] [--watch [--until-revoked <member>]]   list members
   revoke <member> [--compromised]         remove a member
   leave                                   remove this node and delete its keys
@@ -44,6 +50,8 @@ func main() {
 		"up": cli.RunUp, "down": cli.RunDown, "invite": cli.RunInvite, "join": cli.RunJoin, "ls": cli.RunLs,
 		"revoke": cli.RunRevoke, "leave": cli.RunLeave, "pipe": cli.RunPipe, "forward": cli.RunForward,
 		"ssh-config": cli.RunSSHConfig, "relay": cli.RunRelay,
+		"login": cli.RunLogin, "logout": cli.RunLogout, "lock": cli.RunLock, "approve": cli.RunApprove,
+		"deny": cli.RunDeny, "account": cli.RunAccount,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)

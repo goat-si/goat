@@ -49,6 +49,11 @@ type LsReply struct {
 	Uplink  string        `json:"uplink"`
 	Members []LsMember    `json:"members"`
 	Revoked []mesh.Member `json:"revoked"`
+	// Account is the mesh's Google account binding (nil when unbound); Locked is lock mode;
+	// Pending counts requests waiting for this node's approval.
+	Account *mesh.Account `json:"account,omitempty"`
+	Locked  bool          `json:"locked"`
+	Pending int           `json:"pending"`
 }
 
 // WatchLine is one view change.
@@ -248,7 +253,8 @@ func (d *Daemon) status() Status {
 func (d *Daemon) ls() LsReply {
 	v := d.view()
 	s := d.uplinkState()
-	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s, Revoked: v.SortedRevoked()}
+	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s, Revoked: v.SortedRevoked(),
+		Account: v.Account, Locked: v.Locked, Pending: len(d.pending.all(d.now()))}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, m := range v.SortedMembers() {
