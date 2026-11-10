@@ -22,6 +22,9 @@ import { GoatBotCheckInForm } from "./GoatBotCheckInForm";
 import { useGoatBotName } from "./goatBotMemberContext";
 import { GoatBotPanelEmpty, GoatBotPanelFailure } from "./GoatBotPanelEmpty";
 
+/** What New routine puts in the message box: the person finishes the sentence. */
+const NEW_ROUTINE_DRAFT = "Set up a routine: ";
+
 export function GoatBotRoutines(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -29,6 +32,8 @@ export function GoatBotRoutines(props: {
   readonly tasks: readonly BotRoutineSource[] | null;
   readonly error: string | null;
   readonly onRetry: () => void;
+  /** Starts a routine request in the chat's message box; absent while the chat cannot send. */
+  readonly onDraft?: ((text: string) => void) | undefined;
 }) {
   const nowMinute = useNowMinute();
   const botName = useGoatBotName();
@@ -39,16 +44,31 @@ export function GoatBotRoutines(props: {
   if (props.tasks === null)
     return failure ?? <p className="text-muted-foreground">Loading routines…</p>;
   const rows = botRoutineRows(props.tasks, props.threadId, Date.parse(`${nowMinute}:00.000Z`));
+  const offerCheckIn =
+    failure === null && findCheckInRoutine(props.tasks, props.threadId) === undefined;
+  const onDraft = props.onDraft;
   return (
     <div className="space-y-3">
       {failure}
-      {failure === null && findCheckInRoutine(props.tasks, props.threadId) === undefined ? (
-        <CheckInOffer environmentId={props.environmentId} threadId={props.threadId} />
-      ) : null}
+      {/* The check-in form opens in this row and takes all of it. */}
+      <div className="flex flex-wrap gap-2 [&>form]:basis-full">
+        {onDraft === undefined ? null : (
+          <Button variant="outline" size="sm" onClick={() => onDraft(NEW_ROUTINE_DRAFT)}>
+            New routine
+          </Button>
+        )}
+        {offerCheckIn ? (
+          <CheckInOffer environmentId={props.environmentId} threadId={props.threadId} />
+        ) : null}
+      </div>
       {rows.length === 0 && failure === null ? (
         <GoatBotPanelEmpty
           title="No routines yet"
-          next={`Ask ${botName} in chat to set up a routine.`}
+          next={
+            onDraft === undefined
+              ? `Ask ${botName} in chat to set up a routine.`
+              : `Ask ${botName} in chat to set up a routine, or start with New routine.`
+          }
         />
       ) : rows.length === 0 ? null : (
         <ul className="m-0 list-none space-y-1 p-0">

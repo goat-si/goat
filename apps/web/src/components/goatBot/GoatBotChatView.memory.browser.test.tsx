@@ -191,6 +191,16 @@ it("in the narrow sheet Escape steps from a task back to Home, then closes the s
   await expect.element(field).toHaveValue("Half a thought");
 });
 
+it("New routine starts a routine request in the composer and sends nothing", async () => {
+  const { view, onSend } = setup();
+  await using screen = await render(view());
+  await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
+  await userEvent.click(screen.getByRole("button", { name: "New routine" }));
+  await expect.element(composer(screen)).toHaveValue("Set up a routine: ");
+  await expect.element(composer(screen)).toHaveFocus();
+  expect(onSend).not.toHaveBeenCalled();
+});
+
 it("Ask to forget puts the quoted note in the composer and sends nothing", async () => {
   const { view, onSend } = setup();
   await using screen = await render(view());
