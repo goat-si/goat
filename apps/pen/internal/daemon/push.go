@@ -32,6 +32,7 @@ func (d *Daemon) pushAll(ctx context.Context) []PushResult {
 }
 
 func (d *Daemon) pushTo(ctx context.Context, members []mesh.Member) []PushResult {
+	d.retrySave()
 	limit := pushTimeout
 	if d.opt.PushTimeout > 0 {
 		limit = d.opt.PushTimeout

@@ -159,6 +159,14 @@ func SyncRespondAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHel
 				l.Close(errLine.Code)
 				return errLine
 			}
+			// Done tells the initiator its records are kept. A set that still holds records it
+			// could not write (an earlier sync, or this one with nothing new) tries again first.
+			if onMerged != nil && s.Unsaved() {
+				if err := onMerged(nil); err != nil {
+					l.Close(wire.CodeNotKept)
+					return &relay.CloseError{Code: wire.CodeNotKept}
+				}
+			}
 			return c.Write(Msg{T: "done"})
 		}
 	}
