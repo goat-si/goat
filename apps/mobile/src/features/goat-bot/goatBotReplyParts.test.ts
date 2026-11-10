@@ -71,8 +71,25 @@ describe("splitGoatBotReply", () => {
   });
 
   it("keeps a reply with link reference definitions whole, so its links resolve", () => {
-    const text = ["See [the notes][x].", "", ...table, "", "[x]: https://example.com"].join("\n");
+    for (const definition of [
+      ["[x]: https://example.com"],
+      ["[x]:", "  https://example.com"],
+      ["[a\\]b]: https://example.com"],
+    ]) {
+      const text = ["See [the notes][x].", "", ...table, "", ...definition].join("\n");
+      expect(splitGoatBotReply(text)).toEqual(prose(text));
+    }
+  });
+
+  it("decides each table from what it has read so far, so a long held run stays prose", () => {
+    const pairs = Array.from({ length: 2000 }, () => "| A |\n| - |").join("\n");
+    const text = `- item\n${pairs}`;
     expect(splitGoatBotReply(text)).toEqual(prose(text));
+    expect(splitGoatBotReply(`${text}\n\n${table.join("\n")}`).at(-1)).toEqual({
+      kind: "table",
+      markdown: table.join("\n"),
+      columns: 3,
+    });
   });
 
   it("returns one prose part for text without a table", () => {

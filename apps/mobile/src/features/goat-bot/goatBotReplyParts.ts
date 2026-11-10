@@ -21,8 +21,9 @@ const RAW_HTML: ReadonlyArray<readonly [RegExp, RegExp]> = [
   [/^ {0,3}<![A-Za-z]/, />/],
   [/^ {0,3}<!\[CDATA\[/, /\]\]>/],
 ];
-// A link reference definition: its links may sit in another part, so such replies stay whole.
-const REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:[ \t]*\S/m;
+// A link reference definition's label (its destination may follow on the next line): its links may
+// sit in another part, so such replies stay whole.
+const REFERENCE_DEFINITION = /^ {0,3}\[(?:[^\]\\]|\\.)+\]:/m;
 
 /** How many cells a table row has, counting pipes a backslash does not escape. */
 function cellCount(line: string): number {
@@ -39,20 +40,6 @@ function isDelimiterRow(line: string): boolean {
 }
 
 /**
- * Whether a table may start at this line: after a blank line, or after a plain paragraph at the
- * left edge, which a table ends. A paragraph that holds a list item, quote or indented line could
- * carry the table as its continuation, so it may not.
- */
-function startsBlock(lines: ReadonlyArray<string>, index: number): boolean {
-  for (let back = index - 1; back >= 0; back -= 1) {
-    const line = lines[back] ?? "";
-    if (line.trim() === "") return true;
-    if (/^\s/.test(line) || OTHER_BLOCK.test(line)) return false;
-  }
-  return true;
-}
-
-/**
  * Splits a bot reply at its tables so each can stand in its own card: a header row and a delimiter
  * row with as many cells at the left edge, outside any list, quote, HTML or code block, then rows up
  * to a blank line or another block. A reply with link reference definitions stays whole.
@@ -63,6 +50,13 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
   const parts: GoatBotReplyPart[] = [];
   let prose: string[] = [];
   let fence: string | null = null;
+  // Whether the paragraph run since the last blank line holds a list item, quote, HTML, code or
+  // indented line, which could carry a table below it as a continuation.
+  let held = false;
+  const keep = (line: string, code = false) => {
+    prose.push(line);
+    held = line.trim() === "" ? false : held || code || /^\s/.test(line) || OTHER_BLOCK.test(line);
+  };
   let rawEnd: RegExp | null = null;
   const flushProse = () => {
     // Blank lines around a stretch go; its first line keeps its indent, which can mean code.
@@ -80,24 +74,24 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
       if (closer !== undefined && closer[0] === fence[0] && closer.length >= fence.length) {
         fence = null;
       }
-      prose.push(line);
+      keep(line, true);
       continue;
     }
     if (rawEnd !== null) {
       if (rawEnd.test(line)) rawEnd = null;
-      prose.push(line);
+      keep(line, true);
       continue;
     }
     const opener = FENCE_OPEN.exec(line)?.[1];
     if (opener !== undefined) {
       fence = opener;
-      prose.push(line);
+      keep(line, true);
       continue;
     }
     const raw = RAW_HTML.find(([start]) => start.test(line));
     if (raw !== undefined) {
       if (!raw[1].test(line.replace(raw[0], ""))) rawEnd = raw[1];
-      prose.push(line);
+      keep(line, true);
       continue;
     }
     const next = lines[index + 1];
@@ -110,9 +104,9 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
       /^\s/.test(next) ||
       !isDelimiterRow(next) ||
       cellCount(next) !== columns ||
-      !startsBlock(lines, index)
+      held
     ) {
-      prose.push(line);
+      keep(line);
       continue;
     }
     let end = index + 2;
@@ -123,6 +117,7 @@ export function splitGoatBotReply(text: string): GoatBotReplyPart[] {
     }
     flushProse();
     parts.push({ kind: "table", markdown: lines.slice(index, end).join("\n"), columns });
+    held = false;
     index = end - 1;
   }
   flushProse();
