@@ -1,6 +1,11 @@
 import { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
 export { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
 import * as Lineage from "./orchestratorMcpThreadLineage.ts";
+import {
+  OrchestratorMcpThreadRun,
+  OrchestratorMcpThreadStatusRun,
+} from "./orchestratorMcpThreadRun.ts";
+export * from "./orchestratorMcpThreadRun.ts";
 export * from "./orchestratorMcpThreadLineage.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -16,7 +21,6 @@ import {
   PositiveInt,
   ProjectId,
   RunId,
-  RunAttemptId,
   RuntimeRequestId,
   ScheduledTaskId,
   ThreadId,
@@ -44,7 +48,6 @@ import {
   ThreadPullRequestLinkSource,
 } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
-import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
 import { RemoteSenderAttribution, TurnCapability } from "./composerContext.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
@@ -744,19 +747,6 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
 });
 export type OrchestratorMcpThreadDetail = typeof OrchestratorMcpThreadDetail.Type;
 
-export const OrchestratorMcpThreadRun = Schema.Struct({
-  runId: RunId,
-  ordinal: PositiveInt,
-  status: OrchestrationV2RunStatus,
-  terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
-  providerInstanceId: ProviderInstanceId,
-  model: Schema.String,
-  requestedAt: IsoDateTime,
-  startedAt: Schema.NullOr(IsoDateTime),
-  completedAt: Schema.NullOr(IsoDateTime),
-});
-export type OrchestratorMcpThreadRun = typeof OrchestratorMcpThreadRun.Type;
-
 export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
   position: NonNegativeInt,
   visibility: Schema.Literals(["local", "inherited", "synthetic"]),
@@ -892,17 +882,7 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
   /** Whether the described run does no more work. */
   terminal: Schema.Boolean,
   /** The active run, or the latest one when none is active; null before the first run. */
-  run: Schema.NullOr(
-    Schema.Struct({
-      runId: RunId,
-      activeAttemptId: Schema.optional(Schema.NullOr(RunAttemptId)),
-      status: OrchestrationV2RunStatus,
-      terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
-      requestedAt: IsoDateTime,
-      startedAt: Schema.NullOr(IsoDateTime),
-      completedAt: Schema.NullOr(IsoDateTime),
-    }),
-  ),
+  run: Schema.NullOr(OrchestratorMcpThreadStatusRun),
   /** A newer run queued behind the active one, when there is one. */
   queuedRunId: Schema.NullOr(RunId),
   pendingRequest: Schema.NullOr(

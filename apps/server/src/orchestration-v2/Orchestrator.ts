@@ -38,6 +38,7 @@ import {
   type PullRequestSnapshotReader,
 } from "./pullRequestSnapshot.ts";
 import { survivorQueuedRuns } from "./goat/CodexSurvivorQueuedRuns.ts";
+import { dispatchRunStartHold } from "./goat/RunStartHold.ts";
 import { pinSettlement } from "./goat/PinSettlement.ts";
 import { keptProviderSessionId, makeProviderSessionPlacement } from "./ProviderSessionPlacement.ts";
 import {
@@ -675,6 +676,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
     case "thread.interrupt.unresponsive":
+    case "run.start-hold.update":
     case "thread.stop":
     case "provider.switch":
       return command.threadId;
@@ -13028,6 +13030,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.interrupt.unresponsive":
         yield* dispatchInterruptUnresponsive(command, events);
+        break;
+      case "run.start-hold.update":
+        yield* dispatchRunStartHold({ projectionStore, emit, mapDispatchError })(command, events);
         break;
       case "thread.fork":
         yield* dispatchThreadFork(command, events);

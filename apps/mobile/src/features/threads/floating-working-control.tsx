@@ -170,6 +170,7 @@ export function FloatingWorkingControl(props: {
     props.status?.kind === "connection" ||
     props.status?.kind === "extension" ||
     props.status?.kind === "child-input" ||
+    props.status?.kind === "held" ||
     props.status?.kind === "background";
   const capsuleInteractive =
     statusInteractive ||
@@ -465,6 +466,23 @@ function FloatingStatusLabel(props: {
         onPress={props.status.onPress}
       >
         <SymbolView name="text.bubble" size={13} tintColorClassName="foreground" />
+        <Text className="shrink font-goat-medium text-xs text-foreground" numberOfLines={1}>
+          {props.status.label}
+        </Text>
+      </StatusLabelRow>
+    );
+  }
+  if (props.status.kind === "held") {
+    return (
+      <StatusLabelRow
+        key="held"
+        accessibilityLabel={props.status.accessibilityLabel}
+        accessibilityRole="button"
+        className="gap-2"
+        onLayout={props.onLayout}
+        onPress={props.status.onPress}
+      >
+        <SymbolView name="clock" size={13} tintColorClassName="foreground" type="monochrome" />
         <Text className="shrink font-goat-medium text-xs text-foreground" numberOfLines={1}>
           {props.status.label}
         </Text>
