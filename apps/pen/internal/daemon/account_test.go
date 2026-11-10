@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -409,5 +410,89 @@ func TestAVersionAnnouncedInAnEarlierSyncDoesNotCountAfterTheMemberDowngrades(t 
 	startWith(t, ctx, rs, b.st, func(o *Options) { o.Announce = "-" })
 	if err := Call(a.st, Request{Op: "lock", On: true}, &r); err == nil || !strings.Contains(err.Error(), "b") {
 		t.Fatalf("lock after b came back as v1.0: %v, want a refusal naming b", err)
+	}
+}
+
+// toOffer plays an account joiner up to the member's offer; the caller sends the card when it chooses.
+func toOffer(t *testing.T, ctx context.Context, rs *relaytest.Server, to *node, id *ident.Identity, as *login.Assertion) (*mesh.Lines, *mesh.Msg) {
+	t.Helper()
+	sec, err := OpenAny(ctx, []string{rs.URL}, to.id.NodeID(), func(conn relay.Conn) (*session.Secure, error) {
+		return session.Initiate(ctx, conn, session.KindAccount, to.id.NodeID(), to.id.NoisePub, id, nil, session.Payload{V: 1, Stream: "account", Name: "j"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &mesh.Lines{L: sec}
+	raw, _ := json.Marshal(as)
+	if err := c.Write(mesh.Msg{T: "assertion", Assertion: raw}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := c.Read(ctx)
+	if err != nil || m.T != "offer" {
+		t.Fatalf("got %+v %v, want an offer", m, err)
+	}
+	return c, m
+}
+
+func sendCard(t *testing.T, ctx context.Context, c *mesh.Lines, id *ident.Identity, offer *mesh.Msg) *mesh.Msg {
+	t.Helper()
+	card, err := mesh.MakeCard(id, offer.Mesh, offer.Inviter, offer.Nonce, "j")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Write(mesh.Msg{T: "card", Card: card}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := c.Read(ctx)
+	if err != nil {
+		t.Fatalf("after the card: %v", err)
+	}
+	return m
+}
+
+func TestAnUnbindDuringTheCardWaitRefusesTheJoinerWithoutACrash(t *testing.T) {
+	for _, locked := range []bool{true, false} {
+		ctx, cancel := context.WithCancel(context.Background())
+		rs := relaytest.New()
+		f := loginFake(t)
+		a := founder(t, ctx, rs, "a", nil)
+		bindTo(t, a, f, f.Key())
+		var r map[string]any
+		if locked {
+			Call(a.st, Request{Op: "lock", On: true}, &r)
+		}
+		j := newcomer(t)
+		c, offer := toOffer(t, ctx, rs, a, j, f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now()))
+		if err := Call(a.st, Request{Op: "account-unbind"}, &r); err != nil {
+			t.Fatal(err)
+		}
+		if m := sendCard(t, ctx, c, j, offer); m.T != "refused" {
+			t.Fatalf("locked %v: after an unbind the card got %q, want refused", locked, m.T)
+		}
+		if n := len(a.ls(t).Members); n != 1 {
+			t.Fatalf("locked %v: %d members", locked, n)
+		}
+		cancel()
+		rs.Close()
+	}
+}
+
+func TestARebindToAnotherAccountDuringTheCardWaitRefusesTheJoiner(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	j := newcomer(t)
+	c, offer := toOffer(t, ctx, rs, a, j, f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now()))
+	var r map[string]any
+	other := &mesh.Account{LoginURL: f.URL, LoginKey: mesh.LoginKey(f.Key()), Sub: "2002"}
+	if err := Call(a.st, Request{Op: "login-bind", Account: other}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if m := sendCard(t, ctx, c, j, offer); m.T != "refused" || !strings.Contains(m.Reason, "another Google account") {
+		t.Fatalf("after a rebind to another account the card got %+v, want refused", m)
 	}
 }

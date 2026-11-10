@@ -75,8 +75,7 @@ func binding(v *mesh.View) (login.Binding, bool) {
 }
 
 // checkAssertion is a member's decision on an account joiner's assertion (contract "Account join").
-func (d *Daemon) checkAssertion(raw json.RawMessage) (mesh.Claim, error) {
-	v := d.view()
+func (d *Daemon) checkAssertion(raw json.RawMessage, v *mesh.View) (mesh.Claim, error) {
 	b, ok := binding(v)
 	if !ok {
 		return mesh.Claim{}, errors.New("this mesh is not bound to a Google account")
@@ -94,7 +93,7 @@ func (d *Daemon) checkAssertion(raw json.RawMessage) (mesh.Claim, error) {
 	if d.pending.isDenied(a.A.SignPub, d.now()) {
 		return mesh.Claim{}, errors.New("a member denied this machine; it may ask again after 24 hours")
 	}
-	return mesh.Claim{SignPub: a.A.SignPub, NoisePub: a.A.NoisePub, Email: a.A.Email, Hash: a.Hash()}, nil
+	return mesh.Claim{SignPub: a.A.SignPub, NoisePub: a.A.NoisePub, Email: a.A.Email, Sub: a.A.Sub, Hash: a.Hash()}, nil
 }
 
 // queueRequest keeps an account join while the mesh is locked.
@@ -104,9 +103,8 @@ func (d *Daemon) queueRequest(card *mesh.Card, c mesh.Claim) (string, error) {
 		return "", err
 	}
 	fp := ident.Fingerprint(noise)
-	v := d.view()
 	p := Pending{ID: fp[:9], Fingerprint: fp, Name: card.C.Name, NodeID: card.C.NodeID, SignPub: card.C.SignPub,
-		Email: c.Email, Sub: v.Account.Sub, Assertion: c.Hash, At: d.now().UnixMilli(), Card: card}
+		Email: c.Email, Sub: c.Sub, Assertion: c.Hash, At: d.now().UnixMilli(), Card: card}
 	if err := d.pending.add(p, d.now()); err != nil {
 		return "", err
 	}
