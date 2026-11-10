@@ -68,8 +68,16 @@ func StartMessage(signPub, noisePub []byte, name string) []byte {
 	return append(m, name...)
 }
 
-// PollMessage is what a device/token proof signs.
-func PollMessage(deviceCode string) []byte { return append([]byte(pollPrefix), deviceCode...) }
+// PollMessage is what a device/token proof signs: the prefix and the device code's 32 raw bytes
+// (deviceCode is their base64url form). A code that does not decode signs its text, which the
+// service refuses.
+func PollMessage(deviceCode string) []byte {
+	raw, err := ident.B64.DecodeString(deviceCode)
+	if err != nil {
+		raw = []byte(deviceCode)
+	}
+	return append([]byte(pollPrefix), raw...)
+}
 
 // ForgetMessage is what a mesh/forget proof signs; ts is in milliseconds.
 func ForgetMessage(nodeID string, ts uint64) []byte {

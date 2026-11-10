@@ -339,7 +339,7 @@ func (s *Server) register(w http.ResponseWriter, r interface{ Read([]byte) (int,
 		return
 	}
 	if s.used[a.Hash()] {
-		reply(w, http.StatusConflict, map[string]string{"error": "assertion already registered"})
+		reply(w, http.StatusConflict, map[string]string{"error": "assertion_used"})
 		return
 	}
 	e := s.registry[a.A.Sub]
@@ -347,7 +347,7 @@ func (s *Server) register(w http.ResponseWriter, r interface{ Read([]byte) (int,
 		e = &entry{meshID: in.MeshID, nodes: map[string]login.OfferedMember{}}
 		s.registry[a.A.Sub] = e
 	} else if e.meshID != in.MeshID {
-		reply(w, http.StatusConflict, map[string]string{"error": "account registered with another mesh"})
+		reply(w, http.StatusConflict, map[string]any{"error": "mesh_mismatch", "meshId": e.meshID})
 		return
 	}
 	s.used[a.Hash()] = true

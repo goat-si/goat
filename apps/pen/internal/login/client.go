@@ -71,6 +71,8 @@ var (
 	ErrDenied  = errors.New("the sign-in was denied")
 	// ErrOtherMesh is the registry's 409: the account is registered with another mesh.
 	ErrOtherMesh = errors.New("this Google account is registered with another mesh")
+	// ErrAssertionUsed is the registry's 409 for an assertion that already registered.
+	ErrAssertionUsed = errors.New("this sign-in was already used to register; run pen login again")
 )
 
 // HTTPError is an unexpected answer.
@@ -228,6 +230,12 @@ func (c *Client) Register(ctx context.Context, a *Assertion, meshID string) erro
 	case http.StatusOK:
 		return nil
 	case http.StatusConflict:
+		var e struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(body, &e) == nil && e.Error == "assertion_used" {
+			return ErrAssertionUsed
+		}
 		return ErrOtherMesh
 	}
 	return &HTTPError{Status: code, Body: string(body)}
