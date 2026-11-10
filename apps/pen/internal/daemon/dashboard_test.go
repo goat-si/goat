@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"slices"
@@ -497,4 +500,105 @@ func TestDashboardLogout(t *testing.T) {
 	want(t, "logout", d.post("/api/logout", bearer, nil), http.StatusOK)
 	want(t, "state after logout", d.get("/api/state", bearer), http.StatusUnauthorized)
 	want(t, "another session after logout", d.get("/api/state", other), http.StatusOK)
+}
+
+// rawGet sends one GET over conn and reads its response.
+func rawGet(t *testing.T, conn net.Conn, host, path string) *http.Response {
+	t.Helper()
+	if _, err := fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", path, host); err != nil {
+		t.Fatal(err)
+	}
+	res, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	return res
+}
+
+// readsEOF reports whether the server closed conn: a read returns EOF (or a reset) instead of data.
+func readsEOF(conn net.Conn) bool {
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, err := conn.Read(make([]byte, 1))
+	return err != nil && !errors.Is(err, os.ErrDeadlineExceeded)
+}
+
+func TestDashboardRejectionsCloseTheConnection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	d, _ := openDash(t, a)
+	addr := strings.TrimPrefix(d.base, "http://")
+	for _, c := range []struct {
+		host, path string
+		code       int
+	}{
+		{"evil.example:" + strings.Split(addr, ":")[1], "/", http.StatusForbidden},
+		{addr, "/api/state", http.StatusUnauthorized},
+	} {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := rawGet(t, conn, c.host, c.path)
+		if res.StatusCode != c.code || !res.Close {
+			t.Fatalf("%s %s: %d, Connection: close %v; want %d and a closed connection", c.host, c.path, res.StatusCode, res.Close, c.code)
+		}
+		if !readsEOF(conn) {
+			t.Fatalf("%s %s: the server kept the rejected connection open", c.host, c.path)
+		}
+		conn.Close()
+	}
+}
+
+func TestDashboardIdleConnectionsDoNotLockThePageOut(t *testing.T) {
+	if dashIdleTimeout != 5*time.Second {
+		t.Fatalf("idle timeout %v, want 5s", dashIdleTimeout)
+	}
+	defer func(old time.Duration) { dashIdleTimeout = old }(dashIdleTimeout)
+	dashIdleTimeout = 300 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	d, _ := openDash(t, a)
+	addr := strings.TrimPrefix(d.base, "http://")
+	var held []net.Conn
+	for range dashMaxConns {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if res := rawGet(t, conn, addr, "/"); res.StatusCode != http.StatusOK || res.Close {
+			t.Fatalf("held connection: %d close %v", res.StatusCode, res.Close)
+		}
+		held = append(held, conn)
+	}
+	extra, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !readsEOF(extra) {
+		t.Fatal("a 17th connection was served while 16 were held")
+	}
+	extra.Close()
+	// The server ends each held connection once it has been idle for dashIdleTimeout.
+	for _, conn := range held {
+		if !readsEOF(conn) {
+			t.Fatal("an idle connection outlived the idle timeout")
+		}
+	}
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if res := rawGet(t, conn, addr, "/"); res.StatusCode != http.StatusOK {
+		t.Fatalf("after the idle timeout: %d", res.StatusCode)
+	}
 }

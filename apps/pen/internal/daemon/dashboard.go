@@ -43,6 +43,9 @@ const (
 	dashMaxInvite   = 24 * time.Hour
 )
 
+// dashIdleTimeout closes a kept-alive connection that sends nothing, freeing its slot of dashMaxConns.
+var dashIdleTimeout = 5 * time.Second
+
 // DashboardReply answers op "dashboard".
 type DashboardReply struct {
 	// URL carries the one-time token in its fragment, which never reaches a server or a log.
@@ -113,7 +116,7 @@ func (d *Daemon) startDashboard() (*dashboard, error) {
 		ReadTimeout:       10 * time.Second,
 		// Approve, revoke and lock push to every member (30 s each, concurrently).
 		WriteTimeout:   90 * time.Second,
-		IdleTimeout:    60 * time.Second,
+		IdleTimeout:    dashIdleTimeout,
 		MaxHeaderBytes: 16 << 10,
 		ErrorLog:       log.New(io.Discard, "", 0),
 	}
@@ -313,6 +316,8 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func jsonError(w http.ResponseWriter, code int, msg string) {
+	// A refused request gives its connection back: kept open, 16 of them would lock the page out.
+	w.Header().Set("Connection", "close")
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
@@ -650,7 +655,7 @@ type capConn struct {
 }
 
 func (c *capConn) Close() error {
-	err := c.Conn.Close()
+	// The slot frees before the socket closes, so a peer that sees the close can count on it.
 	c.once.Do(func() { <-c.sem })
-	return err
+	return c.Conn.Close()
 }
