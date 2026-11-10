@@ -797,4 +797,82 @@ describe("a conversation-only main chat", () => {
     expect(view(null, [])).toEqual(["card"]);
     expect(view("t1", ["t1"])).toEqual(["card"]);
   });
+
+  it("keeps a retried task's card when only the earlier attempt's ending was told", () => {
+    const rows = buildGoatBotTimeline({
+      visibleTurnItems: rowsOf([
+        notice("first-end", "2026-10-12T12:00:00Z"),
+        bot("first-told", "2026-10-12T12:00:01Z", "It failed."),
+        notice("retry", "2026-10-12T12:01:00Z"),
+        notice("second-end", "2026-10-12T12:02:00Z"),
+      ]),
+      pendingInputs: [],
+      readers: readers(
+        { "first-told": { ...outcome("t1"), tone: "failure" } },
+        {
+          "first-end": { ...ended("t1"), revision: 2 },
+          retry: { ...card("t1", 3, "Working"), ended: false },
+          "second-end": { ...ended("t1"), revision: 4, summary: "Fixed on the second try." },
+        },
+      ),
+      taskId: null,
+      knownTaskIds: ["t1"],
+      conversationOnly: true,
+    });
+    // The card keeps its first place and shows its newest revision.
+    expect(content(rows).map((row) => (row.kind === "task" ? row.card.revision : row.id))).toEqual([
+      4,
+      "first-told",
+    ]);
+  });
+
+  it("keeps a result that arrives before its task's final card, next to the progress card", () => {
+    const items = rowsOf([
+      notice("progress", "2026-10-12T12:00:00Z"),
+      bot("done", "2026-10-12T12:00:05Z", "17.8k stars."),
+    ]);
+    const progress = { ...card("t1", 2, "Working"), ended: false, summary: "Cloned the repo." };
+    const view = (taskId: string | null) =>
+      content(
+        buildGoatBotTimeline({
+          visibleTurnItems: items,
+          pendingInputs: [],
+          readers: readers({ done: outcome("t1") }, { progress }),
+          taskId,
+          knownTaskIds: ["t1"],
+          conversationOnly: true,
+        }),
+      ).map((row) => row.id);
+    expect(view("t1")).toEqual(["progress", "done"]);
+    expect(view(null)).toEqual(["done"]);
+  });
+
+  it("previews a card that changed after later messages by when it changed", () => {
+    const rows: GoatBotRow[] = [
+      {
+        kind: "task",
+        id: "card",
+        createdAt: "2026-10-12T12:00:00Z",
+        card: { ...ended("t1"), updatedAt: "2026-10-12T12:10:00Z", title: "Count the stars" },
+        firstInGroup: true,
+        groupPosition: "single",
+      },
+      {
+        kind: "bot",
+        id: "later",
+        text: "Anything else?",
+        createdAt: "2026-10-12T12:05:00Z",
+        tone: "reply",
+        proactive: false,
+        replyTo: null,
+        options: [],
+        firstInGroup: true,
+        groupPosition: "single",
+      },
+    ];
+    expect(goatBotConversationPreview({ rows, lastVisitedAt: null, active: true })).toMatchObject({
+      text: "Done: Count the stars",
+      at: "2026-10-12T12:10:00Z",
+    });
+  });
 });
