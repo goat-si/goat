@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
-	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/state"
 )
@@ -64,33 +63,11 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	cfg, err := st.LoadConfig()
-	if err != nil {
-		return fail(stderr, err)
-	}
-	if len(relayURLs) > 0 {
-		var list []string
-		for _, u := range relayURLs {
-			list = append(list, strings.TrimRight(u, "/"))
-		}
-		if err := daemon.ValidRelays(list); err != nil {
-			return fail(stderr, err)
-		}
-		cfg.SetRelays(list)
-	}
-	if len(cfg.RelayList()) == 0 {
+	cfg, err := startConfig(st, relayURLs, *name)
+	if errors.Is(err, errNoRelay) {
 		return refused(errors.New("no relay configured; run pen up --relay https://<relay>"))
 	}
-	if *name != "" {
-		cfg.Name = *name
-	}
-	if cfg.Name == "" {
-		cfg.Name = defaultName()
-	}
-	if !ident.ValidName(cfg.Name) {
-		return fail(stderr, fmt.Errorf("invalid name %q (1-32 of a-z 0-9 - _ ., starting with a letter or digit)", cfg.Name))
-	}
-	if err := st.SaveConfig(cfg); err != nil {
+	if err != nil {
 		return fail(stderr, err)
 	}
 	if err := daemon.CheckConfig(cfg); err != nil {

@@ -85,8 +85,7 @@ func runRelayEdit(verb string, args []string, stdout, stderr io.Writer) int {
 	case err == nil:
 		fmt.Fprintln(stdout, "the running node now uses:")
 	case errors.Is(err, daemon.ErrNotRunning):
-		cfg.SetRelays(list)
-		if err := st.SaveConfig(cfg); err != nil {
+		if err := st.UpdateConfig(func(c *state.Config) { c.SetRelays(list) }); err != nil {
 			return fail(stderr, err)
 		}
 	default:
