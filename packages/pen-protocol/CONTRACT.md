@@ -183,7 +183,8 @@ record hash so its revoke of honest members sorts before its own revocation; the
 1. The inviter's `pen invite` creates an invite `{id, secret (32 random bytes), expiresAt}` (default 10 minutes, single use)
    and prints a token: `pen1_` + base64url(no padding) of
    `version (1) || signPub (32) || noisePub (32) || secret (32) || relayURL (UTF-8)`. An inviter with several relays
-   prints version 2 instead (see "Several relays").
+   prints version 2 instead (see "Several relays"). The relay URL follows the version 2 scheme rule: `https` or `wss`,
+   `http` or `ws` only for a loopback host. An invite that expired is refused and removed from the inviter's store.
 2. The joiner dials `/v1/client/<inviter nodeId>` with kind 0x03, `{"v":1,"stream":"join","invite":"<id>","name":"<name>"}`.
 3. The inviter sends `{"t":"offer","mesh":"<id>","inviter":"<nodeId>","nonce":"<b64url 16 bytes>"}`. The joiner answers
    `{"t":"card","card":{…}}` whose noisePub equals the key it authenticated with. The inviter burns the invite before
@@ -197,7 +198,9 @@ record hash so its revoke of honest members sorts before its own revocation; the
 Stream `mesh` lines are UTF-8 JSON objects with a string `t`, LF-terminated, at most 256 KiB. `{"t":"hello","have":[hashes]}`
 from each side (a `have` list longer than 4096 hashes is 4400); each answers with zero or more
 `{"t":"records","records":[…]}` lines of at most 64 records (the ones the peer's `have` lacks) and `{"t":"done"}`. A node pushes after every record it signs (dialing each online member), on its uplink's return, and
-every 10 minutes. Unknown `t` is ignored; a malformed or oversized line closes 4400.
+every 10 minutes. Unknown `t` is ignored; a malformed or oversized line closes 4400. One session carries at most
+4352 records (4096 stored plus 256 waiting for their `prev`, all an honest member can hold); a side that receives more
+closes 4400.
 
 ### Revocation and leave
 
@@ -389,3 +392,5 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
 - v1.1 (2026-11-10): "Several relays": kind 0x01 sessions race the handshake on every relay instead of the ping race
   (message 1 on every socket, the first verified message 2 wins, losers close 1000 unconfirmed); joins and account
   sessions keep the ping race. Clients only; no wire change, and v1.0 and v1.1 responders answer both alike.
+- v1.1 (2026-11-10): a version 1 token's relay URL obeys the version 2 scheme rule, and one sync session carries at most
+  4352 records. Both tighten what a node accepts; an honest peer never sent either.
