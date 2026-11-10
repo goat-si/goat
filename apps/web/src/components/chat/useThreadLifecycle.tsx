@@ -74,6 +74,7 @@ import {
   startHoldBannerItem,
 } from "./ThreadActivityBanners";
 import { useForceStopThread } from "./useForceStopThread";
+import { useStopHeldTurn } from "./useStopHeldTurn";
 import { useAtomValue } from "@effect/atom-react";
 import type {
   RunStartHoldPresentation,
@@ -604,6 +605,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       : null;
 
   const forceStop = useForceStopThread(environmentId);
+  const stopHeld = useStopHeldTurn(environmentId);
   const anyRunStop = useAtomValue(
     threadDetailRef ? environmentThreadDetails.runStopAtom(threadDetailRef) : NO_RUN_STOP_ATOM,
   );
@@ -624,7 +626,13 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   );
   const startHoldBanner =
     activeThread && startHold !== null
-      ? startHoldBannerItem({ threadId: activeThread.id, hold: startHold })
+      ? startHoldBannerItem({
+          threadId: activeThread.id,
+          hold: startHold,
+          canStop: stopHeld.canStopHeldTurn,
+          stopping: stopHeld.stoppingThreadId === activeThread.id,
+          onStop: () => void stopHeld.stopHeldTurn(activeThread.id),
+        })
       : null;
   const backgroundWorkBanner = activeThread
     ? backgroundWorkBannerItem({

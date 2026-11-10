@@ -310,6 +310,7 @@ import * as SourceControlStarPrompt from "./sourceControl/SourceControlStarPromp
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import { storageRpcHandlers } from "./storage/storageRpc.ts";
+import { heldTurnRpcHandlers } from "./provider/CodexHeldTurnStop.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -2063,8 +2064,8 @@ export const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) => threadManagement.stopWorkflow(input),
-        [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: (input) =>
-          threadManagement.forceStopThread(input),
+        [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: threadManagement.forceStopThread,
+        ...(yield* heldTurnRpcHandlers),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
           readWorkflowScript({ scriptPath: input.scriptPath }),
         [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: (input) =>

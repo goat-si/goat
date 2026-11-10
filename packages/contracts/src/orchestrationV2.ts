@@ -3698,6 +3698,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getNativeChildWork: "orchestration.getNativeChildWork",
   stopWorkflow: "orchestration.stopWorkflow",
   forceStopThread: "orchestration.forceStopThread",
+  stopHeldTurn: "orchestration.stopHeldTurn",
   getTurnItem: "orchestration.getTurnItem",
   launchThread: "orchestration.launchThread",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
@@ -4146,6 +4147,28 @@ export class OrchestrationV2ForceStopThreadError extends Schema.TaggedError<Orch
   }
 }
 
+/** Stops the Codex turns no run owns that hold the thread's next start. */
+export const OrchestrationV2StopHeldTurnInput = Schema.Struct({ threadId: ThreadId });
+export type OrchestrationV2StopHeldTurnInput = typeof OrchestrationV2StopHeldTurnInput.Type;
+
+export const OrchestrationV2StopHeldTurnResult = Schema.Struct({
+  /**
+   * `stopped`: each held turn ended, so the waiting message starts. `stopping`: Codex took the
+   * stop but has not reported the end yet; the message starts when it does. `none`: nothing held.
+   */
+  outcome: Schema.Literals(["stopped", "stopping", "none"]),
+});
+export type OrchestrationV2StopHeldTurnResult = typeof OrchestrationV2StopHeldTurnResult.Type;
+
+export class OrchestrationV2StopHeldTurnError extends Schema.TaggedError<OrchestrationV2StopHeldTurnError>()(
+  "OrchestrationV2StopHeldTurnError",
+  { threadId: ThreadId, cause: Schema.optional(Schema.Defect()) },
+) {
+  override get message(): string {
+    return "Could not stop the Codex turn this message waits for.";
+  }
+}
+
 export const OrchestrationV2GetWorkflowScriptInput = Schema.Struct({
   threadId: ThreadId,
   scriptPath: TrimmedNonEmptyString,
@@ -4382,6 +4405,10 @@ export const OrchestrationV2RpcSchemas = {
   forceStopThread: {
     input: OrchestrationV2ForceStopThreadInput,
     output: OrchestrationV2ForceStopThreadResult,
+  },
+  stopHeldTurn: {
+    input: OrchestrationV2StopHeldTurnInput,
+    output: OrchestrationV2StopHeldTurnResult,
   },
   getWorkflowScript: {
     input: OrchestrationV2GetWorkflowScriptInput,

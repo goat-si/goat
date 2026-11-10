@@ -7,7 +7,13 @@ import {
 } from "@goat/client-runtime/state/thread-execution";
 import * as Dialog from "../../components/ui/Dialog";
 import { environmentThreadDetails } from "../../state/threads";
-import type { OrchestrationV2ProviderSession, ScopedThreadRef } from "@goat/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2ProviderSession,
+  ScopedThreadRef,
+} from "@goat/contracts";
+import { orchestrationEnvironment } from "../../state/orchestration";
+import { useAtomCommand } from "../../state/use-atom-command";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 
 export interface FloatingStatusAction {
@@ -71,13 +77,15 @@ const NO_START_HOLD_ATOM = Atom.make<RunStartHoldPresentation | null>(null).pipe
 );
 
 /** The thread's unfinished Stop, and the Codex turn its newest message waits behind. */
-export function useRunStopAndStartHold(ref: ScopedThreadRef | null) {
+export function useRunStopAndStartHold(ref: ScopedThreadRef | null, environmentId: EnvironmentId) {
   const runStop = useAtomValue(
     ref === null ? NO_RUN_STOP_ATOM : environmentThreadDetails.runStopAtom(ref),
   );
   const hold = useAtomValue(
     ref === null ? NO_START_HOLD_ATOM : environmentThreadDetails.startHoldAtom(ref),
   );
+  const stopHeldTurn = useAtomCommand(orchestrationEnvironment.stopHeldTurn);
+  const canStop = useAtomValue(orchestrationEnvironment.stopHeldTurn.permissionAtom(environmentId));
   const startHold: FloatingWorkingStatus | null =
     hold === null
       ? null
@@ -85,7 +93,22 @@ export function useRunStopAndStartHold(ref: ScopedThreadRef | null) {
           kind: "held",
           label: hold.title,
           accessibilityLabel: `${hold.title}. ${hold.description}`,
-          onPress: () => Dialog.alert(hold.title, hold.description),
+          // A turn from before the restart stops with its own run; only an unowned one stops here.
+          onPress: () =>
+            ref !== null && canStop && hold.reason === "unowned_turn"
+              ? Dialog.confirm({
+                  title: hold.title,
+                  message: `${hold.description} Stopping that turn lets your message start now.`,
+                  cancelText: "Keep waiting",
+                  confirmText: "Stop that turn",
+                  destructive: true,
+                  onConfirm: () =>
+                    void stopHeldTurn({
+                      environmentId: ref.environmentId,
+                      input: { threadId: ref.threadId },
+                    }),
+                })
+              : Dialog.alert(hold.title, hold.description),
         };
   return { runStop, startHold };
 }
