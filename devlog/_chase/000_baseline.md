@@ -2,7 +2,7 @@
 
 > T3 축의 기준선이다. Cua Driver 축은 [20_cua_baseline](./20_cua_baseline.md).
 
-> 갱신: 2026-11-09 (사이클 261107 기록 닫기와 사이클 261109 수동 선별. 내용 기준 reviewed-through `743bb8cf3d`, merge-base는 `2c592a108`)
+> 갱신: 2026-11-11 (사이클 261109 기록 닫기와 사이클 261110 수동 선별. 내용 기준 reviewed-through `fa2f4ff2a2`, merge-base는 `2c592a108`)
 
 ## 현재 기준선
 
@@ -11,8 +11,8 @@
 | upstream                      | `pingdotgg/t3code` `main` (remote `upstream`, `tagopt --no-tags`)                                                        |
 | GOAT 통합 브랜치              | `goat-si/goat` `dev`                                                                                                     |
 | reviewed-through (merge-base) | `2c592a108` 2026-10-24 fix(client-runtime): avoid duplicate handoff previews during startup (#24349)                     |
-| reviewed-through (내용 기준)  | `743bb8cf3d` 2026-11-08 fix(provider-core): agents ask for a sudo password through the private secret card (#27748)      |
-| 스캔한 GOAT dev               | `557e138e9f`                                                                                                             |
+| reviewed-through (내용 기준)  | `fa2f4ff2a2` 2026-11-10 fix(web): panel resize handles follow touch drags (#33066)                                       |
+| 스캔한 GOAT dev               | `fb2199188c`                                                                                                             |
 | GOAT 고유 커밋                | 2073                                                                                                                     |
 | upstream 앞섬                 | 0 (2026-10-24 KST)                                                                                                       |
 | trial merge 충돌              | 없음 ([10.013](./_fin/10/10.013_t3_chase_cycle_261024b.md))                                                              |
@@ -45,4 +45,5 @@ upstream은 하루에 약 50-100커밋씩 움직인다. 사이클이 길어질�
 | 261103  | 2026-11-03 | `79f1fadfc6..cefb544af3`                       | 485  | 수동   | 162 take, 237 adapt, 69 skip, 17 결정. 합친 PR #2533 → dev `350d99869a`                | 10.020     |
 | 261106  | 2026-11-06 | `cefb544af3..42a0e917cf`                       | 344  | 수동   | 47 take, 197 adapt, 45 skip, 55 미룸(6 결정 포함). 합친 PR #2561 → dev `cef8330992`    | 10.021     |
 | 261107  | 2026-11-07 | `42a0e917cf..83a3674ffd`                       | 153  | 수동   | 38 take, 76 adapt, 23 skip, 15 미룸, 1 결정 대기. 합친 PR #2634 → dev `15523029d1`     | 10.022     |
-| 261109  | 2026-11-09 | `83a3674ffd..743bb8cf3d` (+S1-S4)              | 94+4 | 수동   | 14 take, 42 adapt, 16 skip, 24 미룸, 2 결정 대기. 합친 PR #2780                        | 10.023     |
+| 261109  | 2026-11-09 | `83a3674ffd..743bb8cf3d` (+S1-S4)              | 94+4 | 수동   | 14 take, 42 adapt, 16 skip, 24 미룸, 2 결정 대기. 합친 PR #2780 → dev `30c110263f`     | 10.023     |
+| 261110  | 2026-11-10 | `743bb8cf3d..fa2f4ff2a2`                       | 159  | 수동   | 76 가져옴, 18 skip, 65 미룸(#2832). 주제 PR 2개                                        | 10.024     |
