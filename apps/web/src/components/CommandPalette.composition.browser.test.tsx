@@ -55,6 +55,7 @@ vi.mock("../state/environments", async (original) => ({
         serverConfig: {
           environment: { platform: { os: "linux" }, capabilities: { projectCloneTracking: true } },
           settings: { addProjectBaseDirectory: "/workspace/" },
+          newProjectsRoot: "/workspace/",
         },
       },
     ],
@@ -174,4 +175,19 @@ it("keeps a child search open on a composing Escape", async () => {
   });
   await act(() => input.element().dispatchEvent(escape));
   await expect.element(palette()).toHaveAttribute("data-palette-mode", "command");
+});
+
+it.each([
+  { flow: "Git URL", value: "https://github.com/pingdotgg/t3code.git", submit: "Continue (Enter)" },
+  { flow: "New project", value: "demo-tab-order", submit: /^Create \(/ },
+])("moves focus from the $flow input to its enabled submit button on Tab", async (step) => {
+  await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+  await act(() => openCommandPalette({ open: "add-project" }));
+  await page.getByText(step.flow, { exact: true }).click();
+  const input = page.getByRole("combobox");
+  await input.fill(step.value);
+  const submit = page.getByRole("button", { name: step.submit });
+  await expect.element(submit).toBeEnabled();
+  await userEvent.keyboard("{Tab}");
+  await expect.element(submit).toHaveFocus();
 });
