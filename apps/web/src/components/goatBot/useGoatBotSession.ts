@@ -546,6 +546,8 @@ export function useGoatBotSession(
       readers: goatBotItemReaders,
       knownTaskIds,
       ...(selectedTask === undefined ? {} : { taskId: selectedTask }),
+      // Work cards leave the chat only where the bot's work list can open every task.
+      conversationOnly: capabilities?.goatBotTaskThreads === true,
     });
   const rows = rowsForTask(taskId);
   const sendable =

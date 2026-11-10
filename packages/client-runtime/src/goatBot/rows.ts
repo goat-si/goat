@@ -315,6 +315,11 @@ export function buildGoatBotTimeline(input: {
   readonly readers: GoatBotItemReaders;
   readonly taskId?: string | null;
   readonly knownTaskIds?: ReadonlyArray<string>;
+  /**
+   * The main chat shows conversation only: work cards stay in their task's own view and the
+   * bot's work list. Set it only where that list reaches every task.
+   */
+  readonly conversationOnly?: boolean;
 }): GoatBotRow[] {
   const knownTasks = new Set(input.knownTaskIds ?? []);
   // Each task's newest card, read before the messages so it also governs messages above it.
@@ -465,6 +470,7 @@ export function buildGoatBotTimeline(input: {
       const card = input.readers.taskCard(item);
       if (card === null) continue;
       if (input.taskId != null && card.key !== input.taskId) continue;
+      if (input.conversationOnly === true && input.taskId == null) continue;
       const existingIndex = cardIndexByKey.get(card.key);
       if (existingIndex === undefined) {
         cardIndexByKey.set(card.key, committed.length);

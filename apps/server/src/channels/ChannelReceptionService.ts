@@ -1617,26 +1617,14 @@ const make = Effect.gen(function* () {
       const task = stored.task;
       const origin = task.originAddress;
       const bot = (yield* ledger.getBotById(stored.ownerId, stored.botId))?.bot;
-      // In GOAT Bot a task's card is its result: it already shows the outcome, the summary and
-      // the checks, so a message repeating them would say everything twice. A turn is GOAT Bot's
-      // own answer and stays a message.
+      // GOAT Bot's chat shows conversation, not task cards, so a GOAT task's outcome is told as a
+      // message too; its card still carries it for the task's own view and the work queue. A turn
+      // is GOAT Bot's own answer and is already a message.
       const cardIsResult =
         bot !== undefined &&
         task.kind !== "turn" &&
         (base.kind === "result" || base.kind === "failure");
-      if (cardIsResult && origin.kind === "goat") {
-        // The outcome is delivered as the card itself, under the narration's key, so the work
-        // queue still sees the result reach the person. The timeline records each card version
-        // once, so this adds no second item.
-        yield* ledger.completeNarration({
-          owner,
-          sequence: pending.sequence,
-          deliveries: [chipDelivery(task, bot, "narration:" + pending.event.eventId + ":origin")],
-          now,
-        });
-        yield* wake.wake;
-        return;
-      }
+      const goatOutcome = cardIsResult && origin.kind === "goat";
       const plain = splitChannelResultText(base.text).text;
       const baseText = plain === "" ? base.text : plain;
       // The requester's own words set the reply's language; the worker's summary may use another.
@@ -1672,25 +1660,29 @@ const make = Effect.gen(function* () {
                 onSome: (result) => splitChannelResultText(result.replyText).text || baseText,
               },
             );
-      // Text channels have no card, so meaningful verification rides along as one sentence.
+      // A message has no card around it, so meaningful verification rides along as one sentence.
       const evidence =
-        origin.kind !== "goat" && (base.kind === "result" || base.kind === "failure")
+        (origin.kind !== "goat" || goatOutcome) &&
+        (base.kind === "result" || base.kind === "failure")
           ? channelEvidenceSentence(task.observed?.result)
           : null;
       const replyTo = turnAnswerReplyTo(task, base.kind);
-      const deliveries = [
-        replyDelivery({
-          causeKey: "narration:" + pending.event.eventId + ":origin",
-          destination: origin,
-          kind: base.kind,
-          text: evidence === null ? worded : worded + "\n\n" + evidence,
-          replyTo,
-          task,
-          mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
-          options: "options" in base ? base.options : undefined,
-          questionId: "questionId" in base ? base.questionId : undefined,
-        }),
-      ];
+      const told = replyDelivery({
+        // The outcome's card keeps the narration's key, so the work queue still sees it reach the person.
+        causeKey: "narration:" + pending.event.eventId + (goatOutcome ? ":text" : ":origin"),
+        destination: origin,
+        kind: base.kind,
+        text: evidence === null ? worded : worded + "\n\n" + evidence,
+        replyTo,
+        task,
+        mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
+        options: "options" in base ? base.options : undefined,
+        questionId: "questionId" in base ? base.questionId : undefined,
+      });
+      const deliveries =
+        goatOutcome && bot !== undefined
+          ? [chipDelivery(task, bot, "narration:" + pending.event.eventId + ":origin"), told]
+          : [told];
       // Work started elsewhere shows up in the bot as its card; its result is on the card, and
       // only receipts and a turn's answer also arrive as messages.
       if (
