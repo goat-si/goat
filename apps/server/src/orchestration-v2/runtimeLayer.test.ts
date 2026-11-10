@@ -92,91 +92,9 @@ import {
   layerProjectServiceTest,
   layerTestProviderInstanceRegistry,
 } from "./runtimeLayer.testkit.ts";
+import { seedProject, watchedPullRequestDetail } from "./pullRequestWatchFixture.testkit.ts";
 
 const prWatchDisabledProjectId = ProjectId.make("pr-watch-disabled-project");
-
-const watchedPullRequestDetail = (input: {
-  readonly projectId: ProjectId;
-  readonly number: number;
-  readonly at: string;
-}): PullRequestDetail => ({
-  provider: SourceControlProviderKind.make("github"),
-  capabilities: {
-    diff: true,
-    comment: true,
-    actions: [],
-    mergeMethods: [],
-    search: false,
-    checksAlwaysReport: true,
-    review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
-    reviewers: { request: false, listCandidates: false },
-  },
-  viewerPermissions: {
-    actions: [],
-    comment: true,
-    resolve: true,
-    verdicts: [],
-    requestReviewers: false,
-  },
-  projectId: input.projectId,
-  projectTitle: "Watch wake",
-  workspaceRoot: "/workspace/watch",
-  repository: "goat-si/goat",
-  number: input.number,
-  title: "Watched pull request",
-  body: "",
-  url: `https://github.com/goat-si/goat/pull/${input.number}`,
-  author: { login: "agent-user", name: null, avatarUrl: null },
-  state: "open",
-  isDraft: false,
-  mergeability: "mergeable",
-  additions: 1,
-  deletions: 0,
-  changedFiles: 1,
-  headBranch: "feature",
-  headSha: "abc1234def",
-  baseBranch: "main",
-  createdAt: input.at,
-  updatedAt: input.at,
-  mergedAt: null,
-  closedAt: null,
-  reviewers: [],
-  labels: [],
-  checks: [{ name: "lint", status: "failure", description: null, url: null }],
-  mergeCapabilities: { merge: true, squash: true, rebase: true },
-  viewer: "agent-user",
-});
-
-const seedProject = (input: {
-  readonly projectId: ProjectId;
-  readonly title: string;
-  readonly workspaceRoot: string;
-  readonly defaultModelSelection: ModelSelection | null;
-  readonly createdAt: string;
-}) =>
-  Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
-    projects.apply({
-      sequence: 0,
-      eventId: EventId.make(`seed:${input.projectId}`),
-      aggregateKind: "project",
-      aggregateId: input.projectId,
-      occurredAt: input.createdAt,
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "project.created",
-      payload: {
-        projectId: input.projectId,
-        title: input.title,
-        workspaceRoot: input.workspaceRoot,
-        defaultModelSelection: input.defaultModelSelection,
-        scripts: [],
-        createdAt: input.createdAt,
-        updatedAt: input.createdAt,
-      },
-    }),
-  );
 
 const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: string) =>
   Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
@@ -4146,12 +4064,12 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("finishes owed checks once after pending sweeps, a restart, and a re-watch", () =>
+  it.effect.each(["pending", "action-required"] as const)("recovers %s watches", (initialStatus) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-      const threadId = ThreadId.make("runtime-pull-request-watch-owed");
-      const projectId = ProjectId.make("pr-watch-owed-project");
+      const threadId = ThreadId.make(`runtime-pull-request-watch-owed-${initialStatus}`);
+      const projectId = ProjectId.make(`pr-watch-owed-project-${initialStatus}`);
       yield* seedProject({
         projectId,
         title: "Watch owed",
@@ -4163,7 +4081,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
-        commandId: CommandId.make("pr-watch-owed-create"),
+        commandId: CommandId.make(`pr-watch-owed-create-${initialStatus}`),
         threadId,
         projectId,
         title: "Watch owed",
@@ -4176,7 +4094,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const watch = (on: boolean, id: string) =>
         orchestrator.dispatch({
           type: "thread.pull-request.watch",
-          commandId: CommandId.make(`pr-watch-owed-${id}`),
+          commandId: CommandId.make(`pr-watch-owed-${initialStatus}-${id}`),
           threadId,
           host: "github.com",
           repository: "goat-si/goat",
@@ -4186,7 +4104,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         });
       yield* watch(true, "start");
 
-      let remainingStatus: "pending" | "success" = "pending";
+      let remainingStatus: "pending" | "action-required" | "success" = initialStatus;
+      const approval = initialStatus === "action-required";
+      const firstSummary = approval ? "#12: checks await approval" : "#12: checks passed";
+      const runUrl = "https://github.com/goat-si/goat/actions/runs/123";
       const host = Layer.mergeAll(
         NodeServices.layer,
         ServerSettings.layerTest(),
@@ -4203,7 +4124,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                 name,
                 status: name === "test" ? remainingStatus : ("success" as const),
                 description: null,
-                url: null,
+                url: name === "test" ? `${runUrl}/job/7` : null,
                 required: name === "lint",
               })),
             })),
@@ -4221,6 +4142,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         orchestrator.getThreadRecords(threadId, ["messages"]),
         ({ messages }) => messages.flatMap((message) => message.notification?.summary ?? []),
       );
+      const obligation = Effect.map(
+        orchestrator.getThreadShell(threadId),
+        (shell) => shell?.pullRequests?.[0]?.watch?.[approval ? "awaitingApproval" : "owedChecks"],
+      );
 
       const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
       yield* reactor.sweep;
@@ -4228,38 +4153,32 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* TestClock.adjust("10 minutes");
       yield* reactor.sweep;
       yield* worker.drain();
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
+      assert.deepEqual(yield* summaries, [firstSummary]);
 
-      assert.deepEqual(
-        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch?.owedChecks,
-        ["test"],
-      );
+      assert.deepEqual(yield* obligation, approval ? [runUrl] : ["test"]);
       // The fresh reactor reloads the nonempty obligation from the persisted watch.
       const restarted = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
       yield* restarted.sweep;
       yield* worker.drain();
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
+      assert.deepEqual(yield* summaries, [firstSummary]);
 
       // A new watch on the same pull request knows what the last one told.
       yield* watch(false, "stop");
       yield* watch(true, "again");
       yield* restarted.sweep;
       yield* worker.drain();
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
+      assert.deepEqual(yield* summaries, [firstSummary]);
 
-      assert.deepEqual(
-        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch?.owedChecks,
-        ["test"],
-      );
+      assert.deepEqual(yield* obligation, approval ? [runUrl] : ["test"]);
       remainingStatus = "success";
       yield* TestClock.adjust("10 minutes");
       yield* restarted.sweep;
       yield* worker.drain();
-      assert.deepEqual(yield* summaries, ["#12: checks passed", "#12: checks passed"]);
+      assert.deepEqual(yield* summaries, [firstSummary, "#12: checks passed"]);
       yield* TestClock.adjust("10 minutes");
       yield* restarted.sweep;
       yield* worker.drain();
-      assert.deepEqual(yield* summaries, ["#12: checks passed", "#12: checks passed"]);
+      assert.deepEqual(yield* summaries, [firstSummary, "#12: checks passed"]);
       assert.deepEqual(
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch?.owedChecks,
         [],
