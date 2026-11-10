@@ -3,7 +3,6 @@ import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 const persisted = vi.hoisted(() => ({ title: "" }));
-const openMenu = vi.hoisted(() => vi.fn());
 vi.mock(import("../../state/session"), async (importOriginal) => ({
   ...(await importOriginal()),
   useEnvironmentScope: () => true,
@@ -18,10 +17,10 @@ vi.mock(import("../../state/use-orchestration-command"), async (importOriginal) 
     }) as never,
 }));
 vi.mock(import("~/hooks/useThreadActionMenu"), () => ({
-  useThreadActionMenu: () => ({ openMenu, closeMenu: () => {} }),
+  useThreadActionMenu: () => ({ openMenu: () => {}, closeMenu: () => {} }),
 }));
 
-import { render, stubGlobal } from "../../../test/render";
+import { render } from "../../../test/render";
 import { ChatHeader } from "./ChatHeader";
 
 function header(title: string) {
@@ -72,11 +71,3 @@ it.each(["blur", "Enter"] as const)(
     expect(persisted.title).toBe("My edited title");
   },
 );
-
-it("opens the thread menu on a desktop title click without waiting", async () => {
-  openMenu.mockClear();
-  using _bridge = stubGlobal("desktopBridge", {});
-  await using screen = await render(header("New thread"));
-  await screen.getByRole("button", { name: "Thread actions for New thread" }).click();
-  expect(openMenu).toHaveBeenCalledOnce();
-});

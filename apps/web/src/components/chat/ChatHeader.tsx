@@ -96,6 +96,8 @@ function resolveRenameCommit(input: {
   return { action: "commit", title: trimmed };
 }
 
+// Delay the input-swallowing native menu through the double-click rename interval.
+const TITLE_MENU_OPEN_DELAY_MS = 500;
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadId,
@@ -250,21 +252,53 @@ export const ChatHeader = memo(function ChatHeader({
     canShareWithGuest,
     globalAgent,
   });
-  const openMenuFromTitle = (event: ReactMouseEvent<HTMLButtonElement>) => {
-    if (isTrailingDoubleClick(event.detail)) return;
-    const rect = event.currentTarget.getBoundingClientRect();
+  const titleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const titleMenuTimerRef = useRef<number | null>(null);
+  const cancelPendingTitleMenu = () => {
+    if (titleMenuTimerRef.current === null) return;
+    clearTimeout(titleMenuTimerRef.current);
+    titleMenuTimerRef.current = null;
+  };
+  useEffect(
+    () => () => {
+      if (titleMenuTimerRef.current === null) return;
+      clearTimeout(titleMenuTimerRef.current);
+      titleMenuTimerRef.current = null;
+    },
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A pending title menu belongs to the thread that was clicked, so switching threads drops it.
+    [activeThreadEnvironmentId, activeThreadId],
+  );
+  const openTitleMenuNow = () => {
+    cancelPendingTitleMenu();
+    const rect = titleButtonRef.current?.getBoundingClientRect();
+    if (!rect) return;
     openMenu({ x: rect.left, y: rect.bottom + 4 });
   };
-  // A native menu takes the second click, so only the in-page menu lets a double-click reach here.
+  const openMenuFromTitle = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (isTrailingDoubleClick(event.detail)) return;
+    const clickedChevron =
+      (event.target as HTMLElement).closest("[data-thread-title-chevron]") !== null;
+    if (event.detail === 0 || clickedChevron || window.desktopBridge === undefined) {
+      openTitleMenuNow();
+      return;
+    }
+    cancelPendingTitleMenu();
+    titleMenuTimerRef.current = window.setTimeout(() => {
+      titleMenuTimerRef.current = null;
+      openTitleMenuNow();
+    }, TITLE_MENU_OPEN_DELAY_MS);
+  };
   const handleTitleDoubleClick = (event: ReactMouseEvent) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     if ((event.target as HTMLElement).closest("[data-thread-title-chevron]") !== null) return;
+    cancelPendingTitleMenu();
     closeMenu();
     startRename();
   };
   const handleHeaderContextMenu = (event: ReactMouseEvent) => {
     if (renamingTitle !== null) return;
     if (!isServerThread && onOpenProjectSettings === undefined) return;
+    cancelPendingTitleMenu();
     event.preventDefault();
     if (!isServerThread) {
       const api = readLocalApi();
@@ -413,6 +447,7 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipTrigger
                 render={
                   <button
+                    ref={titleButtonRef}
                     type="button"
                     aria-label={`Thread actions for ${shownTitle}`}
                     aria-haspopup="menu"
@@ -420,6 +455,7 @@ export const ChatHeader = memo(function ChatHeader({
                     onDoubleClick={
                       canOperateThread && canRenameInline ? handleTitleDoubleClick : undefined
                     }
+                    onBlur={cancelPendingTitleMenu}
                     className="group/thread-title inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   />
                 }
