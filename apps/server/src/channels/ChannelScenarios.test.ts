@@ -345,10 +345,9 @@ describe("GOAT bot boundary (scenario 6)", () => {
 
       // Both channels contribute to the owner's waiting count.
       assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 2);
-      assert.deepStrictEqual(yield* bots.status(owner), {
-        bot: { environmentId, projectId: scratchProjectId, threadId: botThreadId },
-        waitingCount: 2,
-      });
+      const { latest, ...status } = yield* bots.status(owner);
+      const bot = { environmentId, projectId: scratchProjectId, threadId: botThreadId };
+      assert.deepStrictEqual([status, latest?.text], [{ bot, waitingCount: 2 }, "On it."]);
     }).pipe(Effect.provide(harness.layer));
   });
 
