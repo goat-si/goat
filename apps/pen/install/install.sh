@@ -2,17 +2,20 @@
 # pen installer: downloads the pen binary for this machine from the relay, verifies it and starts it.
 #   curl -fsSL <relay>/install.sh | sh
 #   curl -fsSL <relay>/install.sh | sh -s -- --join <token>
+#   curl -fsSL <relay>/install.sh | sh -s -- --login     (sign in with Google)
 set -eu
 
 PEN_RELAY="${PEN_RELAY:-__PEN_RELAY__}"
 VERSION="${PEN_VERSION:-__PEN_VERSION__}"
 JOIN=""
+LOGIN=""
 NAME=""
 NO_SERVICE=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--join) JOIN="$2"; shift 2 ;;
+	--login) LOGIN=1; shift ;;
 	--name) NAME="$2"; shift 2 ;;
 	--no-service) NO_SERVICE="--no-service"; shift ;;
 	--relay) PEN_RELAY="$2"; shift 2 ;;
@@ -67,6 +70,17 @@ if [ -n "$JOIN" ]; then
 		exec "$HOME/.local/bin/pen" join "$JOIN" --name "$NAME" $NO_SERVICE
 	fi
 	exec "$HOME/.local/bin/pen" join "$JOIN" $NO_SERVICE
+fi
+if [ -n "$LOGIN" ]; then
+	set -- login --relay "$PEN_RELAY" $NO_SERVICE
+	if [ -n "$NAME" ]; then
+		set -- "$@" --name "$NAME"
+	fi
+	# pen login asks before it founds or joins; under curl | sh stdin is this script, so ask the terminal.
+	if (exec </dev/tty) 2>/dev/null; then
+		exec "$HOME/.local/bin/pen" "$@" </dev/tty
+	fi
+	exec "$HOME/.local/bin/pen" "$@"
 fi
 if [ -n "$NAME" ]; then
 	exec "$HOME/.local/bin/pen" up --relay "$PEN_RELAY" --name "$NAME" $NO_SERVICE
