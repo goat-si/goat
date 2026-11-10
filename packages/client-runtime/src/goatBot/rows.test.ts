@@ -741,6 +741,8 @@ describe("goatBotReplyingSince", () => {
           bot("b2", "2026-10-12T12:00:04Z", "Here they are."),
           user("u2", "2026-10-12T12:00:05Z", "and count docs"),
           bot("b3", "2026-10-12T12:00:06Z", "Also: the folder list is final."),
+          // After a reply about the older prompt, one about the newest needs its quote again.
+          bot("b4", "2026-10-12T12:00:07Z", "There are 49 docs."),
         ]),
         pendingInputs: [],
         readers: readers({
@@ -749,10 +751,11 @@ describe("goatBotReplyingSince", () => {
           b2: reply("in-1"),
           u2: asked("in-2"),
           b3: reply("in-1"),
+          b4: reply("in-2"),
         }),
       }),
     ).flatMap((row) => (row.kind === "bot" ? [row.replyTo] : []));
-    expect(quotes).toEqual([null, null, "list the folders"]);
+    expect(quotes).toEqual([null, null, "list the folders", "and count docs"]);
   });
 
   const read = (requestKey: string, readAt: string): GoatBotMessagePresentation => ({

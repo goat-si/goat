@@ -445,6 +445,8 @@ export function buildGoatBotTimeline(input: {
         ...(open === true && presentation?.taskId ? { answerTaskId: presentation.taskId } : {}),
         ...(presentation?.memory === undefined ? {} : { memory: presentation.memory }),
       });
+      // The conversation is now about what this reply answered; a later reply about it needs no quote.
+      previousInputKey = presentation?.replyToKey ?? null;
       continue;
     }
     if (item.type === "notification") {
