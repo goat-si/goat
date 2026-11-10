@@ -214,13 +214,14 @@ func (s *Store) merge(recs []*Record) ([]*Record, error) {
 // store keeps a record whose prev is present, if its signer was introduced in its past and the caps
 // allow it: other records stop at 3840, revokes at 4096.
 func (s *Store) store(r *Record) (bool, error) {
-	if !s.uncapped && (len(s.recs) >= MaxRecords || r.B.Type != TypeRevoke && len(s.recs) >= MaxOrdinary) {
+	revoke := r.B.Type == TypeRevoke && !r.Opaque
+	if !s.uncapped && (len(s.recs) >= MaxRecords || !revoke && len(s.recs) >= MaxOrdinary) {
 		return false, ErrFull
 	}
 	if !s.introduced(r) {
 		return false, nil
 	}
-	if r.B.Type == TypeRevoke {
+	if revoke {
 		for _, k := range r.B.Subjects {
 			if !s.introducedIn(k, r.B.Prev) {
 				return false, nil
@@ -388,12 +389,12 @@ func (s *Store) heads() []string {
 	return out
 }
 
-// choosePrev picks up to 64 heads, keeping one whose past holds the signer's latest record.
-func (s *Store) choosePrev(own string) []string {
+// choosePrev picks up to limit heads, keeping one whose past holds the signer's latest record.
+func (s *Store) choosePrev(own string, limit int) []string {
 	heads := s.heads()
-	if len(heads) <= maxPrev || own == "" {
-		if len(heads) > maxPrev {
-			heads = heads[:maxPrev]
+	if len(heads) <= limit || own == "" {
+		if len(heads) > limit {
+			heads = heads[:limit]
 		}
 		return heads
 	}
@@ -425,7 +426,7 @@ func (s *Store) choosePrev(own string) []string {
 	}
 	out := []string{keep}
 	for _, h := range heads {
-		if h != keep && len(out) < maxPrev {
+		if h != keep && len(out) < limit {
 			out = append(out, h)
 		}
 	}
@@ -435,6 +436,11 @@ func (s *Store) choosePrev(own string) []string {
 
 // Append signs the signer's next record over the current heads, stores it and saves.
 func (s *Store) Append(id *ident.Identity, typ string, at int64, f Fields) (*Record, error) {
+	limit := maxPrev
+	if f.Via != "" {
+		// An admit for an account names at most 8 heads, so its body stays within 2048 bytes.
+		limit = maxAccountAdmitPrev
+	}
 	s.mu.Lock()
 	by := ident.B64.EncodeToString(id.SignPub)
 	n, own := s.selfN, ""
@@ -448,7 +454,7 @@ func (s *Store) Append(id *ident.Identity, typ string, at int64, f Fields) (*Rec
 		}
 	}
 	n = max(n, ownN) + 1
-	r, err := Sign(id, s.MeshID, typ, n, s.choosePrev(own), at, f)
+	r, err := Sign(id, s.MeshID, typ, n, s.choosePrev(own, limit), at, f)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err

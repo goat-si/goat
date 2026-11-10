@@ -7,6 +7,12 @@ import (
 // Merged is called with the records a sync stored.
 type Merged func(added []*Record)
 
+// Version is what a v1.1 node announces in its sync hello.
+const Version = "1.1"
+
+// Hello is called with the version the peer announced in its hello ("" for a v1.0 node).
+type Hello func(pen string)
+
 func (s *Store) hashes() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -44,9 +50,9 @@ func (s *Store) take(m *Msg, onMerged Merged) error {
 
 // SyncInitiate runs the dialing side of a mesh session. It returns once the peer's done arrived,
 // which the responder sends only after it stored everything this side sent (the push was taken).
-func SyncInitiate(ctx context.Context, l Link, s *Store, onMerged Merged) error {
+func SyncInitiate(ctx context.Context, l Link, s *Store, onMerged Merged, onHello Hello) error {
 	c := &Lines{L: l}
-	if err := c.Write(Msg{T: "hello", Have: s.hashes()}); err != nil {
+	if err := c.Write(Msg{T: "hello", Pen: Version, Have: s.hashes()}); err != nil {
 		return err
 	}
 	sentDone := false
@@ -60,6 +66,9 @@ func SyncInitiate(ctx context.Context, l Link, s *Store, onMerged Merged) error 
 			if sentDone {
 				l.Close(errLine.Code)
 				return errLine
+			}
+			if onHello != nil {
+				onHello(m.Pen)
 			}
 			if err := c.writeRecords(s.missingFrom(m.Have)); err != nil {
 				return err
@@ -84,9 +93,9 @@ func SyncInitiate(ctx context.Context, l Link, s *Store, onMerged Merged) error 
 
 // SyncRespond runs the accepting side. It sends its done only after the initiator's done, so the
 // initiator learns its records were stored. The caller closes the link afterwards.
-func SyncRespond(ctx context.Context, l Link, s *Store, onMerged Merged) error {
+func SyncRespond(ctx context.Context, l Link, s *Store, onMerged Merged, onHello Hello) error {
 	c := &Lines{L: l}
-	if err := c.Write(Msg{T: "hello", Have: s.hashes()}); err != nil {
+	if err := c.Write(Msg{T: "hello", Pen: Version, Have: s.hashes()}); err != nil {
 		return err
 	}
 	gotHello := false
@@ -102,6 +111,9 @@ func SyncRespond(ctx context.Context, l Link, s *Store, onMerged Merged) error {
 				return errLine
 			}
 			gotHello = true
+			if onHello != nil {
+				onHello(m.Pen)
+			}
 			if err := c.writeRecords(s.missingFrom(m.Have)); err != nil {
 				return err
 			}

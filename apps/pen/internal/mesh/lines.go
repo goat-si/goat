@@ -33,6 +33,7 @@ var errLine = &relay.CloseError{Code: wire.CodeCrypto}
 // Msg is any mesh or join line.
 type Msg struct {
 	T       string    `json:"t"`
+	Pen     string    `json:"pen,omitempty"`
 	Have    []string  `json:"have,omitempty"`
 	Records []*Record `json:"records,omitempty"`
 	Mesh    string    `json:"mesh,omitempty"`
@@ -40,6 +41,10 @@ type Msg struct {
 	Nonce   string    `json:"nonce,omitempty"`
 	Card    *Card     `json:"card,omitempty"`
 	Reason  string    `json:"reason,omitempty"`
+	// Assertion is an account join's login assertion; ID and Member answer a queued request.
+	Assertion json.RawMessage `json:"assertion,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Member    string          `json:"member,omitempty"`
 }
 
 // Lines frames LF-terminated JSON lines over records.

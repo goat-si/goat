@@ -62,11 +62,13 @@ type Daemon struct {
 	halted string // set once the uplinks are down for good ("stopped", "left")
 	runCtx context.Context
 
-	mu         sync.Mutex
-	sessions   map[uint64]*live
-	nextLive   uint64
-	watchers   map[chan []byte]struct{}
-	seen       map[string]seenInfo
+	mu       sync.Mutex
+	sessions map[uint64]*live
+	nextLive uint64
+	watchers map[chan []byte]struct{}
+	seen     map[string]seenInfo
+	// versions is what each peer (by Noise key) announced in its last sync hello.
+	versions   map[string]string
 	inviteWait map[string]chan mesh.Member
 	lastView   *mesh.View
 
@@ -162,7 +164,7 @@ func New(opt Options) (*Daemon, error) {
 	d := &Daemon{
 		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites,
 		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, seen: map[string]seenInfo{},
-		inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
+		versions: map[string]string{}, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
 	}
 	switch opt.SSHUser {
 	case "":
@@ -491,4 +493,14 @@ func (d *Daemon) unregister(k uint64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.sessions, k)
+}
+
+// helloFrom records the version a peer announces in its sync hello.
+func (d *Daemon) helloFrom(noisePub []byte) mesh.Hello {
+	k := ident.B64.EncodeToString(noisePub)
+	return func(pen string) {
+		d.mu.Lock()
+		d.versions[k] = pen
+		d.mu.Unlock()
+	}
 }

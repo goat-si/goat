@@ -77,7 +77,7 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 		return res(err)
 	}
 	defer sec.Close(wire.CodeNormal)
-	if err := mesh.SyncInitiate(ctx, sec, d.mesh(), d.onMerged); err != nil {
+	if err := mesh.SyncInitiate(ctx, sec, d.mesh(), d.onMerged, d.helloFrom(noise)); err != nil {
 		return res(err)
 	}
 	d.markSeen(noise, true)

@@ -115,7 +115,7 @@ func (d *Daemon) serveMesh(ctx context.Context, sec *session.Secure, l *live) {
 		}
 		d.onMerged(added)
 	}
-	if err := mesh.SyncRespond(ctx, sec, d.mesh(), merged); err != nil {
+	if err := mesh.SyncRespond(ctx, sec, d.mesh(), merged, d.helloFrom(sec.RemoteStatic)); err != nil {
 		if relay.CodeOf(err) == 0 {
 			sec.Close(wire.CodeTimeout)
 		}

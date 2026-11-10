@@ -19,6 +19,9 @@ type Member struct {
 	// User is the SSH login name from the member's latest hostkeys record.
 	User  string `json:"user,omitempty"`
 	Since int64  `json:"since"`
+	// Via is "google" for a member admitted for a Google account assertion; Email is that account's.
+	Via   string `json:"via,omitempty"`
+	Email string `json:"email,omitempty"`
 }
 
 // View is the state replayed from a record set.
@@ -31,6 +34,9 @@ type View struct {
 	// Order is the canonical replay order (record hashes); Effective marks records that took effect.
 	Order     []string
 	Effective map[string]bool
+	// Account is the mesh's binding (nil when unbound); Locked is lock mode.
+	Account *Account
+	Locked  bool
 }
 
 // MemberByNoise finds a current member by Noise static key.
@@ -162,6 +168,10 @@ func Compute(meshID string, recs []*Record) *View {
 	claimed := map[chainKey]bool{}
 	usedNonces := map[string]bool{}
 	admitted := map[string][]string{}
+	// compromised are keys revoked as compromised, directly or as admits of such a key; their
+	// account and lock records lose effect.
+	compromised := map[string]bool{}
+	var accounts, locksOn, locksOff []int
 
 	revoke := func(k string) {
 		if m, ok := v.Members[k]; ok {
@@ -194,6 +204,9 @@ func Compute(meshID string, recs []*Record) *View {
 			if !inPast {
 				continue
 			}
+		}
+		if r.Opaque {
+			continue // stored and forwarded, without effect
 		}
 		if b.Type == TypeFound {
 			if MeshIDOf(r) != meshID || len(v.Members) != 0 {
@@ -228,7 +241,11 @@ func Compute(meshID string, recs []*Record) *View {
 				continue
 			}
 			usedNonces[c.Nonce] = true
-			v.Members[c.SignPub] = Member{NodeID: c.NodeID, SignPub: c.SignPub, NoisePub: c.NoisePub, Name: c.Name, AdmittedBy: b.By, Since: b.At}
+			m := Member{NodeID: c.NodeID, SignPub: c.SignPub, NoisePub: c.NoisePub, Name: c.Name, AdmittedBy: b.By, Since: b.At}
+			if b.Via != nil {
+				m.Via, m.Email = *b.Via, *b.Email
+			}
+			v.Members[c.SignPub] = m
 			admitted[b.By] = append(admitted[b.By], c.SignPub)
 		case TypeRevoke:
 			for _, s := range b.Subjects {
@@ -239,6 +256,7 @@ func Compute(meshID string, recs []*Record) *View {
 						x := queue[0]
 						queue = queue[1:]
 						revoke(x)
+						compromised[x] = true
 						for _, y := range admitted[x] {
 							if !seen[y] {
 								seen[y] = true
@@ -265,8 +283,47 @@ func Compute(meshID string, recs []*Record) *View {
 				m.User = *b.User
 			}
 			v.Members[b.By] = m
+		case TypeAccount:
+			accounts = append(accounts, i)
+		case TypeLock:
+			if *b.On {
+				locksOn = append(locksOn, i)
+			} else {
+				locksOff = append(locksOff, i)
+			}
 		}
 		v.Effective[r.Hash] = true
+	}
+	kept := func(idx []int) []int {
+		var out []int
+		for _, i := range idx {
+			if !compromised[order[i].B.By] {
+				out = append(out, i)
+			}
+		}
+		return out
+	}
+	// The binding is the last account record whose signer was not revoked as compromised.
+	if acc := kept(accounts); len(acc) > 0 {
+		v.Account, _ = accountOf(&order[acc[len(acc)-1]].B)
+	}
+	// Locked unless an unlock has every lock in its past.
+	on := kept(locksOn)
+	if len(on) > 0 {
+		v.Locked = true
+		for _, off := range kept(locksOff) {
+			all := true
+			for _, j := range on {
+				if anc[off][j/64]&(1<<(j%64)) == 0 {
+					all = false
+					break
+				}
+			}
+			if all {
+				v.Locked = false
+				break
+			}
+		}
 	}
 	return v
 }
