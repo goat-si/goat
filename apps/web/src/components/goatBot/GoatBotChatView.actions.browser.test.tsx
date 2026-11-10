@@ -39,7 +39,8 @@ it("replies, clears, sends, jumps to a source, and copies its text", async () =>
     sendKey: null,
     requestKey: null,
     quote: bot.text,
-    text: "answer",
+    reply: "answer",
+    text: "answer\n\n> First line\n> Second line",
     createdAt: "2026-10-12T09:41:00Z",
     delivery: { state: "sent" },
     firstInGroup: true,
@@ -74,7 +75,7 @@ it("replies, clears, sends, jumps to a source, and copies its text", async () =>
   await expect.element(field).not.toHaveAttribute("placeholder", "Reply…");
   await userEvent.click(screen.getByRole("button", { name: "Reply" }));
   await userEvent.type(field, "{Enter}");
-  expect(onSend).toHaveBeenCalledWith("> First line\n> Second line\n\ndraft", []);
+  expect(onSend).toHaveBeenCalledWith("draft\n\n> First line\n> Second line", []);
   await screen.rerender(view([bot, sent]));
   await userEvent.click(screen.getByRole("button", { name: "First line Second line" }));
   expect(document.activeElement?.getAttribute("data-bot-row")).toBe("bot-1");

@@ -1,3 +1,4 @@
+import { goatBotPreviewText } from "@goat/client-runtime/goatBot";
 import { ArrowUpIcon, FileIcon, XIcon } from "~/components/solar";
 import {
   type ClipboardEvent,
@@ -164,7 +165,7 @@ export function GoatBotComposer({
       <div className={cn("goat-composer-field flex flex-col py-1 pr-1", disabled && "opacity-64")}>
         {replyTo !== null ? (
           <div className="mx-2 mt-1 flex min-w-0 items-center gap-1 rounded-md border border-border ps-2 text-xs text-muted-foreground">
-            <span className="min-w-0 flex-1 truncate">{replyTo}</span>
+            <span className="min-w-0 flex-1 truncate">{goatBotPreviewText(replyTo)}</span>
             <Button
               type="button"
               variant="ghost"

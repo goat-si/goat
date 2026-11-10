@@ -2,6 +2,7 @@ import {
   GOAT_BOT_READING_LIMIT_MS,
   goatBotActivity,
   goatBotFirstUnread,
+  goatBotPreviewText,
   goatBotStampParts,
   goatBotReceiptLabel,
   goatBotRejectionText,
@@ -333,10 +334,10 @@ export function GoatBotTimeline({
                                 element?.focus({ preventScroll: true });
                               }}
                             >
-                              {row.quote}
+                              {goatBotPreviewText(row.quote)}
                             </button>
                           ) : (
-                            <span className={style}>{row.quote}</span>
+                            <span className={style}>{goatBotPreviewText(row.quote)}</span>
                           );
                         })()
                       : null}
