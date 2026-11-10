@@ -15,10 +15,13 @@ every Pen suite). `wrangler whoami` must list only the account above.
 
 ## Check a relay
 
-`pen relay check <url>` checks a relay end to end: `/healthz`, the certificate's expiry, and a throwaway node that
-uplinks and exchanges 64 KiB each way with a client through the relay, with timings. It exits 1 on any failure,
-including a certificate that expires within 14 days (`--min-cert-days`), so it works as a cron or monitor probe. Run it
-against both relays after every deploy:
+`pen relay check <url>` checks a relay end to end: `/healthz`, the certificate's expiry, and a check node that
+uplinks and exchanges 64 KiB each way with a client through the relay, with timings. It exits 1 on any failure or
+when `--timeout` (30 s) runs out, including a certificate that expires within 14 days (`--min-cert-days`), so it
+works as a cron or monitor probe. The check node's keys live in `relay-check/` under the state directory
+(`~/.pen`), separate from the machine's own node, so repeated checks reuse one node id and leave each relay one small
+entry (the Go relay its next session id for that node, the Worker one Durable Object holding the same). Run it against
+both relays after every deploy:
 
 ```sh
 pen relay check https://pen-relay.pos090001.workers.dev
@@ -42,14 +45,15 @@ Upgrade a running node by replacing its
 
 ## pen-relay Worker
 
-Deploy: in `infra/pen-relay`, `pnpm run deploy` (after a `build.sh`, or the deploy publishes whatever `public/`
-holds). Then `node scripts/smoke.ts https://pen-relay.pos090001.workers.dev`: it checks `/healthz`, that the upgrade
+Deploy: in `infra/pen-relay`, `pnpm run deploy` after a `build.sh`. It first runs `scripts/check-public.ts`, which
+refuses a `public/install.sh` whose relays are loopback or plain http (a local test build) or whose version has no
+`dl/<version>/SHA256SUMS`. Then `node scripts/smoke.ts https://pen-relay.pos090001.workers.dev`: it checks `/healthz`, that the upgrade
 offers no compression, moves 1 MiB each way between a fresh node and a client, and prints close latency. Check one
 served build with `curl -fsS .../dl/<version>/SHA256SUMS` against the local file.
 
 Rollback: `pnpm exec wrangler deployments list`, then `pnpm exec wrangler rollback <version-id>`. Static assets roll
-back with the version. Its Durable Objects keep nothing that outlives their sockets, so a rollback loses only open
-sockets, which reconnect.
+back with the version. Each node id's Durable Object keeps only its next session id beyond its sockets, so a rollback
+loses only open sockets, which reconnect.
 
 ## pen-login Worker
 
@@ -74,8 +78,17 @@ Rotate the Google client secret: add a new secret to the OAuth client in the Goo
 file, run `deploy:secrets <client file>` (the Worker keeps its login key), check one sign-in, then disable the old
 secret in the console. Sign-ins in flight during the deploy fail once; nothing else changes.
 
-Moving the service or recovering a deleted Worker: `deploy:secrets` with `--signing-key-file` pointing at the kept
-file restores the same key, and bound meshes notice nothing.
+Moving the service: `deploy:secrets` with `--signing-key-file` pointing at the kept file restores the same key, and
+the Durable Object's data moves with the Worker, so bound meshes notice nothing.
+
+Recovering a deleted Worker: the same command restores the key, but the account registry was in the deleted
+`Login` Durable Object, so every account starts with no registered mesh. Until one member of a mesh signs in again, a
+new machine that signs in gets no mesh offer and `pen login` offers to found a new mesh, which would then take the
+account's registration. So before reopening sign-ins, ask each person to run `pen login` on one existing member: with
+no mesh registered it asks `No mesh is registered for <email>. Bind this machine's mesh <id> (N members)?`, and yes
+registers that mesh again. If a new machine already founded a second mesh, its members get `pen leave first`: reset
+the account at `/reset` on the sign-in page, run `pen login` on an existing member first, then on the stray machine run
+`pen leave` and `pen login` to join the real mesh.
 
 ### Rotate the login key and rebind
 
@@ -87,23 +100,25 @@ bound to, so each mesh moves to the new key when one of its members signs in aga
    Pen account, and `curl -s https://pen-login.pos090001.workers.dev/v1/keys` shows the old `kid`.
 2. `pnpm exec wrangler secret delete LOGIN_SIGNING_KEY`. That publishes a version without the key, so sign-ins fail
    until the next step; run it at once.
-3. `pnpm run deploy:secrets ~/.pen-secrets/google-oauth-client.json --signing-key-file ~/.pen-secrets/login-signing-key`
-   with no file at that path yet (the directory must be 0700). It creates the key there and prints
-   `login key kid <new>`. Copy the file somewhere offline.
-4. `curl -s .../v1/keys` now shows `<new>`.
+3. Move the old key file aside first (`mv ~/.pen-secrets/login-signing-key ~/.pen-secrets/login-signing-key.<old kid>`):
+   with a file at that path, `deploy:secrets` restores the key it holds instead of making a new one.
+4. `pnpm run deploy:secrets ~/.pen-secrets/google-oauth-client.json --signing-key-file ~/.pen-secrets/login-signing-key`
+   (the directory must be 0700). It creates the key there and prints `login key kid <new> from <path>`; a printed
+   `<old>` means it restored the old key, so stop and check step 3. Copy the new file somewhere offline.
+5. `curl -s .../v1/keys` now shows `<new>`.
 
 While a mesh is still bound to the old key, members, invites, `pen pipe`, `pen forward` and SSH keep working, and
 `pen account` on a member still shows `login key <old>`. A new machine can sign in at `/device`, but every member
 refuses it and its `pen login` ends with `login: assertion is not signed by this login key`.
 
-5. On one member of each bound mesh, the person runs `pen login` and signs in with the mesh's Google account. It asks
+6. On one member of each bound mesh, the person runs `pen login` and signs in with the mesh's Google account. It asks
    `Mesh <id> is bound to an older login key (<old>). Bind it to the service's current key <new>?` and, after yes,
    prints `mesh <id> is bound to <email> again`. Like any binding change this needs every member to have announced pen
    1.1; a member that never did blocks it with a message naming that member.
-6. Confirm: `pen account` on that member, and on the others after their next sync (`pen ls` shows them online),
+7. Confirm: `pen account` on that member, and on the others after their next sync (`pen ls` shows them online),
    prints `login key <new>`. A test sign-in of a new machine now joins.
 
-For the operator's own mesh (mac-studio, `PEN_HOME=~/goat-research/pen-boxes-test/.penhome/state`), step 5 is
+For the operator's own mesh (mac-studio, `PEN_HOME=~/goat-research/pen-boxes-test/.penhome/state`), step 6 is
 `pen login` there with that `PEN_HOME`.
 
 ## Seoul relay
@@ -135,10 +150,19 @@ fails until issuance succeeds. A failed first issuance does the same and the pro
 
 ## Incidents
 
-**A member was lost or stolen.** On any other member: `pen revoke <member> --compromised`, then `pen lock on`. If the
+**A member was lost or stolen.** On any other member: `pen revoke <member> --compromised` (this also works for a
+machine that already left or was revoked plainly, and revokes every machine it admitted), then `pen lock on`. If the
 mesh is bound to a Google account, change that account's password and reset its machine list from the reset link on
-`https://pen-login.pos090001.workers.dev/device`. Every member refuses the revoked key as soon as the revoke reaches it,
-so push it to every member (`pen ls` shows who is online).
+`https://pen-login.pos090001.workers.dev/device`. The revoke goes to every online member at once and reaches the others
+at their next sync (every 10 minutes and whenever their uplink returns); each member refuses the key as soon as it has
+the revoke. `pen ls --watch --until-revoked <member>` on another member shows when it arrived. If `pen ls` then says
+the login service still offers the removed machine, this machine is not registered with the account: run `pen login`
+here, or use the reset link.
+
+**Someone else could sign in to the account.** The login service registers any machine with a valid sign-in, even one
+a locked mesh only queued, and any registered machine can remove the others from the account's list, so new machines
+would be offered only that one. Lock the mesh, then reset the account's machine list at `/reset` and run `pen login`
+on one trusted member.
 
 **A relay is down.** Nodes keep working through their other relays; dials race every relay, so no action is needed for
 running meshes. New installs need the download relay (the Worker). Check `/healthz` on each relay and, for the Worker,

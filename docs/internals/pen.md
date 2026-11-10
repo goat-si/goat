@@ -57,6 +57,23 @@ registry too (`forgetRevoked` in `apps/pen/internal/daemon/account.go`).
 `"pen":"1.1"` in a sync hello. The last announced version is kept in `versions.json` so one offline member
 that already announced does not block the mesh; a member that never announced still does.
 
+## What lock mode and the registry do not guarantee
+
+- **Lock binds only members that hold it.** Before deciding a Google join a member syncs with every member it
+  can reach for up to 5 s, so a lock it slept through still counts. A member that reaches none of the members
+  holding the lock decides on its own view and can admit. The same holds for an unbind or a revoke.
+- **A served copy can be cut.** The member that admits a new machine chooses which records to send. A revoked
+  or stolen machine that the registry still lists could send its own admit and its revokes of the honest
+  members. The joiner therefore also syncs with every node the registry listed that its copy does not count
+  as a member, and a refusal from one of them fails the join (`FinishJoin` in `apps/pen/internal/daemon/account.go`).
+  This helps only while an honest listed node is online.
+- **The registry is not the mesh.** Any node with a valid sign-in for the account registers, even one a locked
+  mesh only queued, and any registered node can remove the others from the account's list. One phished
+  sign-in can therefore make the service offer new machines only the attacker's node. Members and invites
+  are unaffected; the remedy is lock mode plus the reset page. Binding registration to a member's
+  signature would close this and is not done. A forget that the service refuses because the revoking
+  node is not registered shows in `pen ls` and the dashboard instead of retrying silently.
+
 ## Dials
 
 Kind 0x01 sessions (TCP and mesh sync) race the Noise handshake on every relay and confirm only the first

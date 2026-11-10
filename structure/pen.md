@@ -24,10 +24,16 @@ consumes it only through OpenSSH: `pen ssh-config --install` writes `Host pen-<n
 
 ## State
 
-A node keeps everything under `PEN_HOME` (default `~/.pen`, 0700): `identity.json` (0600, the node's keys),
+A node keeps its state under `PEN_HOME` (default `~/.pen`, 0700): `identity.json` (0600, the node's keys),
 `config.json` (name, relays, download relay), `mesh.json` (the record log), `offers.json` (live invites),
-`versions.json` (each member's last announced protocol version), `forgets.json` (pending registry removals),
-`daemon.log` and the control socket `control.sock`. `pen leave` deletes the keys and `mesh.json`.
+`pending.json` (requests waiting for approval in lock mode), `login.json` (the account this machine signed in
+with), `versions.json` (each member's last announced protocol version), `forgets.json` (pending registry removals),
+`daemon.json` and `daemon.lock` (the running daemon), `state.lock`, `daemon.log` (capped at 4 MiB with
+`daemon.log.1`), `dashboard.html` while a dashboard link is unused, `relay-check/` (the keys `pen relay check`
+uses), the `left` marker after `pen leave`, and the control socket `control.sock`. Outside it, `pen ssh-config`
+writes `~/.ssh/pen/config` and an `Include` line in `~/.ssh/config`, and a service is
+`~/.config/systemd/user/pen.service` or `~/Library/LaunchAgents/si.goat.pen.plist`. `pen leave` deletes the keys and
+`mesh.json`.
 
 ## Checks
 

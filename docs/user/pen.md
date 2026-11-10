@@ -100,11 +100,11 @@ after Pen restarts. `pen dashboard --stop` closes the page and signs out every o
 
 ## Remove a machine
 
-| Command                             | Use it when                                                                                                              |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `pen leave`                         | You are retiring this machine. It leaves the mesh and deletes its keys.                                                  |
-| `pen revoke <member>`               | A machine should no longer be a member. Every member refuses it from then on.                                            |
-| `pen revoke <member> --compromised` | A machine was lost or stolen. Also removes every machine it admitted, and its unlocks and account changes stop counting. |
+| Command                             | Use it when                                                                                                                                       |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pen leave`                         | You are retiring this machine. It leaves the mesh and deletes its keys.                                                                           |
+| `pen revoke <member>`               | A machine should no longer be a member. Every member refuses it from then on.                                                                     |
+| `pen revoke <member> --compromised` | A machine was lost or stolen, even if it already left. Also removes every machine it admitted, and its unlocks and account changes stop counting. |
 
 After `--compromised` on a mesh with Google sign-in, Pen tells you what else to do: turn on
 `pen lock on`, change your Google password, and clear your account's machine list from the reset

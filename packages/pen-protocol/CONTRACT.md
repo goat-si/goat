@@ -204,7 +204,8 @@ closes 4400.
 
 ### Revocation and leave
 
-`pen revoke <member> [--compromised]` signs a `revoke` and pushes it. Every member closes the revoked keys' sessions
+`pen revoke <member> [--compromised]` signs a `revoke` and pushes it; `--compromised` also accepts a key that is
+already revoked (a machine found stolen after it left). Every member closes the revoked keys' sessions
 (4401) and refuses them from then on; a session on which the revoke itself arrived is closed only after this side
 sent its `done`, so a leaving node learns its push was taken. `pen leave` signs a revoke of its own key, pushes it, stops its uplink and
 deletes its keys.
@@ -295,9 +296,14 @@ Device flow (RFC 8628 shaped):
 
 Assertion: `{"body":"<base64url>","sig":"<base64url>"}`, body an I-JSON object
 `{"v":1,"iss":L,"kid","sub","email","signPub","noisePub","iat","exp"}` (seconds; exp = iat + 600), sig = Ed25519 by the
-login key over `"pen-login/1 assertion" || SHA-256(body)`.
+login key over `"pen-login/1 assertion" || SHA-256(body)`. `sub` and `email` hold no C0 control character or DEL
+(members print them); an assertion that does is malformed, and so are `admit` and `account` records that carry one.
 
 Registry (Durable Object, SQLite): account `sub` -> one meshId and the nodes registered under it; nothing else long-lived.
+The registry is not the mesh: any node with a valid sign-in registers, even one a locked mesh only queued, and any
+registered node may forget the others under the same `sub`. A person who loses control of the Google account (one
+phished sign-in is enough) can therefore make the registry offer new machines only their machine; meshes and their
+members are unaffected. The remedy is lock mode plus the reset page, then `pen login` on a trusted member.
 
 - `POST L/v1/mesh/register` `{"assertion","meshId","proof"}` adds the asserting node (nodeId, keys, name) under the
   assertion's sub; proof is Ed25519 by the assertion's signPub over `"pen-login/1 register" || SHA-256(assertion body) || meshId`,
@@ -339,13 +345,17 @@ in sync `hello` as `"pen":"1.1"` and refuses otherwise); v1.0 nodes reject those
 Kind 0x04, `account`: `Noise_IK_25519_ChaChaPoly_BLAKE2s`, prologue `pen/1` || nodeId || 0x04, valid only with
 `{"v":1,"stream":"account","name"}`. The responder accepts any initiator key on this kind; at most 4 such sessions run at
 once, a fifth evicts the oldest one that has not sent its assertion (4429), and a session that sends no assertion within
-10 s after key confirmation, or no card within 10 s after the offer, closes 4408. The joiner sends `{"t":"assertion","assertion":{...}}`; the member sends
+10 s after key confirmation, or no card within 10 s after the offer, closes 4408. The slot is taken at message 1, before
+key confirmation, so an initiator that never confirms holds it for up to the 10 s handshake timeout and can evict another
+unasserted session; asserted sessions are never evicted. The joiner sends `{"t":"assertion","assertion":{...}}`; the member sends
 `{"t":"offer","mesh","inviter","nonce"}` and the joiner answers `{"t":"card","card":{...}}` as in Join. The member refuses
 (`refused` then 4401) unless: the mesh is bound; the assertion's `kid` names the binding's login key and the signature
 verifies; `iss` equals `loginUrl`; `sub` equals the binding's `sub`; `iat` <= now + 60 s and now < `exp` + 60 s (a
 refusal for time says "clock skew" so a person can fix it); the assertion's signPub and noisePub equal the card's and the
-card's noisePub equals the session key; the key is not revoked. The member takes the binding and lock state from one view
-when the card arrives and checks the assertion against that view again. Then:
+card's noisePub equals the session key; the key is not revoked. When the card arrives the member first syncs with every
+other member it can reach (5 s at most), then takes the binding and lock state from one view and checks the assertion
+against that view again, so a lock, unbind or revoke it slept through counts once any reachable member holds it. Lock
+mode cannot bind a member that reaches no member holding the lock record; such a member decides on what it has. Then:
 
 - unlocked: the member signs `admit` with `via` and the assertion hash, sends the records and `done` as in Join, and every
   member shows "<name> joined via Google <email>, fingerprint ..." for 7 days in `pen ls`.
@@ -361,7 +371,10 @@ when the card arrives and checks the assertion against that view again. Then:
 The joining side: `pen login` shows the returned email and, when the registry offers a mesh, its member names and
 fingerprints, and asks before founding or joining (`--yes` skips the question for scripts; `install.sh --login` does not
 pass it). After joining it syncs with at least two members, or warns that only one was reachable, checks that it is still
-a member after those syncs, and only then serves `tcp` streams and registers. When its assertion has expired by then
+a member after those syncs, and only then serves `tcp` streams and registers. It also syncs with every node the registry
+offered that its copy of the mesh does not count as a member; one that refuses it (4401) holds records the admitting
+member left out (a revoked or stolen member can serve a cut copy), so the join fails with that node's name and nothing
+is installed. When its assertion has expired by then
 (a slow approval), it stays a member and says registration waits for the next `pen login`. `pen login` on a member whose
 mesh is unbound, or bound to an older login key, offers to bind it again (same question).
 
@@ -394,3 +407,7 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
   sessions keep the ping race. Clients only; no wire change, and v1.0 and v1.1 responders answer both alike.
 - v1.1 (2026-11-10): a version 1 token's relay URL obeys the version 2 scheme rule, and one sync session carries at most
   4352 records. Both tighten what a node accepts; an honest peer never sent either.
+- v1.1 (2026-11-11): assertion `sub` and `email` and the matching record fields refuse control characters; a member
+  syncs with reachable members before deciding an account join; a joiner also checks the registry's other nodes; a key
+  already revoked can be revoked again as compromised. The registry's trust limit and the kind 0x04 slot timing are
+  stated. Vectors: two new login check cases.
