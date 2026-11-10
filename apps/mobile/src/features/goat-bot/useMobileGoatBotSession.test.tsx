@@ -966,27 +966,24 @@ it("refreshes the work list per finished record or chip move (card or not), not 
   harness.environments = [environment("env")];
   harness.botRef = bot(EnvironmentId.make("env"));
   harness.supportsTaskThreads = true;
-  const items = conversation({ environmentId: "env", threadId: "worker-1" });
-  const [, ack, card] = items as OrchestrationV2ProjectedTurnItem[];
+  const [input, ack, card] = conversation({ environmentId: "env", threadId: "worker-1" });
   const reply = (text: string, streaming: boolean) =>
     ({ ...ack, sourceItemId: "reply", item: { ...ack!.item, text, streaming } }) as typeof ack;
-  const chip = card!.item as Extract<typeof card.item, { type: "notification" }>;
-  const steps = [
-    [...items, reply("Look", true)],
-    [...items, reply("Looking at the disks", true)],
-    [...items, reply("Looking at the disks.", false)],
-    [
-      items[0]!,
-      ack!,
-      { ...card!, item: { ...chip, ledgerTask: { ...chip.ledgerTask!, taskVersion: 2 } } },
-      reply("Looking at the disks.", false),
-    ],
-  ];
+  const chip = card!.item as Extract<NonNullable<typeof ack>["item"], { type: "notification" }>;
+  const moved = {
+    ...card!,
+    item: { ...chip, ledgerTask: { ...chip.ledgerTask!, taskVersion: 2 } },
+  };
+  const items = [input!, ack!, card!];
+  const steps = [[reply("Look", true)], [reply("Looking", true)], [reply("Looked.", false)]];
   harness.items = items;
   await render();
   harness.refresh.mockClear();
   const counts: number[] = [];
-  for (const step of steps) {
+  for (const step of [
+    ...steps.map((tail) => [...items, ...tail]),
+    [input!, ack!, moved, reply("Looked.", false)],
+  ]) {
     harness.items = step;
     await render();
     counts.push(harness.refresh.mock.calls.length);
