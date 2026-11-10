@@ -246,6 +246,20 @@ export function botComputers(tasks: ReadonlyArray<BotComputerTask>): ReadonlyArr
 const PREVIEW_TEXT_CHARS = 1200;
 
 /**
+ * The preview a reply's file card makes room for before the file is read, judged by its name
+ * and size, so the card keeps its height when the preview arrives.
+ */
+export function botArtifactPreviewSlot(
+  relativePath: string,
+  size: number,
+): "image" | "text" | null {
+  if (/\.(png|jpe?g|gif|webp|svg|avif)$/i.test(relativePath))
+    return size <= CHANNEL_BOT_ARTIFACT_CHUNK_BYTES ? "image" : null;
+  if (/\.(md|markdown|txt|csv|json|log)$/i.test(relativePath)) return "text";
+  return null;
+}
+
+/**
  * What a reply's file card previews from the file's first chunk: the start of a text or
  * markdown file, or an image that fits in that chunk. Anything else shows no preview.
  */

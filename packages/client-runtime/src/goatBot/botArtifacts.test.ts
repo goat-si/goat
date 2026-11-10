@@ -21,6 +21,7 @@ import {
   botArtifactsFailure,
   botComputers,
   botArtifactPreview,
+  botArtifactPreviewSlot,
   botArtifactViewKind,
   goatBotArtifactDays,
   goatBotReplyFiles,
@@ -357,5 +358,14 @@ describe("botArtifactPreview", () => {
     expect(botArtifactPreview(answer("image/png", new Uint8Array([1, 2]), false, 9e6))).toBeNull();
     expect(botArtifactPreview(answer("application/pdf", new Uint8Array([1])))).toBeNull();
     expect(botArtifactPreview({ status: "busy", relativePath: "f" })).toBeNull();
+  });
+});
+
+describe("botArtifactPreviewSlot", () => {
+  it("keeps room for a text preview or a one-chunk image, and none for other files", () => {
+    expect(botArtifactPreviewSlot("reports/summary.md", 100)).toBe("text");
+    expect(botArtifactPreviewSlot("chart.PNG", 1000)).toBe("image");
+    expect(botArtifactPreviewSlot("huge.png", 5 * 1024 * 1024)).toBeNull();
+    expect(botArtifactPreviewSlot("deck.pdf", 10)).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import {
   botArtifactName,
   botArtifactPreview,
+  botArtifactPreviewSlot,
   botArtifactViewKind,
   goatBotReplyFiles,
   goatBotReplyMayNameFile,
@@ -13,6 +14,7 @@ import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { cn } from "~/lib/utils";
 import ChatMarkdown from "../ChatMarkdown";
 import { afterLastChunkRequest } from "./goatBotFileReads";
 
@@ -96,27 +98,33 @@ function GoatBotFileCard({
     };
   }, []);
   const shown = preview?.kind ?? kind;
+  const slot = botArtifactPreviewSlot(file.relativePath, file.size);
   const Icon = shown === "image" ? ImageIcon : shown === "download" ? FileIcon : FileTextIcon;
   return (
     <div className="relative flex w-full flex-col overflow-hidden rounded-2xl border border-border bg-background hover:bg-accent/40 has-focus-visible:outline-2 has-focus-visible:outline-ring">
-      {preview?.kind === "image" ? (
-        <img src={preview.url} alt="" className="max-h-56 w-full object-cover" />
-      ) : preview?.kind === "markdown" ? (
-        // A glance at the page; the footer button opens it, so nothing here takes focus.
+      {/* The room is kept before the file is read, so the chat doesn't jump when it arrives. */}
+      {slot !== null ? (
         <div
           aria-hidden
           inert
-          className="max-h-44 overflow-hidden px-4 pt-3 text-xs [mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
+          className={cn(
+            "overflow-hidden",
+            slot === "image" ? "h-56 bg-muted/40" : "h-40",
+            preview !== null &&
+              preview.kind !== "image" &&
+              "px-4 pt-3 text-xs [mask-image:linear-gradient(to_bottom,black_55%,transparent)]",
+          )}
         >
-          <ChatMarkdown text={preview.text} cwd={undefined} fileActions={false} />
+          {preview?.kind === "image" ? (
+            <img src={preview.url} alt="" className="size-full object-cover" />
+          ) : preview?.kind === "markdown" ? (
+            <ChatMarkdown text={preview.text} cwd={undefined} fileActions={false} />
+          ) : preview !== null ? (
+            <span className="font-mono leading-5 whitespace-pre-wrap text-muted-foreground">
+              {preview.text}
+            </span>
+          ) : null}
         </div>
-      ) : preview !== null ? (
-        <span
-          aria-hidden
-          className="block max-h-40 overflow-hidden px-4 pt-3 font-mono text-xs leading-5 whitespace-pre-wrap text-muted-foreground [mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
-        >
-          {preview.text}
-        </span>
       ) : null}
       <button
         type="button"
