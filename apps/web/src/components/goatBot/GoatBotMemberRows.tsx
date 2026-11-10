@@ -176,7 +176,7 @@ function GoatBotMemberRow({
         {/* The same slots as the main bot's row: unread mark, avatar, name over a second line. */}
         <span aria-hidden className="size-2.5 shrink-0 group-data-[collapsible=icon]:hidden" />
         <GoatBotSessionAvatar
-          size="sm"
+          size="md"
           place="list"
           waitingCount={count}
           emoji={goatBotMemberPicture(bot)}
