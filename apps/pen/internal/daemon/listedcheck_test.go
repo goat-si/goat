@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/login"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
+	"github.com/goat-si/goat/apps/pen/internal/session"
 )
 
 func listedAs(n *node, name string) login.OfferedMember {
@@ -196,5 +199,145 @@ func TestAMachineThatIsNotAMemberRefusesAGoogleJoinWithoutSigningAnything(t *tes
 	}
 	if n := y.d.mesh().Len(); n != before {
 		t.Fatalf("y signed %d record(s) for a join it could not make", n-before)
+	}
+}
+
+// J1: a still-listed machine that is not a member answers first and refuses; the join goes on
+// through the healthy listed member within the same call.
+func TestAGoogleJoinGoesOnPastAListedMachineThatIsNotAMember(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	y := joiner(t, ctx, rs, a.invite(t, time.Minute), "y")
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(y.id.SignPub)}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := y.d.mesh().Merge(a.d.mesh().Records()); err != nil {
+		t.Fatal(err)
+	}
+	y.d.viewChanged()
+	// y's handshake finishes before a is even dialed.
+	yDone := make(chan struct{})
+	var once sync.Once
+	raceHooks.before = func(id string) {
+		if id == a.d.NodeID() {
+			<-yDone
+		}
+	}
+	raceHooks.after = func(id string) {
+		if id == y.d.NodeID() {
+			once.Do(func() { close(yDone) })
+		}
+	}
+	t.Cleanup(func() { raceHooks.before, raceHooks.after = nil, nil })
+	j := newcomer(t)
+	as := f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now())
+	out, by, err := AccountJoin(ctx, []string{rs.URL}, j, "j", as, []login.OfferedMember{listedAs(y, "y"), listedAs(a, "a")})
+	if err != nil {
+		t.Fatalf("the join stopped at the listed machine that is not a member: %v", err)
+	}
+	if by.NodeID != a.d.NodeID() || out.MeshID != a.d.mesh().MeshID {
+		t.Fatalf("joined through %s into %s, want a's mesh through a", by.Name, out.MeshID)
+	}
+}
+
+// J2: an inviter that is no longer a member refuses the joiner before the invite is burned, so
+// nothing is signed and the invite stays as it was.
+func TestAnInviterThatIsNotAMemberRefusesAndKeepsTheInvite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	x := joiner(t, ctx, rs, a.invite(t, time.Minute), "x")
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(x.id.SignPub)}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.d.mesh().Merge(a.d.mesh().Records()); err != nil {
+		t.Fatal(err)
+	}
+	x.d.viewChanged()
+	tok := x.invite(t, time.Minute)
+	before := x.d.mesh().Len()
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	if _, err := Join(ctx, jst, jid, tok, "j"); err == nil || !strings.Contains(err.Error(), "no longer a member") {
+		t.Fatalf("join through an inviter that is not a member: %v", err)
+	}
+	if n := x.d.mesh().Len(); n != before {
+		t.Fatalf("the inviter signed %d record(s)", n-before)
+	}
+	if _, ok := x.d.invites.Lookup(session.InviteID(tok.Secret), time.Now()); !ok {
+		t.Fatal("the invite was burned by a join that could not happen")
+	}
+}
+
+// J2: approve on a machine that stopped being a member after it queued the request refuses
+// without signing.
+func TestApproveOnAMachineThatIsNotAMemberRefuses(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	y := joiner(t, ctx, rs, a.invite(t, time.Minute), "y")
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "lock", On: true}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if !y.d.view().Locked {
+		t.Fatal("setup: y has not heard of the lock")
+	}
+	j := newcomer(t)
+	as := f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now())
+	out, _, err := AccountJoin(ctx, []string{rs.URL}, j, "j", as, offeredBy(t, y))
+	if err != nil || out.QueuedBy != "y" {
+		t.Fatalf("setup: queue on y: %+v %v", out, err)
+	}
+	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(y.id.SignPub)}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := y.d.mesh().Merge(a.d.mesh().Records()); err != nil {
+		t.Fatal(err)
+	}
+	y.d.viewChanged()
+	before := y.d.mesh().Len()
+	var ar ApproveResult
+	if err := Call(y.st, Request{Op: "approve", Subject: ident.Fingerprint(j.NoisePub)}, &ar); err == nil || !strings.Contains(err.Error(), "not a member") {
+		t.Fatalf("approve on a machine that is not a member: %v", err)
+	}
+	if n := y.d.mesh().Len(); n != before {
+		t.Fatalf("y signed %d record(s)", n-before)
+	}
+}
+
+// A machine no member counts (revoked by another, or its admit never took effect) leaves without
+// a member taking it: there is nothing to tell, so pen leave works with every member offline.
+func TestAMachineThatIsNotAMemberLeavesWithEveryMemberOffline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	y := joiner(t, ctx, rs, a.invite(t, time.Minute), "y")
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(y.id.SignPub)}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := y.d.mesh().Merge(a.d.mesh().Records()); err != nil {
+		t.Fatal(err)
+	}
+	y.d.viewChanged()
+	stop(t, a)
+	if err := Call(y.st, Request{Op: "leave"}, &r); err != nil {
+		t.Fatalf("pen leave on a machine no member counts: %v", err)
 	}
 }

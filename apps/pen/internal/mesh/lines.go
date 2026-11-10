@@ -41,6 +41,9 @@ type Msg struct {
 	Nonce   string    `json:"nonce,omitempty"`
 	Card    *Card     `json:"card,omitempty"`
 	Reason  string    `json:"reason,omitempty"`
+	// NotMember marks a refusal by a node that is not a member of its mesh: another member may
+	// still serve the request.
+	NotMember bool `json:"notMember,omitempty"`
 	// Assertion is an account join's login assertion; ID and Member answer a queued request.
 	Assertion json.RawMessage `json:"assertion,omitempty"`
 	ID        string          `json:"id,omitempty"`

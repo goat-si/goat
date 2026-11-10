@@ -72,7 +72,9 @@ that already announced does not block the mesh; a member that never announced st
   a machine admitted by a since-revoked key that this node has not heard of yet, which passes once the members
   sync, and a machine whose admit lost to a concurrent revoke of its admitter in the canonical order, which was
   never a member anywhere and must join again (`admittedCleanly` and its tests in `mesh/check_test.go`). Such a
-  machine admits nobody (`ServeAccount` refuses before signing) and `pen ls` on it says it is not a member. This protects a join only while an honest listed node answers: a listed node that is offline,
+  machine admits nobody: the Google join (after its refresh), the invite (before it is used) and `pen approve` all
+  check `mesh.IsMember` before signing, and the refusal carries `notMember` so a Google joiner tries the next
+  listed machine. `pen ls` on it says it is not a member, and `pen leave` there needs no member to take it. This protects a join only while an honest listed node answers: a listed node that is offline,
   out of session slots or slower than the 30 s push timeout takes no part, and one older than the check
   (pen 0.2.6 and before) still refuses every joiner it does not know.
 - **The registry is not the mesh.** Any node with a valid sign-in for the account registers, even one a locked

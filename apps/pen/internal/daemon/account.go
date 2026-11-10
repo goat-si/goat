@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -182,6 +183,9 @@ func (d *Daemon) approve(ctx context.Context, arg string) (ApproveResult, error)
 	if _, gone := v.Revoked[p.SignPub]; gone {
 		return ApproveResult{}, errors.New("this key was revoked")
 	}
+	if !mesh.IsMember(d.mesh(), d.id) {
+		return ApproveResult{}, errors.New("this machine is not a member of the mesh, so its approval would not count; approve on a current member (pen ls there shows the request once the joiner asks it)")
+	}
 	m, err := mesh.AdmitAccount(d.id, d.mesh(), p.Card, mesh.Claim{SignPub: p.SignPub, NoisePub: p.Card.C.NoisePub, Email: p.Email, Hash: p.Assertion}, d.now())
 	if err != nil {
 		return ApproveResult{}, err
@@ -292,8 +296,30 @@ func (d *Daemon) forgetRevoked(old, v *mesh.View) {
 var ErrNoMemberOnline = errors.New("no member online yet")
 
 // AccountJoin races the offered members for a kind 0x04 session and runs the join on the first
-// that answers. It returns the outcome and the member that served it.
+// that answers. A machine that refuses as not a member of its mesh (still listed, but revoked or
+// never admitted) is left out and the race runs again among the rest. It returns the outcome and
+// the member that served it.
 func AccountJoin(ctx context.Context, relays []string, id *ident.Identity, name string, a *login.Assertion, members []login.OfferedMember) (mesh.AccountOutcome, login.OfferedMember, error) {
+	left := slices.Clone(members)
+	var skipped []string
+	for {
+		out, by, err := accountJoinOnce(ctx, relays, id, name, a, left)
+		var refused *mesh.RefusedError
+		if !errors.As(err, &refused) || !refused.NotMember {
+			return out, by, err
+		}
+		skipped = append(skipped, by.Name)
+		left = slices.DeleteFunc(left, func(m login.OfferedMember) bool { return m.NodeID == by.NodeID })
+		if len(left) == 0 {
+			return out, by, fmt.Errorf("every listed machine that answered (%s) is not a member of the mesh; sign in on a current member, or reset the account's machine list on the sign-in page", strings.Join(skipped, ", "))
+		}
+	}
+}
+
+// raceHooks, when set, run around each machine's dial in an account join race (tests).
+var raceHooks struct{ before, after func(nodeID string) }
+
+func accountJoinOnce(ctx context.Context, relays []string, id *ident.Identity, name string, a *login.Assertion, members []login.OfferedMember) (mesh.AccountOutcome, login.OfferedMember, error) {
 	raw, err := json.Marshal(a)
 	if err != nil {
 		return mesh.AccountOutcome{}, login.OfferedMember{}, err
@@ -306,6 +332,7 @@ func AccountJoin(ctx context.Context, relays []string, id *ident.Identity, name 
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := make(chan won, len(members))
+	before, after := raceHooks.before, raceHooks.after
 	n := 0
 	for _, m := range members {
 		noise, err := ident.DecodeKey(m.NoisePub)
@@ -314,10 +341,16 @@ func AccountJoin(ctx context.Context, relays []string, id *ident.Identity, name 
 		}
 		n++
 		go func() {
+			if before != nil {
+				before(m.NodeID)
+			}
 			sec, err := OpenAny(rctx, relays, m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
 				return session.Initiate(rctx, conn, session.KindAccount, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "account", Name: name})
 			})
 			results <- won{sec, m, err}
+			if after != nil {
+				after(m.NodeID)
+			}
 		}()
 	}
 	var first *won

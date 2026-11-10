@@ -424,8 +424,12 @@ the join succeeds once the members have synced that admit. If X's admit of Y and
 and the revoke sorts first in the canonical order, replay ignores the admit: Y was never a member in any converged view,
 no sync changes that, and Y has to join again (invite, or sign-in through a current member) before machines can join
 through it. The joiner's message says to run `pen login` again and, if it keeps failing, to join the admitting machine
-again. A node that is not a member of its mesh (revoked, or its admit never took effect) refuses an `assertion` on kind
-0x04 (`refused`, 4401) before signing anything; it still answers a `check`. A refusal also stands when the check
+again. A node that is not a member of its own view (revoked, or its admit never took effect) admits nobody: on kind 0x04 it
+answers an `assertion`, at once and again after the refresh before deciding, and on kind 0x03 a card, before the
+invite is used, with `{"t":"refused","reason":"this machine is not a member of the mesh","notMember":true}` and 4401,
+signing and queueing nothing; it still answers a `check`. A Google joiner leaves such a node out and races the other
+listed nodes again in the same sign-in; an invited joiner is told the invite was not used and to ask a current member
+for a new one. An older joiner ignores `notMember` and reports the refusal as before. A refusal also stands when the check
 does not complete. A node older than the check (pen 0.2.6 and before) answers `refused` ("expected an assertion") and
 4401, so while such a node is the one refusing, a join fails in exactly the cases the check was added for; updating it,
 or joining by invite, is the way through. A listed node that does not answer (offline, out of session slots, slower than
@@ -471,6 +475,8 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
 - v1.1 (2026-11-11): `pen relay serve` counts connections against its caps from accept, counts queued and partly read
   messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so one source alone cannot
   fill it. Relay implementation only; no wire change.
+- v1.1 (2026-11-11): `refused` may carry `"notMember":true` from a node that is not a member of its own view; joiners
+  try another node (Google join) or report that the invite was not used. Older joiners ignore the member. No vector.
 - v1.1 (2026-11-11): `pen relay serve` reads a message of up to 96 KiB per socket without a charge and larger ones
   from a separate 32 MiB pool; data that does not fit the window, the receiving address's share or the total ends only
   the session that offered it, and a session the node has not answered may send one message of at most 4096 bytes.

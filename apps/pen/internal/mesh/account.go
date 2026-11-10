@@ -87,9 +87,9 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 		return AccountResult{}, refuse(c, "expected an assertion")
 	}
 	// A machine that is not a member (revoked, or its admit never took effect) admits nobody; it
-	// still answers the check above, which only reads its records.
-	if _, member := a.Store.View().Members[ident.B64.EncodeToString(a.ID.SignPub)]; !member {
-		return AccountResult{}, refuse(c, "this machine is not a member of the mesh")
+	// still answers the check above, which only reads its records. Checked again after the refresh.
+	if !IsMember(a.Store, a.ID) {
+		return AccountResult{}, refuseNotMember(c)
 	}
 	if a.Asserted != nil {
 		a.Asserted()
@@ -130,6 +130,9 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 	// was away: sync, then decide on one view taken now.
 	if a.Refresh != nil {
 		a.Refresh()
+	}
+	if !IsMember(a.Store, a.ID) {
+		return AccountResult{}, refuseNotMember(c)
 	}
 	v := a.Store.View()
 	if claim, err = a.Check(assertion, v); err != nil {
@@ -209,7 +212,7 @@ func AccountJoin(ctx context.Context, l Link, id *ident.Identity, name string, a
 		return AccountOutcome{}, err
 	}
 	if m.T == "refused" {
-		return AccountOutcome{}, &RefusedError{Reason: m.Reason}
+		return AccountOutcome{}, &RefusedError{Reason: m.Reason, NotMember: m.NotMember}
 	}
 	if m.T != "offer" || m.Mesh == "" || !ident.ValidNodeID(m.Inviter) {
 		l.Close(wire.CodeCrypto)
@@ -230,7 +233,7 @@ func AccountJoin(ctx context.Context, l Link, id *ident.Identity, name string, a
 		}
 		switch m.T {
 		case "refused":
-			return AccountOutcome{}, &RefusedError{Reason: m.Reason}
+			return AccountOutcome{}, &RefusedError{Reason: m.Reason, NotMember: m.NotMember}
 		case "queued":
 			out.QueuedID, out.QueuedBy = m.ID, m.Member
 			return out, nil

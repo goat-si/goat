@@ -177,6 +177,9 @@ func Join(ctx context.Context, st *state.Store, id *ident.Identity, tok mesh.Tok
 
 func joinError(err error) error {
 	var refused *mesh.RefusedError
+	if errors.As(err, &refused) && refused.NotMember {
+		return errors.New("the inviting machine is no longer a member of its mesh, so it cannot add this one; the invite was not used. Ask a current member for a new invite")
+	}
 	if errors.As(err, &refused) {
 		return err
 	}

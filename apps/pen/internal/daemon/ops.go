@@ -41,8 +41,12 @@ func (d *Daemon) revoke(ctx context.Context, subject string, compromised bool) (
 func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 	v := d.view()
 	before := v.SortedMembers()
-	// A retried leave finds its own revoke already signed and only pushes it again.
-	if _, revoked := v.Revoked[d.selfKey()]; !revoked {
+	if d.countedByNoOne(v) {
+		// Revoked by another member, or admitted by an admit that never took effect: no member
+		// counts this node, so there is nothing to tell them.
+		before = nil
+	} else if _, revoked := v.Revoked[d.selfKey()]; !revoked {
+		// A retried leave finds its own revoke already signed and only pushes it again.
 		if _, err := d.mesh().Append(d.id, mesh.TypeRevoke, d.now().UnixMilli(), mesh.Fields{Subjects: []string{d.selfKey()}}); err != nil {
 			return nil, err
 		}
@@ -59,7 +63,7 @@ func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 			taken++
 		}
 	}
-	if len(res) > 0 && taken == 0 {
+	if len(before) > 0 && len(res) > 0 && taken == 0 {
 		// Deleting the keys now would leave the mesh counting this node as a member for good.
 		return res, errors.New("no member took the leave; this node keeps running and pushes it when a member's uplink returns or at its 10-minute sync, or run pen leave again")
 	}
@@ -87,6 +91,21 @@ func (d *Daemon) leave(ctx context.Context) ([]PushResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// countedByNoOne reports whether this node is not a member of v and no revoke of it is its own
+// (its own revoke still has to reach a member, or the others keep counting it).
+func (d *Daemon) countedByNoOne(v *mesh.View) bool {
+	self := d.selfKey()
+	if _, ok := v.Members[self]; ok {
+		return false
+	}
+	for _, r := range d.mesh().Records() {
+		if r.B.Type == mesh.TypeRevoke && r.B.By == self {
+			return false
+		}
+	}
+	return true
 }
 
 // join replaces a solo mesh with the one tok invites to.
