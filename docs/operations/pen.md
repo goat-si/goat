@@ -47,6 +47,13 @@ Upgrade a running node by replacing its
 A node on pen 0.2.6 or older does not know the Google join's check: while it is listed for the account and refuses a
 new machine it has not heard of (it left, or has not synced yet), that machine's `pen login` fails naming it.
 Upgrade it, or add the machine with an invite.
+`pen up` rewrites the service unit or plist; replacing the binary does not. A unit written by pen 0.2.6 or older runs
+`pen up --foreground` without `--service`, and a refused start (a stored relay list pen no longer accepts) then exits
+non-zero. pen recognises such a start by `SYSTEMD_EXEC_PID` (systemd 248 and later) or by `XPC_SERVICE_NAME` being
+`si.goat.pen` (launchd) and exits 0 as the new unit does. On systemd older than 248, run `pen up` once after
+upgrading; until then systemd restarts the unit every 2 s (`RestartSec=2`, no start limit of its own) until its default
+start limit (5 starts in 10 s) marks it failed. A shell or container that carries `XPC_SERVICE_NAME=si.goat.pen`, or
+the internal `--service` flag, likewise makes a refused `pen up --foreground` print the reason and exit 0.
 
 ## pen-relay Worker
 
