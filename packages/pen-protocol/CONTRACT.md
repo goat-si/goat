@@ -223,14 +223,16 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   a message 2 that fails to verify at the client may be a relay's forgery, so the client closes that socket 4400 and
   keeps racing. Losers finish their dial before their close (an aborted handshake would reach the node as 1006);
   dials have their own 15 s deadline and each handshake the 10 s one. A relay where the node is offline closes 4404;
-  a relay that is down never connects.
+  a relay that is down never connects. Close codes are not authenticated, so a hostile relay can also close 4401 or
+  4400 itself and end the race; that is an availability limit, the same as a relay that drops the socket.
 - Ping race (kinds 0x03 and 0x04): a join's message 1 names a single-use invite and an account session reserves one
   of the node's account slots at message 1, so these send message 1 on one socket only. The client sends the text
   `ping` on every socket, keeps the first that answers `pong` and closes every other socket with 1000 before sending
   any other byte (Doriterm #1351 rule). Losers finish their dial first, and the race has its own 15 s deadline. A
   relay where the node is offline closes 4404 before any pong, so it never wins.
 - Fallback (ping race): a relay can answer `pong` for a stale uplink. When the handshake on the winning socket fails
-  with anything but 4401 or 4400 (the node's own answers), the client drops that relay and races the rest.
+  with anything but a 4401 or 4400 close or a message 2 that fails to verify, the client drops that relay and races
+  the rest; those three end the attempt.
 - Token v2: `pen1_` + base64url(no padding) of
   `version (2) || signPub (32) || noisePub (32) || secret (32) || relay URLs (UTF-8, joined by LF)`: 1 to 8 URLs,
   each 1 to 256 bytes, naming distinct relay origins (`https://a` and `wss://A:443` are one relay), `https` or `wss` (`http` or `ws` only for loopback hosts, which local test

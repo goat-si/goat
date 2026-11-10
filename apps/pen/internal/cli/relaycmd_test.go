@@ -290,6 +290,8 @@ func TestRelayDownloadTakesOnlyAnHTTPSOriginOrALoopbackHTTPOne(t *testing.T) {
 	for _, bad := range []string{
 		"http://relay.example", "wss://relay.example", "https://relay.example/dl", "https://relay.example?x=1",
 		"https://relay.example#top", "https://user@relay.example", "relay.example", "https://",
+		// Invites print it into a curl | sh line, so a host must not carry shell syntax.
+		"https://a;b", "https://a$(id)", "https://a&b", "https://a'b", "https://a%20b", "https://a`id`",
 	} {
 		var out, errOut bytes.Buffer
 		if code := RunRelay([]string{"download", bad}, &out, &errOut); code == 0 {

@@ -365,9 +365,25 @@ func downloadOrigin(u string) error {
 	}
 	host := p.Hostname()
 	ip := net.ParseIP(host)
+	if ip == nil && !dnsName(host) {
+		return bad
+	}
 	loopback := strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback()
 	if p.Scheme != "https" && (p.Scheme != "http" || !loopback) {
 		return bad
 	}
 	return nil
+}
+
+// dnsName reports a host made only of letters, digits, dots and hyphens, so it carries no shell syntax.
+func dnsName(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	for _, c := range h {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-') {
+			return false
+		}
+	}
+	return true
 }

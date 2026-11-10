@@ -22,12 +22,23 @@ const ApproveQuestion = "Approve this machine? It gets full access to every mach
 
 // InstallCommand installs pen on a new machine and joins the mesh token invites to.
 func InstallCommand(downloadRelay, token string) string {
-	return "curl -fsSL " + downloadRelay + "/install.sh | sh -s -- --join " + token
+	return "curl -fsSL " + shellWord(downloadRelay+"/install.sh") + " | sh -s -- --join " + shellWord(token)
 }
 
 // LoginCommand installs pen on a new machine and signs it in with Google.
 func LoginCommand(downloadRelay string) string {
-	return "curl -fsSL " + downloadRelay + "/install.sh | sh -s -- --login"
+	return "curl -fsSL " + shellWord(downloadRelay+"/install.sh") + " | sh -s -- --login"
+}
+
+// shellWord leaves a plain URL or token as it is and single-quotes anything else (config.json can be
+// edited by hand), so a copied command never runs text from the value.
+func shellWord(s string) string {
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune(":/._-", c)) {
+			return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+		}
+	}
+	return s
 }
 
 // CompromisedNextSteps is what to do after revoking a stolen member of a mesh bound to acct
