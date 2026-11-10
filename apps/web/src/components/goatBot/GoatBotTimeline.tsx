@@ -475,7 +475,7 @@ export function GoatBotTimeline({
         </ol>
       </div>
       {unread && dividerAbove && !pillDismissed ? (
-        <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-primary text-primary-foreground shadow-sm">
+        <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-primary text-primary-foreground shadow-sm ring-2 ring-background">
           <Button size="sm" onClick={jumpToUnread}>
             {unread.count === 1 ? "1 new message" : `${unread.count} new messages`}
           </Button>
