@@ -383,6 +383,52 @@ describe("pen-login contract (Accounts v1.1)", () => {
     expect((await register(service, fresh, MESH_B)).status).toBe(200);
   });
 
+  it("a reset ends a device flow waiting at its confirmation page: confirm, poll and register all fail, and a new flow from that browser goes to Google again", async () => {
+    const sub = "610000000000000000061";
+    const kept = await signIn(service, issuer, { sub }, "kept-page");
+    expect(kept.callback.status).toBe(200);
+
+    await resetAccount(service, issuer, sub);
+
+    const approve = await kept.browser.post("/device/confirm", {
+      csrf: kept.callback.csrf ?? "",
+      action: "approve",
+    });
+    expect(approve.status).toBe(403);
+    expect((await poll(service.url, kept.machine, kept.deviceCode)).json).toEqual({
+      status: "denied",
+    });
+    const machine = await device("again");
+    const started = await startDevice(service.url, machine);
+    const entry = await kept.browser.get("/device");
+    const sent = await kept.browser.post("/device", {
+      code: String(started.json.userCode),
+      csrf: entry.csrf ?? "",
+    });
+    expect(sent.status).toBe(303);
+    expect(sent.location?.startsWith(`${issuer.url}/authorize?`)).toBe(true);
+  });
+
+  it("a Google sign-in that left for Google before a reset is refused when it comes back", async () => {
+    const sub = "620000000000000000062";
+    const machine = await device("in-flight");
+    const started = await startDevice(service.url, machine);
+    const browser = new Browser(service.url);
+    const entry = await browser.get("/device");
+    const sent = await browser.post("/device", {
+      code: String(started.json.userCode),
+      csrf: entry.csrf ?? "",
+    });
+    issuer.next = { sub };
+    const google = await fetch(sent.location ?? "", { redirect: "manual" });
+
+    await resetAccount(service, issuer, sub);
+
+    const back = await browser.get(google.headers.get("location") ?? "");
+    expect(back.status).toBe(403);
+    expect(back.csrf).toBeNull();
+  });
+
   it("replaying a callback URL, even when the provider would redeem its code again, shows the error page", async () => {
     issuer.allowCodeReuse = true;
     try {
