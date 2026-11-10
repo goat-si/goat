@@ -251,11 +251,14 @@ Branches and thread history stay.
 Merge cleanup requires a merged pull request whose commits are included in the remote default
 branch. A squash or rebase merge on GitHub also counts when the pull request targeted the default
 branch and the worktree is still at the pull request’s last commit.</p>
-<p>Before automatic worktree cleanup starts for the first time, GOAT shows a preview. After you
-see it, cleanup can start 24 hours later; some remote environments require confirmation instead.
-The preview approves the rules and a count, not specific paths. If more worktrees become eligible,
-GOAT shows a new preview before starting. <strong>Clean up now</strong> confirms the preview; <strong>Delete now</strong>
-alone does not. Review or turn off the default rules in <strong>Settings → Storage</strong>.</p>
+<p>Automatic cleanup removes eligible worktrees as soon as it runs. To see what it would remove
+first, turn on <strong>Preview before automatic cleanup</strong> in <strong>Settings → Storage</strong>. GOAT then shows a
+preview before cleanup starts, and cleanup starts 24 hours after you see it; on a server started
+over SSH, including one GOAT installed there, it waits for <strong>Clean up now</strong> instead. The preview
+approves the rules and a count, not specific paths. If more worktrees become eligible, or you turn
+the preview off and on again, GOAT shows a new preview before the next cleanup; a cleanup already
+running may finish under the earlier approval. <strong>Delete now</strong> alone does not confirm a preview.
+Review or turn off the default rules in <strong>Settings → Storage</strong>.</p>
 <p>When you open a cleaned thread, choose <strong>Restore</strong> in its banner. Sending a message also restores
 the worktree automatically. If restoration fails, the banner offers <strong>Start in a new worktree</strong>;
 the saved snapshot remains available for manual recovery.</p>
