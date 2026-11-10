@@ -12,6 +12,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import type { CodexAppServerMessageChannel } from "effect-codex-app-server/client";
 import { blocksSession, recordKey, servesSession } from "./CodexRecordSessions.ts";
+import { goalKey, sameGoal, sameStop, stopKey } from "./CodexFenceKeys.ts";
 import type {
   CodexGoalBlock,
   CodexInstanceRecordKey,
@@ -476,23 +477,6 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       }),
     );
 
-  const sameStop = (a: CodexStopObligation, b: CodexStopObligation) =>
-    a.threadId === b.threadId &&
-    a.nativeThreadId === b.nativeThreadId &&
-    a.nativeTurnId === b.nativeTurnId;
-  const sameGoal = (a: CodexGoalBlock, b: CodexGoalBlock) =>
-    a.threadId === b.threadId && a.nativeThreadId === b.nativeThreadId;
-  const stopKey = (key: CodexInstanceRecordKey, stop: CodexStopObligation) =>
-    JSON.stringify([
-      "stop",
-      key.instanceId,
-      key.recordName,
-      stop.threadId,
-      stop.nativeThreadId,
-      stop.nativeTurnId,
-    ]);
-  const goalKey = (key: CodexInstanceRecordKey, goal: CodexGoalBlock) =>
-    JSON.stringify(["goal", key.instanceId, key.recordName, goal.threadId, goal.nativeThreadId]);
   const recordStopObligation = (key: CodexInstanceRecordKey, stop: CodexStopObligation) =>
     Effect.sync(() => {
       failedFences.set(stopKey(key, stop), stop.threadId);
@@ -512,10 +496,18 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
         }),
       ),
     );
-  const clearStopObligation = (key: CodexInstanceRecordKey, stop: CodexStopObligation) =>
+  /** `releaseGoal` drops the goal block of the stop's native thread in the same write. */
+  const clearStopObligation = (
+    key: CodexInstanceRecordKey,
+    stop: CodexStopObligation,
+    releaseGoal = false,
+  ) =>
     mutateFence(key, (record) => ({
       ...record,
       stopObligations: (record.stopObligations ?? []).filter((entry) => !sameStop(entry, stop)),
+      ...(releaseGoal
+        ? { goalBlocks: (record.goalBlocks ?? []).filter((goal) => !sameGoal(goal, stop)) }
+        : {}),
     }));
   const assignSession = (key: CodexInstanceRecordKey, providerSessionId: ProviderSessionId) =>
     mutateFence(key, (record) => ({

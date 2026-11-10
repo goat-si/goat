@@ -33,17 +33,17 @@ type Outcome = OrchestrationV2StopHeldTurnResult["outcome"];
 const isDetachedError = Schema.is(CodexDetachedAppServerError);
 
 /**
- * Stops the named turn when it still holds the thread as a turn no run owns, then releases the
- * fences in the order admission reads them: the stop fence quietly, the goal block (the goal is
- * paused by then), and finally a wake so the waiting start is claimed.
+ * Stops the named turn when it still holds the thread as a turn no run owns. Its stop fence and
+ * the goal block of its native thread (the goal is paused by then) go in one write, so no polling
+ * worker sees the thread free while admission would still refuse it; a wake follows.
  */
 export const stopHeldTurn = Effect.fn("CodexHeldTurnStop.stopHeldTurn")(function* <E>(input: {
   readonly survivors: Pick<
     CodexSurvivors["Service"],
-    "list" | "getStopObligations" | "getGoalBlocks" | "clearGoalBlock" | "clearStopObligation"
+    "list" | "getStopObligations" | "clearStopObligation"
   >;
-  /** Clears a stop fence without waking queued starts. */
-  readonly clearStopQuietly: (
+  /** Clears the stop fence and its native thread's goal block in one write, without a wake. */
+  readonly release: (
     record: CodexInstanceRecordKey,
     turn: CodexStopObligation,
   ) => Effect.Effect<void, CodexDetachedAppServerError>;
@@ -64,10 +64,7 @@ export const stopHeldTurn = Effect.fn("CodexHeldTurnStop.stopHeldTurn")(function
   // A turn that survived a restart belongs to a run and stops with it.
   if (held === undefined || survivorTurn) return "none" satisfies Outcome;
   if (!(yield* input.stop(held.record, held.block))) return "stopping" satisfies Outcome;
-  yield* input.clearStopQuietly(held.record, held.block);
-  if ((yield* input.survivors.getStopObligations(input.threadId)).length === 0)
-    for (const { record, block } of yield* input.survivors.getGoalBlocks(input.threadId))
-      yield* input.survivors.clearGoalBlock(record, block);
+  yield* input.release(held.record, held.block);
   yield* input.survivors.clearStopObligation(held.record, held.block);
   return "stopped" satisfies Outcome;
 });
@@ -160,7 +157,8 @@ export const heldTurnRpcHandlers = Effect.gen(function* () {
         ? Effect.succeed<Outcome>("none")
         : stopHeldTurn({
             survivors: survivors.value,
-            clearStopQuietly: detached.value.clearStopObligation,
+            release: (record, turn) =>
+              detached.value.clearStopObligation(record, turn, true).pipe(Effect.asVoid),
             threadId: input.threadId,
             nativeTurnId: input.nativeTurnId,
             stop: (record, turn) => stopTurnOnRecord(detached.value, record, turn),

@@ -32,8 +32,37 @@ const heldStart = (
     const threadId = ThreadId.make(`held-${name}`);
     const turn = { threadId, nativeThreadId: "native-thread", nativeTurnId: "goal-turn" };
     const obligations = yield* Ref.make([turn]);
-    const goalBlocks = yield* Ref.make([{ threadId, nativeThreadId: "native-thread" }]);
+    // The second block guards another native thread whose goal this stop never checks.
+    const goalBlocks = yield* Ref.make([
+      { threadId, nativeThreadId: "native-thread" },
+      { threadId, nativeThreadId: "other-native-thread" },
+    ]);
     const goalBlocksAtWake = yield* Ref.make<number | undefined>(undefined);
+    /** Set when the start guard stopped holding the thread while its goal block still stood. */
+    const unfencedWithGoal = yield* Ref.make(false);
+    // Like the record store: one write per call, with the goal of that native thread on request.
+    const clearStop = (
+      _record: unknown,
+      cleared: { readonly nativeThreadId: string; readonly nativeTurnId: string },
+      releaseGoal?: boolean,
+    ) =>
+      Effect.gen(function* () {
+        const held = (yield* Ref.get(obligations)).filter(
+          (entry) => entry.nativeTurnId !== cleared.nativeTurnId,
+        );
+        yield* Ref.set(obligations, held);
+        if (releaseGoal === true)
+          yield* Ref.update(goalBlocks, (blocks) =>
+            blocks.filter((block) => block.nativeThreadId !== cleared.nativeThreadId),
+          );
+        if (
+          held.length === 0 &&
+          (yield* Ref.get(goalBlocks)).some(
+            (block) => block.nativeThreadId === cleared.nativeThreadId,
+          )
+        )
+          yield* Ref.set(unfencedWithGoal, true);
+      }).pipe(Effect.as(undefined));
     const detached = Layer.mock(CodexDetached.CodexDetachedAppServers)({
       socketTransportEnabled: true,
       stopFencedThreads: Ref.get(obligations).pipe(
@@ -41,18 +70,18 @@ const heldStart = (
       ),
       getStopObligations: () =>
         Ref.get(obligations).pipe(Effect.map((held) => held.map((block) => ({ record, block })))),
-      clearStopObligation: (_record, cleared) =>
-        Ref.update(obligations, (held) =>
-          held.filter((entry) => entry.nativeTurnId !== cleared.nativeTurnId),
-        ).pipe(Effect.as(undefined)),
+      clearStopObligation: clearStop,
       getGoalBlocks: () =>
         Ref.get(goalBlocks).pipe(
           Effect.map((blocks) => blocks.map((block) => ({ record, block }))),
         ),
       // Like the record store: a goal block stays while any stop fence holds its thread.
-      clearGoalBlock: () =>
+      clearGoalBlock: (_record, block) =>
         Effect.gen(function* () {
-          if ((yield* Ref.get(obligations)).length === 0) yield* Ref.set(goalBlocks, []);
+          if ((yield* Ref.get(obligations)).length === 0)
+            yield* Ref.update(goalBlocks, (blocks) =>
+              blocks.filter((entry) => entry.nativeThreadId !== block.nativeThreadId),
+            );
         }).pipe(Effect.as(undefined)),
     });
     return yield* Effect.gen(function* () {
@@ -85,10 +114,7 @@ const heldStart = (
       const stopped: Array<string> = [];
       const outcome = yield* stopHeldTurn({
         survivors,
-        clearStopQuietly: (_record, cleared) =>
-          Ref.update(obligations, (held) =>
-            held.filter((entry) => entry.nativeTurnId !== cleared.nativeTurnId),
-          ),
+        release: (heldRecord, cleared) => clearStop(heldRecord, cleared, true),
         threadId,
         nativeTurnId: options.turnId,
         stop: (_record, target) =>
@@ -97,18 +123,39 @@ const heldStart = (
             return options.confirmed;
           }),
       });
-      return { outbox, claim, outcome, stopped, obligations, goalBlocks, goalBlocksAtWake };
+      return {
+        outbox,
+        claim,
+        outcome,
+        stopped,
+        obligations,
+        goalBlocks,
+        goalBlocksAtWake,
+        unfencedWithGoal,
+      };
     }).pipe(Effect.provide(CodexSurvivors.layer.pipe(Layer.provide(detached))));
   });
 
-it.effect("stopping the shown turn releases both fences before the waiting message starts", () =>
+it.effect("stopping the shown turn releases its stop fence and goal block in one step", () =>
   Effect.gen(function* () {
     const held = yield* heldStart("confirmed", { confirmed: true, turnId: "goal-turn" });
     assert.strictEqual(held.outcome, "stopped");
     assert.deepStrictEqual(held.stopped, ["goal-turn"]);
-    assert.strictEqual(yield* Ref.get(held.goalBlocksAtWake), 0);
+    // A worker that polls between two writes must never find the thread unfenced but goal-blocked.
+    assert.isFalse(yield* Ref.get(held.unfencedWithGoal));
     yield* held.outbox.awaitStartAvailable;
     assert.strictEqual(Option.getOrThrow(yield* held.claim).id, "start-confirmed");
+  }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
+);
+
+it.effect("the goal block of another native thread stays when the shown turn stops", () =>
+  Effect.gen(function* () {
+    const held = yield* heldStart("other-goal", { confirmed: true, turnId: "goal-turn" });
+    assert.strictEqual(held.outcome, "stopped");
+    assert.deepStrictEqual(
+      (yield* Ref.get(held.goalBlocks)).map((block) => block.nativeThreadId),
+      ["other-native-thread"],
+    );
   }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );
 
@@ -138,7 +185,7 @@ it.effect("a stop Codex has not confirmed keeps the message waiting behind the t
     const held = yield* heldStart("unconfirmed", { confirmed: false, turnId: "goal-turn" });
     assert.strictEqual(held.outcome, "stopping");
     assert.lengthOf(yield* Ref.get(held.obligations), 1);
-    assert.lengthOf(yield* Ref.get(held.goalBlocks), 1);
+    assert.lengthOf(yield* Ref.get(held.goalBlocks), 2);
     assert.isTrue(Option.isNone(yield* held.claim));
   }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );
