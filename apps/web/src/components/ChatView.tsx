@@ -13,7 +13,7 @@ import { usePullRequestDraftThread } from "./chat/usePullRequestDraftThread";
 import { useComposerSelection } from "./chat/useComposerSelection";
 import { useProjectCloneBanner } from "./chat/useProjectCloneBanner";
 import { useThreadWorkspaceStatus, workspaceUnavailable } from "./chat/useThreadWorkspaceStatus";
-import { ThreadWorkspaceBanner } from "./chat/ThreadWorkspaceBanner";
+import { ThreadWorkspaceBanner, threadWorkspaceNeedsAttention } from "./chat/ThreadWorkspaceBanner";
 import { useAttachmentPreviewHandoff } from "./chat/useAttachmentPreviewHandoff";
 import {
   applyOptimisticUserMessagesAction,
@@ -2760,17 +2760,17 @@ export default function ChatView(props: ChatViewProps) {
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
     const workspaceItems =
-      activeThreadRef &&
-      (workspaceStatus.data?.state === "cleaned" || workspaceStatus.data?.state === "missing")
+      activeThreadRef && workspaceStatus.data && threadWorkspaceNeedsAttention(workspaceStatus.data)
         ? [
             {
               id: "thread-workspace",
-              variant: "warning" as const,
+              variant:
+                workspaceStatus.data.state === "present" ? ("info" as const) : ("warning" as const),
               content: (
                 <ThreadWorkspaceBanner
                   key={activeThreadKey}
                   threadRef={activeThreadRef}
-                  state={workspaceStatus.data.state}
+                  status={workspaceStatus.data}
                   refresh={workspaceStatus.refresh}
                 />
               ),

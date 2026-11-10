@@ -55,7 +55,7 @@ it.effect("remote outage retries use independent bounded jitter without relaunch
   }).pipe(Effect.provide(database)),
 );
 
-it.effect("host unavailability sleeps before retry and read-key refusal becomes lost", () =>
+it.effect("a refusal right after a host outage is retried; one after the grace becomes lost", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Effect.gen(function* () {
@@ -74,6 +74,20 @@ it.effect("host unavailability sleeps before retry and read-key refusal becomes 
       assert.equal(yield* Queue.size(f.calls), 0);
       yield* TestClock.adjust("1 second");
       yield* Queue.take(f.calls);
+      yield* f.replyLatest(
+        Effect.fail(
+          new Ssh.SshRemoteDispatchError({
+            reason: "remote_refused",
+            remoteCode: "capability_denied",
+            message: "fixture",
+          }),
+        ),
+      );
+      // The host's GOAT server may still be starting: the same read is tried again.
+      yield* TestClock.adjust("5 seconds");
+      yield* Queue.take(f.calls);
+      assert.equal((yield* c.get(launched.correlationId))!.state, "running");
+      yield* TestClock.adjust("10 minutes");
       yield* f.replyLatest(
         Effect.fail(
           new Ssh.SshRemoteDispatchError({

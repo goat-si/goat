@@ -334,7 +334,7 @@ it.effect("refuses watch when the calling thread loses orchestration:read", () =
   }),
 );
 
-it.effect("refuses a local watch without orchestration:operate", () =>
+it.effect("watches a local thread with read access, without copying its checkpoints", () =>
   Effect.gen(function* () {
     const { invocation, requested } = watchScope(["orchestration:read"]);
     const { result, calls, registrations } = yield* runService(
@@ -342,6 +342,23 @@ it.effect("refuses a local watch without orchestration:operate", () =>
       (service) => service.watchThread(invocation, { threadId: ThreadId.make("remote-1") }),
     );
     expect(calls).toHaveLength(0);
+    expect(result._tag).toBe("Success");
+    expect(registrations).toMatchObject([{ checkpointReplication: "off" }]);
+    expect(requested).toEqual(["orchestration:operate", "orchestration:read"]);
+  }),
+);
+
+it.effect("refuses local checkpoint replication without orchestration:operate", () =>
+  Effect.gen(function* () {
+    const { invocation, requested } = watchScope(["orchestration:read"]);
+    const { result, registrations } = yield* runService(
+      { interactionMode: "default", hostCall: () => Effect.succeed(remoteWatchRead) },
+      (service) =>
+        service.watchThread(invocation, {
+          threadId: ThreadId.make("remote-1"),
+          checkpointReplication: "on",
+        }),
+    );
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.code).toBe("capability_denied");
     expect(registrations).toHaveLength(0);

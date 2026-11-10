@@ -21,6 +21,7 @@ import {
   ThreadId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
+  type GitManagerServiceError,
   type WorktreeKeepWhen,
   type StorageCleanupSettings,
   type TerminalMetadataStreamEvent,
@@ -102,6 +103,9 @@ export const cleanupFixture = (
     let fullStatusCalls = 0;
     let gitfileDiagnostic: string | null = null;
     let snapshotReads = 0;
+    let pullRequest: Effect.Effect<GitManager.GitBranchPullRequest | null, GitManagerServiceError> =
+      Effect.succeed(null);
+    let pullRequestLookups = 0;
     let terminalListener: ((event: TerminalMetadataStreamEvent) => Effect.Effect<void>) | undefined;
     let events: Stream.Stream<OrchestrationV2DomainEvent> = Stream.empty;
     const activated = yield* Deferred.make<void>();
@@ -218,6 +222,11 @@ export const cleanupFixture = (
         )) as unknown as SqlClient.SqlClient),
       Effect.provideService(GitManager.GitManager, {
         invalidateStatus: () => Effect.void,
+        branchPullRequest: () =>
+          Effect.suspend(() => {
+            pullRequestLookups++;
+            return pullRequest;
+          }),
       } as unknown as GitManager.GitManager["Service"]),
       Effect.provideService(TerminalManager.TerminalManager, {
         subscribeMetadata: (
@@ -317,6 +326,12 @@ export const cleanupFixture = (
         gitfileDiagnostic = diagnostic;
       },
       snapshotReads: () => snapshotReads,
+      setPullRequest: (
+        next: Effect.Effect<GitManager.GitBranchPullRequest | null, GitManagerServiceError>,
+      ) => {
+        pullRequest = next;
+      },
+      pullRequestLookups: () => pullRequestLookups,
       activate: (domainEvents: Stream.Stream<OrchestrationV2DomainEvent>) => {
         events = domainEvents;
         return Deferred.succeed(activated, undefined);

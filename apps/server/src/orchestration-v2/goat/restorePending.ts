@@ -11,6 +11,8 @@ export const RestorePendingState = Schema.Struct({
   headSha: Schema.String,
   snapshotSha: Schema.NullOr(Schema.String),
   snapshotRef: Schema.NullOr(Schema.String),
+  /** Set once the snapshot is in the folder; before that a resumed restore must start over. */
+  applied: Schema.optionalKey(Schema.Boolean),
 });
 export type RestorePendingState = typeof RestorePendingState.Type;
 
