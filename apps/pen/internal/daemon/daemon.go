@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"sync"
 	"syscall"
@@ -76,10 +77,9 @@ type Daemon struct {
 	nextLive uint64
 	watchers map[chan []byte]struct{}
 	seen     map[string]seenInfo
-	// versions is what each peer (by Noise key) announced in its last sync hello, numbered by
-	// helloSeq so a check counts only hellos of its own round.
-	versions map[string]heard
-	helloSeq uint64
+	// versions is what each peer (by Noise key) announced in its last sync hello, kept in
+	// versions.json so an offline member's last announcement still counts.
+	versions map[string]string
 	// acct are the running kind 0x04 sessions, oldest first.
 	acct       []*acctSlot
 	inviteWait map[string]chan mesh.Member
@@ -178,6 +178,10 @@ func New(opt Options) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
+	versions, err := loadVersions(st)
+	if err != nil {
+		return nil, err
+	}
 	forgets, err := loadForgets(st)
 	if err != nil {
 		return nil, err
@@ -185,7 +189,7 @@ func New(opt Options) (*Daemon, error) {
 	d := &Daemon{
 		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites, pending: pending, forgets: forgets,
 		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, seen: map[string]seenInfo{},
-		versions: map[string]heard{}, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
+		versions: versions, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
 	}
 	switch opt.SSHUser {
 	case "":
@@ -524,9 +528,18 @@ func (d *Daemon) helloFrom(noisePub []byte) mesh.Hello {
 	k := ident.B64.EncodeToString(noisePub)
 	return func(pen string) {
 		d.mu.Lock()
-		d.helloSeq++
-		d.versions[k] = heard{pen: pen, seq: d.helloSeq}
+		changed := d.versions[k] != pen
+		d.versions[k] = pen
+		var snapshot map[string]string
+		if changed {
+			snapshot = maps.Clone(d.versions)
+		}
 		d.mu.Unlock()
+		if changed {
+			if err := d.saveVersions(snapshot); err != nil {
+				d.opt.Logf("%s: %v", VersionsFile, err)
+			}
+		}
 	}
 }
 
@@ -539,10 +552,4 @@ func (d *Daemon) announce() string {
 		return ""
 	}
 	return d.opt.Announce
-}
-
-// heard is a version a peer announced and when, by hello count.
-type heard struct {
-	pen string
-	seq uint64
 }

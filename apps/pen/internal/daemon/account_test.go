@@ -592,3 +592,45 @@ func TestWithFourAssertedAccountSessionsAFifthIsRefused4429(t *testing.T) {
 		t.Fatalf("fifth session: %v, want 4429", err)
 	}
 }
+
+func TestAnOfflineMemberThatAnnounced11EarlierDoesNotBlockLockButOneThatNeverDid(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	var r map[string]any
+	for _, on := range []bool{true, false} {
+		if err := Call(a.st, Request{Op: "lock", On: on}, &r); err != nil {
+			t.Fatalf("lock %v with b online: %v", on, err)
+		}
+	}
+	// b goes offline and a restarts: only a's stored record of b's announcement remains.
+	stop := func(n *node) {
+		n.d.Stop()
+		if err := <-n.done; err != nil {
+			t.Fatal(err)
+		}
+		n.done <- nil
+	}
+	stop(b)
+	stop(a)
+	a2 := start(t, ctx, rs, a.st, nil)
+	if err := Call(a2.st, Request{Op: "lock", On: true}, &r); err != nil {
+		t.Fatalf("lock with b offline after it announced 1.1: %v", err)
+	}
+	// c joins but never runs, so it never announces a version.
+	st := shortDir(t)
+	tok := a2.invite(t, time.Minute)
+	id := identity(t, st, tok.Relays[0], "c")
+	s, err := Join(ctx, st, id, tok, "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Save()
+	err = Call(a2.st, Request{Op: "lock", On: false}, &r)
+	if err == nil || !strings.HasSuffix(err.Error(), ": c") {
+		t.Fatalf("unlock with c never heard from: %v, want a refusal naming c only", err)
+	}
+}
