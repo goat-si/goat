@@ -396,6 +396,34 @@ it.layer(ServerSettings.layerTest())("desktop generation fences", (it) => {
     ),
   );
 
+  it.effect(
+    "regression #2720: a follow-up fence queued with no active driver lets a newer host pass",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* generationFixture(1, undefined);
+        if (!f.service.markBrowserFence) return expect.fail("missing follow-up fence");
+        yield* f.service.acquire;
+        yield* Deferred.await(f.firstSupported);
+        yield* f.setEnabled(false);
+        yield* Deferred.await(f.stopRequested);
+        const followUp = f.service.markBrowserFence();
+        expect(yield* followUp.run).toBe(false);
+        yield* f.setGeneration(2);
+        yield* f.setEnabled(true);
+        yield* f.service.acquire;
+        yield* Deferred.await(f.secondProbeStarted);
+        yield* Deferred.succeed(f.releaseStop, undefined);
+        yield* Deferred.succeed(f.releaseSecondProbe, undefined);
+        yield* Deferred.await(f.secondProbeFinished);
+        expect(f.supported()).toBe(true);
+        expect((yield* f.request).status).toBe("pending");
+      }).pipe(
+        Effect.provideService(Scheduler.PreventSchedulerYield, true),
+        Effect.scoped,
+        Effect.provide(NodeCrypto.layer),
+      ),
+  );
+
   it.effect("a queued fence blocks a delayed probe before acquiring the lifecycle permit", () =>
     Effect.gen(function* () {
       const probeStarted = yield* Deferred.make<void>();
