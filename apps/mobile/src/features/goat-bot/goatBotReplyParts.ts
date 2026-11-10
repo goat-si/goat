@@ -10,9 +10,10 @@ export type GoatBotReplyPart =
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
 const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const DELIMITER_CELL = /^:?-+:?$/;
-// Lines that open another block, which ends a table.
+// Lines that open another block, which ends a table. HTML means a tag or <! / <?; an autolink such
+// as <https://…> is inline and stays in its row.
 const OTHER_BLOCK =
-  /^ {0,3}(?:>|#{1,6}(?:\s|$)|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|(?:[-*_] *){3,}$|`{3,}|~{3,}|<)/;
+  /^ {0,3}(?:>|#{1,6}(?:\s|$)|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|(?:[-*_] *){3,}$|`{3,}|~{3,}|<\/?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)|<[!?])/;
 // HTML blocks that run past blank lines, with what ends each.
 const RAW_HTML: ReadonlyArray<readonly [RegExp, RegExp]> = [
   [/^ {0,3}<(?:pre|script|style|textarea)(?:\s|>|$)/i, /<\/(?:pre|script|style|textarea)>/i],

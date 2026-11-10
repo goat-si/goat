@@ -92,6 +92,13 @@ describe("splitGoatBotReply", () => {
     });
   });
 
+  it("keeps a row that starts with an autolink in its table", () => {
+    const rows = ["| A | B |", "| - | - |", "<https://example.com> | value"];
+    expect(splitGoatBotReply(rows.join("\n"))).toEqual([
+      { kind: "table", markdown: rows.join("\n"), columns: 2 },
+    ]);
+  });
+
   it("returns one prose part for text without a table", () => {
     expect(splitGoatBotReply("Just words.")).toEqual(prose("Just words."));
   });
