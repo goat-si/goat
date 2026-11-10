@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -59,6 +60,9 @@ type dashboard struct {
 	d    *Daemon
 	srv  *http.Server
 	port string
+	// key derives each session's server id, which the page checks on every response; it never
+	// leaves the daemon, so a program on the port after the dashboard stops cannot forge the id.
+	key []byte
 
 	mu       sync.Mutex
 	token    [32]byte // sha256 of the outstanding one-time token
@@ -109,7 +113,9 @@ func (d *Daemon) startDashboard() (*dashboard, error) {
 	if err != nil {
 		return nil, err
 	}
-	ds := &dashboard{d: d, port: strconv.Itoa(ln.Addr().(*net.TCPAddr).Port), sessions: map[[32]byte]uint64{}}
+	key := make([]byte, 32)
+	rand.Read(key)
+	ds := &dashboard{d: d, port: strconv.Itoa(ln.Addr().(*net.TCPAddr).Port), key: key, sessions: map[[32]byte]uint64{}}
 	ds.srv = &http.Server{
 		Handler:           ds.routes(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -207,6 +213,13 @@ func (ds *dashboard) exchange(tok string) (string, bool) {
 	return bearer, true
 }
 
+// serverID is HMAC-SHA256(key, bearer): the id /api/session hands the page with its bearer.
+func (ds *dashboard) serverID(bearer string) string {
+	m := hmac.New(sha256.New, ds.key)
+	m.Write([]byte(bearer))
+	return ident.B64.EncodeToString(m.Sum(nil))
+}
+
 // bearerOf is the Authorization bearer; cookies never authenticate.
 func bearerOf(r *http.Request) (string, bool) {
 	b, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -277,6 +290,11 @@ func (ds *dashboard) routes() http.Handler {
 func (ds *dashboard) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
+		// Every answer to a request carrying a bearer, refusals included, names that session's
+		// server id; a caller without the bearer never sees it.
+		if b, ok := bearerOf(r); ok {
+			h.Set("X-Pen-Server", ds.serverID(b))
+		}
 		h.Set("Cache-Control", "no-store")
 		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -369,7 +387,7 @@ func (ds *dashboard) handleSession(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusUnauthorized, "this link was already used or has expired; run pen dashboard for a new one")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"bearer": bearer})
+	writeJSON(w, http.StatusOK, map[string]string{"bearer": bearer, "server": ds.serverID(bearer)})
 }
 
 func isHex(s string) bool {

@@ -3,7 +3,12 @@
 // fragment and is traded for a bearer kept in sessionStorage; every API call sends it.
 (() => {
   const KEY = "pen.dashboard.bearer";
+  const SERVER_KEY = "pen.dashboard.server";
   const POLL_MS = 3000;
+  // A request that outlives these ends the tab: state polls are quick, actions may push to every
+  // member (the server allows them 90 s).
+  const STATE_TIMEOUT_MS = 10000;
+  const ACTION_TIMEOUT_MS = 95000;
   const $ = (id) => document.getElementById(id);
 
   function h(tag, attrs, ...kids) {
@@ -34,6 +39,8 @@
   }
 
   let bearer = sessionStorage.getItem(KEY);
+  // server is this session's server id: only the dashboard that issued the bearer can name it.
+  let server = sessionStorage.getItem(SERVER_KEY);
   let state = null;
   let offset = 0; // client clock minus daemon clock
   let lastKey = "";
@@ -42,8 +49,6 @@
   let polling = false;
   let pollAgain = false;
   let retried503 = false;
-  // owner is the daemon that answered first (node id and pid).
-  let owner = null;
   const fullFP = new Set();
 
   class ApiError extends Error {
@@ -65,18 +70,31 @@
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body);
     }
+    const ctl = new AbortController();
+    const timeout = setTimeout(
+      () => ctl.abort(),
+      method === "GET" ? STATE_TIMEOUT_MS : ACTION_TIMEOUT_MS,
+    );
+    opts.signal = ctl.signal;
     let r;
-    try {
-      r = await fetch(path, opts);
-    } catch {
-      // The dashboard never comes back on this port, and another program may take it: stop here.
-      stopForGood();
-      throw new ApiError("gone", "the dashboard stopped");
-    }
     let data = null;
     try {
-      data = await r.json();
-    } catch {}
+      r = await fetch(path, opts);
+      // The dashboard never comes back on this port, and another program may take it: an answer
+      // without this session's server id is not the dashboard's, so nothing of it is read.
+      if (!server || r.headers.get("X-Pen-Server") !== server)
+        throw new Error("not this dashboard");
+      try {
+        data = await r.json();
+      } catch (e) {
+        if (ctl.signal.aborted) throw e;
+      }
+    } catch {
+      stopForGood();
+      throw new ApiError("gone", "the dashboard stopped");
+    } finally {
+      clearTimeout(timeout);
+    }
     if (r.status === 401) {
       dropSession();
       throw new ApiError("session", data && data.error);
@@ -87,7 +105,9 @@
 
   function dropSession() {
     bearer = null;
+    server = null;
     sessionStorage.removeItem(KEY);
+    sessionStorage.removeItem(SERVER_KEY);
   }
 
   const pad = (n) => String(n).padStart(2, "0");
@@ -168,7 +188,7 @@
     ],
     gone: [
       "대시보드가 멈췄습니다 · The dashboard stopped",
-      "pen dashboard를 다시 실행하세요 (주소가 바뀝니다). pen이 꺼져 있다면 먼저 pen up을 실행하세요. · Run pen dashboard again (the address changes). If pen is not running, run pen up first.",
+      "이 탭을 닫고 pen dashboard를 다시 실행하세요 (주소가 바뀝니다). pen이 꺼져 있다면 먼저 pen up을 실행하세요. · Close this tab and run pen dashboard again (the address changes). If pen is not running, run pen up first.",
       "pen dashboard",
     ],
     out: [
@@ -204,11 +224,6 @@
     polling = true;
     try {
       const s = await api("GET", "/api/state");
-      // The page belongs to one daemon: a state from another (a new pen, or a program on the
-      // freed port) is not this dashboard's.
-      if (owner && (s.self.nodeId !== owner.nodeId || s.self.pid !== owner.pid))
-        throw new ApiError("failed", "another daemon");
-      owner = { nodeId: s.self.nodeId, pid: s.self.pid };
       retried503 = false;
       render(s);
     } catch (e) {
@@ -904,6 +919,8 @@
     const m = /^#t=([A-Za-z0-9_-]+)$/.exec(location.hash);
     if (m) {
       history.replaceState(null, "", location.pathname);
+      const ctl = new AbortController();
+      const timeout = setTimeout(() => ctl.abort(), STATE_TIMEOUT_MS);
       try {
         const r = await fetch("/api/session", {
           method: "POST",
@@ -911,18 +928,26 @@
           body: JSON.stringify({ token: m[1] }),
           cache: "no-store",
           credentials: "omit",
+          signal: ctl.signal,
         });
         if (r.ok) {
-          bearer = (await r.json()).bearer;
+          const out = await r.json();
+          if (!out.bearer || !out.server) throw new Error("not a pen dashboard");
+          bearer = out.bearer;
+          server = out.server;
           sessionStorage.setItem(KEY, bearer);
+          sessionStorage.setItem(SERVER_KEY, server);
         } else if (!bearer) {
           return gate("used");
         }
       } catch {
+        dropSession();
         return gate("gone");
+      } finally {
+        clearTimeout(timeout);
       }
     }
-    if (!bearer) return gate("none");
+    if (!bearer || !server) return gate("none");
     poll();
   }
   start();

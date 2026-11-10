@@ -602,3 +602,55 @@ func TestDashboardIdleConnectionsDoNotLockThePageOut(t *testing.T) {
 		t.Fatalf("after the idle timeout: %d", res.StatusCode)
 	}
 }
+
+// loginServer exchanges tok and returns the bearer and the server id the page checks responses against.
+func (d *dash) loginServer(tok string) (bearer, server string) {
+	d.t.Helper()
+	r := d.post("/api/session", "", map[string]string{"token": tok})
+	var out struct{ Bearer, Server string }
+	r.json(d.t, &out)
+	if r.code != http.StatusOK || out.Bearer == "" {
+		d.t.Fatalf("session: %d %s", r.code, r.body)
+	}
+	return out.Bearer, out.Server
+}
+
+// The page trusts only responses that carry its session's server id, so a program that takes the
+// port after the dashboard stops cannot pass for it.
+func TestDashboardEveryAPIResponseCarriesTheSessionsServerID(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	d, tok := openDash(t, a)
+	bearer, server := d.loginServer(tok)
+	if len(server) != 43 {
+		t.Fatalf("/api/session server id %q, want 32 bytes base64url", server)
+	}
+	_, tok2 := openDash(t, a)
+	if _, other := d.loginServer(tok2); other == server {
+		t.Fatal("two sessions share a server id")
+	}
+	port := strings.TrimPrefix(d.base, "http://127.0.0.1:")
+	check := func(what string, r reply, code int) {
+		t.Helper()
+		want(t, what, r, code)
+		if got := r.hdr.Get("X-Pen-Server"); got != server {
+			t.Fatalf("%s: X-Pen-Server %q, want the session's %q", what, got, server)
+		}
+	}
+	check("state", d.get("/api/state", bearer), http.StatusOK)
+	check("unknown member", d.post("/api/lock", bearer, map[string]any{"on": true, "x": 1}), http.StatusBadRequest)
+	check("foreign host", d.send(http.MethodGet, "/api/state", bearer, nil, func(r *http.Request) { r.Host = "evil.example:" + port }), http.StatusForbidden)
+	check("revoke a stranger", d.post("/api/revoke", bearer, map[string]any{"nodeId": "x", "compromised": false, "confirmName": "x"}), http.StatusConflict)
+	check("17 KiB", d.post("/api/relays", bearer, []byte(`{"relays":["`+strings.Repeat("a", 17<<10)+`"]}`)), http.StatusRequestEntityTooLarge)
+	check("form post", d.send(http.MethodPost, "/api/lock", bearer, []byte("on=true"), func(r *http.Request) {
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}), http.StatusUnsupportedMediaType)
+	check("logout", d.post("/api/logout", bearer, nil), http.StatusOK)
+	check("state after logout", d.get("/api/state", bearer), http.StatusUnauthorized)
+	if r := d.get("/api/state", ""); r.code != http.StatusUnauthorized || r.hdr.Get("X-Pen-Server") != "" {
+		t.Fatalf("a caller without the bearer got %d with server id %q", r.code, r.hdr.Get("X-Pen-Server"))
+	}
+}
