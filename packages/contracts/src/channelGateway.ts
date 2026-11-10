@@ -314,6 +314,25 @@ export const ChannelGetBotStatusResult = Schema.Struct({
 });
 export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
 
+/**
+ * One thing a bot waits on the person for, across all of the owner's bots: an open question or
+ * an approval, with the words its card shows and the card it opens. Newest first.
+ */
+export const ChannelOpenAsk = Schema.Struct({
+  botId: BotId,
+  taskId: ChannelTaskId,
+  kind: Schema.Literals(["question", "approval"]),
+  text: Schema.String,
+  askedAt: IsoDateTime,
+  questionId: Schema.optionalKey(ChannelQuestionId),
+  requestId: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ChannelOpenAsk = typeof ChannelOpenAsk.Type;
+export const ChannelListOpenAsksInput = Schema.Struct({});
+export type ChannelListOpenAsksInput = typeof ChannelListOpenAsksInput.Type;
+export const ChannelListOpenAsksResult = Schema.Struct({ asks: Schema.Array(ChannelOpenAsk) });
+export type ChannelListOpenAsksResult = typeof ChannelListOpenAsksResult.Type;
+
 /** Main first; never creates a bot. Deleted members only when asked for. */
 export const ChannelListBotsInput = Schema.Struct({
   includeDeleted: Schema.optionalKey(Schema.Boolean),
@@ -565,6 +584,7 @@ export type ChannelBotHomeClaimResult = typeof ChannelBotHomeClaimResult.Type;
 export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
   getBotStatus: "channel.getBotStatus",
+  listOpenAsks: "channel.listOpenAsks",
   listBots: "channel.listBots",
   updateBot: "channel.updateBot",
   createBot: "channel.createBot",

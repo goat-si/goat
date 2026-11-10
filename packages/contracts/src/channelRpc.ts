@@ -9,6 +9,8 @@ import {
   ChannelEnsureBotResult,
   ChannelGetBotStatusInput,
   ChannelGetBotStatusResult,
+  ChannelListOpenAsksInput,
+  ChannelListOpenAsksResult,
   ChannelListBotsInput,
   ChannelListBotsResult,
   ChannelUpdateBotInput,
@@ -69,6 +71,12 @@ const ChannelEnsureBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ensureBot, {
 const ChannelGetBotStatusRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotStatus, {
   payload: ChannelGetBotStatusInput,
   success: ChannelGetBotStatusResult,
+  error: ChannelRpcError,
+});
+
+const ChannelListOpenAsksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listOpenAsks, {
+  payload: ChannelListOpenAsksInput,
+  success: ChannelListOpenAsksResult,
   error: ChannelRpcError,
 });
 
@@ -217,6 +225,7 @@ const SlackChannelSubscribeStatusRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.subscri
 export const ChannelRpcs = RpcGroup.make(
   ChannelEnsureBotRpc,
   ChannelGetBotStatusRpc,
+  ChannelListOpenAsksRpc,
   ChannelListBotsRpc,
   ChannelUpdateBotRpc,
   ChannelCreateBotRpc,

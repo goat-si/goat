@@ -236,6 +236,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotHome: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.getBotStatus`. Older servers leave clients paging `listTasks`. */
   goatBotStatus: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.listOpenAsks`: each open question and approval across bots. */
+  goatBotOpenAsks: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBots`. */
   goatBotProfiles: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.updateBot`, and the main bot's sessions carry its name and purpose. */
