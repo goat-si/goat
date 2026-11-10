@@ -39,4 +39,39 @@ describe("splitGoatBotReply", () => {
   it("returns one prose part for text without a table", () => {
     expect(splitGoatBotReply("Just words.")).toEqual([{ kind: "prose", text: "Just words." }]);
   });
+
+  it("ends a table at a blank line or another block, pads short rows and drops extra cells", () => {
+    const rows = ["| A | B |", "| - | - |", "| 1 |", "2 | 3 | 4", "> quoted"];
+    expect(splitGoatBotReply(rows.join("\n"))).toEqual([
+      {
+        kind: "table",
+        markdown: rows.slice(0, 4).join("\n"),
+        header: ["A", "B"],
+        rows: [
+          ["1", ""],
+          ["2", "3"],
+        ],
+      },
+      { kind: "prose", text: "> quoted" },
+    ]);
+    expect(splitGoatBotReply(["| A |", "| - |", "", "after"].join("\n"))).toEqual([
+      { kind: "table", markdown: "| A |\n| - |", header: ["A"], rows: [] },
+      { kind: "prose", text: "after" },
+    ]);
+  });
+
+  it("leaves tables in indented code, block quotes and list items as prose", () => {
+    for (const text of [
+      ["    | A | B |", "    | - | - |"].join("\n"),
+      ["> | A | B |", "> | - | - |"].join("\n"),
+      ["- | A | B |", "  | - | - |"].join("\n"),
+    ]) {
+      expect(splitGoatBotReply(text)).toEqual([{ kind: "prose", text }]);
+    }
+  });
+
+  it("keeps a fence open until a closing fence of its kind and length", () => {
+    const text = ["~~~~", "```", ...table, "~~~", "still code", "~~~~"].join("\n");
+    expect(splitGoatBotReply(text)).toEqual([{ kind: "prose", text }]);
+  });
 });

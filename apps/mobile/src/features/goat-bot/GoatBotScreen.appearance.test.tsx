@@ -113,6 +113,7 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({

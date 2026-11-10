@@ -64,6 +64,8 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
 vi.mock("./useMobileGoatBotSession", () => ({ useMobileGoatBotSession: () => ({}) }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+const clipboard = vi.hoisted(() => ({ copy: vi.fn(async (_text: string) => true) }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: clipboard.copy }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
     themeAppearance: appearance.mode,
@@ -607,5 +609,58 @@ describe("a question in the chat folds to the answer the person sent", () => {
     expect(text).toContain("BRelease");
     expect(text).not.toContain("CI fix");
     expect(buttons).toEqual([]);
+  });
+});
+
+describe("a reply with a table", () => {
+  const table = ["| Step | Result |", "| --- | --- |", "| Read | [notes](goat-thread://v1/t-1) |"];
+  const render = async (row: GoatBotRow) => {
+    h = createNativeMemoryHarness();
+    view = renderNative(h, <GoatBotTimelineRow {...props} row={row} />);
+    await view.render();
+    return view.container.textContent ?? "";
+  };
+
+  it("puts the intro, the table and the closing in cards of their own, captioned once", async () => {
+    const text = await render(
+      bot({ text: ["Done.", "", ...table, "", "Ask again any time."].join("\n") }),
+    );
+    const intro = text.indexOf("Done.");
+    const grid = text.indexOf("md[| Step | Result |");
+    const closing = text.indexOf("Ask again any time.");
+    expect(intro).toBeGreaterThanOrEqual(0);
+    expect(grid).toBeGreaterThan(intro);
+    expect(closing).toBeGreaterThan(grid);
+    expect(text.split(goatBotTime("2026-10-12T09:40:00Z")).length - 1).toBe(1);
+    expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(1);
+  });
+
+  it("copies the table as the bot wrote it, says so, and says when it could not", async () => {
+    clipboard.copy.mockClear();
+    await render(bot({ text: ["Done.", "", ...table].join("\n") }));
+    await view.click("Copy table");
+    expect(clipboard.copy).toHaveBeenCalledWith(table.join("\n"), { target: "table" });
+    expect(view.container.querySelector('[aria-label="Copied"]')).not.toBeNull();
+    expect(h.announcements).toEqual(["Table copied"]);
+    await view.unmount();
+    h.dispose();
+
+    clipboard.copy.mockImplementationOnce(async () => false);
+    await render(bot({ text: table.join("\n") }));
+    await view.click("Copy table");
+    expect(view.container.querySelector('[aria-label="Copy table"]')).not.toBeNull();
+    expect(h.announcements).toEqual(["Couldn't copy the table"]);
+  });
+
+  it("gives every table its own card, and keeps a question in one card", async () => {
+    await render(bot({ text: [...table, "", "Then:", "", ...table].join("\n") }));
+    expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(2);
+    await view.unmount();
+    h.dispose();
+
+    await render(
+      bot({ tone: "question", text: ["Which?", "", ...table].join("\n"), options: ["Read"] }),
+    );
+    expect(view.container.querySelectorAll('[aria-label="Copy table"]')).toHaveLength(0);
   });
 });
