@@ -241,6 +241,10 @@ merging, or when they have no commits beyond the default branch. Set settled ret
 to remove a worktree at the next cleanup after settlement. In repositories without remotes,
 unchanged-worktree cleanup compares against the branch checked out in the project workspace;
 if that checkout has a detached HEAD, the worktree is kept. Only GOAT-managed worktrees are eligible.
+No rule except deleting the thread removes a worktree whose branch has commits that are not in the
+remote default branch (in repositories without remotes, the project’s branch) unless a merged pull
+request names them, even when its files are unchanged. The cleanup results show how many such
+commits each kept worktree has. When GOAT cannot fetch the default branch, it keeps the worktree.
 Active sessions, open terminals and worktrees shared by independent threads prevent removal.
 Pinned threads are kept except when deleted. Before removing a worktree, GOAT saves a snapshot
 of tracked and non-ignored untracked changes. Turn off <strong>Clean up worktrees with uncommitted
@@ -260,8 +264,11 @@ the preview off and on again, GOAT shows a new preview before the next cleanup; 
 running may finish under the earlier approval. <strong>Delete now</strong> alone does not confirm a preview.
 Review or turn off the default rules in <strong>Settings → Storage</strong>.</p>
 <p>When you open a cleaned thread, choose <strong>Restore</strong> in its banner. Sending a message also restores
-the worktree automatically. If restoration fails, the banner offers <strong>Start in a new worktree</strong>;
-the saved snapshot remains available for manual recovery.</p>
+the worktree automatically, and the thread notes what came back and what did not, such as ignored
+files or changes that were never committed. <strong>Start in a new worktree</strong> continues on a new branch
+started from the thread’s branch; the saved snapshot remains available for manual recovery. If a
+restore stops before its setup script finishes, the banner says so and offers <strong>Run setup now</strong>;
+the next turn also runs it.</p>
 <p>Snapshots live in the project repository under <code>refs/goat/snapshots/&lt;thread&gt;/&lt;time&gt;</code> and are kept
 for 30 days by default; change the retention period in <strong>Settings → Storage</strong>. Snapshots of
 deleted threads are kept for at least 24 hours after they are created, subject to the configured
