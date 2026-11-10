@@ -4,10 +4,12 @@
 #   curl -fsSL <relay>/install.sh | sh -s -- --join <token>   (then join the mesh the token invites to)
 #   curl -fsSL <relay>/install.sh | sh -s -- --login          (then sign in with Google; add --yes for scripts)
 #   curl -fsSL <relay>/install.sh | sh -s -- --up             (then start a new mesh on this machine)
-# --name N names this machine for --join, --login or --up; --relay URL is the download relay and the first relay.
+# --name N names this machine for --join, --login or --up. The node uses every relay in PEN_RELAYS; one or more
+# --relay URL replace that list. pen downloads from PEN_RELAY, which invites name in their install line.
 set -eu
 
 PEN_RELAY="${PEN_RELAY:-__PEN_RELAY__}"
+PEN_RELAYS="${PEN_RELAYS:-__PEN_RELAYS__}"
 VERSION="${PEN_VERSION:-__PEN_VERSION__}"
 JOIN=""
 LOGIN=""
@@ -15,6 +17,7 @@ UP=""
 NAME=""
 NO_SERVICE=""
 YES=""
+RELAYS=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -22,11 +25,20 @@ while [ $# -gt 0 ]; do
 	--login) LOGIN=1; shift ;;
 	--name) NAME="$2"; shift 2 ;;
 	--no-service) NO_SERVICE="--no-service"; shift ;;
-	--relay) PEN_RELAY="$2"; shift 2 ;;
+	--relay) RELAYS="$RELAYS $2"; shift 2 ;;
 	--up) UP=1; shift ;;
 	--yes) YES="--yes"; shift ;;
 	*) echo "install.sh: unknown argument $1" >&2; exit 2 ;;
 	esac
+done
+if [ -n "$RELAYS" ]; then
+	PEN_RELAYS="$RELAYS"
+fi
+# The relay lists split on spaces below and where $relay_flags expands; never as file globs.
+set -f
+relay_flags=""
+for r in $PEN_RELAYS; do
+	relay_flags="$relay_flags --relay $r"
 done
 
 case "$(uname -s)" in
@@ -74,6 +86,7 @@ case ":$PATH:" in
 	pen="$HOME/.local/bin/pen"
 	;;
 esac
+"$HOME/.local/bin/pen" relay download "$PEN_RELAY" >/dev/null
 
 if [ -n "$JOIN" ]; then
 	if [ -n "$NAME" ]; then
@@ -82,7 +95,7 @@ if [ -n "$JOIN" ]; then
 	exec "$HOME/.local/bin/pen" join "$JOIN" $NO_SERVICE
 fi
 if [ -n "$LOGIN" ]; then
-	set -- login --relay "$PEN_RELAY" $NO_SERVICE $YES
+	set -- login $relay_flags $NO_SERVICE $YES
 	if [ -n "$NAME" ]; then
 		set -- "$@" --name "$NAME"
 	fi
@@ -94,9 +107,9 @@ if [ -n "$LOGIN" ]; then
 fi
 if [ -n "$UP" ]; then
 	if [ -n "$NAME" ]; then
-		exec "$HOME/.local/bin/pen" up --relay "$PEN_RELAY" --name "$NAME" $NO_SERVICE
+		exec "$HOME/.local/bin/pen" up $relay_flags --name "$NAME" $NO_SERVICE
 	fi
-	exec "$HOME/.local/bin/pen" up --relay "$PEN_RELAY" $NO_SERVICE
+	exec "$HOME/.local/bin/pen" up $relay_flags $NO_SERVICE
 fi
-echo "Next: $pen login --relay $PEN_RELAY (sign in with Google), $pen join <token> (an invite), or $pen up --relay $PEN_RELAY (start a new mesh on this machine)."
+echo "Next: $pen login$relay_flags (sign in with Google), $pen join <token> (an invite), or $pen up$relay_flags (start a new mesh on this machine)."
 

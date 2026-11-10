@@ -70,9 +70,7 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 		}
 		return "error: " + err.Error()
 	}
-	sec, used, err := openVia(ctx, d.relays(), m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
-		return session.Initiate(ctx, conn, session.KindSession, m.NodeID, noise, d.id, nil, session.Payload{V: 1, Stream: "mesh"})
-	})
+	sec, used, err := openMemberVia(ctx, d.relays(), d.id, m.NodeID, noise, session.Payload{V: 1, Stream: "mesh"})
 	if err != nil {
 		return res(err)
 	}
@@ -87,38 +85,33 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 // DialRetries is how often a join retries a relay 4404 (the inviter's uplink may be registering).
 var DialRetries = []time.Duration{300 * time.Millisecond, time.Second, 2 * time.Second}
 
-// OpenAny reaches nodeID through the first of relays to answer (DialRace) and runs handshake on it.
-// A relay can answer pong for a stale uplink, so when the handshake fails there it falls back to the
-// remaining relays; 4401 and 4400 are the node's answer and end the attempt.
+// OpenAny reaches nodeID through the first of relays to answer (DialRace) and runs handshake on it,
+// for kinds 0x03 and 0x04 (kind 0x01 races the handshake itself, OpenSession). A relay can answer
+// pong for a stale uplink, so when the handshake fails there it falls back to the remaining relays;
+// 4401 and 4400 are the node's answer and end the attempt.
 func OpenAny(ctx context.Context, relays []string, nodeID string, handshake func(relay.Conn) (*session.Secure, error)) (*session.Secure, error) {
-	sec, _, err := openVia(ctx, relays, nodeID, handshake)
-	return sec, err
-}
-
-// openVia is OpenAny that also names the relay the session runs on.
-func openVia(ctx context.Context, relays []string, nodeID string, handshake func(relay.Conn) (*session.Secure, error)) (*session.Secure, string, error) {
 	left := append([]string(nil), relays...)
 	var last error
 	for len(left) > 0 {
 		conn, used, err := relay.DialRace(ctx, left, nodeID)
 		if err != nil {
 			if last != nil {
-				return nil, "", last
+				return nil, last
 			}
-			return nil, "", err
+			return nil, err
 		}
 		sec, err := handshake(conn)
 		if err == nil {
-			return sec, used, nil
+			return sec, nil
 		}
 		conn.Close(wire.CodeNormal)
 		if code := relay.CodeOf(err); code == wire.CodeNotAdmitted || code == wire.CodeCrypto || ctx.Err() != nil {
-			return nil, "", err
+			return nil, err
 		}
 		last = err
 		left = slices.DeleteFunc(left, func(u string) bool { return u == used })
 	}
-	return nil, "", last
+	return nil, last
 }
 
 // OpenTCP opens a kind 0x01 tcp stream to port on member m and returns the confirmed session.
@@ -127,9 +120,7 @@ func OpenTCP(ctx context.Context, relays []string, id *ident.Identity, m mesh.Me
 	if err != nil {
 		return nil, err
 	}
-	return OpenAny(ctx, relays, m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
-		return session.Initiate(ctx, conn, session.KindSession, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "tcp", Port: port})
-	})
+	return openMember(ctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "tcp", Port: port})
 }
 
 // Join runs the joiner side of tok against its relay and returns the verified set (not yet saved).

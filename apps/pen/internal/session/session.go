@@ -79,6 +79,11 @@ func decodeLine(b []byte, v any) error {
 
 var msg2Payload = []byte("{\"v\":1}\n")
 
+// ErrBadMessage2 marks an initiator handshake whose message 2 did not verify. This side closed
+// the link 4400 and the error still carries that code (relay.CodeOf), but the bytes came through
+// a relay, which can forge them: a race across relays keeps going on it (contract "Several relays").
+var ErrBadMessage2 = errors.New("session: message 2 did not verify")
+
 // InviteID is base64url(SHA-256("pen/1 invite" || secret)[0..12]).
 func InviteID(secret []byte) string {
 	sum := sha256.Sum256(append([]byte("pen/1 invite"), secret...))
@@ -167,6 +172,36 @@ func Initiate(ctx context.Context, conn relay.Conn, kind byte, nodeID string, re
 }
 
 func initiate(ctx context.Context, conn relay.Conn, kind byte, nodeID string, remoteNoisePub []byte, local *ident.Identity, psk []byte, payload any, rng io.Reader) (*Secure, error) {
+	p, err := initiateHandshake(ctx, conn, kind, nodeID, remoteNoisePub, local, psk, payload, rng)
+	if err != nil {
+		return nil, err
+	}
+	return p.Confirm()
+}
+
+// Pending is an initiator handshake whose message 2 verified and whose key confirmation is unsent:
+// the responder has not opened the stream yet.
+type Pending struct{ s *Secure }
+
+// InitiateHandshake sends message 1 and verifies message 2, as Initiate does, but leaves the key
+// confirmation to Confirm, so a caller racing several links can abort the others unconfirmed.
+func InitiateHandshake(ctx context.Context, conn relay.Conn, kind byte, nodeID string, remoteNoisePub []byte, local *ident.Identity, psk []byte, payload any) (*Pending, error) {
+	return initiateHandshake(ctx, conn, kind, nodeID, remoteNoisePub, local, psk, payload, nil)
+}
+
+// Confirm sends the key confirmation (an empty record) and returns the open session.
+func (p *Pending) Confirm() (*Secure, error) {
+	if err := p.s.Send(nil); err != nil {
+		return nil, err
+	}
+	raiseQueue(p.s.conn)
+	return p.s, nil
+}
+
+// Abort closes the link with code without confirming; the responder never opens the stream.
+func (p *Pending) Abort(code uint16) { p.s.conn.Close(code) }
+
+func initiateHandshake(ctx context.Context, conn relay.Conn, kind byte, nodeID string, remoteNoisePub []byte, local *ident.Identity, psk []byte, payload any, rng io.Reader) (*Pending, error) {
 	ctx, cancel := context.WithTimeout(ctx, HandshakeTimeout)
 	defer cancel()
 	line, err := EncodePayload(payload)
@@ -200,14 +235,9 @@ func initiate(ctx context.Context, conn relay.Conn, kind byte, nodeID string, re
 	p2, cs1, cs2, err := hs.ReadMessage(nil, m2)
 	if err != nil || !bytes.Equal(p2, msg2Payload) || cs1 == nil {
 		conn.Close(wire.CodeCrypto)
-		return nil, &relay.CloseError{Code: wire.CodeCrypto}
+		return nil, fmt.Errorf("%w: %w", ErrBadMessage2, &relay.CloseError{Code: wire.CodeCrypto})
 	}
-	s := &Secure{conn: conn, send: cs1, recv: cs2, RemoteStatic: remoteNoisePub, Kind: kind}
-	if err := s.Send(nil); err != nil {
-		return nil, err
-	}
-	raiseQueue(conn)
-	return s, nil
+	return &Pending{s: &Secure{conn: conn, send: cs1, recv: cs2, RemoteStatic: remoteNoisePub, Kind: kind}}, nil
 }
 
 // AdmitFunc decides on a session after message 1. It returns the psk for KindJoin. A *relay.CloseError

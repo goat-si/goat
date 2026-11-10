@@ -284,3 +284,30 @@ func TestAutocertCacheIsAPrivateDirectory(t *testing.T) {
 		t.Fatal("a file was accepted as the cache directory")
 	}
 }
+
+func TestRelayDownloadTakesOnlyAnHTTPSOriginOrALoopbackHTTPOne(t *testing.T) {
+	t.Setenv("PEN_HOME", t.TempDir())
+	for _, bad := range []string{
+		"http://relay.example", "wss://relay.example", "https://relay.example/dl", "https://relay.example?x=1",
+		"https://relay.example#top", "https://user@relay.example", "relay.example", "https://",
+	} {
+		var out, errOut bytes.Buffer
+		if code := RunRelay([]string{"download", bad}, &out, &errOut); code == 0 {
+			t.Errorf("pen relay download %s was accepted", bad)
+		}
+	}
+	for url, want := range map[string]string{
+		"https://relay.example/": "https://relay.example",
+		"http://127.0.0.1:8787":  "http://127.0.0.1:8787",
+	} {
+		var out, errOut bytes.Buffer
+		if code := RunRelay([]string{"download", url}, &out, &errOut); code != 0 {
+			t.Fatalf("pen relay download %s: exit %d: %s", url, code, errOut.String())
+		}
+		out.Reset()
+		RunRelay([]string{"download"}, &out, &errOut)
+		if got := strings.TrimSpace(out.String()); got != want {
+			t.Fatalf("after setting %s the download relay is %q, want %q", url, got, want)
+		}
+	}
+}

@@ -70,6 +70,10 @@ type Hooks struct {
 	OnBadAck func()
 	// OnSocketDone is called when a socket's handler, reader and writer have all ended.
 	OnSocketDone func(nodeID, role string)
+	// OnMessage is called with each message a socket sent (role "node" or "client"), before the
+	// relay handles it; blocking here holds that socket's later messages too (tests hold forwarding
+	// or pongs).
+	OnMessage func(nodeID, role string, text bool)
 }
 
 // Server is a relay. It is an http.Handler.
@@ -533,6 +537,13 @@ func (k *sock) readLoop() {
 		if err != nil {
 			k.room.peerGone(k, closeCode(err))
 			return
+		}
+		if f := k.srv.Hooks.OnMessage; f != nil {
+			role := "client"
+			if k.role == roleNode {
+				role = "node"
+			}
+			f(k.nodeID, role, typ == websocket.MessageText)
 		}
 		rm := k.room
 		rm.mu.Lock()

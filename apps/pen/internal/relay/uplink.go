@@ -18,6 +18,10 @@ import (
 // ErrReplaced is returned by Uplink.Run when a newer uplink for this nodeId took over (4409).
 var ErrReplaced = errors.New("relay: uplink replaced by a newer one (4409)")
 
+// errSilent ends an uplink that received nothing for two ping intervals: the path died without a
+// close (sleep, a dropped NAT mapping), and writes alone would not notice for minutes.
+var errSilent = errors.New("relay sent nothing for two ping intervals")
+
 // AuthTimeout bounds the wait for the relay's challenge.
 const AuthTimeout = 10 * time.Second
 
@@ -33,8 +37,14 @@ type Uplink struct {
 
 	// MinBackoff and MaxBackoff bound the reconnect delay (0.5 s doubling to 30 s by default).
 	MinBackoff, MaxBackoff time.Duration
+	// PingInterval is the keepalive period (relay.PingInterval when zero).
+	PingInterval time.Duration
 
 	accept chan Conn
+	// kick asks Run to reconnect at once (Redial); drop ends the current socket.
+	kick chan struct{}
+	mu   sync.Mutex
+	drop context.CancelFunc
 }
 
 // NewUplinkInto builds an uplink whose sessions arrive on accept (shared by several uplinks).
@@ -46,7 +56,23 @@ func NewUplinkInto(relayURL string, id *ident.Identity, accept chan Conn) *Uplin
 
 // NewUplink builds an uplink for id at relayURL.
 func NewUplink(relayURL string, id *ident.Identity) *Uplink {
-	return &Uplink{RelayURL: relayURL, ID: id, accept: make(chan Conn, 64), MinBackoff: 500 * time.Millisecond, MaxBackoff: 30 * time.Second}
+	return &Uplink{RelayURL: relayURL, ID: id, accept: make(chan Conn, 64), kick: make(chan struct{}, 1),
+		MinBackoff: 500 * time.Millisecond, MaxBackoff: 30 * time.Second}
+}
+
+// Redial drops the current socket, if any, and reconnects at once without backoff (after the
+// machine woke, the old socket is likely dead and a write would take minutes to notice).
+func (u *Uplink) Redial() {
+	select {
+	case u.kick <- struct{}{}:
+	default:
+	}
+	u.mu.Lock()
+	drop := u.drop
+	u.mu.Unlock()
+	if drop != nil {
+		drop()
+	}
 }
 
 // Accept returns the next relay session (an OPEN).
@@ -77,6 +103,13 @@ func (u *Uplink) Run(ctx context.Context) error {
 		if errors.Is(err, ErrReplaced) {
 			return err
 		}
+		select {
+		case <-u.kick:
+			u.logf("uplink: redialing at once")
+			backoff = u.MinBackoff
+			continue
+		default:
+		}
 		if time.Since(start) > 10*time.Second {
 			backoff = u.MinBackoff
 		}
@@ -87,6 +120,10 @@ func (u *Uplink) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			t.Stop()
 			return ctx.Err()
+		case <-u.kick:
+			t.Stop()
+			backoff = u.MinBackoff
+			continue
 		case <-t.C:
 		}
 		backoff = min(backoff*2, u.MaxBackoff)
@@ -127,17 +164,38 @@ func (u *Uplink) runOnce(ctx context.Context) error {
 	}
 	lctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	u.mu.Lock()
+	u.drop = cancel
+	u.mu.Unlock()
+	defer func() {
+		u.mu.Lock()
+		u.drop = nil
+		u.mu.Unlock()
+	}()
 	if err := ws.Write(lctx, websocket.MessageBinary, AnswerChallenge(u.ID, origin, challenge)); err != nil {
 		ws.CloseNow()
 		return err
 	}
-	m := &mux{ws: ws, ctx: lctx, sessions: map[uint32]*muxConn{}, relay: u.RelayURL, onPong: u.OnPong}
+	// Any message counts as life: the relay may hold a pong behind a slow write.
+	every := u.pingInterval()
+	var silent atomic.Bool
+	deadline := time.AfterFunc(2*every, func() {
+		silent.Store(true)
+		cancel()
+	})
+	defer deadline.Stop()
+	m := &mux{ws: ws, ctx: lctx, sessions: map[uint32]*muxConn{}, heard: func() { deadline.Reset(2 * every) },
+		relay: u.RelayURL, onPong: u.OnPong}
 	if u.OnState != nil {
 		u.OnState(true)
 		defer u.OnState(false)
 	}
-	go m.pinger()
+	go m.pinger(every)
 	err = m.readLoop(u.accept, len(challenge))
+	if silent.Load() && ctx.Err() == nil {
+		ws.CloseNow()
+		err = errSilent
+	}
 	code := statusCode(err)
 	m.failAll(&CloseError{Code: wire.CodeOffline})
 	if code == wire.CodeReplaced {
@@ -149,9 +207,18 @@ func (u *Uplink) runOnce(ctx context.Context) error {
 	return err
 }
 
+func (u *Uplink) pingInterval() time.Duration {
+	if u.PingInterval > 0 {
+		return u.PingInterval
+	}
+	return PingInterval
+}
+
 type mux struct {
 	ws  *websocket.Conn
 	ctx context.Context
+	// heard is called with every message the relay sends.
+	heard func()
 	// relay is the uplink's relay URL; pingAt is when the unanswered ping left (unix ns, 0 when none).
 	relay  string
 	onPong func(time.Duration)
@@ -163,9 +230,9 @@ type mux struct {
 }
 
 // pinger pings at once, so the round trip is known right after authentication, then every
-// PingInterval.
-func (m *mux) pinger() {
-	t := time.NewTicker(PingInterval)
+// interval.
+func (m *mux) pinger(every time.Duration) {
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		m.pingAt.Store(time.Now().UnixNano())
@@ -194,6 +261,7 @@ func (m *mux) readLoop(accept chan Conn, received int) error {
 		if err != nil {
 			return err
 		}
+		m.heard()
 		if typ != websocket.MessageBinary {
 			if string(p) == "pong" && m.onPong != nil {
 				if at := m.pingAt.Swap(0); at != 0 {

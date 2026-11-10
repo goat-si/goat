@@ -185,7 +185,7 @@ type Config struct {
 	Relay  string   `json:"relay"`
 	Relays []string `json:"relays,omitempty"`
 	Name   string   `json:"name"`
-	// DownloadRelay serves install.sh for the install commands pen prints (a default when empty).
+	// DownloadRelay serves install.sh and the binaries (install.sh sets it); invites name it.
 	DownloadRelay string `json:"downloadRelay,omitempty"`
 }
 

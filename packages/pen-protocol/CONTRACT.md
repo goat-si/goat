@@ -213,19 +213,29 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
 - Uplink per relay: the node keeps one authenticated uplink on every relay in its list (`config.json` `relays`; a
   v1 config's `relay` is a one-element list, and `relay` keeps naming the first relay for older binaries). Each
   uplink reconnects, acks and stops on 4409 independently; sessions from all of them are handled alike.
-- Ping race: to reach a node, a client opens one `/v1/client/<nodeId>` socket per relay in parallel and sends the
-  text `ping` on each. It keeps the first socket that answers `pong` and closes every other socket with 1000 before
-  sending any other byte, so no Noise byte travels on more than one socket (Doriterm #1351 rule). Losers finish their
-  dial before that close (an aborted handshake would reach the node as 1006), and the whole race has its own 15 s
-  deadline. A relay where the
-  node is offline closes 4404 before any pong, so it never wins; a relay that is down never answers.
-- Fallback: a relay can answer `pong` for a stale uplink. When the handshake on the winning socket fails with
-  anything but 4401 or 4400 (the node's own answers), the client drops that relay and races the rest.
+- Handshake race (kind 0x01): to open a session, a client opens one `/v1/client/<nodeId>` socket per relay in
+  parallel and sends Noise message 1 on every socket that connects, each with its own fresh ephemeral key. It keeps
+  the first socket whose message 2 verifies, sends the key confirmation on that socket only, and closes every other
+  socket with 1000 unconfirmed. A pong shows only that a relay is up; the first verified message 2 shows the path
+  that reached the node and back fastest. This is safe because a responder acts on a stream (dials a port, syncs)
+  only after key confirmation ("Sessions", "Streams"), so a losing socket costs it one unconfirmed handshake and
+  nothing else. A 4401 close, or a 4400 close from the far side, on any socket is the node's answer and ends the race;
+  a message 2 that fails to verify at the client may be a relay's forgery, so the client closes that socket 4400 and
+  keeps racing. Losers finish their dial before their close (an aborted handshake would reach the node as 1006);
+  dials have their own 15 s deadline and each handshake the 10 s one. A relay where the node is offline closes 4404;
+  a relay that is down never connects.
+- Ping race (kinds 0x03 and 0x04): a join's message 1 names a single-use invite and an account session reserves one
+  of the node's account slots at message 1, so these send message 1 on one socket only. The client sends the text
+  `ping` on every socket, keeps the first that answers `pong` and closes every other socket with 1000 before sending
+  any other byte (Doriterm #1351 rule). Losers finish their dial first, and the race has its own 15 s deadline. A
+  relay where the node is offline closes 4404 before any pong, so it never wins.
+- Fallback (ping race): a relay can answer `pong` for a stale uplink. When the handshake on the winning socket fails
+  with anything but 4401 or 4400 (the node's own answers), the client drops that relay and races the rest.
 - Token v2: `pen1_` + base64url(no padding) of
   `version (2) || signPub (32) || noisePub (32) || secret (32) || relay URLs (UTF-8, joined by LF)`: 1 to 8 URLs,
   each 1 to 256 bytes, naming distinct relay origins (`https://a` and `wss://A:443` are one relay), `https` or `wss` (`http` or `ws` only for loopback hosts, which local test
   relays use). A token with one relay stays version 1 so older nodes can join; version 1 keeps parsing. The joiner
-  races the token's relays the same way and keeps them as its own list.
+  reaches the inviter over the token's relays with the ping race and keeps them as its own list.
 - Relay-serve parity: `pen relay serve` (apps/pen/internal/relayserver) implements this contract's "Relay" section
   rule for rule (auth, origin binding, mux, caps, timeouts, backpressure, acks, ping, 1 MiB cap, `/healthz`) and is
   tested against the same cases as the Worker. It closes a client 4404 right after accept, before reading any text,
@@ -374,3 +384,6 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
   `pen relay serve` parity.
 - v1.1 (2026-11-10): "Accounts": Google sign-in through a login service, session kind 0x04, `account` and `lock` records,
   and unknown record types stored without effect.
+- v1.1 (2026-11-10): "Several relays": kind 0x01 sessions race the handshake on every relay instead of the ping race
+  (message 1 on every socket, the first verified message 2 wins, losers close 1000 unconfirmed); joins and account
+  sessions keep the ping race. Clients only; no wire change, and v1.0 and v1.1 responders answer both alike.

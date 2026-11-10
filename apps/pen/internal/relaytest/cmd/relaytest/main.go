@@ -16,6 +16,8 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:0", "listen address")
 	public := flag.String("public", "", "directory to serve for paths outside /v1/ and /healthz")
+	forwardDelay := flag.Duration("forward-delay", 0, "hold each client message this long before forwarding it to the node")
+	pongDelay := flag.Duration("pong-delay", 0, "answer client pings this much later")
 	flag.Parse()
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -23,6 +25,7 @@ func main() {
 		os.Exit(1)
 	}
 	s := relaytest.NewUnstarted()
+	s.ForwardDelay, s.PongDelay = *forwardDelay, *pongDelay
 	var h http.Handler = s.Handler()
 	if *public != "" {
 		files := http.FileServer(http.Dir(*public))

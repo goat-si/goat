@@ -100,7 +100,11 @@ func joinOffline(ctx context.Context, st *state.Store, id *ident.Identity, tok m
 		return err
 	}
 	os.Remove(st.Path("offers.json"))
-	c := state.Config{Name: name}
+	old, err := st.LoadConfig()
+	if err != nil {
+		return err
+	}
+	c := state.Config{Name: name, DownloadRelay: old.DownloadRelay}
 	c.SetRelays(tok.Relays)
 	return st.SaveConfig(c)
 }
