@@ -52,6 +52,7 @@ describe("presentTaskChip", () => {
       retryable: false,
       updatedAt: "2026-10-12T12:01:00.000Z",
       summary: null,
+      ended: false,
       attentionLabel: null,
       evidenceLabels: [],
       pullRequests: [],
