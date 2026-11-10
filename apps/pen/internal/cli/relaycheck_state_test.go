@@ -3,11 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
 // Relays keep a little state per node id (the Go relay its next session id, the Worker a Durable
@@ -71,4 +74,34 @@ func TestRelayCheckOpensItsSessionOnlyOnceTheRelayHasTakenItsUplink(t *testing.T
 	if code := RunRelay([]string{"check", "--timeout", "10s", rs.URL}, &out, &errOut); code != 0 {
 		t.Fatalf("check while an earlier uplink of its node was still at the relay: exit %d\n%s%s", code, out.String(), errOut.String())
 	}
+}
+
+// --timeout bounds every lock the check waits for: another process holding the check node's state
+// lock (say, a check creating the node's keys) makes the check give up, not hang.
+func TestCheckIdentityGivesUpWhenTheCheckNodesStateLockIsHeld(t *testing.T) {
+	t.Setenv("PEN_HOME", t.TempDir())
+	dir, err := state.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := state.OpenDir(filepath.Join(dir, "relay-check"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := st.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, _, err := checkIdentity(ctx); err == nil {
+		t.Fatal("checkIdentity got the check node while its state lock was held")
+	}
+	// The abandoned wait goes on in the background; taking the node once more waits for it.
+	unlock()
+	_, release, err := checkIdentity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
 }

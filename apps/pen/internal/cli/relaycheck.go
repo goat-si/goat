@@ -130,14 +130,27 @@ func checkIdentity(ctx context.Context) (*ident.Identity, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// Both locks block in the kernel, so they are taken aside and --timeout ends the wait.
 	type locked struct {
+		id      *ident.Identity
 		release func()
 		err     error
 	}
 	got := make(chan locked, 1)
 	go func() {
+		beforeCheckHold()
 		release, err := hold.Lock()
-		got <- locked{release, err}
+		if err != nil {
+			got <- locked{err: err}
+			return
+		}
+		id, _, err := st.EnsureIdentity()
+		if err != nil {
+			release()
+			got <- locked{err: err}
+			return
+		}
+		got <- locked{id: id, release: release}
 	}()
 	var l locked
 	select {
@@ -149,18 +162,17 @@ func checkIdentity(ctx context.Context) (*ident.Identity, func(), error) {
 				l.release()
 			}
 		}()
-		return nil, nil, errors.New("another pen relay check on this machine held the check node until --timeout")
+		return nil, nil, errors.New("another pen relay check on this machine held the check node, or its keys, until --timeout")
 	}
 	if l.err != nil {
 		return nil, nil, l.err
 	}
-	id, _, err := st.EnsureIdentity()
-	if err != nil {
-		l.release()
-		return nil, nil, err
-	}
-	return id, l.release, nil
+	return l.id, l.release, nil
 }
+
+// beforeCheckHold runs as a check starts waiting for the check node; tests use it to make two
+// checks overlap.
+var beforeCheckHold = func() {}
 
 // checkRoundTrip uplinks the check node, opens a client session to it and moves 64 KiB each way.
 func checkRoundTrip(ctx context.Context, relayURL string, stdout io.Writer) error {
