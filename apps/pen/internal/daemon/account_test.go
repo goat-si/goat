@@ -362,3 +362,52 @@ func TestALeavingMemberForgetsItselfAtTheLoginService(t *testing.T) {
 		t.Fatalf("forgot %s, want the leaving node %s", got, bid.NodeID())
 	}
 }
+
+func TestLockWaitsUntilEveryMemberAnnouncesPen11(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	st := shortDir(t)
+	tok := a.invite(t, time.Minute)
+	id := identity(t, st, tok.Relays[0], "old")
+	s, err := Join(ctx, st, id, tok, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Save()
+	startWith(t, ctx, rs, st, func(o *Options) { o.Announce = "-" }) // a v1.0 node
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "lock", On: true}, &r); err == nil || !strings.Contains(err.Error(), "old") {
+		t.Fatalf("lock with a v1.0 member: %v, want a refusal naming old", err)
+	}
+	if a.ls(t).Locked {
+		t.Fatal("a lock record was signed while a member runs v1.0")
+	}
+}
+
+func TestAVersionAnnouncedInAnEarlierSyncDoesNotCountAfterTheMemberDowngrades(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "lock", On: true}, &r); err != nil {
+		t.Fatalf("lock with every member on 1.1: %v", err)
+	}
+	if err := Call(a.st, Request{Op: "lock", On: false}, &r); err != nil {
+		t.Fatal(err)
+	}
+	b.d.Stop()
+	if err := <-b.done; err != nil {
+		t.Fatal(err)
+	}
+	b.done <- nil
+	startWith(t, ctx, rs, b.st, func(o *Options) { o.Announce = "-" })
+	if err := Call(a.st, Request{Op: "lock", On: true}, &r); err == nil || !strings.Contains(err.Error(), "b") {
+		t.Fatalf("lock after b came back as v1.0: %v, want a refusal naming b", err)
+	}
+}

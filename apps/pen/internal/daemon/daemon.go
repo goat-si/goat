@@ -38,6 +38,9 @@ type Options struct {
 	OnView func(*mesh.View) error
 	// AccountWait bounds the wait for an account joiner's assertion and card (10 s).
 	AccountWait time.Duration
+	// Announce is the version this node announces in sync hellos (mesh.Version); tests set "-" to
+	// act as a v1.0 node, which announces none.
+	Announce string
 	// Ready is called once the control socket accepts requests.
 	Ready func()
 	Now   func() time.Time
@@ -70,8 +73,10 @@ type Daemon struct {
 	nextLive uint64
 	watchers map[chan []byte]struct{}
 	seen     map[string]seenInfo
-	// versions is what each peer (by Noise key) announced in its last sync hello.
-	versions map[string]string
+	// versions is what each peer (by Noise key) announced in its last sync hello, numbered by
+	// helloSeq so a check counts only hellos of its own round.
+	versions map[string]heard
+	helloSeq uint64
 	// acct are the running kind 0x04 sessions, oldest first.
 	acct       []*acctSlot
 	inviteWait map[string]chan mesh.Member
@@ -173,7 +178,7 @@ func New(opt Options) (*Daemon, error) {
 	d := &Daemon{
 		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites, pending: pending,
 		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, seen: map[string]seenInfo{},
-		versions: map[string]string{}, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
+		versions: map[string]heard{}, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
 	}
 	switch opt.SSHUser {
 	case "":
@@ -511,7 +516,25 @@ func (d *Daemon) helloFrom(noisePub []byte) mesh.Hello {
 	k := ident.B64.EncodeToString(noisePub)
 	return func(pen string) {
 		d.mu.Lock()
-		d.versions[k] = pen
+		d.helloSeq++
+		d.versions[k] = heard{pen: pen, seq: d.helloSeq}
 		d.mu.Unlock()
 	}
+}
+
+// announce is the version this node puts in its sync hellos.
+func (d *Daemon) announce() string {
+	switch d.opt.Announce {
+	case "":
+		return mesh.Version
+	case "-":
+		return ""
+	}
+	return d.opt.Announce
+}
+
+// heard is a version a peer announced and when, by hello count.
+type heard struct {
+	pen string
+	seq uint64
 }

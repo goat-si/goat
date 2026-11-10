@@ -187,34 +187,37 @@ func (d *Daemon) deny(arg string) (Pending, error) {
 	return p, d.pending.remove(p, true, d.now())
 }
 
-// membersWithoutV11 names the other members that have not announced pen 1.1 in a sync hello.
-func (d *Daemon) membersWithoutV11() []string {
+// requireV11 syncs with every member and refuses unless each announced pen 1.1 in a hello of this
+// round: an announcement lasts only for its session, so a member that came back older counts as
+// older (contract "Mesh records": v1.0 nodes reject account and lock records and would stall).
+func (d *Daemon) requireV11(ctx context.Context, what string) error {
+	d.mu.Lock()
+	since := d.helloSeq
+	d.mu.Unlock()
+	d.pushAll(ctx)
 	v := d.view()
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	var out []string
+	var missing []string
 	for _, m := range v.SortedMembers() {
-		if m.NodeID != d.nodeID && d.versions[m.NoisePub] != mesh.Version {
-			out = append(out, m.Name)
+		if h := d.versions[m.NoisePub]; m.NodeID != d.nodeID && (h.seq <= since || h.pen != mesh.Version) {
+			missing = append(missing, m.Name)
 		}
 	}
-	return out
+	d.mu.Unlock()
+	if len(missing) > 0 {
+		return fmt.Errorf("every member must run pen 1.1 before %s; not confirmed now: %s (offline or older)", what, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
-// bindAccount signs an account record (nil unbinds) and pushes it. A bind waits until every member
-// has announced pen 1.1 (contract "Mesh records").
+// bindAccount signs an account record (nil unbinds) and pushes it, once every member runs pen 1.1.
 func (d *Daemon) bindAccount(ctx context.Context, acct *mesh.Account) ([]PushResult, error) {
 	cur := d.view().Account
 	if acct == nil && cur == nil || acct != nil && cur != nil && *acct == *cur {
 		return nil, nil
 	}
-	if acct != nil {
-		if missing := d.membersWithoutV11(); len(missing) > 0 {
-			d.pushAll(ctx)
-			if missing = d.membersWithoutV11(); len(missing) > 0 {
-				return nil, fmt.Errorf("every member must run pen 1.1 before the mesh is bound to an account; not confirmed: %s (offline or older)", strings.Join(missing, ", "))
-			}
-		}
+	if err := d.requireV11(ctx, "the mesh's account binding changes"); err != nil {
+		return nil, err
 	}
 	if _, err := d.mesh().Append(d.id, mesh.TypeAccount, d.now().UnixMilli(), mesh.Fields{Bind: acct}); err != nil {
 		return nil, err
@@ -223,10 +226,13 @@ func (d *Daemon) bindAccount(ctx context.Context, acct *mesh.Account) ([]PushRes
 	return d.pushAll(ctx), nil
 }
 
-// setLock signs a lock record and pushes it.
+// setLock signs a lock record and pushes it, once every member runs pen 1.1.
 func (d *Daemon) setLock(ctx context.Context, on bool) ([]PushResult, error) {
 	if d.view().Locked == on {
 		return nil, nil
+	}
+	if err := d.requireV11(ctx, "lock mode changes"); err != nil {
+		return nil, err
 	}
 	if _, err := d.mesh().Append(d.id, mesh.TypeLock, d.now().UnixMilli(), mesh.Fields{On: on}); err != nil {
 		return nil, err
