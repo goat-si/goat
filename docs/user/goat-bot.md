@@ -49,11 +49,14 @@ move when the window is hidden or when your system asks to reduce motion.
 
 ## Work
 
-**Work** in the bot's header opens its status, tasks, routines, memory, library and computers.
+**Work** in the bot's header opens the bot's home. **Home** is one page: a status note when
+something needs fixing, the machines its work runs on, its tasks, and its routines. Selecting a
+task shows its conversation right there, beside the chat; **Go to thread** opens it in full.
+**Library** holds the files the bot saved and its memory.
 
-- **Status** says whether the bot can work right now and why not: the machine it answers on, its
-  model, open and waiting work, and Slack. Each problem comes with the action that fixes it when
-  you're allowed to take it.
+- The status note says why the bot can't work right now: the machine it answers on, its model,
+  open and waiting work, or Slack. Each problem comes with the action that fixes it when you're
+  allowed to take it. The full status stays in **Settings → GOAT Bot**.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. **Check in on me** sets up a routine on the days and
   hours you choose: the bot looks over its tasks and writes only when something needs you. A
@@ -74,7 +77,7 @@ move when the window is hidden or when your system asks to reduce motion.
   file itself is unchanged.
 - **Library** lists the files the bot saved, newest first. Images and text open in place; other
   files download, or open the share sheet on mobile. Files over 20 MB don't open.
-- **Computer** shows which machines the bot's running tasks use.
+- **Machines** shows which machines the bot's running tasks use.
 
 ## Going back to an older GOAT
 
