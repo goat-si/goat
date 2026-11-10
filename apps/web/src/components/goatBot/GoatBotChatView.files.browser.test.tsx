@@ -110,10 +110,10 @@ const row: GoatBotRow = {
   groupPosition: "single",
 };
 
-function view() {
+function view(threadId = "bot") {
   return (
     <GoatBotChatView
-      availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
+      availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make(threadId) } }}
       canOperate
       rows={[row]}
       onSend={() => {}}
@@ -155,4 +155,16 @@ it("on a narrow screen the sheet closes for the file, and Close returns to the c
   await userEvent.keyboard("{Escape}");
   await expect.element(screen.getByText("Earlier conversation")).toBeVisible();
   await expect.element(screen.getByRole("textbox", { name: "Message GOAT Bot" })).toHaveFocus();
+});
+
+it("switching to another bot closes the open file instead of showing it over that bot's chat", async () => {
+  state.narrow = false;
+  await using screen = await render(view());
+  await openLibraryFile(screen);
+  await expect.element(screen.getByRole("heading", { name: "Weekly summary" })).toBeVisible();
+  await screen.rerender(view("other-bot"));
+  await expect.element(screen.getByText("Earlier conversation")).toBeVisible();
+  await screen.rerender(view());
+  await expect.element(screen.getByText("Earlier conversation")).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Weekly summary" }).query()).toBeNull();
 });

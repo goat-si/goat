@@ -139,9 +139,10 @@ export function GoatBotChatView({
       }
     : undefined;
   const notesRefreshKey = goatBotNotesRefreshKey(rows);
-  // A Library file open in place of the conversation, on the server it was listed from.
+  // A Library file open in place of the conversation, for the bot it was opened from.
   const [viewing, setViewing] = useState<{
     readonly environmentId: EnvironmentId;
+    readonly threadId: string;
     readonly file: ChannelBotArtifact;
   } | null>(null);
   const fileOpener = useRef<HTMLElement | null>(null);
@@ -150,7 +151,7 @@ export function GoatBotChatView({
         fileOpener.current =
           document.activeElement instanceof HTMLElement ? document.activeElement : null;
         if (narrow) setPanelOpen(false);
-        setViewing({ environmentId: bot.environmentId, file });
+        setViewing({ environmentId: bot.environmentId, threadId: bot.threadId, file });
       }
     : () => {};
   const closeFile = () => {
@@ -161,8 +162,21 @@ export function GoatBotChatView({
     if (opener?.isConnected) opener.focus();
     else composerRef.current?.focus();
   };
+  // Another bot, or this one moved to another server, closes the file for good; a bot that is
+  // only briefly unavailable keeps it.
+  if (
+    viewing !== null &&
+    bot !== null &&
+    (viewing.environmentId !== bot.environmentId || viewing.threadId !== bot.threadId)
+  ) {
+    setViewing(null);
+  }
   const shownFile =
-    viewing !== null && viewing.environmentId === bot?.environmentId ? viewing : null;
+    viewing !== null &&
+    viewing.environmentId === bot?.environmentId &&
+    viewing.threadId === bot.threadId
+      ? viewing
+      : null;
   const [dragActive, setDragActive] = useState(false);
   if (!acceptsFiles && dragActive) setDragActive(false);
   const addDroppedFiles = useStableCallback((files: File[]) =>
