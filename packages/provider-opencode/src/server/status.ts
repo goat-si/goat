@@ -10,6 +10,7 @@ import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 
 import { createModelCapabilities } from "@goat/shared/model";
@@ -565,6 +566,22 @@ export const loadOpenCode2Workspace = Effect.fn("OpencodeProviderStatus.loadOpen
   },
 );
 
+/**
+ * Machine-level skills, read without a location. A cold server answers with an empty list while
+ * it scans; a finished scan always lists OpenCode's built-in skills.
+ */
+export const loadOpenCode2GlobalSkills = <E>(
+  list: Effect.Effect<OpenCode2Workspace["skills"], E>,
+) =>
+  list.pipe(
+    Effect.repeat({
+      until: (skills) => skills.length > 0,
+      schedule: Schedule.spaced("250 millis"),
+    }),
+    Effect.timeoutOption("5 seconds"),
+    Effect.map(Option.getOrElse((): OpenCode2Workspace["skills"] => [])),
+  );
+
 export function openCode2SkillsToServerProviderSkills(
   skills: OpenCode2Workspace["skills"],
 ): ReadonlyArray<ServerProviderSkill> {
@@ -632,8 +649,22 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
   version: string,
   checkedAt: string,
   loadModels: Effect.Effect<ReadonlyArray<OpenCode2Model>, OpenCodeRuntime.OpenCodeRuntimeError>,
+  loadSkills: Effect.Effect<OpenCode2Workspace["skills"], OpenCodeRuntime.OpenCodeRuntimeError>,
 ) {
-  const result = yield* Effect.exit(loadModels);
+  const [result, skillsResult] = yield* Effect.all(
+    [Effect.exit(loadModels), Effect.exit(loadSkills)],
+    {
+      concurrency: "unbounded",
+    },
+  );
+  if (skillsResult._tag === "Failure") {
+    yield* Effect.logWarning("OpenCode 2 could not list its global skills", skillsResult.cause);
+  }
+  // Global skills back the composer until a workspace snapshot exists for the thread's cwd.
+  const skills =
+    skillsResult._tag === "Success"
+      ? openCode2SkillsToServerProviderSkills(skillsResult.value)
+      : [];
   const probe = (status: "ready" | "warning" | "error", message: string) => ({
     installed: true,
     version,
@@ -657,6 +688,7 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
         settings.customModels,
         DEFAULT_OPENCODE_MODEL_CAPABILITIES,
       ),
+      skills,
       slashCommands: [COMPACT_SLASH_COMMAND],
       probe: probe("error", "OpenCode could not load its model list."),
     });
@@ -692,6 +724,7 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
     enabled: true,
     checkedAt,
     models,
+    skills,
     slashCommands: [COMPACT_SLASH_COMMAND],
     probe:
       result.value.length > 0
@@ -711,6 +744,10 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     ReadonlyArray<OpenCode2Model>,
     OpenCodeRuntime.OpenCodeRuntimeError
   >,
+  loadOpenCode2Skills: Effect.Effect<
+    OpenCode2Workspace["skills"],
+    OpenCodeRuntime.OpenCodeRuntimeError
+  > = Effect.succeed([]),
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -784,7 +821,13 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   }
   const probed = probedExit.value;
   if (probed.generation === "v2") {
-    return yield* checkOpenCode2(openCodeSettings, probed.version, checkedAt, loadOpenCode2Models);
+    return yield* checkOpenCode2(
+      openCodeSettings,
+      probed.version,
+      checkedAt,
+      loadOpenCode2Models,
+      loadOpenCode2Skills,
+    );
   }
   if (compareSemverVersions(probed.version, OpenCodeRuntime.MINIMUM_OPENCODE_VERSION) < 0) {
     return buildServerProvider({
