@@ -839,7 +839,7 @@ const make = Effect.gen(function* () {
         kept.push({ ...entry, reason: blocker });
         continue;
       }
-      // Each sweep attempts at least one removal, so a repeat reaches a different worktree.
+      // Each sweep attempts at least one removal; a caller stops repeating when one removes nothing.
       if (!dryRun && attempted && (yield* Clock.currentTimeMillis) >= deadline) {
         remaining++;
         continue;
