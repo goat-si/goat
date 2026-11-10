@@ -67,6 +67,7 @@ describe("readOpenCodeUsage", () => {
       );
       let changed = false;
       let largestRawResult = 0;
+      let largestResultRows = 0;
       const originalAll = NodeSqlite.StatementSync.prototype.all;
       yield* Effect.acquireRelease(
         Effect.sync(() =>
@@ -75,6 +76,7 @@ describe("readOpenCodeUsage", () => {
             ...params
           ) {
             const rows = originalAll.apply(this, params);
+            largestResultRows = Math.max(largestResultRows, rows.length);
             const rawSize = rows.reduce(
               (size, row) => size + (typeof row.data === "string" ? row.data.length : 0),
               0,
@@ -110,6 +112,8 @@ describe("readOpenCodeUsage", () => {
       );
       assert.isAbove(largestRawResult, 0);
       assert.isBelow(largestRawResult, 64 * 1024);
+      // The rowid listing pages too, so no statement returns the whole window at once.
+      assert.isAtMost(largestResultRows, 64);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

@@ -143,6 +143,8 @@ export function evaluatePullRequestWatch(
           (workflowRunOf(key) === key ? !finished.has(key) : nameUnfinished(key)),
       ),
     ];
+    // Once every approval hold has settled, a later wait on the same head is news again.
+    if (awaitingApproval.length === 0) approvalAnnounced = false;
   }
   const required = checks.filter((check) => check.required === true);
   const gate = required.length > 0 ? required : checks;

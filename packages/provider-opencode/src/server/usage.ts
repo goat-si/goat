@@ -172,19 +172,25 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
         const timestamp = columns.has("time_created") ? "time_created" : "NULL";
         const predicates = table === "session_message" ? ["type = 'assistant'"] : [];
         if (timestamp !== "NULL") predicates.push("time_created >= ?");
-        // List only rowids so SQLite can use time indexes without reading message bodies.
-        const listed = (yield* sql.unsafe<{ readonly row_id: number }>(
-          `SELECT rowid AS row_id FROM ${table}
-           ${predicates.length ? `WHERE ${predicates.join(" AND ")}` : ""}`,
-          timestamp === "NULL" ? [] : [sinceMs],
-        )).toSorted((a, b) => a.row_id - b.row_id);
-        databaseRows += listed.length;
         // Filter and project in SQLite: user diffs and assistant bodies can be hundreds of MB.
         const validAssistant = `CASE WHEN typeof(data) = 'text' AND json_valid(data)
           THEN json_type(data, '$.role') IS NULL OR data ->> '$.role' = 'assistant' END`;
-        // Omit per-page spans; the enclosing scan records row and page counts.
-        for (let start = 0; start < listed.length; start += MESSAGE_PAGE_SIZE) {
-          const page = listed.slice(start, start + MESSAGE_PAGE_SIZE);
+        const keysetPredicates = [...predicates, "rowid > ?"].join(" AND ");
+        // Page rowids by keyset so neither the id list nor the bodies outgrow one page; the
+        // read transaction keeps mid-scan appends out. Omit per-page spans; the enclosing scan
+        // records row and page counts.
+        for (let after = Number.MIN_SAFE_INTEGER; ;) {
+          const page = yield* sql
+            .unsafe<{ readonly row_id: number }>(
+              `SELECT rowid AS row_id FROM ${table} WHERE ${keysetPredicates}
+               ORDER BY rowid LIMIT ${MESSAGE_PAGE_SIZE}`,
+              [...(timestamp === "NULL" ? [] : [sinceMs]), after],
+            )
+            .pipe(Effect.withTracerEnabled(false));
+          const last = page.at(-1);
+          if (last === undefined) break;
+          after = last.row_id;
+          databaseRows += page.length;
           databasePages++;
           const rows = yield* sql
             .unsafe<{
@@ -215,6 +221,7 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
             );
           }
           yield* Effect.yieldNow;
+          if (page.length < MESSAGE_PAGE_SIZE) break;
         }
       }
     }).pipe(

@@ -41,6 +41,8 @@ const MAX_MODELS = 256;
 const MAX_ID_LENGTH = 128;
 const MAX_NAME_LENGTH = 160;
 const MAX_DESCRIPTION_LENGTH = 1_024;
+// Generous enough for real agents' command menus while bounding what one probe holds and sends.
+const MAX_COMMANDS = 1_024;
 const MAX_COMMAND_LINE_LENGTH = 2_048;
 const MAX_LISTED_SESSIONS = 1_280;
 const MAX_LISTED_SESSION_BYTES = 1_048_576;
@@ -218,6 +220,7 @@ export function normalizeAcpRegistryCommands(
   const slashCommands: Array<ServerProviderSlashCommand> = [];
   const skills: Array<ServerProviderSkill> = [];
   for (const command of commands) {
+    if (seen.size >= MAX_COMMANDS) break;
     const name = boundedOpaqueValue(command.name, MAX_ID_LENGTH);
     if (name === undefined) continue;
     const key = name.toLowerCase();

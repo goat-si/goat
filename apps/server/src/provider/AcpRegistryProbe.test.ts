@@ -335,6 +335,14 @@ describe("ACP Registry probe", () => {
     expect(commands.skills.map((skill) => skill.name)).toEqual(["late-skill"]);
   });
 
+  it("stops at 1,024 distinct commands so one agent cannot grow the probe without bound", () => {
+    const commands = normalizeAcpRegistryCommands(
+      Array.from({ length: 1_100 }, (_, index) => ({ name: "command_" + index, description: "" })),
+    );
+    expect(commands.slashCommands).toHaveLength(1_024);
+    expect(commands.slashCommands.at(-1)).toEqual({ name: "command_1023" });
+  });
+
   it("routes dollar-prefixed ACP commands to the provider skill menu", () => {
     expect(
       normalizeAcpRegistryCommands([

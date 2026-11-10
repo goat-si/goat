@@ -117,6 +117,26 @@ const evaluate = (
 ) => evaluatePullRequestWatch(current, pullRequest, remarks, options);
 
 describe("evaluatePullRequestWatch", () => {
+  it("announces a later workflow approval wait on the same head after the first one settled", () => {
+    const bot = check("bot", "success");
+    const approval = { ...check("CI", "action-required"), url: run(1) };
+    const first = evaluate(watch(), detail({ checks: [bot, approval] }), noRemarks);
+    assert.deepEqual(first.changes, [{ kind: "checks-awaiting-approval", checks: [approval] }]);
+    const settled = evaluate(
+      first.next,
+      detail({ checks: [bot, { ...approval, status: "success" }] }),
+      noRemarks,
+    );
+    assert.deepEqual(settled.next.awaitingApproval, []);
+    const later = { ...check("Deploy", "action-required"), url: run(2) };
+    const second = evaluate(
+      settled.next,
+      detail({ checks: [bot, { ...approval, status: "success" }, later] }),
+      noRemarks,
+    );
+    assert.deepEqual(second.changes, [{ kind: "checks-awaiting-approval", checks: [later] }]);
+  });
+
   it("waits for workflow approval once, through reads that miss it, until the run finishes", () => {
     const bot = check("bot", "success");
     const approval = { ...check("CI", "action-required"), url: run(1) };
