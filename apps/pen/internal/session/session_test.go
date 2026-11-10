@@ -187,3 +187,37 @@ func TestRekeyEvery2To20MessagesKeepsBothDirectionsInStep(t *testing.T) {
 		t.Fatalf("nonce %d: rekey must not reset n", a.send.Nonce())
 	}
 }
+
+func TestAPendingHandshakeOpensOnlyWhenConfirmedAndAnAbortReachesTheResponderAs1000(t *testing.T) {
+	ctx := context.Background()
+	admitAll := func(byte, []byte, Payload) ([]byte, error) { return nil, nil }
+	for _, confirm := range []bool{true, false} {
+		a, b := relay.Pipe()
+		resp, init := mustID(t), mustID(t)
+		rc := make(chan result, 1)
+		go func() {
+			s, err := Respond(ctx, b, resp, resp.NodeID(), admitAll)
+			rc <- result{s, err}
+		}()
+		p, err := InitiateHandshake(ctx, a, KindSession, resp.NodeID(), resp.NoisePub, init, nil, Payload{V: 1, Stream: "tcp", Port: 22})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !confirm {
+			p.Abort(wire.CodeNormal)
+			if r := <-rc; relay.CodeOf(r.err) != wire.CodeNormal {
+				t.Fatalf("responder of an aborted handshake: %v, want closed 1000", r.err)
+			}
+			continue
+		}
+		is, err := p.Confirm()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := <-rc
+		if r.err != nil {
+			t.Fatalf("responder of a confirmed handshake: %v", r.err)
+		}
+		exchange(t, is, r.s)
+	}
+}
