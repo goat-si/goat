@@ -40,6 +40,7 @@ var (
 	}
 	newLoginClient = login.New
 	retryAfter     = time.After
+	nowFn          = time.Now
 )
 
 // loginState is login.json: the account this node last signed in with.
@@ -225,6 +226,10 @@ func (l *loginRun) register(ctx context.Context, meshID string) error {
 		}
 		return err
 	}
+	return l.saveLogin(meshID)
+}
+
+func (l *loginRun) saveLogin(meshID string) error {
 	return l.st.WriteJSON(loginFile, loginState{LoginURL: l.lc.URL, Sub: l.tok.Account.Sub, Email: l.tok.Account.Email, MeshID: meshID}, 0o600)
 }
 
@@ -253,7 +258,14 @@ func (l *loginRun) join(ctx context.Context) error {
 	if err := l.install(s); err != nil {
 		return err
 	}
-	if err := l.register(ctx, s.MeshID); err != nil {
+	if !nowFn().Before(time.Unix(l.tok.Assertion.A.Exp, 0)) {
+		// A slow approval outlived the assertion: this node is a member, but the registry takes only a
+		// live assertion, so the next pen login registers it.
+		if err := l.saveLogin(s.MeshID); err != nil {
+			return err
+		}
+		fmt.Fprintf(l.stdout, "the sign-in expired before the approval, so registration waits for the next pen login\n")
+	} else if err := l.register(ctx, s.MeshID); err != nil {
 		return err
 	}
 	v := s.View()

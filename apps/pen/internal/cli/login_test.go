@@ -143,3 +143,80 @@ func TestLoginFoundsAndBindsThenAMachineJoinsAndALockedMeshQueuesUntilApproved(t
 		t.Fatalf("registry lists %d nodes, want 3", len(nodes))
 	}
 }
+
+func TestASlowApprovalLeavesAMemberWhoseRegistrationWaitsForTheNextLogin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := logintest.New()
+	f.MinPoll = 0
+	f.AutoApprove = &login.Account{Sub: "1001", Email: "me@example.com"}
+	f.Start()
+	defer f.Close()
+	tick := loginSeams(t, ctx, rs)
+	flags := func(name string) []string {
+		return []string{"--login-url", f.URL, "--relay", rs.URL, "--name", name, "--yes", "--no-service"}
+	}
+	a := tmpStore(t)
+	t.Setenv("PEN_HOME", a.Dir)
+	var out, errOut strings.Builder
+	if code := RunLogin(flags("a"), &out, &errOut); code != 0 {
+		t.Fatalf("first login: %s", errOut.String())
+	}
+	var lr map[string]any
+	if err := daemon.Call(a, daemon.Request{Op: "lock", On: true}, &lr); err != nil {
+		t.Fatal(err)
+	}
+	c := tmpStore(t)
+	t.Setenv("PEN_HOME", c.Dir)
+	pr, pw := io.Pipe()
+	done := make(chan int, 1)
+	var cOut, cErr strings.Builder
+	go func() { done <- RunLogin(flags("c"), pw, &cErr); pw.Close() }()
+	fp := ""
+	sc := bufio.NewScanner(pr)
+	for sc.Scan() {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "this machine's fingerprint: "); ok {
+			fp = v
+			break
+		}
+	}
+	rest := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		for sc.Scan() {
+			b.WriteString(sc.Text() + "\n")
+		}
+		rest <- b.String()
+	}()
+	var ar daemon.ApproveResult
+	if err := daemon.Call(a, daemon.Request{Op: "approve", Subject: fp}, &ar); err != nil {
+		t.Fatal(err)
+	}
+	// The approval came after the 10-minute assertion expired.
+	later := time.Now().Add(time.Hour)
+	f.SetNow(func() time.Time { return later })
+	oldNow := nowFn
+	nowFn = func() time.Time { return later }
+	defer func() { nowFn = oldNow }()
+	tick <- time.Time{}
+	if code := <-done; code != 0 {
+		t.Fatalf("slow-approved login: exit %d: %s", code, cErr.String())
+	}
+	pw.Close()
+	cOut.WriteString(<-rest)
+	if memberCount(t, c) != 2 {
+		t.Fatal("c is not a member")
+	}
+	if !strings.Contains(cOut.String()+cErr.String(), "registration waits for the next pen login") {
+		t.Fatalf("output:\n%s%s", cOut.String(), cErr.String())
+	}
+	var ls loginState
+	if ok, _ := c.ReadJSON(loginFile, &ls); !ok || ls.Email != "me@example.com" {
+		t.Fatalf("login.json %+v (%v)", ls, ok)
+	}
+	if _, nodes := f.Registry("1001"); len(nodes) != 1 {
+		t.Fatalf("registry lists %d nodes, want only a", len(nodes))
+	}
+}
