@@ -45,10 +45,11 @@ func TestHelperDialControl(t *testing.T) {
 	os.Exit(0)
 }
 
-// Another user on the machine must not drive the daemon. The child runs with this user's token with
-// the user SID made deny-only, which is how another account looks to an access check; the daemon must
-// not answer it. The same child with the normal token gets its answer, so the refusal is not the child
-// failing to run.
+// Another user on the machine must not drive the daemon: Windows checks an AF_UNIX connect against the
+// socket file's DACL, which grants this user alone. The child runs with this user's token with the user
+// SID made deny-only and without privileges (an elevated token's backup and restore privileges pass any
+// DACL), which is how another standard account looks to the check. It must be refused, and must get its
+// answer once the DACL admits Everyone, so the refusal comes from the DACL and not from the child.
 func TestControlSocketRefusesAProcessWithoutTheOwnersSID(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -63,7 +64,7 @@ func TestControlSocketRefusesAProcessWithoutTheOwnersSID(t *testing.T) {
 	}
 	exe, dir := runnableCopy(t)
 	tok := restrictedToken(t)
-	dial := func(tok windows.Token) (int, string) {
+	dial := func() (int, string) {
 		cmd := exec.Command(exe, "-test.run=^TestHelperDialControl$")
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), "PEN_TEST_DIAL="+sock)
@@ -78,15 +79,16 @@ func TestControlSocketRefusesAProcessWithoutTheOwnersSID(t *testing.T) {
 		}
 		return 0, string(out)
 	}
-	if code, out := dial(tok); code != 3 {
+	if code, out := dial(); code != 3 {
 		t.Fatalf("a process without the owner's SID: exit %d, want 3 (refused): %s", code, out)
 	}
-	if code, out := dial(0); code != 0 {
-		t.Fatalf("the owner's own child got no status: exit %d: %s", code, out)
+	setDACL(t, sock, windows.GENERIC_ALL, false)
+	if code, out := dial(); code != 0 {
+		t.Fatalf("the restricted child got no status from a socket open to Everyone: exit %d: %s", code, out)
 	}
 }
 
-// restrictedToken is this process's token with its user SID made deny-only.
+// restrictedToken is this process's token with its user SID deny-only and its privileges removed.
 func restrictedToken(t *testing.T) windows.Token {
 	t.Helper()
 	var self windows.Token
@@ -99,9 +101,10 @@ func restrictedToken(t *testing.T) windows.Token {
 		t.Fatal(err)
 	}
 	disable := windows.SIDAndAttributes{Sid: u.User.Sid}
+	const disableMaxPrivilege = 0x1
 	var tok windows.Token
 	r, _, err := windows.NewLazySystemDLL("advapi32.dll").NewProc("CreateRestrictedToken").Call(
-		uintptr(self), 0, 1, uintptr(unsafe.Pointer(&disable)), 0, 0, 0, 0, uintptr(unsafe.Pointer(&tok)))
+		uintptr(self), disableMaxPrivilege, 1, uintptr(unsafe.Pointer(&disable)), 0, 0, 0, 0, uintptr(unsafe.Pointer(&tok)))
 	if r == 0 {
 		t.Fatalf("CreateRestrictedToken: %v", err)
 	}
