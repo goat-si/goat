@@ -44,6 +44,8 @@ type Options struct {
 	Announce string
 	// RetryAfter waits between registry forget retries (time.After); tests drive it.
 	RetryAfter func(time.Duration) <-chan time.Time
+	// OnForget, when set, is told each registry forget attempt and whether it stays queued.
+	OnForget func(nodeID string, err error, kept bool)
 	// Ready is called once the control socket accepts requests.
 	Ready func()
 	Now   func() time.Time

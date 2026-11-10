@@ -49,8 +49,9 @@ type Server struct {
 	// AutoApprove, when set, approves every started device for this account at once.
 	AutoApprove *login.Account
 	clock       atomic.Pointer[func() time.Time]
-	// ForgetDown makes forgets answer 503, as a service that is down.
-	ForgetDown atomic.Bool
+	// ForgetStatus, when set, is the HTTP status every forget answers (503 as a service that is down,
+	// 401 as one that refuses for clock skew).
+	ForgetStatus atomic.Int32
 
 	mu       sync.Mutex
 	keys     []ed25519.PrivateKey
@@ -204,9 +205,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v1/mesh/register":
 		s.register(w, body)
 	case "/v1/mesh/forget":
-		if s.ForgetDown.Load() {
-			s.attempt(http.StatusServiceUnavailable)
-			reply(w, http.StatusServiceUnavailable, map[string]string{"error": "down"})
+		if code := int(s.ForgetStatus.Load()); code != 0 {
+			s.attempt(code)
+			reply(w, code, map[string]string{"error": http.StatusText(code)})
 			return
 		}
 		s.forget(w, body)

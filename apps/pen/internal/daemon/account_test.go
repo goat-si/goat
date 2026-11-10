@@ -517,7 +517,7 @@ func TestAForgetTheServiceDidNotAnswerIsKeptAndSentAfterARestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	f.ForgetDown.Store(true)
+	f.ForgetStatus.Store(503)
 	var r map[string]any
 	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(b.SignPub)}, &r); err != nil {
 		t.Fatal(err)
@@ -534,7 +534,7 @@ func TestAForgetTheServiceDidNotAnswerIsKeptAndSentAfterARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.done <- nil
-	f.ForgetDown.Store(false)
+	f.ForgetStatus.Store(0)
 	a2 := start(t, ctx, rs, a.st, nil)
 	if got := <-f.Forgotten(); got != b.NodeID() {
 		t.Fatalf("forgot %s, want b", got)
@@ -632,5 +632,47 @@ func TestAnOfflineMemberThatAnnounced11EarlierDoesNotBlockLockButOneThatNeverDid
 	err = Call(a2.st, Request{Op: "lock", On: false}, &r)
 	if err == nil || !strings.HasSuffix(err.Error(), ": c") {
 		t.Fatalf("unlock with c never heard from: %v, want a refusal naming c only", err)
+	}
+}
+
+func TestAForgetRefusedForClockSkewOrRateIsRetriedAndABadRequestIsDropped(t *testing.T) {
+	cases := []struct {
+		status int
+		kept   bool
+	}{{401, true}, {429, true}, {403, true}, {400, false}, {404, false}, {409, false}}
+	for _, c := range cases {
+		ctx, cancel := context.WithCancel(context.Background())
+		rs := relaytest.New()
+		f := loginFake(t)
+		st := shortDir(t)
+		id := identity(t, st, rs.URL, "a")
+		if _, err := mesh.Found(st, id, "a", 1); err != nil {
+			t.Fatal(err)
+		}
+		type attempt struct {
+			nodeID string
+			kept   bool
+		}
+		seen := make(chan attempt, 8)
+		a := startWith(t, ctx, rs, st, func(o *Options) {
+			o.OnForget = func(nodeID string, _ error, kept bool) { seen <- attempt{nodeID, kept} }
+		})
+		bindTo(t, a, f, f.Key())
+		b := newcomer(t)
+		as := f.Issue(testSub, "me@example.com", b.SignPub, b.NoisePub, time.Now())
+		if _, _, err := AccountJoin(ctx, []string{rs.URL}, b, "b", as, offeredBy(t, a)); err != nil {
+			t.Fatal(err)
+		}
+		f.ForgetStatus.Store(int32(c.status))
+		var r map[string]any
+		if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(b.SignPub)}, &r); err != nil {
+			t.Fatal(err)
+		}
+		got := <-seen
+		if got.nodeID != b.NodeID() || got.kept != c.kept {
+			t.Fatalf("answer %d: forget of %s kept %v, want kept %v", c.status, got.nodeID, got.kept, c.kept)
+		}
+		cancel()
+		rs.Close()
 	}
 }
