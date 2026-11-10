@@ -537,6 +537,8 @@ type DashState struct {
 	Events        []DashEvent   `json:"events"`
 	DownloadRelay string        `json:"downloadRelay"`
 	LoginCommand  string        `json:"loginCommand"`
+	// LoginCommandWindows is LoginCommand for PowerShell.
+	LoginCommandWindows string `json:"loginCommandWindows"`
 	// Unforgotten are revoked machines the login service still offers (see LsReply).
 	Unforgotten []Unforgotten `json:"unforgotten"`
 	// ApproveQuestion is the warning pen approve asks before approving by request id.
@@ -562,6 +564,7 @@ func (d *Daemon) dashState() DashState {
 		s.Members = []LsMember{}
 	}
 	s.LoginCommand = LoginCommand(s.DownloadRelay)
+	s.LoginCommandWindows = LoginCommandWindows(s.DownloadRelay)
 	if v.Account != nil {
 		s.Account = &DashAccount{LoginURL: v.Account.LoginURL, Sub: v.Account.Sub, Email: d.accountEmail(v)}
 	}

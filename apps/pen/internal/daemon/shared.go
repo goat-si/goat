@@ -29,6 +29,23 @@ func LoginCommand(downloadRelay string) string {
 	return "curl -fsSL " + shellWord(downloadRelay+"/install.sh") + " | sh -s -- --login"
 }
 
+// InstallCommandWindows is InstallCommand for PowerShell on Windows.
+func InstallCommandWindows(downloadRelay, token string) string {
+	return psInstaller(downloadRelay) + " --join " + psWord(token)
+}
+
+// LoginCommandWindows is LoginCommand for PowerShell on Windows.
+func LoginCommandWindows(downloadRelay string) string { return psInstaller(downloadRelay) + " --login" }
+
+// psInstaller runs install.ps1 as a script block, so the options after it reach the script.
+func psInstaller(downloadRelay string) string {
+	return "& ([scriptblock]::Create((irm " + psWord(downloadRelay+"/install.ps1") + ")))"
+}
+
+// psWord single-quotes s for PowerShell, where nothing inside single quotes is expanded and a quote
+// is written twice.
+func psWord(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
 // shellWord leaves a plain URL or token as it is and single-quotes anything else (config.json can be
 // edited by hand), so a copied command never runs text from the value.
 func shellWord(s string) string {

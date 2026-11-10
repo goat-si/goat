@@ -14,6 +14,17 @@ func TestInstallAndLoginCommandsQuoteADownloadRelayThatIsNotPlain(t *testing.T) 
 	}
 }
 
+func TestWindowsInstallAndLoginCommandsKeepTheirValuesInert(t *testing.T) {
+	if got := LoginCommandWindows("https://pen-relay.example"); got != "& ([scriptblock]::Create((irm 'https://pen-relay.example/install.ps1'))) --login" {
+		t.Fatalf("plain relay: %q", got)
+	}
+	got := InstallCommandWindows("https://a$(id)';b", "tok_EN-1")
+	want := "& ([scriptblock]::Create((irm 'https://a$(id)'';b/install.ps1'))) --join 'tok_EN-1'"
+	if got != want {
+		t.Fatalf("hostile relay:\n got %s\nwant %s", got, want)
+	}
+}
+
 // A node's only relay ends up in a version 1 invite, which refuses plain http to a public host, so
 // the node must refuse that relay too instead of printing invites no joiner can use.
 func TestASingleRelayFollowsTheInviteSchemeRule(t *testing.T) {

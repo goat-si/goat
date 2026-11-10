@@ -317,6 +317,8 @@ type InviteReply struct {
 	ExpiresAt int64  `json:"expiresAt"`
 	// Command installs pen on the new machine and joins (from the download relay).
 	Command string `json:"command"`
+	// WindowsCommand does the same from PowerShell on Windows.
+	WindowsCommand string `json:"windowsCommand"`
 }
 
 func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
@@ -330,7 +332,8 @@ func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
 	}
 	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relays: d.relays()}
 	s := tok.String()
-	return InviteReply{Token: s, Relay: tok.Relays[0], ExpiresAt: inv.ExpiresAt, Command: InstallCommand(d.downloadRelay(), s)}, inv.ID, nil
+	return InviteReply{Token: s, Relay: tok.Relays[0], ExpiresAt: inv.ExpiresAt, Command: InstallCommand(d.downloadRelay(), s),
+		WindowsCommand: InstallCommandWindows(d.downloadRelay(), s)}, inv.ID, nil
 }
 
 func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds pen for every release target into infra/pen-relay/public/dl/<version>/ with SHA256SUMS and
-# NOTICE, and writes infra/pen-relay/public/install.sh with the relays and version filled in.
+# NOTICE, and writes infra/pen-relay/public/install.sh and install.ps1 with the relays and version filled in.
 # PEN_PUBLIC names another output folder (installcheck.sh builds into its scratch folder).
 #   apps/pen/scripts/build.sh <version> <download relay URL> [extra relay URL]...
 # install.sh downloads from the first relay and gives installed nodes all of them.
@@ -24,11 +24,15 @@ public="${PEN_PUBLIC:-$repo/infra/pen-relay/public}"
 out="$public/dl/$V"
 mkdir -p "$out"
 
+targets="linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64 windows/arm64"
 cd "$here"
-for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
+for target in $targets; do
 	os="${target%/*}"
 	arch="${target#*/}"
 	bin="$out/pen-$os-$arch"
+	if [ "$os" = windows ]; then
+		bin="$bin.exe"
+	fi
 	CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" "$GO" build -trimpath -ldflags "-s -w -X main.version=$V" -o "$bin" .
 	gzip -9 -n -f "$bin"
 done
@@ -51,7 +55,7 @@ modcache="$(cd "$here" && "$GO" env GOMODCACHE)"
 	echo "================================================================"
 	cat "$repo/LICENSE"
 	echo
-	mods="$(for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
+	mods="$(for target in $targets; do
 		(cd "$here" && GOOS="${target%/*}" GOARCH="${target#*/}" "$GO" list -deps -f '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}}{{end}}{{end}}' .)
 	done | sort -u)"
 	for mod in $mods; do
@@ -71,6 +75,7 @@ modcache="$(cd "$here" && "$GO" env GOMODCACHE)"
 
 sed -e "s|__PEN_RELAYS__|$RELAYS|" -e "s|__PEN_RELAY__|$RELAY|" -e "s|__PEN_VERSION__|$V|" "$here/install/install.sh" >"$public/install.sh"
 chmod 0755 "$public/install.sh"
+sed -e "s|__PEN_RELAYS__|$RELAYS|" -e "s|__PEN_RELAY__|$RELAY|" -e "s|__PEN_VERSION__|$V|" "$here/install/install.ps1" >"$public/install.ps1"
 
 for f in pen-*.gz; do
 	bytes="$(wc -c <"$f" | tr -d ' ')"
