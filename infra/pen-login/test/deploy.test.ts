@@ -35,7 +35,7 @@ function sandbox(
       "const a = process.argv.slice(2);",
       `if (a[0] === 'secret' && a[1] === 'list' && ${JSON.stringify(opts.listError ?? "")}) { console.error(${JSON.stringify(opts.listError ?? "")}); process.exit(1); }`,
       `if (a[0] === 'secret' && a[1] === 'list') { const names = ${JSON.stringify(existingSecrets)}; if (fs.existsSync(${JSON.stringify(landed)})) names.push(...Object.keys(JSON.parse(fs.readFileSync(${JSON.stringify(sent)}, 'utf8')))); console.log(JSON.stringify(names.map((name) => ({ name })))); process.exit(0); }`,
-      `if (a[0] === 'deploy') { fs.copyFileSync(a[a.indexOf('--secrets-file') + 1], ${JSON.stringify(sent)}); ${opts.landsThenFails ? `fs.writeFileSync(${JSON.stringify(landed)}, ''); process.exit(1);` : ""} ${opts.signal ? `process.kill(process.ppid, ${JSON.stringify(opts.signal)}); setTimeout(() => process.exit(130), 200); return;` : ""} process.exit(${opts.deployExit ?? 0}); }`,
+      `if (a[0] === 'deploy') { fs.copyFileSync(a[a.indexOf('--secrets-file') + 1], ${JSON.stringify(sent)}); ${opts.landsThenFails ? `fs.writeFileSync(${JSON.stringify(landed)}, ''); process.exit(1);` : ""} ${opts.signal ? `process.kill(process.ppid, ${JSON.stringify(opts.signal)}); process.exit(130);` : ""} process.exit(${opts.deployExit ?? 0}); }`,
       "process.exit(3);",
     ].join("\n"),
     { mode: 0o755 },
@@ -214,7 +214,8 @@ describe("deploy:secrets and the login key", () => {
       const r = s.run("--signing-key-file", keyFile);
       expect(r.status).toBe(1);
       expect(r.out).not.toContain("run this again");
-      expect(r.out).toContain("LOGIN_SIGNING_KEY is set");
+      expect(r.out).toContain("has a LOGIN_SIGNING_KEY now");
+      expect(r.out).toContain("/v1/keys");
     } finally {
       s.cleanup();
     }
