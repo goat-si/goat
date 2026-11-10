@@ -19,9 +19,11 @@ every Pen suite). `wrangler whoami` must list only the account above.
 uplinks and exchanges 64 KiB each way with a client through the relay, with timings. It exits 1 on any failure or
 when `--timeout` (30 s) runs out, including a certificate that expires within 14 days (`--min-cert-days`), so it
 works as a cron or monitor probe. The check node's keys live in `relay-check/` under the state directory
-(`~/.pen`), separate from the machine's own node, so repeated checks reuse one node id and leave each relay one small
-entry (the Go relay its next session id for that node, the Worker one Durable Object holding the same). Run it against
-both relays after every deploy:
+(`~/.pen`, or `PEN_HOME`), separate from the machine's own node, so repeated checks reuse one node id and leave each
+relay one small entry (the Go relay its next session id for that node, the Worker one Durable Object holding the same).
+That directory must be writable by the user the probe runs as; a cron job under another user or a read-only home
+sets `PEN_HOME` to a directory it owns. Checks on one machine take turns with the check node: a second check started
+while one runs waits for it, within its own `--timeout`. Run it against both relays after every deploy:
 
 ```sh
 pen relay check https://pen-relay.pos090001.workers.dev
