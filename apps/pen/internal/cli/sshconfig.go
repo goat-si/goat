@@ -112,16 +112,23 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''
 // sshArg double-quotes a path for ssh_config and keeps ssh from expanding % tokens in it.
 func sshArg(s string) string { return `"` + strings.ReplaceAll(s, "%", "%%") + `"` }
 
-// sshConfigText is one Host block per member name plus a pen-* fallback for names added later.
-// cmd is already shell-quoted. Each host reuses one connection for 10 minutes (ControlMaster), so
-// only the first ssh to a member pays the relay and key exchange round trips; control sockets live
-// in controlDir (ssh -o ControlMaster=no opens a fresh connection).
 // sshHost is one member's concrete Host block; User is empty when the member did not publish one.
 type sshHost struct{ Name, User string }
 
+// controlSocketMax is the smallest sun_path (macOS, with its NUL); ssh binds the control socket
+// first under its path plus a 17-byte ".<16 random>" suffix, and %C expands to 40 hex digits.
+const controlSocketMax = 104
+
+// sshConfigText is one Host block per member name plus a pen-* fallback for names added later.
+// cmd is already shell-quoted. Each host reuses one connection for 10 minutes (ControlMaster), so
+// only the first ssh to a member pays the relay and key exchange round trips; control sockets live
+// in controlDir, and are left out when their path would not fit a unix socket address
+// (ssh -o ControlPath=none opens a fresh connection).
 func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 	var b strings.Builder
 	b.WriteString("# Written by pen ssh-config. pen ssh-config --uninstall removes it.\n")
+	controlPrefix := filepath.Join(controlDir, "cm-")
+	reuse := len(controlPrefix)+40+17 < controlSocketMax
 	block := func(pattern, user string) {
 		fmt.Fprintf(&b, "Host %s\n", pattern)
 		if user != "" {
@@ -130,8 +137,11 @@ func sshConfigText(cmd, knownHosts, controlDir string, hosts []sshHost) string {
 		fmt.Fprintf(&b, "    ProxyCommand %s pipe %%n 22\n", strings.ReplaceAll(cmd, "%", "%%"))
 		fmt.Fprintf(&b, "    UserKnownHostsFile %s\n", sshArg(knownHosts))
 		b.WriteString("    StrictHostKeyChecking yes\n")
+		if !reuse {
+			return
+		}
 		b.WriteString("    ControlMaster auto\n")
-		fmt.Fprintf(&b, "    ControlPath %s\n", strings.TrimSuffix(sshArg(filepath.Join(controlDir, "cm-")), `"`)+`%C"`)
+		fmt.Fprintf(&b, "    ControlPath %s\n", strings.TrimSuffix(sshArg(controlPrefix), `"`)+`%C"`)
 		b.WriteString("    ControlPersist 10m\n")
 	}
 	for _, h := range hosts {

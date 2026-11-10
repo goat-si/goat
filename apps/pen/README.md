@@ -53,7 +53,7 @@ started it does not stop it. It does not come back after a reboot; run `pen up` 
 `pen ssh-config --install` writes `~/.ssh/pen/config` (one `Host pen-<name>` per member with `ProxyCommand pen pipe %n 22`,
 the member's login user and its signed host keys) and puts an `Include` for it first in `~/.ssh/config`. The daemon keeps it
 current as members join. `pen ssh-config --uninstall` removes both. Each host keeps its first connection open for 10 minutes
-(`ControlMaster`), so a repeat `ssh` skips the relay and key exchange round trips; `ssh -o ControlMaster=no` opens a fresh one.
+(`ControlMaster`), so a repeat `ssh` skips the relay and key exchange round trips; `ssh -o ControlPath=none` opens a fresh one.
 
 ## Relays
 

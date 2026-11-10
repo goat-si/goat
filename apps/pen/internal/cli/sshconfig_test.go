@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
@@ -156,5 +157,16 @@ func TestRefreshSSHConfigRewritesAnInstalledConfigWithEveryMemberAndLeavesAMissi
 	got, _ := os.ReadFile(filepath.Join(dir, "pen", "config"))
 	if !bytes.Contains(got, []byte("Host pen-sbx1\n    User ubuntu\n")) || !bytes.Contains(got, []byte("Host pen-studio\n")) {
 		t.Fatalf("refreshed config:\n%s", got)
+	}
+}
+
+func TestSSHConfigLeavesOutConnectionReuseWhenTheControlSocketPathWouldNotFit(t *testing.T) {
+	long := "/" + strings.Repeat("d", 50)
+	got := sshConfigText(shellQuote("/bin/pen"), "/k/known_hosts", long, []sshHost{{Name: "studio"}})
+	if strings.Contains(got, "Control") {
+		t.Fatalf("control dir %s gives sockets over 104 bytes, yet the config sets:\n%s", long, got)
+	}
+	if !strings.Contains(got, "ProxyCommand") {
+		t.Fatalf("config lost its ProxyCommand:\n%s", got)
 	}
 }
