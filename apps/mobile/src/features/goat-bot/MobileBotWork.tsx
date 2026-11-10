@@ -44,7 +44,6 @@ import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import { MobileBotComputer } from "./MobileBotComputer";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
-import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
@@ -115,6 +114,8 @@ export function MobileBotWork(props: {
   readonly turnsWaiting?: ReadonlyArray<GoatBotWaitingTurn>;
   /** What the chat calls this bot. */
   readonly botName?: string;
+  /** The bot's profile picture, shown at the top of the sheet. */
+  readonly botAvatar?: string | null | undefined;
   /** The main bot, named on a member's inherited model. */
   readonly main?: Pick<BotProfile, "name"> | null;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
@@ -344,11 +345,7 @@ export function MobileBotWork(props: {
           >
             <View>
               <View className="items-center gap-2 pt-2 pb-4">
-                <GoatBotFaceAvatar
-                  state="idle"
-                  size={56}
-                  emoji={member ? mobileGoatBotMemberPicture(member) : props.main?.avatar}
-                />
+                <GoatBotFaceAvatar state="idle" size={56} emoji={props.botAvatar} />
                 <Text accessibilityRole="header" className="text-lg font-semibold text-foreground">
                   {botName}
                 </Text>
