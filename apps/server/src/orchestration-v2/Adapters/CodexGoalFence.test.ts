@@ -26,6 +26,7 @@ const scenario = (snapshot: boolean, race = false) =>
     const writeStarted = yield* Deferred.make<void>();
     const writeReleased = yield* Deferred.make<void>();
     const terminalRead = yield* Deferred.make<void>();
+    const pauseRequested = yield* Deferred.make<unknown>();
     const service = {
       list: Effect.succeed([]),
       listGoalBlocksByInstance: () => Effect.succeed([{ record, block }]),
@@ -72,10 +73,11 @@ const scenario = (snapshot: boolean, race = false) =>
         Effect.sync(() => {
           handlers.set(method, handler);
         }),
-      request: (method: string) =>
+      request: (method: string, params: unknown) =>
         Effect.gen(function* () {
           requests.push(method);
           if (method === "thread/goal/get") yield* Deferred.succeed(terminalRead, undefined);
+          if (method === "thread/goal/set") yield* Deferred.succeed(pauseRequested, params);
           return method === "thread/turns/list"
             ? { data: snapshot ? [{ id: "U", status: "inProgress" }] : [] }
             : { goal: { status: goalStatus } };
@@ -117,6 +119,11 @@ const scenario = (snapshot: boolean, race = false) =>
         turn: { id: "U", status: "inProgress" },
       });
     assert.isTrue(stopped, "the running native turn must be fenced");
+    assert.deepEqual(
+      yield* Deferred.await(pauseRequested),
+      { threadId: block.nativeThreadId, status: "paused" },
+      "Codex must not continue the goal after the fenced turn",
+    );
     goalStatus = "paused";
     yield* handlers.get("thread/goal/updated")!({
       threadId: block.nativeThreadId,
@@ -177,6 +184,7 @@ it.effect("a goal turn fence clears only after the retained process is verified 
       goals: new Map([[block.nativeThreadId, [{ record, block }]]]),
       waiting: new Map(),
       tracked: new Map(),
+      scope: yield* Scope.make(),
       onReady: () => Effect.void,
     });
     yield* fences.clearDead();
