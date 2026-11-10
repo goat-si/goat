@@ -54,18 +54,30 @@ func TestThePlistKeepsAnExecutablePathWithMarkupCharactersExact(t *testing.T) {
 }
 
 func TestTheUnitQuotesTheExecutablePathForSystemd(t *testing.T) {
-	doc, err := fill(template(t, "pen.service"), false, `/home/x/My Apps/100%/$HOME/a"b\c/pen`, "/home/x")
+	doc, err := fill(template(t, "pen.service"), false, `/home/x/My Apps/100%/a"b\c/pen`, "/home/x")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `ExecStart="/home/x/My Apps/100%%/$$HOME/a\"b\\c/pen" up --foreground --service`
+	want := `ExecStart="/home/x/My Apps/100%%/a\"b\\c/pen" up --foreground --service`
 	if !strings.Contains(doc, want+"\n") {
 		t.Fatalf("unit:\n%s\nwant the line %s", doc, want)
 	}
 }
 
-func TestAServiceIsNotWrittenForAPathWithALineBreak(t *testing.T) {
-	if _, err := fill(template(t, "pen.service"), false, "/home/x/a\nExecStartPre=/bin/evil", "/home/x"); err == nil {
-		t.Fatal("a path with a line break was written into the unit")
+// systemd resolves the executable before it expands $, so a unit cannot start a path with $ in it;
+// a line break or another control character cannot be carried either. pen refuses to write those.
+func TestAServiceIsNotWrittenForAPathItCannotCarryExactly(t *testing.T) {
+	for _, c := range []struct {
+		plist bool
+		exe   string
+	}{{false, "/home/x/a\nExecStartPre=/bin/evil"}, {false, "/home/x/$HOME/pen"}, {false, "/home/x/a\tb/pen"}, {true, "/Users/x/a\x01b/pen"}} {
+		name := "pen.service"
+		if c.plist {
+			name = "si.goat.pen.plist"
+		}
+		_, err := fill(template(t, name), c.plist, c.exe, "/home/x")
+		if err == nil || !strings.Contains(err.Error(), "install pen under a path without them") {
+			t.Fatalf("%q: %v, want a refusal that says what to do", c.exe, err)
+		}
 	}
 }
