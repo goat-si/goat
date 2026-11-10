@@ -25,14 +25,16 @@ import (
 
 // Contract limits.
 const (
-	MessageMax    = 1 << 20
-	SocketWindow  = 4 << 20
-	LightSession  = 16 << 10
-	RelayHeadroom = 64 << 10
-	PendingMax    = 8
-	ActiveMax     = 32
-	challengeLen  = 32
-	answerLen     = 96
+	MessageMax   = 1 << 20
+	SocketWindow = 4 << 20
+	LightSession = 16 << 10
+	// FirstMessageMax is the largest first message a client sends on a session (contract "Sessions").
+	FirstMessageMax = 4096
+	RelayHeadroom   = 64 << 10
+	PendingMax      = 8
+	ActiveMax       = 32
+	challengeLen    = 32
+	answerLen       = 96
 	// queueSlack is what a socket's outbound queue may hold past the contract windows (pongs).
 	queueSlack = 64 << 10
 	// maxQueuedPongs caps pongs waiting behind a slow write; more pings get no pong until it drains.
@@ -101,8 +103,10 @@ type Server struct {
 	// DefaultMaxReading); one source holds at most an eighth of it.
 	MaxReading int
 
-	// clock replaces time.Now in tests.
-	clock func() time.Time
+	// clock replaces time.Now in tests; beforeEnd runs between choosing a stalled queue and
+	// ending it (tests).
+	clock     func() time.Time
+	beforeEnd func(*outq)
 
 	queued, reading atomic.Int64
 
@@ -187,33 +191,55 @@ func (s *Server) maxReading() int64 { return int64(orDefault(s.MaxReading, Defau
 // Reading is what messages being read hold past their sockets' read allowance now.
 func (s *Server) Reading() int64 { return s.reading.Load() }
 
-// makeRoom ends the queue a full relay gives up first (rank.endsBefore) among the queues of within,
-// or of every source when within is nil; it reports whether that gave anything back. It ends none
-// when self ranks first: then self's offer is refused and its own session ends.
-func (s *Server) makeRoom(within *source, self *outq) bool {
-	s.mu.Lock()
-	now := time.Now()
+// pendingQueued is what a pending session may have queued toward its uplink: one first message.
+var pendingQueued = itemOverhead + allocSize(wire.HeaderLen+FirstMessageMax)
+
+func (s *Server) now() time.Time {
 	if s.clock != nil {
-		now = s.clock()
+		return s.clock()
 	}
-	var victim *outq
-	var worst rank
-	consider := func(src *source) {
-		for q := range src.queues {
-			if r, ok := q.rank(now); ok && (victim == nil || r.endsBefore(worst)) {
-				victim, worst = q, r
+	return time.Now()
+}
+
+// endStalled ends the stalled queue a full relay gives up first (rank.endsBefore): among the
+// queues of within when a source's share is full, else among those of dest's source and of every
+// source holding more than it, so a source never ends a smaller one's queues. It reports whether
+// it ended one; it ends none when self ranks first or nothing is stalled.
+func (s *Server) endStalled(within, dest *source, self *outq) bool {
+	for {
+		s.mu.Lock()
+		now := s.now()
+		var victim *outq
+		var worst rank
+		consider := func(src *source) {
+			for q := range src.queues {
+				if r, ok := q.rank(now); ok && (victim == nil || r.endsBefore(worst)) {
+					victim, worst = q, r
+				}
 			}
 		}
-	}
-	if within != nil {
-		consider(within)
-	} else {
-		for _, src := range s.shares {
-			consider(src)
+		if within != nil {
+			consider(within)
+		} else {
+			held := dest.held.Load()
+			for _, src := range s.shares {
+				if src == dest || src.held.Load() > held {
+					consider(src)
+				}
+			}
 		}
+		s.mu.Unlock()
+		if victim == nil || victim == self {
+			return false
+		}
+		if s.beforeEnd != nil {
+			s.beforeEnd(victim)
+		}
+		if victim.endIfStalled() {
+			return true
+		}
+		// It drained since it was ranked: rank again without it.
 	}
-	s.mu.Unlock()
-	return victim != nil && victim != self && victim.abort()
 }
 
 // shareLocked is ip's part of the budget, held once more.
@@ -793,6 +819,13 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	if qMine+cost > LightSession {
 		qLimit = SocketWindow - LightSession*others
 	}
+	// Until the node answers, a client may only have sent its first message (contract "Sessions"):
+	// eight pending sessions then hold little of the node's source share.
+	if c.pending && qMine+cost > pendingQueued {
+		rm.endSession(c, wire.CodeTimeout)
+		return
+	}
+	// Data toward an uplink never ends another queue: when it does not fit, only its session ends.
 	if up.sent-up.acked+uint64(frameLen) > limit || qTotal+cost > qLimit || !up.out.offerFrame(c.sid, payload) {
 		rm.endSession(c, wire.CodeTimeout)
 		return

@@ -73,6 +73,7 @@ func TestClientsThatStopReadingFillOnlyTheirSourcesShareOfTheQueueBudget(t *test
 // is still queued, at the expense of the largest holder.
 func TestAFullRelayCostsTheSourcesHoldingItNotAnHonestUplink(t *testing.T) {
 	s := New(DefaultLimits())
+	clk := clocked(s)
 	s.MaxQueued = 4 << 20
 	s.MaxQueuedPerSource = 1 << 20
 	for i := range 4 {
@@ -90,6 +91,7 @@ func TestAFullRelayCostsTheSourcesHoldingItNotAnHonestUplink(t *testing.T) {
 	if q := s.Queued(); q < s.maxQueued()-1024 {
 		t.Fatalf("setup: %d bytes queued, want the total of %d about full", q, s.maxQueued())
 	}
+	clk.at = clk.at.Add(5 * time.Second)
 	honest := &room{srv: s, clients: map[uint32]*sock{}}
 	up := testSock(s, honest, roleNode, 0, "203.0.113.1", stalled(t))
 	c := testSock(s, honest, roleClient, 1, "203.0.113.2", stalled(t))
@@ -128,14 +130,17 @@ func (w *closableWS) CloseNow() error {
 }
 
 // The memory a full relay holds can sit in messages being written to clients that stopped
-// reading, one per queue, with nothing queued behind them. Ending such a queue must give that
-// memory back before the honest message is refused.
-func TestAFullRelayEndsAQueueWhoseMemoryIsInAStalledWrite(t *testing.T) {
+// reading, one per queue, with nothing queued behind them. That memory comes back only when the
+// write fails, so the offer that finds the relay full is refused (its session ends 4408), but the
+// stalled queues are ended without waiting, and once their writes fail the next offer fits.
+func TestAFullRelayEndsQueuesStalledInAWriteAndTheNextOfferFits(t *testing.T) {
 	s := New(DefaultLimits())
+	clk := clocked(s)
 	const size = 300 << 10
 	item := allocSize(size) + itemOverhead
 	s.MaxQueued = 9*item + 512
 	s.MaxQueuedPerSource = 1 << 20
+	var stuck []*sock
 	for i := range 3 {
 		ip := fmt.Sprintf("198.51.100.%d", i+1)
 		rm := &room{srv: s, clients: map[uint32]*sock{}}
@@ -147,28 +152,37 @@ func TestAFullRelayEndsAQueueWhoseMemoryIsInAStalledWrite(t *testing.T) {
 			rm.toClient(c, make([]byte, size))
 			rm.mu.Unlock()
 			<-ws.started
+			stuck = append(stuck, c)
 		}
 	}
 	if q := s.Queued(); q != int64(9*item) {
 		t.Fatalf("setup: %d bytes queued, want %d in stalled writes", q, 9*item)
 	}
+	clk.at = clk.at.Add(5 * time.Second)
 	honest := &room{srv: s, clients: map[uint32]*sock{}}
-	open := &closableWS{started: make(chan struct{}, 8), gone: make(chan struct{})}
-	up := testSock(s, honest, roleNode, 0, "203.0.113.1", open)
-	c := testSock(s, honest, roleClient, 1, "203.0.113.2", open)
+	up := testSock(s, honest, roleNode, 0, "203.0.113.1", stalled(t))
+	first := testSock(s, honest, roleClient, 1, "203.0.113.2", stalled(t))
 	honest.mu.Lock()
-	honest.onUplinkFrame(up, wire.Frame{Type: wire.FrameData, SID: 1, Payload: make([]byte, 1<<10)}.Encode())
+	honest.toClient(first, make([]byte, 1<<10))
 	honest.mu.Unlock()
-	if up.closed || c.closed {
-		t.Fatalf("on a relay full of stalled writes the honest uplink closed %v, its session closed %v", up.closed, c.closed)
+	// Ended sockets close in the background; once one has, the eviction may stop early.
+	ended := 0
+	for _, c := range stuck {
+		if isDone(c.out) {
+			c.out.wait()
+			ended++
+		}
 	}
-}
-
-// stalled is a socket of its own that stopped reading, released when the test ends.
-func stalled(t *testing.T) *stalledWS {
-	ws := &stalledWS{release: make(chan struct{})}
-	t.Cleanup(func() { close(ws.release) })
-	return ws
+	if ended == 0 {
+		t.Fatal("a full relay ended none of the queues stalled in a write")
+	}
+	second := testSock(s, honest, roleClient, 2, "203.0.113.2", stalled(t))
+	honest.mu.Lock()
+	honest.toClient(second, make([]byte, 1<<10))
+	honest.mu.Unlock()
+	if second.closed || up.closed {
+		t.Fatalf("after the stalled writes failed, the next session closed %v, the uplink %v", second.closed, up.closed)
+	}
 }
 
 // testClock is a relay clock a test moves by hand.
@@ -309,4 +323,11 @@ func TestAMessageOfUpTo96KiBIsReadWithAFullLargeReadPool(t *testing.T) {
 			t.Fatalf("a %d-byte message with the pool full: %d bytes, %v", size, len(data), err)
 		}
 	}
+}
+
+// stalled is a socket of its own that stopped reading, released when the test ends.
+func stalled(t *testing.T) *stalledWS {
+	ws := &stalledWS{release: make(chan struct{})}
+	t.Cleanup(func() { close(ws.release) })
+	return ws
 }

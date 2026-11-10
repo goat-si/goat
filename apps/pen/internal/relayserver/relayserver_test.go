@@ -495,7 +495,8 @@ func TestDataPast4MiBUnackedTowardASilentClientEndsThatSession4408(t *testing.T)
 func TestOneMiBMessageIsForwardedAndOneByteMoreCloses1009(t *testing.T) {
 	rs := defaults(t)
 	n := ready(t, rs, nodeOpts{})
-	s := open(t, rs, n, true)
+	// An answered session: before its node answers, a client may have queued only its first message.
+	s := active(t, rs, n, true)
 	s.c.send(make([]byte, relayserver.MessageMax))
 	if f := n.expect(t, wire.FrameData, s.sid); len(f.Payload) != relayserver.MessageMax {
 		t.Fatalf("forwarded %d bytes", len(f.Payload))

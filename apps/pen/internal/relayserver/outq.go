@@ -40,42 +40,45 @@ const readAllowance = 4<<10 + firstGrowth
 // that shows it ended, so such a message never needs the large-read pool.
 const firstGrowth = 104 << 10
 
-// try charges n bytes of queue for self, or charges nothing and reports false. Past the source's
-// share it first ends a queue of that source, past the server-wide total one of any source, each
-// time the queue makeRoom ranks first; it fails once self ranks first.
-func (b *budget) try(n int, self *outq) bool {
+// try charges n bytes of queue, or charges nothing and reports false; shareFull says the source's
+// share refused it rather than the server-wide total.
+func (b *budget) try(n int) (ok, shareFull bool) {
 	if b == nil {
-		return true
+		return true, false
 	}
-	for range maxEvictions {
-		if b.src.held.Add(int64(n)) > b.srv.maxPerSource() {
-			b.src.held.Add(-int64(n))
-			if !b.srv.makeRoom(b.src, self) {
-				return false
-			}
-			continue
-		}
-		if b.srv.queued.Add(int64(n)) <= b.srv.maxQueued() {
-			return true
-		}
+	if b.src.held.Add(int64(n)) > b.srv.maxPerSource() {
+		b.src.held.Add(-int64(n))
+		return false, true
+	}
+	if b.srv.queued.Add(int64(n)) > b.srv.maxQueued() {
 		b.srv.queued.Add(-int64(n))
 		b.src.held.Add(-int64(n))
-		if !b.srv.makeRoom(nil, self) {
+		return false, false
+	}
+	return true, false
+}
+
+// tryEvicting charges n bytes for self like try. When a cap refuses, it ends one stalled queue
+// (Server.endStalled) and tries again, until the charge fits or no stalled queue ranks before
+// self. Only data a node sends its client uses it.
+func (b *budget) tryEvicting(n int, self *outq) bool {
+	for {
+		ok, shareFull := b.try(n)
+		if ok {
+			return true
+		}
+		var within *source
+		if shareFull {
+			within = b.src
+		}
+		if !b.srv.endStalled(within, b.src, self) {
 			return false
 		}
 	}
-	return false
 }
 
-// maxEvictions bounds the queues one offer may end, and abortWait how long it waits for each to
-// give back a message being written, so an offer holds its room's lock at most 4 s.
-const (
-	maxEvictions = 4
-	abortWait    = time.Second
-)
-
 // stallAfter is how long a queue holding memory may go without a finished write and still count
-// as draining.
+// as draining; only stalled queues are ended to make room.
 const stallAfter = 2 * time.Second
 
 // count charges n bytes of queue (negative to give them back) without checking the caps: control
@@ -257,7 +260,7 @@ func newOutq(ws wsWriter, timeout time.Duration, b *budget, uplink bool) *outq {
 func (q *outq) offerFrame(sid uint32, payload []byte) bool {
 	n := wire.HeaderLen + len(payload)
 	reserved := itemOverhead + allocSize(n)
-	if !q.budget.try(reserved, q) {
+	if ok, _ := q.budget.try(reserved); !ok {
 		return false
 	}
 	buf := own(nil, n)[:n]
@@ -278,7 +281,7 @@ func (q *outq) offer(data []byte, sid uint32) bool {
 	if len(data) > 0 {
 		reserved += allocSize(len(data))
 	}
-	if !q.budget.try(reserved, q) {
+	if !q.budget.tryEvicting(reserved, q) {
 		return false
 	}
 	it := outItem{data: own(data, 0), sid: sid}
@@ -294,7 +297,8 @@ func (q *outq) now() time.Time {
 	return time.Now()
 }
 
-// rank is what makeRoom orders queues by; ok is false for a queue that has nothing more to give back.
+// rank is what endStalled orders queues by; ok is false for a queue that is not stalled, holds
+// nothing, or was already ended with nothing left but its write in flight.
 type rank struct {
 	held   int
 	age    time.Duration
@@ -305,62 +309,41 @@ func (q *outq) rank(now time.Time) (r rank, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	held := q.bytes + q.writing
-	// A queue ended with nothing left but its write in flight is already giving that back.
-	if held == 0 || q.done && q.bytes == 0 {
+	age := now.Sub(q.since)
+	if held == 0 || q.done && q.bytes == 0 || age < stallAfter {
 		return rank{}, false
 	}
-	return rank{held: held, age: now.Sub(q.since), uplink: q.uplink}, true
+	return rank{held: held, age: age, uplink: q.uplink}, true
 }
 
-// endsBefore reports whether a full relay ends a queue ranked r before one ranked o: one stalled
-// past stallAfter before one draining; among stalled ones a client's before an uplink's (which
-// takes its sessions with it), then the longest stalled; among draining ones the slowest, then a
-// client's; the larger last.
+// endsBefore reports whether a full relay ends a stalled queue ranked r before one ranked o: a
+// client's before an uplink's (which takes its sessions with it), then the longest stalled, then
+// the larger.
 func (r rank) endsBefore(o rank) bool {
-	rs, os := r.age >= stallAfter, o.age >= stallAfter
 	switch {
-	case rs != os:
-		return rs
-	case rs && r.uplink != o.uplink:
+	case r.uplink != o.uplink:
 		return !r.uplink
 	case r.age != o.age:
 		return r.age > o.age
-	case r.uplink != o.uplink:
-		return !r.uplink
 	}
 	return r.held > o.held
 }
 
-// size is what the queue holds now, the item being written included.
-func (q *outq) size() int {
+// endIfStalled ends the queue if it is still stalled, checked under its own lock (it may have
+// drained since it was ranked): it gives back what it has queued at once, and the message being
+// written once the closed socket fails the write. The socket closes in the background, so the
+// caller, which holds its room's lock, never waits.
+func (q *outq) endIfStalled() bool {
 	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.bytes + q.writing
-}
-
-// abort ends the queue at once, gives back what it has queued and drops the socket; it reports
-// whether that gave anything back. A message being written is given back by the writer once the
-// closed socket fails the write, so abort waits for that (at most the write timeout): a client
-// that stopped reading holds its memory there with nothing queued behind it.
-func (q *outq) abort() bool {
-	q.mu.Lock()
-	freed := q.bytes > 0 || q.writing > 0
-	if !q.done || q.bytes > 0 {
-		q.dropLocked()
+	if q.bytes+q.writing == 0 || q.done && q.bytes == 0 || q.now().Sub(q.since) < stallAfter {
+		q.mu.Unlock()
+		return false
 	}
-	writing := q.writing > 0
+	q.dropLocked()
 	q.mu.Unlock()
-	q.ws.CloseNow()
 	q.signal()
-	if writing {
-		t := time.NewTimer(min(q.timeout, abortWait))
-		select {
-		case <-q.ended:
-		case <-t.C:
-		}
-		t.Stop()
-	}
-	return freed
+	go q.ws.CloseNow()
+	return true
 }
 
 func (q *outq) binary(b []byte) { q.push(outItem{data: own(b, 0)}, false) }
