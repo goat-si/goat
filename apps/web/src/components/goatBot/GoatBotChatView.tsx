@@ -59,6 +59,8 @@ export interface GoatBotChatViewProps {
   readonly availability: GoatBotAvailability;
   readonly canOperate: boolean;
   readonly rows: ReadonlyArray<GoatBotRow>;
+  /** A task's own conversation, for reading it in the bot's panel. */
+  readonly rowsForTask?: ((taskId: ChannelTaskId) => ReadonlyArray<GoatBotRow>) | undefined;
   /** When GOAT Bot started reading a message it is still answering. */
   readonly replyingSince?: string | null | undefined;
   readonly onSend: (
@@ -103,6 +105,7 @@ export function GoatBotChatView({
   onSendToTask,
   attachmentSupport = null,
   onRetryInput,
+  rowsForTask,
   onDiscardInput,
   onRetryAvailability,
   legacyAgentRoute,
@@ -327,6 +330,8 @@ export function GoatBotChatView({
             threadId={bot.threadId}
             onDraft={onDraft}
             notesRefreshKey={notesRefreshKey}
+            peekRows={rowsForTask}
+            onRetryInput={onRetryInput}
           />
         </aside>
       )}
@@ -340,6 +345,8 @@ export function GoatBotChatView({
               onDraft={onDraft}
               notesRefreshKey={notesRefreshKey}
               onShowChat={() => setPanelOpen(false)}
+              peekRows={rowsForTask}
+              onRetryInput={onRetryInput}
             />
           </SheetPopup>
         </Sheet>

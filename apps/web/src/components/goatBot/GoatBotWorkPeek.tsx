@@ -1,0 +1,70 @@
+import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import { Link } from "@tanstack/react-router";
+
+import { ChevronLeftIcon } from "~/components/solar";
+
+import { Button } from "../ui/button";
+import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
+import { GoatBotTimeline } from "./GoatBotTimeline";
+
+const NO_RETRY = () => {};
+// Focus moves to Back when the peek opens, as the row that opened it is gone.
+const focusElement = (element: HTMLElement | null) => element?.focus();
+
+/**
+ * A task's conversation read inside the bot's panel, so the bot's own chat stays beside it. One
+ * button opens the task in full.
+ */
+export function GoatBotWorkPeek({
+  taskId,
+  title,
+  rows,
+  environmentId,
+  onRetry,
+  onBack,
+}: {
+  readonly taskId: ChannelTaskId;
+  readonly title: string;
+  readonly rows: ReadonlyArray<GoatBotRow>;
+  readonly environmentId: EnvironmentId;
+  readonly onRetry?: ((clientKey: string) => void) | undefined;
+  readonly onBack: () => void;
+}) {
+  const member = useGoatBotMember();
+  return (
+    <section aria-label={title} className="flex min-h-0 min-w-0 flex-1 flex-col text-sm">
+      <div className="flex min-w-0 items-center px-3 pt-14 pb-2">
+        <Button
+          ref={focusElement}
+          variant="ghost"
+          size="sm"
+          onClick={onBack}
+          aria-label={"Back to Home from " + title}
+          className="max-w-full min-w-0"
+        >
+          <ChevronLeftIcon aria-hidden className="size-4 shrink-0" />
+          <span className="truncate">{title}</span>
+        </Button>
+      </div>
+      {rows.length > 0 ? (
+        <GoatBotTimeline
+          taskDetails
+          rows={rows}
+          environmentId={environmentId}
+          onRetry={onRetry ?? NO_RETRY}
+        />
+      ) : (
+        <p className="flex-1 px-4 text-muted-foreground">Nothing has been said in this task yet.</p>
+      )}
+      <div className="p-3">
+        <Button
+          className="w-full"
+          render={<Link to="/bot" search={{ task: taskId, ...goatBotSearch(member) }} />}
+        >
+          Go to thread
+        </Button>
+      </div>
+    </section>
+  );
+}
