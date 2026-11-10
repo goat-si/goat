@@ -3,10 +3,16 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
+	"github.com/goat-si/goat/apps/pen/internal/relaytest"
 	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
@@ -29,5 +35,33 @@ func TestUpForegroundAfterLeaveExitsZeroWithoutANewIdentityOrMesh(t *testing.T) 
 	}
 	if _, err := os.Stat(st.Path("mesh.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a new mesh was founded after leave")
+	}
+}
+
+func TestNoServiceDaemonIsNotAChildOfTheCommandThatStartedIt(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st := tmpStore(t)
+	t.Setenv("PEN_TEST_MAIN", "1")
+	t.Setenv("PEN_HOME", st.Dir)
+	t.Setenv("PEN_SERVICE", "none")
+	t.Setenv("PEN_HOSTKEYS", "none")
+	t.Setenv("PEN_SSH_DIR", filepath.Join(st.Dir, "ssh"))
+	var out, errOut bytes.Buffer
+	code := RunUp([]string{"--no-service", "--relay", rs.URL, "--name", "t"}, &out, &errOut)
+	t.Cleanup(func() { RunDown(nil, io.Discard, io.Discard) })
+	if code != 0 {
+		t.Fatalf("pen up exit %d: %s", code, errOut.String())
+	}
+	var s daemon.Status
+	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
+		t.Fatal(err)
+	}
+	ppid, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(s.PID)).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(ppid)); got == strconv.Itoa(os.Getpid()) {
+		t.Fatalf("daemon %d is still a child of the pen up that started it (ppid %s)", s.PID, got)
 	}
 }

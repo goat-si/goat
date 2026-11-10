@@ -30,12 +30,16 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	name := fs.String("name", "", "this node's name")
 	foreground := fs.Bool("foreground", false, "run the daemon in this process")
 	noService := fs.Bool("no-service", false, "never install a systemd or launchd service")
+	spawnDaemon := fs.Bool("spawn-daemon", false, "internal: start the daemon detached, print its pid and exit")
 	if _, err := parse(fs, args); err != nil {
 		return 2
 	}
 	st, err := openState()
 	if err != nil {
 		return fail(stderr, err)
+	}
+	if *spawnDaemon {
+		return spawnDetached(st, stdout, stderr)
 	}
 	if *foreground {
 		// A service manager restarting the daemon after pen leave must not mint a new node.
@@ -158,7 +162,9 @@ func runForeground(st *state.Store, stderr io.Writer) int {
 	return 0
 }
 
-// startDetached runs "pen up --foreground" in a new session and waits for its ready line.
+// startDetached starts the daemon through "pen up --spawn-daemon", which exits once the daemon runs, so the
+// daemon is owned by init from the start and a kill of this command's process tree does not reach it.
+// The ready pipe on fd 3 passes through to the daemon.
 func startDetached(st *state.Store) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -174,16 +180,17 @@ func startDetached(st *state.Store) error {
 		return err
 	}
 	defer r.Close()
-	cmd := exec.Command(exe, "up", "--foreground")
+	cmd := exec.Command(exe, "up", "--spawn-daemon")
 	cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir, "PEN_READY_FD=3")
 	cmd.ExtraFiles = []*os.File{w}
-	cmd.Stdout, cmd.Stderr = logf, logf
+	cmd.Stderr = logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
-		w.Close()
-		return err
-	}
+	out, err := cmd.Output()
 	w.Close()
+	if err != nil {
+		return fmt.Errorf("could not start the daemon (%v); see %s", err, st.Path("daemon.log"))
+	}
+	pid := strings.TrimSpace(string(out))
 	line := make(chan string, 1)
 	go func() {
 		s, _ := bufio.NewReader(r).ReadString('\n')
@@ -192,13 +199,39 @@ func startDetached(st *state.Store) error {
 	select {
 	case s := <-line:
 		if s != "ready\n" {
-			cmd.Wait()
-			return fmt.Errorf("the daemon exited during start; see %s", st.Path("daemon.log"))
+			return fmt.Errorf("the daemon (pid %s) exited during start; see %s", pid, st.Path("daemon.log"))
 		}
 	case <-time.After(readyTimeout):
-		return fmt.Errorf("the daemon did not report ready within %v; see %s", readyTimeout, st.Path("daemon.log"))
+		return fmt.Errorf("the daemon (pid %s) did not report ready within %v; see %s", pid, readyTimeout, st.Path("daemon.log"))
 	}
-	return cmd.Process.Release()
+	return nil
+}
+
+// spawnDetached is "pen up --spawn-daemon": it starts "pen up --foreground" in its own session with the
+// inherited ready pipe, prints the daemon's pid and returns without waiting for it.
+func spawnDetached(st *state.Store, stdout, stderr io.Writer) int {
+	exe, err := os.Executable()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	logf, err := os.OpenFile(st.Path("daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	defer logf.Close()
+	cmd := exec.Command(exe, "up", "--foreground")
+	cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir, "PEN_READY_FD=3")
+	cmd.ExtraFiles = []*os.File{os.NewFile(3, "ready")}
+	cmd.Stdout, cmd.Stderr = logf, logf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return fail(stderr, err)
+	}
+	fmt.Fprintln(stdout, cmd.Process.Pid)
+	if err := cmd.Process.Release(); err != nil {
+		return fail(stderr, err)
+	}
+	return 0
 }
 
 // waitControl waits for a service-started daemon to answer on its control socket.

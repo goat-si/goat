@@ -42,6 +42,12 @@ for 24 hours). `pen account unbind` turns Google sign-in off for the mesh, and `
 account's list without leaving the mesh. The login service is trusted to say which Google account a machine belongs to;
 lock mode means a member decides instead.
 
+## Running without a service
+
+`pen up`, `pen join` and `pen login` install a systemd user service or a launchd agent where they can. With
+`--no-service`, or where neither exists, the daemon runs detached and owned by PID 1, so ending the shell or command that
+started it does not stop it. It does not come back after a reboot; run `pen up` again, or use the service.
+
 ## SSH and GOAT
 
 `pen ssh-config --install` writes `~/.ssh/pen/config` (one `Host pen-<name>` per member with `ProxyCommand pen pipe %n 22`,
