@@ -126,48 +126,64 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	reply := func(v any) { enc.Encode(v) }
 	fail := func(err error) { reply(map[string]string{"error": err.Error()}) }
 	switch req.Op {
-	case "status":
-		reply(d.status())
-	case "ls":
-		reply(d.ls())
-	case "invite":
-		d.controlInvite(ctx, c, req, reply, fail)
-	case "push":
-		reply(map[string]any{"results": d.pushAll(ctx)})
 	case "watch":
 		d.controlWatch(ctx, c)
+		return
+	case "invite":
+		if req.Wait {
+			d.controlInvite(ctx, c, req, reply, fail)
+			return
+		}
+	}
+	res, err := d.do(ctx, req)
+	if err != nil {
+		fail(err)
+		return
+	}
+	reply(res)
+	if req.Op == "stop" || req.Op == "leave" {
+		d.Stop()
+	}
+}
+
+// do runs one non-streaming control op; the control socket and the dashboard both call it.
+func (d *Daemon) do(ctx context.Context, req Request) (any, error) {
+	switch req.Op {
+	case "status":
+		return d.status(), nil
+	case "ls":
+		return d.ls(), nil
+	case "invite":
+		r, _, err := d.createInvite(req.TTLMs)
+		return r, err
+	case "push":
+		return map[string]any{"results": d.pushAll(ctx)}, nil
 	case "revoke":
 		res, err := d.revoke(ctx, req.Subject, req.Compromised)
 		if err != nil {
-			fail(err)
-			return
+			return nil, err
 		}
-		reply(map[string]any{"results": res})
+		return map[string]any{"results": res}, nil
 	case "leave":
 		res, err := d.leave(ctx)
 		if err != nil {
-			fail(err)
-			return
+			return nil, err
 		}
-		reply(map[string]any{"results": res})
-		d.Stop()
+		return map[string]any{"results": res}, nil
 	case "join":
 		if err := d.join(ctx, req.Token, req.Name); err != nil {
-			fail(err)
-			return
+			return nil, err
 		}
-		reply(d.ls())
+		return d.ls(), nil
 	case "name":
 		if err := d.rename(ctx, req.Name); err != nil {
-			fail(err)
-			return
+			return nil, err
 		}
-		reply(d.status())
+		return d.status(), nil
 	case "reconnect":
 		cfg, err := d.st.LoadConfig()
 		if err != nil {
-			fail(err)
-			return
+			return nil, err
 		}
 		d.cfgMu.Lock()
 		changed := len(cfg.RelayList()) > 0 && !slices.Equal(cfg.RelayList(), d.cfg.RelayList())
@@ -178,56 +194,44 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 		if changed || d.anyReplaced() {
 			d.startUplinks()
 		}
-		reply(d.status())
+		return d.status(), nil
 	case "stop":
-		reply(map[string]bool{"ok": true})
-		d.Stop()
+		return map[string]bool{"ok": true}, nil
 	case "login-bind", "account-unbind":
 		acct := req.Account
 		if req.Op == "account-unbind" {
 			acct = nil
 		} else if acct == nil {
-			fail(errors.New("login-bind needs an account"))
-			return
+			return nil, errors.New("login-bind needs an account")
 		}
 		res, err := d.bindAccount(ctx, acct)
 		if err != nil {
-			fail(err)
-			return
+			return nil, err
 		}
-		reply(map[string]any{"results": res, "status": d.status()})
+		return map[string]any{"results": res, "status": d.status()}, nil
 	case "lock":
 		res, err := d.setLock(ctx, req.On)
 		if err != nil {
-			fail(err)
-			return
+			return nil, err
 		}
-		reply(map[string]any{"results": res, "locked": d.view().Locked})
+		return map[string]any{"results": res, "locked": d.view().Locked}, nil
 	case "pending":
-		reply(map[string]any{"pending": d.pending.all(d.now())})
+		return map[string]any{"pending": d.pending.all(d.now())}, nil
 	case "approve":
-		res, err := d.approve(ctx, req.Subject)
-		if err != nil {
-			fail(err)
-			return
-		}
-		reply(res)
+		return d.approve(ctx, req.Subject)
 	case "deny":
 		p, err := d.deny(req.Subject)
 		if err != nil {
-			fail(err)
-			return
+			return nil, err
 		}
-		reply(map[string]any{"denied": p})
+		return map[string]any{"denied": p}, nil
 	case "adopt":
 		if err := d.adopt(ctx); err != nil {
-			fail(err)
-			return
+			return nil, err
 		}
-		reply(d.ls())
-	default:
-		fail(fmt.Errorf("unknown op %q", req.Op))
+		return d.ls(), nil
 	}
+	return nil, fmt.Errorf("unknown op %q", req.Op)
 }
 
 // Status is the status answer.
@@ -278,35 +282,44 @@ func (d *Daemon) ls() LsReply {
 	return out
 }
 
-func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
-	ttl := time.Duration(req.TTLMs) * time.Millisecond
+// InviteReply is what an invite answers.
+type InviteReply struct {
+	Token     string `json:"token"`
+	Relay     string `json:"relay"`
+	ExpiresAt int64  `json:"expiresAt"`
+}
+
+func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
+	ttl := time.Duration(ttlMs) * time.Millisecond
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}
 	inv, err := d.inviteBook().Create(ttl, d.now())
 	if err != nil {
+		return InviteReply{}, "", err
+	}
+	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relays: d.relays()}
+	return InviteReply{Token: tok.String(), Relay: tok.Relays[0], ExpiresAt: inv.ExpiresAt}, inv.ID, nil
+}
+
+func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
+	r, id, err := d.createInvite(req.TTLMs)
+	if err != nil {
 		fail(err)
 		return
 	}
-	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relays: d.relays()}
-	var wait chan mesh.Member
-	if req.Wait {
-		wait = make(chan mesh.Member, 1)
+	wait := make(chan mesh.Member, 1)
+	d.mu.Lock()
+	d.inviteWait[id] = wait
+	d.mu.Unlock()
+	defer func() {
 		d.mu.Lock()
-		d.inviteWait[inv.ID] = wait
+		delete(d.inviteWait, id)
 		d.mu.Unlock()
-		defer func() {
-			d.mu.Lock()
-			delete(d.inviteWait, inv.ID)
-			d.mu.Unlock()
-		}()
-	}
-	reply(map[string]any{"token": tok.String(), "relay": tok.Relays[0], "expiresAt": inv.ExpiresAt})
-	if wait == nil {
-		return
-	}
+	}()
+	reply(r)
 	gone := clientGone(c)
-	t := time.NewTimer(time.Until(time.UnixMilli(inv.ExpiresAt)))
+	t := time.NewTimer(time.Until(time.UnixMilli(r.ExpiresAt)))
 	defer t.Stop()
 	select {
 	case m := <-wait:
