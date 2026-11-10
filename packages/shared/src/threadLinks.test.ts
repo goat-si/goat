@@ -49,6 +49,19 @@ describe("thread links", () => {
       "[New](goat-thread://v1/t1)",
     );
   });
+
+  it("keeps a thread id with parentheses or a closing paren readable", () => {
+    for (const threadId of ["mcp:launch:qa(1)", "mcp:launch:qa)"]) {
+      const link = formatThreadLink(threadId, "Original");
+      expect(link).toBe(`[Original](<goat-thread://v1/${threadId}>)`);
+      expect(parseThreadLinkHref(link.slice(link.indexOf("(<") + 2, -2))).toBe(threadId);
+      expect(relabelThreadLinks(link, () => "Renamed")).toBe(
+        `[Renamed](<goat-thread://v1/${threadId}>)`,
+      );
+      // An untitled thread keeps the link as written, so the client can still open it.
+      expect(relabelThreadLinks(link, () => undefined)).toBe(link);
+    }
+  });
   it("takes the thread id verbatim, percent escapes included", () => {
     expect(parseThreadLinkHref("t3-thread://v1/mcp:1234")).toBe("mcp:1234");
     expect(parseThreadLinkHref("t3-thread://v1/thread:delegated-task:mcp%3A1")).toBe(
