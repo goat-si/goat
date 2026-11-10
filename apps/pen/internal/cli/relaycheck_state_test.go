@@ -5,7 +5,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
@@ -42,8 +41,9 @@ func TestRepeatedRelayChecksUseOneNodeID(t *testing.T) {
 }
 
 // A check that finds an earlier uplink of the check node still at the relay (a check before it
-// that has not gone yet) must not open its session there: it waits until the relay has taken its
-// own uplink, here slowed down, and its session reaches it.
+// that has not gone yet) gets no word when the relay takes its own uplink. Here the relay handles
+// the new uplink's answer only once the check's client has reached the earlier uplink; the check
+// must still end with its session on its own uplink, by opening it again.
 func TestRelayCheckOpensItsSessionOnlyOnceTheRelayHasTakenItsUplink(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -60,7 +60,13 @@ func TestRelayCheckOpensItsSessionOnlyOnceTheRelayHasTakenItsUplink(t *testing.T
 	if err := rs.WaitOnline(ctx, id.NodeID()); err != nil {
 		t.Fatal(err)
 	}
-	rs.DelayNextNodeMessage(500 * time.Millisecond)
+	releaseAnswer := rs.HoldNextUplinkMessage()
+	defer releaseAnswer()
+	go func() {
+		if rs.NextClientMessage(ctx, id.NodeID()) == nil {
+			releaseAnswer()
+		}
+	}()
 	var out, errOut bytes.Buffer
 	if code := RunRelay([]string{"check", "--timeout", "10s", rs.URL}, &out, &errOut); code != 0 {
 		t.Fatalf("check while an earlier uplink of its node was still at the relay: exit %d\n%s%s", code, out.String(), errOut.String())

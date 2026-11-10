@@ -131,6 +131,27 @@ describe("pen relay contract (default limits)", () => {
     expect(next.sid).toBeGreaterThan(Math.max(...seen));
   });
 
+  // The relay answers ping on its own, before it has handled an uplink's answer, and says nothing
+  // when it takes the uplink. So a pong proves nothing: a client dialed after it reaches the uplink
+  // being replaced, whose sessions then close 4404 (pen relay check opens its session again).
+  it("an uplink's pong comes before its answer is handled, so a client dialed after it can reach the uplink it replaces", async () => {
+    const seed = randomSeed();
+    const old = await fakeNode(relay.url, seed);
+    await old.ready();
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    const replacement = await fakeNode(relay.url, seed, { answerAfter: answered });
+    await replacement.opened;
+    replacement.sendRaw("ping");
+    expect(await replacement.texts.next()).toBe("pong");
+    const c = client(relay.url, old.nodeId);
+    await old.expect(FrameType.Open);
+    answer();
+    expect(await old.closed).toBe(CloseCode.Replaced);
+    expect(await c.closed).toBe(CloseCode.Offline);
+    await replacement.ready();
+  });
+
   it("a ninth pending session closes the oldest pending one 4429", async () => {
     const node = await readyNode(relay);
     const pending: Array<{ c: Client; sid: number }> = [];

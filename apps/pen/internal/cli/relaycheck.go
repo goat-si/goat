@@ -172,11 +172,11 @@ func checkRoundTrip(ctx context.Context, relayURL string, stdout io.Writer) erro
 	up := relay.NewUplink(relayURL, id)
 	ready := make(chan struct{})
 	var once sync.Once
-	// The relay confirms nothing on authentication, and an earlier uplink of this node (a check
-	// that has not gone yet) may still hold its room. The uplink pings right after its answer and
-	// the relay handles a socket's messages in order, so the first pong means this uplink is the
-	// node's; a session opened before that could land on the earlier one.
-	up.OnPong = func(time.Duration) { once.Do(func() { close(ready) }) }
+	up.OnState = func(on bool) {
+		if on {
+			once.Do(func() { close(ready) })
+		}
+	}
 	uctx, stop := context.WithCancel(ctx)
 	defer stop()
 	start := time.Now()
@@ -206,31 +206,79 @@ func checkRoundTrip(ctx context.Context, relayURL string, stdout io.Writer) erro
 	return nil
 }
 
-// checkSession opens a client session to the check node and moves 64 KiB each way.
+// checkSession opens a client session to the check node and moves 64 KiB each way. The relay
+// confirms nothing when an uplink authenticates (the Worker answers ping before it handles the
+// answer), so until it has taken this uplink a client reaches the uplink it replaces, which closes
+// the session 4404 once replaced, or no uplink (4404). A session that ends before the node side has
+// answered is opened again, within --timeout.
 func checkSession(ctx context.Context, relayURL string, id *ident.Identity, up *relay.Uplink) error {
-	client, err := relay.Dial(ctx, relayURL, id.NodeID())
+	for attempt := 1; ; attempt++ {
+		node, client, err := openCheckSession(ctx, relayURL, id, up, attempt)
+		if err == nil {
+			defer client.Close(wire.CodeNormal)
+			defer node.Close(wire.CodeNormal)
+			if err := exchange(ctx, client, node); err != nil {
+				return fmt.Errorf("client to node: %w", err)
+			}
+			if err := exchange(ctx, node, client); err != nil {
+				return fmt.Errorf("node to client: %w", err)
+			}
+			return nil
+		}
+		if relay.CodeOf(err) == 0 || ctx.Err() != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(min(time.Duration(attempt)*100*time.Millisecond, time.Second)):
+		}
+	}
+}
+
+// openCheckSession dials the check node as a client and waits for the node side to accept this
+// attempt's session and answer it.
+func openCheckSession(ctx context.Context, relayURL string, id *ident.Identity, up *relay.Uplink, attempt int) (node, client relay.Conn, err error) {
+	client, err = relay.Dial(ctx, relayURL, id.NodeID())
 	if err != nil {
-		return fmt.Errorf("client dial: %w", err)
+		return nil, nil, fmt.Errorf("client dial: %w", err)
 	}
-	defer client.Close(wire.CodeNormal)
-	if err := client.Send([]byte("pen relay check")); err != nil {
-		return fmt.Errorf("client send: %w", err)
+	hello := fmt.Sprintf("pen relay check %d", attempt)
+	if err := client.Send([]byte(hello)); err != nil {
+		client.Close(wire.CodeNormal)
+		return nil, nil, fmt.Errorf("client send: %w", err)
 	}
-	node, err := up.Accept(ctx)
+	actx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	accepted := make(chan relay.Conn, 1)
+	go func() {
+		for {
+			n, err := up.Accept(actx)
+			if err != nil {
+				close(accepted)
+				return
+			}
+			// A session of an earlier attempt can still arrive; only this attempt's counts.
+			if got, err := n.Recv(actx); err == nil && string(got) == hello && n.Send([]byte("ready")) == nil {
+				accepted <- n
+				return
+			}
+			n.Close(wire.CodeNormal)
+		}
+	}()
+	got, err := client.Recv(ctx)
+	if err == nil && string(got) != "ready" {
+		err = fmt.Errorf("the client got %q instead of the node's answer", got)
+	}
 	if err != nil {
-		return errors.New("the relay never opened the client's session at the node")
+		client.Close(wire.CodeNormal)
+		cancel()
+		if n, ok := <-accepted; ok {
+			n.Close(wire.CodeNormal)
+		}
+		return nil, nil, fmt.Errorf("client: %w", err)
 	}
-	defer node.Close(wire.CodeNormal)
-	if _, err := node.Recv(ctx); err != nil {
-		return fmt.Errorf("node receive: %w", err)
-	}
-	if err := exchange(ctx, client, node); err != nil {
-		return fmt.Errorf("client to node: %w", err)
-	}
-	if err := exchange(ctx, node, client); err != nil {
-		return fmt.Errorf("node to client: %w", err)
-	}
-	return nil
+	return <-accepted, client, nil
 }
 
 // exchange sends checkChunks random messages from one end and reads them back at the other.

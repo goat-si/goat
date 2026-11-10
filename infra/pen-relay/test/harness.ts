@@ -222,6 +222,8 @@ export interface FakeNodeOptions {
   readonly pathNodeId?: string;
   /** Never answer the challenge. */
   readonly silent?: boolean;
+  /** Answer the challenge only once this settles. */
+  readonly answerAfter?: Promise<unknown>;
 }
 
 export function randomSeed(): Uint8Array {
@@ -254,8 +256,10 @@ export async function fakeNode(
       challenged = true;
       if (options.silent) return;
       const challenge = bytes.slice();
-      void key
-        .sign(challengeMessage(relayOrigin(url), options.pathNodeId ?? nodeId, challenge))
+      void (options.answerAfter ?? Promise.resolve())
+        .then(() =>
+          key.sign(challengeMessage(relayOrigin(url), options.pathNodeId ?? nodeId, challenge)),
+        )
         .then((signature) => {
           const answer =
             options.answer?.({ signPub: key.signPub, signature, challenge }) ??
