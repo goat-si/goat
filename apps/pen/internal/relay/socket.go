@@ -163,6 +163,10 @@ func (rc Racer) Dial(ctx context.Context, relays []string, nodeID string) (Conn,
 			emit("ws", u)
 			cc := c.(*clientConn)
 			if err := cc.ws.Write(rctx, websocket.MessageText, []byte("ping")); err != nil {
+				// A relay with no uplink for the node may close 4404 before the ping goes out;
+				// report that close, as Send does.
+				err := cc.closedWith()
+				emit(ClosedEvent(err), u)
 				results <- result{c: cc, url: u, err: err}
 				return
 			}
@@ -291,18 +295,22 @@ func (c *clientConn) Send(p []byte) error {
 		return ErrClosed
 	}
 	if err := c.ws.Write(c.ctx, websocket.MessageBinary, p); err != nil {
-		// The socket is gone; report the close code its reader received (4404 from a relay
-		// with no uplink for this node, for example) rather than a generic failure.
-		select {
-		case <-c.done:
-		case <-time.After(time.Second):
-		}
-		if ce, ok := c.in.terminal().(*CloseError); ok {
-			return ce
-		}
-		return &CloseError{Code: 1006}
+		return c.closedWith()
 	}
 	return nil
+}
+
+// closedWith is the close a failed write ran into: the code the socket's reader received (4404
+// from a relay with no uplink for this node, for example), or 1006 when none arrives within 1 s.
+func (c *clientConn) closedWith() error {
+	select {
+	case <-c.done:
+	case <-time.After(time.Second):
+	}
+	if ce, ok := c.in.terminal().(*CloseError); ok {
+		return ce
+	}
+	return &CloseError{Code: 1006}
 }
 
 func (c *clientConn) Recv(ctx context.Context) ([]byte, error) { return c.in.recv(ctx) }
