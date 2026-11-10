@@ -13,6 +13,7 @@ import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import ChatMarkdown from "../ChatMarkdown";
 import { afterLastChunkRequest } from "./goatBotFileReads";
 
 /** The bot's server and how to open one of its Library files; null outside a bot chat. */
@@ -97,29 +98,38 @@ function GoatBotFileCard({
   const shown = preview?.kind ?? kind;
   const Icon = shown === "image" ? ImageIcon : shown === "download" ? FileIcon : FileTextIcon;
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-label={`Open ${name}`}
-      className="flex w-full flex-col overflow-hidden rounded-2xl border border-border bg-background text-left hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-ring"
-    >
+    <div className="relative flex w-full flex-col overflow-hidden rounded-2xl border border-border bg-background hover:bg-accent/40 has-focus-visible:outline-2 has-focus-visible:outline-ring">
       {preview?.kind === "image" ? (
         <img src={preview.url} alt="" className="max-h-56 w-full object-cover" />
+      ) : preview?.kind === "markdown" ? (
+        // A glance at the page; the footer button opens it, so nothing here takes focus.
+        <div
+          aria-hidden
+          inert
+          className="max-h-44 overflow-hidden px-4 pt-3 text-xs [mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
+        >
+          <ChatMarkdown text={preview.text} cwd={undefined} fileActions={false} />
+        </div>
       ) : preview !== null ? (
         <span
           aria-hidden
-          className="block max-h-40 overflow-hidden px-4 pt-3 text-xs leading-5 whitespace-pre-wrap text-muted-foreground [mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
+          className="block max-h-40 overflow-hidden px-4 pt-3 font-mono text-xs leading-5 whitespace-pre-wrap text-muted-foreground [mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
         >
           {preview.text}
         </span>
       ) : null}
-      <span className="flex items-center gap-2.5 border-t border-border px-4 py-2.5 first:border-t-0">
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Open ${name}`}
+        className="flex items-center gap-2.5 border-t border-border px-4 py-2.5 text-left outline-none first:border-t-0 after:absolute after:inset-0"
+      >
         <Icon aria-hidden className="size-5 shrink-0 text-muted-foreground" />
         <span className="flex min-w-0 flex-col">
           <span className="truncate text-sm font-medium">{name}</span>
           <span className="text-xs text-muted-foreground">{KIND_LABEL[shown]}</span>
         </span>
-      </span>
-    </button>
+      </button>
+    </div>
   );
 }

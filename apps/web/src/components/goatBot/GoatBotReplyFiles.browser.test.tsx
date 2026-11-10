@@ -107,7 +107,7 @@ it("a reply naming a saved file shows its card with a preview, which opens the f
   );
   const card = screen.getByRole("button", { name: "Open summary.md" });
   await expect.element(card).toBeVisible();
-  await expect.element(card.getByText(/Three merged/)).toBeInTheDocument();
+  await expect.element(screen.getByText(/Three merged/)).toBeInTheDocument();
   await userEvent.click(card);
   expect(open).toHaveBeenCalledWith(
     expect.objectContaining({ relativePath: "reports/summary.md" }),
