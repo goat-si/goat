@@ -754,8 +754,15 @@ const make = Effect.gen(function* () {
   )(function* (alias) {
     if (!SAFE_ALIAS.test(alias) || hasCloudMachineAliasPrefix(alias) || !(yield* hubEnabled))
       return undefined;
-    const revision = yield* aliasRevision(alias).pipe(Effect.orElseSucceed(() => undefined));
-    if (revision === undefined) return undefined;
+    const read = yield* aliasRevision(alias).pipe(Effect.option);
+    // Unreadable proves nothing, so the grant stays; a read that finds no alias ends it, so the
+    // same name coming back later needs a person again.
+    if (Option.isNone(read)) return undefined;
+    if (read.value === undefined) {
+      if ((yield* consents.held(alias)) !== undefined)
+        yield* consents.forget(alias).pipe(Effect.ignore({ log: true }));
+      return undefined;
+    }
     if ((yield* consents.held(alias)) === undefined) return false;
     // Reconciled on every read, so a signed-out or expired session turns the switch off and the
     // host says why, without waiting for its next setup. A Child stays one.

@@ -31,7 +31,7 @@ import { type OcxLayout, resolveOcx } from "../opencodex/childPrepare.ts";
 import { SAFE_LINK_ID } from "./opencodexSyncPlan.ts";
 import {
   fingerprintOfType,
-  isDirectRoute,
+  isPlainRoute,
   penConfigHosts,
   penKnownHostsFile,
   penRevision,
@@ -646,7 +646,9 @@ const make = Effect.gen(function* () {
         if (!SAFE_ALIAS.test(alias)) return false;
         const output = yield* run(yield* resolveSshCommand, ["-G", alias], 10_000);
         if (output.code !== 0 || output.timedOut) return false;
-        return isDirectRoute(sshSettings(output.stdout));
+        if (isPlainRoute(sshSettings(output.stdout))) return true;
+        // Pen's pipe is one relay hop of a few seconds, so a Pen member's alias counts as direct.
+        return (yield* penMember(alias)) !== undefined;
       },
       Effect.orElseSucceed(() => false),
     ),

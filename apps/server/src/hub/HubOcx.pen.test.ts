@@ -84,11 +84,25 @@ it.effect.each([
     proxy: "env LD_PRELOAD='/tmp/x.so' '/home/u/.local/bin/pen' pipe %n 22",
     direct: false,
   },
-])("a Remote Link alias through $name is direct: $direct", ({ proxy, direct }) =>
+])("a Pen member's alias through $name is direct: $direct", ({ proxy, direct }) =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home, { proxycommand: proxy });
+    expect(yield* ocx.directAlias("pen-box")).toBe(direct);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// Only Pen's own files make a proxied alias direct; the ProxyCommand alone does not.
+it.effect("a Pen-shaped ProxyCommand without Pen's files is not direct", () =>
   Effect.gen(function* () {
     const ocx = yield* HubOcx;
-    expect(yield* ocx.directAlias("pen-box")).toBe(direct);
-  }).pipe(Effect.provide(world(penConfig(proxy)))),
+    expect(yield* ocx.directAlias("pen-box")).toBe(false);
+  }).pipe(Effect.provide(world(penConfig("'/home/u/.local/bin/pen' pipe %n 22")))),
 );
 
 const sleepingDevice = (failure: Dispatch.SshRemoteDispatchError | undefined) =>
@@ -190,6 +204,8 @@ const penSshG =
       port: "22",
       proxycommand: "'/home/u/.local/bin/pen' pipe %n 22",
       userknownhostsfile: `${home}/.ssh/pen/known_hosts`,
+      stricthostkeychecking: "true",
+      globalknownhostsfile: "/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2",
       ...overrides,
     })
       .map(([key, value]) => `${key} ${value}`)
@@ -354,5 +370,48 @@ it.effect("two recorded keys of the offered type name no pin", () =>
     const { ocx, home } = yield* penHome(machine);
     machine.sshG = penSshG(home);
     expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// ssh's own host-key policy is part of what the pin and consent stand for.
+it.effect(
+  "a Pen alias that ssh would not hold to Pen's key strictly has no revision and no pin",
+  () =>
+    Effect.gen(function* () {
+      const machine = {
+        config: PEN_BLOCK("pen-box"),
+        sshG: (_: string) => "",
+        keys: keyLines("node1", "AAAA1"),
+        fingerprints: FINGERPRINTS,
+      };
+      const { ocx, home } = yield* penHome(machine);
+      for (const overrides of [
+        { stricthostkeychecking: "ask" },
+        { stricthostkeychecking: "false" },
+        { stricthostkeychecking: "accept-new" },
+        { knownhostscommand: "/usr/local/bin/hostkeys %H" },
+      ]) {
+        machine.sshG = penSshG(home, overrides);
+        expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+        expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+        expect(yield* ocx.directAlias("pen-box")).toBe(false);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a Pen alias's revision changes with the global known_hosts files ssh also reads", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+    };
+    const { ocx, home } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
+    const before = yield* ocx.penAliasRevision("pen-box");
+    machine.sshG = penSshG(home, { globalknownhostsfile: "/etc/ssh/other_known_hosts" });
+    const after = yield* ocx.penAliasRevision("pen-box");
+    expect(after).toEqual(expect.any(String));
+    expect(after).not.toBe(before);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
