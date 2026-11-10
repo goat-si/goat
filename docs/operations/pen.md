@@ -33,8 +33,10 @@ apps/pen/scripts/build.sh <version> https://pen-relay.pos090001.workers.dev http
 
 The first URL is the download relay; every URL becomes a relay of nodes installed with that `install.sh`. Output goes
 to `infra/pen-relay/public/` (`dl/<version>/` with four gzipped binaries, `SHA256SUMS` and `NOTICE`, and
-`install.sh`), which is gitignored and published by the next `pen-relay` deploy. Older `dl/<version>/` folders stay
-and keep being served; an `install.sh` downloads the version it was built for unless `PEN_VERSION` names another.
+`install.sh`), which is gitignored and published by the next `pen-relay` deploy. A deploy serves exactly what that
+folder holds, so a deploy from another checkout drops older releases: copy the previous `dl/<version>/` in first
+(download it from the Worker and check it with `shasum -a 256 -c SHA256SUMS`) so nodes can roll back. An `install.sh`
+downloads the version it was built for unless `PEN_VERSION` names another.
 Upgrade a running node by replacing its
 `~/.local/bin/pen` (or rerunning `install.sh`) and restarting it with `pen down` and `pen up`.
 
