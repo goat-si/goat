@@ -26,6 +26,7 @@ type loginVectors struct {
 		TS             uint64
 		Message, Proof string
 	}
+	Register  struct{ MeshID, Message, Proof string }
 	Assertion struct{ BodyJSON, Body, Sig, Hash string }
 	Checks    []struct {
 		Name      string
@@ -93,6 +94,7 @@ func TestLoginVectorsMatch(t *testing.T) {
 	if string(a.Body) != v.Assertion.BodyJSON || ident.B64.EncodeToString(a.Sig) != v.Assertion.Sig || a.Hash() != v.Assertion.Hash {
 		t.Fatalf("assertion body %s sig %s hash %s", a.Body, ident.B64.EncodeToString(a.Sig), a.Hash())
 	}
+	sign("register", login.RegisterMessage(a.Body, v.Register.MeshID), v.Register.Message, v.Register.Proof)
 
 	key := login.Key{Kid: v.LoginKey.Kid, Pub: v.LoginKey.Pub}
 	for _, c := range v.Checks {
