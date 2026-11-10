@@ -758,6 +758,42 @@ describe("goatBotReplyingSince", () => {
     expect(quotes).toEqual([null, null, "list the folders", "and count docs"]);
   });
 
+  it("keeps the prompt unquoted across task cards and event lines about the same request", () => {
+    const reply = (replyToKey: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      replyToKey,
+    });
+    const event = {
+      ...notice("e1", "2026-10-12T12:00:04Z"),
+      source: { kind: "goat_bot_event" },
+    } as unknown as OrchestrationV2TurnItem;
+    const quotes = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          user("u1", "2026-10-12T12:00:00Z", "count the docs"),
+          bot("b1", "2026-10-12T12:00:01Z", "Starting a task."),
+          notice("n1", "2026-10-12T12:00:02Z"),
+          bot("b2", "2026-10-12T12:00:03Z", "It is running."),
+          event,
+          bot("b3", "2026-10-12T12:00:05Z", "There are 49 docs."),
+        ]),
+        pendingInputs: [],
+        readers: readers(
+          {
+            u1: { tone: "reply", readAt: "2026-10-12T12:00:01Z", requestKey: "in-1" },
+            b1: reply("in-1"),
+            b2: reply("in-1"),
+            b3: reply("in-1"),
+          },
+          { n1: card("t1", 1) },
+        ),
+      }),
+    ).flatMap((row) => (row.kind === "bot" ? [row.replyTo] : []));
+    expect(quotes).toEqual([null, null, null]);
+  });
+
   const read = (requestKey: string, readAt: string): GoatBotMessagePresentation => ({
     tone: "reply",
     readAt,
