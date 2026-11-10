@@ -29,8 +29,9 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&relayURLs, "relay", "relay URL (https://...); repeat for several relays")
 	name := fs.String("name", "", "this node's name")
 	foreground := fs.Bool("foreground", false, "run the daemon in this process")
-	noService := fs.Bool("no-service", false, "never install a systemd or launchd service")
+	noService := fs.Bool("no-service", false, "never install a service (systemd, launchd or a Windows logon task)")
 	spawnDaemon := fs.Bool("spawn-daemon", false, "internal: start the daemon detached, print its pid and exit")
+	supervise := fs.Bool("supervise", false, "internal: the Windows logon task's action; runs the daemon and restarts it after a crash")
 	if _, err := parse(fs, args); err != nil {
 		return 2
 	}
@@ -41,7 +42,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if *spawnDaemon {
 		return spawnDetached(st, stdout, stderr)
 	}
-	if *foreground {
+	if *foreground || *supervise {
 		// A service manager restarting the daemon after pen leave must not mint a new node.
 		if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
 			fmt.Fprintln(stderr, "pen: this node left its mesh; run pen up or pen join to start again")
@@ -91,6 +92,9 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 
+	if *supervise {
+		return runSupervised(st, stderr)
+	}
 	if *foreground {
 		return runForeground(st, stderr)
 	}

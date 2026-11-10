@@ -30,7 +30,7 @@ func RunLeave(args []string, stdout, stderr io.Writer) int {
 	// Only now that leave succeeded does the service go. The left marker stops a restart in the
 	// meantime from minting a new node.
 	if mode != "none" {
-		if err := removeService(mode); err != nil {
+		if err := removeService(mode, st); err != nil {
 			return fail(stderr, fmt.Errorf("left the mesh, but removing the %s service failed: %w", mode, err))
 		}
 	}

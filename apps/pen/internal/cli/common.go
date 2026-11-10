@@ -22,8 +22,8 @@ var Stdin io.Reader = os.Stdin
 // Version is set by main.
 var Version = "dev"
 
-// ServiceUnit and LaunchdPlist are the service templates main embeds.
-var ServiceUnit, LaunchdPlist string
+// ServiceUnit, LaunchdPlist and TaskXML are the service templates main embeds.
+var ServiceUnit, LaunchdPlist, TaskXML string
 
 func fail(stderr io.Writer, err error) int {
 	fmt.Fprintln(stderr, "pen:", err)

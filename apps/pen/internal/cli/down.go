@@ -21,7 +21,7 @@ func RunDown(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if mode := installedService(st); mode != "none" {
-		if err := stopService(mode); err != nil {
+		if err := stopService(mode, st); err != nil {
 			return fail(stderr, err)
 		}
 		fmt.Fprintln(stdout, "stopped the pen service")
