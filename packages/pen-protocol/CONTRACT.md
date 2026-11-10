@@ -498,6 +498,8 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
 - v1.1 (2026-11-11): `pen relay serve` admits a client session only when its OPEN and CLOSE toward the uplink fit
   (else 4429), and past 8 pending sessions per node the address holding the most loses its oldest (4429). Go relay
   only; the Worker keeps the node-wide rule. No wire change.
+- v1.1 (2026-11-11): session ids wrap past 0xffffffff to 1 and skip live ones, on both relays (the Worker's counter
+  grew past u32 and its frames truncated it); the Go relay counts them per node id. No wire change.
 - v1.1 (2026-11-11): a mesh sync that brings a record the receiver refuses for its cap closes 4508 (4429 is the relays' busy code), and one whose
   records it cannot save closes 4507; before, both answered `done`. Older nodes still answer `done`; an older
   sender reads 4507 and 4508 as a failed sync (the member shown offline), never as taken.
