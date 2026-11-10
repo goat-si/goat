@@ -261,19 +261,24 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   128 bytes, all of them at most 192 MiB (`--max-queued-mib`) and one source address's at most 16 MiB
   (`--max-queued-per-source-mib`; a source is an IPv4 address or an IPv6 /64). Each socket reads a message of up to
   96 KiB (a ping, an ack or a whole Noise message) without a charge; a larger message being read draws on a separate
-  32 MiB pool, a source at most 4 MiB of it, and a socket whose message would pass that closes 4408. Data that would pass
-  its source's share first ends a queue of that source, and data that would pass the total a queue of any source: the
-  one stalled longest. A queue holding data that has finished no write for 2 s is stalled and goes before any that is
-  draining; among stalled queues a client's goes before an uplink's, among draining ones the one waiting longest goes
-  first. An ended queue's socket is dropped without a close frame (its peer sees 1006): a client's session ends and the
-  node gets CLOSE 1000; an uplink's sessions all end 4404 and the node reconnects (from 0.5 s, doubling) while its other
-  relays carry it. When the queue the data was meant for ranks first itself, the data is refused and that session ends
-  4408 (CLOSE 4408 to the node). The relay reopens nothing; a new connection races every relay again. One source holds
-  at most its share (16 of 128 MiB on the reference unit), so it cannot fill the total alone; once other sources' memory
-  has nearly filled it, the queue stalled longest goes, whichever source holds it. A session whose client keeps
-  reading ends only when no stalled queue is left; many sources together can
-  still fill the relay and end sessions anywhere, draining ones last. One offer ends at most four queues and waits at
-  most 1 s for each to give back a message being written. Each connection
+  32 MiB pool, a source at most 4 MiB of it, and a socket whose message would pass that closes 4408. Queued memory is
+  charged to the source of the socket that will receive it. Data a client sends toward its uplink never ends another
+  queue: when it does not fit the uplink's source share or the total, only that client's session ends 4408 (CLOSE 4408 to
+  the node), and until the node has answered a session the relay holds at most its first message (4096 bytes) queued
+  toward the uplink, so a pending session that sends more ends 4408. Data a node sends its client may end stalled
+  queues to fit: a queue holding data that has finished no write for 2 s is stalled. When the client's source share is
+  full, the relay ends stalled queues of that source; when the total is full, stalled queues of that source and of
+  sources holding more than it, so a source never ends a smaller one's queues. It ends a client's queue before an
+  uplink's, then the longest stalled, one at a time until the data fits, rechecking each under its own lock, and never
+  one that is draining; when nothing stalled is left, or the client's own queue would go first, the data is refused and
+  that session ends 4408. An ended queue gives back what it had queued at once and its socket is closed in the
+  background (its peer sees 1006): a client's session ends and the node gets CLOSE 1000; an uplink's sessions all end
+  4404 and the node reconnects (from 0.5 s, doubling) while its other relays carry it. A message an ended socket was
+  in the middle of writing is given back only when that write fails, so data that needed that memory is refused
+  meanwhile. Ending a queue never makes a room wait. The relay reopens nothing; a new connection races every relay
+  again. One source holds at most its share (16 of 128 MiB on the reference unit), so it cannot fill the total alone,
+  and data it sends toward another source's uplink ends only its own sessions; many sources together can fill the
+  relay, and then sessions stalled for 2 s anywhere can end, draining ones only by refusal of their own data. Each connection
   gets fixed 64 KiB kernel send and receive buffers and at most 8 KiB of request headers. It
   reads at most the 96-byte answer from an uplink before it authenticates, drops a socket whose write or closing
   handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, so a client
@@ -462,8 +467,9 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
   messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so one source alone cannot
   fill it. Relay implementation only; no wire change.
 - v1.1 (2026-11-11): `pen relay serve` reads a message of up to 96 KiB per socket without a charge and larger ones
-  from a separate 32 MiB pool, and a full source share or total first ends the queue stalled longest (draining ones
-  last, uplinks after clients). The "Relay text" section states that nothing confirms an uplink's authentication and
+  from a separate 32 MiB pool, and a full source share or total ends stalled queues first (clients before uplinks)
+  for data toward clients, while data toward an uplink only ever ends its own session; a pending session queues at
+  most its first message. The "Relay text" section states that nothing confirms an uplink's authentication and
   that a pong proves nothing about it. No wire change.
 - v1.1 (2026-11-11): kind 0x04 `check`: a Google joiner that a listed node refused asks it to check the joiner's
   records against its own, so a node that left or has not heard of the joiner no longer fails the join while the
