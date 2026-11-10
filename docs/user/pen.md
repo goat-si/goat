@@ -125,6 +125,8 @@ You can run your own relay with `pen relay serve` on a machine with a public add
 `pen login`, `pen join` and `pen up` install a user service (systemd on Linux, launchd on macOS)
 where they can, so Pen comes back after a restart. With `--no-service`, Pen runs in the background
 until the machine restarts; run `pen up` again afterwards. `pen down` stops it.
+Pen writes its log to `~/.pen/daemon.log` (on Linux with a service, to the user journal) and keeps
+it under 4 MiB, with the previous part in `daemon.log.1`.
 
 ## Cloud boxes and images
 

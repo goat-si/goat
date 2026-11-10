@@ -13,6 +13,18 @@ Pen has three hosted pieces, all on the Cloudflare account `88fe49abfe560e75daf6
 Deploy from a checkout of the commit you mean to ship, after its `goat-ci-result` is green (the `test-pen` task runs
 every Pen suite). `wrangler whoami` must list only the account above.
 
+## Check a relay
+
+`pen relay check <url>` checks a relay end to end: `/healthz`, the certificate's expiry, and a throwaway node that
+uplinks and exchanges 64 KiB each way with a client through the relay, with timings. It exits 1 on any failure,
+including a certificate that expires within 14 days (`--min-cert-days`), so it works as a cron or monitor probe. Run it
+against both relays after every deploy:
+
+```sh
+pen relay check https://pen-relay.pos090001.workers.dev
+pen relay check https://158-180-76-7.sslip.io
+```
+
 ## Release the node
 
 ```sh
@@ -42,12 +54,16 @@ sockets, which reconnect.
 Secrets: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` come from the Google OAuth web client of the `pen-login`
 Google Cloud project (the client file lives on the operator machine, mac-studio, at
 `~/.pen-secrets/google-oauth-client.json`, mode 0600). `LOGIN_SIGNING_KEY` is the Ed25519 seed of the login key.
-None can be read back from Cloudflare.
+None can be read back from Cloudflare, so the login key's only other copy is the file `deploy:secrets` created it in
+(keep it at `~/.pen-secrets/login-signing-key` on the operator machine, and an offline copy).
 
-Deploy: in `infra/pen-login`, `pnpm run deploy:secrets <google-oauth-client.json>` sets the Google secrets and deploys
-in one version; it creates `LOGIN_SIGNING_KEY` only when the Worker has none. A code-only change uses
-`pnpm run deploy`. Check `GET /v1/keys`: its `kid` must not change across deploys, because every bound mesh pins it.
-`GET /` answers 303 to `/device`.
+Deploy: in `infra/pen-login`,
+`pnpm run deploy:secrets <google-oauth-client.json> [--signing-key-file <path>]` sets the secrets and deploys in one
+version. When the Worker has no `LOGIN_SIGNING_KEY` it needs `--signing-key-file`: an existing file restores that key,
+a missing one is created there (0600, in a 0700 directory outside the repository) with a new key, and the script prints
+the key's `kid`. When the Worker has a key it keeps it and refuses a key file. A code-only change uses
+`pnpm run deploy`. Check `GET /v1/keys`: its `kid` must not change across deploys, because every bound mesh pins
+it. `GET /` answers 303 to `/device`.
 
 Rollback: as for pen-relay. The `Login` Durable Object holds the account registry, device codes and rate-limit
 counters in SQLite; a rollback keeps that data, so roll back only to a version whose schema reads it.
@@ -55,27 +71,41 @@ counters in SQLite; a rollback keeps that data, so roll back only to a version w
 Rotate the Google client secret: create a new secret in the Google Cloud console, update the client file, run
 `deploy:secrets` again. Sign-ins in flight fail once; nothing else changes.
 
-Lost or leaked `LOGIN_SIGNING_KEY`: delete the secret (`pnpm exec wrangler secret delete LOGIN_SIGNING_KEY`), run
-`deploy:secrets` to create a new one, and ask each person to run `pen login` on one member of their mesh, which binds
-the mesh to the new key. Until then new machines cannot sign in to those meshes; members and invites keep working.
+Moving the service or recovering a deleted Worker: `deploy:secrets` with `--signing-key-file` pointing at the kept
+file restores the same key, and bound meshes notice nothing.
+
+Rotate, or replace a lost or leaked `LOGIN_SIGNING_KEY`: delete the secret
+(`pnpm exec wrangler secret delete LOGIN_SIGNING_KEY`), run `deploy:secrets` with `--signing-key-file` naming a new
+file, and ask each person to run `pen login` on one member of their mesh, which binds the mesh to the new key. Until
+then new machines cannot sign in to those meshes; members and invites keep working. There is no overlap period:
+assertions live 10 minutes and members check them only against the key their mesh is bound to.
 
 ## Seoul relay
 
-The VM runs `pen relay serve` as user `ubuntu` from `/home/ubuntu/pen-relay/pen` under the system unit
-`pen-relay.service`, listening on `10.0.0.222:443` behind the VCN's public address `158.180.76.7`, with a Let's
-Encrypt certificate for `158-180-76-7.sslip.io` cached in `/home/ubuntu/pen-relay/acme`.
+The VM (`clisu-oracle`, Ubuntu on arm64) runs `/opt/pen-relay/pen relay serve` under the system unit
+`apps/pen/install/pen-relay.service`, installed as `/etc/systemd/system/pen-relay.service`. It runs as a dynamic
+user with a read-only system, no access to home directories and a 512 MiB memory ceiling
+(`systemd-analyze security pen-relay` rates it 1.6). `/etc/pen-relay.env` sets `PEN_RELAY_LISTEN=10.0.0.222:443`
+(the VCN's private address behind the public `158.180.76.7`) and `PEN_RELAY_HOST=158-180-76-7.sslip.io`. The
+Let's Encrypt account and certificate are cached in `/var/lib/pen-relay/acme` (systemd keeps it in
+`/var/lib/private/pen-relay`).
 
-Deploy a new binary: copy `pen-linux-arm64` from the build (gunzip it) to the VM, keep the running one as
-`pen.prev`, move the new one into place and `sudo systemctl restart pen-relay`. Rollback is the reverse. Check
-`https://158-180-76-7.sslip.io/healthz` and `journalctl -u pen-relay -n 50`.
+Install on a new VM: put the binary at `/opt/pen-relay/pen` (0755), write `/etc/pen-relay.env`, copy the unit file,
+then `sudo systemctl daemon-reload && sudo systemctl enable --now pen-relay`. To keep an existing certificate, copy its
+cache into `/var/lib/private/pen-relay/acme` before the first start; systemd hands it to the service user.
 
-Certificates: `autocert` renews a certificate when a third of its lifetime is left (30 days for Let's Encrypt's 90-day
-certificates, with up to an hour of jitter) while the process runs, and a restart reuses the cached certificate. A
-failed renewal is retried every 30 to 60 minutes and is not
-logged, and the relay keeps serving the cached certificate until it expires; after that every TLS handshake fails until
-issuance succeeds. Watch the expiry with
-`echo | openssl s_client -connect 158.180.76.7:443 -servername 158-180-76-7.sslip.io 2>/dev/null | openssl x509 -noout -enddate`.
-Issuance needs port 443 reachable from the internet (TLS-ALPN-01).
+Deploy a new binary: copy `pen-linux-arm64` from the build (gunzip it) to the VM, `sudo cp /opt/pen-relay/pen
+/opt/pen-relay/pen.prev`, `sudo install -m 0755 <new> /opt/pen-relay/pen`, `sudo systemctl restart pen-relay`, then
+`pen relay check https://158-180-76-7.sslip.io`. Rollback installs `pen.prev` the same way. Logs:
+`journalctl -u pen-relay`; TLS handshake errors from scanners are normal there.
+
+Certificates: `autocert` renews a certificate when a third of its lifetime is left (30 days for Let's Encrypt's
+90-day certificates, with up to an hour of jitter) while the process runs, and a restart reuses the cached certificate
+(the 2026-11-10 move to this unit kept serial `051E01E7…E463`). A failed renewal is retried every 30 to 60 minutes and
+is not logged; the relay keeps serving the cached certificate until it expires, and after that every TLS handshake
+fails until issuance succeeds. A failed first issuance does the same and the process keeps running. So the alarm is
+`pen relay check`, which fails 14 days before expiry. Issuance needs port 443 reachable from the internet
+(TLS-ALPN-01); restarting the service retries at once.
 
 ## Incidents
 

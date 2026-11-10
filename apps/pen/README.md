@@ -79,8 +79,9 @@ pen relay serve --listen <public-ip>:443 --autocert <host> --cache ~/pen-relay/a
 ```
 
 `--autocert` gets a Let's Encrypt certificate for `<host>` over TLS-ALPN on port 443 (an sslip.io name of the public IP
-works without DNS). Run it as an unprivileged user with `AmbientCapabilities=CAP_NET_BIND_SERVICE` in a systemd unit.
-Behind a TLS terminator use `--plain --public-origin wss://<host>`.
+works without DNS). `install/pen-relay.service` runs it as a hardened system service. Behind a TLS terminator use
+`--plain --public-origin wss://<host>`. `pen relay check <url>` checks any relay end to end and fails when its
+certificate expires within 14 days.
 
 ## Build
 
