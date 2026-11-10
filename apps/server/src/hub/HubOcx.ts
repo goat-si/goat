@@ -556,6 +556,10 @@ const make = Effect.gen(function* () {
     // ssh also accepts a key its global known_hosts holds for the alias, so there must be none.
     const globals = penGlobalFiles(settings);
     if (globals === undefined) return undefined;
+    // The default pair prints like one file of that whole name; if one exists, ssh's choice is unknown.
+    const whole = globals.join(" ");
+    if (globals.length > 1 && (yield* fs.exists(whole).pipe(Effect.orElseSucceed(() => true))))
+      return undefined;
     for (const file of globals) {
       if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => true)))) continue;
       const found = yield* run("ssh-keygen", ["-F", alias, "-f", file], 10_000).pipe(
