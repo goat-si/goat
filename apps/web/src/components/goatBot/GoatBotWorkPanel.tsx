@@ -18,7 +18,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotAvatar } from "./GoatBotAvatar";
-import { GoatBotHeaderName } from "./GoatBotHeaderName";
+import { GoatBotEditBotButton } from "./GoatBotEditBotButton";
 import { GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotComputer } from "./GoatBotComputer";
 import { GoatBotLibrary } from "./GoatBotLibrary";
@@ -119,7 +119,7 @@ export function GoatBotWorkPanel({
       <header className="flex flex-col items-center gap-2 pt-16 pb-4 text-center">
         <GoatBotAvatar size="lg" emoji={avatar} />
         <h2 className="max-w-full truncate text-base font-semibold">{botName}</h2>
-        <GoatBotHeaderName />
+        <GoatBotEditBotButton />
       </header>
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
         <TabsList aria-label={`${botName} work`} variant="plain" className="justify-center">

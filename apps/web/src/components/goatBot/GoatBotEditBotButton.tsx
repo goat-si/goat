@@ -12,7 +12,7 @@ import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMember
 const NO_PERMISSION = Atom.make(false);
 
 /** Profile editing stays available wherever this bot can be edited. */
-export function GoatBotHeaderName() {
+export function GoatBotEditBotButton() {
   const member = useContext(GoatBotMemberContext);
   const main = useContext(GoatBotMainProfileContext);
   const bot = member ?? main;
