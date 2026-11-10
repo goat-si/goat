@@ -73,8 +73,8 @@ func statusCode(err error) uint16 {
 const DialRaceTimeout = 15 * time.Second
 
 // Trace receives one stage of a race: what happened, on which relay, and how long after the race
-// started. Events: ws (socket connected), pong, answer (message 2 verified), closed <code>, failed,
-// winner, confirmed, loser closed.
+// started. Events: ws (socket connected), pong, answer (message 2 verified), bad answer (message 2
+// did not verify), closed <code>, failed, winner, confirmed, loser closed.
 type Trace func(event, relayURL string, since time.Duration)
 
 type traceKey struct{}

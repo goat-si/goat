@@ -79,6 +79,11 @@ func decodeLine(b []byte, v any) error {
 
 var msg2Payload = []byte("{\"v\":1}\n")
 
+// ErrBadMessage2 marks an initiator handshake whose message 2 did not verify. This side closed
+// the link 4400 and the error still carries that code (relay.CodeOf), but the bytes came through
+// a relay, which can forge them: a race across relays keeps going on it (contract "Several relays").
+var ErrBadMessage2 = errors.New("session: message 2 did not verify")
+
 // InviteID is base64url(SHA-256("pen/1 invite" || secret)[0..12]).
 func InviteID(secret []byte) string {
 	sum := sha256.Sum256(append([]byte("pen/1 invite"), secret...))
@@ -230,7 +235,7 @@ func initiateHandshake(ctx context.Context, conn relay.Conn, kind byte, nodeID s
 	p2, cs1, cs2, err := hs.ReadMessage(nil, m2)
 	if err != nil || !bytes.Equal(p2, msg2Payload) || cs1 == nil {
 		conn.Close(wire.CodeCrypto)
-		return nil, &relay.CloseError{Code: wire.CodeCrypto}
+		return nil, fmt.Errorf("%w: %w", ErrBadMessage2, &relay.CloseError{Code: wire.CodeCrypto})
 	}
 	return &Pending{s: &Secure{conn: conn, send: cs1, recv: cs2, RemoteStatic: remoteNoisePub, Kind: kind}}, nil
 }

@@ -17,7 +17,8 @@ var errLostRace = errors.New("another relay answered first")
 // once and keeping the first whose message 2 verifies: that relay's path reached the node and
 // back fastest, which a pong from the relay alone does not show. Only the winner is confirmed;
 // every other link closes 1000 unconfirmed, so its responder never opens the stream. A 4401 or
-// 4400 on any relay is the node's answer and ends the race.
+// 4400 close on any relay is the node's answer and ends the race; a message 2 that fails to
+// verify here (session.ErrBadMessage2) may be a relay's forgery, so the race goes on.
 func OpenSession(ctx context.Context, relays []string, nodeID string, start func(context.Context, relay.Conn) (*session.Pending, error)) (*session.Secure, error) {
 	if len(relays) == 0 {
 		return nil, errors.New("relay: no relays")
@@ -32,15 +33,16 @@ func OpenSession(ctx context.Context, relays []string, nodeID string, start func
 		err     error
 		// handshake marks an error from a socket that connected.
 		handshake bool
+		// refusal marks the node's own answer (a 4401 or 4400 close), which ended the race.
+		refusal bool
 	}
 	results := make(chan result, len(relays))
 	var mu sync.Mutex
 	decided := false
 	conns := map[string]relay.Conn{}
-	// decide ends the race for every link but keep's; it reports false when it already ended.
-	decide := func(keep string) bool {
-		mu.Lock()
-		defer mu.Unlock()
+	// decideLocked ends the race for every link but keep's (none for ""); it reports false when
+	// the race already ended. The caller holds mu, so one winner or one refusal ends it, never both.
+	decideLocked := func(keep string) bool {
 		if decided {
 			return false
 		}
@@ -78,19 +80,32 @@ func OpenSession(ctx context.Context, relays []string, nodeID string, start func
 			}
 			p, err := start(ctx, c)
 			if err != nil {
+				refusal := nodeRefused(err)
 				mu.Lock()
-				lost := decided
 				delete(conns, u)
-				mu.Unlock()
-				if !lost {
-					emit(relay.ClosedEvent(err), u)
-					c.Close(wire.CodeNormal)
+				lost := decided
+				if refusal && !lost {
+					decideLocked("")
 				}
-				results <- result{url: u, err: err, handshake: true}
+				mu.Unlock()
+				if lost {
+					results <- result{url: u, err: errLostRace}
+					return
+				}
+				if errors.Is(err, session.ErrBadMessage2) {
+					emit("bad answer", u)
+				} else {
+					emit(relay.ClosedEvent(err), u)
+				}
+				c.Close(wire.CodeNormal)
+				results <- result{url: u, err: err, handshake: true, refusal: refusal}
 				return
 			}
 			emit("answer", u)
-			if !decide(u) {
+			mu.Lock()
+			won := decideLocked(u)
+			mu.Unlock()
+			if !won {
 				p.Abort(wire.CodeNormal)
 				emit("loser closed", u)
 				results <- result{url: u, err: errLostRace}
@@ -101,7 +116,9 @@ func OpenSession(ctx context.Context, relays []string, nodeID string, start func
 	}
 	drain := func(left int) {
 		for range left {
-			<-results
+			if r := <-results; r.pending != nil {
+				r.pending.Abort(wire.CodeNormal)
+			}
 		}
 		dcancel()
 	}
@@ -119,12 +136,11 @@ func OpenSession(ctx context.Context, relays []string, nodeID string, start func
 			emit("confirmed", r.url)
 			return sec, nil
 		}
-		code := relay.CodeOf(r.err)
-		if code == wire.CodeNotAdmitted || code == wire.CodeCrypto {
-			decide("")
+		if r.refusal {
 			go drain(len(relays) - i - 1)
 			return nil, r.err
 		}
+		code := relay.CodeOf(r.err)
 		switch {
 		case code == wire.CodeOffline:
 			offline = r.err
@@ -140,6 +156,13 @@ func OpenSession(ctx context.Context, relays []string, nodeID string, start func
 		}
 	}
 	return nil, last
+}
+
+// nodeRefused reports a close only the node sends: 4401, or 4400 from the far side. A message 2
+// that failed to verify here also carries 4400 but may be a relay's forgery.
+func nodeRefused(err error) bool {
+	code := relay.CodeOf(err)
+	return (code == wire.CodeNotAdmitted || code == wire.CodeCrypto) && !errors.Is(err, session.ErrBadMessage2)
 }
 
 // openMember opens a kind 0x01 session with payload to the member nodeID whose Noise key is noise.

@@ -13,6 +13,7 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relay"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
+	"github.com/goat-si/goat/apps/pen/internal/session"
 	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
@@ -244,5 +245,55 @@ func TestJoinAndAccountSessionsKeepThePingRace(t *testing.T) {
 	}
 	if got := tr.winner(); got != ra.URL || !slices.Contains(tr.of(ra.URL), "pong") {
 		t.Fatalf("account join (kind 0x04) chose %s with trace %v; want the ping race's pick ra", got, tr.of(ra.URL))
+	}
+}
+
+func TestARelayThatAnswersAGarbageMessage2FirstDoesNotEndTheRace(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ra, rb := relaytest.New(), relaytest.New()
+	defer ra.Close()
+	defer rb.Close()
+	a := founderOn(t, ctx, "a", rb)
+	b := joiner(t, ctx, rb, a.invite(t, time.Minute), "b")
+	// ra holds an uplink for a's node id that answers every message 1 with bytes no node would send.
+	fake := relay.NewUplink(ra.URL, a.id)
+	go fake.Run(ctx)
+	if err := ra.WaitOnline(ctx, a.d.NodeID()); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			c, err := fake.Accept(ctx)
+			if err != nil {
+				return
+			}
+			if _, err := c.Recv(ctx); err == nil {
+				c.Send(make([]byte, 48))
+			}
+		}
+	}()
+	release := rb.HoldForwarding()
+	defer release()
+	tr := newRaceTrace()
+	type opened struct {
+		sec *session.Secure
+		err error
+	}
+	done := make(chan opened, 1)
+	go func() {
+		sec, err := OpenTCP(relay.WithTrace(ctx, tr.trace), []string{ra.URL, rb.URL}, b.id, memberNamed(t, b, "a"), echoServer(t))
+		done <- opened{sec, err}
+	}()
+	// The honest path answers only after the garbage reached the client.
+	tr.waitFor(ctx, ra.URL, "bad answer", "closed 4400", "failed")
+	release()
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("open after a relay's garbage message 2: %v (trace %v / %v), want the honest relay's session", r.err, tr.of(ra.URL), tr.of(rb.URL))
+	}
+	r.sec.Close(wire.CodeNormal)
+	if got := tr.winner(); got != rb.URL {
+		t.Fatalf("winner %s, want rb", got)
 	}
 }
