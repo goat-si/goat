@@ -94,7 +94,8 @@ describe("GOAT Bot approval cards", () => {
       );
       // Codes are issued in order per conversation and never reused.
       const code = "A1";
-      assert.deepStrictEqual(cards[0]?.channel?.options, ["Approve " + code, "Deny " + code]);
+      // Deny comes first, so a quick first pick never approves.
+      assert.deepStrictEqual(cards[0]?.channel?.options, ["Deny " + code, "Approve " + code]);
 
       // The button sends its label, which is answered without the model.
       yield* gateway.ingest(goatInput("Approve " + code, "a2"), rpcContext);
@@ -260,7 +261,7 @@ describe("GOAT Bot approval cards", () => {
       const card = resultsTo(harness.slackSent, "question")[0];
       assert.strictEqual(
         card?.message.text,
-        "deploy staging: the agent wants to run a command.\n1. Approve A1\n2. Deny A1",
+        "deploy staging: the agent wants to run a command.\n1. Deny A1\n2. Approve A1",
       );
 
       yield* identities.unlink({ connectionId: "slack-1", externalActorId: "U1" });
