@@ -314,8 +314,9 @@ first, turn on **Preview before automatic cleanup** in **Settings → Storage**.
 preview before cleanup starts, and cleanup starts 24 hours after you see it; on a server started
 over SSH, including one GOAT installed there, it waits for **Clean up now** instead. The preview
 approves the rules and a count, not specific paths. If more worktrees become eligible, or you turn
-the preview off and on again, GOAT shows a new preview before starting. **Delete now** alone does
-not confirm it. Review or turn off the default rules in **Settings → Storage**.
+the preview off and on again, GOAT shows a new preview before the next cleanup; a cleanup already
+running may finish under the earlier approval. **Delete now** alone does not confirm a preview.
+Review or turn off the default rules in **Settings → Storage**.
 
 When you open a cleaned thread, choose **Restore** in its banner. Sending a message also restores
 the worktree automatically. If restoration fails, the banner offers **Start in a new worktree**;
