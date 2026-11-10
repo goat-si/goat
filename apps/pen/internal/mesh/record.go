@@ -77,7 +77,7 @@ func (c *Card) MarshalJSON() ([]byte, error) {
 }
 
 func (c *Card) UnmarshalJSON(b []byte) error {
-	body, sig, err := decodeSigned(b)
+	body, sig, err := decodeSigned(b, strictjson.UnmarshalNested)
 	if err != nil {
 		return err
 	}
@@ -85,9 +85,9 @@ func (c *Card) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func decodeSigned(b []byte) ([]byte, []byte, error) {
+func decodeSigned(b []byte, decode func([]byte, any) error) ([]byte, []byte, error) {
 	var s signedJSON
-	if err := strictUnmarshal(b, &s); err != nil {
+	if err := decode(b, &s); err != nil {
 		return nil, nil, err
 	}
 	body, err1 := ident.B64.DecodeString(s.Body)
@@ -121,7 +121,7 @@ func (c *Card) Verify() error {
 		return errors.New("mesh: card body too large")
 	}
 	var cb CardBody
-	if err := strictUnmarshal(c.Body, &cb); err != nil {
+	if err := strictjson.UnmarshalNested(c.Body, &cb); err != nil {
 		return fmt.Errorf("mesh: card: %w", err)
 	}
 	if cb.V != 1 {
@@ -187,7 +187,7 @@ type LoginKey struct {
 func (k *LoginKey) UnmarshalJSON(b []byte) error {
 	type plain LoginKey
 	var p plain
-	if err := strictUnmarshal(b, &p); err != nil {
+	if err := strictjson.UnmarshalNested(b, &p); err != nil {
 		return err
 	}
 	*k = LoginKey(p)
@@ -220,7 +220,7 @@ func (r *Record) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the wire form; call Verify before trusting it.
 func (r *Record) UnmarshalJSON(b []byte) error {
-	body, sig, err := decodeSigned(b)
+	body, sig, err := decodeSigned(b, strictUnmarshal)
 	if err != nil {
 		return err
 	}

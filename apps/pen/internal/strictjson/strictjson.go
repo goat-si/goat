@@ -91,3 +91,24 @@ func Keys(b []byte) ([]string, error) {
 	}
 	return out, nil
 }
+
+// UnmarshalNested decodes an object nested in a signed body: unknown member names are ignored, but a
+// duplicate name, or one that differs from a known name only by case, is rejected.
+func UnmarshalNested(b []byte, v any) error {
+	keys, err := Keys(b)
+	if err != nil {
+		return err
+	}
+	known := Names(v)
+	for _, k := range keys {
+		if known[k] {
+			continue
+		}
+		for n := range known {
+			if strings.EqualFold(k, n) {
+				return fmt.Errorf("member %q differs from %q only by case", k, n)
+			}
+		}
+	}
+	return json.Unmarshal(b, v)
+}
