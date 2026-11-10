@@ -321,7 +321,7 @@ export function GoatBotChatView({
         </div>
       </div>
       {bot && panelOpen && !narrow && (
-        <aside aria-label={`${title} work`} className="flex w-80 shrink-0 border-l border-border">
+        <aside aria-label={`${title} work`} className="flex w-88 shrink-0 border-l border-border">
           <GoatBotWorkPanel
             environmentId={bot.environmentId}
             threadId={bot.threadId}

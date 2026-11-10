@@ -7,16 +7,10 @@ import {
 import type { BotRemoteWork, BotThreadRow, EnvironmentId, ThreadId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
-import {
-  BrainIcon,
-  CalendarClockIcon,
-  FolderIcon,
-  ListChecksIcon,
-  MonitorIcon,
-} from "~/components/solar";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
+import { GoatBotAvatar } from "./GoatBotAvatar";
 import { GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotComputer } from "./GoatBotComputer";
 import { GoatBotLibrary } from "./GoatBotLibrary";
@@ -27,19 +21,15 @@ import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import {
   goatBotSearch,
   memberThreadsKey,
+  useGoatBotAvatar,
   useGoatBotMember,
   useGoatBotName,
 } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
 
-const tabs = [
-  { name: "Tasks", Icon: ListChecksIcon },
-  { name: "Routines", Icon: CalendarClockIcon },
-  { name: "Memory", Icon: BrainIcon },
-  { name: "Library", Icon: FolderIcon },
-  { name: "Computer", Icon: MonitorIcon },
-] as const;
-type Tab = (typeof tabs)[number]["name"];
+// The machines running work show under Tasks, so four short labels fit the panel as text.
+const tabs = ["Tasks", "Routines", "Memory", "Library"] as const;
+type Tab = (typeof tabs)[number];
 
 export function GoatBotWorkPanel({
   environmentId,
@@ -59,6 +49,7 @@ export function GoatBotWorkPanel({
   const [tab, setTab] = useState<Tab>("Tasks");
   const member = useGoatBotMember();
   const botName = useGoatBotName();
+  const avatar = useGoatBotAvatar();
   const { rows, remoteWork, supported, loaded, failed, turnsWaiting, refresh } = useBotThreads(
     environmentId,
     memberThreadsKey(member),
@@ -69,29 +60,28 @@ export function GoatBotWorkPanel({
   const work = groupBotWork(rows, [], environmentId);
   const tasks = [...work.inProgress, ...work.done];
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 text-sm">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col px-4 pb-4 text-sm">
+      <header className="flex flex-col items-center gap-2 pt-16 pb-4 text-center">
+        <GoatBotAvatar size="lg" emoji={avatar} />
+        <h2 className="max-w-full truncate text-base font-semibold">{botName}</h2>
+      </header>
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
-        {/* In a sheet the close button sits at the top right, beside the tabs. */}
-        <div className={onShowChat ? "pr-10" : undefined}>
-          {/* Every destination stays in view: five equal columns, each an icon over its label. */}
-          <TabsList aria-label={`${botName} work`} className="grid grid-cols-5">
-            {tabs.map(({ name, Icon }) => (
-              <TabsTab key={name} value={name} variant="stacked">
-                <Icon aria-hidden />
-                {name}
-              </TabsTab>
-            ))}
-          </TabsList>
-        </div>
+        <TabsList aria-label={`${botName} work`} variant="plain" className="justify-center">
+          {tabs.map((name) => (
+            <TabsTab key={name} value={name} variant="plain">
+              {name}
+            </TabsTab>
+          ))}
+        </TabsList>
         <GoatBotStatusCard
-          className="mt-4 rounded-lg border border-border p-3"
+          className="mt-5 rounded-xl border border-border p-3"
           environmentId={environmentId}
           member={member}
           rows={!supported ? "unavailable" : failed ? "failed" : loaded ? rows : null}
           turnsWaiting={turnsWaiting}
           onShowChat={onShowChat}
         />
-        <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
+        <TabsPanel value="Tasks" className="mt-5 min-h-0 overflow-y-auto">
           {goatBotTurnsOutsideList(turnsWaiting, rows).length > 0 ? (
             <p className="mb-3">
               {goatBotWaitingInChatText(botName)}.{" "}
@@ -118,7 +108,9 @@ export function GoatBotWorkPanel({
               {([false, true] as const).map((done) =>
                 (done ? work.done : work.inProgress).length === 0 ? null : (
                   <section key={String(done)}>
-                    <h3 className="font-semibold">{done ? "Done" : "In progress"}</h3>
+                    <h3 className="mb-1 px-1 text-xs font-medium text-muted-foreground">
+                      {done ? "Done" : "In progress"}
+                    </h3>
                     {(done ? work.done : work.inProgress).map(({ row }) => (
                       <TaskWorkRow
                         key={row.task.taskId}
@@ -144,8 +136,16 @@ export function GoatBotWorkPanel({
               next={`Ask ${botName} in chat to start work.`}
             />
           )}
+          {work.inProgress.length > 0 ? (
+            <section className="mt-6">
+              <h3 className="mb-1 px-1 text-xs font-medium text-muted-foreground">Machines</h3>
+              <div className="px-1">
+                <GoatBotComputer environmentId={environmentId} />
+              </div>
+            </section>
+          ) : null}
         </TabsPanel>
-        <TabsPanel value="Routines" className="mt-4 min-h-0 overflow-y-auto">
+        <TabsPanel value="Routines" className="mt-5 min-h-0 overflow-y-auto">
           <GoatBotRoutines
             environmentId={environmentId}
             threadId={threadId}
@@ -154,18 +154,15 @@ export function GoatBotWorkPanel({
             onRetry={routines.refresh}
           />
         </TabsPanel>
-        <TabsPanel value="Memory" className="mt-4 min-h-0 overflow-y-auto">
+        <TabsPanel value="Memory" className="mt-5 min-h-0 overflow-y-auto">
           <GoatBotMemory
             environmentId={environmentId}
             onDraft={onDraft}
             refreshKey={notesRefreshKey}
           />
         </TabsPanel>
-        <TabsPanel value="Library" className="mt-4 min-h-0 overflow-y-auto">
+        <TabsPanel value="Library" className="mt-5 min-h-0 overflow-y-auto">
           <GoatBotLibrary environmentId={environmentId} />
-        </TabsPanel>
-        <TabsPanel value="Computer" className="mt-4 min-h-0 overflow-y-auto">
-          <GoatBotComputer environmentId={environmentId} />
         </TabsPanel>
       </Tabs>
     </div>
