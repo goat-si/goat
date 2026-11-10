@@ -167,25 +167,29 @@ export function GoatBotChatView({
           {/* Equal sides center the title until the controls, which never shrink, need its space. */}
           <div aria-hidden className="flex-1 basis-0" />
           <div className="flex max-w-[60%] min-w-0 items-center gap-2">
-            {member ? (
-              <GoatBotSessionAvatar
-                size="md"
-                chatOpen
-                emoji={avatar}
-                waitingCount={memberWaiting}
-                threadRef={scopeThreadRef(member.environmentId, member.sessionThreadId)}
-                activity={reading ? { state: "reading" } : removed ? null : working}
-              />
-            ) : (
-              <GoatBotMainAvatar
-                size="md"
-                chatOpen
-                emoji={avatar}
-                activity={reading ? { state: "reading" } : removed ? null : working}
-              />
-            )}
             <div className="flex min-w-0 items-center gap-2">
-              <GoatBotHeaderName title={title} />
+              <GoatBotHeaderName
+                title={title}
+                avatar={
+                  member ? (
+                    <GoatBotSessionAvatar
+                      size="sm"
+                      chatOpen
+                      emoji={avatar}
+                      waitingCount={memberWaiting}
+                      threadRef={scopeThreadRef(member.environmentId, member.sessionThreadId)}
+                      activity={reading ? { state: "reading" } : removed ? null : working}
+                    />
+                  ) : (
+                    <GoatBotMainAvatar
+                      size="sm"
+                      chatOpen
+                      emoji={avatar}
+                      activity={reading ? { state: "reading" } : removed ? null : working}
+                    />
+                  )
+                }
+              />
               {headerStatus ? (
                 <p className="truncate text-2xs text-muted-foreground">{headerStatus}</p>
               ) : null}

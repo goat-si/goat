@@ -15,7 +15,6 @@ import { cn } from "~/lib/utils";
 import { formatElapsedDurationLabel } from "~/timestampFormat";
 
 import { Button } from "../ui/button";
-import { GoatBotAvatar } from "./GoatBotAvatar";
 
 /** The activity line also shows how long the followed work has run and, opened, what it is. */
 export type GoatBotTimelineActivity = GoatBotActivity & {
@@ -23,33 +22,34 @@ export type GoatBotTimelineActivity = GoatBotActivity & {
   readonly title?: string;
 };
 
-/** The first line of a run of bot messages: who wrote it and when, visible without hovering. */
-export function GoatBotMessageHeader({
-  name,
-  avatar,
-  proactive,
-  timeId,
+/** Opens a run of messages the bot sent on its own, so an update never reads as a reply. */
+export function GoatBotUpdateLabel({ name }: { readonly name: string }) {
+  return (
+    <div className="ms-3.5 mb-1 flex min-w-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground">
+      <BellIcon className="size-3.5 shrink-0" aria-hidden />
+      <span className="truncate">{`${name} · Update`}</span>
+    </div>
+  );
+}
+
+/** A message's time, shown beside it on hover or focus; stamps between groups carry it otherwise. */
+export function GoatBotMessageTime({
+  id,
   createdAt,
   time,
 }: {
-  readonly name: string;
-  readonly avatar: string | null;
-  readonly proactive: boolean;
-  readonly timeId: string;
+  readonly id: string;
   readonly createdAt: string;
   readonly time: string;
 }) {
   return (
-    <div className="mb-1.5 flex min-w-0 items-center gap-2 text-xs leading-5 text-muted-foreground">
-      <GoatBotAvatar size="sm" emoji={avatar} />
-      <span className="truncate font-semibold text-foreground">
-        {proactive ? `${name} · Update` : name}
-      </span>
-      {proactive ? <BellIcon className="size-3.5 shrink-0" aria-hidden /> : null}
-      <time id={timeId} dateTime={createdAt} className="shrink-0">
-        {time}
-      </time>
-    </div>
+    <time
+      id={id}
+      dateTime={createdAt}
+      className="shrink-0 pb-1.5 text-2xs leading-4 text-muted-foreground tabular-nums opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-visible/message:opacity-100"
+    >
+      {time}
+    </time>
   );
 }
 
