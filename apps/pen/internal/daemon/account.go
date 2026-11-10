@@ -188,21 +188,18 @@ func (d *Daemon) deny(arg string) (Pending, error) {
 // round: an announcement lasts only for its session, so a member that came back older counts as
 // older (contract "Mesh records": v1.0 nodes reject account and lock records and would stall).
 func (d *Daemon) requireV11(ctx context.Context, what string) error {
-	d.mu.Lock()
-	since := d.helloSeq
-	d.mu.Unlock()
 	d.pushAll(ctx)
 	v := d.view()
 	d.mu.Lock()
 	var missing []string
 	for _, m := range v.SortedMembers() {
-		if h := d.versions[m.NoisePub]; m.NodeID != d.nodeID && (h.seq <= since || h.pen != mesh.Version) {
+		if m.NodeID != d.nodeID && d.versions[m.NoisePub] != mesh.Version {
 			missing = append(missing, m.Name)
 		}
 	}
 	d.mu.Unlock()
 	if len(missing) > 0 {
-		return fmt.Errorf("every member must run pen 1.1 before %s; not confirmed now: %s (offline or older)", what, strings.Join(missing, ", "))
+		return fmt.Errorf("every member must run pen 1.1 before %s; these have not announced 1.1 (older, or never online since joining): %s", what, strings.Join(missing, ", "))
 	}
 	return nil
 }

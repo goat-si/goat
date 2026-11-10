@@ -84,13 +84,22 @@ func (b *forgetBook) done(f PendingForget) {
 	b.saveLocked()
 }
 
-// answered reports a reply the service gave on purpose; network errors, 429 and 5xx are retried.
+// answered reports a final reply: success, or a refusal that can never succeed (400 malformed,
+// 404 gone, 409 conflict). Everything else is retried with the backoff: 401 (clock skew, or the
+// signing node not registered yet), 403, 429, 5xx and network errors.
 func answered(err error) bool {
 	if err == nil {
 		return true
 	}
 	var h *login.HTTPError
-	return errors.As(err, &h) && h.Status < 500 && h.Status != http.StatusTooManyRequests
+	if !errors.As(err, &h) {
+		return false
+	}
+	switch h.Status {
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusConflict:
+		return true
+	}
+	return false
 }
 
 // forgetLoop sends queued forgets until the service answers each, backing off from 30 s to 1 h.
@@ -102,11 +111,17 @@ func (d *Daemon) forgetLoop(ctx context.Context) {
 			fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			err := login.New(f.LoginURL).Forget(fctx, d.id, f.NodeID, d.now())
 			cancel()
-			if answered(err) {
+			final := answered(err)
+			if final {
 				if err != nil {
 					d.opt.Logf("login forget %s: %v", f.NodeID, err)
 				}
 				d.forgets.done(f)
+			}
+			if d.opt.OnForget != nil {
+				d.opt.OnForget(f.NodeID, err, !final)
+			}
+			if final {
 				continue
 			}
 			d.opt.Logf("login forget %s: %v; retrying", f.NodeID, err)

@@ -312,15 +312,23 @@ func (l *loginRun) join(ctx context.Context) error {
 	if err := l.install(s); err != nil {
 		return err
 	}
-	if !nowFn().Before(time.Unix(l.tok.Assertion.A.Exp, 0)) {
-		// A slow approval outlived the assertion: this node is a member, but the registry takes only a
-		// live assertion, so the next pen login registers it.
+	// A slow approval can outlive the assertion: this node is a member, but the registry takes only a
+	// live assertion, so the next pen login registers it. Clocks may differ by the contract's 60 s.
+	expired := !nowFn().Before(time.Unix(l.tok.Assertion.A.Exp, 0).Add(login.Skew))
+	if !expired {
+		err := l.register(ctx, s.MeshID)
+		var h *login.HTTPError
+		if errors.As(err, &h) && strings.Contains(h.Body, "expired") {
+			expired = true
+		} else if err != nil {
+			return err
+		}
+	}
+	if expired {
 		if err := l.saveLogin(s.MeshID); err != nil {
 			return err
 		}
 		fmt.Fprintf(l.stdout, "the sign-in expired before the approval, so registration waits for the next pen login\n")
-	} else if err := l.register(ctx, s.MeshID); err != nil {
-		return err
 	}
 	v := s.View()
 	fmt.Fprintf(l.stdout, "member of mesh %s as %s (%d members), %d ms after sign-in\n", s.MeshID, v.Members[self].Name,
