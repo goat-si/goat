@@ -70,7 +70,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
-vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
+vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null, GoatBotFaceAvatar: () => null }));
 // Work sits in the iOS header's trailing items; they render as buttons here.
 vi.mock("../../native/StackHeader", () => ({
   NativeStackScreenOptions: ({
