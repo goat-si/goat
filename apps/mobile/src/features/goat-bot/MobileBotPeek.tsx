@@ -7,13 +7,17 @@ import type { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat
 import * as Option from "effect/Option";
 import { Pressable, Text, View } from "react-native";
 
+import { Button } from "../../components/ui/Button";
 import { useThreadDetail, useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { goatBotWithoutThreadLinks } from "./goatBotChatMarkdown";
+import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 
 type ThreadSelection = { readonly environmentId: EnvironmentId; readonly id: ThreadId };
 const PEEK_MESSAGES = 20;
+/** About eight lines of a message; the thread holds the rest. */
+const PEEK_CARD_MAX_HEIGHT = 200;
 
 /**
  * A task seen from the bot's home without leaving it: its state, the latest words of its work
@@ -106,23 +110,21 @@ export function MobileBotPeek(props: {
       ) : null}
       <View className="mt-auto gap-2 pb-4">
         {first !== null ? (
-          <Pressable
-            accessibilityRole="button"
+          <Button
+            label="Go to thread"
+            tone="contrast"
+            fullWidth
             onPress={() =>
               props.onOpenThread({ environmentId: first.environmentId, id: first.threadId })
             }
-            className="min-h-[48px] items-center justify-center rounded-full bg-foreground px-4"
-          >
-            <Text className="font-semibold text-background">Go to thread</Text>
-          </Pressable>
+          />
         ) : null}
-        <Pressable
-          accessibilityRole="button"
+        <Button
+          label="Open task"
+          tone="secondary"
+          fullWidth
           onPress={() => props.onOpenTask(row.task.taskId)}
-          className="min-h-[48px] items-center justify-center rounded-full border border-border px-4"
-        >
-          <Text className="font-semibold text-foreground">Open task</Text>
-        </Pressable>
+        />
       </View>
     </View>
   );
@@ -139,9 +141,9 @@ function MobileBotPeekMessages(props: {
   const detail = useThreadDetail(target);
   const items = useThreadVisibleTurnItems(target);
   const label = useScaledTextRole("label");
-  const body = useScaledTextRole("body");
+  // The work's own words; the instructions the bot handed the worker stay in the thread.
   const messages = items
-    .filter(({ item }) => item.type === "user_message" || item.type === "assistant_message")
+    .filter(({ item }) => item.type === "assistant_message")
     .slice(-PEEK_MESSAGES);
   const hasData = Option.isSome(detail.data);
   const line = (text: string, danger = false) => (
@@ -163,27 +165,17 @@ function MobileBotPeekMessages(props: {
       {messages.length === 0
         ? line("No messages yet.")
         : messages.map(({ item }) =>
-            item.type === "user_message" || item.type === "assistant_message" ? (
+            item.type === "assistant_message" ? (
               <View
                 key={item.id}
-                className={
-                  item.type === "user_message"
-                    ? "self-end rounded-2xl bg-goat-person-message px-3 py-2"
-                    : "self-start rounded-2xl bg-goat-bot-message px-3 py-2"
-                }
-                style={{ maxWidth: "88%" }}
+                className="self-start overflow-hidden rounded-2xl bg-goat-bot-message px-3 py-2"
+                style={{ maxWidth: "88%", maxHeight: PEEK_CARD_MAX_HEIGHT }}
               >
-                <Text
-                  numberOfLines={6}
-                  className={
-                    item.type === "user_message"
-                      ? "text-goat-person-message-foreground"
-                      : "text-foreground"
-                  }
-                  style={body}
-                >
-                  {goatBotWithoutThreadLinks(item.text)}
-                </Text>
+                <GoatBotMarkdown
+                  text={goatBotWithoutThreadLinks(item.text)}
+                  environmentId={props.environmentId}
+                  onSelectThread={() => {}}
+                />
               </View>
             ) : null,
           )}

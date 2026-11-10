@@ -192,6 +192,14 @@ vi.mock("../../state/use-thread-detail", () => ({
   useThreadDetail: () => ({ data: { _tag: "None" }, status: "empty", error: { _tag: "None" } }),
   useThreadVisibleTurnItems: () => [],
 }));
+vi.mock("./GoatBotMarkdown", () => ({
+  GoatBotMarkdown: (props: { text: string }) => <span>{props.text}</span>,
+}));
+vi.mock("../../components/ui/Button", () => ({
+  Button: (props: { label: string; onPress: () => void }) => (
+    <button onClick={props.onPress}>{props.label}</button>
+  ),
+}));
 import { MobileBotWork } from "./MobileBotWork";
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;

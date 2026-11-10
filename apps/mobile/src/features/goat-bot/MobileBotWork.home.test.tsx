@@ -145,6 +145,14 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
 }));
 vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
+vi.mock("./GoatBotMarkdown", () => ({
+  GoatBotMarkdown: (props: { text: string }) => <span>{props.text}</span>,
+}));
+vi.mock("../../components/ui/Button", () => ({
+  Button: (props: { label: string; onPress: () => void }) => (
+    <button onClick={props.onPress}>{props.label}</button>
+  ),
+}));
 import { MobileBotWork } from "./MobileBotWork";
 
 const at = "2026-11-11T02:00:00.000Z";
