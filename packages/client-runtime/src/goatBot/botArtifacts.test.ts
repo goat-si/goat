@@ -20,6 +20,8 @@ import {
   botArtifactSizeLabel,
   botArtifactsFailure,
   botComputers,
+  botArtifactViewKind,
+  goatBotArtifactDays,
   readWholeBotArtifact,
 } from "./botArtifacts.ts";
 
@@ -250,5 +252,49 @@ describe("botComputers", () => {
     expect(
       botComputers([task("a", "running", { host: "studio", worker: {} })])[0]?.host,
     ).toBeNull();
+  });
+});
+
+describe("goatBotArtifactDays", () => {
+  // Local times, since days follow the device's calendar.
+  const at = (day: number, hour: number) => new Date(2026, 10, day, hour).toISOString();
+  const file = (name: string, modifiedAt: string) => ({ relativePath: name, size: 1, modifiedAt });
+
+  it("puts newest-first files under one heading per local day, keeping their order", () => {
+    const now = new Date(2026, 10, 11, 12).getTime();
+    const files = [
+      file("late.md", at(11, 9)),
+      file("early.md", at(11, 0)),
+      file("night.png", at(10, 23)),
+      file("old.csv", at(2, 8)),
+    ];
+    expect(
+      goatBotArtifactDays(files, now).map((day) => ({
+        label: day.label,
+        names: day.files.map((entry) => entry.relativePath),
+      })),
+    ).toEqual([
+      { label: "Today", names: ["late.md", "early.md"] },
+      { label: "Yesterday", names: ["night.png"] },
+      {
+        label: new Intl.DateTimeFormat(undefined, {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+        }).format(new Date(2026, 10, 2)),
+        names: ["old.csv"],
+      },
+    ]);
+  });
+});
+
+describe("botArtifactViewKind", () => {
+  it("renders markdown by type or name, shows text and images, and downloads the rest", () => {
+    expect(botArtifactViewKind("text/markdown; charset=utf-8", "notes")).toBe("markdown");
+    expect(botArtifactViewKind("application/octet-stream", "reports/summary.MD")).toBe("markdown");
+    expect(botArtifactViewKind("text/plain", "log.txt")).toBe("text");
+    expect(botArtifactViewKind("application/json", "data.json")).toBe("text");
+    expect(botArtifactViewKind("image/png", "chart.png")).toBe("image");
+    expect(botArtifactViewKind("application/pdf", "report.pdf")).toBe("download");
   });
 });

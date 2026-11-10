@@ -1,11 +1,13 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import { type ChannelBotArtifact, ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
+import { cn } from "~/lib/utils";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
+import { GoatBotFileViewer } from "./GoatBotFileViewer";
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 
 import { APP_DISPLAY_NAME } from "~/branding";
@@ -137,6 +139,30 @@ export function GoatBotChatView({
       }
     : undefined;
   const notesRefreshKey = goatBotNotesRefreshKey(rows);
+  // A Library file open in place of the conversation, on the server it was listed from.
+  const [viewing, setViewing] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly file: ChannelBotArtifact;
+  } | null>(null);
+  const fileOpener = useRef<HTMLElement | null>(null);
+  const openFile = bot
+    ? (file: ChannelBotArtifact) => {
+        fileOpener.current =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        if (narrow) setPanelOpen(false);
+        setViewing({ environmentId: bot.environmentId, file });
+      }
+    : () => {};
+  const closeFile = () => {
+    setViewing(null);
+    const opener = fileOpener.current;
+    fileOpener.current = null;
+    // Focus returns to the Library row; on a narrow screen its sheet is gone, so to the composer.
+    if (opener?.isConnected) opener.focus();
+    else composerRef.current?.focus();
+  };
+  const shownFile =
+    viewing !== null && viewing.environmentId === bot?.environmentId ? viewing : null;
   const [dragActive, setDragActive] = useState(false);
   if (!acceptsFiles && dragActive) setDragActive(false);
   const addDroppedFiles = useStableCallback((files: File[]) =>
@@ -264,49 +290,60 @@ export function GoatBotChatView({
           {...(acceptsFiles ? dropHandlers : {})}
         >
           {dragActive ? <WorkspaceFileDropOverlay /> : null}
-          {rows.length > 0 ? (
-            // History stays readable while the bot is unavailable; only sending stops.
-            <GoatBotTimeline
-              rows={rows}
-              environmentId={environmentId}
-              taskThreads={supportsTaskThreads}
-              retryEnvironmentId={supportsTaskRetry ? environmentId : null}
-              replyingSince={removed ? null : replyingSince}
-              onRetry={onRetryInput}
-              onDiscard={onDiscardInput}
-              onPick={
-                canSend
-                  ? (answer, taskId) =>
-                      taskId !== undefined && onSendToTask !== undefined
-                        ? onSendToTask(ChannelTaskId.make(taskId), answer)
-                        : onSend(answer)
-                  : undefined
-              }
+          {shownFile !== null ? (
+            <GoatBotFileViewer
+              key={`${shownFile.file.relativePath}:${shownFile.file.modifiedAt}`}
+              environmentId={shownFile.environmentId}
+              file={shownFile.file}
+              onClose={closeFile}
             />
-          ) : removal !== null ? (
-            <GoatBotRemovedNotice
-              removal={removal}
-              availability={availability}
-              onRetryAvailability={onRetryAvailability}
-              canOpenCurrentBot={canOpenCurrentBot}
-              onUnarchive={onUnarchive}
-              onRestore={member ? onRestore : undefined}
-              memberName={member?.name ?? null}
-              onCheckAgain={onCheckAgain}
-            />
-          ) : (
-            <GoatBotNotice
-              availability={availability}
-              homeMove={homeMove}
-              onRetryAvailability={onRetryAvailability}
-              legacyAgentRoute={legacyAgentRoute}
-              onSelectExample={
-                canSend
-                  ? (text) => setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
-                  : undefined
-              }
-            />
-          )}
+          ) : null}
+          {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
+          <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
+            {rows.length > 0 ? (
+              // History stays readable while the bot is unavailable; only sending stops.
+              <GoatBotTimeline
+                rows={rows}
+                environmentId={environmentId}
+                taskThreads={supportsTaskThreads}
+                retryEnvironmentId={supportsTaskRetry ? environmentId : null}
+                replyingSince={removed ? null : replyingSince}
+                onRetry={onRetryInput}
+                onDiscard={onDiscardInput}
+                onPick={
+                  canSend
+                    ? (answer, taskId) =>
+                        taskId !== undefined && onSendToTask !== undefined
+                          ? onSendToTask(ChannelTaskId.make(taskId), answer)
+                          : onSend(answer)
+                    : undefined
+                }
+              />
+            ) : removal !== null ? (
+              <GoatBotRemovedNotice
+                removal={removal}
+                availability={availability}
+                onRetryAvailability={onRetryAvailability}
+                canOpenCurrentBot={canOpenCurrentBot}
+                onUnarchive={onUnarchive}
+                onRestore={member ? onRestore : undefined}
+                memberName={member?.name ?? null}
+                onCheckAgain={onCheckAgain}
+              />
+            ) : (
+              <GoatBotNotice
+                availability={availability}
+                homeMove={homeMove}
+                onRetryAvailability={onRetryAvailability}
+                legacyAgentRoute={legacyAgentRoute}
+                onSelectExample={
+                  canSend
+                    ? (text) => setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
+                    : undefined
+                }
+              />
+            )}
+          </div>
           {ready && !canOperate ? (
             <p className="mx-auto w-full max-w-3xl px-4 pb-2 text-xs text-muted-foreground">
               You can read this chat but can't send messages.
@@ -337,6 +374,8 @@ export function GoatBotChatView({
             notesRefreshKey={notesRefreshKey}
             peekRows={rowsForTask}
             onRetryInput={onRetryInput}
+            openFile={shownFile?.file.relativePath ?? null}
+            onOpenFile={openFile}
           />
         </aside>
       )}
@@ -352,6 +391,8 @@ export function GoatBotChatView({
               onShowChat={() => setPanelOpen(false)}
               peekRows={rowsForTask}
               onRetryInput={onRetryInput}
+              openFile={shownFile?.file.relativePath ?? null}
+              onOpenFile={openFile}
             />
           </SheetPopup>
         </Sheet>
