@@ -52,6 +52,13 @@ the mesh locked, it waits up to 30 minutes for approval.
 `pen logout` removes this machine from your account's machine list. It stays in the mesh.
 `pen account unbind`, on any member, turns Google sign-in off for the mesh; invites keep working.
 
+The account's machine list is kept by the sign-in service, and it only decides which mesh a new
+machine is offered. Anyone who signs in to your Google account, even once, can add a machine to that
+list or remove the others from it, so new machines might be offered the wrong mesh; machines already
+in your mesh and invites are not affected. If that may have happened, turn on `pen lock on` so new
+machines need your approval, change your Google password, clear the list from the reset link on the
+sign-in page, and run `pen login` on one of your machines to register your mesh again.
+
 ## Require approval for new machines
 
 `pen lock on` makes every newly signed-in machine wait for approval. Its `pen login` names the

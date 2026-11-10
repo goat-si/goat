@@ -83,17 +83,33 @@ Rotate the Google client secret: add a new secret to the OAuth client in the Goo
 file, run `deploy:secrets <client file>` (the Worker keeps its login key), check one sign-in, then disable the old
 secret in the console. Sign-ins in flight during the deploy fail once; nothing else changes.
 
-Moving the service: `deploy:secrets` with `--signing-key-file` pointing at the kept file restores the same key, and
-the Durable Object's data moves with the Worker, so bound meshes notice nothing.
+Moving the service to another Worker name, host or Cloudflare account costs every bound mesh a sign-in. A new Worker
+starts with an empty `Login` Durable Object (no account registry), its assertions carry its own origin as `iss`,
+and every member accepts only assertions whose `iss` is the login URL its mesh is bound to. Steps:
+
+1. Add `https://<new host>/v1/auth/google/callback` to the Google OAuth client's redirect URIs and set `CALLBACK`
+   in `infra/pen-login/scripts/deploy.ts` to it (the script refuses a client file without it).
+2. Point `wrangler.jsonc` at the new name or account and run `deploy:secrets` with `--signing-key-file` naming the
+   kept key file, so `/v1/keys` on the new host shows the same `kid`.
+3. On one member of each bound mesh the person runs `pen login --login-url https://<new host>` (or sets
+   `PEN_LOGIN`). The new registry has no mesh, so it asks `No mesh is registered for <email>. Bind this
+   machine's mesh <id> (<n> members) to <email>?` (on a mesh of one machine: `No mesh is registered for <email>.
+   Found a mesh with this machine and bind it to <email>?`, which binds the existing mesh); yes binds the mesh to
+   the new URL and registers this
+   machine. The other members take the binding at their next sync. Every member must have announced pen 1.1.
+4. New machines reach the new service only with `--login-url` or `PEN_LOGIN` until a release changes
+   `login.DefaultURL` in `apps/pen/internal/login/login.go`.
+5. Delete the old Worker once every mesh moved; until then it keeps signing in machines for meshes still bound to it.
 
 Recovering a deleted Worker: the same command restores the key, but the account registry was in the deleted
 `Login` Durable Object, so every account starts with no registered mesh. Until one member of a mesh signs in again, a
 new machine that signs in gets no mesh offer and `pen login` offers to found a new mesh, which would then take the
-account's registration. So before reopening sign-ins, ask each person to run `pen login` on one existing member: with
-no mesh registered it asks `No mesh is registered for <email>. Bind this machine's mesh <id> (N members)?`, and yes
-registers that mesh again. If a new machine already founded a second mesh, its members get `pen leave first`: reset
-the account at `/reset` on the sign-in page, run `pen login` on an existing member first, then on the stray machine run
-`pen leave` and `pen login` to join the real mesh.
+account's registration. Pen has no switch that closes sign-ins, so ask each person right away to run `pen login` on
+one existing member: with no mesh registered it asks `No mesh is registered for <email>. Bind this machine's mesh
+<id> (<n> members) to <email>?`, and yes registers that mesh again. If a new machine already founded a second mesh,
+`pen login` on the existing members says `pen leave first` (the account is registered with the stray mesh): reset
+the account at `/reset` on the sign-in page, run `pen login` on an existing member first, then on the stray machine
+run `pen leave` and `pen login` to join the real mesh.
 
 ### Rotate the login key and rebind
 
@@ -103,13 +119,14 @@ bound to, so each mesh moves to the new key when one of its members signs in aga
 
 1. In `infra/pen-login` of the deployed commit, on the operator machine: `pnpm exec wrangler whoami` lists only the
    Pen account, and `curl -s https://pen-login.pos090001.workers.dev/v1/keys` shows the old `kid`.
-2. `pnpm exec wrangler secret delete LOGIN_SIGNING_KEY`. That publishes a version without the key, so sign-ins fail
-   until the next step; run it at once.
-3. Move the old key file aside first (`mv ~/.pen-secrets/login-signing-key ~/.pen-secrets/login-signing-key.<old kid>`):
+2. Move the old key file aside (`mv ~/.pen-secrets/login-signing-key ~/.pen-secrets/login-signing-key.<old kid>`):
    with a file at that path, `deploy:secrets` restores the key it holds instead of making a new one.
+3. `pnpm exec wrangler secret delete LOGIN_SIGNING_KEY`. That publishes a version without the key, so every sign-in
+   fails from here until step 4 deploys; run step 4 at once.
 4. `pnpm run deploy:secrets ~/.pen-secrets/google-oauth-client.json --signing-key-file ~/.pen-secrets/login-signing-key`
    (the directory must be 0700). It creates the key there and prints `login key kid <new> from <path>`; a printed
-   `<old>` means it restored the old key, so stop and check step 3. Copy the new file somewhere offline.
+   `<old>` means it restored the old key: the Worker runs with the old key again, so check step 2 and repeat from
+   step 2. Copy the new file somewhere offline.
 5. `curl -s .../v1/keys` now shows `<new>`.
 
 While a mesh is still bound to the old key, members, invites, `pen pipe`, `pen forward` and SSH keep working, and
