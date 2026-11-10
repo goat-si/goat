@@ -28,12 +28,9 @@ port="$(freeport)"
 relay="http://127.0.0.1:$port"
 port2="$(freeport)"
 relay2="http://127.0.0.1:$port2"
-repo="$(cd "$here/../.." && pwd)"
-GO="$GO" "$here/scripts/build.sh" 0.0.0-check "$relay" "$relay2" >/dev/null
-mkdir -p "$work/public/dl"
-cp -R "$repo/infra/pen-relay/public/dl/0.0.0-check" "$work/public/dl/"
-cp "$repo/infra/pen-relay/public/install.sh" "$work/public/install.sh"
-rm -rf "$repo/infra/pen-relay/public/dl/0.0.0-check"
+# Build into the scratch folder: infra/pen-relay/public is what a deploy publishes.
+mkdir -p "$work/public"
+GO="$GO" PEN_PUBLIC="$work/public" "$here/scripts/build.sh" 0.0.0-check "$relay" "$relay2" >/dev/null
 
 mkfifo "$work/relay.out"
 "$work/relaytest" -addr "127.0.0.1:$port" -public "$work/public" >"$work/relay.out" &
