@@ -155,7 +155,7 @@ type loginRun struct {
 func (l *loginRun) run(ctx context.Context) error {
 	s, err := l.lc.Start(ctx, l.id, l.name)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not start a sign-in at %s (%w); check --login-url, or try again later if the service is down", l.lc.URL, err)
 	}
 	fmt.Fprintf(l.stdout, "To sign in, open %s and type the code %s\n", s.VerificationURI, s.UserCode)
 	fmt.Fprintf(l.stdout, "  this machine: %s, fingerprint %s\n  waiting for the sign-in...\n", l.name, ident.Fingerprint(l.id.NoisePub))
