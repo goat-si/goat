@@ -31,7 +31,10 @@ type forgetBook struct {
 	st   *state.Store
 	mu   sync.Mutex
 	list []PendingForget
-	kick chan struct{}
+	// refused marks forgets the service last answered 403: retrying cannot help until this node is
+	// registered under the account, so ls shows them.
+	refused map[PendingForget]bool
+	kick    chan struct{}
 }
 
 func loadForgets(st *state.Store) (*forgetBook, error) {
@@ -82,7 +85,34 @@ func (b *forgetBook) done(f PendingForget) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.list = slices.DeleteFunc(b.list, func(x PendingForget) bool { return x == f })
+	delete(b.refused, f)
 	b.saveLocked()
+}
+
+// markRefused records whether the service's last answer to f was 403.
+func (b *forgetBook) markRefused(f PendingForget, refused bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.refused == nil {
+		b.refused = map[PendingForget]bool{}
+	}
+	if refused {
+		b.refused[f] = true
+	} else {
+		delete(b.refused, f)
+	}
+}
+
+func (b *forgetBook) refusedList() []PendingForget {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []PendingForget
+	for _, f := range b.list {
+		if b.refused[f] {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // answered reports a final reply: success, or a refusal that can never succeed (400 malformed,
@@ -116,6 +146,8 @@ func (d *Daemon) forgetLoop(ctx context.Context) {
 			err := login.New(f.LoginURL).Forget(fctx, d.id, f.NodeID, d.now())
 			cancel()
 			final := answered(err)
+			var h *login.HTTPError
+			d.forgets.markRefused(f, errors.As(err, &h) && h.Status == http.StatusForbidden)
 			if final {
 				if err != nil {
 					d.opt.Logf("login forget %s: %v", f.NodeID, err)

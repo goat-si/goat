@@ -58,6 +58,16 @@ type LsReply struct {
 	Account *mesh.Account `json:"account,omitempty"`
 	Locked  bool          `json:"locked"`
 	Pending int           `json:"pending"`
+	// Unforgotten are revoked machines the login service still offers to new machines because it
+	// refused this node's forget (this node is not registered under the account).
+	Unforgotten []Unforgotten `json:"unforgotten,omitempty"`
+}
+
+// Unforgotten is a revoked machine the login service still lists.
+type Unforgotten struct {
+	NodeID   string `json:"nodeId"`
+	Name     string `json:"name"`
+	LoginURL string `json:"loginUrl"`
 }
 
 // WatchLine is one view change.
@@ -269,6 +279,13 @@ func (d *Daemon) ls() LsReply {
 	s := d.uplinkState()
 	out := LsReply{Self: d.nodeID, MeshID: v.MeshID, Relay: d.relayURL(), Uplink: s, Revoked: v.SortedRevoked(),
 		Account: v.Account, Locked: v.Locked, Pending: len(d.pending.all(d.now()))}
+	for _, f := range d.forgets.refusedList() {
+		u := Unforgotten{NodeID: f.NodeID, LoginURL: f.LoginURL}
+		if m, ok := v.RevokedByNodeID(f.NodeID); ok {
+			u.Name = m.Name
+		}
+		out.Unforgotten = append(out.Unforgotten, u)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, m := range v.SortedMembers() {

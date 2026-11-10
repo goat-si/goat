@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -409,13 +410,59 @@ func syncWith(ctx context.Context, relays []string, id *ident.Identity, s *mesh.
 // serves tcp streams, and reports how many took part. It fails when a member refuses this node
 // (4401: it holds a revoke the admitting member had not heard of) or the synced view no longer
 // makes it a member.
-func FinishJoin(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store) (taken, others int, err error) {
+func FinishJoin(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store, listed []login.OfferedMember) (taken, others int, err error) {
 	taken, refused, others := syncWith(ctx, relays, id, s)
 	if refused > 0 {
 		return taken, others, fmt.Errorf("%d member(s) refuse this machine (revoked, or they have not heard of its admission yet); nothing was changed here, run pen login again later", refused)
+	}
+	// The admitting member chose which records to serve. Every machine the login service lists but
+	// the served view does not call a member is asked too: one that refuses this machine holds records
+	// the admitting member left out (a revoke of it, typically), so this copy cannot be trusted.
+	if names := refusedByListed(ctx, relays, id, s, listed); len(names) > 0 {
+		return taken, others, fmt.Errorf("%s, listed for this account but not a member in the copy of the mesh this machine was given, refuse(s) this machine: the member that admitted it may be revoked or stolen and served a partial mesh. Nothing was changed here; check pen ls on a machine you trust, revoke a stolen one with pen revoke --compromised, and reset the account's machine list on the sign-in page", strings.Join(names, ", "))
 	}
 	if _, ok := s.View().Members[ident.B64.EncodeToString(id.SignPub)]; !ok {
 		return taken, others, errors.New("after syncing with the other members this machine is not a member (revoked); nothing was changed here")
 	}
 	return taken, others, nil
+}
+
+// refusedByListed syncs with each listed machine that s does not count as a member and names those
+// that refuse this node (4401). One that accepts merges its records into s.
+func refusedByListed(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store, listed []login.OfferedMember) []string {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var names []string
+	members := s.View().Members
+	for _, m := range listed {
+		if m.NodeID == id.NodeID() {
+			continue
+		}
+		if _, ok := members[m.SignPub]; ok {
+			continue
+		}
+		noise, err := ident.DecodeKey(m.NoisePub)
+		if err != nil {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pctx, cancel := context.WithTimeout(ctx, pushTimeout)
+			defer cancel()
+			sec, err := openMember(pctx, relays, id, m.NodeID, noise, session.Payload{V: 1, Stream: "mesh"})
+			if err == nil {
+				defer sec.Close(wire.CodeNormal)
+				err = mesh.SyncInitiate(pctx, sec, s, nil, nil)
+			}
+			if relay.CodeOf(err) == wire.CodeNotAdmitted {
+				mu.Lock()
+				names = append(names, m.Name)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	sort.Strings(names)
+	return names
 }

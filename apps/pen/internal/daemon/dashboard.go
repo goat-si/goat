@@ -537,6 +537,8 @@ type DashState struct {
 	Events        []DashEvent   `json:"events"`
 	DownloadRelay string        `json:"downloadRelay"`
 	LoginCommand  string        `json:"loginCommand"`
+	// Unforgotten are revoked machines the login service still offers (see LsReply).
+	Unforgotten []Unforgotten `json:"unforgotten"`
 	// ApproveQuestion is the warning pen approve asks before approving by request id.
 	ApproveQuestion string `json:"approveQuestion"`
 	Now             int64  `json:"now"`
@@ -552,7 +554,10 @@ func (d *Daemon) dashState() DashState {
 	v := d.view()
 	s := DashState{Self: d.status(), Uplink: ls.Uplink, Members: ls.Members, Locked: v.Locked, Relays: d.relayStates(),
 		Pending: []DashPending{}, Events: d.events(v), DownloadRelay: d.downloadRelay(), ApproveQuestion: ApproveQuestion,
-		Now: d.now().UnixMilli()}
+		Now: d.now().UnixMilli(), Unforgotten: ls.Unforgotten}
+	if s.Unforgotten == nil {
+		s.Unforgotten = []Unforgotten{}
+	}
 	if s.Members == nil {
 		s.Members = []LsMember{}
 	}

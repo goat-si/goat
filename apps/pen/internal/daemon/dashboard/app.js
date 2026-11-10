@@ -844,7 +844,23 @@
       );
       return;
     }
+    const stuck = (s.unforgotten || []).map((u) =>
+      h(
+        "p",
+        { class: "warn-text" },
+        "로그인 서비스가 제거된 기기 " +
+          (u.name || u.nodeId) +
+          "을(를) 아직 새 기기에 보여 줍니다. 이 기기는 계정에 등록되지 않아 지울 수 없습니다: 여기서 pen login을 실행하거나 " +
+          u.loginUrl +
+          "/reset 에서 계정의 기기 목록을 초기화하세요. · The login service still offers the removed machine " +
+          (u.name || u.nodeId) +
+          " to new machines, and this machine is not registered with the account, so it cannot remove it: run pen login here, or reset the account's machine list at " +
+          u.loginUrl +
+          "/reset.",
+      ),
+    );
     out.replaceChildren(
+      ...stuck,
       h(
         "p",
         { class: "sub" },

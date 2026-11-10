@@ -302,7 +302,7 @@ func (l *loginRun) join(ctx context.Context) error {
 		return err
 	}
 	self := ident.B64.EncodeToString(l.id.SignPub)
-	taken, others, err := daemon.FinishJoin(ctx, l.relays, l.id, s)
+	taken, others, err := daemon.FinishJoin(ctx, l.relays, l.id, s, l.tok.Mesh.Members)
 	if err != nil {
 		return err
 	}

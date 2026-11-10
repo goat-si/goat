@@ -567,7 +567,7 @@ func TestAJoinerRevokedElsewhereLearnsItWhenItSyncsAfterJoining(t *testing.T) {
 	if err := Call(b.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(j.SignPub)}, &r); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := FinishJoin(ctx, []string{rs.URL}, j, s); err == nil {
+	if _, _, err := FinishJoin(ctx, []string{rs.URL}, j, s, nil); err == nil {
 		t.Fatal("the joiner went on although a member it synced with had revoked it")
 	}
 }
