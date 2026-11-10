@@ -63,8 +63,8 @@ func (s *Store) take(l Link, m *Msg, onMerged Merged, received *int) error {
 	}
 	// A record refused for the cap fails the sync, so the sender sees it was not taken.
 	if errors.Is(err, ErrFull) {
-		l.Close(wire.CodeCaps)
-		return &relay.CloseError{Code: wire.CodeCaps}
+		l.Close(wire.CodeMeshFull)
+		return &relay.CloseError{Code: wire.CodeMeshFull}
 	}
 	return err
 }

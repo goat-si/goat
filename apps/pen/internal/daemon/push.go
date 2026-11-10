@@ -85,7 +85,10 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member, limit time.Duration) s
 		case wire.CodeNotAdmitted:
 			return "refused"
 		case wire.CodeCaps:
-			return "not taken: its mesh is full (4429)"
+			// The relay's own limits (pending, admission): busy, not the member's mesh.
+			return "not taken: the relay is busy (4429); it syncs again within 10 minutes"
+		case wire.CodeMeshFull:
+			return "not taken: its mesh is full (4508)"
 		case wire.CodeNotKept:
 			return "not taken: it cannot write its state folder (4507)"
 		}

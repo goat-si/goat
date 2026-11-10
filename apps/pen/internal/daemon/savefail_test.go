@@ -2,13 +2,17 @@ package daemon
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
+	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
 // N4: a member that cannot write its state folder does not acknowledge a revoke it was sent: the
@@ -78,4 +82,30 @@ func pushResult(t *testing.T, from *node, name string) string {
 	}
 	t.Fatalf("no push result for %s", name)
 	return ""
+}
+
+// T2: a relay that refuses the member session with its own 4429 (busy) is not reported as the
+// member's mesh being full; only the member's 4508 is.
+func TestARelaysBusyRefusalIsNotReportedAsAFullMesh(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err == nil {
+			ws.Close(websocket.StatusCode(wire.CodeCaps), "busy")
+		}
+	}))
+	defer busy.Close()
+	a.d.cfgMu.Lock()
+	a.d.cfg.SetRelays([]string{busy.URL})
+	a.d.cfgMu.Unlock()
+	m := a.d.view().Members[ident.B64.EncodeToString(b.id.SignPub)]
+	got := a.d.push(ctx, m, time.Minute)
+	if strings.Contains(got, "full") || !strings.Contains(got, "busy") {
+		t.Fatalf("a relay's 4429 was reported as %q", got)
+	}
 }
