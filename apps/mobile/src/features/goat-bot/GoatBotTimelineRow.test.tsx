@@ -35,8 +35,11 @@ vi.mock("./GoatBotShimmerText", async () => {
     ),
   };
 });
-// The native Markdown renderer cannot load under Vitest.
-vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
+// The native Markdown renderer cannot load under Vitest; its source text stands in for it.
+vi.mock("./GoatBotMarkdown", async () => {
+  const { Text } = await import("react-native");
+  return { GoatBotMarkdown: (props: { text: string }) => <Text>{`md[${props.text}]`}</Text> };
+});
 vi.mock("./GoatBotComposerAttachments", () => ({
   GoatBotAttachButton: () => null,
   GoatBotAttachmentStrip: () => null,
@@ -353,17 +356,22 @@ describe("the progress line under the last message", () => {
   });
 });
 
-it("reads a thread link in a reply as plain words, since the bot's threads open from its home", async () => {
+it("reads a link to a thread the home lists as plain words, and keeps other thread links", async () => {
   h = createNativeMemoryHarness();
   view = renderNative(
     h,
     <GoatBotTimelineRow
       {...props}
-      row={bot({ text: "Started [Fix the build](goat-thread://v1/thread-1)." })}
+      listedThreadIds={new Set([ThreadId.make("thread-1")])}
+      row={bot({
+        text: "Started [Fix the build](goat-thread://v1/thread-1), see [old](goat-thread://v1/gone).",
+      })}
     />,
   );
   await view.render();
-  expect(view.container.textContent).toContain("Started Fix the build.");
+  expect(view.container.textContent).toContain(
+    "md[Started Fix the build, see [old](goat-thread://v1/gone).]",
+  );
 });
 
 it("asks a question in one card with lettered choices and sends the pick to its task", async () => {

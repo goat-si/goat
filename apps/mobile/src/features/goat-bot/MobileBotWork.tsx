@@ -430,33 +430,39 @@ export function MobileBotWork(props: {
                 </Pressable>
               ) : null}
               {/* Known tasks stay listed through a refresh and a failed one; only a read that
-                  succeeded with nothing in it says there are no tasks. */}
+                  succeeded with nothing in it says there are no tasks. Tasks the chat shows are
+                  listed from the conversation even before the list loads or when it fails. */}
               {tab === "Tasks" ? (
                 !enabled ? (
                   <Text className="text-foreground-muted">
                     Tasks are unavailable while {botName} is offline or unsupported.
                   </Text>
-                ) : threads.data === null ? (
+                ) : threads.data === null && (props.chatTasks ?? []).length === 0 ? (
                   threads.error ? null : (
                     <Text className="text-foreground-muted">Loading tasks…</Text>
                   )
                 ) : (
-                  <MobileBotTaskList
-                    botName={botName}
-                    work={work}
-                    rows={rows}
-                    chatTasks={props.chatTasks ?? []}
-                    onOpenTask={(id) => {
-                      setOpen(false);
-                      props.onOpenTask(id);
-                    }}
-                    onOpenThread={(thread) => {
-                      setOpen(false);
-                      props.onOpenThread(thread);
-                    }}
-                    onUpdate={(input) => void update(input)}
-                    failed={threads.error !== null && threads.error !== undefined}
-                  />
+                  <>
+                    {threads.data === null && !threads.error ? (
+                      <Text className="text-foreground-muted">Loading tasks…</Text>
+                    ) : null}
+                    <MobileBotTaskList
+                      botName={botName}
+                      work={work}
+                      rows={rows}
+                      chatTasks={props.chatTasks ?? []}
+                      onOpenTask={(id) => {
+                        setOpen(false);
+                        props.onOpenTask(id);
+                      }}
+                      onOpenThread={(thread) => {
+                        setOpen(false);
+                        props.onOpenThread(thread);
+                      }}
+                      onUpdate={(input) => void update(input)}
+                      failed={threads.error !== null && threads.error !== undefined}
+                    />
+                  </>
                 )
               ) : null}
               {tab === "Routines" &&

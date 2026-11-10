@@ -1,13 +1,19 @@
-import { hasThreadLinks, parseThreadLinkHref } from "@goat/shared/threadLinks";
+import type { ThreadId } from "@goat/contracts";
+import {
+  hasThreadLinks,
+  parseThreadLinkHref,
+  percentDecodedThreadLinkId,
+} from "@goat/shared/threadLinks";
 
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/u;
 
 /**
- * Bot Markdown without links to GOAT threads: a thread link keeps its words and loses the link, since
- * the threads a bot starts are reached from its home, not from the conversation. Web, pull request
- * and file links stay. Code spans and fenced blocks are left exactly as written.
+ * Bot Markdown without links to the threads its home lists: such a link keeps its words and loses
+ * the link, since those threads open from the home. Links to any other thread, and web, pull
+ * request and file links, stay. Code spans and fenced blocks are left exactly as written.
  */
-export function goatBotWithoutThreadLinks(markdown: string): string {
+export function goatBotWithoutThreadLinks(markdown: string, listed: ReadonlySet<ThreadId>): string {
+  if (listed.size === 0) return markdown;
   if (!hasThreadLinks(markdown)) return markdown;
   let fence: string | null = null;
   return markdown
@@ -23,12 +29,19 @@ export function goatBotWithoutThreadLinks(markdown: string): string {
         fence = opener;
         return line;
       }
-      return stripLine(line);
+      return stripLine(line, listed);
     })
     .join("\n");
 }
 
-function stripLine(line: string): string {
+function listedThread(href: string, listed: ReadonlySet<ThreadId>): boolean {
+  const id = parseThreadLinkHref(href);
+  if (id === null) return false;
+  const decoded = percentDecodedThreadLinkId(id);
+  return listed.has(id) || (decoded !== null && listed.has(decoded));
+}
+
+function stripLine(line: string, listed: ReadonlySet<ThreadId>): string {
   let out = "";
   let index = 0;
   while (index < line.length) {
@@ -46,7 +59,7 @@ function stripLine(line: string): string {
     if (char === "[") {
       const link = readLink(line, index);
       if (link !== null) {
-        out += parseThreadLinkHref(link.href) === null ? line.slice(index, link.end) : link.label;
+        out += listedThread(link.href, listed) ? link.label : line.slice(index, link.end);
         index = link.end;
         continue;
       }
@@ -76,11 +89,66 @@ function readLink(
     }
   }
   if (depth !== 0 || line[index + 1] !== "(") return null;
-  const close = line.indexOf(")", index + 2);
-  if (close === -1) return null;
-  const target = line.slice(index + 2, close).trim();
-  const href = target.startsWith("<")
-    ? target.slice(1, target.indexOf(">") === -1 ? undefined : target.indexOf(">"))
-    : (target.split(/\s+/u)[0] ?? "");
-  return { label: line.slice(start + 1, index), href, end: close + 1 };
+  const target = readTarget(line, index + 2);
+  return target === null ? null : { label: line.slice(start + 1, index), ...target };
+}
+
+const CLOSERS: Record<string, string> = { '"': '"', "'": "'", "(": ")" };
+
+/**
+ * An inline link's destination and optional title from `start` (just past "(") to its closing
+ * ")": an angle-bracketed destination may hold parentheses and spaces, a bare one balanced
+ * parentheses, and a title is quoted or parenthesised. Null when the link does not close.
+ */
+function readTarget(
+  line: string,
+  start: number,
+): { readonly href: string; readonly end: number } | null {
+  let index = start;
+  const skipSpace = () => {
+    while (line[index] === " " || line[index] === "\t") index += 1;
+  };
+  skipSpace();
+  let href = "";
+  if (line[index] === "<") {
+    index += 1;
+    for (; index < line.length && line[index] !== ">"; index += 1) {
+      if (line[index] === "<") return null;
+      if (line[index] === "\\") index += 1;
+      href += line[index] ?? "";
+    }
+    if (line[index] !== ">") return null;
+    index += 1;
+  } else {
+    let depth = 0;
+    for (; index < line.length; index += 1) {
+      const char = line[index];
+      if (char === " " || char === "\t") break;
+      if (char === "\\") {
+        href += line[index + 1] ?? "";
+        index += 1;
+        continue;
+      }
+      if (char === "(") depth += 1;
+      if (char === ")") {
+        if (depth === 0) break;
+        depth -= 1;
+      }
+      href += char;
+    }
+  }
+  skipSpace();
+  const opener = line[index];
+  const closer = opener === undefined ? undefined : CLOSERS[opener];
+  if (closer !== undefined && index > start) {
+    index += 1;
+    while (index < line.length && line[index] !== closer) {
+      if (line[index] === "\\") index += 1;
+      index += 1;
+    }
+    if (line[index] !== closer) return null;
+    index += 1;
+    skipSpace();
+  }
+  return line[index] === ")" ? { href, end: index + 1 } : null;
 }

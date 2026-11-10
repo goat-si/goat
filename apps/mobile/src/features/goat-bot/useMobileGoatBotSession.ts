@@ -407,6 +407,15 @@ export function useMobileGoatBotSession(
       (threads.data?.rows ?? []).flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
     [threads.data],
   );
+  const listedThreadIds = useMemo(
+    () =>
+      new Set(
+        (threads.data?.rows ?? []).flatMap((row) =>
+          row.kind === "coding" ? [row.threadId] : row.worker ? [row.worker.threadId] : [],
+        ),
+      ),
+    [threads.data],
+  );
   const connection = useAtomValue(
     environmentId === null ? NO_CONNECTION : environmentCatalog.stateAtom(environmentId),
   );
@@ -779,6 +788,8 @@ export function useMobileGoatBotSession(
   return {
     rows,
     supportsTaskThreads,
+    /** Threads the bot's home lists and opens; the chat drops its links to these only. */
+    listedThreadIds,
     /** The environment of the bot whose history is shown; before a move confirms, the old one. */
     historyEnvironmentId: target?.environmentId ?? null,
     /** The conversation shown: the member's own, else the main bot's. */

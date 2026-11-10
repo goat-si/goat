@@ -1,3 +1,4 @@
+import type { GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -210,6 +211,7 @@ async function render(
   taskId?: ChannelTaskId,
   taskCard?: ReactNode,
   turnsWaiting: readonly string[] = [],
+  chatTasks: ReadonlyArray<GoatBotTaskCard> = [],
 ) {
   if (!root) root = createRoot(container);
   await act(async () =>
@@ -219,6 +221,7 @@ async function render(
         taskId={taskId}
         taskCard={taskCard}
         turnsWaiting={turnsWaiting}
+        chatTasks={chatTasks}
         onOpenTask={() => {}}
         onOpenThread={state.openThread}
       />,
@@ -258,6 +261,31 @@ it("distinguishes task and routine loading, empty, offline, and retry states", a
   state.connected = false;
   await render();
   expect(container.textContent).toContain("offline");
+});
+
+it("lists the tasks the chat shows while the work list loads or after it failed", async () => {
+  reset();
+  const card: GoatBotTaskCard = {
+    key: "chat-task",
+    revision: 1,
+    updatedAt: "2026-11-07T10:00:00.000Z",
+    title: "Task from the chat",
+    statusLabel: "Done",
+    tone: "success",
+    sourceLabel: null,
+    summary: null,
+    attentionLabel: null,
+    pullRequests: [],
+    target: { kind: "none", label: "Task from the chat" },
+  };
+  await render(undefined, undefined, [], [card]);
+  await press("Work");
+  expect(container.textContent).toContain("Loading tasks");
+  expect(container.textContent).toContain("Earlier in chat");
+  Object.assign(state.task, { isPending: false, error: "failed" });
+  await render(undefined, undefined, [], [card]);
+  expect(container.textContent).toContain("Couldn't load tasks");
+  expect(container.textContent).toContain("Earlier in chat");
 });
 
 it("shows empty routines when live data is available while the subscription waits", async () => {
