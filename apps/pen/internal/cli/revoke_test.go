@@ -115,3 +115,22 @@ func TestRevokeCompromisedTakesAFingerprintPrefixAndSuggestsCommandsThatWork(t *
 		}
 	}
 }
+
+// A member can take a name that is another machine's fingerprint start. Revoking that string as
+// compromised must not pick either machine: it names both, with a command for each that works.
+func TestRevokeCompromisedRefusesANameThatIsAlsoAnotherMachinesFingerprintStart(t *testing.T) {
+	key := func(b byte) string { return ident.B64.EncodeToString(bytes.Repeat([]byte{b}, 32)) }
+	target := mesh.Member{Name: "c", NodeID: "targetnodeidaaaaaaaaaaaaaa", NoisePub: key(1), SignPub: key(3)}
+	fp := fingerprintOf(target.NoisePub)
+	squatter := mesh.Member{Name: strings.ToLower(fp[:4] + fp[5:9]), NodeID: "squatternodeidaaaaaaaaaaaa", NoisePub: key(2), SignPub: key(4)}
+	ls := daemon.LsReply{Members: []daemon.LsMember{{Member: target}, {Member: squatter}}}
+	m, err := resolveCompromised(ls, squatter.Name)
+	if err == nil {
+		t.Fatalf("%q resolved to %s, though it names one machine and starts another's fingerprint", squatter.Name, m.NodeID)
+	}
+	for _, id := range []string{target.NodeID, squatter.NodeID} {
+		if !strings.Contains(err.Error(), "pen revoke --compromised "+normalFingerprint(fingerprintOf(map[string]string{target.NodeID: target.NoisePub, squatter.NodeID: squatter.NoisePub}[id]))) {
+			t.Fatalf("the refusal does not offer a command for %s: %v", id, err)
+		}
+	}
+}
