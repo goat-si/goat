@@ -48,7 +48,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import { loadUrlAllowingRedirects } from "./loadUrlAllowingRedirects.ts";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -1889,8 +1888,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       );
       return;
     }
-    yield* loadUrlAllowingRedirects(wc, url, (load) =>
-      attemptPromise({ operation: "navigate.loadURL", tabId, webContentsId: wc.id }, load),
+    yield* attemptPromise({ operation: "navigate.loadURL", tabId, webContentsId: wc.id }, () =>
+      wc.loadURL(url),
     );
   });
 
