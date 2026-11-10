@@ -132,8 +132,28 @@ it under 4 MiB, with the previous part in `daemon.log.1`.
 
 Install and join each box on its first boot with `--login --yes` or `--join`. Never copy `~/.pen`
 into an image or template: every box made from it would share one identity, and they would keep
-pushing each other off the relays. To bring Pen back after a box sleeps or restarts, run `pen up`
-from the box's startup script only when `~/.pen/mesh.json` exists.
+pushing each other off the relays.
+
+On a box that already belongs to a mesh, run `sudo loginctl enable-linger $USER` so Pen's user
+service keeps running without a login, and record the box's machine id with
+`cat /etc/machine-id > ~/.pen/box-machine-id`. A startup script like this one (on boxes.dev, the
+project's startup script) then brings Pen back after the box sleeps or restarts, never starts a new
+mesh, and stops a box cloned from this one from reusing its identity:
+
+```sh
+#!/bin/sh
+PEN_BIN="$HOME/.local/bin/pen"
+PEN_DIR="$HOME/.pen"
+[ -f "$PEN_DIR/mesh.json" ] && [ -x "$PEN_BIN" ] || exit 0
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+if [ "$(cat /etc/machine-id 2>/dev/null)" != "$(cat "$PEN_DIR/box-machine-id" 2>/dev/null)" ]; then
+	systemctl --user disable --now pen >/dev/null 2>&1
+	"$PEN_BIN" down >/dev/null 2>&1
+	echo "pen: this box was cloned; remove ~/.pen and run install.sh --login --yes" >&2
+	exit 0
+fi
+systemctl --user start pen || "$PEN_BIN" up
+```
 
 ## Not supported
 
