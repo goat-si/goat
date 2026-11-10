@@ -187,3 +187,32 @@ describe("iMessage sender", () => {
     }),
   );
 });
+
+describe("tables in iMessage replies", () => {
+  it.effect("are sent as a list, since Messages draws no tables", () =>
+    Effect.gen(function* () {
+      const sent: Array<string> = [];
+      const transport = makeImessageTransport({
+        connectionId: "imessage-000000000001",
+        sender: {
+          sendText: async ({ text }) => {
+            sent.push(text);
+            return { acceptedAt: "2026-10-19T00:00:00.000Z" };
+          },
+        },
+        isActive: () => Effect.succeed(true),
+      });
+      yield* transport.send({
+        deliveryId: "d" as never,
+        kind: "receipt" as const,
+        text: "Results:\n| Name | Count |\n|---|---|\n| docs | 20 |\n| `internals` | 44 |",
+        destination: {
+          kind: "imessage" as const,
+          connectionId: "imessage-000000000001",
+          chatGuid: "guid",
+        },
+      });
+      expect(sent).toEqual(["Results:\n• docs (Count: 20)\n• `internals` (Count: 44)"]);
+    }),
+  );
+});

@@ -7,6 +7,7 @@ import { ChannelGatewayError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import type { ChannelTransport } from "../ChannelTransport.ts";
+import { markdownTablesToLists } from "../channelTables.ts";
 
 export type ImessageSendFailure = {
   readonly outcome: "not_sent" | "unknown";
@@ -118,7 +119,10 @@ export function makeImessageTransport(input: {
         if (!(yield* input.isActive()))
           return yield* new ChannelGatewayError({ reason: "adapter_unavailable" });
         const result = yield* Effect.promise(() =>
-          input.sender.sendText({ chatGuid: target.chatGuid, text: message.text }),
+          input.sender.sendText({
+            chatGuid: target.chatGuid,
+            text: markdownTablesToLists(message.text, { bullet: "•", boldFirst: false }),
+          }),
         );
         if ("outcome" in result) {
           const code =
