@@ -47,12 +47,31 @@ type live struct {
 	stallNode string
 	stallSID  uint32
 	stalled   chan struct{}
+	// authed[nodeID] receives once per uplink the relay accepted (Hooks.OnUplink).
+	t      *testing.T
+	authed map[string]chan struct{}
+}
+
+// failsafe bounds a wait for an event the test drives, so a missing event fails with a message
+// instead of hanging; no outcome depends on it.
+const failsafe = 30 * time.Second
+
+func (lv *live) authedCh(nodeID string) chan struct{} {
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	ch := lv.authed[nodeID]
+	if ch == nil {
+		ch = make(chan struct{}, 1024)
+		lv.authed[nodeID] = ch
+	}
+	return ch
 }
 
 func newLive(t *testing.T, l Limits) *live {
 	s := New(l)
-	lv := &live{s: s, done: make(chan struct{}, 1<<16), stalled: make(chan struct{}, 1)}
+	lv := &live{s: s, done: make(chan struct{}, 1<<16), stalled: make(chan struct{}, 1), t: t, authed: map[string]chan struct{}{}}
 	s.Hooks.OnSocketDone = func(string, string) { lv.done <- struct{}{} }
+	s.Hooks.OnUplink = func(nodeID string) { lv.authedCh(nodeID) <- struct{}{} }
 	s.Hooks.FailWrite = func(nodeID, role string, sid uint32) error {
 		lv.mu.Lock()
 		hit := role == "client" && nodeID == lv.stallNode && sid == lv.stallSID
@@ -138,7 +157,28 @@ func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
 			}
 		}
 	}()
+	if good {
+		// Clients dialed before the relay accepted this uplink would reach no uplink (4404) or
+		// the one it replaces.
+		select {
+		case <-lv.authedCh(id.NodeID()):
+		case <-time.After(failsafe):
+			lv.t.Fatalf("the relay did not accept the uplink of %s", id.NodeID())
+		}
+	}
 	return n
+}
+
+// nextOpen is the sid of the next OPEN this uplink receives.
+func (n *liveNode) nextOpen(t *testing.T) uint32 {
+	t.Helper()
+	select {
+	case sid := <-n.opened:
+		return sid
+	case <-time.After(failsafe):
+		t.Fatalf("no OPEN reached the uplink of %s", n.id.NodeID())
+		return 0
+	}
 }
 
 func (n *liveNode) someSID(r *mrand.Rand) (uint32, bool) {
@@ -272,14 +312,14 @@ func TestAWrappedSessionIDSkipsTheLiveOnes(t *testing.T) {
 	rm := lv.s.rooms[id.NodeID()]
 	lv.s.mu.Unlock()
 	first := lv.dial("/v1/client/" + id.NodeID())
-	if got := <-n.opened; got != 1 {
+	if got := n.nextOpen(t); got != 1 {
 		t.Fatalf("first session got sid %d, want 1", got)
 	}
 	rm.mu.Lock()
 	rm.sid = math.MaxUint32
 	rm.mu.Unlock()
 	lv.dial("/v1/client/" + id.NodeID())
-	if got := <-n.opened; got != 2 {
+	if got := n.nextOpen(t); got != 2 {
 		t.Fatalf("after the wrap the new session got sid %d, want 2 (1 is live)", got)
 	}
 	rm.mu.Lock()
@@ -303,19 +343,19 @@ func prelude(t *testing.T, lv *live, ids []*ident.Identity) *liveNode {
 	}
 	old := lv.uplink(ids[0], true)
 	orphan := lv.dial("/v1/client/" + ids[0].NodeID())
-	<-old.opened
+	old.nextOpen(t)
 	n := lv.uplink(ids[0], true) // replaces old (4409); orphan ends 4404
 	_ = orphan
 	for range 9 { // the ninth pending session ends the oldest 4429
 		lv.dial("/v1/client/" + ids[0].NodeID())
-		<-n.opened
+		n.nextOpen(t)
 	}
 	twice := lv.dial("/v1/client/" + ids[0].NodeID())
-	<-n.opened
+	n.nextOpen(t)
 	twice.Write(ctx, websocket.MessageBinary, []byte("first"))
 	twice.Write(ctx, websocket.MessageBinary, []byte("second")) // 4408
 	closed := lv.dial("/v1/client/" + ids[0].NodeID())
-	sid := <-n.opened
+	sid := n.nextOpen(t)
 	n.ws.Write(ctx, websocket.MessageBinary, wire.CloseFrame(sid, 1000).Encode())
 	if _, _, err := closed.Read(ctx); err == nil {
 		t.Fatal("prelude: the session the node closed is still open")
@@ -323,11 +363,15 @@ func prelude(t *testing.T, lv *live, ids []*ident.Identity) *liveNode {
 	// A client whose write fails as a stalled one's would: the hook fails it, so no kernel buffer
 	// or timer decides whether this path is taken.
 	lv.dial("/v1/client/" + ids[0].NodeID())
-	sid = <-n.opened
+	sid = n.nextOpen(t)
 	lv.mu.Lock()
 	lv.stallNode, lv.stallSID = ids[0].NodeID(), sid
 	lv.mu.Unlock()
 	n.ws.Write(ctx, websocket.MessageBinary, wire.Frame{Type: wire.FrameData, SID: sid, Payload: []byte("to a stalled client")}.Encode())
-	<-lv.stalled
+	select {
+	case <-lv.stalled:
+	case <-time.After(failsafe):
+		t.Fatal("prelude: the stalled client's write was never attempted")
+	}
 	return n
 }
