@@ -699,3 +699,35 @@ func TestACorruptVersionsFileIsReadAsEmpty(t *testing.T) {
 		t.Fatalf("versions %v, %v; want an empty map and no error", v, err)
 	}
 }
+
+func TestAVersionsFileHoldingNullDoesNotCrashTheFirstHello(t *testing.T) {
+	st := shortDir(t)
+	if err := os.WriteFile(st.Path(VersionsFile), []byte("null"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v, err := loadVersions(st)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	d := &Daemon{st: st, versions: v}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("a versions.json holding null made the first sync hello panic: %v", r)
+		}
+	}()
+	d.helloFrom([]byte("0123456789abcdef0123456789abcdef"))(mesh.Version)
+}
+
+func TestACompromisedRevokeThatDropsTheBindingStillForgetsTheKey(t *testing.T) {
+	st := shortDir(t)
+	d := &Daemon{st: st, nodeID: "self", forgets: &forgetBook{st: st, kick: make(chan struct{}, 1)}}
+	bound := &mesh.Account{LoginURL: "https://login.example", Sub: testSub}
+	old := &mesh.View{Account: bound, Revoked: map[string]mesh.Member{}}
+	// The stolen laptop signed the binding, so revoking it as compromised drops the binding too.
+	v := &mesh.View{Revoked: map[string]mesh.Member{"laptopSignPub": {NodeID: "laptop"}}}
+	d.forgetRevoked(old, v)
+	got := d.forgets.pending()
+	if len(got) != 1 || got[0].NodeID != "laptop" || got[0].LoginURL != bound.LoginURL {
+		t.Fatalf("forgets %+v; want the compromised laptop forgotten at %s", got, bound.LoginURL)
+	}
+}

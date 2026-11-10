@@ -87,8 +87,8 @@ func (b *forgetBook) done(f PendingForget) {
 
 // answered reports a final reply: success, or a refusal that can never succeed (400 malformed,
 // 404 gone, 409 conflict). Everything else is retried with the backoff: 400 "stale" (the ts was
-// outside the service's window, so a later try with a fresh ts can pass), 401 (the signing node
-// not registered yet), 403, 429, 5xx and network errors.
+// outside the service's window, so a later try with a fresh ts can pass), 401, 403 (the signing
+// node not registered under that account yet), 429, 5xx and network errors.
 func answered(err error) bool {
 	if err == nil {
 		return true

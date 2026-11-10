@@ -307,8 +307,9 @@ func Compute(meshID string, recs []*Record) *View {
 	if acc := kept(accounts); len(acc) > 0 {
 		v.Account, _ = accountOf(&order[acc[len(acc)-1]].B)
 	}
-	// Locked unless an unlock has every lock in its past.
-	on := kept(locksOn)
+	// Locked unless an unlock has every lock in its past. A compromised key's locks keep effect
+	// (revoking a stolen machine must not reopen auto-admission); only its unlocks are dropped.
+	on := locksOn
 	if len(on) > 0 {
 		v.Locked = true
 		for _, off := range kept(locksOff) {

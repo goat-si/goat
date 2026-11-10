@@ -311,9 +311,10 @@ in sync `hello` as `"pen":"1.1"` and refuses otherwise); v1.0 nodes reject those
 - `account`: `{"loginUrl","loginKey":{"kid","pub"},"sub"}` or `{"sub":null}` (unbind). The binding is the last `account`
   record in canonical order whose signer was not revoked as compromised (directly or as an admit of a compromised key);
   a plain `leave` or `revoke` keeps the signer's binding in effect. `{"sub":null}` means unbound.
-- `lock`: `{"on":true|false}`. The mesh is locked if some effective `lock` `on` record is not in the past of an effective
-  `lock` `off` record: an `off` counts only when every `on` is in its past. As for `account`, records of keys revoked as
-  compromised lose effect; a plain leave or revoke does not unlock the mesh.
+- `lock`: `{"on":true|false}`. The mesh is locked if some `lock` `on` record is not in the past of an effective
+  `lock` `off` record: an `off` counts only when every `on` is in its past. An `off` signed by a key revoked as
+  compromised loses effect; an `on` keeps it, whoever signed it, so revoking a stolen machine never unlocks the mesh (a
+  stray `on` costs nothing: any member's later `off` clears it). A plain leave or revoke does not unlock the mesh.
 - `admit` may carry `"via":"google"`, `"email"` (copied from the assertion the admitting member verified) and `"assertion"`
   (base64url SHA-256 of that assertion's body). Without `via` it was an invite. The admit's body stays within 2048 bytes;
   an email longer than 254 bytes is refused, and an admitting member lists at most 8 heads in `prev`.

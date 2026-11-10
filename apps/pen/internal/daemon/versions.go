@@ -27,6 +27,9 @@ func loadVersions(st *state.Store) (map[string]string, error) {
 		}
 		return nil, err
 	}
+	if v == nil {
+		return map[string]string{}, nil
+	}
 	return v, nil
 }
 

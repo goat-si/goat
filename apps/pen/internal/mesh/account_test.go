@@ -97,7 +97,7 @@ func TestTheLastAccountRecordBindsAndANullSubUnbinds(t *testing.T) {
 	}
 }
 
-func TestACompromisedSignersBindingAndLockLoseEffectAndAPlainLeaveKeepsThem(t *testing.T) {
+func TestACompromisedSignersBindingLosesEffectItsLockStaysAndAPlainLeaveKeepsBoth(t *testing.T) {
 	a, c, d := detID(1), detID(2), detID(3)
 	b, found := newMesh(t, a)
 	ac := b.admit(a, c, found)
@@ -108,9 +108,41 @@ func TestACompromisedSignersBindingAndLockLoseEffectAndAPlainLeaveKeepsThem(t *t
 	if v := b.view(); sub(v) != "1001" || !v.Locked {
 		t.Fatalf("after c left plainly: sub %q locked %v, want both kept", sub(v), v.Locked)
 	}
-	b.sign(d, TypeRevoke, []*Record{leave}, Fields{Subjects: []string{pub(c)}, Compromised: true})
-	if v := b.view(); v.Account != nil || v.Locked {
-		t.Fatalf("c revoked as compromised: account %+v locked %v, want neither", v.Account, v.Locked)
+	revoke := b.sign(d, TypeRevoke, []*Record{leave}, Fields{Subjects: []string{pub(c)}, Compromised: true})
+	// A stolen machine's lock must not be undone by revoking it: that would reopen auto-admission.
+	if v := b.view(); v.Account != nil || !v.Locked {
+		t.Fatalf("c revoked as compromised: account %+v locked %v, want unbound and still locked", v.Account, v.Locked)
+	}
+	b.lock(d, false, revoke)
+	if b.view().Locked {
+		t.Fatal("an honest unlock with the compromised lock in its past did not unlock")
+	}
+}
+
+func TestRevokingTheLockSignerAsCompromisedKeepsABoundMeshLocked(t *testing.T) {
+	a, c := detID(1), detID(2)
+	b, found := newMesh(t, a)
+	adm := b.admit(a, c, found)
+	bind := b.bind(a, "1001", adm)
+	lock := b.lock(c, true, bind)
+	b.sign(a, TypeRevoke, []*Record{lock}, Fields{Subjects: []string{pub(c)}, Compromised: true})
+	if v := b.view(); sub(v) != "1001" || !v.Locked {
+		t.Fatalf("after revoking the lock signer as compromised: sub %q locked %v; want bound and locked", sub(v), v.Locked)
+	}
+}
+
+func TestACompromisedSignersUnlockLosesEffect(t *testing.T) {
+	a, c := detID(1), detID(2)
+	b, found := newMesh(t, a)
+	adm := b.admit(a, c, found)
+	on := b.lock(a, true, adm)
+	off := b.lock(c, false, on)
+	if b.view().Locked {
+		t.Fatal("setup: c's unlock did not unlock")
+	}
+	b.sign(a, TypeRevoke, []*Record{off}, Fields{Subjects: []string{pub(c)}, Compromised: true})
+	if !b.view().Locked {
+		t.Fatal("an unlock signed by a key revoked as compromised still counts")
 	}
 }
 
@@ -202,7 +234,7 @@ func TestUnknownMembersInsideACardOrLoginKeyAreIgnored(t *testing.T) {
 	}
 }
 
-func TestASignerRevokedOnlyAsAnAdmitOfACompromisedKeyLosesItsBindingAndLock(t *testing.T) {
+func TestASignerRevokedOnlyAsAnAdmitOfACompromisedKeyLosesItsBindingButNotItsLock(t *testing.T) {
 	a, c, d := detID(1), detID(2), detID(3)
 	b, found := newMesh(t, a)
 	ac := b.admit(a, c, found)
@@ -217,7 +249,7 @@ func TestASignerRevokedOnlyAsAnAdmitOfACompromisedKeyLosesItsBindingAndLock(t *t
 	if isMember(v, d) {
 		t.Fatal("d, admitted by the compromised c, is still a member")
 	}
-	if v.Account != nil || v.Locked {
-		t.Fatalf("d's account %+v and lock %v kept effect after c was revoked as compromised", v.Account, v.Locked)
+	if v.Account != nil || !v.Locked {
+		t.Fatalf("after c was revoked as compromised: d's account %+v, locked %v; want unbound and still locked", v.Account, v.Locked)
 	}
 }

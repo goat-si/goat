@@ -184,9 +184,9 @@ func (d *Daemon) deny(arg string) (Pending, error) {
 	return p, d.pending.remove(p, true, d.now())
 }
 
-// requireV11 syncs with every member and refuses unless each announced pen 1.1 in a hello of this
-// round: an announcement lasts only for its session, so a member that came back older counts as
-// older (contract "Mesh records": v1.0 nodes reject account and lock records and would stall).
+// requireV11 syncs with every member and refuses unless each announced pen 1.1 in its latest hello
+// (kept in versions.json; a member that came back older announces that and counts as older).
+// Contract "Mesh records": v1.0 nodes reject account and lock records and would stall.
 func (d *Daemon) requireV11(ctx context.Context, what string) error {
 	d.pushAll(ctx)
 	v := d.view()
@@ -239,9 +239,16 @@ func (d *Daemon) setLock(ctx context.Context, on bool) ([]PushResult, error) {
 }
 
 // forgetRevoked tells the login service to drop keys this view revokes (contract "Login service").
+// A compromised revoke of the binding's signer drops the binding itself, so the old one is used.
 func (d *Daemon) forgetRevoked(old, v *mesh.View) {
+	if old == nil {
+		return
+	}
 	b, ok := binding(v)
-	if !ok || old == nil {
+	if !ok {
+		b, ok = binding(old)
+	}
+	if !ok {
 		return
 	}
 	var gone []string
