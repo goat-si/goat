@@ -1,4 +1,5 @@
 import {
+  BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES,
   botArtifactName,
   botArtifactOpenMessage,
   botArtifactSizeLabel,
@@ -100,7 +101,7 @@ function FileViewer({
           setView({ kind: "message", message: botArtifactOpenMessage(name, result, botName) });
           return;
         }
-        const show = botArtifactViewKind(result.mimeType, file.relativePath);
+        const show = botArtifactViewKind(result.mimeType, file.relativePath, result.size);
         if (show === "image")
           imageUrl = URL.createObjectURL(new Blob([result.bytes], { type: result.mimeType }));
         setView({
@@ -182,7 +183,12 @@ function FileViewer({
             <img src={view.content} alt={name} className="max-w-full rounded-lg" />
           ) : (
             <div className="space-y-2 text-sm">
-              <p className="text-muted-foreground">This file can't be shown here.</p>
+              <p className="text-muted-foreground">
+                {view.bytes.length > BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES &&
+                !view.mimeType.startsWith("image/")
+                  ? "This file is too long to show here."
+                  : "This file can't be shown here."}
+              </p>
               <Button
                 size="sm"
                 variant="outline"

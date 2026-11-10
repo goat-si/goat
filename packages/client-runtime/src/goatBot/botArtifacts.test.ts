@@ -298,4 +298,9 @@ describe("botArtifactViewKind", () => {
     expect(botArtifactViewKind("image/png", "chart.png")).toBe("image");
     expect(botArtifactViewKind("application/pdf", "report.pdf")).toBe("download");
   });
+
+  it("offers text too long to show as a download", () => {
+    expect(botArtifactViewKind("text/markdown", "big.md", 2 * 1024 * 1024)).toBe("download");
+    expect(botArtifactViewKind("image/png", "big.png", 2 * 1024 * 1024)).toBe("image");
+  });
 });

@@ -95,16 +95,20 @@ export const botArtifactName = (relativePath: string) =>
   relativePath.split("/").at(-1) ?? relativePath;
 
 const TEXT_TYPES = new Set(["application/json", "text/csv"]);
+/** Larger text stays a download: decoding and rendering it would stall the chat. */
+export const BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES = 1024 * 1024;
 
 /** How the Library shows a file: rendered markdown, plain text, an image, or a download. */
 export function botArtifactViewKind(
   mimeType: string,
   relativePath: string,
+  size = 0,
 ): "markdown" | "text" | "image" | "download" {
   const type = mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (type.startsWith("image/")) return "image";
+  if (size > BOT_ARTIFACT_MAX_SHOWN_TEXT_BYTES) return "download";
   if (type === "text/markdown" || /\.(md|markdown)$/i.test(relativePath)) return "markdown";
   if (type.startsWith("text/") || TEXT_TYPES.has(type)) return "text";
-  if (type.startsWith("image/")) return "image";
   return "download";
 }
 
