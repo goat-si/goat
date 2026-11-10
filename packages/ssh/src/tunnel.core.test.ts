@@ -200,10 +200,7 @@ describe("ssh tunnel scripts", () => {
       script,
       'GOAT_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$GOAT_ARCHIVE_VERSION"',
     );
-    assert.include(
-      script,
-      'GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.tar.gz"',
-    );
+    assert.include(script, 'GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.tar.gz"');
     assert.include(script, "SHA256SUMS");
     assert.include(script, 'exec "$GOAT_RUNTIME_DIR/goat" "$@"');
     assert.notInclude(script, "npx");
