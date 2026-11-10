@@ -3,7 +3,7 @@ import { DurableObject } from "cloudflare:workers";
 import { signingKeyFromSeed } from "@goat/pen-protocol/identity";
 import { base64url, fromBase64url, loginKid } from "@goat/pen-protocol/login";
 import { forget, keys, register, start, token } from "./api.ts";
-import type { Context, LoginSigner } from "./context.ts";
+import { type Context, type Limits, type LoginSigner, readLimits } from "./context.ts";
 import type { Env } from "./env.ts";
 import { CITY_HEADER, COUNTRY_HEADER, json, SOURCE_HEADER } from "./http.ts";
 import { Store } from "./store.ts";
@@ -38,11 +38,14 @@ const ROUTES: Record<string, Handler> = {
 export class Login extends DurableObject<Env> {
   private readonly store: Store;
   private lastPrune = 0;
+  private readonly limits: Limits;
   private signer: Promise<LoginSigner> | null = null;
+  private cookieKey: Promise<CryptoKey> | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.store = new Store(ctx.storage.sql);
+    this.store = new Store(ctx.storage);
+    this.limits = readLimits(env);
   }
 
   private loginKey(): Promise<LoginSigner> {
@@ -51,6 +54,32 @@ export class Login extends DurableObject<Env> {
       return { key, public: { kid: await loginKid(key.signPub), pub: base64url(key.signPub) } };
     })();
     return this.signer;
+  }
+
+  /** HMAC key for session cookies, derived from the login seed so no further secret is needed. */
+  private sessionKey(): Promise<CryptoKey> {
+    this.cookieKey ??= (async () => {
+      const seed = await crypto.subtle.importKey(
+        "raw",
+        fromBase64url(this.env.LOGIN_SIGNING_KEY),
+        "HKDF",
+        false,
+        ["deriveKey"],
+      );
+      return crypto.subtle.deriveKey(
+        {
+          name: "HKDF",
+          hash: "SHA-256",
+          salt: new Uint8Array(0),
+          info: new TextEncoder().encode("pen-login/1 session cookie"),
+        },
+        seed,
+        { name: "HMAC", hash: "SHA-256", length: 256 },
+        false,
+        ["sign", "verify"],
+      );
+    })();
+    return this.cookieKey;
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -72,6 +101,8 @@ export class Login extends DurableObject<Env> {
       country: request.headers.get(COUNTRY_HEADER) ?? "",
       city: request.headers.get(CITY_HEADER) ?? "",
       loginKey: () => this.loginKey(),
+      sessionKey: () => this.sessionKey(),
+      limits: this.limits,
     };
     return handler(ctx, request);
   }

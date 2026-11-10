@@ -52,12 +52,16 @@ export interface FakeIssuer {
   /** The query of the last authorize request. */
   lastAuthorize: URLSearchParams | null;
   jwksFetches: number;
+  /** Let an authorization code be redeemed more than once, as a careless provider might. */
+  allowCodeReuse: boolean;
+  /** Answer the JWKS endpoint with this status and body instead of the keys. */
+  jwksOverride: { status: number; body: string } | null;
   close(): Promise<void>;
 }
 
 const base64url = (data: Buffer | string) => Buffer.from(data).toString("base64url");
 
-function sign(claims: Record<string, unknown>, key: SigningKeyPair): string {
+export function signIdToken(claims: Record<string, unknown>, key: SigningKeyPair): string {
   const header = base64url(JSON.stringify({ alg: "RS256", kid: key.kid, typ: "JWT" }));
   const payload = base64url(JSON.stringify(claims));
   const signature = NodeCrypto.sign("sha256", Buffer.from(`${header}.${payload}`), key.privateKey);
@@ -89,6 +93,8 @@ export async function startFakeIssuer(): Promise<FakeIssuer> {
     next: {},
     lastAuthorize: null,
     jwksFetches: 0,
+    allowCodeReuse: false,
+    jwksOverride: null,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
   const json = (response: NodeHttp.ServerResponse, status: number, body: unknown) => {
@@ -97,6 +103,20 @@ export async function startFakeIssuer(): Promise<FakeIssuer> {
   };
   server.on("request", (request, response) => {
     void (async () => {
+      try {
+        await handle(request, response);
+      } catch (cause) {
+        // A fixture bug answers 500 at once instead of leaving the Worker's request open.
+        if (!response.headersSent) response.writeHead(500, { "content-type": "text/plain" });
+        response.end(String(cause));
+      }
+    })();
+  });
+  async function handle(
+    request: NodeHttp.IncomingMessage,
+    response: NodeHttp.ServerResponse,
+  ): Promise<unknown> {
+    {
       const requestUrl = new URL(request.url ?? "/", url);
       if (requestUrl.pathname === "/.well-known/openid-configuration") {
         return json(response, 200, {
@@ -108,6 +128,10 @@ export async function startFakeIssuer(): Promise<FakeIssuer> {
       }
       if (requestUrl.pathname === "/jwks") {
         issuer.jwksFetches++;
+        if (issuer.jwksOverride) {
+          response.writeHead(issuer.jwksOverride.status, { "content-type": "application/json" });
+          return response.end(issuer.jwksOverride.body);
+        }
         return json(response, 200, { keys: issuer.published.map((key) => key.jwk) });
       }
       if (requestUrl.pathname === "/authorize") {
@@ -137,7 +161,7 @@ export async function startFakeIssuer(): Promise<FakeIssuer> {
       if (requestUrl.pathname === "/token" && request.method === "POST") {
         const form = new URLSearchParams(await readBody(request));
         const grant = grants.get(form.get("code") ?? "");
-        grants.delete(form.get("code") ?? "");
+        if (!issuer.allowCodeReuse) grants.delete(form.get("code") ?? "");
         const verifier = form.get("code_verifier") ?? "";
         const challenge = base64url(NodeCrypto.createHash("sha256").update(verifier).digest());
         if (
@@ -165,13 +189,13 @@ export async function startFakeIssuer(): Promise<FakeIssuer> {
         const signer = o.signer ?? issuer.published[0];
         if (!signer) return json(response, 500, { error: "no key" });
         return json(response, 200, {
-          id_token: sign(claims, signer),
+          id_token: signIdToken(claims, signer),
           access_token: "unused",
           token_type: "Bearer",
         });
       }
       json(response, 404, { error: "not_found" });
-    })();
-  });
+    }
+  }
   return issuer;
 }

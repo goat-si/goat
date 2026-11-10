@@ -3,13 +3,10 @@ import { base64url, fromBase64url } from "@goat/pen-protocol/login";
 import { sha256 } from "@goat/pen-protocol/identity";
 import type { Env } from "./env.ts";
 import { isLocalHost } from "./http.ts";
-import type { Store } from "./store.ts";
 
 const GOOGLE_DISCOVERY = "https://accounts.google.com/.well-known/openid-configuration";
 const GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"];
 const DISCOVERY_TTL_MS = 3_600_000;
-const JWKS_TTL_MS = 3_600_000;
-const UNKNOWN_KID_REFETCH_MS = 300_000;
 
 export interface Provider {
   readonly discovery: string;
@@ -122,31 +119,67 @@ interface Jwk {
   readonly e?: string;
 }
 
-async function fetchJwks(store: Store, url: string, now: number): Promise<Array<Jwk>> {
-  const response = await fetch(url);
-  if (!response.ok) throw new OidcError("jwks");
-  const body = await response.text();
-  store.saveJwks(url, body, now);
-  return parseJwks(body);
+/** Where verified keys are cached between requests. */
+export interface JwksCache {
+  jwks(url: string): { body: string; fetched_at: number } | null;
+  saveJwks(url: string, body: string, at: number): void;
 }
 
-function parseJwks(body: string): Array<Jwk> {
-  const value = JSON.parse(body) as { keys?: unknown };
-  return Array.isArray(value.keys) ? (value.keys as Array<Jwk>) : [];
+export interface JwksTiming {
+  /** How long a fetched key set is used before it is fetched again. */
+  readonly ttlMs: number;
+  /** Least time between fetches made for an unknown kid. */
+  readonly refetchMs: number;
 }
 
-/** The key for kid: cached for an hour, refetched for an unknown kid at most once per 5 minutes. */
-async function jwkFor(store: Store, url: string, kid: string, now: number): Promise<Jwk | null> {
-  const cached = store.jwks(url);
-  let keys =
-    cached && now - cached.fetched_at < JWKS_TTL_MS
-      ? parseJwks(cached.body)
-      : await fetchJwks(store, url, now);
-  let key = keys.find((candidate) => candidate.kid === kid) ?? null;
-  const fetchedAt = store.jwks(url)?.fetched_at ?? now;
-  if (!key && now - fetchedAt >= UNKNOWN_KID_REFETCH_MS) {
-    keys = await fetchJwks(store, url, now);
-    key = keys.find((candidate) => candidate.kid === kid) ?? null;
+const DEFAULT_TIMING: JwksTiming = { ttlMs: 3_600_000, refetchMs: 300_000 };
+
+/** A key set, or null when the body is not one. */
+function parseJwks(body: string): Array<Jwk> | null {
+  try {
+    const value = JSON.parse(body) as { keys?: unknown };
+    return Array.isArray(value.keys) ? (value.keys as Array<Jwk>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Last fetch attempt per JWKS URL, kept in memory: a failing endpoint is not retried on every request. */
+const attempts = new Map<string, number>();
+
+/** Fetches and parses the key set and saves it only when it parsed; null on any failure. */
+async function refresh(cache: JwksCache, url: string, now: number): Promise<Array<Jwk> | null> {
+  attempts.set(url, now);
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const body = await response.text();
+    const keys = parseJwks(body);
+    if (keys) cache.saveJwks(url, body, now);
+    return keys;
+  } catch {
+    return null;
+  }
+}
+
+/** The key for kid: a stale or missing set is refreshed, an unknown kid refetches at most once per refetch window. */
+async function jwkFor(
+  cache: JwksCache,
+  url: string,
+  kid: string,
+  now: number,
+  timing: JwksTiming,
+): Promise<Jwk | null> {
+  const cached = cache.jwks(url);
+  let keys = cached ? parseJwks(cached.body) : null;
+  const lastTry = Math.max(cached?.fetched_at ?? 0, attempts.get(url) ?? 0);
+  if (!keys || !cached || now - cached.fetched_at >= timing.ttlMs)
+    keys = (await refresh(cache, url, now)) ?? keys;
+  let key = keys?.find((candidate) => candidate.kid === kid) ?? null;
+  const triedNow = attempts.get(url) === now;
+  if (!key && !triedNow && now - lastTry >= timing.refetchMs) {
+    keys = (await refresh(cache, url, now)) ?? keys;
+    key = keys?.find((candidate) => candidate.kid === kid) ?? null;
   }
   return key;
 }
@@ -167,11 +200,12 @@ function decodeJson(part: string): Record<string, unknown> {
 
 /** Verifies an RS256 id_token and returns the account it names. */
 export async function verifyIdToken(
-  store: Store,
+  cache: JwksCache,
   found: Endpoints,
   target: Provider,
   idToken: string,
   expected: { nonce: string; now: number },
+  timing: JwksTiming = DEFAULT_TIMING,
 ): Promise<Identity> {
   const parts = idToken.split(".");
   if (parts.length !== 3) throw new OidcError("token");
@@ -187,7 +221,7 @@ export async function verifyIdToken(
     throw new OidcError("token");
   }
   if (header.alg !== "RS256" || typeof header.kid !== "string") throw new OidcError("token");
-  const jwk = await jwkFor(store, found.jwks, header.kid, expected.now);
+  const jwk = await jwkFor(cache, found.jwks, header.kid, expected.now, timing);
   if (!jwk || jwk.kty !== "RSA" || !jwk.n || !jwk.e) throw new OidcError("signature");
   const key = await crypto.subtle.importKey(
     "jwk",
