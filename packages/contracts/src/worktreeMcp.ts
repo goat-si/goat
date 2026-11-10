@@ -229,7 +229,7 @@ export const WorktreeMcpCleanupResult = Schema.Struct({
   remaining: Schema.optional(
     NonNegativeInt.annotate({
       description:
-        "Eligible worktrees this sweep left for a later call when it reached its time limit. Call again until 0.",
+        "Worktrees this sweep did not check because it reached its time limit; they are in neither removed nor kept. Call again while it is above 0 and the last call removed something.",
     }),
   ),
   host: resultHost,
