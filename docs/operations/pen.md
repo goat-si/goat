@@ -125,8 +125,12 @@ For the operator's own mesh (mac-studio, `PEN_HOME=~/goat-research/pen-boxes-tes
 
 The VM (`clisu-oracle`, Ubuntu on arm64) runs `/opt/pen-relay/pen relay serve` under the system unit
 `apps/pen/install/pen-relay.service`, installed as `/etc/systemd/system/pen-relay.service`. It runs as a dynamic
-user with a read-only system, no access to home directories and a 512 MiB memory ceiling
-(`systemd-analyze security pen-relay` rates it 1.6). `/etc/pen-relay.env` sets `PEN_RELAY_LISTEN=10.0.0.222:443`
+user with a read-only system and no access to home directories (`systemd-analyze security pen-relay` rates it 1.6).
+Its memory ceiling is 768 MiB with `GOMEMLIMIT=224MiB`, sized for the caps the unit passes: 1024 connections, 64 per
+source address, 128 MiB of queued data with 16 MiB per source. The unit's comment carries the arithmetic and the
+measurement; change the caps, `GOMEMLIMIT` and `MemoryMax` together. A relay at its caps refuses new connections and
+ends the sessions of whichever source fills its share (4408 in the nodes' logs); it does not run out of memory.
+`/etc/pen-relay.env` sets `PEN_RELAY_LISTEN=10.0.0.222:443`
 (the VCN's private address behind the public `158.180.76.7`) and `PEN_RELAY_HOST=158-180-76-7.sslip.io`. The
 Let's Encrypt account and certificate are cached in `/var/lib/pen-relay/acme` (systemd keeps it in
 `/var/lib/private/pen-relay`).
@@ -137,7 +141,9 @@ cache into `/var/lib/private/pen-relay/acme` before the first start; systemd han
 
 Deploy a new binary: copy `pen-linux-arm64` from the build (gunzip it) to the VM, `sudo cp /opt/pen-relay/pen
 /opt/pen-relay/pen.prev`, `sudo install -m 0755 <new> /opt/pen-relay/pen`, `sudo systemctl restart pen-relay`, then
-`pen relay check https://158-180-76-7.sslip.io`. Rollback installs `pen.prev` the same way. Logs:
+`pen relay check https://158-180-76-7.sslip.io`. When the unit file changed too, copy it to
+`/etc/systemd/system/pen-relay.service` (keep the old one as `pen-relay.service.prev`) and run
+`sudo systemctl daemon-reload` before the restart. Rollback installs `pen.prev` the same way. Logs:
 `journalctl -u pen-relay`; TLS handshake errors from scanners are normal there.
 
 Certificates: `autocert` renews a certificate when a third of its lifetime is left (30 days for Let's Encrypt's

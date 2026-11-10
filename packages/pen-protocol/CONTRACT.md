@@ -249,11 +249,18 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   `wss://<host>`, `--cert`/`--key` and a TLS terminator in front of `--plain` need `--public-origin wss://host`, and a
   request whose Host does not name that origin gets HTTP 421 before any upgrade. `--plain` without a public origin
   listens on loopback only (tests and local relays), where the origin follows the request. Beyond the contract it caps all
-  sockets (4096, `--max-sockets`) and one IPv4 address's or IPv6 /64's sockets (64, `--max-per-ip`) with HTTP 429;
-  past one node id's unauthenticated uplinks (4, `--max-unauth-per-node`) a new uplink closes the oldest one 4429. It
+  connections (4096, `--max-sockets`) and one IPv4 address's or IPv6 /64's connections (64, `--max-per-ip`), counted
+  from accept: one past a cap is closed before any request is read (HTTP 429 when a cap is reached between accept and
+  upgrade). Past one node id's unauthenticated uplinks (4, `--max-unauth-per-node`) a new uplink closes the oldest one 4429. It caps the memory that queued and partly read messages hold, each counted at its allocation size plus 128
+  bytes: all of it (192 MiB, `--max-queued-mib`) and one source address's part (16 MiB,
+  `--max-queued-per-source-mib`, the same IPv4 address or IPv6 /64). Data that would pass either ends the session whose
+  socket would hold it 4408: a client that stops reading ends its own session, and a socket whose message being read
+  would pass it closes 4408. So a full relay ends the sessions of the source that holds the memory, and sessions from
+  other sources go on until enough sources fill the total. Each connection gets fixed 64 KiB kernel send and receive
+  buffers and at most 8 KiB of request headers. It
   reads at most the 96-byte answer from an uplink before it authenticates, drops a socket whose write or closing
-  handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, counting 64
-  bytes per message on top of its size, so a client flooding empty DATA ends only its own session 4408. Session ids are never
+  handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, so a client
+  flooding empty DATA ends only its own session 4408. Session ids are never
   reused while the process runs (a restart starts at 1 again; uplinks reconnect then and see fresh sessions).
 
 ## Accounts (v1.1)
@@ -411,3 +418,6 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
   syncs with reachable members before deciding an account join; a joiner also checks the registry's other nodes; a key
   already revoked can be revoked again as compromised. The registry's trust limit and the kind 0x04 slot timing are
   stated. Vectors: two new login check cases.
+- v1.1 (2026-11-11): `pen relay serve` counts connections against its caps from accept, counts queued and partly read
+  messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so a
+  full relay ends the sessions of the source holding the memory. Relay implementation only; no wire change.
