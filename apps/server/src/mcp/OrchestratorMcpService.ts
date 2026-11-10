@@ -49,7 +49,6 @@ import {
   type OrchestratorMcpThreadListResult,
   type OrchestratorMcpThreadReadInput,
   OrchestratorMcpThreadReadResult,
-  type OrchestratorMcpThreadRun,
   type OrchestratorMcpThreadSendDelivered,
   type OrchestratorMcpThreadSendInput,
   type OrchestratorMcpThreadStatusInput,
@@ -149,7 +148,7 @@ import { acceptRemoteSender, withRemoteSender } from "./remoteSender.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
 import { makeContinueReviewTask } from "./reviewContinuation.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
-import { statusFromShell } from "./threadStatus.ts";
+import { statusFromShell, threadRun } from "./threadStatus.ts";
 import * as View from "./threadListView.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
@@ -876,20 +875,6 @@ function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
   return input.role === undefined || input.role === "general"
     ? input.task
     : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
-}
-
-function threadRun(run: OrchestrationV2Run): OrchestratorMcpThreadRun {
-  return {
-    runId: run.id,
-    ordinal: run.ordinal,
-    status: run.status,
-    ...(run.terminationCause === undefined ? {} : { terminationCause: run.terminationCause }),
-    providerInstanceId: run.modelSelection.instanceId,
-    model: run.modelSelection.model,
-    requestedAt: DateTime.formatIso(run.requestedAt),
-    startedAt: run.startedAt === null ? null : DateTime.formatIso(run.startedAt),
-    completedAt: run.completedAt === null ? null : DateTime.formatIso(run.completedAt),
-  };
 }
 
 function jsonText(value: unknown): string {

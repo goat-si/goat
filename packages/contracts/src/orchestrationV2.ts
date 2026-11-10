@@ -718,6 +718,18 @@ export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
 
 export const ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE = "workspace_preparation_failed";
 
+/** Another Codex turn on the thread that a starting run must wait for. */
+export const OrchestrationV2RunStartHold = Schema.Struct({
+  /**
+   * `restart_survivor`: a turn that kept running across a GOAT server restart.
+   * `unowned_turn`: a turn Codex started that no run owns, such as a goal continuation.
+   */
+  reason: Schema.Literals(["restart_survivor", "unowned_turn"]),
+  /** Codex's id for the turn, when GOAT knows it. */
+  nativeTurnId: Schema.optional(Schema.String),
+});
+export type OrchestrationV2RunStartHold = typeof OrchestrationV2RunStartHold.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
   memoryGrantCeiling: MemoryTaskGrantCeilingField,
   currentMemoryAccess: Schema.optionalKey(MemoryCurrentAccess),
@@ -735,6 +747,8 @@ export const OrchestrationV2Run = Schema.Struct({
   terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
   queuePosition: Schema.optional(Schema.NullOr(PositiveInt)),
   queueHeld: Schema.optional(Schema.Boolean),
+  /** Why a `starting` run has not started; meaningful only while the run is `starting`. */
+  startHold: Schema.optional(OrchestrationV2RunStartHold),
   requestedAt: Schema.DateTimeUtc,
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
@@ -3591,6 +3605,14 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
+  }),
+  /** Records, or with null clears, what a starting run waits for. */
+  Schema.Struct({
+    type: Schema.Literal("run.start-hold.update"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    startHold: Schema.NullOr(OrchestrationV2RunStartHold),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.background-work.settle"),
