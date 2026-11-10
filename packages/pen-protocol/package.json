@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     "./wire": "./src/wire.ts",
-    "./identity": "./src/identity.ts"
+    "./identity": "./src/identity.ts",
+    "./login": "./src/login.ts"
   },
   "scripts": {
     "test": "vp test run --config ../../vite.config.ts --dir .",
