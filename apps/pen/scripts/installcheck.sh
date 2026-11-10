@@ -78,6 +78,15 @@ members="$(pen a ls --json | grep -c '"fingerprint"')"
 [ "$members" = 2 ] || { echo "FAIL: a lists $members members"; exit 1; }
 echo "ok: install.sh installed and started a; install.sh --join added b (a lists 2)"
 
+# A line whose name only matches as a pattern (pen-linux-amd64Xgz) is another archive's; check-public.ts ignores it,
+# so install.sh must too.
+sums="$work/public/dl/0.0.0-check/SHA256SUMS"
+sed 's/\.gz$/Xgz/; s/^[0-9a-f]*/0000000000000000000000000000000000000000000000000000000000000000/' "$sums" >"$work/decoys"
+cat "$work/decoys" >>"$sums"
+inst d --name d 2>"$work/d.err" || { echo "FAIL: install.sh refused a SHA256SUMS whose extra lines name other files:"; cat "$work/d.err"; exit 1; }
+[ -x "$work/d/.local/bin/pen" ] || { echo "FAIL: install.sh installed nothing"; exit 1; }
+echo "ok: install.sh reads only the SHA256SUMS line that names its archive"
+
 printf '0000000000000000000000000000000000000000000000000000000000000000  pen-darwin-arm64.gz\n0000000000000000000000000000000000000000000000000000000000000000  pen-darwin-amd64.gz\n0000000000000000000000000000000000000000000000000000000000000000  pen-linux-arm64.gz\n0000000000000000000000000000000000000000000000000000000000000000  pen-linux-amd64.gz\n' >"$work/public/dl/0.0.0-check/SHA256SUMS"
 if inst c --name c 2>"$work/c.err"; then
 	echo "FAIL: install.sh accepted a bad checksum"

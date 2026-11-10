@@ -66,7 +66,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$PEN_RELAY/dl/$VERSION/$file" -o "$tmp/$file"
 curl -fsSL "$PEN_RELAY/dl/$VERSION/SHA256SUMS" -o "$tmp/SHA256SUMS"
-want="$(grep " $file\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)"
+# The one line ending in " <archive>", compared as text (check-public.ts reads it the same way).
+want="$(awk -v s=" $file" 'length($0) > length(s) && substr($0, length($0) - length(s) + 1) == s { n++; w = $0; sub(/ .*/, "", w) } END { if (n == 1) print w }' "$tmp/SHA256SUMS")"
 got="$(sha "$tmp/$file")"
 if [ -z "$want" ] || [ "$want" != "$got" ]; then
 	echo "install.sh: checksum mismatch for $file" >&2
