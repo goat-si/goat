@@ -12,6 +12,7 @@ import * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpSchemaV1 from "effect-acp/schema-v1";
 import { deriveToolActivityPresentation, mergeToolActivityData } from "@goat/shared/toolActivity";
 import { GOAT_MCP_TOOL_NAMES } from "@goat/shared/goatMcpToolPresentation";
+import { acpMcpFallbackInput, ompDeviceGoatToolCall } from "./acpMcpCallInput.ts";
 import type {
   OrchestrationV2ProviderThreadNativeMetadata,
   ThreadTokenUsageSnapshot,
@@ -1049,25 +1050,6 @@ export interface AcpMcpToolCallIdentity {
 
 const ACP_MCP_FALLBACK_CALL = /(?:^|[\s"'=])acp-mcp-call[\s"']+([A-Za-z0-9_.-]+)(?:\s+(.+?))?\s*$/u;
 
-function acpMcpFallbackInput(value: string | undefined): Record<string, unknown> | undefined {
-  if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  const candidates = [
-    trimmed,
-    ...(trimmed.startsWith("'") && trimmed.endsWith("'") ? [trimmed.slice(1, -1)] : []),
-  ];
-  for (const candidate of candidates) {
-    try {
-      const parsed: unknown = JSON.parse(candidate);
-      const unwrapped = typeof parsed === "string" ? JSON.parse(parsed) : parsed;
-      if (isRecord(unwrapped)) return unwrapped;
-    } catch {
-      // Unknown shell quoting retains MCP identity but omits unparseable input.
-    }
-  }
-  return undefined;
-}
-
 /**
  * GOAT always injects its server as "goat", and matches are additionally gated on the known GOAT
  * tool inventory, so the separator match can stay loose.
@@ -1146,16 +1128,8 @@ export function extractMcpToolCallIdentity(
     const tool = prefix === undefined ? metaToolName : metaToolName.slice(prefix.length);
     return tool ? { server: metaServerId, tool } : undefined;
   }
-  // OMP mounts MCP tools as xd://mcp__<server>_<tool> devices and calls them by writing JSON
-  // args; a read of the same path only fetches the tool's docs.
-  const devicePath = typeof rawInput?.path === "string" ? rawInput.path : "";
-  if (devicePath.startsWith("xd://") && typeof rawInput?.content === "string") {
-    const deviceTool = T3_MCP_TITLE_CALL.exec(devicePath.slice("xd://".length))?.groups?.tool;
-    if (deviceTool !== undefined && T3_MCP_TOOL_NAMES.has(deviceTool)) {
-      const input = acpMcpFallbackInput(rawInput.content);
-      return { server: "t3-code", tool: deviceTool, ...(input === undefined ? {} : { input }) };
-    }
-  }
+  const deviceCall = ompDeviceGoatToolCall(rawInput, GOAT_MCP_TITLE_CALL);
+  if (deviceCall !== undefined) return { server: "goat", ...deviceCall };
   const candidates = [
     meta?.toolName,
     claudeCode?.toolName,
