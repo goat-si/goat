@@ -8,6 +8,7 @@ import type {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
+import { parseGoatBotQuote } from "./quote.ts";
 import { goatBotPreviewText } from "./previewText.ts";
 
 /**
@@ -150,6 +151,7 @@ export type GoatBotRow =
        */
       readonly requestKey: string | null;
       readonly text: string;
+      readonly quote?: string;
       readonly attachments?: ReadonlyArray<GoatBotAttachmentLabel>;
       readonly createdAt: string;
       readonly delivery: GoatBotDelivery;
@@ -488,7 +490,7 @@ export function buildGoatBotTimeline(input: {
         id: item.id,
         sendKey: null,
         requestKey: presentation?.requestKey ?? null,
-        text: item.text,
+        ...parseGoatBotQuote(item.text),
         ...attachmentLabels(item.attachments),
         createdAt: itemCreatedAt(item),
         delivery: presentation?.readAt
@@ -605,7 +607,7 @@ export function buildGoatBotTimeline(input: {
         id: `pending:${entry.clientKey}`,
         sendKey: entry.clientKey,
         requestKey: entry.requestKey,
-        text: entry.text,
+        ...parseGoatBotQuote(entry.text),
         ...attachmentLabels(entry.attachments),
         createdAt: entry.createdAt,
         delivery:

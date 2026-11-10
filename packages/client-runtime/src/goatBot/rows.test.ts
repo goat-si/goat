@@ -941,3 +941,14 @@ describe("attachments on the person's messages", () => {
     );
   });
 });
+
+it("splits a quoted user reply into its quote and message", () => {
+  const rows = buildGoatBotTimeline({
+    visibleTurnItems: rowsOf([
+      user("quoted", "2026-10-12T12:00:00Z", "> first\n> second\n\nanswer"),
+    ]),
+    pendingInputs: [],
+    readers: readers(),
+  });
+  expect(content(rows)).toMatchObject([{ kind: "user", quote: "first\nsecond", text: "answer" }]);
+});

@@ -45,6 +45,8 @@ export function GoatBotComposer({
   attachmentSupport = null,
   modelPicker,
   onSend,
+  replyTo = null,
+  onClearReply,
 }: {
   readonly ref?: Ref<GoatBotComposerHandle>;
   readonly disabled: boolean;
@@ -52,6 +54,8 @@ export function GoatBotComposer({
   readonly botName: string;
   readonly placeholder: string;
   readonly initialText?: string;
+  readonly replyTo?: string | null;
+  readonly onClearReply?: () => void;
   readonly attachmentSupport?: GoatBotAttachmentSupport | null;
   readonly modelPicker?: ReactNode;
   /** Returns false when the message was not taken, so the draft stays. */
@@ -137,6 +141,11 @@ export function GoatBotComposer({
     submit();
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Escape" && replyTo !== null) {
+      event.preventDefault();
+      onClearReply?.();
+      return;
+    }
     // Enter sends; Shift+Enter breaks the line; Enter that confirms IME input does neither.
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
@@ -152,6 +161,14 @@ export function GoatBotComposer({
   return (
     <form onSubmit={handleSubmit} className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
       <div className={cn("goat-composer-field flex flex-col py-1 pr-1", disabled && "opacity-64")}>
+        {replyTo !== null ? (
+          <div className="mx-2 mt-1 flex min-w-0 items-center gap-2 rounded-md border border-border px-2 text-xs text-muted-foreground">
+            <span className="min-w-0 flex-1 truncate">{replyTo}</span>
+            <button type="button" aria-label="Clear reply" onClick={onClearReply}>
+              <XIcon className="size-3" />
+            </button>
+          </div>
+        ) : null}
         {attachments.length > 0 ? (
           <ul aria-label="Attachments" className="flex flex-wrap gap-1.5 pt-1.5 pb-1 pl-2">
             {attachments.map((attachment) => (
@@ -187,7 +204,7 @@ export function GoatBotComposer({
             rows={1}
             data-goat-bot-composer=""
             aria-label={`Message ${botName}`}
-            placeholder={placeholder}
+            placeholder={replyTo !== null ? "Reply…" : placeholder}
             value={text}
             disabled={disabled}
             onChange={(event) => setText(event.currentTarget.value)}

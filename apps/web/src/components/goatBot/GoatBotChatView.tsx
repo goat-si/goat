@@ -37,6 +37,7 @@ import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
+  buildGoatBotQuote,
   canSendToGoatBot,
   goatBotOpenQuestionPlaceholder,
   goatBotNotesRefreshKey,
@@ -146,6 +147,10 @@ export function GoatBotChatView({
     field.setSelectionRange(field.value.length, field.value.length);
     return field;
   };
+  const botIdentity = `${environmentId ?? ""}:${member?.sessionThreadId ?? bot?.threadId ?? ""}`;
+  const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
+  if (replyState !== null && replyState.botIdentity !== botIdentity) setReplyState(null);
+  const replyTo = replyState?.botIdentity === botIdentity ? replyState.text : null;
   const onDraft = canSend
     ? (text: string) => {
         if (narrow) {
@@ -333,6 +338,14 @@ export function GoatBotChatView({
               <GoatBotTimeline
                 rows={rows}
                 unreadSince={unreadSince}
+                onReply={
+                  canSend
+                    ? (text) => {
+                        setReplyState({ botIdentity, text });
+                        composerRef.current?.focus();
+                      }
+                    : undefined
+                }
                 environmentId={environmentId}
                 onOpenHome={bot ? () => setPanelOpen(true) : undefined}
                 taskThreads={supportsTaskThreads}
@@ -394,7 +407,16 @@ export function GoatBotChatView({
             modelPicker={
               member ? <GoatBotMemberModelPicker member={member} /> : <GoatBotModelPicker />
             }
-            onSend={onSend}
+            replyTo={replyTo}
+            onClearReply={() => setReplyState(null)}
+            onSend={(text, attachments) => {
+              const result = onSend(
+                replyTo === null ? text : buildGoatBotQuote(replyTo, text),
+                attachments,
+              );
+              if (result !== false) setReplyState(null);
+              return result;
+            }}
           />
         </div>
       </div>
