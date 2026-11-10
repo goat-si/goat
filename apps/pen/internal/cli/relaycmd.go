@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"slices"
@@ -352,7 +353,7 @@ func runRelayDownload(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	u := strings.TrimRight(args[0], "/")
-	if _, err := wire.RelayOrigin(u); err != nil {
+	if err := downloadOrigin(u); err != nil {
 		return fail(stderr, err)
 	}
 	cfg.DownloadRelay = u
@@ -371,4 +372,21 @@ func downloadRelay(cfg state.Config) string {
 		return l[0]
 	}
 	return ""
+}
+
+// downloadOrigin accepts an https origin (http only for a loopback host) with no user, path, query
+// or fragment: invites print it in front of /install.sh.
+func downloadOrigin(u string) error {
+	bad := fmt.Errorf("download relay %q: want https://<host>[:port] (http:// only for loopback)", u)
+	p, err := url.Parse(u)
+	if err != nil || p.Host == "" || p.User != nil || p.Path != "" || p.Opaque != "" || strings.ContainsAny(u, "?#") {
+		return bad
+	}
+	host := p.Hostname()
+	ip := net.ParseIP(host)
+	loopback := strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback()
+	if p.Scheme != "https" && (p.Scheme != "http" || !loopback) {
+		return bad
+	}
+	return nil
 }
