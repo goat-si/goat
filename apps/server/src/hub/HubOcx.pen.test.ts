@@ -624,22 +624,25 @@ it.effect("a Pen alias with a @revoked line in Pen's known_hosts is not trusted"
 );
 
 // Opening a FIFO for reading waits for a writer; the open must not, whatever the first stat said.
-it.effect("a Pen config that turns into a FIFO after its stat fails at once", () =>
-  Effect.gen(function* () {
-    const machine = {
-      config: PEN_BLOCK("pen-box"),
-      sshG: (_: string) => "",
-      keys: keyLines("node1", "AAAA1"),
-      configStat: "regular" as const,
-    };
-    const { ocx, home } = yield* penHome(machine);
-    machine.sshG = penSshG(home);
-    const config = `${home}/.ssh/pen/config`;
-    const fs = yield* FileSystem.FileSystem;
-    yield* fs.rename(config, `${config}.regular`);
-    NodeChildProcess.execFileSync("mkfifo", [config]);
-    expect((yield* ocx.penAliasRevision("pen-box").pipe(Effect.flip))._tag).toBe("HubOcxError");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+// Windows has no FIFOs; there the open passes O_RDONLY | 0, since O_NONBLOCK is absent.
+it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "a Pen config that turns into a FIFO after its stat fails at once",
+  () =>
+    Effect.gen(function* () {
+      const machine = {
+        config: PEN_BLOCK("pen-box"),
+        sshG: (_: string) => "",
+        keys: keyLines("node1", "AAAA1"),
+        configStat: "regular" as const,
+      };
+      const { ocx, home } = yield* penHome(machine);
+      machine.sshG = penSshG(home);
+      const config = `${home}/.ssh/pen/config`;
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.rename(config, `${config}.regular`);
+      NodeChildProcess.execFileSync("mkfifo", [config]);
+      expect((yield* ocx.penAliasRevision("pen-box").pipe(Effect.flip))._tag).toBe("HubOcxError");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 // A status pass reads every host in turn; one stalled config read must not cost a deadline each.
