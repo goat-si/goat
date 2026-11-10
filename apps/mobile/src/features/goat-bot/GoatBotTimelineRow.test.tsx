@@ -149,14 +149,13 @@ it("offers retry only for a recoverable failure", async () => {
   expect(view.container.textContent).toContain("Retry");
 });
 
-it("heads only the first bot message of a group with the bot's name and marks updates", async () => {
+it("labels the first of the bot's unprompted updates and leaves its replies unheaded", async () => {
   h = createNativeMemoryHarness();
   view = renderNative(h, <GoatBotTimelineRow {...props} row={bot({ proactive: true })} />);
   await view.render();
   expect(view.container.textContent).toContain("GOAT Bot · Update");
   await view.rerender(<GoatBotTimelineRow {...props} row={bot({ proactive: false })} />);
-  expect(view.container.textContent).toMatch(/^GOAT Bot · \d/);
-  expect(view.container.textContent).not.toContain("GOAT Bot · Update");
+  expect(view.container.textContent).not.toContain("GOAT Bot");
   await view.rerender(
     <GoatBotTimelineRow
       {...props}
