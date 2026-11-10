@@ -449,15 +449,14 @@ export function useThreadActions() {
     const permissionFailure = threadOperationFailure(target);
     if (permissionFailure) return permissionFailure;
     const resolved = resolveThreadTarget(target);
+    // Read the family before the delete, while side chats the shell may omit still exist.
+    const deletedWith = await readThreadsDeletedWith(target, () =>
+      loadThreadFamily({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId },
+      }),
+    );
     if (!resolved) {
-      // Read the family before the delete, while the side chats still exist.
-      const deletedWith = await readThreadsDeletedWith(target, async () => {
-        const family = await loadThreadFamily({
-          environmentId: target.environmentId,
-          input: { threadId: target.threadId },
-        });
-        return family._tag === "Success" ? family.value.threads : null;
-      });
       const result = await deleteThreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId },
@@ -588,7 +587,7 @@ export function useThreadActions() {
     refreshArchivedThreadsForEnvironment(threadRef.environmentId);
     useGlobalAgentStore.getState().clearIfThread(threadRef);
     // The server deletes the thread's side chats with it.
-    clearThreadDraftsDeletedWith(threadRef, threads);
+    clearThreadDraftsDeletedWith(threadRef, [...threads, ...deletedWith]);
     clearProjectDraftThreadById(
       scopeProjectRef(threadRef.environmentId, thread.projectId),
       threadRef,

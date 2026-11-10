@@ -443,6 +443,19 @@ describe("thread action permissions", () => {
     expect(state.localEffects).not.toContain("clear-draft:fork");
   });
 
+  it("clears the drafts of side chats the shell left out when deleting a loaded parent", async () => {
+    state.scopes.get(secondary)!.add(AuthOrchestrationOperateScope);
+    state.serverConfig.shellThreadFamilies = true;
+    state.familyThreads = [{ id: ThreadId.make("settled-side-chat"), sideChatOf: target.threadId }];
+    expect((await useThreadActions().deleteThread(target))._tag).toBe("Success");
+    expect(state.localEffects).toEqual(
+      expect.arrayContaining([
+        "release-uploads:settled-side-chat",
+        "clear-draft:settled-side-chat",
+      ]),
+    );
+  });
+
   it("does not request worktree removal after its grant is revoked during delete", async () => {
     state.scopes
       .get(secondary)!
