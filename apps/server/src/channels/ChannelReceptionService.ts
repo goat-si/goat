@@ -760,14 +760,15 @@ const make = Effect.gen(function* () {
       for (const card of openApprovalCards([task])) {
         if (!wanted.has(card.approval.requestId)) continue;
         const detail = yield* approvalRequestDetail(card.approval, threads);
-        const code = yield* ledger.issueApprovalCode({
+        const issued = yield* ledger.issueApprovalCode({
           conversationId: task.conversationId,
           requestId: card.approval.requestId,
           now: DateTime.formatIso(yield* DateTime.now),
         });
         const words = approvalCard({
           card,
-          code,
+          code: issued.code,
+          order: issued.order,
           bySubagent: card.approval.threadId !== task.worker?.threadId,
           kind: detail?.kind,
           prompt: detail?.prompt,
@@ -840,7 +841,7 @@ const make = Effect.gen(function* () {
         const coded = yield* Effect.forEach(open, (card) =>
           ledger
             .issueApprovalCode({ conversationId, requestId: card.approval.requestId, now })
-            .pipe(Effect.map((code) => ({ card, code }))),
+            .pipe(Effect.map((issued) => ({ card, code: issued.code }))),
         );
         return { ...whichApproval(coded, reply.decision), task: undefined };
       }

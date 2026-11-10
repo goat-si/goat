@@ -9,6 +9,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
@@ -144,6 +145,53 @@ const projectFor = (label: string) => {
 };
 
 describe("decision cards", () => {
+  // A card issued before Deny moved first listed "1. Approve, 2. Deny"; its code record has no
+  // order. Its numbers keep the meaning the person read.
+  const answerOldCard = (reply: string, decision: "accept" | "decline") => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const registry = yield* ChannelTransport.ChannelTransportRegistry;
+      yield* registry.register({
+        kind: "imessage",
+        send: (message) =>
+          Effect.succeed({
+            deliveryId: message.deliveryId,
+            acceptedAt: "2026-10-12T00:00:01.000Z",
+          }),
+      });
+      yield* linkImessage;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(imessageInput("do: ship the build", "row-1"), imessageContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      const request = approval("ship");
+      harness.world.runtimeRequests.set(task.worker!.threadId, [request]);
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE channel_runtime_state SET value_json = '{"code":"A1"}'
+        WHERE key = ${"approval-code-of:" + request.id}
+      `;
+
+      yield* gateway.ingest(imessageInput(reply, "row-2"), imessageContext);
+      yield* runtime.drain;
+      const [answered] = responses(harness);
+      assert.strictEqual(answered?.decision, decision);
+      assert.strictEqual(answered?.requestId, request.id);
+    }).pipe(Effect.provide(harness.layer));
+  };
+
+  it.effect("approves from 1 on a card listed before Deny moved first", () =>
+    answerOldCard("1", "accept"),
+  );
+
+  it.effect("denies from 2 on a card listed before Deny moved first", () =>
+    answerOldCard("2", "decline"),
+  );
+
   it.effect("lists Slack approval choices as a numbered list", () => {
     const harness = makeHarness();
     const seen: string[] = [];

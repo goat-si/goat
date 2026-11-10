@@ -187,11 +187,13 @@ describe("GOAT Bot approval cards", () => {
         );
         // Asking again for an issued request returns the code its card already shows.
         const codeOf = (requestId: string) =>
-          ledger.issueApprovalCode({
-            conversationId: deps.conversationId,
-            requestId,
-            now: "2026-10-12T00:02:00.000Z",
-          });
+          ledger
+            .issueApprovalCode({
+              conversationId: deps.conversationId,
+              requestId,
+              now: "2026-10-12T00:02:00.000Z",
+            })
+            .pipe(Effect.map((issued) => issued.code));
         const depsCode = yield* codeOf("approval:deps");
         const loginCode = yield* codeOf("approval:login");
         assert.sameMembers([depsCode, loginCode], ["A1", "A2"]);

@@ -59,7 +59,7 @@ export const makeInboundChoices = (
             : {
                 at: found.issuedAt,
                 tie: approvalCodeOrder(found.code),
-                options: approvalChoiceLabels(found.code),
+                options: approvalChoiceLabels(found.code, found.order),
                 target: { type: "approval" },
               },
         ),
@@ -151,7 +151,7 @@ export const makeInboundChoices = (
     for (const card of openApprovalCards([target.task])) {
       const found = yield* ledger.approvalCodeForRequest(card.approval.requestId);
       if (found === undefined) continue;
-      const labels = approvalChoiceLabels(found.code);
+      const labels = approvalChoiceLabels(found.code, found.order);
       if (labels[0] === trimmed || labels[1] === trimmed) {
         return { type: "approval-label" as const, text: trimmed };
       }

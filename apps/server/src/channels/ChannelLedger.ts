@@ -58,6 +58,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
+import {
+  type IssuedApprovalCode,
+  newApprovalCode,
+  readApprovalCode,
+} from "./channelApprovalCodeRecord.ts";
 export { ChannelLedgerError } from "./channelLedgerError.ts";
 
 /** A delivery to commit alongside a ledger change. `causeKey` makes a re-commit a no-op. */
@@ -387,15 +392,16 @@ export class ChannelLedger extends Context.Service<
       readonly conversationId: ChannelConversationId;
       readonly requestId: string;
       readonly now: string;
-    }) => Effect.Effect<string, ChannelLedgerError>;
+    }) => Effect.Effect<IssuedApprovalCode, ChannelLedgerError>;
     /**
-     * The code already issued for a request, and when. Does not issue a new one: a card that
-     * was never sent has no code, so a numbered reply cannot land on it.
+     * The code already issued for a request, when, and the order its card listed its choices in.
+     * Does not issue a new one: a card that was never sent has no code, so a numbered reply
+     * cannot land on it.
      */
     readonly approvalCodeForRequest: (
       requestId: string,
     ) => Effect.Effect<
-      { readonly code: string; readonly issuedAt: string } | undefined,
+      (IssuedApprovalCode & { readonly issuedAt: string }) | undefined,
       ChannelLedgerError
     >;
     /** The request a code was issued for in this conversation, if any. */
@@ -588,12 +594,9 @@ const encodeOutbound = Schema.encodeSync(Schema.fromJsonString(ChannelOutboundMe
 const encodeScopes = Schema.encodeSync(Schema.fromJsonString(AuthEnvironmentScopes));
 const decodeScopes = Schema.decodeUnknownSync(Schema.fromJsonString(AuthEnvironmentScopes));
 const ApprovalCodeCount = Schema.fromJsonString(Schema.Struct({ n: Schema.Number }));
-const ApprovalCodeOf = Schema.fromJsonString(Schema.Struct({ code: Schema.String }));
 const ApprovalCodeTarget = Schema.fromJsonString(Schema.Struct({ requestId: Schema.String }));
 const encodeApprovalCount = Schema.encodeSync(ApprovalCodeCount);
 const decodeApprovalCount = Schema.decodeUnknownSync(ApprovalCodeCount);
-const encodeApprovalOf = Schema.encodeSync(ApprovalCodeOf);
-const decodeApprovalOf = Schema.decodeUnknownSync(ApprovalCodeOf);
 const encodeApprovalTarget = Schema.encodeSync(ApprovalCodeTarget);
 const decodeApprovalTarget = Schema.decodeUnknownSync(ApprovalCodeTarget);
 const decodeStrings = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.String)));
@@ -1518,7 +1521,7 @@ const make = Effect.gen(function* () {
               SELECT value_json FROM channel_runtime_state WHERE key = ${ofKey}
             `;
             if (issued[0] !== undefined) {
-              return decodeApprovalOf(issued[0].value_json).code;
+              return readApprovalCode(issued[0].value_json);
             }
             const counterKey = "approval-codes:" + input.conversationId;
             const counter = yield* sql<{ readonly value_json: string }>`
@@ -1527,6 +1530,7 @@ const make = Effect.gen(function* () {
             const next =
               (counter[0] === undefined ? 0 : decodeApprovalCount(counter[0].value_json).n) + 1;
             const code = "A" + next;
+            const fresh = newApprovalCode(code);
             yield* sql`
               INSERT INTO channel_runtime_state (key, value_json, updated_at)
               VALUES (${counterKey}, ${encodeApprovalCount({ n: next })}, ${input.now})
@@ -1545,11 +1549,11 @@ const make = Effect.gen(function* () {
               INSERT INTO channel_runtime_state (key, value_json, updated_at)
               VALUES (
                 ${ofKey},
-                ${encodeApprovalOf({ code })},
+                ${fresh.json},
                 ${input.now}
               )
             `;
-            return code;
+            return fresh.issued;
           }),
         )
         .pipe(Effect.mapError(toLedgerError("issueApprovalCode"))),
@@ -1562,7 +1566,7 @@ const make = Effect.gen(function* () {
         Effect.map((rows) => {
           const row = rows[0];
           if (row === undefined) return undefined;
-          return { code: decodeApprovalOf(row.value_json).code, issuedAt: row.updated_at };
+          return { ...readApprovalCode(row.value_json), issuedAt: row.updated_at };
         }),
         Effect.mapError(toLedgerError("approvalCodeForRequest")),
       ),

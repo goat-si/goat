@@ -81,13 +81,19 @@ const actionPhrase = (kind: OrchestrationV2RuntimeRequest["kind"] | undefined): 
 const MAX_PROMPT_CHARS = 400;
 
 /**
- * The two buttons on an approval card, Deny first so a quick first pick never approves. A number
- * or a Slack button sends one of these labels.
+ * The order a card listed its two choices in. Cards are issued Deny first so a quick first pick
+ * never approves; a card issued before that listed Approve first, and its numbers keep that order.
  */
-export const approvalChoiceLabels = (code: string): readonly [string, string] => [
-  "Deny " + code,
-  "Approve " + code,
-];
+export type ApprovalChoiceOrder = "deny-first" | "approve-first";
+
+/** The two buttons on an approval card. A number or a Slack button sends one of these labels. */
+export const approvalChoiceLabels = (
+  code: string,
+  order: ApprovalChoiceOrder,
+): readonly [string, string] =>
+  order === "deny-first"
+    ? ["Deny " + code, "Approve " + code]
+    : ["Approve " + code, "Deny " + code];
 
 /** Same words a local answer records, and the provenance a remote respond requires. */
 export const approvalReason = (
@@ -111,6 +117,7 @@ export const approvalSent = (decision: ApprovalReply["decision"], title: string)
 export const approvalCard = (input: {
   readonly card: OpenApprovalCard;
   readonly code: string;
+  readonly order: ApprovalChoiceOrder;
   readonly bySubagent: boolean;
   readonly kind: OrchestrationV2RuntimeRequest["kind"] | undefined;
   readonly prompt: string | undefined;
@@ -130,7 +137,7 @@ export const approvalCard = (input: {
       actionPhrase(input.kind) +
       "." +
       detail,
-    options: approvalChoiceLabels(input.code),
+    options: approvalChoiceLabels(input.code, input.order),
   };
 };
 
