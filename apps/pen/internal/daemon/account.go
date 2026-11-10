@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/login"
@@ -19,6 +20,10 @@ import (
 
 // MaxAccountSessions caps concurrent kind 0x04 sessions on a member.
 const MaxAccountSessions = 4
+
+// accountRefreshTimeout bounds the sync with the other members before a Google admit is decided; the
+// joiner waits for the answer meanwhile.
+const accountRefreshTimeout = 5 * time.Second
 
 // acctSlot is one running kind 0x04 session; asserted ones are no longer evictable.
 type acctSlot struct {
@@ -125,6 +130,18 @@ func (d *Daemon) serveAccount(ctx context.Context, sec *session.Secure, slot *ac
 		},
 		Check: d.checkAssertion,
 		Queue: d.queueRequest,
+		Refresh: func() {
+			rctx, cancel := context.WithTimeout(ctx, accountRefreshTimeout)
+			defer cancel()
+			var others []mesh.Member
+			for _, m := range d.view().SortedMembers() {
+				if m.NoisePub != joiner {
+					others = append(others, m)
+				}
+			}
+			d.pushTo(rctx, others)
+			d.viewChanged()
+		},
 		OnAdmit: func(*mesh.Record) {
 			d.viewChanged()
 			var others []mesh.Member

@@ -43,6 +43,9 @@ type AccountAdmission struct {
 	Queue func(card *Card, c Claim) (string, error)
 	// OnAdmit is called with the admit record after it is stored.
 	OnAdmit func(admit *Record)
+	// Refresh, when set, syncs with the other reachable members before the decision, so a lock,
+	// unbind or revoke this member has not heard of yet still counts.
+	Refresh func()
 }
 
 // AccountResult is how a member served an account join.
@@ -112,7 +115,11 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 	if cb.SignPub != claim.SignPub || cb.NoisePub != claim.NoisePub {
 		return AccountResult{}, refuse(c, "the card's keys are not the assertion's")
 	}
-	// The binding may have changed while the card was on its way: decide on one view taken now.
+	// The binding may have changed while the card was on its way, or elsewhere while this member
+	// was away: sync, then decide on one view taken now.
+	if a.Refresh != nil {
+		a.Refresh()
+	}
 	v := a.Store.View()
 	if claim, err = a.Check(assertion, v); err != nil {
 		return AccountResult{}, refuse(c, err.Error())
