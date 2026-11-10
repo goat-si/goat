@@ -101,6 +101,9 @@ type Server struct {
 	// DefaultMaxReading); one source holds at most an eighth of it.
 	MaxReading int
 
+	// clock replaces time.Now in tests.
+	clock func() time.Time
+
 	queued, reading atomic.Int64
 
 	mu     sync.Mutex
@@ -184,29 +187,33 @@ func (s *Server) maxReading() int64 { return int64(orDefault(s.MaxReading, Defau
 // Reading is what messages being read hold past their sockets' read allowance now.
 func (s *Server) Reading() int64 { return s.reading.Load() }
 
-// makeRoom ends the largest queue of the source holding the most queued memory, when that source
-// holds more than src; it reports whether that gave anything back. A full relay so costs the
-// sources that hold it, and refuses src only when src holds the most.
-func (s *Server) makeRoom(src *source, n int64) bool {
+// makeRoom ends the queue a full relay gives up first (rank.endsBefore) among the queues of within,
+// or of every source when within is nil; it reports whether that gave anything back. It ends none
+// when self ranks first: then self's offer is refused and its own session ends.
+func (s *Server) makeRoom(within *source, self *outq) bool {
 	s.mu.Lock()
-	var top *source
-	most := src.held.Load()
-	for _, x := range s.shares {
-		if h := x.held.Load(); x != src && h > most {
-			top, most = x, h
-		}
+	now := time.Now()
+	if s.clock != nil {
+		now = s.clock()
 	}
 	var victim *outq
-	if top != nil {
-		largest := 0
-		for q := range top.queues {
-			if size := q.size(); size > largest {
-				victim, largest = q, size
+	var worst rank
+	consider := func(src *source) {
+		for q := range src.queues {
+			if r, ok := q.rank(now); ok && (victim == nil || r.endsBefore(worst)) {
+				victim, worst = q, r
 			}
 		}
 	}
+	if within != nil {
+		consider(within)
+	} else {
+		for _, src := range s.shares {
+			consider(src)
+		}
+	}
 	s.mu.Unlock()
-	return victim != nil && victim.abort()
+	return victim != nil && victim != self && victim.abort()
 }
 
 // shareLocked is ip's part of the budget, held once more.
@@ -279,7 +286,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		origin, _ = wire.RelayOrigin(scheme + "://" + r.Host)
 	}
-	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout, k.budget)
+	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout, k.budget, role == "node")
 	s.mu.Lock()
 	s.socks[k] = struct{}{}
 	rm := s.rooms[nodeID]
@@ -768,11 +775,11 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 		rm.closeSock(c, wire.CodeOffline)
 		return
 	}
-	frame := wire.Frame{Type: wire.FrameData, SID: c.sid, Payload: payload}.Encode()
+	frameLen := wire.HeaderLen + len(payload)
 	if up.acked >= c.upEnd {
 		c.upUnacked = 0
 	}
-	mine := c.upUnacked + uint64(len(frame))
+	mine := c.upUnacked + uint64(frameLen)
 	others := max(1, len(rm.clients)-1)
 	limit := uint64(SocketWindow)
 	if mine > LightSession {
@@ -780,17 +787,17 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	}
 	// The same fair share applies to what the uplink's queue holds, where each frame also costs
 	// itemOverhead: a flood of empty frames ends its own session before the queue overflows.
-	cost := len(frame) + itemOverhead
+	cost := allocSize(frameLen) + itemOverhead
 	qMine, qTotal := up.out.queued(c.sid)
 	qLimit := SocketWindow
 	if qMine+cost > LightSession {
 		qLimit = SocketWindow - LightSession*others
 	}
-	if up.sent-up.acked+uint64(len(frame)) > limit || qTotal+cost > qLimit || !up.out.offer(frame, c.sid) {
+	if up.sent-up.acked+uint64(frameLen) > limit || qTotal+cost > qLimit || !up.out.offerFrame(c.sid, payload) {
 		rm.endSession(c, wire.CodeTimeout)
 		return
 	}
-	up.sent += uint64(len(frame))
+	up.sent += uint64(frameLen)
 	c.upEnd = up.sent
 	c.upUnacked = mine
 }

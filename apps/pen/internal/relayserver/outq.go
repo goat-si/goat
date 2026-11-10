@@ -2,6 +2,7 @@ package relayserver
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
 // budget is what one socket's queue and reader charge: the server-wide totals and the share of the
@@ -32,31 +34,49 @@ type source struct {
 // readAllowance is what one socket may hold for the message it is reading without a charge: a
 // ping, an ack or a whole Noise message (64 KiB) always gets read, whoever fills the budgets.
 // Past it a read charges the large-read pool (MaxReading) and the source's part of it.
-const readAllowance = 96 << 10
+const readAllowance = 4<<10 + firstGrowth
 
-// try charges n bytes of queue, or charges nothing and reports false. Past the source's share it
-// fails; past the server-wide total it first ends the largest queue of the source holding the most,
-// so a full relay costs the sources that hold its memory.
-func (b *budget) try(n int) bool {
+// firstGrowth is the read buffer after its first 4 KiB: room for a 96 KiB message and the byte
+// that shows it ended, so such a message never needs the large-read pool.
+const firstGrowth = 104 << 10
+
+// try charges n bytes of queue for self, or charges nothing and reports false. Past the source's
+// share it first ends a queue of that source, past the server-wide total one of any source, each
+// time the queue makeRoom ranks first; it fails once self ranks first.
+func (b *budget) try(n int, self *outq) bool {
 	if b == nil {
 		return true
 	}
-	if b.src.held.Add(int64(n)) > b.srv.maxPerSource() {
-		b.src.held.Add(-int64(n))
-		return false
-	}
-	for range 4 {
+	for range maxEvictions {
+		if b.src.held.Add(int64(n)) > b.srv.maxPerSource() {
+			b.src.held.Add(-int64(n))
+			if !b.srv.makeRoom(b.src, self) {
+				return false
+			}
+			continue
+		}
 		if b.srv.queued.Add(int64(n)) <= b.srv.maxQueued() {
 			return true
 		}
 		b.srv.queued.Add(-int64(n))
-		if !b.srv.makeRoom(b.src, int64(n)) {
-			break
+		b.src.held.Add(-int64(n))
+		if !b.srv.makeRoom(nil, self) {
+			return false
 		}
 	}
-	b.src.held.Add(-int64(n))
 	return false
 }
+
+// maxEvictions bounds the queues one offer may end, and abortWait how long it waits for each to
+// give back a message being written, so an offer holds its room's lock at most 4 s.
+const (
+	maxEvictions = 4
+	abortWait    = time.Second
+)
+
+// stallAfter is how long a queue holding memory may go without a finished write and still count
+// as draining.
+const stallAfter = 2 * time.Second
 
 // count charges n bytes of queue (negative to give them back) without checking the caps: control
 // messages are small and bounded per socket.
@@ -135,8 +155,7 @@ func readMessage(r io.Reader, limit int, b *budget) (data []byte, err error) {
 			if len(buf) > limit {
 				return buf, nil
 			}
-			// A Noise message is at most 64 KiB plus the frame header; grow to that at once.
-			next := allocSize(min(max(2*cap(buf), 72<<10), limit+1))
+			next := allocSize(min(max(2*cap(buf), firstGrowth), limit+1))
 			if !hold(cap(buf) + next) {
 				b.countRead(-charged)
 				return nil, errOverBudget
@@ -185,7 +204,11 @@ type outq struct {
 	timeout time.Duration
 	// budget is what this queue charges (nil in unit tests).
 	budget *budget
+	// uplink marks a node's queue, ended only after every stalled client queue.
+	uplink bool
 	mu     sync.Mutex
+	// since is when the queue last finished a write, or took its first item while empty.
+	since time.Time
 	// ring holds the queued items from head; popped slots are cleared so a sent payload is not
 	// kept alive by the array.
 	ring  []outItem
@@ -218,8 +241,8 @@ const minRing = 8
 
 func cost(it outItem) int { return cap(it.data) + itemOverhead }
 
-func newOutq(ws wsWriter, timeout time.Duration, b *budget) *outq {
-	q := &outq{ws: ws, timeout: timeout, budget: b, wake: make(chan struct{}, 1), ended: make(chan struct{})}
+func newOutq(ws wsWriter, timeout time.Duration, b *budget, uplink bool) *outq {
+	q := &outq{ws: ws, timeout: timeout, budget: b, uplink: uplink, wake: make(chan struct{}, 1), ended: make(chan struct{})}
 	if b != nil {
 		b.srv.mu.Lock()
 		b.src.queues[q] = struct{}{}
@@ -227,6 +250,24 @@ func newOutq(ws wsWriter, timeout time.Duration, b *budget) *outq {
 	}
 	go q.run()
 	return q
+}
+
+// offerFrame queues a DATA frame for sid carrying payload, like offer: the frame is built in its
+// own buffer only once its cost is charged, so no copy exists outside the budget.
+func (q *outq) offerFrame(sid uint32, payload []byte) bool {
+	n := wire.HeaderLen + len(payload)
+	reserved := itemOverhead + allocSize(n)
+	if !q.budget.try(reserved, q) {
+		return false
+	}
+	buf := own(nil, n)[:n]
+	buf[0] = wire.FrameData
+	binary.LittleEndian.PutUint32(buf[1:wire.HeaderLen], sid)
+	copy(buf[wire.HeaderLen:], payload)
+	it := outItem{data: buf, sid: sid}
+	q.budget.count(cost(it) - reserved)
+	q.push(it, true)
+	return true
 }
 
 // offer queues a copy of a session's data unless its cost would pass the source's share, or the
@@ -237,13 +278,57 @@ func (q *outq) offer(data []byte, sid uint32) bool {
 	if len(data) > 0 {
 		reserved += allocSize(len(data))
 	}
-	if !q.budget.try(reserved) {
+	if !q.budget.try(reserved, q) {
 		return false
 	}
 	it := outItem{data: own(data, 0), sid: sid}
 	q.budget.count(cost(it) - reserved)
 	q.push(it, true)
 	return true
+}
+
+func (q *outq) now() time.Time {
+	if q.budget != nil && q.budget.srv.clock != nil {
+		return q.budget.srv.clock()
+	}
+	return time.Now()
+}
+
+// rank is what makeRoom orders queues by; ok is false for a queue that has nothing more to give back.
+type rank struct {
+	held   int
+	age    time.Duration
+	uplink bool
+}
+
+func (q *outq) rank(now time.Time) (r rank, ok bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	held := q.bytes + q.writing
+	// A queue ended with nothing left but its write in flight is already giving that back.
+	if held == 0 || q.done && q.bytes == 0 {
+		return rank{}, false
+	}
+	return rank{held: held, age: now.Sub(q.since), uplink: q.uplink}, true
+}
+
+// endsBefore reports whether a full relay ends a queue ranked r before one ranked o: one stalled
+// past stallAfter before one draining; among stalled ones a client's before an uplink's (which
+// takes its sessions with it), then the longest stalled; among draining ones the slowest, then a
+// client's; the larger last.
+func (r rank) endsBefore(o rank) bool {
+	rs, os := r.age >= stallAfter, o.age >= stallAfter
+	switch {
+	case rs != os:
+		return rs
+	case rs && r.uplink != o.uplink:
+		return !r.uplink
+	case r.age != o.age:
+		return r.age > o.age
+	case r.uplink != o.uplink:
+		return !r.uplink
+	}
+	return r.held > o.held
 }
 
 // size is what the queue holds now, the item being written included.
@@ -268,7 +353,7 @@ func (q *outq) abort() bool {
 	q.ws.CloseNow()
 	q.signal()
 	if writing {
-		t := time.NewTimer(q.timeout)
+		t := time.NewTimer(min(q.timeout, abortWait))
 		select {
 		case <-q.ended:
 		case <-t.C:
@@ -296,6 +381,9 @@ func (q *outq) push(it outItem, charged bool) {
 	}
 	if !charged {
 		q.budget.count(c)
+	}
+	if q.bytes == 0 && q.writing == 0 {
+		q.since = q.now()
 	}
 	if it.close != 0 {
 		q.done = true
@@ -397,6 +485,7 @@ func (q *outq) written() {
 	q.mu.Lock()
 	q.budget.count(-q.writing)
 	q.writing = 0
+	q.since = q.now()
 	q.mu.Unlock()
 }
 
