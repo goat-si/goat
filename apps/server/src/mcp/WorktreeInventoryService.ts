@@ -839,7 +839,7 @@ const make = Effect.gen(function* () {
         kept.push({ ...entry, reason: blocker });
         continue;
       }
-      // Each sweep attempts at least one removal; a caller stops repeating when one removes nothing.
+      // The deadline never skips the first eligible removal, so a repeated sweep can make progress.
       if (!dryRun && attempted && (yield* Clock.currentTimeMillis) >= deadline) {
         remaining++;
         continue;
