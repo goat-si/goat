@@ -721,6 +721,40 @@ describe("buildGoatBotTimeline", () => {
 });
 
 describe("goatBotReplyingSince", () => {
+  it("quotes the prompt only when a reply answers something other than the latest message", () => {
+    const reply = (replyToKey: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      replyToKey,
+    });
+    const asked = (requestKey: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: "2026-10-12T12:00:01Z",
+      requestKey,
+    });
+    const quotes = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          user("u1", "2026-10-12T12:00:00Z", "list the folders"),
+          bot("b1", "2026-10-12T12:00:02Z", "On it."),
+          bot("b2", "2026-10-12T12:00:04Z", "Here they are."),
+          user("u2", "2026-10-12T12:00:05Z", "and count docs"),
+          bot("b3", "2026-10-12T12:00:06Z", "Also: the folder list is final."),
+        ]),
+        pendingInputs: [],
+        readers: readers({
+          u1: asked("in-1"),
+          b1: reply("in-1"),
+          b2: reply("in-1"),
+          u2: asked("in-2"),
+          b3: reply("in-1"),
+        }),
+      }),
+    ).flatMap((row) => (row.kind === "bot" ? [row.replyTo] : []));
+    expect(quotes).toEqual([null, null, "list the folders"]);
+  });
+
   const read = (requestKey: string, readAt: string): GoatBotMessagePresentation => ({
     tone: "reply",
     readAt,
