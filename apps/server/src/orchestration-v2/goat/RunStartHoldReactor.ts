@@ -31,7 +31,7 @@ interface ThreadHold {
 }
 
 /** What holds each thread, from the same state the start guard reads. */
-export const threadHolds = Effect.fn("RunStartHoldReactor.threadHolds")(function* (
+const threadHolds = Effect.fn("RunStartHoldReactor.threadHolds")(function* (
   survivors: CodexSurvivors.CodexSurvivors["Service"],
 ) {
   const holds = new Map<ThreadId, ThreadHold>();
@@ -62,7 +62,7 @@ export const threadHolds = Effect.fn("RunStartHoldReactor.threadHolds")(function
   return holds;
 });
 
-export const heldBy = (
+const heldBy = (
   run: OrchestrationV2Run,
   holds: ReadonlyMap<ThreadId, ThreadHold>,
 ): OrchestrationV2RunStartHold | undefined => {

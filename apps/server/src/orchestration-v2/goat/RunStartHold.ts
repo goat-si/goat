@@ -24,7 +24,7 @@ type StartHoldCommand = Extract<
   { readonly type: "run.start-hold.update" }
 >;
 
-export const sameStartHold = (
+const sameStartHold = (
   left: OrchestrationV2RunStartHold | undefined,
   right: OrchestrationV2RunStartHold | undefined,
 ) => left?.reason === right?.reason && left?.nativeTurnId === right?.nativeTurnId;
