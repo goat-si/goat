@@ -28,6 +28,8 @@ const heldStart = (
     readonly ownedByRun?: boolean;
     /** Another native thread of this GOAT thread with its own goal block. */
     readonly otherGoal?: boolean;
+    /** A second process record with a goal block for the same native thread. */
+    readonly otherRecordGoal?: boolean;
   },
 ) =>
   Effect.gen(function* () {
@@ -35,9 +37,14 @@ const heldStart = (
     const threadId = ThreadId.make(`held-${name}`);
     const turn = { threadId, nativeThreadId: "native-thread", nativeTurnId: "goal-turn" };
     const obligations = yield* Ref.make([turn]);
-    const goalBlocks = yield* Ref.make([
+    const goalBlocks = yield* Ref.make<
+      ReadonlyArray<{ threadId: ThreadId; nativeThreadId: string; recordName?: string }>
+    >([
       { threadId, nativeThreadId: "native-thread" },
       ...(options.otherGoal === true ? [{ threadId, nativeThreadId: "other-native-thread" }] : []),
+      ...(options.otherRecordGoal === true
+        ? [{ threadId, nativeThreadId: "native-thread", recordName: "codex-other-record" }]
+        : []),
     ]);
     const goalBlocksAtWake = yield* Ref.make<number | undefined>(undefined);
     /** Set when the start guard stopped holding the thread while its goal block still stood. */
@@ -75,7 +82,12 @@ const heldStart = (
       clearStopObligation: clearStop,
       getGoalBlocks: () =>
         Ref.get(goalBlocks).pipe(
-          Effect.map((blocks) => blocks.map((block) => ({ record, block }))),
+          Effect.map((blocks) =>
+            blocks.map(({ recordName, ...block }) => ({
+              record: recordName === undefined ? record : { ...record, recordName },
+              block,
+            })),
+          ),
         ),
       // Like the record store: a goal block stays while any stop fence holds its thread.
       clearGoalBlock: (_record, block) =>
@@ -156,6 +168,16 @@ it.effect("a goal block on another native thread refuses the stop before anythin
     // Admission would still refuse the message, so ending the turn could not release it.
     const exit = yield* Effect.exit(
       heldStart("other-goal", { confirmed: true, turnId: "goal-turn", otherGoal: true }),
+    );
+    assert.isTrue(Exit.isFailure(exit));
+  }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
+);
+
+it.effect("a goal block in another process record refuses the stop before anything stops", () =>
+  Effect.gen(function* () {
+    // The release writes one record, so a block kept elsewhere would still refuse the message.
+    const exit = yield* Effect.exit(
+      heldStart("other-record", { confirmed: true, turnId: "goal-turn", otherRecordGoal: true }),
     );
     assert.isTrue(Exit.isFailure(exit));
   }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),

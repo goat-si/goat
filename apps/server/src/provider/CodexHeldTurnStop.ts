@@ -73,10 +73,14 @@ export const stopHeldTurn = Effect.fn("CodexHeldTurnStop.stopHeldTurn")(function
   // A turn that survived a restart, or any other run's turn, stops with its run.
   if (held === undefined || survivorTurn || (yield* input.ownedByRun(input.nativeTurnId)))
     return "none" satisfies Outcome;
-  // Admission would still refuse the message for that goal, so this stop could not release it.
+  // The release writes one record. A goal block anywhere else would keep admission refusing the
+  // message, so only the plain case is stopped: every block is this turn's, in this record.
   if (
     (yield* input.survivors.getGoalBlocks(input.threadId)).some(
-      ({ block }) => block.nativeThreadId !== held.block.nativeThreadId,
+      ({ record, block }) =>
+        block.nativeThreadId !== held.block.nativeThreadId ||
+        record.instanceId !== held.record.instanceId ||
+        record.recordName !== held.record.recordName,
     )
   )
     return yield* new CodexDetachedAppServerError({
