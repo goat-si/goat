@@ -49,6 +49,11 @@ type Options struct {
 	// Ready is called once the control socket accepts requests.
 	Ready func()
 	Now   func() time.Time
+	// Since is the monotonic time elapsed since a Now reading (time.Since); a wall clock that ran
+	// ahead of it means the machine slept (wake.go).
+	Since func(time.Time) time.Duration
+	// WakeTicks paces the sleep check (every 5 s when nil); tests drive it.
+	WakeTicks <-chan time.Time
 }
 
 // Daemon is one running node.
@@ -144,6 +149,9 @@ func New(opt Options) (*Daemon, error) {
 	}
 	if opt.Now == nil {
 		opt.Now = time.Now
+	}
+	if opt.Since == nil {
+		opt.Since = time.Since
 	}
 	if opt.KnownHosts == "" {
 		p, err := DefaultKnownHosts()
@@ -268,6 +276,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.spawn(func() { d.every(ctx, d.opt.SyncEvery, func() { d.pushAll(ctx) }) })
 	d.spawn(func() { d.hostKeysLoop(ctx) })
 	d.spawn(func() { d.forgetLoop(ctx) })
+	d.spawn(func() { d.wakeLoop(ctx) })
 	d.writeKnownHosts()
 	if d.opt.Ready != nil {
 		d.opt.Ready()

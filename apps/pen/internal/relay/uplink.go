@@ -39,6 +39,10 @@ type Uplink struct {
 	PingInterval time.Duration
 
 	accept chan Conn
+	// kick asks Run to reconnect at once (Redial); drop ends the current socket.
+	kick chan struct{}
+	mu   sync.Mutex
+	drop context.CancelFunc
 }
 
 // NewUplinkInto builds an uplink whose sessions arrive on accept (shared by several uplinks).
@@ -50,7 +54,23 @@ func NewUplinkInto(relayURL string, id *ident.Identity, accept chan Conn) *Uplin
 
 // NewUplink builds an uplink for id at relayURL.
 func NewUplink(relayURL string, id *ident.Identity) *Uplink {
-	return &Uplink{RelayURL: relayURL, ID: id, accept: make(chan Conn, 64), MinBackoff: 500 * time.Millisecond, MaxBackoff: 30 * time.Second}
+	return &Uplink{RelayURL: relayURL, ID: id, accept: make(chan Conn, 64), kick: make(chan struct{}, 1),
+		MinBackoff: 500 * time.Millisecond, MaxBackoff: 30 * time.Second}
+}
+
+// Redial drops the current socket, if any, and reconnects at once without backoff (after the
+// machine woke, the old socket is likely dead and a write would take minutes to notice).
+func (u *Uplink) Redial() {
+	select {
+	case u.kick <- struct{}{}:
+	default:
+	}
+	u.mu.Lock()
+	drop := u.drop
+	u.mu.Unlock()
+	if drop != nil {
+		drop()
+	}
 }
 
 // Accept returns the next relay session (an OPEN).
@@ -81,6 +101,13 @@ func (u *Uplink) Run(ctx context.Context) error {
 		if errors.Is(err, ErrReplaced) {
 			return err
 		}
+		select {
+		case <-u.kick:
+			u.logf("uplink: redialing at once")
+			backoff = u.MinBackoff
+			continue
+		default:
+		}
 		if time.Since(start) > 10*time.Second {
 			backoff = u.MinBackoff
 		}
@@ -91,6 +118,10 @@ func (u *Uplink) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			t.Stop()
 			return ctx.Err()
+		case <-u.kick:
+			t.Stop()
+			backoff = u.MinBackoff
+			continue
 		case <-t.C:
 		}
 		backoff = min(backoff*2, u.MaxBackoff)
@@ -131,6 +162,14 @@ func (u *Uplink) runOnce(ctx context.Context) error {
 	}
 	lctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	u.mu.Lock()
+	u.drop = cancel
+	u.mu.Unlock()
+	defer func() {
+		u.mu.Lock()
+		u.drop = nil
+		u.mu.Unlock()
+	}()
 	if err := ws.Write(lctx, websocket.MessageBinary, AnswerChallenge(u.ID, origin, challenge)); err != nil {
 		ws.CloseNow()
 		return err
