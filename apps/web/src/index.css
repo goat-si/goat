@@ -2557,6 +2557,11 @@ code {
   font-weight: 500;
 }
 
+/* Room for the copy control, so it never covers the last heading. */
+.goat-bot-table .chat-markdown thead th:last-child {
+  padding-inline-end: 2.75rem;
+}
+
 .goat-bot-table .chat-markdown tbody tr:last-child td {
   border-bottom: 0;
 }

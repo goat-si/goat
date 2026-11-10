@@ -44,7 +44,7 @@ export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
       <div
         className={
           onCard
-            ? "goat-table-card-copy absolute end-2 top-2 flex select-none"
+            ? "goat-table-card-copy absolute end-2 top-2.5 flex select-none"
             : "mt-0.5 -mx-1 flex items-center justify-end select-none"
         }
       >
@@ -56,8 +56,8 @@ export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
                   render={
                     <Button
                       type="button"
-                      variant={onCard ? "outline" : "ghost-muted"}
-                      size={onCard ? "xs" : "icon-xs"}
+                      variant="ghost-muted"
+                      size="icon-xs"
                       aria-label={copyLabel}
                     />
                   }
@@ -65,7 +65,6 @@ export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
               }
             >
               <MorphIcon className="size-3" icon={copied ? Check : Copy} />
-              {onCard ? copyLabel : null}
             </TooltipTrigger>
             <TooltipPopup side="top">{copyLabel}</TooltipPopup>
           </Tooltip>
