@@ -92,7 +92,7 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 			return
 		}
 		defer d.unregister(k)
-		d.markSeen(sec.RemoteStatic, true)
+		d.markSeen(sec.RemoteStatic, true, relayOf(c))
 		if sec.Payload.Stream == "tcp" {
 			d.serveTCP(ctx, sec)
 		} else {
@@ -105,6 +105,14 @@ func (d *Daemon) handleOpen(ctx context.Context, c relay.Conn) {
 	default:
 		sec.Close(wire.CodeNotAdmitted)
 	}
+}
+
+// relayOf is the relay whose uplink carried c.
+func relayOf(c relay.Conn) string {
+	if r, ok := c.(interface{ Relay() string }); ok {
+		return r.Relay()
+	}
+	return ""
 }
 
 func (d *Daemon) serveTCP(ctx context.Context, sec *session.Secure) {

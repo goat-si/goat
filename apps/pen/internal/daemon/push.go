@@ -63,14 +63,14 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 	res := func(err error) string {
 		switch relay.CodeOf(err) {
 		case wire.CodeOffline:
-			d.markSeen(noise, false)
+			d.markSeen(noise, false, "")
 			return "offline"
 		case wire.CodeNotAdmitted:
 			return "refused"
 		}
 		return "error: " + err.Error()
 	}
-	sec, err := OpenAny(ctx, d.relays(), m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
+	sec, used, err := openVia(ctx, d.relays(), m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
 		return session.Initiate(ctx, conn, session.KindSession, m.NodeID, noise, d.id, nil, session.Payload{V: 1, Stream: "mesh"})
 	})
 	if err != nil {
@@ -80,7 +80,7 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 	if err := mesh.SyncInitiateAs(ctx, sec, d.mesh(), d.onMerged, d.helloFrom(noise), d.announce()); err != nil {
 		return res(err)
 	}
-	d.markSeen(noise, true)
+	d.markSeen(noise, true, used)
 	return "taken"
 }
 
@@ -91,28 +91,34 @@ var DialRetries = []time.Duration{300 * time.Millisecond, time.Second, 2 * time.
 // A relay can answer pong for a stale uplink, so when the handshake fails there it falls back to the
 // remaining relays; 4401 and 4400 are the node's answer and end the attempt.
 func OpenAny(ctx context.Context, relays []string, nodeID string, handshake func(relay.Conn) (*session.Secure, error)) (*session.Secure, error) {
+	sec, _, err := openVia(ctx, relays, nodeID, handshake)
+	return sec, err
+}
+
+// openVia is OpenAny that also names the relay the session runs on.
+func openVia(ctx context.Context, relays []string, nodeID string, handshake func(relay.Conn) (*session.Secure, error)) (*session.Secure, string, error) {
 	left := append([]string(nil), relays...)
 	var last error
 	for len(left) > 0 {
 		conn, used, err := relay.DialRace(ctx, left, nodeID)
 		if err != nil {
 			if last != nil {
-				return nil, last
+				return nil, "", last
 			}
-			return nil, err
+			return nil, "", err
 		}
 		sec, err := handshake(conn)
 		if err == nil {
-			return sec, nil
+			return sec, used, nil
 		}
 		conn.Close(wire.CodeNormal)
 		if code := relay.CodeOf(err); code == wire.CodeNotAdmitted || code == wire.CodeCrypto || ctx.Err() != nil {
-			return nil, err
+			return nil, "", err
 		}
 		last = err
 		left = slices.DeleteFunc(left, func(u string) bool { return u == used })
 	}
-	return nil, last
+	return nil, "", last
 }
 
 // OpenTCP opens a kind 0x01 tcp stream to port on member m and returns the confirmed session.

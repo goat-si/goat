@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -26,7 +27,9 @@ type Uplink struct {
 	ID       *ident.Identity
 	// OnState is called with true after each authentication and false when the socket drops.
 	OnState func(up bool)
-	Logf    func(format string, args ...any)
+	// OnPong is called with the time from the uplink's last ping to the relay's pong.
+	OnPong func(rtt time.Duration)
+	Logf   func(format string, args ...any)
 
 	// MinBackoff and MaxBackoff bound the reconnect delay (0.5 s doubling to 30 s by default).
 	MinBackoff, MaxBackoff time.Duration
@@ -128,12 +131,12 @@ func (u *Uplink) runOnce(ctx context.Context) error {
 		ws.CloseNow()
 		return err
 	}
-	m := &mux{ws: ws, ctx: lctx, sessions: map[uint32]*muxConn{}}
+	m := &mux{ws: ws, ctx: lctx, sessions: map[uint32]*muxConn{}, relay: u.RelayURL, onPong: u.OnPong}
 	if u.OnState != nil {
 		u.OnState(true)
 		defer u.OnState(false)
 	}
-	go pinger(lctx, ws)
+	go m.pinger()
 	err = m.readLoop(u.accept, len(challenge))
 	code := statusCode(err)
 	m.failAll(&CloseError{Code: wire.CodeOffline})
@@ -149,10 +152,32 @@ func (u *Uplink) runOnce(ctx context.Context) error {
 type mux struct {
 	ws  *websocket.Conn
 	ctx context.Context
+	// relay is the uplink's relay URL; pingAt is when the unanswered ping left (unix ns, 0 when none).
+	relay  string
+	onPong func(time.Duration)
+	pingAt atomic.Int64
 
 	mu       sync.Mutex
 	sessions map[uint32]*muxConn
 	dead     bool
+}
+
+// pinger pings at once, so the round trip is known right after authentication, then every
+// PingInterval.
+func (m *mux) pinger() {
+	t := time.NewTicker(PingInterval)
+	defer t.Stop()
+	for {
+		m.pingAt.Store(time.Now().UnixNano())
+		if err := m.ws.Write(m.ctx, websocket.MessageText, []byte("ping")); err != nil {
+			return
+		}
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 func (m *mux) protocolError(err error) error {
@@ -170,6 +195,11 @@ func (m *mux) readLoop(accept chan Conn, received int) error {
 			return err
 		}
 		if typ != websocket.MessageBinary {
+			if string(p) == "pong" && m.onPong != nil {
+				if at := m.pingAt.Swap(0); at != 0 {
+					m.onPong(time.Since(time.Unix(0, at)))
+				}
+			}
 			continue
 		}
 		if s, ok := ack.add(len(p)); ok {
@@ -263,6 +293,9 @@ func (c *muxConn) Send(p []byte) error {
 }
 
 func (c *muxConn) Recv(ctx context.Context) ([]byte, error) { return c.in.recv(ctx) }
+
+// Relay is the URL of the relay whose uplink carried this session.
+func (c *muxConn) Relay() string { return c.m.relay }
 
 func (c *muxConn) SetQueueLimit(n int) { c.in.setLimit(n) }
 

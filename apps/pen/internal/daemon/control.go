@@ -41,6 +41,8 @@ type LsMember struct {
 	Online         bool   `json:"online"`
 	LastSeen       int64  `json:"lastSeen,omitempty"`
 	AdmittedByName string `json:"admittedByName,omitempty"`
+	// Relay carried the member's last session with this node (mesh sync or accepted session).
+	Relay string `json:"relay,omitempty"`
 }
 
 // LsReply is the ls answer.
@@ -277,6 +279,7 @@ func (d *Daemon) ls() LsReply {
 			lm.Online = s == "up"
 		} else if seen, ok := d.seen[m.SignPub]; ok {
 			lm.Online = seen.Online
+			lm.Relay = seen.Relay
 			if !seen.At.IsZero() {
 				lm.LastSeen = seen.At.UnixMilli()
 			}

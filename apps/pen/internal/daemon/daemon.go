@@ -117,6 +117,8 @@ type live struct {
 type seenInfo struct {
 	At     time.Time
 	Online bool
+	// Relay carried the member's last session with this node.
+	Relay string
 }
 
 // LeftMarker is written by pen leave; pen up --foreground (a service restart) then refuses to start.
@@ -319,6 +321,8 @@ type uplinkSlot struct {
 	cancel context.CancelFunc
 	mu     sync.Mutex
 	state  string
+	rtt    time.Duration
+	rttAt  time.Time
 }
 
 func (sl *uplinkSlot) set(state string) {
@@ -331,6 +335,12 @@ func (sl *uplinkSlot) get() string {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
 	return sl.state
+}
+
+func (sl *uplinkSlot) setRTT(rtt time.Duration, at time.Time) {
+	sl.mu.Lock()
+	sl.rtt, sl.rttAt = rtt, at
+	sl.mu.Unlock()
 }
 
 // startUplinks (re)connects one uplink per relay.
@@ -347,6 +357,7 @@ func (d *Daemon) startUplinks() {
 		sl.up = relay.NewUplinkInto(url, d.id, d.accept)
 		sl.up.Logf = func(format string, args ...any) { d.opt.Logf(url+": "+format, args...) }
 		sl.up.OnState = func(up bool) { d.onUplink(sl, up) }
+		sl.up.OnPong = func(rtt time.Duration) { sl.setRTT(rtt, d.now()) }
 		d.slots = append(d.slots, sl)
 		d.spawn(func() {
 			err := sl.up.Run(ctx)
@@ -379,10 +390,12 @@ func (d *Daemon) onUplink(sl *uplinkSlot, up bool) {
 	d.writeDaemonJSON(d.now())
 }
 
-// RelayState is one relay's uplink.
+// RelayState is one relay's uplink and its last ping round trip.
 type RelayState struct {
 	URL    string `json:"url"`
 	Uplink string `json:"uplink"`
+	RTTMs  int64  `json:"rttMs,omitempty"`
+	RTTAt  int64  `json:"rttAt,omitempty"`
 }
 
 func (d *Daemon) relayStates() []RelayState {
@@ -390,11 +403,16 @@ func (d *Daemon) relayStates() []RelayState {
 	defer d.upMu.Unlock()
 	out := make([]RelayState, 0, len(d.slots))
 	for _, sl := range d.slots {
-		s := sl.get()
-		if d.halted != "" {
-			s = d.halted
+		sl.mu.Lock()
+		r := RelayState{URL: sl.url, Uplink: sl.state}
+		if !sl.rttAt.IsZero() {
+			r.RTTMs, r.RTTAt = max(sl.rtt.Milliseconds(), 1), sl.rttAt.UnixMilli()
 		}
-		out = append(out, RelayState{URL: sl.url, Uplink: s})
+		sl.mu.Unlock()
+		if d.halted != "" {
+			r.Uplink = d.halted
+		}
+		out = append(out, r)
 	}
 	return out
 }
@@ -444,7 +462,8 @@ func (d *Daemon) every(ctx context.Context, period time.Duration, f func()) {
 	}
 }
 
-func (d *Daemon) markSeen(noisePub []byte, online bool) {
+// markSeen records a member's session state; via is the relay that carried it ("" keeps the last).
+func (d *Daemon) markSeen(noisePub []byte, online bool, via string) {
 	m, ok := d.view().MemberByNoise(noisePub)
 	if !ok {
 		return
@@ -455,6 +474,9 @@ func (d *Daemon) markSeen(noisePub []byte, online bool) {
 	s.Online = online
 	if online {
 		s.At = d.now()
+	}
+	if via != "" {
+		s.Relay = via
 	}
 	d.seen[m.SignPub] = s
 }
