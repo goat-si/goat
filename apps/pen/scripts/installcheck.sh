@@ -44,8 +44,12 @@ read -r _ _ <"$work/relay2.out"
 inst() {
 	n="$1"
 	shift
-	mkdir -p "$work/$n"
-	curl -fsSL "$relay/install.sh" | HOME="$work/$n" PEN_HOME="$work/$n/.pen" PEN_HOSTKEYS=none PEN_SSH_DIR="$work/$n/ssh" sh -s -- --no-service "$@"
+	mkdir -p "$work/$n/tmp"
+	curl -fsSL "$relay/install.sh" | TMPDIR="$work/$n/tmp" HOME="$work/$n" PEN_HOME="$work/$n/.pen" PEN_HOSTKEYS=none PEN_SSH_DIR="$work/$n/ssh" sh -s -- --no-service "$@"
+}
+# install.sh downloads into a folder under TMPDIR; it must be gone also when install.sh ends by running pen.
+notmp() {
+	[ -z "$(ls -A "$work/$1/tmp")" ] || { echo "FAIL: install.sh $2 left its download behind:"; ls -R "$work/$1/tmp"; exit 1; }
 }
 pen() {
 	n="$1"
@@ -65,6 +69,7 @@ grep -q "no mesh here yet; run pen login" "$work/z.err" || { echo "FAIL: pen ls 
 echo "ok: a bare install.sh installs pen and founds nothing"
 
 inst a --name a --up
+notmp a --up
 pen a version
 relays="$(pen a relay ls)"
 for r in "$relay" "$relay2"; do
@@ -73,6 +78,7 @@ done
 [ "$(pen a relay download)" = "$relay" ] || { echo "FAIL: a's download relay is $(pen a relay download), want $relay"; exit 1; }
 echo "ok: install.sh --up gave a both relays and kept the download relay"
 inst b --name b --join "$(pen a invite --auto)"
+notmp b --join
 [ "$(pen b relay download)" = "$relay" ] || { echo "FAIL: b's download relay is $(pen b relay download), want $relay"; exit 1; }
 members="$(pen a ls --json | grep -c '"fingerprint"')"
 [ "$members" = 2 ] || { echo "FAIL: a lists $members members"; exit 1; }

@@ -62,7 +62,7 @@ else
 fi
 
 file="pen-$os-$arch.gz"
-tmp="$(mktemp -d)"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/pen-install.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$PEN_RELAY/dl/$VERSION/$file" -o "$tmp/$file"
 curl -fsSL "$PEN_RELAY/dl/$VERSION/SHA256SUMS" -o "$tmp/SHA256SUMS"
@@ -78,6 +78,9 @@ mkdir -p "$HOME/.local/bin"
 gunzip -c "$tmp/$file" >"$tmp/pen"
 chmod 0755 "$tmp/pen"
 mv "$tmp/pen" "$HOME/.local/bin/pen"
+# The steps below may exec pen, which skips the EXIT trap, so the download goes now.
+rm -rf "$tmp"
+trap - EXIT
 echo "installed $HOME/.local/bin/pen ($VERSION)"
 pen="pen"
 case ":$PATH:" in
