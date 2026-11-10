@@ -1,6 +1,11 @@
 package daemon
 
-import "github.com/goat-si/goat/apps/pen/internal/state"
+import (
+	"encoding/json"
+	"errors"
+
+	"github.com/goat-si/goat/apps/pen/internal/state"
+)
 
 // VersionsFile keeps the pen version each member (by Noise key) last announced in a sync hello.
 //
@@ -10,9 +15,16 @@ import "github.com/goat-si/goat/apps/pen/internal/state"
 // offline is not detected until it syncs again: downgrades are unsupported.
 const VersionsFile = "versions.json"
 
+// loadVersions reads the stored announcements. A file that does not parse reads as empty: that
+// fails closed (no member counts as 1.1 until it announces again) instead of stopping the daemon.
 func loadVersions(st *state.Store) (map[string]string, error) {
 	v := map[string]string{}
 	if _, err := st.ReadJSON(VersionsFile, &v); err != nil {
+		var syntax *json.SyntaxError
+		var typ *json.UnmarshalTypeError
+		if errors.As(err, &syntax) || errors.As(err, &typ) {
+			return map[string]string{}, nil
+		}
 		return nil, err
 	}
 	return v, nil

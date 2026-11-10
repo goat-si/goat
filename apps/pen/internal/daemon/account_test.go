@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -684,5 +685,17 @@ func TestAForgetRefusedForClockSkewIsRetried(t *testing.T) {
 	}
 	if !answered(&login.HTTPError{Status: 400, Body: `{"error":"bad_proof"}`}) {
 		t.Fatal("a malformed forget was retried")
+	}
+}
+
+func TestACorruptVersionsFileIsReadAsEmpty(t *testing.T) {
+	st := shortDir(t)
+	if err := os.WriteFile(st.Path(VersionsFile), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Reading it as empty still fails closed: no member counts as 1.1 until it announces again.
+	v, err := loadVersions(st)
+	if err != nil || len(v) != 0 {
+		t.Fatalf("versions %v, %v; want an empty map and no error", v, err)
 	}
 }
