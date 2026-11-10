@@ -150,7 +150,7 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
               "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
           };
         }
-        return base;
+        return isStreaming ? { ...base, data: { disposition: "queued" } } : base;
       case "get_available_models":
         return { ...base, data: { models } };
       case "set_model":
