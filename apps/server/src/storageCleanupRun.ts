@@ -41,8 +41,9 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
   const previewState = yield* WorktreeCleanupPreviewState;
   const store = yield* WorktreeSnapshotStore;
   const sql = yield* SqlClient.SqlClient;
-  // Activation never reverts, so later sweeps skip the dry pass.
+  // Activation lasts until the preview is forgotten; later sweeps skip the dry pass.
   let activated = false;
+  let forgotten = 0;
   const housekeeping = Effect.fn("StorageCleanup.snapshotHousekeeping")(
     function* (nowMs: number, snapshotDays: number | null) {
       const deleted = yield* sql<{ threadId: string }>`
@@ -81,6 +82,7 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
       input.entries.push(...dryEntries);
       return { ...dry, preview: none };
     }
+    const asked = forgotten;
     const gate = yield* previewState.evaluate({
       nowMs: input.nowMs,
       plannedCount,
@@ -90,11 +92,13 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
       input.entries.push(...dryEntries);
       return { ...dry, preview: gate.preview };
     }
-    activated = true;
+    // A preview forgotten during this approval must not stay approved for later sweeps.
+    activated = asked === forgotten;
     return { ...(yield* input.clean(false, input.entries)), preview: none };
   });
   const forgetPreview = Effect.sync(() => {
     activated = false;
+    forgotten++;
   }).pipe(Effect.andThen(previewState.reset));
   // Turning the preview off forgets it, so turning it on again shows a new one. null is startup.
   const forgetIfTurnedOff = (before: ServerSettings | null, after: ServerSettings) =>
