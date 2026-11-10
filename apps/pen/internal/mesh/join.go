@@ -148,6 +148,8 @@ type Invites struct {
 	st   *state.Store
 	mu   sync.Mutex
 	live map[string]Invite
+	// retired is set when the node's mesh is replaced: this book no longer writes offers.json.
+	retired bool
 }
 
 // LoadInvites reads offers.json (st may be nil for in-memory use).
@@ -175,7 +177,7 @@ func (iv *Invites) saveLocked(now time.Time) error {
 		}
 		list = append(list, x)
 	}
-	if iv.st == nil {
+	if iv.st == nil || iv.retired {
 		return nil
 	}
 	unlock, err := iv.st.Lock()
@@ -184,6 +186,13 @@ func (iv *Invites) saveLocked(now time.Time) error {
 	}
 	defer unlock()
 	return iv.st.WriteJSON("offers.json", list, 0o600)
+}
+
+// Retire stops this book from writing offers.json; a save already running finishes first.
+func (iv *Invites) Retire() {
+	iv.mu.Lock()
+	iv.retired = true
+	iv.mu.Unlock()
 }
 
 // Create makes an invite valid for ttl.
@@ -195,6 +204,9 @@ func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
 	x := Invite{ID: session.InviteID(secret), Secret: secret, ExpiresAt: now.Add(ttl).UnixMilli()}
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
+	if iv.retired {
+		return Invite{}, errors.New("this node's mesh changed while the invite was made; run pen invite again")
+	}
 	iv.live[x.ID] = x
 	return x, iv.saveLocked(now)
 }
