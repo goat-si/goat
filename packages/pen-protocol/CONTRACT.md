@@ -394,15 +394,20 @@ offered that its copy of the mesh does not count as a member. One that refuses i
 kind 0x04: the first line is `{"t":"check","assertion":{...}}` instead of `assertion`. The node runs the assertion
 checks above (a lock does not matter here) and then a sync as on kind 0x01, with the joiner as initiator, except that it
 sends its own records and `done` only after the joiner's `done`, and only if both hold in a scratch copy of its own set
-with the joiner's records merged in: the joiner is a member, and walking the admits back from the joiner's (each
-member's `admittedBy`), the walk reaches a key this node's own view counts as a current member, or the founder, before
-it reaches a key this node's own view revoked as compromised (directly or as an admit of such a key). Keys its own view
-revoked plainly, or does not know, are walked past, since a plain revoke keeps what the key admitted. Otherwise it sends
-`refused` and closes 4401. It stores nothing the joiner sent. A node that left or was revoked plainly, or has not heard
-of the joiner yet, so passes it its records, and the joiner applies them like any sync. A node that still refuses holds
-records the admitting member left out, typically a compromised revoke along the joiner's admits (a revoked or stolen
-member can serve a cut copy, and a stolen key can win a revoke race in the merged order, so the check decides on the
-node's own view), so the join fails with that node's name and nothing is installed. A refusal also stands when the check
+with the joiner's records merged in: the joiner is a member, and a walk from the joiner toward the founder accepts it.
+The walk visits a key, starting with the joiner's: if this node's own view counts the key as a current member, it
+accepts; if its own view revoked the key (plainly or as compromised), or the key has no admitter (a founder this node
+does not count), it refuses; otherwise it moves to the key's admitter (the member entry's `admittedBy` in the merged
+copy, current or revoked) and visits that. It never walks past a key its own view revoked: an admit by a revoked key
+that this node does not already hold looks the same as one signed after the revoke. Keys it never heard of are walked
+through, so the walk must still reach a current member. Otherwise it sends `refused` and closes 4401. It stores nothing
+the joiner sent. A node that left, was revoked, or has not heard of the joiner yet so passes it its records whenever the
+joiner's admits reach a member it still counts, and the joiner applies them like any sync. A node that still refuses
+holds a revoke along the joiner's admits (a revoked or stolen member can serve a cut copy and a stolen key can win a
+revoke race in the merged order, so the check decides on the node's own view), so the join fails with that node's name
+and nothing is installed. The walk fails closed in one honest case: a machine admitted by a since-revoked key before the
+revoke, whose admit this node has not received yet, admits the joiner; that join fails until the members have synced
+the admit, and the joiner's message says to try again. A refusal also stands when the check
 does not complete. A node older than the check (pen 0.2.6 and before) answers `refused` ("expected an assertion") and
 4401, so while such a node is the one refusing, a join fails in exactly the cases the check was added for; updating it,
 or joining by invite, is the way through. A listed node that does not answer (offline, out of session slots, slower than
@@ -453,6 +458,7 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
   "Relay text" section states that nothing confirms an uplink's authentication and that a pong proves nothing about
   it. No wire change.
 - v1.1 (2026-11-11): kind 0x04 `check`: a Google joiner that a listed node refused asks it to check the joiner's
-  records against its own, so a node that left or has not heard of the joiner no longer fails the join while a cut copy
-  served by a revoked member still does. Nodes before this answer the check as an unexpected first line (4401), which
+  records against its own, so a node that left or has not heard of the joiner no longer fails the join while the
+  joiner's admits reach a member it counts; a copy whose admits pass a key it revoked, plainly or as compromised,
+  still fails. Nodes before this answer the check as an unexpected first line (4401), which
   the joiner counts as the refusal it was. No account-stream messages are in the shared vectors.

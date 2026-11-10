@@ -70,31 +70,29 @@ func serveCheck(ctx context.Context, c *Lines, remoteStatic []byte, a AccountAdm
 	}
 }
 
-// admittedCleanly reports whether k is a member of v admitted through keys own trusts: walking the
-// admits back from k's, it accepts at the first admitter own counts as a current member (or at
-// the founder) and refuses at one own revoked as compromised, which takes its admits with it. An
-// admitter own revoked plainly, or does not know, is walked past: a plain revoke keeps what the key
-// admitted. Which of two keys revoking each other wins in v depends on the canonical order (a
-// stolen key can grind it), so v alone cannot settle a set a revoked member served; own can.
+// admittedCleanly reports whether k is a member of v admitted through keys own trusts. Walking
+// from k toward the founder through the admits in v, it accepts at the first key own counts as a
+// current member and refuses at the first key own revoked, plainly or as compromised: an admit by
+// a revoked key own does not already count looks the same as one signed after the revoke, and
+// which of two keys revoking each other wins in v depends on the canonical order (a stolen key can
+// grind it). Keys own never heard of are walked through, so the walk must still end at a current
+// member; one admitted by a revoked key before its revoke fails until own has synced its admit.
 func admittedCleanly(v, own *View, k string) bool {
 	m, ok := v.Members[k]
 	if !ok {
 		return false
 	}
 	for range len(v.Members) + len(v.Revoked) + 1 {
-		by := m.AdmittedBy
-		if by == "" {
+		key := m.SignPub
+		if _, member := own.Members[key]; member {
 			return true
 		}
-		if own.Compromised[by] {
+		if _, revoked := own.Revoked[key]; revoked || m.AdmittedBy == "" {
 			return false
 		}
-		if _, member := own.Members[by]; member {
-			return true
-		}
-		next, ok := v.Members[by]
+		next, ok := v.Members[m.AdmittedBy]
 		if !ok {
-			next, ok = v.Revoked[by]
+			next, ok = v.Revoked[m.AdmittedBy]
 		}
 		if !ok {
 			return false

@@ -438,7 +438,7 @@ func FinishJoin(ctx context.Context, relays []string, id *ident.Identity, s *mes
 	// holds records the admitting member left out (a revoke of it, typically), so this copy cannot
 	// be trusted. One that takes them hands over its records, which may still revoke this machine.
 	if names := refusedByListed(ctx, relays, id, s, listed, as); len(names) > 0 {
-		return taken, others, fmt.Errorf("%s, listed for this account but not a member in the copy of the mesh this machine was given, refuse(s) this machine: the member that admitted it may be revoked or stolen and served a partial mesh. Nothing was changed here; check pen ls on a machine you trust, revoke a stolen one with pen revoke --compromised, and reset the account's machine list on the sign-in page", strings.Join(names, ", "))
+		return taken, others, fmt.Errorf("%s, listed for this account but not a member in the copy of the mesh this machine was given, refuse(s) this machine: the member that admitted it may be revoked or stolen and served a partial mesh, or a machine that joined shortly before has not reached it yet. Nothing was changed here; try again in a minute, and if it fails again check pen ls on a machine you trust, revoke a stolen one with pen revoke --compromised, and reset the account's machine list on the sign-in page", strings.Join(names, ", "))
 	}
 	if _, ok := s.View().Members[ident.B64.EncodeToString(id.SignPub)]; !ok {
 		return taken, others, errors.New("after syncing with the other members this machine is not a member (revoked); nothing was changed here")
