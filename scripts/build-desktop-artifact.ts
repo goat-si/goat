@@ -3066,7 +3066,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           ],
         }),
     extraResources: [
-      // macOS runs the helper's driver; Windows runs the helper, which carries its own (#1228).
+      // macOS runs the helper's driver; Windows runs the helper, which carries its own.
       ...DESKTOP_EXTRA_RESOURCES.filter(
         (resource) => resource.to !== "cua-driver" || platform === "linux",
       ),

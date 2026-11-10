@@ -56,14 +56,11 @@ export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(fu
   readonly platform: DesktopPlatform;
   readonly arch: DesktopArch;
 }) {
-  // Windows packages run the helper, which carries its own pinned driver (#1228).
+  // Windows packages run the helper, which carries its own pinned driver.
   if (input.platform === "mac" || input.platform === "win") return;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const release = cuaDriverRelease(
-    input.platform === "win" ? "win32" : "linux",
-    input.arch === "universal" ? "arm64" : input.arch,
-  );
+  const release = cuaDriverRelease("linux", input.arch === "universal" ? "arm64" : input.arch);
   if (!release) {
     return yield* new CuaDriverArtifactError({ message: "Unsupported Cua Driver build target." });
   }
@@ -202,9 +199,9 @@ const signWindowsComputerUseHelper = Effect.fn("signWindowsComputerUseHelper")(f
 });
 
 /**
- * Puts the Windows helper in resources\computer-use-helper (#1228). A release packages on Linux,
- * so it carries a helper built on a Windows runner through --computer-use-helper-dir; a Windows
- * host builds it here, which is what nightly does.
+ * Puts the Windows helper in resources\computer-use-helper. A release packages on Linux, so it
+ * carries a helper built on a Windows runner through --computer-use-helper-dir; a Windows host
+ * builds it here, which is what nightly does.
  */
 export const stageWindowsComputerUseHelper = Effect.fn("stageWindowsComputerUseHelper")(
   function* (input: {
