@@ -89,7 +89,7 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 		ln.Close()
 	}()
 	fmt.Fprintf(stdout, "forwarding %s -> %s:%d (Ctrl-C stops)\n", ln.Addr(), m.Name, port)
-	for {
+	for n := 1; ; n++ {
 		c, err := ln.Accept()
 		if err != nil {
 			if wasRevoked.Load() {
@@ -107,7 +107,8 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 			}
 			tc := c.(*net.TCPConn)
 			defer tc.Close()
-			sec, err := daemon.OpenTCP(ctx, p.relays, p.id, m, port)
+			tr := newOpenTrace(stderr, fmt.Sprintf(" conn=%d", n))
+			sec, err := daemon.OpenTCP(tr.context(ctx), p.relays, p.id, m, port)
 			if err != nil {
 				fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, false))
 				return
@@ -126,7 +127,7 @@ func runForward(ctx context.Context, ln net.Listener, st *state.Store, p *peer, 
 				mu.Unlock()
 			}()
 			lc := localConn{tc}
-			if err := stream.Splice(ctx, sec, lc, lc, lc.CloseWrite); err != nil && !wasRevoked.Load() && !clientGone(err) {
+			if err := stream.Splice(ctx, tr.link(sec), lc, lc, lc.CloseWrite); err != nil && !wasRevoked.Load() && !clientGone(err) {
 				fmt.Fprintln(stderr, "pen forward:", openErr(err, m, port, true))
 			}
 		}()

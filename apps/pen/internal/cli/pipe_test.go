@@ -46,13 +46,10 @@ func tmpStore(t *testing.T) *state.Store {
 	return st
 }
 
-func TestPipeEndsWith255WhenTheRemoteIsRevoked(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	rs := relaytest.New()
-	defer rs.Close()
-
-	a := tmpStore(t)
+// meshOfTwo runs members a (the founder) and b on rs and returns their state directories.
+func meshOfTwo(t *testing.T, ctx context.Context, rs *relaytest.Server) (a, b *state.Store) {
+	t.Helper()
+	a = tmpStore(t)
 	aid, _, _ := a.EnsureIdentity()
 	a.SaveConfig(state.Config{Relay: rs.URL, Name: "a"})
 	if _, err := mesh.Found(a, aid, "a", 1); err != nil {
@@ -64,7 +61,7 @@ func TestPipeEndsWith255WhenTheRemoteIsRevoked(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok, _ := mesh.ParseToken(inv.Token)
-	b := tmpStore(t)
+	b = tmpStore(t)
 	bid, _, _ := b.EnsureIdentity()
 	b.SaveConfig(state.Config{Relay: rs.URL, Name: "b"})
 	s, err := daemon.Join(ctx, b, bid, tok, "b")
@@ -73,6 +70,15 @@ func TestPipeEndsWith255WhenTheRemoteIsRevoked(t *testing.T) {
 	}
 	s.Save()
 	startNode(t, ctx, rs, b)
+	return a, b
+}
+
+func TestPipeEndsWith255WhenTheRemoteIsRevoked(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := meshOfTwo(t, ctx, rs)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -115,5 +121,52 @@ func TestPipeEndsWith255WhenTheRemoteIsRevoked(t *testing.T) {
 	}
 	if got := <-code; got != 255 || !strings.Contains(errOut.String(), "revoked") || strings.Count(errOut.String(), "\n") != 1 {
 		t.Fatalf("pipe exit %d, stderr %q; want 255 and one line naming the revoke", got, errOut.String())
+	}
+}
+
+func TestPipeTraceOnPinnedRelaysNamesTheWinnerAndTheFirstByte(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	_, b := meshOfTwo(t, ctx, rs)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		c.Write([]byte("SSH-2.0-test\r\n"))
+		io.Copy(io.Discard, c)
+		c.Close()
+	}()
+	dead, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadURL := "http://" + dead.Addr().String()
+	dead.Close()
+
+	t.Setenv("PEN_HOME", b.Dir)
+	t.Setenv("PEN_TRACE", "1")
+	t.Setenv("PEN_RELAYS", deadURL+" "+rs.URL)
+	Stdin = strings.NewReader("")
+	defer func() { Stdin = os.Stdin }()
+	var out, errOut bytes.Buffer
+	if code := RunPipe([]string{"a", strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)}, &out, &errOut); code != 0 {
+		t.Fatalf("pipe exit %d: %s", code, errOut.String())
+	}
+	if out.String() != "SSH-2.0-test\r\n" {
+		t.Fatalf("pipe output %q", out.String())
+	}
+	trace := errOut.String()
+	for _, want := range []string{"relay=" + deadURL + " failed", "relay=" + rs.URL + " winner", "relay=" + rs.URL + " confirmed", "relay=" + rs.URL + " first-byte"} {
+		if !strings.Contains(trace, want) {
+			t.Fatalf("trace lacks %q:\n%s", want, trace)
+		}
 	}
 }

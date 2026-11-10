@@ -43,7 +43,11 @@ func loadPeer(st *state.Store) (*peer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &peer{id: id, relays: cfg.RelayList(), view: v}, nil
+	relays := cfg.RelayList()
+	if env := envRelays(); len(env) > 0 {
+		relays = env
+	}
+	return &peer{id: id, relays: relays, view: v}, nil
 }
 
 func parsePort(s string) (int, error) {
@@ -104,7 +108,8 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	revoked, stopWatch := daemon.WatchRevoked(st, m.NodeID)
 	defer stopWatch()
-	sec, err := daemon.OpenTCP(ctx, p.relays, p.id, m, port)
+	tr := newOpenTrace(stderr, "")
+	sec, err := daemon.OpenTCP(tr.context(ctx), p.relays, p.id, m, port)
 	if err != nil {
 		return die(openErr(err, m, port, false))
 	}
@@ -125,7 +130,7 @@ func RunPipe(args []string, stdout, stderr io.Writer) int {
 		}
 		return nil
 	}
-	if err := stream.Splice(ctx, sec, Stdin, stdout, closeOut); err != nil {
+	if err := stream.Splice(ctx, tr.link(sec), Stdin, stdout, closeOut); err != nil {
 		if wasRevoked.Load() {
 			return die(revokedErr(m))
 		}
