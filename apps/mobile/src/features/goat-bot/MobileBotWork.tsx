@@ -43,6 +43,8 @@ import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import { MobileBotComputer } from "./MobileBotComputer";
+import { GoatBotFaceAvatar } from "./GoatBotFace";
+import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
@@ -54,7 +56,8 @@ import {
 import { useMobileGoatBotMemberModelMenu } from "./useMobileGoatBotMemberModel";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
-const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"] as const;
+// The machines running work show under Tasks, so four short labels fit one row as text.
+const tabs = ["Tasks", "Routines", "Memory", "Library"] as const;
 
 const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("mobile-goat-bot-remote-work:none"));
 
@@ -339,34 +342,46 @@ export function MobileBotWork(props: {
             automaticallyAdjustKeyboardInsets
             keyboardShouldPersistTaps="handled"
           >
-            <MobileBotStatusCard
-              environmentId={environmentId}
-              member={member}
-              botName={botName}
-              main={props.main ?? null}
-              rows={
-                !enabled
-                  ? "unavailable"
-                  : threads.error
-                    ? "failed"
-                    : threads.isSuccess
-                      ? rows
-                      : null
-              }
-              refreshRows={threads.refresh}
-              turnsWaiting={props.turnsWaiting ?? []}
-              onOpenChat={() => setOpen(false)}
-              onOpenTask={(id) => {
-                setOpen(false);
-                props.onOpenTask(id);
-              }}
-            />
+            <View>
+              <View className="items-center gap-2 pt-2 pb-4">
+                <GoatBotFaceAvatar
+                  state="idle"
+                  size={56}
+                  emoji={member ? mobileGoatBotMemberPicture(member) : props.main?.avatar}
+                />
+                <Text accessibilityRole="header" className="text-lg font-semibold text-foreground">
+                  {botName}
+                </Text>
+              </View>
+              <MobileBotStatusCard
+                environmentId={environmentId}
+                member={member}
+                botName={botName}
+                main={props.main ?? null}
+                rows={
+                  !enabled
+                    ? "unavailable"
+                    : threads.error
+                      ? "failed"
+                      : threads.isSuccess
+                        ? rows
+                        : null
+                }
+                refreshRows={threads.refresh}
+                turnsWaiting={props.turnsWaiting ?? []}
+                onOpenChat={() => setOpen(false)}
+                onOpenTask={(id) => {
+                  setOpen(false);
+                  props.onOpenTask(id);
+                }}
+              />
+            </View>
             {/* One row that scrolls sideways, so large text does not stack the tabs. */}
             <View className="bg-screen py-2">
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
-                contentContainerClassName="gap-4"
+                contentContainerClassName="grow justify-center gap-1"
               >
                 {tabs.map((name) => (
                   <Pressable
@@ -376,11 +391,13 @@ export function MobileBotWork(props: {
                     onPress={() => setTab(name)}
                     className={
                       tab === name
-                        ? "min-h-[44px] justify-center rounded-md bg-thread-selected px-3"
-                        : "min-h-[44px] justify-center px-3"
+                        ? "min-h-[44px] justify-center rounded-full bg-goat-bot-message px-4"
+                        : "min-h-[44px] justify-center px-4"
                     }
                   >
-                    <Text className="text-foreground">{name}</Text>
+                    <Text className={tab === name ? "text-foreground" : "text-foreground-muted"}>
+                      {name}
+                    </Text>
                   </Pressable>
                 ))}
               </ScrollView>
@@ -575,13 +592,16 @@ export function MobileBotWork(props: {
                   supported={capabilities?.goatBotLibrary === true}
                 />
               ) : null}
-              {tab === "Computer" ? (
-                <MobileBotComputer
-                  environmentId={environmentId}
-                  connected={selected?.connected === true}
-                  botId={member?.botId ?? null}
-                  botName={botName}
-                />
+              {tab === "Tasks" && work.inProgress.length > 0 ? (
+                <View className="mt-6 gap-1">
+                  <Text className="text-xs font-medium text-foreground-muted">Machines</Text>
+                  <MobileBotComputer
+                    environmentId={environmentId}
+                    connected={selected?.connected === true}
+                    botId={member?.botId ?? null}
+                    botName={botName}
+                  />
+                </View>
               ) : null}
             </View>
           </ScrollView>

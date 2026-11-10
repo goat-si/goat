@@ -87,6 +87,7 @@ const state = vi.hoisted(() => ({
   memberModel: null as null | Record<string, unknown>,
 }));
 
+vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 // The header's trailing items render as buttons, so tests press Work where iOS shows it.
 vi.mock("../../native/StackHeader", () => ({
@@ -297,7 +298,7 @@ it("exposes work tabs as buttons and updates their selected state", async () => 
   await render();
   await press("Work");
   const buttons = [...container.querySelectorAll("button")];
-  const tabs = ["Tasks", "Routines", "Memory", "Library", "Computer"].map((name) =>
+  const tabs = ["Tasks", "Routines", "Memory", "Library"].map((name) =>
     buttons.find((button) => button.textContent === name),
   );
   expect(tabs.every((tab) => tab !== undefined)).toBe(true);
@@ -456,14 +457,12 @@ it("retries a failed task from its screen, names the attempt, and shows a refusa
   expect(state.task.refresh).toHaveBeenCalledOnce();
 });
 
-it("Library and Computer show their own views", async () => {
+it("Library shows its own view", async () => {
   reset();
   await render();
   await press("Work");
   await press("Library");
   expect(container.textContent).toContain("Files need a newer GOAT server.");
-  await press("Computer");
-  expect(container.textContent).toContain("Loading machines…");
 });
 
 it("opens the coding thread a task launched, such as a bot turn's", async () => {
