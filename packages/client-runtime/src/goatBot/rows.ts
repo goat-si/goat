@@ -559,8 +559,9 @@ export function buildGoatBotTimeline(input: {
           answered.text.trim() || (answered.attachments ?? []).map((file) => file.name).join(", ");
         const answerIndex =
           (answered.attachments ?? []).length === 0 ? (row.choices ?? []).indexOf(answer) : -1;
-        // Only the person's next message after the question can be its pick.
-        const picked = answerIndex >= 0 && reply === nearestSend;
+        // Only the person's next message after a question still open to it can be its pick; a
+        // question its task's card closed may have closed some other way.
+        const picked = answerIndex >= 0 && reply === nearestSend && !decidedByCard;
         if (picked) folded.add(answered.id);
         const sending =
           picked && (answered.delivery.state === "queued" || answered.delivery.state === "sending");

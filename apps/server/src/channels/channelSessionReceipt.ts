@@ -33,7 +33,7 @@ export const sessionFinalText = Effect.fn("channel.sessionFinalText")(function* 
   const line = receipt?.text.trim() ?? "";
   // The person already read the session's first line, so a final message that opens with it,
   // in the same item or a later one of the same run, sends only what follows. A later item
-  // repeats the line only when the line ends where a word does.
+  // repeats the line only when the line is a whole sentence and the answer goes on after it.
   const repeats =
     receipt?.source === "session" &&
     turnItemId !== undefined &&
@@ -41,6 +41,7 @@ export const sessionFinalText = Effect.fn("channel.sessionFinalText")(function* 
     final.startsWith(line) &&
     (receipt.turn_item_id === turnItemId ||
       (receipt.run_id === runId &&
+        /[.!?…。！？]$/u.test(line) &&
         (final.length === line.length || /\s/u.test(final.charAt(line.length)))));
   return repeats ? final.slice(line.length).trim() : final;
 });

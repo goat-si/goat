@@ -106,11 +106,16 @@ describe("session first receipts", () => {
   it.effect.each([
     { first: "Four.", final: "Four.", sent: ["Four."] },
     { first: "Hi!", final: "Hi! What can I do for you?", sent: ["Hi!", "What can I do for you?"] },
-    // Only a whole repeat is dropped: a later answer that merely starts with the same letters is not.
+    // Only a repeated whole sentence is dropped, never the start of a different one.
     {
       first: "First step: inspect",
       final: "First step: inspection found nothing.",
       sent: ["First step: inspect", "First step: inspection found nothing."],
+    },
+    {
+      first: "First step: inspect",
+      final: "First step: inspect for credentials.",
+      sent: ["First step: inspect", "First step: inspect for credentials."],
     },
   ])(
     "a first line that already answered is not sent again by the final message: $final",

@@ -260,7 +260,7 @@ describe("questions a task asks in the main chat", () => {
     expect(pending).toContain("pending:c1");
   });
 
-  it("keeps a pressed answer, inside its question, and the reply to it in the main chat", () => {
+  it("keeps a pressed answer and the reply to it in the main chat", () => {
     const work = { tone: "reply" as const, readAt: null, requestKey: null, taskId: "work" };
     const ids = content(
       buildGoatBotTimeline({
@@ -284,7 +284,8 @@ describe("questions a task asks in the main chat", () => {
         taskId: null,
       }),
     ).map((row) => row.id);
-    expect(ids).toEqual(["n1", "b1", "b2"]);
+    // The task's card closed this question, so the answer stays the person's own message.
+    expect(ids).toEqual(["n1", "b1", "u1", "b2"]);
   });
 
   it("routes a turn's question from its chip and does not show the turn as a card", () => {
