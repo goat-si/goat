@@ -23,21 +23,22 @@ const PEN_PIPE = new RegExp(
 const penRoute = (settings: ReadonlyMap<string, string>) =>
   unset(settings.get("proxyjump")) && PEN_PIPE.test(settings.get("proxycommand") ?? "");
 
-/**
- * A jump chain is what missed OpenCodex's 15-second link admission window. Pen's pipe is one relay
- * hop that connects in a few seconds, so an alias `pen ssh-config` wrote counts as direct.
- */
-export const isDirectRoute = (settings: ReadonlyMap<string, string>) =>
-  penRoute(settings) || (unset(settings.get("proxyjump")) && unset(settings.get("proxycommand")));
+/** No jump chain or proxy command: a jump chain is what missed OpenCodex's link admission window. */
+export const isPlainRoute = (settings: ReadonlyMap<string, string>) =>
+  unset(settings.get("proxyjump")) && unset(settings.get("proxycommand"));
 
 /**
- * The known_hosts file Pen keeps for a Pen alias. ssh already holds every connection to that
- * alias to it (StrictHostKeyChecking yes), so its key is the alias's pin.
+ * The known_hosts file a Pen alias names, when ssh holds every connection to it strictly to that
+ * file's key: StrictHostKeyChecking yes and no KnownHostsCommand.
  */
 export const penKnownHostsFile = (settings: ReadonlyMap<string, string>) => {
   const file = settings.get("userknownhostsfile");
+  const strict =
+    settings.get("stricthostkeychecking") === "true" && unset(settings.get("knownhostscommand"));
   // ssh -G separates several files with spaces; a path with one is not a single file.
-  return penRoute(settings) && file !== undefined && /^\/\S+$/u.test(file) ? file : undefined;
+  return penRoute(settings) && strict && file !== undefined && /^\/\S+$/u.test(file)
+    ? file
+    : undefined;
 };
 
 /** The one fingerprint of `keyType` in `ssh-keygen -l -F` output; several name no key. */
@@ -57,7 +58,17 @@ export const penConfigHosts = (config: string) =>
     .filter((alias): alias is string => alias !== undefined && !alias.includes("*"));
 
 // The settings that decide which machine an alias reaches and which key ssh accepts for it.
-const BOUND = ["hostname", "user", "port", "proxycommand", "proxyjump", "hostkeyalias"] as const;
+const BOUND = [
+  "hostname",
+  "user",
+  "port",
+  "proxycommand",
+  "proxyjump",
+  "hostkeyalias",
+  "stricthostkeychecking",
+  "knownhostscommand",
+  "globalknownhostsfile",
+] as const;
 
 /**
  * Identifies a Pen member's alias for consent: its effective settings and the known_hosts lines Pen

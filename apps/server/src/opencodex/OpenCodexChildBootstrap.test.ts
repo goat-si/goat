@@ -387,6 +387,17 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     }),
   );
 
+  it.effect("a grant for an alias seen gone from Pen's config does not come back with it", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+      yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+      home.machine.penRevisions.delete("pen-box");
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+      home.machine.penRevisions.set("pen-box", "pen:node1");
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(false);
+    }),
+  );
+
   it.effect("an opted-in SSH host joins on the person's consent now and after setups, once", () =>
     Effect.gen(function* () {
       const home = yield* setup();
