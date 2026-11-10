@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -8,6 +9,8 @@ import * as Ref from "effect/Ref";
 import { describe, expect } from "vite-plus/test";
 
 import { copyDownload } from "./downloadCopy.ts";
+
+class CopyFailed extends Data.TaggedError("CopyFailed")<{ readonly cause: unknown }> {}
 
 describe("copyDownload", () => {
   it.effect.each([false, true])(
@@ -47,10 +50,10 @@ describe("copyDownload", () => {
             directory: downloads,
             source,
             fileName: "report.txt",
-            onError: (cause) => cause,
+            onError: (cause) => new CopyFailed({ cause }),
             reveal: (target) => void targets.push(target),
           });
-        yield* Effect.all(sources.map(copy), { concurrency: "unbounded" });
+        yield* Effect.forEach(sources, copy, { concurrency: "unbounded" });
 
         const names = (yield* fs.readDirectory(downloads)).toSorted();
         expect(names).toEqual(
