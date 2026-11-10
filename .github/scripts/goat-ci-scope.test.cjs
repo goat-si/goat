@@ -579,11 +579,12 @@ describe("planRun", () => {
       vitest: [],
       node: [".github/scripts/goat-ci-scope.test.cjs"],
     });
-    assert.deepEqual(scripts.tasks, ["check", "typecheck", "test-changed"]);
+    // goat-ci-scope.cjs and goat-ci.yml also define test-pen, so they run it.
+    assert.deepEqual(scripts.tasks, ["check", "typecheck", "test-changed", "test-pen"]);
     const docs = await plan(pr(), labels([]), ["docs/user/memory.md"]);
     assert.deepEqual(docs.tasks, ["check"]);
     const workflow = await plan(pr(), labels([]), [".github/workflows/goat-ci.yml"]);
-    assert.deepEqual(workflow.tasks, ["check", "typecheck"]);
+    assert.deepEqual(workflow.tasks, ["check", "typecheck", "test-pen"]);
   });
 
   it("runs an app's React Compiler coverage suite for its source changes, deletions included (#1579)", async () => {
@@ -822,6 +823,12 @@ describe("pen suites", () => {
     const suites = packageSuites(root);
     for (const name of ["@goat/pen-protocol", "@goat/pen-relay", "@goat/pen-login"])
       assert.ok(!suites.includes(name), name);
+  });
+
+  it("runs when the CI files that define test-pen change", async () => {
+    for (const file of [".github/workflows/goat-ci.yml", ".github/scripts/goat-ci-scope.cjs"]) {
+      assert.equal((await quick([file])).reasons.get("test-pen"), file, file);
+    }
   });
 
   it("does not run for unrelated changes", async () => {

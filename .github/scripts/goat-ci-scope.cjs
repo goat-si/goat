@@ -89,6 +89,8 @@ const LINUX_COMPUTER_USE_PATHS = [
 const LINUX_COMPUTER_USE_TASK = "smoke-linux-computer-use";
 /** Pen's directories; a change under one selects test-pen, which owns their suites. */
 const PEN_PATHS = ["apps/pen/", "packages/pen-protocol/", "infra/pen-relay/", "infra/pen-login/"];
+/** The CI files that define test-pen; changing them runs it too. */
+const PEN_CI_FILES = [".github/workflows/goat-ci.yml", ".github/scripts/goat-ci-scope.cjs"];
 const PEN_TASK = "test-pen";
 /** The quick run's selected tests. */
 const CHANGED_TESTS_TASK = "test-changed";
@@ -766,7 +768,7 @@ async function planTasks({ env, payload, root, fetchImpl, files }) {
     tasks.add(LINUX_COMPUTER_USE_TASK);
     reasons.set(LINUX_COMPUTER_USE_TASK, linuxChange);
   }
-  const penChange = changed.find(isPen);
+  const penChange = changed.find((file) => isPen(file) || PEN_CI_FILES.includes(file));
   if (penChange !== undefined) {
     tasks.add(PEN_TASK);
     reasons.set(PEN_TASK, penChange);
