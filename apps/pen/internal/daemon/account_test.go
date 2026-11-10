@@ -676,3 +676,13 @@ func TestAForgetRefusedForClockSkewOrRateIsRetriedAndABadRequestIsDropped(t *tes
 		rs.Close()
 	}
 }
+
+func TestAForgetRefusedForClockSkewIsRetried(t *testing.T) {
+	// pen-login answers a forget whose ts is outside its window with 400 {"error":"stale"}.
+	if answered(&login.HTTPError{Status: 400, Body: `{"error":"stale"}`}) {
+		t.Fatal("a stale forget was treated as final")
+	}
+	if !answered(&login.HTTPError{Status: 400, Body: `{"error":"bad_proof"}`}) {
+		t.Fatal("a malformed forget was retried")
+	}
+}

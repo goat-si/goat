@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,8 +86,9 @@ func (b *forgetBook) done(f PendingForget) {
 }
 
 // answered reports a final reply: success, or a refusal that can never succeed (400 malformed,
-// 404 gone, 409 conflict). Everything else is retried with the backoff: 401 (clock skew, or the
-// signing node not registered yet), 403, 429, 5xx and network errors.
+// 404 gone, 409 conflict). Everything else is retried with the backoff: 400 "stale" (the ts was
+// outside the service's window, so a later try with a fresh ts can pass), 401 (the signing node
+// not registered yet), 403, 429, 5xx and network errors.
 func answered(err error) bool {
 	if err == nil {
 		return true
@@ -96,7 +98,9 @@ func answered(err error) bool {
 		return false
 	}
 	switch h.Status {
-	case http.StatusBadRequest, http.StatusNotFound, http.StatusConflict:
+	case http.StatusBadRequest:
+		return !strings.Contains(h.Body, `"stale"`)
+	case http.StatusNotFound, http.StatusConflict:
 		return true
 	}
 	return false
