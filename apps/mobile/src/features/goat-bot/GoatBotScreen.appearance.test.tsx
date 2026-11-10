@@ -463,7 +463,7 @@ it("renders legacy task cards without task navigation when the capability is abs
   screenSession.rows = [];
 });
 
-it("keeps the main chat a plain conversation where the bot's home lists its work", async () => {
+it("shows in the main chat the work cards the shared rows keep there", async () => {
   screenSession.supportsTaskThreads = true;
   const reply = (id: string, groupPosition: "first" | "last"): GoatBotRow => ({
     ...bot,
@@ -498,9 +498,12 @@ it("keeps the main chat a plain conversation where the bot's home lists its work
   ];
   const view = await render(<GoatBotScreen visible />);
   try {
-    expect(view.container.textContent).not.toContain("Check disks");
-    // The reply the card followed now ends its group, so it keeps its time.
-    expect(list.props?.data).toEqual([{ ...reply("ack", "first"), groupPosition: "single" }]);
+    // A card the rows keep is work the home cannot open, or whose ending the chat never told.
+    expect(view.container.textContent).toContain("Check disks");
+    expect(((list.props?.data ?? []) as GoatBotRow[]).map((row) => row.id)).toEqual([
+      "ack",
+      "card",
+    ]);
     expect(screenSession.chatTasks.map((card) => card.key)).toEqual(["task-1"]);
   } finally {
     await view.unmount();

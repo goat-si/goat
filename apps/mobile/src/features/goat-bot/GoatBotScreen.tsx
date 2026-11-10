@@ -363,9 +363,9 @@ export function GoatBotScreen(props: {
     ? session.rows.find((row): row is TaskRow => row.kind === "task" && row.card.key === taskId)
     : undefined;
   const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
-  // A plain chatbot: work the bot starts is listed in its home sheet, not in the conversation.
-  // Servers without task threads have no such list, so their cards stay.
-  const hidesTaskCards = taskId !== undefined || session.supportsTaskThreads;
+  // The shared rows decide which work cards the main chat keeps (conversationOnly): only work the
+  // home lists and whose ending the chat told leaves it. A task's own view has its card above.
+  const hidesTaskCards = taskId !== undefined;
   const visibleRows = useMemo(
     () =>
       hidesTaskCards ? goatBotChatRows(session.rows, (row) => row.kind === "task") : session.rows,
