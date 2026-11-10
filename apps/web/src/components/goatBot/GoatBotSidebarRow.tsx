@@ -36,6 +36,7 @@ import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { GoatBotMainMenu } from "./GoatBotMemberRows";
 import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 import { useGoatBotReadMenu } from "./useGoatBotReadMenu";
+import { useBotThreads } from "./useBotRoster";
 
 type GoatBotReadMenuProps = ReturnType<typeof useGoatBotReadMenu>;
 
@@ -146,10 +147,15 @@ function GoatBotSidebarPreview({
   const localLastVisitedAt = useUiStateStore(
     (state) => state.threadLastVisitedAtById[scopedThreadKey(threadRef)],
   );
+  // The preview reads the chat as it shows: no cards for the tasks its work list opens.
+  const work = useBotThreads(botRef.environmentId, null);
   const rows = buildGoatBotTimeline({
     visibleTurnItems: items,
     pendingInputs: [],
     readers: goatBotItemReaders,
+    taskId: null,
+    knownTaskIds: work.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+    conversationOnly: work.supported,
   });
   const preview = goatBotConversationPreview({
     rows,

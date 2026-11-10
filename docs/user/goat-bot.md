@@ -5,6 +5,10 @@ its own task threads, and reports back in the same conversation. Choose **Bots**
 on web and desktop, or the Bots segment on mobile Home. To reach it from Slack or iMessage, see
 [Slack](./slack.md).
 
+The conversation holds only what you and the bot say: its answers, its questions, a line while it
+works and how the work ended. On web and desktop, the tasks it starts open from **Work** in the
+bot's header, where each one has its own view.
+
 ## Bots
 
 The main bot is GOAT Bot. On servers that support it, **New bot** creates more bots, each with a
@@ -54,7 +58,7 @@ move when the window is hidden or when your system asks to reduce motion.
   run went, and a switch to pause them. **Check in on me** sets up a routine on the days and
   hours you choose: the bot looks over its tasks and writes only when something needs you. A
   routine whose last run failed shows **Run now**.
-- A task that failed or that you stopped shows **Retry** on its card and in its task view; each
+- A task that failed or that you stopped shows **Retry** in its task view; each
   retry runs it again as its next attempt (**Attempt 2**, then 3). While the stopped work is still
   ending, Retry is refused; try again once it has ended. Work that ran on another computer is not
   retried from here: check it on that computer, then ask the bot again.

@@ -339,8 +339,14 @@ export function buildGoatBotTimeline(input: {
   readonly readers: GoatBotItemReaders;
   readonly taskId?: string | null;
   readonly knownTaskIds?: ReadonlyArray<string>;
+  /**
+   * The main chat shows conversation only: a work card stays in its task's own view when the
+   * bot's work list (`knownTaskIds`) can open it; cards of tasks outside that list still show.
+   */
+  readonly conversationOnly?: boolean;
 }): GoatBotRow[] {
   const knownTasks = new Set(input.knownTaskIds ?? []);
+  const listedTasks = new Set(input.knownTaskIds ?? []);
   // Each task's newest card, read before the messages so it also governs messages above it.
   const newestCards = new Map<string, GoatBotTaskCard>();
   const newestQuestionChips = new Map<string, GoatBotQuestionState>();
@@ -388,6 +394,8 @@ export function buildGoatBotTimeline(input: {
   const openOnCard = new Set<string>();
   const sentTasks = new Map<string, string | null>();
   const committed: UngroupedRow[] = [];
+  // Requests the person made in this view, so a task's reply to one of them is part of it.
+  const mainInputs = new Set<string>();
   const committedRequestKeys = new Set<string>();
   const inputTexts = new Map<string, string>();
   let previousInputKey: string | null = null;
@@ -414,6 +422,7 @@ export function buildGoatBotTimeline(input: {
       }
       previousInputKey = presentation?.requestKey ?? null;
       sentTasks.set(item.id, presentation?.taskId ?? null);
+      if (input.taskId == null && presentation?.requestKey) mainInputs.add(presentation.requestKey);
       committed.push({
         kind: "user",
         id: item.id,
@@ -436,7 +445,17 @@ export function buildGoatBotTimeline(input: {
         input.taskId === null &&
         presentation?.replyToKey != null &&
         answeredRequestKeys.has(presentation.replyToKey);
-      if (!includesMessage(presentation?.taskId, hasOptions) && !repliesToAnswer) continue;
+      // Without work cards the chat still hears from its tasks: the reply to a request made here,
+      // what a task asks, and how the work ended.
+      const toldInChat =
+        input.conversationOnly === true &&
+        input.taskId == null &&
+        (presentation?.tone === "result" ||
+          presentation?.tone === "failure" ||
+          presentation?.tone === "question" ||
+          (presentation?.replyToKey != null && mainInputs.has(presentation.replyToKey)));
+      if (!includesMessage(presentation?.taskId, hasOptions) && !repliesToAnswer && !toldInChat)
+        continue;
       const tone = presentation?.tone ?? "reply";
       const open = questionOpen(presentation?.taskId, presentation?.questionId);
       if (open !== null) cardDecidesOptions.add(item.id);
@@ -490,6 +509,8 @@ export function buildGoatBotTimeline(input: {
       const card = input.readers.taskCard(item);
       if (card === null) continue;
       if (input.taskId != null && card.key !== input.taskId) continue;
+      if (input.conversationOnly === true && input.taskId == null && listedTasks.has(card.key))
+        continue;
       const existingIndex = cardIndexByKey.get(card.key);
       if (existingIndex === undefined) {
         cardIndexByKey.set(card.key, committed.length);
