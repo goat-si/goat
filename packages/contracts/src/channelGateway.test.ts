@@ -2,7 +2,9 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
 import {
+  BotProfile,
   ChannelGatewayError,
+  ChannelCreateBotInput,
   ChannelIdentityLinkConsumeInput,
   ChannelIngestInput,
   ChannelIngestResult,
@@ -15,6 +17,7 @@ import {
 } from "./index.ts";
 
 const json = <S extends Schema.Codec<unknown, unknown>>(schema: S) => Schema.toCodecJson(schema);
+const decodeProfile = Schema.decodeUnknownExit(BotProfile);
 
 describe("channel.updateBot input", () => {
   const decode = Schema.decodeUnknownExit(ChannelUpdateBotInput);
@@ -56,6 +59,50 @@ describe("channel.updateBot input", () => {
     expect(decode({ botId: "helper", defaultModelSelection: { model: "gpt-small" } })._tag).toBe(
       "Failure",
     );
+  });
+  it("carries a bot color as #RRGGBB, clears it with null and refuses anything else", () => {
+    const decoded = Schema.decodeUnknownSync(ChannelUpdateBotInput);
+    expect(decoded({ botId: "helper", color: "#2f80ed" })).toEqual({
+      botId: "helper",
+      color: "#2f80ed",
+    });
+    expect(decoded({ botId: "helper", color: null })).toEqual({ botId: "helper", color: null });
+    expect(decoded({ botId: "helper", name: "Builder" })).not.toHaveProperty("color");
+    for (const color of ["red", "#fff", "#12345g", "#1234567", "url(x)", "var(--x)", ""]) {
+      expect(decode({ botId: "helper", color })._tag, color).toBe("Failure");
+    }
+    const create = Schema.decodeUnknownExit(ChannelCreateBotInput);
+    const fields = {
+      clientRequestId: "c1",
+      name: "Helper",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+    };
+    expect(create(fields)._tag).toBe("Success");
+    expect(create({ ...fields, color: "#2F80ED" })._tag).toBe("Success");
+    expect(create({ ...fields, color: "blue" })._tag).toBe("Failure");
+  });
+  it("keeps a colored profile readable by a client that predates color", () => {
+    const { color: _color, ...olderFields } = BotProfile.fields;
+    const older = Schema.decodeUnknownExit(Schema.Struct(olderFields));
+    const profile = {
+      botId: "helper",
+      role: "member",
+      name: "Helper",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+      defaultProjectId: null,
+      environmentId: "env",
+      sessionThreadId: "thread",
+      createdAt: "2026-11-11T00:00:00.000Z",
+      updatedAt: "2026-11-11T00:00:00.000Z",
+      color: "#2F80ED",
+    };
+    expect(older(profile)._tag).toBe("Success");
+    const { color: _stored, ...legacy } = profile;
+    expect(decodeProfile(legacy)._tag).toBe("Success");
   });
 });
 
