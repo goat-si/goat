@@ -541,3 +541,32 @@ func TestAForgetTheServiceDidNotAnswerIsKeptAndSentAfterARestart(t *testing.T) {
 	}
 	_ = a2
 }
+
+func TestAJoinerRevokedElsewhereLearnsItWhenItSyncsAfterJoining(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	bindTo(t, a, f, f.Key())
+	j := newcomer(t)
+	as := f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now())
+	out, _, err := AccountJoin(ctx, []string{rs.URL}, j, "j", as, offeredBy(t, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := mesh.CheckJoined(nil, j, out.MeshID, out.Records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// b heard of j's admit from a and revokes it; the joiner holds only a's set.
+	var r map[string]any
+	if err := Call(b.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(j.SignPub)}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := FinishJoin(ctx, []string{rs.URL}, j, s); err == nil {
+		t.Fatal("the joiner went on although a member it synced with had revoked it")
+	}
+}

@@ -243,9 +243,12 @@ func (l *loginRun) join(ctx context.Context) error {
 		return err
 	}
 	self := ident.B64.EncodeToString(l.id.SignPub)
-	taken, others := daemon.SyncWith(ctx, l.relays, l.id, s)
-	if others >= 2 && taken < 2 {
-		fmt.Fprintf(l.stderr, "pen: warning: only %d of %d members were reachable to sync with\n", taken, others)
+	taken, others, err := daemon.FinishJoin(ctx, l.relays, l.id, s)
+	if err != nil {
+		return err
+	}
+	if taken < 2 {
+		fmt.Fprintf(l.stderr, "pen: warning: only %d of %d other members were reachable to sync with; this machine trusts what they told it\n", taken, others)
 	}
 	if err := l.install(s); err != nil {
 		return err

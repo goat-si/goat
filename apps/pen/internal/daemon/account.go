@@ -362,6 +362,12 @@ func SyncApproved(ctx context.Context, relays []string, id *ident.Identity, memb
 // SyncWith syncs s with every other member it lists (kind 0x01 mesh) and reports how many of the
 // others took part (contract "Account join": a joiner syncs before it serves tcp streams).
 func SyncWith(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store) (taken, others int) {
+	taken, _, others = syncWith(ctx, relays, id, s)
+	return taken, others
+}
+
+// syncWith also counts the members that refused this node (4401).
+func syncWith(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store) (taken, refused, others int) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, m := range s.View().SortedMembers() {
@@ -381,17 +387,35 @@ func SyncWith(ctx context.Context, relays []string, id *ident.Identity, s *mesh.
 			sec, err := OpenAny(pctx, relays, m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
 				return session.Initiate(pctx, conn, session.KindSession, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "mesh"})
 			})
-			if err != nil {
-				return
+			if err == nil {
+				defer sec.Close(wire.CodeNormal)
+				err = mesh.SyncInitiate(pctx, sec, s, nil, nil)
 			}
-			defer sec.Close(wire.CodeNormal)
-			if mesh.SyncInitiate(pctx, sec, s, nil, nil) == nil {
-				mu.Lock()
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
 				taken++
-				mu.Unlock()
+			case relay.CodeOf(err) == wire.CodeNotAdmitted:
+				refused++
 			}
 		}()
 	}
 	wg.Wait()
-	return taken, others
+	return taken, refused, others
+}
+
+// FinishJoin syncs a freshly joined set with every reachable member, as a joiner must before it
+// serves tcp streams, and reports how many took part. It fails when a member refuses this node
+// (4401: it holds a revoke the admitting member had not heard of) or the synced view no longer
+// makes it a member.
+func FinishJoin(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store) (taken, others int, err error) {
+	taken, refused, others := syncWith(ctx, relays, id, s)
+	if refused > 0 {
+		return taken, others, fmt.Errorf("%d member(s) refuse this machine (revoked, or they have not heard of its admission yet); nothing was changed here, run pen login again later", refused)
+	}
+	if _, ok := s.View().Members[ident.B64.EncodeToString(id.SignPub)]; !ok {
+		return taken, others, errors.New("after syncing with the other members this machine is not a member (revoked); nothing was changed here")
+	}
+	return taken, others, nil
 }
