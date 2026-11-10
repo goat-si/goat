@@ -1,6 +1,6 @@
 import type { VcsRef } from "@goat/contracts";
 
-export const GIT_LIST_BRANCHES_DEFAULT_LIMIT = 100;
+const GIT_LIST_BRANCHES_DEFAULT_LIMIT = 100;
 
 export function filterBranchesForListQuery(
   refs: ReadonlyArray<VcsRef>,

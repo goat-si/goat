@@ -13,7 +13,7 @@ import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 
-export const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
+const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 export const baseLocalStatus: VcsStatusLocalResult = {
   isRepo: true,

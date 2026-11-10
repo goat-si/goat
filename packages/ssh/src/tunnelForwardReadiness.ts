@@ -12,7 +12,7 @@ const FORWARD_PROBE_INTERVAL_MS = 100;
  * ssh only binds the forward after it connects, which can take ConnectTimeout per dead
  * address, so the forward's own arrival is what readiness waits for first.
  */
-export const waitForTunnelForward = Effect.fn("ssh/tunnel.waitForTunnelForward")(function* (input: {
+const waitForTunnelForward = Effect.fn("ssh/tunnel.waitForTunnelForward")(function* (input: {
   readonly alias: string;
   readonly localPort: number;
   readonly connectTimeoutMs: number;

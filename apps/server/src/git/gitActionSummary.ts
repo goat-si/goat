@@ -9,7 +9,7 @@ function shortenSha(sha: string | undefined): string | null {
   return sha.slice(0, SHORT_SHA_LENGTH);
 }
 
-export function truncateText(
+function truncateText(
   value: string | undefined,
   maxLength = TOAST_DESCRIPTION_MAX,
 ): string | undefined {
@@ -19,7 +19,7 @@ export function truncateText(
   return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
-export function withDescription(title: string, description: string | undefined) {
+function withDescription(title: string, description: string | undefined) {
   return description ? { title, description } : { title };
 }
 

@@ -7,6 +7,7 @@ import type {
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as Ref from "effect/Ref";
+import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 
 import type { OrchestratorDispatchError, OrchestratorV2Error } from "../Orchestrator.ts";
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
@@ -15,12 +16,7 @@ import { hasLiveRun, isTerminalDelegatedTaskStatus } from "./OrchestratorRunStat
 export interface DelegatedCompletionAcceptanceDeps {
   readonly projectionStore: Pick<ProjectionStoreV2Shape, "getMessageCount">;
   readonly idAllocator: {
-    readonly allocate: {
-      readonly message: (input: {
-        readonly threadId: OrchestrationV2ThreadProjection["thread"]["id"];
-        readonly ordinal: number;
-      }) => Effect.Effect<OrchestrationV2ConversationMessage["id"], unknown>;
-    };
+    readonly allocate: Pick<IdAllocator.IdAllocatorV2Allocate, "message">;
   };
   readonly emit: (
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
