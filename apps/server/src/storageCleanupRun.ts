@@ -16,8 +16,8 @@ interface WorktreePass {
 }
 
 /**
- * Runs one sweep's worktree work: snapshot housekeeping first, then, until a person saw or
- * confirmed the first-run preview, a dry pass that only marks what cleanup would remove.
+ * Runs one sweep's worktree work: snapshot housekeeping first, then removal. With the opt-in
+ * preview on, a dry pass only marks what cleanup would remove until a person saw or confirmed it.
  */
 export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeCleanupRun")(function* (
   requiresConfirmation: Effect.Effect<boolean>,
@@ -46,6 +46,7 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
   return Effect.fn("StorageCleanup.runWorktreeCleanup")(function* <E, R>(input: {
     readonly nowMs: number;
     readonly snapshotDays: number | null;
+    readonly preview: boolean;
     readonly entries: StorageCleanupReportEntry[];
     readonly clean: (
       dryRun: boolean,
@@ -54,7 +55,8 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
   }) {
     yield* housekeeping(input.nowMs, input.snapshotDays);
     const none: WorktreeCleanupPreview | null = null;
-    if (activated) return { ...(yield* input.clean(false, input.entries)), preview: none };
+    if (activated || !input.preview)
+      return { ...(yield* input.clean(false, input.entries)), preview: none };
     const dryEntries: StorageCleanupReportEntry[] = [];
     const dry = yield* input.clean(true, dryEntries);
     const plannedCount = dryEntries.filter((entry) => entry.planned === true).length;

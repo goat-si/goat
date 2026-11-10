@@ -74,6 +74,21 @@ export function WorktreeRetentionRows({
           }
         />
       )}
+      {!isProjectScope && (
+        <SettingsRow
+          title="Preview before automatic cleanup"
+          description="Cleanup waits until you have seen what it would remove."
+          status={status("worktreeCleanupPreview")}
+          serverScoped
+          control={
+            <Switch
+              aria-label="Preview before automatic cleanup"
+              checked={settings.worktreeCleanupPreview}
+              onCheckedChange={(worktreeCleanupPreview) => update({ worktreeCleanupPreview })}
+            />
+          }
+        />
+      )}
     </>
   );
 }

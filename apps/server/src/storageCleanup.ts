@@ -1097,6 +1097,7 @@ const make = Effect.gen(function* () {
     const deletedWorktrees = yield* runWorktreeCleanup({
       nowMs: now,
       snapshotDays: settings.worktreeSnapshotDays,
+      preview: settings.worktreeCleanupPreview,
       entries,
       clean: (dryRun, into) => cleanWorktrees(serverSettings, now, into, dryRun),
     }).pipe(
