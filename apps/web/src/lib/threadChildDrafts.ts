@@ -1,6 +1,5 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@goat/contracts";
-import type { AsyncResult } from "effect/reactivity";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
@@ -28,15 +27,13 @@ function readShellDrafts(environmentId: EnvironmentId): ReadonlyArray<ThreadChil
  */
 export async function readThreadsDeletedWith(
   parent: ScopedThreadRef,
-  loadFamily: () => Promise<
-    AsyncResult.AsyncResult<{ readonly threads: ReadonlyArray<ThreadChildDraft> }, unknown>
-  >,
+  loadFamily: () => Promise<ReadonlyArray<ThreadChildDraft> | null>,
 ): Promise<ReadonlyArray<ThreadChildDraft>> {
   const familySupported =
     appAtomRegistry.get(environmentServerConfigsAtom).get(parent.environmentId)
       ?.shellThreadFamilies === true;
   const family = familySupported ? await loadFamily() : null;
-  return family?._tag === "Success" ? family.value.threads : readShellDrafts(parent.environmentId);
+  return family ?? readShellDrafts(parent.environmentId);
 }
 
 /**
