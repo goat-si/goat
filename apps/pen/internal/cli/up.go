@@ -29,6 +29,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&relayURLs, "relay", "relay URL (https://...); repeat for several relays")
 	name := fs.String("name", "", "this node's name")
 	foreground := fs.Bool("foreground", false, "run the daemon in this process")
+	service := fs.Bool("service", false, "internal: run by the systemd or launchd service; a configuration it refuses exits 0 so it is not restarted")
 	noService := fs.Bool("no-service", false, "never install a systemd or launchd service")
 	spawnDaemon := fs.Bool("spawn-daemon", false, "internal: start the daemon detached, print its pid and exit")
 	if _, err := parse(fs, args); err != nil {
@@ -41,8 +42,18 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 	if *spawnDaemon {
 		return spawnDetached(st, stdout, stderr)
 	}
+	// refused ends a start pen up cannot make: the service exits 0, since its manager restarts
+	// only a failure and nothing changes between restarts; everyone else sees the failure.
+	refused := func(err error) int {
+		if *foreground && *service {
+			fmt.Fprintln(stderr, "pen:", err)
+			return 0
+		}
+		return fail(stderr, err)
+	}
 	if *foreground {
-		// A service manager restarting the daemon after pen leave must not mint a new node.
+		// A service manager restarting the daemon after pen leave must not mint a new node. Exit 0
+		// even without --service: units written before that flag run plain --foreground.
 		if _, err := os.Stat(st.Path(daemon.LeftMarker)); err == nil {
 			fmt.Fprintln(stderr, "pen: this node left its mesh; run pen up or pen join to start again")
 			return 0
@@ -69,11 +80,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		cfg.SetRelays(list)
 	}
 	if len(cfg.RelayList()) == 0 {
-		if *foreground {
-			fmt.Fprintln(stderr, "pen: no relay configured; run pen up --relay https://<relay>")
-			return 0
-		}
-		return fail(stderr, errors.New("no relay configured; pass --relay https://<relay>"))
+		return refused(errors.New("no relay configured; run pen up --relay https://<relay>"))
 	}
 	if *name != "" {
 		cfg.Name = *name
@@ -88,12 +95,7 @@ func RunUp(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if err := daemon.CheckConfig(cfg); err != nil {
-		if *foreground {
-			// The service restarts a failed start, and nothing changes between restarts.
-			fmt.Fprintln(stderr, "pen:", err)
-			return 0
-		}
-		return fail(stderr, err)
+		return refused(err)
 	}
 	if _, err := mesh.Load(st); errors.Is(err, os.ErrNotExist) {
 		if _, err := mesh.Found(st, id, cfg.Name, time.Now().UnixMilli()); err != nil {

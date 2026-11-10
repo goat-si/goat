@@ -130,13 +130,63 @@ func TestUpWithAStoredRelayTheDaemonRefusesPrintsWhyAndStartsNothing(t *testing.
 	}
 }
 
-// The service runs pen up --foreground and restarts it on a non-zero exit (systemd Restart=on-failure,
-// launchd SuccessfulExit=false); a configuration it refuses would restart forever.
-func TestUpForegroundWithARefusedRelayListExitsZeroWithTheReason(t *testing.T) {
+// The service runs pen up --foreground --service and restarts it on a non-zero exit (systemd
+// Restart=on-failure, launchd SuccessfulExit=false); a configuration it refuses would restart forever.
+func TestUpAsTheServiceWithARefusedRelayListExitsZeroWithTheReason(t *testing.T) {
 	st := storeWithRelay(t, "http://relay.example.com")
 	t.Setenv("PEN_HOME", st.Dir)
 	var out, errOut bytes.Buffer
-	if code := RunUp([]string{"--foreground"}, &out, &errOut); code != 0 || !strings.Contains(errOut.String(), "cannot be used") {
+	if code := RunUp([]string{"--foreground", "--service"}, &out, &errOut); code != 0 || !strings.Contains(errOut.String(), "cannot be used") {
 		t.Fatalf("exit %d: %q; want 0 and the refusal", code, errOut.String())
+	}
+}
+
+// A person or another supervisor running pen up --foreground must not read a refused start as success.
+func TestUpForegroundWithARefusedOrMissingRelayListFails(t *testing.T) {
+	for _, relay := range []string{"http://relay.example.com", ""} {
+		st := storeWithRelay(t, relay)
+		t.Setenv("PEN_HOME", st.Dir)
+		var out, errOut bytes.Buffer
+		if code := RunUp([]string{"--foreground"}, &out, &errOut); code == 0 {
+			t.Fatalf("relay %q: exit 0 (%q); want a failure", relay, errOut.String())
+		}
+	}
+}
+
+// The service files run the service invocation, so a refused configuration stops them instead of looping.
+func TestTheServiceFilesRunTheServiceInvocation(t *testing.T) {
+	for name, tmpl := range map[string]string{"pen.service": "../../install/pen.service", "si.goat.pen.plist": "../../install/si.goat.pen.plist"} {
+		b, err := os.ReadFile(tmpl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), "--service") {
+			t.Fatalf("%s does not pass --service", name)
+		}
+	}
+}
+
+// After the service stopped on a refused relay list, pen up --relay with a usable relay starts the node.
+func TestUpWithAUsableRelayRecoversAfterTheServiceStoppedOnARefusedOne(t *testing.T) {
+	rs := relaytest.New()
+	defer rs.Close()
+	st := storeWithRelay(t, "http://relay.example.com")
+	t.Setenv("PEN_TEST_MAIN", "1")
+	t.Setenv("PEN_HOME", st.Dir)
+	t.Setenv("PEN_SERVICE", "none")
+	t.Setenv("PEN_HOSTKEYS", "none")
+	t.Setenv("PEN_SSH_DIR", filepath.Join(st.Dir, "ssh"))
+	var out, errOut bytes.Buffer
+	if code := RunUp([]string{"--foreground", "--service"}, &out, &errOut); code != 0 {
+		t.Fatalf("service start exit %d: %s", code, errOut.String())
+	}
+	code := RunUp([]string{"--no-service", "--relay", rs.URL}, &out, &errOut)
+	t.Cleanup(func() { RunDown(nil, io.Discard, io.Discard) })
+	if code != 0 {
+		t.Fatalf("pen up --relay exit %d: %s", code, errOut.String())
+	}
+	var s daemon.Status
+	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
+		t.Fatalf("no daemon after pen up --relay: %v", err)
 	}
 }
