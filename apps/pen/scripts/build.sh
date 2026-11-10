@@ -1,11 +1,21 @@
 #!/bin/sh
 # Builds pen for every release target into infra/pen-relay/public/dl/<version>/ with SHA256SUMS and
-# NOTICE, and writes infra/pen-relay/public/install.sh with the relay and version filled in.
-#   apps/pen/scripts/build.sh <version> <relay URL>   (or PEN_RELAY=<relay URL>)
+# NOTICE, and writes infra/pen-relay/public/install.sh with the relays and version filled in.
+#   apps/pen/scripts/build.sh <version> <download relay URL> [extra relay URL]...
+# install.sh downloads from the first relay and gives installed nodes all of them.
 set -eu
 
-V="${1:?usage: build.sh <version> <relay URL>}"
-RELAY="${2:-${PEN_RELAY:?usage: build.sh <version> <relay URL>}}"
+usage="usage: build.sh <version> <download relay URL> [extra relay URL]..."
+V="${1:?$usage}"
+RELAY="${2:-${PEN_RELAY:?$usage}}"
+shift
+if [ $# -gt 0 ]; then
+	shift
+fi
+RELAYS="$RELAY"
+for r in "$@"; do
+	RELAYS="$RELAYS $r"
+done
 GO="${GO:-go}"
 here="$(cd "$(dirname "$0")/.." && pwd)"
 repo="$(cd "$here/../.." && pwd)"
@@ -57,7 +67,7 @@ modcache="$(cd "$here" && "$GO" env GOMODCACHE)"
 	done
 } >NOTICE
 
-sed -e "s|__PEN_RELAY__|$RELAY|" -e "s|__PEN_VERSION__|$V|" "$here/install/install.sh" >"$repo/infra/pen-relay/public/install.sh"
+sed -e "s|__PEN_RELAYS__|$RELAYS|" -e "s|__PEN_RELAY__|$RELAY|" -e "s|__PEN_VERSION__|$V|" "$here/install/install.sh" >"$repo/infra/pen-relay/public/install.sh"
 chmod 0755 "$repo/infra/pen-relay/public/install.sh"
 
 for f in pen-*.gz; do

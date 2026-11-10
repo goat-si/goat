@@ -41,6 +41,9 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, r.Token)
 		return 0
 	}
+	if cfg, err := st.LoadConfig(); err == nil && cfg.DownloadRelay != "" {
+		r.Relay = cfg.DownloadRelay
+	}
 	fmt.Fprintf(stdout, "invite (single use, expires %s):\n  %s\n\non the new machine:\n  curl -fsSL %s/install.sh | sh -s -- --join %s\n\nwaiting for the join (Ctrl-C leaves the invite valid)...\n",
 		time.UnixMilli(r.ExpiresAt).Format(time.Kitchen), r.Token, r.Relay, r.Token)
 	var ev struct {

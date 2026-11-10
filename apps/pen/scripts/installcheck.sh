@@ -1,6 +1,7 @@
 #!/bin/sh
 # install.sh check against the relay stand-in serving build.sh output: a bare install only installs,
-# install --up founds on one home, install --join joins another, then a corrupted SHA256SUMS must stop the install.
+# install --up founds on one home with every relay build.sh listed, install --join joins another, then a corrupted
+# SHA256SUMS must stop the install.
 #   apps/pen/scripts/installcheck.sh   (runs build.sh into a scratch copy of public/)
 set -eu
 
@@ -8,23 +9,27 @@ GO="${GO:-go}"
 here="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d /tmp/peni.XXXXXX)"
 relay_pid=""
+relay2_pid=""
 cleanup() {
 	for n in z a b; do
 		[ -x "$work/$n/.local/bin/pen" ] && HOME="$work/$n" PEN_HOME="$work/$n/.pen" "$work/$n/.local/bin/pen" down >/dev/null 2>&1 || true
 	done
-	if [ -n "$relay_pid" ]; then
-		kill "$relay_pid" 2>/dev/null || true
-		wait "$relay_pid" 2>/dev/null || true
-	fi
+	for pid in $relay_pid $relay2_pid; do
+		kill "$pid" 2>/dev/null || true
+		wait "$pid" 2>/dev/null || true
+	done
 	rm -rf "$work"
 }
 trap cleanup EXIT
 
 (cd "$here" && "$GO" build -o "$work/relaytest" ./internal/relaytest/cmd/relaytest)
-port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
+freeport() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
+port="$(freeport)"
 relay="http://127.0.0.1:$port"
+port2="$(freeport)"
+relay2="http://127.0.0.1:$port2"
 repo="$(cd "$here/../.." && pwd)"
-GO="$GO" "$here/scripts/build.sh" 0.0.0-check "$relay" >/dev/null
+GO="$GO" "$here/scripts/build.sh" 0.0.0-check "$relay" "$relay2" >/dev/null
 mkdir -p "$work/public/dl"
 cp -R "$repo/infra/pen-relay/public/dl/0.0.0-check" "$work/public/dl/"
 cp "$repo/infra/pen-relay/public/install.sh" "$work/public/install.sh"
@@ -34,6 +39,10 @@ mkfifo "$work/relay.out"
 "$work/relaytest" -addr "127.0.0.1:$port" -public "$work/public" >"$work/relay.out" &
 relay_pid=$!
 read -r _ _ <"$work/relay.out"
+mkfifo "$work/relay2.out"
+"$work/relaytest" -addr "127.0.0.1:$port2" >"$work/relay2.out" &
+relay2_pid=$!
+read -r _ _ <"$work/relay2.out"
 
 inst() {
 	n="$1"
@@ -60,7 +69,14 @@ echo "ok: a bare install.sh installs pen and founds nothing"
 
 inst a --name a --up
 pen a version
+relays="$(pen a relay ls)"
+for r in "$relay" "$relay2"; do
+	printf '%s\n' "$relays" | grep -q "^$r	" || { echo "FAIL: a's relays lack $r:"; printf '%s\n' "$relays"; exit 1; }
+done
+[ "$(pen a relay download)" = "$relay" ] || { echo "FAIL: a's download relay is $(pen a relay download), want $relay"; exit 1; }
+echo "ok: install.sh --up gave a both relays and kept the download relay"
 inst b --name b --join "$(pen a invite --auto)"
+[ "$(pen b relay download)" = "$relay" ] || { echo "FAIL: b's download relay is $(pen b relay download), want $relay"; exit 1; }
 members="$(pen a ls --json | grep -c '"fingerprint"')"
 [ "$members" = 2 ] || { echo "FAIL: a lists $members members"; exit 1; }
 echo "ok: install.sh installed and started a; install.sh --join added b (a lists 2)"

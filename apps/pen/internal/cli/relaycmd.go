@@ -21,13 +21,14 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relayserver"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
-// RunRelay dispatches pen relay serve|add|rm|ls.
+// RunRelay dispatches pen relay serve|add|rm|ls|download.
 func RunRelay(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: pen relay serve|add|rm|ls")
+		fmt.Fprintln(stderr, "usage: pen relay serve|add|rm|ls|download")
 		return 2
 	}
 	switch args[0] {
@@ -37,6 +38,8 @@ func RunRelay(args []string, stdout, stderr io.Writer) int {
 		return runRelayEdit(args[0], args[1:], stdout, stderr)
 	case "ls":
 		return runRelayLs(stdout, stderr)
+	case "download":
+		return runRelayDownload(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "pen relay: unknown command %q\n", args[0])
 	return 2
@@ -328,4 +331,44 @@ func loopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// runRelayDownload prints the relay that serves install.sh to this node's invitees, or sets it.
+func runRelayDownload(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 1 {
+		fmt.Fprintln(stderr, "usage: pen relay download [url]")
+		return 2
+	}
+	st, err := openState()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	cfg, err := st.LoadConfig()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(stdout, downloadRelay(cfg))
+		return 0
+	}
+	u := strings.TrimRight(args[0], "/")
+	if _, err := wire.RelayOrigin(u); err != nil {
+		return fail(stderr, err)
+	}
+	cfg.DownloadRelay = u
+	if err := st.SaveConfig(cfg); err != nil {
+		return fail(stderr, err)
+	}
+	return 0
+}
+
+// downloadRelay is where invitees fetch install.sh: the configured download relay, else the first relay.
+func downloadRelay(cfg state.Config) string {
+	if cfg.DownloadRelay != "" {
+		return cfg.DownloadRelay
+	}
+	if l := cfg.RelayList(); len(l) > 0 {
+		return l[0]
+	}
+	return ""
 }

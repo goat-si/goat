@@ -52,12 +52,18 @@ started it does not stop it. It does not come back after a reboot; run `pen up` 
 
 `pen ssh-config --install` writes `~/.ssh/pen/config` (one `Host pen-<name>` per member with `ProxyCommand pen pipe %n 22`,
 the member's login user and its signed host keys) and puts an `Include` for it first in `~/.ssh/config`. The daemon keeps it
-current as members join. `pen ssh-config --uninstall` removes both.
+current as members join. `pen ssh-config --uninstall` removes both. Each host keeps its first connection open for 10 minutes
+(`ControlMaster`), so a repeat `ssh` skips the relay and key exchange round trips; `ssh -o ControlMaster=no` opens a fresh one.
 
 ## Relays
 
 A node keeps an uplink on every relay in its list (`pen relay ls|add|rm`, or `pen up --relay a --relay b`); dials race all
-of them and use the first that answers. Invites carry the inviter's list.
+of them and use the first whose node answers the handshake. Invites carry the inviter's list. A machine installed with
+`install.sh` gets every relay the release lists; `--relay` (repeatable) replaces that list. `pen relay download` shows the
+relay invites name for `install.sh`.
+
+`PEN_TRACE=1 pen pipe|forward ...` prints each stage of the relay race to stderr (socket, answer, winner, first byte, with
+milliseconds since the dial started); `PEN_RELAYS="<url> <url>"` pins the relays those two commands use.
 
 `pen relay serve` runs a relay that speaks the same contract as `infra/pen-relay`:
 
@@ -71,6 +77,8 @@ Behind a TLS terminator use `--plain --public-origin wss://<host>`.
 
 ## Build
 
-`scripts/build.sh <version> <relay URL>` cross-compiles the binaries into `infra/pen-relay/public/dl/<version>/` with
-`SHA256SUMS`, `NOTICE` and `install.sh`; deploying the Worker serves them. `go test ./...` runs the tests;
+`scripts/build.sh <version> <download relay URL> [extra relay URL]...` cross-compiles the binaries into
+`infra/pen-relay/public/dl/<version>/` with `SHA256SUMS`, `NOTICE` and `install.sh`; deploying the Worker serves them.
+Releases pass the Worker, then the Seoul relay:
+`scripts/build.sh <version> https://pen-relay.pos090001.workers.dev https://158-180-76-7.sslip.io`. `go test ./...` runs the tests;
 `scripts/threenode.sh` checks three nodes end to end against local relays.

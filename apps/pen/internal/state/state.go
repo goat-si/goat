@@ -185,6 +185,8 @@ type Config struct {
 	Relay  string   `json:"relay"`
 	Relays []string `json:"relays,omitempty"`
 	Name   string   `json:"name"`
+	// DownloadRelay serves install.sh and the binaries (install.sh sets it); invites name it.
+	DownloadRelay string `json:"downloadRelay,omitempty"`
 }
 
 // RelayList is the node's relays; a v1 config's single relay migrates to a one-element list.
