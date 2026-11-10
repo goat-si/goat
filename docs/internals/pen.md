@@ -15,7 +15,7 @@ wins over the code; user workflows are in [Pen](../user/pen.md) and procedures i
 - **Relays are untrusted for content, trusted for availability.** They forward Noise records between
   pinned static keys and cannot read, forge, replay or splice them. They see node ids, client addresses,
   record sizes and timing. Close codes are not authenticated, so a hostile relay can end a dial (4401, 4400) or drop it; several relays are the answer to that, not code.
-- **The installer trusts the relay that serves it.** `install.sh` checks the binaries against
+- **The installer trusts the relay that serves it.** `install.sh` (and `install.ps1`) checks the binaries against
   `SHA256SUMS` from the same relay (`apps/pen/install/install.sh`), which proves an intact transfer only.
   Whoever controls the download relay can ship any binary. Publishing checksums somewhere the relay
   operator cannot write (signed release assets) would remove that; it is not done.
@@ -94,8 +94,27 @@ the list because it also serves the installer and binaries.
 
 `pen dashboard` runs on `127.0.0.1` with a random port, and anything on that machine can reach the port.
 Cookies are not isolated by port, so the page never uses one: a single-use token arrives in the URL
-fragment (from a 0600 file, never a process argument), is exchanged for a bearer kept in
+fragment (from an owner-only file, never a process argument), is exchanged for a bearer kept in
 `sessionStorage`, and every response carries an HMAC of that bearer under a per-start key. A tab that
 sees a missing or wrong server id, a network error or a timeout stops for good, because a process that takes
 the port after the dashboard stops would otherwise be trusted by the open tab. Every action goes through
 the same daemon operation as the CLI.
+
+## Windows
+
+- **Go's monotonic clock counts sleep on Windows.** It reads the interrupt time, so wall minus monotonic never
+  shows a sleep there; the wake check uses `QueryUnbiasedInterruptTime` instead (`awake_windows.go` in
+  `apps/pen/internal/daemon`).
+- **Mode bits protect nothing on Windows.** The state directory gets a protected DACL with one ACE for the user,
+  which its files and the AF_UNIX control socket inherit (`private_windows.go` in `apps/pen/internal/state`).
+  Windows checks that DACL when a process connects to the socket; an elevated administrator's backup privilege
+  passes it, as root passes 0600 on unix, so no peer check is added.
+- **Task Scheduler's restart on failure ignores exit codes.** It restarts only a task that failed to launch, so the
+  task runs `pen up --supervise`, which restarts a daemon that exited non-zero. The task uses the user's
+  interactive token, which needs no admin rights and means Pen runs only while that user is signed in; S4U or a
+  stored password would need "Log on as a batch job", which standard users lack. schtasks accepts its XML only in
+  UTF-16.
+- **Win32-OpenSSH starts ProxyCommand without a shell.** The command is quoted for CreateProcess, the state
+  directory travels as `pen pipe --home`, and the config has no ControlMaster, which that ssh lacks.
+- **An sshd session's job ends its processes.** A `--no-service` daemon started over SSH tries to leave the job
+  (CREATE_BREAKAWAY_FROM_JOB) and stays in it when the job forbids that; the task is the background path.

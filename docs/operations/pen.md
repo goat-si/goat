@@ -11,7 +11,7 @@ Pen has three hosted pieces, all on the Cloudflare account `88fe49abfe560e75daf6
 | Seoul relay | `pen relay serve` on the Oracle VM `clisu-oracle` (ap-chuncheon-1), `wss://158-180-76-7.sslip.io`            | `apps/pen` (`relayserver`) |
 
 Deploy from a checkout of the commit you mean to ship, after its `goat-ci-result` is green (the `test-pen` task runs
-every Pen suite). `wrangler whoami` must list only the account above.
+every Pen suite, and `test-pen-windows` the Go suite and install check on Windows). `wrangler whoami` must list only the account above.
 
 ## Check a relay
 
@@ -35,13 +35,14 @@ apps/pen/scripts/build.sh <version> https://pen-relay.pos090001.workers.dev http
 ```
 
 The first URL is the download relay; every URL becomes a relay of nodes installed with that `install.sh`. Output goes
-to `infra/pen-relay/public/` (`dl/<version>/` with four gzipped binaries, `SHA256SUMS` and `NOTICE`, and
-`install.sh`), which is gitignored and published by the next `pen-relay` deploy. A deploy serves exactly what that
+to `infra/pen-relay/public/` (`dl/<version>/` with six gzipped binaries for Linux, macOS and Windows, `SHA256SUMS` and
+`NOTICE`, and `install.sh` and `install.ps1`), which is gitignored and published by the next `pen-relay` deploy. A deploy serves exactly what that
 folder holds, so a deploy from another checkout drops older releases: copy the previous `dl/<version>/` in first
 (download it from the Worker and check it with `shasum -a 256 -c SHA256SUMS`) so nodes can roll back. An `install.sh`
 downloads the version it was built for unless `PEN_VERSION` names another.
 Upgrade a running node by replacing its
-`~/.local/bin/pen` (or rerunning `install.sh`) and restarting it with `pen down` and `pen up`.
+`~/.local/bin/pen` (or rerunning `install.sh`, or `install.ps1` on Windows, which renames a running `pen.exe` aside)
+and restarting it with `pen down` and `pen up`. `apps/pen/scripts/installcheck.ps1` is `installcheck.sh` for Windows.
 
 ## pen-relay Worker
 
