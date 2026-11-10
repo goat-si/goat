@@ -231,6 +231,10 @@ In the desktop app, open **Settings → Connections → Add device**, choose
 forward for you. Projects, provider credentials, and agent work stay on the
 remote machine.
 
+To reach machines that accept no incoming connections, such as a laptop behind
+NAT or a cloud box, join them with [Pen](./pen.md) and pick their `pen-<name>`
+hosts here.
+
 Before it installs anything, GOAT checks the host and shows one line per check:
 whether it answers (including Tailscale), its host key, sign-in with your SSH key,
 the operating system, free disk space, and whether a GOAT runtime is available for

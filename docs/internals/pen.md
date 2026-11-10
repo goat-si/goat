@@ -1,0 +1,81 @@
+# Pen
+
+Pen is a GOAT-only mesh: a Go node (`apps/pen`), its wire contract and vectors
+(`packages/pen-protocol`), a Cloudflare relay (`infra/pen-relay`), a Go relay (`pen relay serve`, run in
+Seoul) and a Google sign-in service (`infra/pen-login`). The [contract](../../packages/pen-protocol/CONTRACT.md)
+wins over the code; user workflows are in [Pen](../user/pen.md) and procedures in the
+[runbook](../operations/pen.md). This page keeps the decisions and the traps.
+
+## Trust
+
+- **Members trust each other fully.** After the Noise handshake a member dials `127.0.0.1:<port>` for any
+  port the peer names (`serveTCP` in `apps/pen/internal/daemon/accept.go`). There is no per-port or
+  per-member policy, because a policy would need signed records every member enforces alike and Pen is
+  one person's machines. Anything that listens on loopback of a member is reachable by every other member.
+- **Relays are untrusted for content, trusted for availability.** They forward Noise records between
+  pinned static keys and cannot read, forge, replay or splice them. They see node ids, client addresses,
+  record sizes and timing. Close codes are not authenticated, so a hostile relay can end a dial (4401, 4400) or drop it; several relays are the answer to that, not code.
+- **The installer trusts the relay that serves it.** `install.sh` checks the binaries against
+  `SHA256SUMS` from the same relay (`apps/pen/install/install.sh`), which proves an intact transfer only.
+  Whoever controls the download relay can ship any binary. Publishing checksums somewhere the relay
+  operator cannot write (signed release assets) would remove that; it is not done.
+- **The login service holds no mesh key.** It asserts only "node key `signPub` belongs to Google account
+  `sub`" for 10 minutes. A member verifies the assertion against the login key recorded in the mesh's
+  `account` record and signs the `admit` itself, so the service cannot add a machine to a mesh on its
+  own, and a mesh keeps working when the service is down. What it can do is admit any machine to an
+  unlocked mesh by asserting a false account; `pen lock on` moves that decision to a member.
+
+## Keys that cannot be replaced quietly
+
+- **`LOGIN_SIGNING_KEY`.** Every bound mesh pins the login key's `kid` and public key in its `account`
+  record. A new key makes every assertion fail on every existing mesh until one member of each mesh runs
+  `pen login` again, which signs a new `account` record with the new key (the rebind path is
+  `TestLoginOnAMemberBindsAgainAfterAnUnbindOrAKeyRotation`). That rebind is also the rotation: assertions
+  live 10 minutes and members verify against the bound key only, so serving two keys at once would buy
+  nothing. The Worker secret cannot be read back, so the only copy outside Cloudflare is the operator's
+  backup (see the runbook).
+- **A node's identity.** `~/.pen/identity.json` is the node. A relay keeps one uplink per node id and
+  closes the older one 4409, and a node that gets 4409 stops instead of reconnecting
+  ([contract](../../packages/pen-protocol/CONTRACT.md#relay)). Two machines sharing an identity, such as boxes
+  made from an image that contained `~/.pen`, therefore knock each other offline. Never bake `~/.pen`
+  into an image; join each machine on its first boot.
+
+## Revocation and compromise
+
+`pen revoke --compromised` also revokes every key the member admitted, and drops its `account` records
+and its lock `off` records while keeping its lock `on` records
+([mesh records](../../packages/pen-protocol/CONTRACT.md#mesh-records)). The asymmetry is deliberate:
+revoking a stolen machine must never unlock the mesh or keep a binding it signed, and a stray `on` costs
+nothing because any member can sign `off` after it. When the stolen machine had signed the binding,
+members fall back to the previous binding's login service to send forgets, so it leaves the account's
+registry too (`forgetRevoked` in `apps/pen/internal/daemon/account.go`).
+
+`account` and `lock` records stall a v1.0 node, so a member signs one only when every member has announced
+`"pen":"1.1"` in a sync hello. The last announced version is kept in `versions.json` so one offline member
+that already announced does not block the mesh; a member that never announced still does.
+
+## Dials
+
+Kind 0x01 sessions (TCP and mesh sync) race the Noise handshake on every relay and confirm only the first
+verified message 2, because the first `pong` only proves a relay is up, while the path back from the node
+is what costs time. This is safe only because a responder acts after key confirmation. Joins (0x03) and
+account sessions (0x04) keep the ping race: their message 1 spends a single-use invite or reserves one
+of four account slots, so it must travel on one socket (Doriterm #1351).
+
+## Why a Seoul relay
+
+Requests from Korea to this account's Worker were served at LAX, so a dial between two Seoul machines through the
+Worker crossed the Pacific twice: `/healthz` took 0.9 to 1.9 s from Korea against 20 to 30 ms for a Go relay
+on an Oracle VM in Chuncheon. With the handshake race, a box in Oregon reaching a Mac in Seoul picks the
+Seoul relay on its own, and a forwarded HTTP request fell from about 2.3 s to 0.87 s. The Worker stays first in
+the list because it also serves the installer and binaries.
+
+## Dashboard
+
+`pen dashboard` runs on `127.0.0.1` with a random port, and anything on that machine can reach the port.
+Cookies are not isolated by port, so the page never uses one: a single-use token arrives in the URL
+fragment (from a 0600 file, never a process argument), is exchanged for a bearer kept in
+`sessionStorage`, and every response carries an HMAC of that bearer under a per-start key. A tab that
+sees a missing or wrong server id, a network error or a timeout stops for good, because a process that takes
+the port after the dashboard stops would otherwise be trusted by the open tab. Every action goes through
+the same daemon operation as the CLI.

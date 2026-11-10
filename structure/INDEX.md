@@ -42,6 +42,7 @@ The process that commits orchestration, runs providers, and reaches other machin
 | [`notes.md`](notes.md)                                           | Markdown notes on disk, revision conflicts, git commits, start-work and automatic done, and the clients that edit them.                                                            |
 | [`ssh.md`](ssh.md)                                               | SSH host trust, preparation/runtime ownership, updates and deferred refresh, provider diagnosis routing, repo inventory and dispatch, Boat managed aliases, and the hub node list. |
 | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md) | Wakes for a launched thread, and durable SSH dispatches that report back.                                                                                                          |
+| [`pen.md`](pen.md)                                               | The Pen mesh outside the server: the Go node and relay, the wire contract, the relay and sign-in Workers, node state, and its CI task.                                             |
 
 ### Tier 4 — Clients
 
@@ -103,6 +104,9 @@ the repository is organised by package. Changing an area requires review of ever
 | `apps/mobile/src/features/goat-bot/goatBotHomeMode.ts`                  | [`mobile.md`](mobile.md)                                                                                                                               |
 | `apps/mobile/src/features/notes/`                                       | [`notes.md`](notes.md)                                                                                                                                 |
 | `apps/mobile/src/persistence/mobile-database.ts`                        | [`notes.md`](notes.md)                                                                                                                                 |
+| `apps/pen`                                                              | [`pen.md`](pen.md)                                                                                                                                     |
+| `apps/pen/install`                                                      | [`pen.md`](pen.md)                                                                                                                                     |
+| `apps/pen/scripts`                                                      | [`pen.md`](pen.md)                                                                                                                                     |
 | `apps/server/src/bin.ts`                                                | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/binCli.ts`                                             | [`overview.md`](overview.md)<br>[`server.md`](server.md)                                                                                               |
 | `apps/server/src/channels/ChannelBotArtifacts.ts`                       | [`channels.md`](channels.md)                                                                                                                           |
@@ -260,6 +264,8 @@ the repository is organised by package. Changing an area requires review of ever
 | `apps/web/src/routes/_chat.tsx`                                         | [`web.md`](web.md)                                                                                                                                     |
 | `apps/web/src/routes/pair.tsx`                                          | [`web.md`](web.md)                                                                                                                                     |
 | `apps/web/vite.config.ts`                                               | [`web.md`](web.md)                                                                                                                                     |
+| `infra/pen-login`                                                       | [`pen.md`](pen.md)                                                                                                                                     |
+| `infra/pen-relay`                                                       | [`pen.md`](pen.md)                                                                                                                                     |
 | `infra/relay`                                                           | [`overview.md`](overview.md)                                                                                                                           |
 | `infra/relay/src/accounts/AccountRateLimitObject.ts`                    | [`overview.md`](overview.md)                                                                                                                           |
 | `packages/client-runtime`                                               | [`overview.md`](overview.md)<br>[`client-runtime.md`](client-runtime.md)                                                                               |
@@ -299,6 +305,8 @@ the repository is organised by package. Changing an area requires review of ever
 | `packages/contracts/src/rpc.ts`                                         | [`contracts.md`](contracts.md)                                                                                                                         |
 | `packages/contracts/src/settings.ts`                                    | [`contracts.md`](contracts.md)<br>[`channels.md`](channels.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                                 |
 | `packages/contracts/src/sshHost.ts`                                     | [`ssh.md`](ssh.md)                                                                                                                                     |
+| `packages/pen-protocol`                                                 | [`pen.md`](pen.md)                                                                                                                                     |
+| `packages/pen-protocol/CONTRACT.md`                                     | [`pen.md`](pen.md)                                                                                                                                     |
 | `packages/provider-acp`                                                 | [`server.md`](server.md)                                                                                                                               |
 | `packages/provider-acp-registry`                                        | [`server.md`](server.md)                                                                                                                               |
 | `packages/provider-acp-registry/src/server/driver.ts`                   | [`server.md`](server.md)                                                                                                                               |
