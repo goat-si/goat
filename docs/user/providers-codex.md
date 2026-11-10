@@ -206,7 +206,8 @@ as a dev server.
 A message you send while such a turn still runs waits for it, and so does one sent
 while Codex runs a turn no message started, such as a goal continuation. The thread
 says which Codex turn the message waits for. For a turn no message started,
-**Stop that turn** ends it so the message starts.
+**Stop that turn** ends it so the message starts. It also pauses the thread's
+Codex goal, so Codex starts no more goal turns until you resume the goal.
 
 ## Give each thread its own Codex app-server
 

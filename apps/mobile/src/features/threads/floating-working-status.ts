@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import {
+  HELD_TURN_STOP_NOTE,
   presentProviderGoal,
   type RunStartHoldPresentation,
   type RunStopPresentation,
@@ -119,7 +120,7 @@ export function useRunStopAndStartHold(ref: ScopedThreadRef | null, environmentI
             return ref !== null && canStop && hold.reason === "unowned_turn" && turnId
               ? Dialog.confirm({
                   title: hold.title,
-                  message: `${hold.description} Stopping that turn lets your message start now.`,
+                  message: `${hold.description} ${HELD_TURN_STOP_NOTE}`,
                   cancelText: "Keep waiting",
                   confirmText: "Stop that turn",
                   destructive: true,

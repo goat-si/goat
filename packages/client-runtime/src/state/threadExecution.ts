@@ -516,6 +516,10 @@ export interface RunStopPresentation {
   readonly cloud: boolean;
 }
 
+/** What stopping a held turn does besides ending it; shown before a person confirms. */
+export const HELD_TURN_STOP_NOTE =
+  "Stopping it also pauses this thread's Codex goal, so Codex starts no more goal turns until you resume the goal.";
+
 export interface RunStartHoldPresentation {
   readonly runId: ThreadStructure["runs"][number]["id"];
   readonly reason: NonNullable<ThreadStructure["runs"][number]["startHold"]>["reason"];

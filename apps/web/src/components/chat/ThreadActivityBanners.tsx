@@ -8,6 +8,7 @@ import type {
 } from "@goat/contracts";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
+  HELD_TURN_STOP_NOTE,
   presentPendingBackgroundWork,
   presentProviderGoal,
   type RunStartHoldPresentation,
@@ -147,9 +148,16 @@ export function startHoldBannerItem(input: {
     description: input.hold.description,
     actions:
       input.canStop && input.hold.reason === "unowned_turn" && input.hold.nativeTurnId ? (
-        <Button size="xs" variant="ghost" disabled={input.stopping} onClick={input.onStop}>
-          {input.stopping ? "Stopping..." : "Stop that turn"}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button size="xs" variant="ghost" disabled={input.stopping} onClick={input.onStop}>
+                {input.stopping ? "Stopping..." : "Stop that turn"}
+              </Button>
+            }
+          />
+          <TooltipPopup side="top">{HELD_TURN_STOP_NOTE}</TooltipPopup>
+        </Tooltip>
       ) : undefined,
   };
 }

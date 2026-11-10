@@ -4,12 +4,10 @@
  *
  * @module CodexHeldTurnStop
  */
-import {
-  ORCHESTRATION_V2_WS_METHODS,
-  OrchestrationV2StopHeldTurnError,
-  type OrchestrationV2StopHeldTurnInput,
-  type OrchestrationV2StopHeldTurnResult,
-  type ThreadId,
+import type {
+  OrchestrationV2ProviderTurn,
+  OrchestrationV2StopHeldTurnResult,
+  ThreadId,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -19,12 +17,12 @@ import * as Schema from "effect/Schema";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 
-import * as Detached from "./CodexDetachedAppServerLive.ts";
+import type * as Detached from "./CodexDetachedAppServerLive.ts";
 import { CodexDetachedAppServerError } from "./CodexDetachedAppServer.ts";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import {
-  CodexSurvivors,
   readGoalReleaseStatus,
+  type CodexSurvivors,
   type CodexInstanceRecordKey,
   type CodexStopObligation,
 } from "./CodexSurvivors.ts";
@@ -33,15 +31,26 @@ type Outcome = OrchestrationV2StopHeldTurnResult["outcome"];
 const isDetachedError = Schema.is(CodexDetachedAppServerError);
 
 /**
+ * Whether a run of the thread recorded this Codex turn. Recovery fences a run's own turn without a
+ * survivor binding when it cannot match the turn to one process, so a missing binding is not enough.
+ */
+export const nativeTurnOwnedByRun = (
+  turns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "nativeTurnRef">>,
+  nativeTurnId: string,
+) => turns.some((turn) => turn.nativeTurnRef?.nativeId === nativeTurnId);
+
+/**
  * Stops the named turn when it still holds the thread as a turn no run owns. Its stop fence and
  * the goal block of its native thread (the goal is paused by then) go in one write, so no polling
  * worker sees the thread free while admission would still refuse it; a wake follows.
  */
-export const stopHeldTurn = Effect.fn("CodexHeldTurnStop.stopHeldTurn")(function* <E>(input: {
+export const stopHeldTurn = Effect.fn("CodexHeldTurnStop.stopHeldTurn")(function* <E, F>(input: {
   readonly survivors: Pick<
     CodexSurvivors["Service"],
     "list" | "getStopObligations" | "clearStopObligation"
   >;
+  /** True when a run owns the turn; such a turn stops with its run, never from here. */
+  readonly ownedByRun: (nativeTurnId: string) => Effect.Effect<boolean, F>;
   /** Clears the stop fence and its native thread's goal block in one write, without a wake. */
   readonly release: (
     record: CodexInstanceRecordKey,
@@ -61,8 +70,9 @@ export const stopHeldTurn = Effect.fn("CodexHeldTurnStop.stopHeldTurn")(function
   const held = (yield* input.survivors.getStopObligations(input.threadId)).find(
     ({ block }) => block.nativeTurnId === input.nativeTurnId,
   );
-  // A turn that survived a restart belongs to a run and stops with it.
-  if (held === undefined || survivorTurn) return "none" satisfies Outcome;
+  // A turn that survived a restart, or any other run's turn, stops with its run.
+  if (held === undefined || survivorTurn || (yield* input.ownedByRun(input.nativeTurnId)))
+    return "none" satisfies Outcome;
   if (!(yield* input.stop(held.record, held.block))) return "stopping" satisfies Outcome;
   yield* input.release(held.record, held.block);
   yield* input.survivors.clearStopObligation(held.record, held.block);
@@ -114,7 +124,7 @@ export const stopTurnOnClient = Effect.fn("CodexHeldTurnStop.stopTurnOnClient")(
   return Option.getOrElse(confirmed, () => false);
 });
 
-const stopTurnOnRecord = Effect.fn("CodexHeldTurnStop.stopTurnOnRecord")(
+export const stopTurnOnRecord = Effect.fn("CodexHeldTurnStop.stopTurnOnRecord")(
   function* (
     detached: Detached.CodexDetachedAppServers["Service"],
     record: CodexInstanceRecordKey,
@@ -139,6 +149,19 @@ const stopTurnOnRecord = Effect.fn("CodexHeldTurnStop.stopTurnOnRecord")(
   (effect) =>
     effect.pipe(
       Effect.scoped,
+      // Each request to a live but unresponsive app-server could wait forever.
+      Effect.timeoutOption("30 seconds"),
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
+              new CodexDetachedAppServerError({
+                detail: "Codex did not answer within 30 seconds; the turn may still be running.",
+              }),
+            ),
+          onSome: Effect.succeed,
+        }),
+      ),
       Effect.mapError((cause) =>
         isDetachedError(cause)
           ? cause
@@ -146,33 +169,3 @@ const stopTurnOnRecord = Effect.fn("CodexHeldTurnStop.stopTurnOnRecord")(
       ),
     ),
 );
-
-export const heldTurnRpcHandlers = Effect.gen(function* () {
-  // Without Codex process tracking, no Codex turn can hold a start.
-  const survivors = yield* Effect.serviceOption(CodexSurvivors);
-  const detached = yield* Effect.serviceOption(Detached.CodexDetachedAppServers);
-  return {
-    [ORCHESTRATION_V2_WS_METHODS.stopHeldTurn]: (input: OrchestrationV2StopHeldTurnInput) =>
-      (Option.isNone(survivors) || Option.isNone(detached)
-        ? Effect.succeed<Outcome>("none")
-        : stopHeldTurn({
-            survivors: survivors.value,
-            release: (record, turn) =>
-              detached.value.clearStopObligation(record, turn, true).pipe(Effect.asVoid),
-            threadId: input.threadId,
-            nativeTurnId: input.nativeTurnId,
-            stop: (record, turn) => stopTurnOnRecord(detached.value, record, turn),
-          })
-      ).pipe(
-        Effect.map((outcome) => ({ outcome })),
-        Effect.mapError(
-          (cause) =>
-            new OrchestrationV2StopHeldTurnError({
-              threadId: input.threadId,
-              detail: cause.detail,
-              cause,
-            }),
-        ),
-      ),
-  };
-});

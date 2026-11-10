@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
+import { nativeTurnOwnedByRun } from "../../provider/CodexHeldTurnStop.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 import { forkParked } from "../../serverActivation.ts";
 import * as EventSink from "../EventSink.ts";
@@ -83,7 +84,15 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const update = Effect.fn("RunStartHoldReactor.update")(
     function* (run: OrchestrationV2Run, holds: ReadonlyMap<ThreadId, ThreadHold>) {
-      const hold = heldBy(run, holds);
+      let hold = heldBy(run, holds);
+      // A fenced turn a run recorded is that run's turn from before the restart, not an unowned one.
+      if (hold?.reason === "unowned_turn" && hold.nativeTurnId !== undefined) {
+        const { providerTurns } = yield* orchestrator.getThreadRecords(run.threadId, [
+          "providerTurns",
+        ]);
+        if (nativeTurnOwnedByRun(providerTurns, hold.nativeTurnId))
+          hold = { reason: "restart_survivor", nativeTurnId: hold.nativeTurnId };
+      }
       if (withStartHold(run, hold) === null) return;
       const uuid = yield* crypto.randomUUIDv4();
       yield* orchestrator.dispatch({

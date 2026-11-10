@@ -25,6 +25,7 @@ const heldStart = (
     readonly confirmed: boolean;
     readonly turnId: string;
     readonly survivorTurn?: boolean;
+    readonly ownedByRun?: boolean;
   },
 ) =>
   Effect.gen(function* () {
@@ -114,6 +115,7 @@ const heldStart = (
       const stopped: Array<string> = [];
       const outcome = yield* stopHeldTurn({
         survivors,
+        ownedByRun: () => Effect.succeed(options.ownedByRun === true),
         release: (heldRecord, cleared) => clearStop(heldRecord, cleared, true),
         threadId,
         nativeTurnId: options.turnId,
@@ -187,6 +189,19 @@ it.effect("a stop Codex has not confirmed keeps the message waiting behind the t
     assert.lengthOf(yield* Ref.get(held.obligations), 1);
     assert.lengthOf(yield* Ref.get(held.goalBlocks), 2);
     assert.isTrue(Option.isNone(yield* held.claim));
+  }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
+);
+
+it.effect("a run's own turn that recovery fenced without a binding is never stopped", () =>
+  Effect.gen(function* () {
+    const held = yield* heldStart("run-owned", {
+      confirmed: true,
+      turnId: "goal-turn",
+      ownedByRun: true,
+    });
+    assert.strictEqual(held.outcome, "none");
+    assert.deepStrictEqual(held.stopped, []);
+    assert.lengthOf(yield* Ref.get(held.obligations), 1);
   }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );
 

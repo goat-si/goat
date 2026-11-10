@@ -310,7 +310,7 @@ import * as SourceControlStarPrompt from "./sourceControl/SourceControlStarPromp
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import { storageRpcHandlers } from "./storage/storageRpc.ts";
-import { heldTurnRpcHandlers } from "./provider/CodexHeldTurnStop.ts";
+import { heldTurnRpcHandlers } from "./orchestration-v2/goat/HeldTurnRpc.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
