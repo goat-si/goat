@@ -598,6 +598,10 @@ func (s *Store) DoAsMember(id *ident.Identity, fn func(v *View) error) error {
 }
 
 func (s *Store) memberLocked(id *ident.Identity) bool {
+	// A retired store is a mesh this node has left: it admits and queues for nobody.
+	if s.retired.Load() {
+		return false
+	}
 	if s.view == nil {
 		s.view = Compute(s.MeshID, s.all())
 	}
@@ -607,6 +611,10 @@ func (s *Store) memberLocked(id *ident.Identity) bool {
 
 // appendLocked signs and stores the record; s.mu is held and is released here.
 func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields) (*Record, error) {
+	if s.retired.Load() {
+		s.mu.Unlock()
+		return nil, ErrNotMember
+	}
 	limit := maxPrev
 	if f.Via != "" {
 		// An admit for an account names at most 8 heads, so its body stays within 2048 bytes.
