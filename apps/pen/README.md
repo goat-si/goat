@@ -13,6 +13,23 @@ curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh -s -- --join 
 
 `pen ls` lists members, `pen revoke <member>` removes one, `pen leave` removes this machine.
 
+## Sign in with Google
+
+```sh
+curl -fsSL https://pen-relay.pos090001.workers.dev/install.sh | sh -s -- --login
+```
+
+or `pen login` on an installed machine. It prints a code: open the address it shows, type the code and sign in with
+Google. The first machine of an account founds a mesh and binds it to that account; later machines see the account's
+mesh and its members, confirm, and join without an invite. `pen ls` marks each member admitted this way and announces
+it for 7 days.
+
+`pen lock on` makes every new machine wait: its `pen login` names the member that queued it and prints its fingerprint,
+and you admit it there with `pen approve '<fingerprint>'` (`pen approve` alone lists requests, `pen deny` refuses one
+for 24 hours). `pen account unbind` turns Google sign-in off for the mesh, and `pen logout` removes this machine from the
+account's list without leaving the mesh. The login service is trusted to say which Google account a machine belongs to;
+lock mode means a member decides instead.
+
 ## SSH and GOAT
 
 `pen ssh-config --install` writes `~/.ssh/pen/config` (one `Host pen-<name>` per member with `ProxyCommand pen pipe %n 22`,
