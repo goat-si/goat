@@ -1593,13 +1593,15 @@ const make = Effect.gen(function* () {
           result?.observedCheck !== undefined && result.observedCheck.status !== "running"
             ? channelEvidenceSentence(result, stored.task.title)
             : null;
-        // GOAT Bot's card shows the check as it lands; text channels get one sentence.
-        if (evidence !== null && stored.task.originAddress.kind !== "goat") {
+        // A check that lands after the result is one more sentence; GOAT Bot's chat, which shows
+        // no task card, reads it as part of the result.
+        if (evidence !== null) {
+          const goat = stored.task.originAddress.kind === "goat";
           deliveries.push(
             replyDelivery({
               causeKey: "narration:" + pending.event.eventId + ":evidence",
               destination: stored.task.originAddress,
-              kind: "receipt",
+              kind: goat ? "result" : "receipt",
               text: evidence,
               task: stored.task,
             }),
