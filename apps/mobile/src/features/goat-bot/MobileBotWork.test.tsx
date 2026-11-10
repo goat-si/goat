@@ -183,6 +183,9 @@ vi.mock("../../state/query", () => ({
             refresh: vi.fn(),
           },
 }));
+// The task card's renderer pulls in the native Markdown view, which cannot load under Vitest.
+vi.mock("./GoatBotTaskRow", () => ({ GoatBotTaskRow: () => null }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 import { MobileBotWork } from "./MobileBotWork";
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;
@@ -367,6 +370,28 @@ it("shows task details in the header when a card is available", async () => {
   expect(container.textContent).not.toContain("Task summary");
   await render(ChannelTaskId.make("task"), <span>Task summary</span>);
   expect(container.textContent).toContain("Task summary");
+});
+
+it("names a task the server no longer lists from its conversation card, not as missing", async () => {
+  reset();
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  if (!root) root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <MobileBotWork
+        visible
+        taskId={ChannelTaskId.make("task-old")}
+        taskCardInfo={{ title: "Summarize the README", statusLabel: "Needs your input" }}
+        taskCard={<span>Connect mac-mini to open</span>}
+        onOpenTask={() => {}}
+        onOpenThread={state.openThread}
+      />,
+    ),
+  );
+  expect(container.textContent).toContain("Summarize the README");
+  expect(container.textContent).toContain("Needs your input");
+  expect(container.textContent).toContain("Connect mac-mini to open");
+  expect(container.textContent).not.toContain("Task not found");
 });
 
 const decodeRow = Schema.decodeUnknownSync(BotThreadRow);

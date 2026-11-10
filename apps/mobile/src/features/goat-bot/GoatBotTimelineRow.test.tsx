@@ -353,6 +353,19 @@ describe("the progress line under the last message", () => {
   });
 });
 
+it("reads a thread link in a reply as plain words, since the bot's threads open from its home", async () => {
+  h = createNativeMemoryHarness();
+  view = renderNative(
+    h,
+    <GoatBotTimelineRow
+      {...props}
+      row={bot({ text: "Started [Fix the build](goat-thread://v1/thread-1)." })}
+    />,
+  );
+  await view.render();
+  expect(view.container.textContent).toContain("Started Fix the build.");
+});
+
 it("asks a question with answers as one card and sends the picked answer to its task", async () => {
   h = createNativeMemoryHarness();
   const onSend = vi.fn(() => true);

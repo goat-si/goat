@@ -14,10 +14,16 @@ const screenSession = vi.hoisted(() => ({
   supportsTaskThreads: false,
   requestedTaskId: undefined as string | null | undefined,
   workTaskId: undefined as string | undefined,
+  chatTasks: [] as ReadonlyArray<{ readonly key: string }>,
 }));
 vi.mock("./MobileBotWork", () => ({
-  MobileBotWork: (props: { taskId?: string; taskCard?: ReactNode }) => {
+  MobileBotWork: (props: {
+    taskId?: string;
+    taskCard?: ReactNode;
+    chatTasks?: ReadonlyArray<{ readonly key: string }>;
+  }) => {
     screenSession.workTaskId = props.taskId;
+    screenSession.chatTasks = props.chatTasks ?? [];
     return <section aria-label="Task header">{props.taskCard}</section>;
   },
 }));
@@ -455,6 +461,52 @@ it("renders legacy task cards without task navigation when the capability is abs
   expect(view.container.textContent).not.toContain("Task thread ·");
   await view.unmount();
   screenSession.rows = [];
+});
+
+it("keeps the main chat a plain conversation where the bot's home lists its work", async () => {
+  screenSession.supportsTaskThreads = true;
+  const reply = (id: string, groupPosition: "first" | "last"): GoatBotRow => ({
+    ...bot,
+    id,
+    tone: "reply",
+    options: [],
+    firstInGroup: groupPosition === "first",
+    groupPosition,
+  });
+  screenSession.rows = [
+    reply("ack", "first"),
+    {
+      kind: "task",
+      id: "card",
+      createdAt: "2026-10-12T09:40:00Z",
+      firstInGroup: false,
+      groupPosition: "last",
+      card: {
+        key: "task-1",
+        revision: 1,
+        updatedAt: "2026-10-12T09:40:00Z",
+        title: "Check disks",
+        statusLabel: "Running",
+        tone: "active",
+        sourceLabel: null,
+        summary: null,
+        attentionLabel: null,
+        pullRequests: [],
+        target: { kind: "none", label: "Unavailable" },
+      },
+    },
+  ];
+  const view = await render(<GoatBotScreen visible />);
+  try {
+    expect(view.container.textContent).not.toContain("Check disks");
+    // The reply the card followed now ends its group, so it keeps its time.
+    expect(list.props?.data).toEqual([{ ...reply("ack", "first"), groupPosition: "single" }]);
+    expect(screenSession.chatTasks.map((card) => card.key)).toEqual(["task-1"]);
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+    screenSession.supportsTaskThreads = false;
+  }
 });
 
 it("shows a task chip in the task header only when one exists", async () => {

@@ -1,9 +1,7 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { goatBotName, type BotRosterEntry } from "@goat/client-runtime/goatBot";
-import type { BotProfile, BotThreadRow, ChannelUpdateTaskViewInput } from "@goat/contracts";
+import type { BotProfile } from "@goat/contracts";
 import { Alert, Text, View } from "react-native";
-import { useNavigationThreadShells } from "../../state/entities";
-import { resolveThreadListV2Status, threadHasUnseenCompletion } from "../threads/threadListV2";
 import { MobileBotProfileSheet } from "./MobileBotProfileSheet";
 import { MobileNewBotModel } from "./MobileNewBotModel";
 import { MobileBotRosterView } from "./MobileBotRosterView";
@@ -17,37 +15,14 @@ export function MobileBotRoster(props: {
   header?: ReactNode;
   selectedKey: string | null;
   onOpenBot: (bot: BotRosterEntry) => void;
-  onOpenChild: (row: BotThreadRow) => void;
 }) {
-  const roster = useMobileBotRoster(props.selectedKey);
+  const roster = useMobileBotRoster();
   const preview = useMobileBotPreview();
-  const shells = useNavigationThreadShells();
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
   const [sheet, setSheet] = useState<
     { readonly mode: "create" } | { readonly mode: "edit"; readonly bot: BotProfile } | null
   >(null);
-  const codingStatuses = useMemo(
-    () =>
-      new Map(
-        shells.map((shell) => {
-          const status = resolveThreadListV2Status(shell);
-          return [
-            `coding:${shell.environmentId}:${shell.id}`,
-            status === "ready" && threadHasUnseenCompletion(shell) ? ("done" as const) : status,
-          ] as const;
-        }),
-      ),
-    [shells],
-  );
-  const update = (input: ChannelUpdateTaskViewInput) => {
-    void roster.update(input).catch((error: unknown) => {
-      Alert.alert(
-        "Could not update task",
-        error instanceof Error ? error.message : "Please try again.",
-      );
-    });
-  };
   const askAbout = (entry: BotRosterEntry) => {
     const bot = entry.profile;
     if (bot === null) return;
@@ -88,9 +63,6 @@ export function MobileBotRoster(props: {
           </>
         }
         selectedKey={props.selectedKey}
-        codingStatuses={codingStatuses}
-        expanded={roster.expanded}
-        hiddenCount={roster.hiddenCount}
         bots={roster.bots}
         members={
           roster.supportsMembers
@@ -109,37 +81,10 @@ export function MobileBotRoster(props: {
               }
             : undefined
         }
-        rows={roster.children.rows}
-        hasMore={roster.children.hasMore}
         slackEnabled={roster.slackEnabled}
         preview={preview?.text}
         unread={preview?.unread}
         onOpenBot={props.onOpenBot}
-        onOpenChild={props.onOpenChild}
-        onShowMore={roster.showMore}
-        onTaskAction={(row, action) => {
-          if (action === "pin") update({ taskId: row.task.taskId, pinned: !row.view.pinnedAt });
-          if (action === "done") update({ taskId: row.task.taskId, done: !row.view.doneAt });
-          if (action === "read")
-            update({ taskId: row.task.taskId, readThrough: row.lastActivityAt });
-        }}
-        onLongPressTask={(row) =>
-          Alert.alert(row.task.title, undefined, [
-            {
-              text: row.view.pinnedAt ? "Unpin" : "Pin",
-              onPress: () => update({ taskId: row.task.taskId, pinned: !row.view.pinnedAt }),
-            },
-            {
-              text: row.view.doneAt ? "Reopen" : "Mark done",
-              onPress: () => update({ taskId: row.task.taskId, done: !row.view.doneAt }),
-            },
-            {
-              text: "Mark read",
-              onPress: () => update({ taskId: row.task.taskId, readThrough: row.lastActivityAt }),
-            },
-            { text: "Cancel", style: "cancel" },
-          ])
-        }
       />
       {sheet !== null && roster.environmentId !== null ? (
         <BotSheet

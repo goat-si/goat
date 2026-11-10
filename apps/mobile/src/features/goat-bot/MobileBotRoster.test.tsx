@@ -1,11 +1,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { BotThreadRow } from "@goat/contracts";
-import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
-  update: vi.fn(async () => {}),
   alert: vi.fn(),
   members: null as null | Record<string, unknown>,
   manage: {
@@ -32,7 +29,6 @@ vi.mock("react-native", () => ({
   Text: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
   Alert: { alert: state.alert },
 }));
-vi.mock("../../state/entities", () => ({ useNavigationThreadShells: () => [] }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
 vi.mock("./useMobileBotRoster", () => ({
   useMobileBotRoster: () => ({
@@ -40,20 +36,14 @@ vi.mock("./useMobileBotRoster", () => ({
     groups: { main: null, members: [], hidden: [], deleted: [] },
     supportsMembers: true,
     environmentId: "env",
-    children: { rows: [], hasMore: false },
     slackEnabled: false,
-    update: state.update,
-    showMore: () => {},
     error: null,
   }),
 }));
 vi.mock("./MobileBotRosterView", () => ({
-  MobileBotRosterView: (props: {
-    onLongPressTask: (row: typeof task) => void;
-    members?: Record<string, unknown>;
-  }) => {
+  MobileBotRosterView: (props: { members?: Record<string, unknown> }) => {
     state.members = props.members ?? null;
-    return <button onClick={() => props.onLongPressTask(task)}>Menu</button>;
+    return null;
   },
 }));
 vi.mock("./useMobileBotManage", () => ({ useMobileBotManage: () => state.manage }));
@@ -80,36 +70,6 @@ vi.mock("./MobileBotProfileSheet", () => ({
   },
 }));
 import { MobileBotRoster } from "./MobileBotRosterPanel";
-const at = "2026-11-04T10:00:00.000Z";
-const task = Schema.decodeUnknownSync(BotThreadRow)({
-  kind: "task",
-  task: { taskId: "task", title: "Review", status: "waiting_input", updatedAt: at },
-  view: { taskId: "task", pinnedAt: null, doneAt: null, readThrough: null },
-  lastActivityAt: at,
-  unread: true,
-  mainMessagesSinceQuiet: 0,
-});
-it("sends reversible view changes and read-through from the task menu", async () => {
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  await act(async () =>
-    root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} onOpenChild={() => {}} />),
-  );
-  await act(async () => container.querySelector("button")?.click());
-  const actions = state.alert.mock.calls[0]?.[2] as Array<{ onPress?: () => void }>;
-  await act(async () => {
-    actions[0]?.onPress?.();
-    actions[1]?.onPress?.();
-    actions[2]?.onPress?.();
-  });
-  expect(state.update.mock.calls).toEqual([
-    [{ taskId: "task", pinned: true }],
-    [{ taskId: "task", done: true }],
-    [{ taskId: "task", readThrough: at }],
-  ]);
-  await act(async () => root.unmount());
-});
-
 const member = { botId: "research", name: "Research", hidden: false };
 type Choice = { text: string; onPress?: () => void };
 const choices = () => state.alert.mock.calls.at(-1)?.[2] as Array<Choice>;
@@ -122,9 +82,7 @@ it("hides a member, and deletes it only after the person confirms", async () => 
   state.alert.mockClear();
   const container = document.createElement("div");
   const root = createRoot(container);
-  await act(async () =>
-    root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} onOpenChild={() => {}} />),
-  );
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
   const members = state.members as { onLongPressBot: (entry: object) => void };
   await act(async () => members.onLongPressBot({ kind: "member", profile: member }));
   expect(choices().map((choice) => choice.text)).toEqual(["Edit", "Hide", "Delete", "Cancel"]);
@@ -145,9 +103,7 @@ it("restores a deleted member after the person confirms", async () => {
   state.alert.mockClear();
   const container = document.createElement("div");
   const root = createRoot(container);
-  await act(async () =>
-    root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} onOpenChild={() => {}} />),
-  );
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
   const members = state.members as {
     canRestore: boolean;
     onRestoreDeleted: (bot: object) => void;
@@ -163,9 +119,7 @@ it("creates a bot from New bot with one request id and opens its conversation", 
   const opened = vi.fn();
   const container = document.createElement("div");
   const root = createRoot(container);
-  await act(async () =>
-    root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} onOpenChild={() => {}} />),
-  );
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={opened} />));
   const members = state.members as { onNewBot: () => void };
   await act(async () => members.onNewBot());
   expect(state.sheet?.mode).toBe("create");
@@ -189,9 +143,7 @@ it("changes a member's model from Edit only where its server takes the change", 
   state.manage.update.mockClear();
   const container = document.createElement("div");
   const root = createRoot(container);
-  await act(async () =>
-    root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} onOpenChild={() => {}} />),
-  );
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
   const members = state.members as { onLongPressBot: (entry: object) => void };
   const profile = { ...member, role: "member", defaultModelSelection: null };
   const luna = { instanceId: "codex", model: "luna" };

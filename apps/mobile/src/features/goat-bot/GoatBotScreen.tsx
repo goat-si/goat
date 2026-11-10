@@ -53,6 +53,8 @@ import {
   goatBotTime,
 } from "./GoatBotMessageParts";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
+import { goatBotChatRows } from "./goatBotChatRows";
+import { goatBotWithoutThreadLinks } from "./goatBotChatMarkdown";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -163,11 +165,13 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       </View>
     );
   }
+  // Threads the bot starts are reached from its home, so their links leave the conversation.
+  const text = goatBotWithoutThreadLinks(row.text);
   const prose = (
     <>
-      {hasGoatBotMarkdown(row.text) ? (
+      {hasGoatBotMarkdown(text) ? (
         <GoatBotMarkdown
-          text={row.text}
+          text={text}
           failed={row.tone === "failure"}
           environmentId={props.environmentId ?? null}
           onSelectThread={props.onSelectThread}
@@ -177,9 +181,9 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
           selectable
           className={row.tone === "failure" ? "text-danger-foreground" : "text-foreground"}
           style={bodyText}
-          accessibilityLabel={row.tone === "failure" ? `Failed: ${row.text}` : undefined}
+          accessibilityLabel={row.tone === "failure" ? `Failed: ${text}` : undefined}
         >
-          <GoatBotLinkedText text={row.text} />
+          <GoatBotLinkedText text={text} />
         </Text>
       )}
       {row.memory ? <MemoryReportLink reference={row.memory} /> : null}
@@ -361,9 +365,20 @@ export function GoatBotScreen(props: {
     ? session.rows.find((row): row is TaskRow => row.kind === "task" && row.card.key === taskId)
     : undefined;
   const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
+  // A plain chatbot: work the bot starts is listed in its home sheet, not in the conversation.
+  // Servers without task threads have no such list, so their cards stay.
+  const hidesTaskCards = taskId !== undefined || session.supportsTaskThreads;
   const visibleRows = useMemo(
-    () => (taskId ? session.rows.filter((row) => row.kind !== "task") : session.rows),
-    [taskId, session.rows],
+    () =>
+      hidesTaskCards ? goatBotChatRows(session.rows, (row) => row.kind === "task") : session.rows,
+    [hidesTaskCards, session.rows],
+  );
+  const chatTasks = useMemo(
+    () =>
+      taskId === undefined && session.supportsTaskThreads
+        ? session.rows.flatMap((row) => (row.kind === "task" ? [row.card] : []))
+        : [],
+    [taskId, session.supportsTaskThreads, session.rows],
   );
   return (
     <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
@@ -405,6 +420,8 @@ export function GoatBotScreen(props: {
           main={props.main ?? null}
           onDraft={session.canSend ? setText : undefined}
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
+          chatTasks={chatTasks}
+          taskCardInfo={taskCard?.card ?? null}
           taskCard={
             taskCard ? (
               <GoatBotTaskRow card={taskCard.card} onSelectThread={onSelectThread} />

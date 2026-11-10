@@ -67,6 +67,7 @@ import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useServerConfigs, useThreadShell } from "../../state/entities";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { useReplying } from "./useReplying";
+import { goatBotWorkRevision } from "./goatBotWorkRevision";
 import { markMobileGoatBotMember, mobileGoatBotMemberActive } from "./mobileGoatBotMembers";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
@@ -650,24 +651,17 @@ export function useMobileGoatBotSession(
     }
     queue.acknowledge(keys);
   }, [visible, queue, visibleTurnItems]);
-  // The roster refreshes the main bot's task list; a member's follows its own conversation here.
-  const channelRevision =
-    member === null
-      ? null
-      : visibleTurnItems
-          .filter(
-            ({ item }) =>
-              (item.type === "notification" && item.ledgerTask !== undefined) ||
-              ((item.type === "user_message" || item.type === "assistant_message") &&
-                item.channel !== undefined),
-          )
-          .map(({ sourceItemId, item }) => sourceItemId + ":" + item.updatedAt)
-          .join("|");
+  // The bot's work list (its home sheet and known task ids) follows its own conversation, main
+  // bot and members alike; a streaming answer does not refetch it.
+  const workRevision = useMemo(
+    () => (visible ? goatBotWorkRevision(visibleTurnItems) : null),
+    [visible, visibleTurnItems],
+  );
   const refreshThreads = threads.refresh;
-  // oxlint-disable-next-line goat/react-effect-budget -- Refresh a member's task list when channel records in its conversation change.
+  // oxlint-disable-next-line goat/react-effect-budget -- Refresh the bot's task list when its conversation's task records change.
   useEffect(() => {
-    if (channelRevision !== null) refreshThreads();
-  }, [channelRevision, refreshThreads]);
+    if (workRevision !== null) refreshThreads();
+  }, [workRevision, refreshThreads]);
   const targetThreadId = target?.threadId ?? null;
   const allPending = session?.pending ?? EMPTY_PENDING;
   const pendingInputs = useMemo(

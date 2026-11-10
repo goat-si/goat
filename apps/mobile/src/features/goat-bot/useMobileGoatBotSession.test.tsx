@@ -961,3 +961,35 @@ it("sends a member's message to the member's own conversation, and stops once it
   expect(session.onSend("still there?")).toBe(false);
   await botSessions.disposeMobileGoatBotEnvironment(env);
 });
+
+it("refreshes the work list per finished record or chip move (card or not), not per streamed chunk", async () => {
+  harness.environments = [environment("env")];
+  harness.botRef = bot(EnvironmentId.make("env"));
+  harness.supportsTaskThreads = true;
+  const items = conversation({ environmentId: "env", threadId: "worker-1" });
+  const [, ack, card] = items as OrchestrationV2ProjectedTurnItem[];
+  const reply = (text: string, streaming: boolean) =>
+    ({ ...ack, sourceItemId: "reply", item: { ...ack!.item, text, streaming } }) as typeof ack;
+  const chip = card!.item as Extract<typeof card.item, { type: "notification" }>;
+  const steps = [
+    [...items, reply("Look", true)],
+    [...items, reply("Looking at the disks", true)],
+    [...items, reply("Looking at the disks.", false)],
+    [
+      items[0]!,
+      ack!,
+      { ...card!, item: { ...chip, ledgerTask: { ...chip.ledgerTask!, taskVersion: 2 } } },
+      reply("Looking at the disks.", false),
+    ],
+  ];
+  harness.items = items;
+  await render();
+  harness.refresh.mockClear();
+  const counts: number[] = [];
+  for (const step of steps) {
+    harness.items = step;
+    await render();
+    counts.push(harness.refresh.mock.calls.length);
+  }
+  expect(counts).toEqual([0, 0, 1, 2]);
+});

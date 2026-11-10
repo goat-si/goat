@@ -35,15 +35,6 @@ export function MobileBotList({ showSegments = true }: { readonly showSegments?:
             params: bot.kind === "member" ? { botId: bot.profile.botId } : {},
           })
         }
-        onOpenChild={(row) => {
-          if (row.kind === "task")
-            selectDetail({ name: "GoatBot", params: { taskId: row.task.taskId } });
-          else
-            selectDetail({
-              name: "Thread",
-              params: { environmentId: String(row.environmentId), threadId: String(row.threadId) },
-            });
-        }}
       />
     </View>
   );

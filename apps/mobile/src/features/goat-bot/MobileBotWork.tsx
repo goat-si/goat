@@ -9,6 +9,7 @@ import {
   resolveRemoteBotWork,
   retryRefusalText,
   taskAttemptLabel,
+  type GoatBotTaskCard,
   type GoatBotWaitingTurn,
 } from "@goat/client-runtime/goatBot";
 import { botRoutineRows, type BotRoutineRow } from "@goat/client-runtime/scheduledTasks";
@@ -54,6 +55,7 @@ import {
 } from "./goatBotMemberModelHeader";
 import { useMobileGoatBotMemberModelMenu } from "./useMobileGoatBotMemberModel";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
+import { MobileBotTaskList } from "./MobileBotTaskList";
 
 // The machines running work show under Tasks, so four short labels fit one row as text.
 const tabs = ["Tasks", "Routines", "Memory", "Library"] as const;
@@ -120,6 +122,10 @@ export function MobileBotWork(props: {
   readonly main?: Pick<BotProfile, "name"> | null;
   /** Puts a message in the chat's composer; absent while the chat cannot send. */
   readonly onDraft?: ((text: string) => void) | undefined;
+  /** Task cards in the conversation; the Tasks tab lists the ones the server no longer does. */
+  readonly chatTasks?: ReadonlyArray<GoatBotTaskCard>;
+  /** The transcript's card for the task this screen shows, for a task the server no longer lists. */
+  readonly taskCardInfo?: Pick<GoatBotTaskCard, "title" | "statusLabel"> | null;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
   readonly notesRefreshKey?: string | undefined;
 }) {
@@ -203,10 +209,12 @@ export function MobileBotWork(props: {
       {props.taskId ? (
         <View className="gap-2 border-b border-border px-4 py-3">
           <Text className="font-semibold text-foreground">
-            {task?.row.task.title ?? "Task thread"}
+            {task?.row.task.title ?? props.taskCardInfo?.title ?? "Task thread"}
           </Text>
           <Text className="text-foreground-muted">
-            {task ? presentTaskStatus(task.row.task.status, task.row.view.doneAt).label : null}
+            {task
+              ? presentTaskStatus(task.row.task.status, task.row.view.doneAt).label
+              : (props.taskCardInfo?.statusLabel ?? null)}
             {task && taskAttemptLabel(task.row.task.generation)
               ? ` · ${taskAttemptLabel(task.row.task.generation)}`
               : null}
@@ -225,7 +233,7 @@ export function MobileBotWork(props: {
             </Pressable>
           ) : threads.data === null ? (
             <Text className="text-foreground-muted">Loading task…</Text>
-          ) : !task ? (
+          ) : !task && !props.taskCardInfo ? (
             <Text className="text-foreground-muted">Task not found.</Text>
           ) : null}
           {task ? (
@@ -432,91 +440,23 @@ export function MobileBotWork(props: {
                   threads.error ? null : (
                     <Text className="text-foreground-muted">Loading tasks…</Text>
                   )
-                ) : work.inProgress.length + work.done.length === 0 ? (
-                  threads.error ? null : (
-                    <MobileBotPanelEmpty
-                      title="No tasks yet"
-                      next={`Ask ${botName} in chat to start work.`}
-                    />
-                  )
                 ) : (
-                  (
-                    [
-                      ["In progress", work.inProgress],
-                      ["Done", work.done],
-                    ] as const
-                  ).map(([label, tasks]) => (
-                    <View key={label} className="gap-2 py-2">
-                      <Text className="font-semibold text-foreground">{label}</Text>
-                      {tasks.map(({ row, threads }) => (
-                        <View key={row.task.taskId}>
-                          <Pressable
-                            accessibilityRole="button"
-                            className="min-h-[44px] justify-center"
-                            onPress={() => {
-                              setOpen(false);
-                              props.onOpenTask(row.task.taskId);
-                            }}
-                          >
-                            <Text className="text-foreground">{row.task.title}</Text>
-                          </Pressable>
-                          {rows.map((coding) =>
-                            coding.kind === "coding" && coding.taskId === row.task.taskId ? (
-                              <Pressable
-                                key={coding.environmentId + ":" + coding.threadId}
-                                accessibilityRole="button"
-                                accessibilityLabel={
-                                  "GOAT thread: " + (coding.title || "GOAT thread")
-                                }
-                                className="ml-4 min-h-[44px] justify-center"
-                                onPress={() => {
-                                  setOpen(false);
-                                  props.onOpenThread({
-                                    environmentId: coding.environmentId,
-                                    id: coding.threadId,
-                                  });
-                                }}
-                              >
-                                <Text numberOfLines={1} className="text-foreground-muted">
-                                  {coding.title || "GOAT thread"}
-                                </Text>
-                              </Pressable>
-                            ) : null,
-                          )}
-                          {/* The task's worker and other launches no row lists: lists leave them to the bot. */}
-                          {threads
-                            .filter(
-                              (thread) =>
-                                !rows.some(
-                                  (coding) =>
-                                    coding.kind === "coding" &&
-                                    coding.environmentId === thread.environmentId &&
-                                    coding.threadId === thread.threadId,
-                                ),
-                            )
-                            .map((thread) => (
-                              <Pressable
-                                key={thread.environmentId + ":" + thread.threadId}
-                                accessibilityRole="button"
-                                accessibilityLabel={"Work thread: " + row.task.title}
-                                className="ml-4 min-h-[44px] justify-center"
-                                onPress={() => {
-                                  setOpen(false);
-                                  props.onOpenThread({
-                                    environmentId: thread.environmentId,
-                                    id: thread.threadId,
-                                  });
-                                }}
-                              >
-                                <Text numberOfLines={1} className="text-foreground-muted">
-                                  Work thread
-                                </Text>
-                              </Pressable>
-                            ))}
-                        </View>
-                      ))}
-                    </View>
-                  ))
+                  <MobileBotTaskList
+                    botName={botName}
+                    work={work}
+                    rows={rows}
+                    chatTasks={props.chatTasks ?? []}
+                    onOpenTask={(id) => {
+                      setOpen(false);
+                      props.onOpenTask(id);
+                    }}
+                    onOpenThread={(thread) => {
+                      setOpen(false);
+                      props.onOpenThread(thread);
+                    }}
+                    onUpdate={(input) => void update(input)}
+                    failed={threads.error !== null && threads.error !== undefined}
+                  />
                 )
               ) : null}
               {tab === "Routines" &&
