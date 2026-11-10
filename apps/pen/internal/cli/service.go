@@ -22,7 +22,8 @@ func serviceMode(noService bool, st *state.Store) string {
 	}
 	switch serviceOS {
 	case "linux":
-		if exec.Command("systemctl", "--user", "show-environment").Run() == nil {
+		withUserBus()
+		if run("systemctl", "--user", "show-environment") == nil {
 			return "systemd"
 		}
 	case "darwin":
@@ -82,6 +83,22 @@ func writeFile(path, content string) error {
 // serviceOS and run are variables so tests can drive the service paths without a service manager.
 var serviceOS = runtime.GOOS
 
+// userRuntimeRoot is a variable so tests can stand in for /run/user.
+var userRuntimeRoot = "/run/user"
+
+// withUserBus points systemctl --user at this user's manager when the session does not say where
+// it is: a cloud console's command runner (dvb exec, cloud-init) has no XDG_RUNTIME_DIR, though
+// with linger the manager runs.
+func withUserBus() {
+	if os.Getenv("XDG_RUNTIME_DIR") != "" {
+		return
+	}
+	dir := filepath.Join(userRuntimeRoot, strconv.Itoa(os.Getuid()))
+	if _, err := os.Stat(filepath.Join(dir, "bus")); err == nil {
+		os.Setenv("XDG_RUNTIME_DIR", dir)
+	}
+}
+
 var run = func(name string, args ...string) error {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
@@ -131,6 +148,7 @@ func startService(mode string, st *state.Store) error {
 func stopService(mode string) error {
 	switch mode {
 	case "systemd":
+		withUserBus()
 		return run("systemctl", "--user", "stop", "pen.service")
 	case "launchd":
 		return run("launchctl", "bootout", guiDomain()+"/"+launchdLabel)
@@ -143,6 +161,7 @@ func stopService(mode string) error {
 func removeService(mode string) error {
 	switch mode {
 	case "systemd":
+		withUserBus()
 		run("systemctl", "--user", "disable", "--now", "pen.service") // absent or already stopped is fine
 		if err := os.Remove(unitPath()); err != nil && !os.IsNotExist(err) {
 			return err
