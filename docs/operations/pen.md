@@ -19,8 +19,9 @@ every Pen suite). `wrangler whoami` must list only the account above.
 uplinks and exchanges 64 KiB each way with a client through the relay, with timings. It exits 1 on any failure or
 when `--timeout` (30 s) runs out, including a certificate that expires within 14 days (`--min-cert-days`), so it
 works as a cron or monitor probe. The check node's keys live in `relay-check/` under the state directory
-(`~/.pen`, or `PEN_HOME`), separate from the machine's own node, so repeated checks reuse one node id and leave each
-relay one small entry (the Go relay its next session id for that node, the Worker one Durable Object holding the same).
+(`~/.pen`, or `PEN_HOME`), separate from the machine's own node, so repeated checks reuse one node id. The Go relay
+keeps nothing for it once the check's sockets close; the Worker keeps one Durable Object holding that node id's next
+session id.
 That directory must be writable by the user the probe runs as; a cron job under another user or a read-only home
 sets `PEN_HOME` to a directory it owns. Checks on one machine take turns with the check node: a second check started
 while one runs waits for it, within its own `--timeout`. Run the same build of `pen` as the relay (see
@@ -224,8 +225,17 @@ here, or use the reset link.
 
 **Someone else could sign in to the account.** The login service registers any machine with a valid sign-in, even one
 a locked mesh only queued, and any registered machine can remove the others from the account's list, so new machines
-would be offered only that one. Lock the mesh, then reset the account's machine list at `/reset` and run `pen login`
-on one trusted member.
+would be offered only that one. Change the Google password first, lock the mesh, then reset the account's machine list
+at `/reset` and run `pen login` on one trusted member. A reset ends everything that predates it for that account:
+the machine list and the account's mesh registration, sign-in codes approved but not yet collected, codes a browser
+signed in as that account was confirming, browser sign-ins waiting at their confirmation page, sign-ins that had left
+for Google before the reset and return after it, and sign-in results not yet registered. After it, only a new Google
+sign-in leads to a machine being registered, and the members of an existing mesh are not changed.
+
+**One member filled the mesh's record space.** `pen ls` says `mesh full`. A mesh keeps at most 4096 records and no
+signer has a share of its own, so a hostile member can fill it with valid records; after that no member can record
+anything, its own revoke included (issue #2864). The remedy is a new mesh, done as in the user guide ("Start over in a
+new mesh"); a machine that cannot reach any member drops the old mesh the same way, since that step is local.
 
 **A relay is down.** Nodes keep working through their other relays; dials race every relay, so no action is needed for
 running meshes. New installs need the download relay (the Worker). Check `/healthz` on each relay and, for the Worker,

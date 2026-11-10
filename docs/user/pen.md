@@ -121,15 +121,39 @@ removes it there at once.
 
 After `--compromised` on a mesh with Google sign-in, Pen tells you what else to do: turn on
 `pen lock on`, change your Google password, and clear your account's machine list from the reset
-link on the sign-in page.
+link on the sign-in page. A reset ends every sign-in for the account that started before it, so after it
+only a new Google sign-in registers a machine.
 
 When a member cannot keep a change another machine sends it, the command that made the change
 (`pen revoke`, `pen lock`, `pen approve` and the like) lists that member as "not taken", and `pen ls`
-on that member says why. "state cannot be written" means its
-state folder is full or not writable: free disk space or fix the folder's permissions, and the next
-sync catches up. "mesh full" means the mesh holds 3840 records, the most Pen keeps for new members,
-names, locks and sign-in changes (removals still work up to 4096); start a new mesh with `pen up`
-on one machine and join the others to it.
+on that member says why:
+
+- "the relay is busy (4429)": the relay refused the connection for a moment. Nothing is wrong with the member; the
+  change reaches it at the next sync (within 10 minutes).
+- "it cannot write its state folder (4507)": the member's state folder is full or not writable. Free disk space or
+  fix the folder's permissions; the member retries on its own every minute and at each sync, and takes no change
+  until it can save.
+- "its mesh is full (4508)": the mesh holds 3840 records, the most Pen keeps for new members, names, locks and
+  sign-in changes (removals still fit up to 4096). Start over in a new mesh, below.
+
+### Start over in a new mesh
+
+Use this when a mesh is full, or to split from a mesh you no longer trust. Each machine keeps its keys, name and
+relays; only its mesh is dropped, and that step needs no other machine, so it works on a machine that cannot reach
+any member.
+
+1. On every machine: `pen down`, then delete these files from the state folder (`~/.pen`, or `PEN_HOME`):
+   `mesh.json`, `offers.json`, `pending.json`, `forgets.json`, `versions.json`, `joined.json` and `login.json`.
+   (`pen up` on a machine that still has `mesh.json` starts its old mesh again; it does not found a new one.)
+2. On the first machine: `pen up`. It founds a new mesh with this machine as its only member.
+3. On each other machine: `pen join <token>` with a token from `pen invite` on a machine already in the new mesh.
+4. If the old mesh used Google sign-in: the new mesh is not bound to the account, and the account is still registered
+   with the old mesh. Reset the account's machine list at the reset link on the sign-in page, then run `pen login`
+   on one machine of the new mesh and answer yes to binding it; after that, new machines join it with `pen login`.
+
+`pen-<name>` SSH hosts keep working: each machine rewrites `~/.ssh/pen/known_hosts` from the new mesh when it starts,
+and the names stay the same. Machines you did not move stay in the old mesh, which keeps listing the moved ones as
+members; they are not reachable from the new one.
 
 ## Relays
 

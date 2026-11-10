@@ -45,7 +45,8 @@ Socket attachments carry `{role, sid, sent, acked, at, deadline}`; client socket
 - A path whose nodeId is not 26 characters of `[a-z2-7]` is HTTP 400; a non-upgrade request to a WebSocket path is 426.
 - Mux frame on the uplink: `[type u8][sid u32 LE][payload]`.
   - 1 OPEN (relay -> node): no payload. The relay assigns sid: a positive u32 from a per-node counter that
-    survives hibernation and uplink replacement, so a sid is never reused for that node.
+    survives hibernation and uplink replacement. Past 0xffffffff the counter wraps to 1 and skips every sid still
+    live for that node, so a live sid is never handed out twice.
   - 2 DATA (both ways): opaque bytes.
   - 3 CLOSE (both ways): payload = u16 LE close code. Either side closing a session sends CLOSE; the relay closes the
     client socket with that code; a client socket that closes produces CLOSE toward the node with the client's code
@@ -173,6 +174,9 @@ nodeIds open sessions to which, from which addresses and when, and nothing it ca
   stored, so a set full of other records can still revoke and every set fits a 4096-hash `have`. A node reloading its
   own saved set applies no cap. A node that refuses a received record for a cap closes that sync 4508 without its
   `done`, and one that cannot save what it received closes it 4507, so the sender learns the records were not taken.
+  Limit: no signer has a share of the record space, so one member can fill it with valid records (ordinary ones to
+  3840, then revokes to 4096), after which every node refuses every new record, the revoke of that member included;
+  the remedy is a new mesh.
 
 ### View
 
@@ -288,12 +292,13 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   gets fixed 64 KiB kernel send and receive buffers and at most 8 KiB of request headers. It
   reads at most the 96-byte answer from an uplink before it authenticates, drops a socket whose write or closing
   handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, so a client
-  flooding empty DATA ends only its own session 4408. Session ids come from one counter for every node, so no sid
-  repeats for a node while the process runs and nothing is kept per node id once its last socket is gone. A restart
-  starts the counter at 1 again; every uplink is a new connection then, and a node keys sessions by its uplink
-  connection, so an id used before the restart cannot reach a session of the new one. The counter does not read the
-  clock, so a clock step changes nothing. (The Worker keeps its per-node counter in that node id's Durable Object, one
-  stored integer per node id that ever had a client reach its authenticated uplink, with no cleanup.)
+  flooding empty DATA ends only its own session 4408. Session ids count per node id while
+  that node has sockets on the relay and wrap like the Worker's (skipping live ids), so a node sees only its own
+  sessions' ids and nothing is kept per node id once its last socket is gone. The room, and with it the counter, outlives an uplink only while clients
+  remain, so a new counter always meets a new uplink connection, and a node keys sessions by its uplink connection:
+  an id from an earlier counter (a restart, or a room that emptied) cannot reach a session of the new one. The counter
+  does not read the clock. (The Worker keeps its counter in that node id's Durable Object, one stored integer per node
+  id that ever had a client reach its authenticated uplink, with no cleanup.)
 
 ## Accounts (v1.1)
 
