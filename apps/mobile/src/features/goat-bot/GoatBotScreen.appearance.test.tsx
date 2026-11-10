@@ -105,14 +105,42 @@ vi.mock("react-native", () => ({
       {children}
     </button>
   ),
-  TextInput: ({ style }: { style?: unknown }) => (
-    <input aria-label="Message GOAT Bot" data-style={JSON.stringify(style)} />
+  TextInput: ({
+    style,
+    value,
+    onChangeText,
+  }: {
+    style?: unknown;
+    value?: string;
+    onChangeText?: (text: string) => void;
+  }) => (
+    <input
+      aria-label="Message GOAT Bot"
+      data-style={JSON.stringify(style)}
+      value={value ?? ""}
+      onChange={(event) => onChangeText?.(event.currentTarget.value)}
+    />
   ),
   Platform: { OS: "ios" },
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+const models = vi.hoisted(() => ({
+  main: null as null | Record<string, unknown>,
+  member: null as null | Record<string, unknown>,
+}));
+vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => models.main }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({
+  useMobileGoatBotMemberModelMenu: () => models.member,
+}));
+vi.mock("./GoatBotModelPill", () => ({
+  GoatBotModelPill: (props: { menu: { label: string; opens: boolean } }) => (
+    <button aria-label="Model" data-opens={String(props.menu.opens)}>
+      {props.menu.label}
+    </button>
+  ),
+}));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
@@ -203,6 +231,14 @@ const bot: Extract<GoatBotRow, { kind: "bot" }> = {
   groupPosition: "single",
 };
 
+async function typeInto(container: HTMLElement, value: string) {
+  const input = container.querySelector<HTMLInputElement>('[aria-label="Message GOAT Bot"]');
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+    input?.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 async function render(element: ReactNode) {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -263,6 +299,7 @@ it("keeps answer chips and the send button off the retired blue message palette"
   await rowView.unmount();
 
   const screenView = await render(<GoatBotScreen visible />);
+  await typeInto(screenView.container, "Hello");
   const send = screenView.container.querySelector('[aria-label="Send message"]');
   const composer = screenView.container.querySelector('[aria-label="Message GOAT Bot"]');
   expect(JSON.parse(composer?.getAttribute("data-style") ?? "null")).toMatchObject({
@@ -284,6 +321,49 @@ it("keeps answer chips and the send button off the retired blue message palette"
   });
   expect(screenView.container.innerHTML).not.toMatch(/#2B66C6|#1466D0/i);
   await screenView.unmount();
+});
+
+it("shows Send only once there is something to send", async () => {
+  const view = await render(<GoatBotScreen visible />);
+  const send = () => view.container.querySelector('[aria-label="Send message"]');
+  expect(send()).toBeNull();
+  await typeInto(view.container, "Hello");
+  expect(send()).not.toBeNull();
+  await typeInto(view.container, "   ");
+  expect(send()).toBeNull();
+  await view.unmount();
+});
+
+it("puts the bot's model in the composer, opening a member's menu even when it cannot change", async () => {
+  const select = vi.fn();
+  models.main = {
+    label: "gpt-6-luna",
+    accessibilityLabel: "GOAT Bot model: gpt-6-luna",
+    items: [],
+    disabled: true,
+    select,
+  };
+  const main = await render(<GoatBotScreen visible />);
+  const pill = () => main.container.querySelector('[aria-label="Model"]');
+  expect(pill()?.textContent).toBe("gpt-6-luna");
+  expect(pill()?.getAttribute("data-opens")).toBe("false");
+  await main.unmount();
+
+  models.member = {
+    label: "claude-opus",
+    accessibilityLabel: "Scout model: claude-opus",
+    title: "You can't change Scout's model",
+    canChange: false,
+    items: [],
+    select,
+  };
+  const member = await render(<GoatBotScreen visible />);
+  const memberPill = member.container.querySelector('[aria-label="Model"]');
+  expect(memberPill?.textContent).toBe("claude-opus");
+  expect(memberPill?.getAttribute("data-opens")).toBe("true");
+  await member.unmount();
+  models.main = null;
+  models.member = null;
 });
 
 it("uses the light filled composer", async () => {

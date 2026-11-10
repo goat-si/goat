@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  goatBotName,
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
@@ -43,12 +42,6 @@ import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
-import { GoatBotMemberModelAndroidMenu } from "./GoatBotMemberModelAndroidMenu";
-import {
-  goatBotMemberModelHeaderItem,
-  goatBotMemberModelHeaderKey,
-} from "./goatBotMemberModelHeader";
-import { useMobileGoatBotMemberModelMenu } from "./useMobileGoatBotMemberModel";
 import { MobileBotTaskList } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
@@ -103,7 +96,6 @@ export function MobileBotWork(props: {
   const member = props.member ?? null;
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
   // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
-  const memberModel = useMobileGoatBotMemberModelMenu(member, goatBotName(props.main ?? null));
   const threads = useEnvironmentQuery(
     environmentId && enabled && (member === null || capabilities?.goatBotMembers === true)
       ? channelEnvironment.listBotThreads({
@@ -276,7 +268,7 @@ export function MobileBotWork(props: {
       ) : Platform.OS === "ios" ? (
         // The chat's header carries Work on its trailing side, like the web header's button.
         <NativeStackScreenOptions
-          optionsVersion={`${botName}:${goatBotMemberModelHeaderKey(memberModel)}`}
+          optionsVersion={botName}
           options={{
             unstable_headerRightItems: () => [
               withNativeGlassHeaderItem({
@@ -286,13 +278,11 @@ export function MobileBotWork(props: {
                 onPress: () => setOpen(true),
                 type: "button" as const,
               }),
-              ...(memberModel ? [goatBotMemberModelHeaderItem(memberModel)] : []),
             ],
           }}
         />
       ) : (
         <View className="flex-row items-center justify-end">
-          {memberModel ? <GoatBotMemberModelAndroidMenu menu={memberModel} /> : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Open ${botName} work`}

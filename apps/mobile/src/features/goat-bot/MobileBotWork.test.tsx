@@ -85,7 +85,6 @@ const state = vi.hoisted(() => ({
   runNow: vi.fn(),
   retry: vi.fn(),
   openThread: vi.fn(),
-  memberModel: null as null | Record<string, unknown>,
 }));
 
 vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
@@ -164,11 +163,6 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
 }));
 vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
-// The Android menu needs native modules; iOS builds the model into the header items below.
-vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
-vi.mock("./useMobileGoatBotMemberModel", () => ({
-  useMobileGoatBotMemberModelMenu: () => state.memberModel,
-}));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (key: string | null) =>
     key === "task"
@@ -211,7 +205,6 @@ afterEach(async () => {
 
 function reset() {
   state.connected = true;
-  state.memberModel = null;
   for (const query of [state.task, state.routines])
     Object.assign(query, { data: null, error: null, isPending: true, isSuccess: false });
   state.task.refresh.mockClear();
@@ -612,20 +605,4 @@ it("offers the Work sheet, and with it Open the chat, only on the chat screen", 
     [...container.querySelectorAll("button")].some((button) => button.textContent === "Work"),
   ).toBe(false);
   expect(container.textContent).not.toContain("waiting for your answer in the chat");
-});
-
-it("puts a member's model beside Work in its chat header", async () => {
-  reset();
-  state.memberModel = {
-    label: "GPT-6-Luna",
-    accessibilityLabel: "Research model: GPT-6-Luna",
-    title: "Research's model",
-    canChange: true,
-    items: [],
-    select: () => {},
-  };
-  await render();
-  const header = [...container.querySelectorAll("[data-header-item]")];
-  expect(header.map((item) => item.textContent)).toEqual(["Work", "GPT-6-Luna"]);
-  expect(header[1]?.getAttribute("aria-label")).toBe("Research model: GPT-6-Luna");
 });

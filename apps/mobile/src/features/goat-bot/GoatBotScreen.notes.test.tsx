@@ -70,6 +70,9 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 }));
 vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => null }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
+vi.mock("./GoatBotModelPill", () => ({ GoatBotModelPill: () => null }));
 vi.mock("./GoatBotFace", () => ({
   GoatBotHeaderFace: () => null,
   GoatBotFaceAvatar: () => null,
@@ -190,7 +193,6 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
 }));
 vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
 // A member's model menu reads server config and native menus this test does not load.
-vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
 // The home sheet's peek reads thread detail, which needs the native runtime.

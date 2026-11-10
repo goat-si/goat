@@ -143,7 +143,6 @@ vi.mock("./goatBotHomeMode", () => ({
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
 }));
-vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./GoatBotMarkdown", () => ({
   GoatBotMarkdown: (props: { text: string }) => <span>{props.text}</span>,
