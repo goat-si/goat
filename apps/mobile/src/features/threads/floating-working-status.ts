@@ -14,6 +14,10 @@ import type {
 } from "@goat/contracts";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useAtomCommand } from "../../state/use-atom-command";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 
 export interface FloatingStatusAction {
@@ -84,7 +88,21 @@ export function useRunStopAndStartHold(ref: ScopedThreadRef | null, environmentI
   const hold = useAtomValue(
     ref === null ? NO_START_HOLD_ATOM : environmentThreadDetails.startHoldAtom(ref),
   );
-  const stopHeldTurn = useAtomCommand(orchestrationEnvironment.stopHeldTurn);
+  const stopHeldTurn = useAtomCommand(orchestrationEnvironment.stopHeldTurn, {
+    reportFailure: false,
+  });
+  const stop = async (target: ScopedThreadRef) => {
+    const result = await stopHeldTurn({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId },
+    });
+    if (result._tag === "Failure") {
+      if (isAtomCommandInterrupted(result)) return;
+      const error = squashAtomCommandFailure(result);
+      Dialog.alert("Could not stop the Codex turn", error instanceof Error ? error.message : "");
+    } else if (result.value.outcome === "stopping")
+      Dialog.alert("Codex is stopping the turn", "Your message starts once it ends.");
+  };
   const canStop = useAtomValue(orchestrationEnvironment.stopHeldTurn.permissionAtom(environmentId));
   const startHold: FloatingWorkingStatus | null =
     hold === null
@@ -102,11 +120,7 @@ export function useRunStopAndStartHold(ref: ScopedThreadRef | null, environmentI
                   cancelText: "Keep waiting",
                   confirmText: "Stop that turn",
                   destructive: true,
-                  onConfirm: () =>
-                    void stopHeldTurn({
-                      environmentId: ref.environmentId,
-                      input: { threadId: ref.threadId },
-                    }),
+                  onConfirm: () => void stop(ref),
                 })
               : Dialog.alert(hold.title, hold.description),
         };

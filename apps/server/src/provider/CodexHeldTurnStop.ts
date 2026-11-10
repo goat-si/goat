@@ -15,6 +15,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 
@@ -28,6 +29,7 @@ import {
 } from "./CodexSurvivors.ts";
 
 type Outcome = OrchestrationV2StopHeldTurnResult["outcome"];
+const isDetachedError = Schema.is(CodexDetachedAppServerError);
 
 /** Stops each held turn and clears its fence once the turn is confirmed ended. */
 export const stopHeldTurns = Effect.fn("CodexHeldTurnStop.stopHeldTurns")(function* <E>(input: {
@@ -103,9 +105,10 @@ export const interruptHeldTurn = Effect.fn("CodexHeldTurnStop.interruptHeldTurn"
   (effect) =>
     effect.pipe(
       Effect.scoped,
-      Effect.mapError(
-        (cause) =>
-          new CodexDetachedAppServerError({ detail: "Could not stop the Codex turn.", cause }),
+      Effect.mapError((cause) =>
+        isDetachedError(cause)
+          ? cause
+          : new CodexDetachedAppServerError({ detail: "Codex did not take the stop.", cause }),
       ),
     ),
 );
@@ -126,7 +129,12 @@ export const heldTurnRpcHandlers = Effect.gen(function* () {
       ).pipe(
         Effect.map((outcome) => ({ outcome })),
         Effect.mapError(
-          (cause) => new OrchestrationV2StopHeldTurnError({ threadId: input.threadId, cause }),
+          (cause) =>
+            new OrchestrationV2StopHeldTurnError({
+              threadId: input.threadId,
+              detail: cause.detail,
+              cause,
+            }),
         ),
       ),
   };

@@ -4162,10 +4162,15 @@ export type OrchestrationV2StopHeldTurnResult = typeof OrchestrationV2StopHeldTu
 
 export class OrchestrationV2StopHeldTurnError extends Schema.TaggedError<OrchestrationV2StopHeldTurnError>()(
   "OrchestrationV2StopHeldTurnError",
-  { threadId: ThreadId, cause: Schema.optional(Schema.Defect()) },
+  {
+    threadId: ThreadId,
+    /** Why, in words a person can act on. */
+    detail: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.Defect()),
+  },
 ) {
   override get message(): string {
-    return "Could not stop the Codex turn this message waits for.";
+    return this.detail ?? "Could not stop the Codex turn this message waits for.";
   }
 }
 
