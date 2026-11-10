@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 	"os"
 	"slices"
 	"time"
@@ -214,8 +215,11 @@ func (d *Daemon) saveConfig() error {
 	d.cfgMu.Lock()
 	cfg := d.cfg
 	d.cfgMu.Unlock()
-	if disk, err := d.st.LoadConfig(); err == nil && disk.DownloadRelay != "" {
-		cfg.DownloadRelay = disk.DownloadRelay
-	}
-	return d.st.SaveConfig(cfg)
+	return d.st.UpdateConfig(func(disk *state.Config) {
+		dl := disk.DownloadRelay
+		*disk = cfg
+		if dl != "" {
+			disk.DownloadRelay = dl
+		}
+	})
 }

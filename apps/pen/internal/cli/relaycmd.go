@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 	"io"
 	"net"
 	"net/http"
@@ -357,8 +358,7 @@ func runRelayDownload(args []string, stdout, stderr io.Writer) int {
 	if err := downloadOrigin(u); err != nil {
 		return fail(stderr, err)
 	}
-	cfg.DownloadRelay = u
-	if err := st.SaveConfig(cfg); err != nil {
+	if err := st.UpdateConfig(func(c *state.Config) { c.DownloadRelay = u }); err != nil {
 		return fail(stderr, err)
 	}
 	return 0
