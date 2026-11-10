@@ -2,6 +2,7 @@ package relayserver
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -9,25 +10,42 @@ import (
 	"github.com/coder/websocket"
 )
 
-// stalledWS blocks every write until release closes; it records aborts and queued texts.
+// stalledWS blocks every write until release closes or, as a real socket does, until it is
+// closed; it records aborts.
 type stalledWS struct {
 	release chan struct{}
 	mu      sync.Mutex
 	aborted bool
+	gone    chan struct{}
+}
+
+func (w *stalledWS) closed() chan struct{} {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.gone == nil {
+		w.gone = make(chan struct{})
+	}
+	return w.gone
 }
 
 func (w *stalledWS) Write(ctx context.Context, _ websocket.MessageType, _ []byte) error {
 	select {
 	case <-w.release:
 		return nil
+	case <-w.closed():
+		return errors.New("closed")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 func (w *stalledWS) Close(websocket.StatusCode, string) error { return nil }
 func (w *stalledWS) CloseNow() error {
+	gone := w.closed()
 	w.mu.Lock()
-	w.aborted = true
+	if !w.aborted {
+		w.aborted = true
+		close(gone)
+	}
 	w.mu.Unlock()
 	return nil
 }

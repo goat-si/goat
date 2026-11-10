@@ -254,16 +254,27 @@ func (q *outq) size() int {
 }
 
 // abort ends the queue at once, gives back what it has queued and drops the socket; it reports
-// whether that gave anything back.
+// whether that gave anything back. A message being written is given back by the writer once the
+// closed socket fails the write, so abort waits for that (at most the write timeout): a client
+// that stopped reading holds its memory there with nothing queued behind it.
 func (q *outq) abort() bool {
 	q.mu.Lock()
-	freed := q.bytes > 0
-	if !q.done || freed {
+	freed := q.bytes > 0 || q.writing > 0
+	if !q.done || q.bytes > 0 {
 		q.dropLocked()
 	}
+	writing := q.writing > 0
 	q.mu.Unlock()
 	q.ws.CloseNow()
 	q.signal()
+	if writing {
+		t := time.NewTimer(q.timeout)
+		select {
+		case <-q.ended:
+		case <-t.C:
+		}
+		t.Stop()
+	}
 	return freed
 }
 
