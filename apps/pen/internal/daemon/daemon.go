@@ -74,7 +74,9 @@ type Daemon struct {
 	nodeID string
 
 	cfgMu sync.Mutex
-	cfg   state.Config
+	// cfgSave and versionsSave hold one save of config.json or versions.json from snapshot to file.
+	cfgSave, versionsSave sync.Mutex
+	cfg                   state.Config
 
 	meshMu  sync.RWMutex
 	store   *mesh.Store
@@ -597,6 +599,9 @@ func (d *Daemon) unregister(k uint64) {
 func (d *Daemon) helloFrom(noisePub []byte) mesh.Hello {
 	k := ident.B64.EncodeToString(noisePub)
 	return func(pen string) {
+		// One save at a time from snapshot to file, so an older snapshot never replaces a newer one.
+		d.versionsSave.Lock()
+		defer d.versionsSave.Unlock()
 		d.mu.Lock()
 		changed := d.versions[k] != pen
 		d.versions[k] = pen

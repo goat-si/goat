@@ -44,6 +44,12 @@ type Store struct {
 	poolBy  map[string]int
 	// reach[k] holds stored records whose past (or self) has a found or admit introducing k.
 	reach map[string]map[string]bool
+
+	// saveMu holds one save from its snapshot to its rename. saveWaits and afterSnapshot, when
+	// set, run when a save has to wait for another and after a save took its snapshot (tests).
+	saveMu        sync.Mutex
+	saveWaits     func()
+	afterSnapshot func()
 }
 
 type pooled struct {
@@ -328,12 +334,23 @@ func (s *Store) Save() error {
 	return s.SaveFile(s.st, "mesh.json")
 }
 
-// SaveFile writes the set to name in st under the state lock.
+// SaveFile writes the set to name in st under the state lock. One save at a time runs from its
+// snapshot to its rename, so a save that took an older snapshot never replaces a newer file.
 func (s *Store) SaveFile(st *state.Store, name string) error {
+	if !s.saveMu.TryLock() {
+		if s.saveWaits != nil {
+			s.saveWaits()
+		}
+		s.saveMu.Lock()
+	}
+	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	// The pool is not persisted (contract "Records").
 	f := storeFile{MeshID: s.MeshID, Records: CanonicalOrder(s.all()), SelfN: s.selfN, Pool: []*Record{}}
 	s.mu.Unlock()
+	if s.afterSnapshot != nil {
+		s.afterSnapshot()
+	}
 	unlock, err := st.Lock()
 	if err != nil {
 		return err
