@@ -55,6 +55,12 @@ const UPLINK_TAG = "node";
 const CLIENT_TAG = "client";
 const READY_STATE_OPEN = 1;
 const sessionTag = (sid: number) => `s:${sid}`;
+const MAX_SID = 0xffffffff;
+
+function sidStart(raw: string | undefined): number {
+  const value = Number(raw);
+  return raw !== undefined && Number.isInteger(value) && value >= 0 && value <= MAX_SID ? value : 0;
+}
 const randomId = () => toHex(crypto.getRandomValues(new Uint8Array(8)));
 
 function read(ws: WebSocket): State | null {
@@ -211,9 +217,16 @@ export class Room extends DurableObject<Env> {
     if (current === null || at < current) await this.ctx.storage.setAlarm(at);
   }
 
-  /** Sids survive hibernation and uplink replacement, so one is never reused for this node. */
+  /**
+   * Sids survive hibernation and uplink replacement. They are u32 (the frame header's width): past
+   * 0xffffffff the counter wraps to 1 and skips 0 and every id still live, so a live id is never
+   * handed out twice.
+   */
   private nextSid(): number {
-    const sid = (this.ctx.storage.kv.get<number>("sid") ?? 0) + 1;
+    let sid = this.ctx.storage.kv.get<number>("sid") ?? sidStart(this.env.SID_START);
+    do {
+      sid = sid >= MAX_SID || sid < 0 ? 1 : sid + 1;
+    } while (this.session(sid) !== null);
     this.ctx.storage.kv.put("sid", sid);
     return sid;
   }

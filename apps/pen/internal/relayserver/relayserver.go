@@ -78,6 +78,10 @@ type Hooks struct {
 	// relay handles it; blocking here holds that socket's later messages too (tests hold forwarding
 	// or pongs).
 	OnMessage func(nodeID, role string, text bool)
+	// OnEnd is called when the relay ends a socket with a close code (role "node" or "client"),
+	// and OnWriteFailed when a socket's write failed or timed out (tests count exit paths).
+	OnEnd         func(role string, code uint16)
+	OnWriteFailed func(role string)
 }
 
 // Server is a relay. It is an http.Handler.
@@ -107,7 +111,6 @@ type Server struct {
 
 	mu     sync.Mutex
 	rooms  map[string]*room
-	sid    uint32 // the last session id handed out, for every node
 	socks  map[*sock]struct{}
 	total  int
 	perIP  map[string]int
@@ -257,6 +260,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		origin, _ = wire.RelayOrigin(scheme + "://" + r.Host)
 	}
 	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout, k.budget)
+	if f := s.Hooks.OnWriteFailed; f != nil {
+		k.out.onWriteFail = func() { f(k.roleName()) }
+	}
 	s.mu.Lock()
 	s.socks[k] = struct{}{}
 	rm := s.rooms[nodeID]
@@ -402,16 +408,17 @@ func (s *Server) hostMatches(host string) bool {
 	return err == nil && o == s.PublicOrigin
 }
 
-// nextSid hands out session ids from one counter for all nodes, so no id repeats for any node
-// while this process runs and nothing is kept per node id once its room is gone. A restart starts
-// again at 1; every uplink reconnects then and sees fresh sessions (contract "Relay").
-func (s *Server) nextSid() uint32 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.sid++; s.sid == 0 {
-		s.sid = 1
+func (k *sock) roleName() string {
+	if k.role == roleNode {
+		return "node"
 	}
-	return s.sid
+	return "client"
+}
+
+func (s *Server) ended(k *sock, code uint16) {
+	if f := s.Hooks.OnEnd; f != nil {
+		f(k.roleName(), code)
+	}
 }
 
 // Close aborts every socket.
@@ -507,6 +514,22 @@ type room struct {
 	mu      sync.Mutex
 	uplink  *sock
 	clients map[uint32]*sock
+	// sid is the last session id this room handed out. The room outlives its uplink only while
+	// clients remain, so a node never sees ids from before its uplink connection's room.
+	sid uint32
+}
+
+// nextSid hands out the next session id that is not 0 and not live in this room; past
+// 0xffffffff it wraps to 1. Called with rm.mu held.
+func (rm *room) nextSid() uint32 {
+	for {
+		if rm.sid++; rm.sid == 0 {
+			continue
+		}
+		if _, live := rm.clients[rm.sid]; !live {
+			return rm.sid
+		}
+	}
 }
 
 func (rm *room) armIdle(k *sock) {
@@ -543,6 +566,7 @@ func (rm *room) acceptClient(k *sock) bool {
 	defer rm.mu.Unlock()
 	if rm.uplink == nil {
 		k.closed = true
+		rm.srv.ended(k, wire.CodeOffline)
 		k.out.close(wire.CodeOffline)
 		return false
 	}
@@ -552,12 +576,13 @@ func (rm *room) acceptClient(k *sock) bool {
 	up := rm.uplink
 	if up.sent-up.acked+up.closeWire+sessionFrameWire > SocketWindow+RelayHeadroom || !up.out.reserve(2*sessionFrameCost) {
 		k.closed = true
+		rm.srv.ended(k, wire.CodeCaps)
 		k.out.close(wire.CodeCaps)
 		return false
 	}
 	k.held = up
 	up.closeWire += closeFrameWire
-	k.sid = rm.srv.nextSid()
+	k.sid = rm.nextSid()
 	k.pending = true
 	rm.makePendingRoom(k.ip)
 	rm.clients[k.sid] = k
@@ -888,6 +913,7 @@ func (rm *room) closeSock(k *sock, code uint16) {
 	if k.role == roleClient && rm.clients[k.sid] == k {
 		delete(rm.clients, k.sid)
 	}
+	rm.srv.ended(k, code)
 	k.out.close(code)
 }
 

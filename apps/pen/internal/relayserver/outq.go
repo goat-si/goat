@@ -210,11 +210,13 @@ type outq struct {
 	// closeTimer bounds the closing write; writerDone is set when run returns.
 	closeTimer *time.Timer
 	writerDone bool
-	bySID      map[uint32]int
-	pongs      int
-	done       bool
-	wake       chan struct{}
-	ended      chan struct{}
+	// onWriteFail, when set, is called once a write fails or times out (tests).
+	onWriteFail func()
+	bySID       map[uint32]int
+	pongs       int
+	done        bool
+	wake        chan struct{}
+	ended       chan struct{}
 }
 
 type outItem struct {
@@ -489,6 +491,12 @@ func (q *outq) close(code uint16) {
 }
 func (q *outq) wait() { <-q.ended }
 
+func (q *outq) writeFailed() {
+	if q.onWriteFail != nil {
+		q.onWriteFail()
+	}
+}
+
 // written gives back the cost of the item the writer held.
 func (q *outq) written() {
 	q.mu.Lock()
@@ -539,6 +547,7 @@ func (q *outq) run() {
 			case <-done:
 			case <-cctx.Done():
 				q.ws.CloseNow()
+				q.writeFailed()
 			}
 			cancel()
 			return
@@ -553,6 +562,7 @@ func (q *outq) run() {
 		q.written()
 		if err != nil {
 			q.ws.CloseNow()
+			q.writeFailed()
 			q.mu.Lock()
 			q.dropLocked()
 			q.mu.Unlock()

@@ -306,6 +306,30 @@ describe("pen relay contract (default limits)", () => {
   });
 });
 
+describe("pen relay session ids at the u32 boundary", () => {
+  let relay: Relay;
+  beforeAll(async () => {
+    relay = await startRelay({ SID_START: "4294967293" });
+  });
+  afterAll(async () => {
+    await relay?.stop();
+  });
+
+  // readyNode's probe client takes 4294967294.
+  it("the counter wraps from 0xffffffff to 1 and DATA still routes both ways on both sides of the wrap", async () => {
+    const node = await readyNode(relay);
+    const last = await session(relay, node);
+    const wrapped = await session(relay, node);
+    expect([last.sid, wrapped.sid]).toEqual([0xffffffff, 1]);
+    for (const s of [last, wrapped]) {
+      await s.c.send(bytes(`to node ${s.sid}`));
+      expect(text((await node.expect(FrameType.Data, s.sid)).payload)).toBe(`to node ${s.sid}`);
+      node.send(FrameType.Data, s.sid, bytes(`to client ${s.sid}`));
+      expect(text(await s.c.messages.next())).toBe(`to client ${s.sid}`);
+    }
+  });
+});
+
 describe("pen relay contract (short auth and pending timeouts)", () => {
   let relay: Relay;
   beforeAll(async () => {
