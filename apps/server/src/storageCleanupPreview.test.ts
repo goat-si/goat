@@ -28,7 +28,7 @@ describe("worktree cleanup without the opt-in preview", () => {
         const report = yield* fixture.service.runNow;
         expect(report.entries.find((entry) => entry.path === fixture.worktree)).toMatchObject({
           outcome: "kept",
-          reason: "settings changed since check",
+          reason: "Settings changed since check",
         });
         expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
       }),

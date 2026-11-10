@@ -1,7 +1,9 @@
 import {
   ThreadId,
+  type ServerSettings,
   type StorageCleanupReportEntry,
   type WorktreeCleanupPreview,
+  type WorktreeCleanupRules,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -14,6 +16,20 @@ interface WorktreePass {
   readonly waiting: boolean;
   readonly kept: ReadonlyArray<string>;
 }
+
+/** Whether a removal checked under `before` must stop because a setting it relied on changed. */
+export const removalSettingsChanged = (
+  before: ServerSettings,
+  after: ServerSettings,
+  rules: WorktreeCleanupRules,
+  current: WorktreeCleanupRules,
+) =>
+  after.autoResumeLimitedThreads !== before.autoResumeLimitedThreads ||
+  after.snoozeLimitedThreads !== before.snoozeLimitedThreads ||
+  after.storageCleanup.worktreeCleanupPreview !== before.storageCleanup.worktreeCleanupPreview ||
+  (Object.keys(rules) as Array<keyof WorktreeCleanupRules>).some(
+    (key) => current[key] !== rules[key],
+  );
 
 /**
  * Runs one sweep's worktree work: snapshot housekeeping first, then removal. With the opt-in
@@ -55,6 +71,11 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
   }) {
     yield* housekeeping(input.nowMs, input.snapshotDays);
     const none: WorktreeCleanupPreview | null = null;
+    if (!input.preview) {
+      // Turning the preview on again must show a new one, never reuse an old answer.
+      activated = false;
+      yield* previewState.reset;
+    }
     if (activated || !input.preview)
       return { ...(yield* input.clean(false, input.entries)), preview: none };
     const dryEntries: StorageCleanupReportEntry[] = [];

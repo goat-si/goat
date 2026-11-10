@@ -57,7 +57,7 @@ import { makeSubmoduleRemoval } from "./storageCleanupSubmodules.ts";
 import { makeNestedWorktrees } from "./storageNestedWorktrees.ts";
 import { makeWorktreeRemovalGate } from "./storageCleanupRemoval.ts";
 import { rankWorktrees, retentionReason } from "./storageCleanupRetention.ts";
-import { makeWorktreeCleanupRun } from "./storageCleanupRun.ts";
+import { makeWorktreeCleanupRun, removalSettingsChanged } from "./storageCleanupRun.ts";
 import { isSshProvisionedRuntime } from "./worktreeSnapshots/isSshProvisionedRuntime.ts";
 import { WorktreeCleanupPreviewState } from "./worktreeSnapshots/WorktreeCleanupPreviewState.ts";
 import { tryWithWorkspaceSubtree } from "./workspace/workspaceLease.ts";
@@ -961,14 +961,7 @@ const make = Effect.gen(function* () {
         if (finalChanges !== null && !snapshotCovers) return keep(finalChanges);
         const currentSettings = yield* settingsService.getSettings;
         const current = resolveWorktreeCleanup(currentSettings, thread.projectId);
-        if (
-          currentSettings.autoResumeLimitedThreads !== serverSettings.autoResumeLimitedThreads ||
-          currentSettings.snoozeLimitedThreads !== serverSettings.snoozeLimitedThreads ||
-          Object.keys(settings).some(
-            (key) =>
-              current[key as keyof typeof settings] !== settings[key as keyof typeof settings],
-          )
-        )
+        if (removalSettingsChanged(serverSettings, currentSettings, settings, current))
           return keep("settings changed since check");
         const submodules = yield* submoduleRemoval(worktreePath, settings);
         if (submodules.reason !== null) return keep(submodules.reason);
@@ -1203,6 +1196,9 @@ const make = Effect.gen(function* () {
     readonly previewId: string;
     readonly response: "seen" | "confirm";
   }) {
+    // A preview left from when it was on cannot approve or start anything.
+    if (!(yield* settingsService.getSettings).storageCleanup.worktreeCleanupPreview)
+      return yield* SubscriptionRef.get(reportRef);
     const nowMs = yield* Clock.currentTimeMillis;
     const answered = yield* previewState
       .respond({ ...input, nowMs })

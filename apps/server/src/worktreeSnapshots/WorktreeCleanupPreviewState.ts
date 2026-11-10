@@ -33,5 +33,7 @@ export class WorktreeCleanupPreviewState extends Context.Service<
       readonly response: "seen" | "confirm";
       readonly nowMs: number;
     }) => Effect.Effect<void, StaleCleanupPreviewError>;
+    /** Forgets every preview and activation, so turning the opt-in preview on starts a new one. */
+    readonly reset: Effect.Effect<void>;
   }
 >()("goat/worktreeSnapshots/WorktreeCleanupPreviewState") {}
