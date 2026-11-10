@@ -40,7 +40,7 @@ are described in [Reach every machine through one hub](./remote-access.md#reach-
 In **Settings → Hub → Hub devices**, **Add device to hub** joins a machine to the
 hub's OpenCodex by its SSH alias; a standalone device in
 the list has **Join** too. The device needs OpenCodex and a direct SSH alias on
-the hub. On a fresh Linux or macOS machine, the
+the hub, such as a Tailscale alias or a [Pen](./pen.md#use-a-member-as-an-opencodex-child) `pen-<name>` alias. On a fresh Linux or macOS machine, the
 [server installer's `--opencodex` option](./install.md#a-server-only-machine)
 installs both; installing does not join the hub. GOAT compares the host key
 OpenCodex is offered with the key GOAT pinned for that alias, links the device,

@@ -88,6 +88,29 @@ almost at once. `ssh -o ControlPath=none pen-<name>` opens a separate connection
 To reach another port, `pen forward 8080 <member>:8080` listens on this machine's port 8080 and
 connects each connection to port 8080 on the member.
 
+### Use a member as an OpenCodex Child
+
+A member can join the hub's OpenCodex Home as a Remote Link Child through its `pen-<name>` alias,
+so its agents use the hub's accounts without a sign-in there. On the hub:
+
+1. Join the hub to the mesh and run `pen ssh-config --install` there.
+2. Make sure the hub's SSH key can sign in on the member: Pen carries SSH to the member and checks
+   its host key, but sign-in is the member's own `~/.ssh/authorized_keys`.
+3. Add the member to GOAT as an SSH host by choosing `pen-<name>` in **Settings → Connections**,
+   and install OpenCodex on it (`goat opencodex install` there, or the server installer's
+   `--opencodex` option).
+4. In **Settings → Hub → Hub devices**, turn on **Join as OpenCodex Child after each SSH setup** on
+   the member's row. GOAT links it with the host key Pen recorded for the member, installs Codex
+   there and marks it **Ready** once a model request goes through the hub.
+
+To detach it, use **Leave** on its row, then remove the machine from the mesh (see
+[Remove a machine](#remove-a-machine)). Run `pen leave` from the machine's own console, such as
+your cloud platform's terminal: the other members close every connection to a machine as soon as
+it leaves, including the SSH session you would run `pen leave` in, so its output would be lost.
+
+GOAT turns the switch off by itself when the member leaves the mesh, when another machine later
+takes its name, or when its host key changes. Turn it on again after the machine joins again.
+
 ## Dashboard
 
 `pen dashboard` opens a page in your browser, served by Pen on this machine, that shows the mesh:
@@ -152,10 +175,17 @@ and the two push each other off the relays. If that happens, on the copy run `pe
 `~/.pen` and join again; `pen leave` there would remove the original machine too, since both hold
 the same keys.
 
+Platforms that put idle boxes to sleep do not count Pen traffic as activity. A boxes.dev box that
+you reach only through Pen goes to sleep a few minutes after it wakes, even while GOAT has it open;
+asleep, it is offline in Pen and GOAT reports it unreachable. Wake it on the platform first
+(`dvb wake <machine>` on boxes.dev), or turn on **Keep awake** in the box's status menu for as
+long as you need it. Both use box-hours.
+
 ## Not supported
 
 - Direct connections between machines: all traffic goes through a relay.
 - Windows machines as members.
+- Waking a cloud box its platform has put to sleep.
 - Managing Pen from GOAT's settings; use the `pen` command or its dashboard.
 - Signing in with a Google account the Pen sign-in service does not allow yet. While the service is
   in testing, only listed accounts can sign in; invites work for everyone.
