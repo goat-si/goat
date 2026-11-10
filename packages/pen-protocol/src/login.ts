@@ -6,6 +6,7 @@ export const LoginPrefix = {
   start: "pen-login/1 start",
   poll: "pen-login/1 poll",
   forget: "pen-login/1 forget",
+  register: "pen-login/1 register",
   assertion: "pen-login/1 assertion",
 } as const;
 
@@ -60,6 +61,18 @@ export function forgetProofMessage(nodeId: string, ts: number): Uint8Array<Array
   const time = new Uint8Array(8);
   new DataView(time.buffer).setBigUint64(0, BigInt(ts), false);
   return concat([encoder.encode(LoginPrefix.forget), encoder.encode(nodeId), time]);
+}
+
+/** `"pen-login/1 register" || SHA-256(assertion body bytes) || meshId` (26 ASCII characters). */
+export async function registerProofMessage(
+  assertionBody: Uint8Array,
+  meshId: string,
+): Promise<Uint8Array<ArrayBuffer>> {
+  return concat([
+    encoder.encode(LoginPrefix.register),
+    await sha256(assertionBody),
+    encoder.encode(meshId),
+  ]);
 }
 
 /** Lowercase base32 of SHA-256(pub)[0..5]: 8 characters. */

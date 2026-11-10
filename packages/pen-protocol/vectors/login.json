@@ -29,6 +29,11 @@
     "message": "70656e2d6c6f67696e2f3120666f72676574746b6a6e666e6b6b746a6b61667872366d777168757866726669000001a1c49d377b",
     "proof": "RRRCJypGBUHOxUcd3-p3B1bQrKKRLx4czlTxyFRSxTEGQz4SCCLXT_3tZYzsTwTNWe9pfH_ZNf6vXAYdCQgoBQ"
   },
+  "register": {
+    "meshId": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "message": "70656e2d6c6f67696e2f31207265676973746572c06954baab1a24eac1214cdfd65b1d20aedeaea2c183221de2212b891d83c6996161616161616161616161616161616161616161616161616161",
+    "proof": "zhB-IeRaOBXt-cCsdqxzzRiqw6rDgfJL32C89i6vdSgNDFgyQIRTbMMs_j15W_A8IccABD_gsB4Wq5H3nEZUAw"
+  },
   "assertion": {
     "bodyJson": "{\"v\":1,\"iss\":\"https://pen-login.pos090001.workers.dev\",\"kid\":\"ws6ziexx\",\"sub\":\"112233445566778899000\",\"email\":\"person@example.com\",\"signPub\":\"25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83_MH50\",\"noisePub\":\"EyxEK-AQ-9V-cmAzKKp25x_MwVA6riGTJ9FNnJmT9HI\",\"iat\":1794300000,\"exp\":1794300600}",
     "body": "eyJ2IjoxLCJpc3MiOiJodHRwczovL3Blbi1sb2dpbi5wb3MwOTAwMDEud29ya2Vycy5kZXYiLCJraWQiOiJ3czZ6aWV4eCIsInN1YiI6IjExMjIzMzQ0NTU2Njc3ODg5OTAwMCIsImVtYWlsIjoicGVyc29uQGV4YW1wbGUuY29tIiwic2lnblB1YiI6IjI1bGY0bEZwMFVIS3VidTZrcnFnSDU4dUhzNTk5TXNxd0ZHUTgzX01INTAiLCJub2lzZVB1YiI6IkV5eEVLLUFRLTlWLWNtQXpLS3AyNXhfTXdWQTZyaUdUSjlGTm5KbVQ5SEkiLCJpYXQiOjE3OTQzMDAwMDAsImV4cCI6MTc5NDMwMDYwMH0",
