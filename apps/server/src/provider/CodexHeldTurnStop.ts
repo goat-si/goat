@@ -1,6 +1,6 @@
 /**
- * Stops, at a person's request, the Codex turns no run owns that hold a thread's next start.
- * The hold opens only once Codex confirms a turn ended, as it would when the turn ends itself.
+ * Stops, at a person's request, the Codex turn no run owns that holds a thread's next start.
+ * The hold opens only once Codex confirms the turn ended, as it would when the turn ends itself.
  *
  * @module CodexHeldTurnStop
  */
@@ -24,6 +24,7 @@ import { CodexDetachedAppServerError } from "./CodexDetachedAppServer.ts";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import {
   CodexSurvivors,
+  readGoalReleaseStatus,
   type CodexInstanceRecordKey,
   type CodexStopObligation,
 } from "./CodexSurvivors.ts";
@@ -31,31 +32,92 @@ import {
 type Outcome = OrchestrationV2StopHeldTurnResult["outcome"];
 const isDetachedError = Schema.is(CodexDetachedAppServerError);
 
-/** Stops each held turn and clears its fence once the turn is confirmed ended. */
-export const stopHeldTurns = Effect.fn("CodexHeldTurnStop.stopHeldTurns")(function* <E>(input: {
-  readonly survivors: Pick<CodexSurvivors["Service"], "getStopObligations" | "clearStopObligation">;
+/**
+ * Stops the named turn when it still holds the thread as a turn no run owns, then releases the
+ * fences in the order admission reads them: the stop fence quietly, the goal block (the goal is
+ * paused by then), and finally a wake so the waiting start is claimed.
+ */
+export const stopHeldTurn = Effect.fn("CodexHeldTurnStop.stopHeldTurn")(function* <E>(input: {
+  readonly survivors: Pick<
+    CodexSurvivors["Service"],
+    "list" | "getStopObligations" | "getGoalBlocks" | "clearGoalBlock" | "clearStopObligation"
+  >;
+  /** Clears a stop fence without waking queued starts. */
+  readonly clearStopQuietly: (
+    record: CodexInstanceRecordKey,
+    turn: CodexStopObligation,
+  ) => Effect.Effect<void, CodexDetachedAppServerError>;
   readonly threadId: ThreadId;
-  /** True once Codex reports the turn ended. */
+  readonly nativeTurnId: string;
+  /** True once Codex reports the turn ended; fails without stopping it when its goal stays active. */
   readonly stop: (
     record: CodexInstanceRecordKey,
     turn: CodexStopObligation,
   ) => Effect.Effect<boolean, E>;
 }) {
-  const held = yield* input.survivors.getStopObligations(input.threadId);
-  if (held.length === 0) return "none" satisfies Outcome;
-  let pending = 0;
-  for (const { record, block } of held) {
-    if (yield* input.stop(record, block)) yield* input.survivors.clearStopObligation(record, block);
-    else pending += 1;
-  }
-  return pending === 0 ? ("stopped" satisfies Outcome) : ("stopping" satisfies Outcome);
+  const survivorTurn = (yield* input.survivors.list).some(
+    (binding) => binding.threadId === input.threadId && binding.nativeTurnId === input.nativeTurnId,
+  );
+  const held = (yield* input.survivors.getStopObligations(input.threadId)).find(
+    ({ block }) => block.nativeTurnId === input.nativeTurnId,
+  );
+  // A turn that survived a restart belongs to a run and stops with it.
+  if (held === undefined || survivorTurn) return "none" satisfies Outcome;
+  if (!(yield* input.stop(held.record, held.block))) return "stopping" satisfies Outcome;
+  yield* input.clearStopQuietly(held.record, held.block);
+  if ((yield* input.survivors.getStopObligations(input.threadId)).length === 0)
+    for (const { record, block } of yield* input.survivors.getGoalBlocks(input.threadId))
+      yield* input.survivors.clearGoalBlock(record, block);
+  yield* input.survivors.clearStopObligation(held.record, held.block);
+  return "stopped" satisfies Outcome;
 });
 
 /**
- * Pauses the turn's goal so Codex starts no continuation, interrupts the turn, and waits briefly
- * for Codex to report its end.
+ * Pauses the thread's goal so Codex starts no continuation, interrupts the turn, and waits briefly
+ * for Codex to report its end. A goal Codex will not pause leaves the turn running.
  */
-const interruptHeldTurn = Effect.fn("CodexHeldTurnStop.interruptHeldTurn")(
+export const stopTurnOnClient = Effect.fn("CodexHeldTurnStop.stopTurnOnClient")(function* (
+  client: CodexClient.CodexAppServerClient["Service"],
+  turn: CodexStopObligation,
+) {
+  const ended = yield* Deferred.make<void>();
+  yield* client.handleServerNotification("turn/completed", (event) =>
+    event.threadId === turn.nativeThreadId &&
+    event.turn.id === turn.nativeTurnId &&
+    event.turn.status !== "inProgress"
+      ? Deferred.succeed(ended, undefined).pipe(Effect.asVoid)
+      : Effect.void,
+  );
+  yield* client.request("thread/resume", { threadId: turn.nativeThreadId, excludeTurns: true });
+  const goal = readGoalReleaseStatus(
+    client.request("thread/goal/get", { threadId: turn.nativeThreadId }),
+  );
+  if ((yield* goal) === "goal") {
+    yield* client
+      .request("thread/goal/set", { threadId: turn.nativeThreadId, status: "paused" })
+      .pipe(Effect.ignore);
+    if ((yield* goal) === "goal")
+      return yield* new CodexDetachedAppServerError({
+        detail: "Codex would not pause this thread's goal, so GOAT left the turn running.",
+      });
+  }
+  yield* client.request("turn/interrupt", {
+    threadId: turn.nativeThreadId,
+    turnId: turn.nativeTurnId,
+  });
+  const confirmed = yield* Effect.gen(function* () {
+    const page = yield* client.request("thread/turns/list", {
+      threadId: turn.nativeThreadId,
+      limit: 100,
+    });
+    const listed = page.data.find((entry) => entry.id === turn.nativeTurnId);
+    if (listed === undefined || listed.status === "inProgress") yield* Deferred.await(ended);
+    return true;
+  }).pipe(Effect.timeoutOption("5 seconds"));
+  return Option.getOrElse(confirmed, () => false);
+});
+
+const stopTurnOnRecord = Effect.fn("CodexHeldTurnStop.stopTurnOnRecord")(
   function* (
     detached: Detached.CodexDetachedAppServers["Service"],
     record: CodexInstanceRecordKey,
@@ -75,32 +137,7 @@ const interruptHeldTurn = Effect.fn("CodexHeldTurnStop.interruptHeldTurn")(
     );
     yield* client.request("initialize", buildCodexInitializeParams());
     yield* client.notify("initialized", undefined);
-    const ended = yield* Deferred.make<void>();
-    yield* client.handleServerNotification("turn/completed", (event) =>
-      event.threadId === turn.nativeThreadId &&
-      event.turn.id === turn.nativeTurnId &&
-      event.turn.status !== "inProgress"
-        ? Deferred.succeed(ended, undefined).pipe(Effect.asVoid)
-        : Effect.void,
-    );
-    yield* client.request("thread/resume", { threadId: turn.nativeThreadId, excludeTurns: true });
-    yield* client
-      .request("thread/goal/set", { threadId: turn.nativeThreadId, status: "paused" })
-      .pipe(Effect.ignore);
-    yield* client.request("turn/interrupt", {
-      threadId: turn.nativeThreadId,
-      turnId: turn.nativeTurnId,
-    });
-    const confirmed = yield* Effect.gen(function* () {
-      const page = yield* client.request("thread/turns/list", {
-        threadId: turn.nativeThreadId,
-        limit: 100,
-      });
-      const listed = page.data.find((entry) => entry.id === turn.nativeTurnId);
-      if (listed === undefined || listed.status === "inProgress") yield* Deferred.await(ended);
-      return true;
-    }).pipe(Effect.timeoutOption("5 seconds"));
-    return Option.getOrElse(confirmed, () => false);
+    return yield* stopTurnOnClient(client, turn);
   },
   (effect) =>
     effect.pipe(
@@ -121,10 +158,12 @@ export const heldTurnRpcHandlers = Effect.gen(function* () {
     [ORCHESTRATION_V2_WS_METHODS.stopHeldTurn]: (input: OrchestrationV2StopHeldTurnInput) =>
       (Option.isNone(survivors) || Option.isNone(detached)
         ? Effect.succeed<Outcome>("none")
-        : stopHeldTurns({
+        : stopHeldTurn({
             survivors: survivors.value,
+            clearStopQuietly: detached.value.clearStopObligation,
             threadId: input.threadId,
-            stop: (record, turn) => interruptHeldTurn(detached.value, record, turn),
+            nativeTurnId: input.nativeTurnId,
+            stop: (record, turn) => stopTurnOnRecord(detached.value, record, turn),
           })
       ).pipe(
         Effect.map((outcome) => ({ outcome })),

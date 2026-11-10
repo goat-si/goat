@@ -91,10 +91,10 @@ export function useRunStopAndStartHold(ref: ScopedThreadRef | null, environmentI
   const stopHeldTurn = useAtomCommand(orchestrationEnvironment.stopHeldTurn, {
     reportFailure: false,
   });
-  const stop = async (target: ScopedThreadRef) => {
+  const stop = async (target: ScopedThreadRef, nativeTurnId: string) => {
     const result = await stopHeldTurn({
       environmentId: target.environmentId,
-      input: { threadId: target.threadId },
+      input: { threadId: target.threadId, nativeTurnId },
     });
     if (result._tag === "Failure") {
       if (isAtomCommandInterrupted(result)) return;
@@ -102,6 +102,8 @@ export function useRunStopAndStartHold(ref: ScopedThreadRef | null, environmentI
       Dialog.alert("Could not stop the Codex turn", error instanceof Error ? error.message : "");
     } else if (result.value.outcome === "stopping")
       Dialog.alert("Codex is stopping the turn", "Your message starts once it ends.");
+    else if (result.value.outcome === "none")
+      Dialog.alert("That Codex turn no longer holds this thread");
   };
   const canStop = useAtomValue(orchestrationEnvironment.stopHeldTurn.permissionAtom(environmentId));
   const startHold: FloatingWorkingStatus | null =
@@ -112,17 +114,19 @@ export function useRunStopAndStartHold(ref: ScopedThreadRef | null, environmentI
           label: hold.title,
           accessibilityLabel: `${hold.title}. ${hold.description}`,
           // A turn from before the restart stops with its own run; only an unowned one stops here.
-          onPress: () =>
-            ref !== null && canStop && hold.reason === "unowned_turn"
+          onPress: () => {
+            const turnId = hold.nativeTurnId;
+            return ref !== null && canStop && hold.reason === "unowned_turn" && turnId
               ? Dialog.confirm({
                   title: hold.title,
                   message: `${hold.description} Stopping that turn lets your message start now.`,
                   cancelText: "Keep waiting",
                   confirmText: "Stop that turn",
                   destructive: true,
-                  onConfirm: () => void stop(ref),
+                  onConfirm: () => void stop(ref, turnId),
                 })
-              : Dialog.alert(hold.title, hold.description),
+              : Dialog.alert(hold.title, hold.description);
+          },
         };
   return { runStop, startHold };
 }

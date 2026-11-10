@@ -631,7 +631,10 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
           hold: startHold,
           canStop: stopHeld.canStopHeldTurn,
           stopping: stopHeld.stoppingThreadId === activeThread.id,
-          onStop: () => void stopHeld.stopHeldTurn(activeThread.id),
+          onStop: () =>
+            startHold.nativeTurnId === undefined
+              ? undefined
+              : void stopHeld.stopHeldTurn(activeThread.id, startHold.nativeTurnId),
         })
       : null;
   const backgroundWorkBanner = activeThread

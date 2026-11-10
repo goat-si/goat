@@ -519,6 +519,7 @@ export interface RunStopPresentation {
 export interface RunStartHoldPresentation {
   readonly runId: ThreadStructure["runs"][number]["id"];
   readonly reason: NonNullable<ThreadStructure["runs"][number]["startHold"]>["reason"];
+  readonly nativeTurnId: string | undefined;
   readonly title: string;
   readonly description: string;
 }
@@ -542,12 +543,14 @@ export function presentRunStartHold(
     ? {
         runId: held.id,
         reason: hold.reason,
+        nativeTurnId: hold.nativeTurnId,
         title: "Waiting for the turn from before the restart",
         description: `Codex is still working on ${turn}, which began before GOAT restarted. This message starts when it ends.`,
       }
     : {
         runId: held.id,
         reason: hold.reason,
+        nativeTurnId: hold.nativeTurnId,
         title: "Waiting for another Codex turn",
         description: `Codex is working on ${turn} that no message here started, such as a goal continuation. This message starts when it ends.`,
       };

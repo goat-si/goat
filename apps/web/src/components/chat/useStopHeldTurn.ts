@@ -17,10 +17,11 @@ export function useStopHeldTurn(environmentId: EnvironmentId) {
     orchestrationEnvironment.stopHeldTurn.permissionAtom(environmentId),
   );
   const [stoppingThreadId, setStoppingThreadId] = useState<ThreadId | null>(null);
-  const stopHeldTurn = async (threadId: ThreadId) => {
+  /** Names the turn the person saw, so a turn that replaced it is never stopped. */
+  const stopHeldTurn = async (threadId: ThreadId, nativeTurnId: string) => {
     if (!canStopHeldTurn || stoppingThreadId !== null) return;
     setStoppingThreadId(threadId);
-    const result = await stop({ environmentId, input: { threadId } });
+    const result = await stop({ environmentId, input: { threadId, nativeTurnId } });
     setStoppingThreadId(null);
     if (result._tag === "Failure") {
       if (isAtomCommandInterrupted(result)) return;
@@ -38,6 +39,8 @@ export function useStopHeldTurn(environmentId: EnvironmentId) {
         title: "Codex is stopping the turn",
         description: "Your message starts once it ends.",
       });
+    if (result.value.outcome === "none")
+      toastManager.add({ type: "info", title: "That Codex turn no longer holds this thread" });
   };
   return { canStopHeldTurn, stoppingThreadId, stopHeldTurn };
 }

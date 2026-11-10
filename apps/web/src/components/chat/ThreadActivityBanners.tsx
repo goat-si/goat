@@ -146,7 +146,7 @@ export function startHoldBannerItem(input: {
     title: input.hold.title,
     description: input.hold.description,
     actions:
-      input.canStop && input.hold.reason === "unowned_turn" ? (
+      input.canStop && input.hold.reason === "unowned_turn" && input.hold.nativeTurnId ? (
         <Button size="xs" variant="ghost" disabled={input.stopping} onClick={input.onStop}>
           {input.stopping ? "Stopping..." : "Stop that turn"}
         </Button>

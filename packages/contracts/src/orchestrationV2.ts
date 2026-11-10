@@ -4147,14 +4147,18 @@ export class OrchestrationV2ForceStopThreadError extends Schema.TaggedError<Orch
   }
 }
 
-/** Stops the Codex turns no run owns that hold the thread's next start. */
-export const OrchestrationV2StopHeldTurnInput = Schema.Struct({ threadId: ThreadId });
+/** Stops the Codex turn no run owns that holds the thread's next start; it must be the one shown. */
+export const OrchestrationV2StopHeldTurnInput = Schema.Struct({
+  threadId: ThreadId,
+  nativeTurnId: TrimmedNonEmptyString,
+});
 export type OrchestrationV2StopHeldTurnInput = typeof OrchestrationV2StopHeldTurnInput.Type;
 
 export const OrchestrationV2StopHeldTurnResult = Schema.Struct({
   /**
-   * `stopped`: each held turn ended, so the waiting message starts. `stopping`: Codex took the
-   * stop but has not reported the end yet; the message starts when it does. `none`: nothing held.
+   * `stopped`: the turn ended, so the waiting message starts. `stopping`: Codex took the stop but
+   * has not reported the end yet; the message starts when it does. `none`: that turn no longer
+   * holds the thread as a turn no run owns, so nothing was stopped.
    */
   outcome: Schema.Literals(["stopped", "stopping", "none"]),
 });
