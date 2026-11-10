@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -8,15 +10,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/goat-si/goat/apps/pen/internal/relaytest"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
-// TestHelperDialControl is the child of the test below: it dials PEN_TEST_DIAL and exits 0 when the
-// connection opens, 3 when it is refused. Run without the variable it does nothing.
+// TestHelperDialControl is the child of the test below: it asks the daemon on PEN_TEST_DIAL for its
+// status and exits 0 when it answers, 3 when the connection is refused or closed unanswered. Run without
+// the variable it does nothing.
 func TestHelperDialControl(t *testing.T) {
 	p := os.Getenv("PEN_TEST_DIAL")
 	if p == "" {
@@ -27,37 +35,38 @@ func TestHelperDialControl(t *testing.T) {
 		fmt.Fprintln(os.Stderr, "dial:", err)
 		os.Exit(3)
 	}
-	c.Close()
+	defer c.Close()
+	fmt.Fprintln(c, `{"op":"status"}`)
+	line, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil || !strings.Contains(line, "nodeId") {
+		fmt.Fprintln(os.Stderr, "no status:", err, line)
+		os.Exit(3)
+	}
 	os.Exit(0)
 }
 
-// Another user on the machine must not drive the daemon. The child runs with this user's token minus
-// the user SID (deny-only), which is what another account looks like to the socket's DACL; it must be
-// refused, and the same child must get in once the DACL admits Everyone, so the refusal comes from the
-// DACL and not from the child failing to run.
+// Another user on the machine must not drive the daemon. The child runs with this user's token with
+// the user SID made deny-only, which is how another account looks to an access check; the daemon must
+// not answer it. The same child with the normal token gets its answer, so the refusal is not the child
+// failing to run.
 func TestControlSocketRefusesAProcessWithoutTheOwnersSID(t *testing.T) {
-	st := shortDir(t)
-	d := &Daemon{st: st}
-	ln, err := d.listenControl()
-	if err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	sock := SocketPath(a.st)
+	if private, err := state.OwnerOnly(sock); err != nil || !private {
+		t.Fatalf("control socket DACL is not owner-only: %v", err)
 	}
-	defer ln.Close()
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			c.Close()
-		}
-	}()
 	exe, dir := runnableCopy(t)
 	tok := restrictedToken(t)
-	dial := func() (int, string) {
+	dial := func(tok windows.Token) (int, string) {
 		cmd := exec.Command(exe, "-test.run=^TestHelperDialControl$")
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "PEN_TEST_DIAL="+SocketPath(st))
+		cmd.Env = append(os.Environ(), "PEN_TEST_DIAL="+sock)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Token: syscall.Token(tok)}
 		out, err := cmd.CombinedOutput()
 		var exit *exec.ExitError
@@ -65,16 +74,15 @@ func TestControlSocketRefusesAProcessWithoutTheOwnersSID(t *testing.T) {
 			return exit.ExitCode(), string(out)
 		}
 		if err != nil {
-			t.Fatalf("starting the restricted child: %v", err)
+			t.Fatalf("starting the child: %v", err)
 		}
 		return 0, string(out)
 	}
-	if code, out := dial(); code != 3 {
+	if code, out := dial(tok); code != 3 {
 		t.Fatalf("a process without the owner's SID: exit %d, want 3 (refused): %s", code, out)
 	}
-	setDACL(t, SocketPath(st), windows.GENERIC_ALL, false)
-	if code, out := dial(); code != 0 {
-		t.Fatalf("the restricted child could not connect to a socket open to Everyone: exit %d: %s", code, out)
+	if code, out := dial(0); code != 0 {
+		t.Fatalf("the owner's own child got no status: exit %d: %s", code, out)
 	}
 }
 

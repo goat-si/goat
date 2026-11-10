@@ -126,6 +126,10 @@ func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 
 func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	defer c.Close()
+	if !peerIsOwner(c) {
+		d.opt.Logf("control: refused a connection from a process of another user")
+		return
+	}
 	r := bufio.NewReader(io.LimitReader(c, 64<<10))
 	line, err := r.ReadBytes('\n')
 	if err != nil {
