@@ -299,9 +299,7 @@ function useGoatBotWorking(visibleTurnItems: ReadonlyArray<OrchestrationV2Projec
     task,
     worker: workerRef === null ? null : { shell: shell?.source ?? null, projection },
   });
-  return activity === null || task === null
-    ? activity
-    : { ...activity, since: task.chip.createdAt, title: task.chip.title };
+  return activity === null || task === null ? activity : { ...activity, title: task.chip.title };
 }
 
 /**

@@ -1,24 +1,13 @@
 import type { GoatBotActivity, GoatBotAttachmentLabel } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
-import { useState, useSyncExternalStore } from "react";
 
 import { useAssetUrlState } from "~/assets/assetUrls";
-import {
-  BellIcon,
-  ChevronDownIcon,
-  CircleDotIcon,
-  ClockIcon,
-  EyeIcon,
-  PaperclipIcon,
-} from "~/components/solar";
-import { cn } from "~/lib/utils";
-import { formatElapsedDurationLabel } from "~/timestampFormat";
+import { BellIcon, PaperclipIcon } from "~/components/solar";
 
-import { Button } from "../ui/button";
+import { GoatBotFace } from "./GoatBotFace";
 
-/** The activity line also shows how long the followed work has run and, opened, what it is. */
+/** The activity line also names the followed work. */
 export type GoatBotTimelineActivity = GoatBotActivity & {
-  readonly since?: string;
   readonly title?: string;
 };
 
@@ -103,67 +92,26 @@ function GoatBotSentFile({ name }: { readonly name: string }) {
   );
 }
 
-const ELAPSED_TICK_MS = 1_000;
-
-/** "12s", "3m": refreshed each second, re-rendering only when the label changes. */
-function useElapsedLabel(since: string | null): string | null {
-  const start = since === null ? Number.NaN : Date.parse(since);
-  const subscribe = (onChange: () => void) => {
-    if (Number.isNaN(start)) return () => {};
-    const timer = setInterval(onChange, ELAPSED_TICK_MS);
-    return () => clearInterval(timer);
-  };
-  return useSyncExternalStore(
-    subscribe,
-    () => (since === null || Number.isNaN(start) ? null : formatElapsedDurationLabel(since)),
-    () => null,
-  );
-}
-
 /**
- * One line for what GOAT Bot is doing: a still icon, what it says, and for how long. Work it
- * follows opens to show which task that is. Nothing here moves; the label is the progress.
+ * One line for what GOAT Bot is doing: its still face and the step it is on, then the work it
+ * follows. Nothing here moves; a new step replaces the text.
  */
-export function GoatBotActivityLine({
-  activity,
-  since,
-}: {
-  readonly activity: GoatBotTimelineActivity;
-  readonly since: string | null;
-}) {
-  const [open, setOpen] = useState(false);
-  const elapsed = useElapsedLabel(since);
+export function GoatBotActivityLine({ activity }: { readonly activity: GoatBotTimelineActivity }) {
   const waiting = activity.state === "working" && activity.text.startsWith("Waiting");
-  const Icon = activity.state === "reading" ? EyeIcon : waiting ? ClockIcon : CircleDotIcon;
-  const title = activity.state === "working" ? (activity.title ?? null) : null;
+  const title =
+    activity.state === "working" && activity.title !== activity.text ? activity.title : undefined;
   return (
-    <div className="flex max-w-[44rem] min-w-0 flex-col text-sm leading-5 text-muted-foreground">
-      <div className="flex min-h-8 min-w-0 items-center gap-2">
-        <Icon
-          aria-hidden
-          className={cn("size-4 shrink-0", waiting ? "text-warning-foreground" : "text-foreground")}
-        />
-        <span role="status" aria-live="polite" aria-atomic="true" className="min-w-0 truncate">
+    <div className="flex min-h-8 max-w-[44rem] min-w-0 items-center gap-2 ps-1 text-sm leading-5 text-muted-foreground">
+      <GoatBotFace
+        state={activity.state === "reading" ? "reading" : waiting ? "waiting" : "working"}
+        className="size-5 shrink-0 text-foreground"
+      />
+      <p className="min-w-0 truncate">
+        <span role="status" aria-live="polite" aria-atomic="true">
           {activity.text}
         </span>
-        {elapsed ? (
-          <span aria-hidden className="shrink-0 tabular-nums">
-            · {elapsed}
-          </span>
-        ) : null}
-        {title !== null ? (
-          <Button
-            variant="ghost-muted"
-            size="icon-xs"
-            aria-expanded={open}
-            aria-label={open ? "Hide work details" : "Show work details"}
-            onClick={() => setOpen((value) => !value)}
-          >
-            <ChevronDownIcon className={cn(open && "rotate-180")} />
-          </Button>
-        ) : null}
-      </div>
-      {open && title !== null ? <p className="ms-6 pb-1 break-words">{title}</p> : null}
+        {title === undefined ? null : <span className="opacity-70">{" · " + title}</span>}
+      </p>
     </div>
   );
 }
