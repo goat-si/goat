@@ -1230,6 +1230,7 @@ const make = Effect.gen(function* () {
     const changes = yield* settingsService.subscribeChanges;
     const events = engine.streamDomainEvents;
     let lastSettings = yield* settingsService.getSettings.pipe(Effect.orDie);
+    yield* runWorktreeCleanup.forgetIfTurnedOff(null, lastSettings);
     yield* forkParked(
       requestSweep.pipe(
         Effect.andThen(worker.drain),
@@ -1245,8 +1246,9 @@ const make = Effect.gen(function* () {
           sameProjectWorktreePolicies(settings, lastSettings)
         )
           return Effect.void;
+        const forget = runWorktreeCleanup.forgetIfTurnedOff(lastSettings, settings);
         lastSettings = settings;
-        return requestSweep;
+        return Effect.andThen(forget, requestSweep);
       }),
     );
     yield* forkParked(

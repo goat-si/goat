@@ -59,7 +59,7 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
       Effect.logWarning("worktree snapshot housekeeping failed", { cause }),
     ),
   );
-  return Effect.fn("StorageCleanup.runWorktreeCleanup")(function* <E, R>(input: {
+  const run = Effect.fn("StorageCleanup.runWorktreeCleanup")(function* <E, R>(input: {
     readonly nowMs: number;
     readonly snapshotDays: number | null;
     readonly preview: boolean;
@@ -71,11 +71,6 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
   }) {
     yield* housekeeping(input.nowMs, input.snapshotDays);
     const none: WorktreeCleanupPreview | null = null;
-    if (!input.preview) {
-      // Turning the preview on again must show a new one, never reuse an old answer.
-      activated = false;
-      yield* previewState.reset;
-    }
     if (activated || !input.preview)
       return { ...(yield* input.clean(false, input.entries)), preview: none };
     const dryEntries: StorageCleanupReportEntry[] = [];
@@ -98,4 +93,14 @@ export const makeWorktreeCleanupRun = Effect.fn("StorageCleanup.makeWorktreeClea
     activated = true;
     return { ...(yield* input.clean(false, input.entries)), preview: none };
   });
+  const forgetPreview = Effect.sync(() => {
+    activated = false;
+  }).pipe(Effect.andThen(previewState.reset));
+  // Turning the preview off forgets it, so turning it on again shows a new one. null is startup.
+  const forgetIfTurnedOff = (before: ServerSettings | null, after: ServerSettings) =>
+    !after.storageCleanup.worktreeCleanupPreview &&
+    (before === null || before.storageCleanup.worktreeCleanupPreview)
+      ? forgetPreview
+      : Effect.void;
+  return Object.assign(run, { forgetPreview, forgetIfTurnedOff });
 });
