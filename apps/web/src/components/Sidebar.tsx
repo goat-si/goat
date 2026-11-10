@@ -84,6 +84,8 @@ import {
 } from "../keybindings";
 import { useShortcutModifierState } from "../shortcutModifierState";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { isPreviewFocused } from "../lib/previewFocus";
+import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isMacPlatform } from "~/lib/utils";
@@ -218,6 +220,7 @@ import {
 } from "./Sidebar.drag";
 import { SIDEBAR_DRAG_DISTANCE, SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
+import { sameHolds, sameKeys } from "./Sidebar.equality";
 import {
   pickSnoozePreset,
   resolveSnoozePresets,
@@ -289,20 +292,6 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "goat:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "goat:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "goat:sidebar:working-expanded";
-function sameKeys(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
-  if (left.size !== right.size) return false;
-  for (const key of left) if (!right.has(key)) return false;
-  return true;
-}
-
-function sameHolds(left: SidebarPriorityHolds, right: SidebarPriorityHolds): boolean {
-  if (left.size !== right.size) return false;
-  for (const [key, settledOverride] of left) {
-    if (!right.has(key) || right.get(key) !== settledOverride) return false;
-  }
-  return true;
-}
-
 function scrollSidebarToTop(content: HTMLElement | null) {
   content?.closest("[data-slot=scroll-area-viewport]")?.scrollTo({ top: 0 });
 }
@@ -2718,6 +2707,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
       : false,
   );
+  const routePreviewOpen = useRightPanelStore(
+    (state) => selectActiveRightPanel(state.byThreadKey, routeThreadRef) === "preview",
+  );
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || isCommandPaletteOpen() || isModelPickerOpen()) {
@@ -2728,6 +2720,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         context: {
           terminalFocus: isTerminalFocused(),
           terminalOpen: routeTerminalOpen,
+          previewFocus: isPreviewFocused(),
+          previewOpen: routePreviewOpen,
           modelPickerOpen: isModelPickerOpen(),
           isWeb: !isElectron,
           isDesktop: isElectron,
@@ -2764,6 +2758,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     navigateToThread,
     orderedThreadKeys,
     routeRowThreadKey,
+    routePreviewOpen,
     routeTerminalOpen,
     threadByKey,
   ]);
@@ -2776,6 +2771,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       context: {
         terminalFocus: terminalFocused,
         terminalOpen: routeTerminalOpen,
+        previewFocus: isPreviewFocused(),
+        previewOpen: routePreviewOpen,
         modelPickerOpen: isModelPickerOpen(),
         isWeb: !isElectron,
         isDesktop: isElectron,
