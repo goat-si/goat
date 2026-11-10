@@ -107,7 +107,7 @@ type Server struct {
 
 	mu     sync.Mutex
 	rooms  map[string]*room
-	sids   map[string]uint32
+	sid    uint32 // the last session id handed out, for every node
 	socks  map[*sock]struct{}
 	total  int
 	perIP  map[string]int
@@ -146,7 +146,7 @@ func New(l Limits) *Server {
 			*f.v = f.d
 		}
 	}
-	return &Server{Limits: l, rooms: map[string]*room{}, sids: map[string]uint32{}, socks: map[*sock]struct{}{},
+	return &Server{Limits: l, rooms: map[string]*room{}, socks: map[*sock]struct{}{},
 		perIP: map[string]int{}, shares: map[string]*source{}, unauth: map[string][]*sock{}}
 }
 
@@ -401,12 +401,16 @@ func (s *Server) hostMatches(host string) bool {
 	return err == nil && o == s.PublicOrigin
 }
 
-// nextSid hands out session ids per node; they are never reused while this process runs.
-func (s *Server) nextSid(nodeID string) uint32 {
+// nextSid hands out session ids from one counter for all nodes, so no id repeats for any node
+// while this process runs and nothing is kept per node id once its room is gone. A restart starts
+// again at 1; every uplink reconnects then and sees fresh sessions (contract "Relay").
+func (s *Server) nextSid() uint32 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sids[nodeID]++
-	return s.sids[nodeID]
+	if s.sid++; s.sid == 0 {
+		s.sid = 1
+	}
+	return s.sid
 }
 
 // Close aborts every socket.
@@ -552,7 +556,7 @@ func (rm *room) acceptClient(k *sock) bool {
 	}
 	k.held = up
 	up.closeWire += closeFrameWire
-	k.sid = rm.srv.nextSid(rm.nodeID)
+	k.sid = rm.srv.nextSid()
 	k.pending = true
 	rm.makePendingRoom(k.ip)
 	rm.clients[k.sid] = k

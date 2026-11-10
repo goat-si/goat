@@ -501,6 +501,10 @@ func (q *outq) run() {
 	defer close(q.ended)
 	defer func() {
 		q.mu.Lock()
+		// Whatever way the writer ends (a close frame written, a failed write), what the queue
+		// still has charged or reserved goes back: an admitted session's unused CLOSE reservation
+		// on an uplink that closed or was replaced included.
+		q.dropLocked()
 		q.writerDone = true
 		t := q.closeTimer
 		q.closeTimer = nil

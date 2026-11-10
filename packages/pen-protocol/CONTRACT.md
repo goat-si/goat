@@ -288,8 +288,12 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   gets fixed 64 KiB kernel send and receive buffers and at most 8 KiB of request headers. It
   reads at most the 96-byte answer from an uplink before it authenticates, drops a socket whose write or closing
   handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, so a client
-  flooding empty DATA ends only its own session 4408. Session ids are never
-  reused while the process runs (a restart starts at 1 again; uplinks reconnect then and see fresh sessions).
+  flooding empty DATA ends only its own session 4408. Session ids come from one counter for every node, so no sid
+  repeats for a node while the process runs and nothing is kept per node id once its last socket is gone. A restart
+  starts the counter at 1 again; every uplink is a new connection then, and a node keys sessions by its uplink
+  connection, so an id used before the restart cannot reach a session of the new one. The counter does not read the
+  clock, so a clock step changes nothing. (The Worker keeps its per-node counter in that node id's Durable Object, one
+  stored integer per node id that ever had a client reach its authenticated uplink, with no cleanup.)
 
 ## Accounts (v1.1)
 
