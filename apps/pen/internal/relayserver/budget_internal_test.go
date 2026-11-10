@@ -1,8 +1,8 @@
 package relayserver
 
 import (
+	"fmt"
 	"testing"
-	"time"
 )
 
 // The server-wide queue budget, without kernel socket buffers in the way (they absorb a different
@@ -17,8 +17,8 @@ func TestSessionDataPastTheServerQueueBudgetEndsItsSession(t *testing.T) {
 	rm := &room{srv: s, clients: map[uint32]*sock{}}
 	var clients []*sock
 	for sid := uint32(1); sid <= 3; sid++ {
-		c := &sock{srv: s, room: rm, role: roleClient, sid: sid, out: newOutq(ws, time.Hour, &s.queued)}
-		rm.clients[sid] = c
+		// Each from its own address: this test is about the server-wide budget.
+		c := testSock(s, rm, roleClient, sid, fmt.Sprintf("192.0.2.%d", sid), ws)
 		clients = append(clients, c)
 	}
 	chunk := make([]byte, 64<<10)

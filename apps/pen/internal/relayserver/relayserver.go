@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -89,9 +90,13 @@ type Server struct {
 	MaxSockets       int
 	MaxPerIP         int
 	MaxUnauthPerNode int
-	// MaxQueued caps the bytes all sockets' outbound queues hold together, so slow readers on many
-	// sockets cannot grow the process past its memory limit (0 means DefaultMaxQueued).
-	MaxQueued int
+	// MaxQueued caps the memory all sockets' queued and partly read messages hold together, so
+	// slow readers on many sockets cannot grow the process past its memory limit (0 means
+	// DefaultMaxQueued). MaxQueuedPerSource caps one source address's part of it, so the
+	// sockets of one source that stop reading cannot fill it for everyone (0 means
+	// DefaultMaxQueuedPerSource, never more than MaxQueued).
+	MaxQueued          int
+	MaxQueuedPerSource int
 
 	queued atomic.Int64
 
@@ -101,15 +106,17 @@ type Server struct {
 	socks  map[*sock]struct{}
 	total  int
 	perIP  map[string]int
+	shares map[string]*source
 	unauth map[string][]*sock // unauthenticated uplinks per node, oldest first
 }
 
 // Default caps.
 const (
-	DefaultMaxSockets       = 4096
-	DefaultMaxPerIP         = 64
-	DefaultMaxUnauthPerNode = 4
-	DefaultMaxQueued        = 192 << 20
+	DefaultMaxSockets         = 4096
+	DefaultMaxPerIP           = 64
+	DefaultMaxUnauthPerNode   = 4
+	DefaultMaxQueued          = 192 << 20
+	DefaultMaxQueuedPerSource = 16 << 20
 )
 
 func orDefault(v, d int) int {
@@ -134,7 +141,7 @@ func New(l Limits) *Server {
 		}
 	}
 	return &Server{Limits: l, rooms: map[string]*room{}, sids: map[string]uint32{}, socks: map[*sock]struct{}{},
-		perIP: map[string]int{}, unauth: map[string][]*sock{}}
+		perIP: map[string]int{}, shares: map[string]*source{}, unauth: map[string][]*sock{}}
 }
 
 // sourceKey is what the per-source cap counts: the IPv4 address, or the IPv6 /64, since one
@@ -159,15 +166,25 @@ func sourceKey(remoteAddr string) string {
 
 var route = regexp.MustCompile(`^/v1/(node|client)/([^/]*)$`)
 
-// Queued is the bytes every socket's outbound queue holds now, per-item overhead included.
+// Queued is the memory every socket's queued and partly read messages hold now.
 func (s *Server) Queued() int64 { return s.queued.Load() }
 
 func (s *Server) maxQueued() int64 { return int64(orDefault(s.MaxQueued, DefaultMaxQueued)) }
 
-// fits reports whether n more bytes of session data may be queued without passing MaxQueued.
-// Control messages (pongs, acks, OPEN and CLOSE) are small and bounded per socket, so they are
-// counted but never refused.
-func (s *Server) fits(n int) bool { return s.queued.Load()+int64(n+itemOverhead) <= s.maxQueued() }
+func (s *Server) maxPerSource() int64 {
+	return min(int64(orDefault(s.MaxQueuedPerSource, DefaultMaxQueuedPerSource)), s.maxQueued())
+}
+
+// shareLocked is ip's part of the budget, held once more.
+func (s *Server) shareLocked(ip string) *source {
+	src := s.shares[ip]
+	if src == nil {
+		src = &source{}
+		s.shares[ip] = src
+	}
+	src.refs++
+	return src
+}
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// With a public origin, the request's Host must name it: uplinks sign that origin, and a relay
@@ -228,7 +245,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		origin, _ = wire.RelayOrigin(scheme + "://" + r.Host)
 	}
-	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout, &s.queued)
+	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout, k.budget)
 	s.mu.Lock()
 	s.socks[k] = struct{}{}
 	rm := s.rooms[nodeID]
@@ -285,6 +302,7 @@ func (s *Server) reserve(k *sock, uplink bool) (bool, *sock) {
 	}
 	s.total++
 	s.perIP[k.ip]++
+	k.budget = &budget{srv: s, src: s.shareLocked(k.ip)}
 	if !uplink {
 		return true, nil
 	}
@@ -326,6 +344,10 @@ func (s *Server) unreserveLocked(k *sock) {
 	s.total--
 	if s.perIP[k.ip]--; s.perIP[k.ip] <= 0 {
 		delete(s.perIP, k.ip)
+	}
+	src := k.budget.src
+	if src.refs--; src.refs == 0 {
+		delete(s.shares, k.ip)
 	}
 	s.authedLocked(k)
 }
@@ -437,6 +459,7 @@ type sock struct {
 	evicted       bool
 	role          int
 	out           *outq
+	budget        *budget
 
 	sent, acked uint64
 	closed      bool
@@ -550,45 +573,60 @@ func (k *sock) readLoop() {
 		if preAuth {
 			limit = answerLen
 		}
-		data, err := io.ReadAll(io.LimitReader(rd, limit+1))
+		data, err := readMessage(io.LimitReader(rd, limit+1), int(limit), k.budget)
+		if errors.Is(err, errOverBudget) {
+			k.room.mu.Lock()
+			if !k.closed {
+				k.room.fail(k, wire.CodeTimeout)
+			}
+			k.room.mu.Unlock()
+			return
+		}
 		if err != nil {
 			k.room.peerGone(k, closeCode(err))
 			return
 		}
-		if f := k.srv.Hooks.OnMessage; f != nil {
-			role := "client"
-			if k.role == roleNode {
-				role = "node"
-			}
-			f(k.nodeID, role, typ == websocket.MessageText)
-		}
-		rm := k.room
-		rm.mu.Lock()
-		if k.closed {
-			rm.mu.Unlock()
+		stop := k.handle(typ, data, preAuth)
+		k.budget.count(-cap(data))
+		if stop {
 			return
 		}
-		if preAuth && len(data) > answerLen {
-			rm.fail(k, wire.CodeRelayAuth)
-			rm.mu.Unlock()
-			return
-		}
-		if len(data) > MessageMax {
-			rm.fail(k, CodeTooBig)
-			rm.mu.Unlock()
-			return
-		}
-		if typ == websocket.MessageText {
-			rm.onText(k, string(data))
-		} else if k.role == roleClient {
-			rm.onClientData(k, data)
-		} else if !k.authed {
-			rm.authenticate(k, data)
-		} else {
-			rm.onUplinkFrame(k, data)
-		}
-		rm.mu.Unlock()
 	}
+}
+
+// handle passes one message to the room; it reports whether the socket is done.
+func (k *sock) handle(typ websocket.MessageType, data []byte, preAuth bool) bool {
+	if f := k.srv.Hooks.OnMessage; f != nil {
+		role := "client"
+		if k.role == roleNode {
+			role = "node"
+		}
+		f(k.nodeID, role, typ == websocket.MessageText)
+	}
+	rm := k.room
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if k.closed {
+		return true
+	}
+	if preAuth && len(data) > answerLen {
+		rm.fail(k, wire.CodeRelayAuth)
+		return true
+	}
+	if len(data) > MessageMax {
+		rm.fail(k, CodeTooBig)
+		return true
+	}
+	if typ == websocket.MessageText {
+		rm.onText(k, string(data))
+	} else if k.role == roleClient {
+		rm.onClientData(k, data)
+	} else if !k.authed {
+		rm.authenticate(k, data)
+	} else {
+		rm.onUplinkFrame(k, data)
+	}
+	return false
 }
 
 func closeCode(err error) uint16 {
@@ -681,11 +719,12 @@ func (rm *room) toClient(c *sock, payload []byte) {
 		rm.endSession(c, wire.CodeTimeout)
 		return
 	}
-	if !rm.srv.fits(len(payload)) {
+	// A full budget or source share ends the session whose client is not reading: its queue holds
+	// the memory.
+	if !c.out.offer(payload, 0) {
 		rm.endSession(c, wire.CodeTimeout)
 		return
 	}
-	c.out.binary(payload)
 	c.sent += uint64(len(payload))
 }
 
@@ -713,11 +752,10 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	if qMine+cost > LightSession {
 		qLimit = SocketWindow - LightSession*others
 	}
-	if up.sent-up.acked+uint64(len(frame)) > limit || qTotal+cost > qLimit || !rm.srv.fits(len(frame)) {
+	if up.sent-up.acked+uint64(len(frame)) > limit || qTotal+cost > qLimit || !up.out.offer(frame, c.sid) {
 		rm.endSession(c, wire.CodeTimeout)
 		return
 	}
-	up.out.push(outItem{data: frame, sid: c.sid})
 	up.sent += uint64(len(frame))
 	c.upEnd = up.sent
 	c.upUnacked = mine
@@ -805,177 +843,4 @@ func sendable(code uint16) uint16 {
 		return code
 	}
 	return 1000
-}
-
-// outq sends a socket's messages in order from one goroutine, so the room never blocks on a slow
-// peer. The contract windows bound what it holds; past them plus slack the socket is aborted.
-// wsWriter is the part of a WebSocket the out queue uses.
-type wsWriter interface {
-	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
-	Close(code websocket.StatusCode, reason string) error
-	CloseNow() error
-}
-
-type outq struct {
-	ws      wsWriter
-	timeout time.Duration
-	// total is the server-wide count of queued bytes this queue adds to (nil in unit tests).
-	total *atomic.Int64
-	mu    sync.Mutex
-	items []outItem
-	bytes int
-	bySID map[uint32]int
-	pongs int
-	done  bool
-	wake  chan struct{}
-	ended chan struct{}
-}
-
-type outItem struct {
-	data  []byte
-	text  bool
-	pong  bool
-	close uint16
-	sid   uint32 // the client session a DATA frame on the uplink belongs to, else 0
-}
-
-// itemOverhead is what each queued item counts beyond its bytes, so many tiny items cannot hold
-// more memory than the limit says.
-const itemOverhead = 64
-
-func newOutq(ws wsWriter, timeout time.Duration, total *atomic.Int64) *outq {
-	q := &outq{ws: ws, timeout: timeout, total: total, wake: make(chan struct{}, 1), ended: make(chan struct{})}
-	go q.run()
-	return q
-}
-
-// count adds n bytes to the server-wide total.
-func (q *outq) count(n int) {
-	if q.total != nil && n != 0 {
-		q.total.Add(int64(n))
-	}
-}
-
-func (q *outq) push(it outItem) {
-	q.mu.Lock()
-	if q.done {
-		q.mu.Unlock()
-		return
-	}
-	if it.pong && q.pongs >= maxQueuedPongs {
-		q.mu.Unlock()
-		return
-	}
-	if it.close != 0 {
-		q.done = true
-	} else if q.bytes+len(it.data)+itemOverhead > SocketWindow+RelayHeadroom+queueSlack {
-		q.done = true
-		q.count(-q.bytes)
-		q.bytes = 0
-		q.items, q.bySID = nil, nil
-		q.mu.Unlock()
-		q.ws.CloseNow()
-		return
-	}
-	q.items = append(q.items, it)
-	q.bytes += len(it.data) + itemOverhead
-	q.count(len(it.data) + itemOverhead)
-	if it.sid != 0 {
-		if q.bySID == nil {
-			q.bySID = map[uint32]int{}
-		}
-		q.bySID[it.sid] += len(it.data) + itemOverhead
-	}
-	if it.pong {
-		q.pongs++
-	}
-	q.mu.Unlock()
-	select {
-	case q.wake <- struct{}{}:
-	default:
-	}
-}
-
-func (q *outq) binary(b []byte) { q.push(outItem{data: b}) }
-func (q *outq) text(s string)   { q.push(outItem{data: []byte(s), text: true, pong: s == "pong"}) }
-
-// queued reports what the queue holds for one session and in total, overhead included.
-func (q *outq) queued(sid uint32) (mine, total int) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.bySID[sid], q.bytes
-}
-
-// close queues the close frame; a writer still busy after the write timeout is aborted.
-func (q *outq) close(code uint16) {
-	q.push(outItem{close: code})
-	time.AfterFunc(q.timeout, func() {
-		select {
-		case <-q.ended:
-		default:
-			q.ws.CloseNow()
-		}
-	})
-}
-func (q *outq) wait() { <-q.ended }
-
-func (q *outq) run() {
-	defer close(q.ended)
-	ctx := context.Background()
-	for {
-		q.mu.Lock()
-		if len(q.items) == 0 {
-			if q.done {
-				q.mu.Unlock()
-				return
-			}
-			q.mu.Unlock()
-			<-q.wake
-			continue
-		}
-		it := q.items[0]
-		q.items = q.items[1:]
-		q.bytes -= len(it.data) + itemOverhead
-		q.count(-(len(it.data) + itemOverhead))
-		if it.sid != 0 {
-			if q.bySID[it.sid] -= len(it.data) + itemOverhead; q.bySID[it.sid] == 0 {
-				delete(q.bySID, it.sid)
-			}
-		}
-		if it.pong {
-			q.pongs--
-		}
-		q.mu.Unlock()
-		if it.close != 0 {
-			cctx, cancel := context.WithTimeout(ctx, q.timeout)
-			done := make(chan struct{})
-			go func() {
-				q.ws.Close(websocket.StatusCode(it.close), "")
-				close(done)
-			}()
-			select {
-			case <-done:
-			case <-cctx.Done():
-				q.ws.CloseNow()
-			}
-			cancel()
-			return
-		}
-		typ := websocket.MessageBinary
-		if it.text {
-			typ = websocket.MessageText
-		}
-		wctx, cancel := context.WithTimeout(ctx, q.timeout)
-		err := q.ws.Write(wctx, typ, it.data)
-		cancel()
-		if err != nil {
-			q.ws.CloseNow()
-			q.mu.Lock()
-			q.count(-q.bytes)
-			q.bytes = 0
-			q.done, q.items, q.bySID = true, nil, nil
-			q.mu.Unlock()
-			return
-		}
-	}
 }
