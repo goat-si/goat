@@ -65,7 +65,7 @@ const FINISH = "When you finish, end with a short summary of the result.";
 /** A turn's final message is delivered to the person as written, so it carries the whole answer. */
 const TURN_REPORT_RESULT = `Before you end, call ${goatCallText("thread.report_result")} with your outcome (succeeded, failed, blocked or cancelled); GOAT settles the task from that report. On success the person reads your final message, not the report's summary; when you fail or are blocked, the summary is the reason or your question.`;
 const TURN_FINISH =
-  "End with your full answer as your final message: outcome first, then the detail the content needs, conversational and without padding. Say what you verified and what you did not in plain sentences; never start a line with NOT RUN:, Reported tests: or GOAT check:, because GOAT drops those lines before the person reads your answer.";
+  "End with your full answer as your final message: outcome first, then the detail the content needs, conversational and without padding. When the person already read your first line, pick up after it instead of repeating it, and ask a question only once. Say what you verified and what you did not in plain sentences; never start a line with NOT RUN:, Reported tests: or GOAT check:, because GOAT drops those lines before the person reads your answer.";
 
 /** The opening every worker gets: the instruction, then which task it belongs to. */
 const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instruction">) => [
