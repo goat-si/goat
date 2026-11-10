@@ -553,9 +553,18 @@ const make = Effect.gen(function* () {
       ["", "none", undefined].includes(settings.get("hostkeyalias"));
     if (!keyedByAlias || penKnownHostsFile(settings) !== knownHosts) return undefined;
     // ssh also accepts a key a global known_hosts file holds for the alias, so there must be none.
-    for (const file of (settings.get("globalknownhostsfile") ?? "").split(" ")) {
-      if (!file.startsWith("/") || !(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => true))))
-        continue;
+    const globalSetting = settings.get("globalknownhostsfile") ?? "";
+    const globals = globalSetting.split(" ").filter((file) => file !== "");
+    // ssh -G prints a relative path as written and a path with spaces unquoted: neither names one
+    // file this check could read, so such a setting is not trusted.
+    if (globals.some((file) => !file.startsWith("/"))) return undefined;
+    if (
+      globals.length > 1 &&
+      (yield* fs.exists(globalSetting).pipe(Effect.orElseSucceed(() => true)))
+    )
+      return undefined;
+    for (const file of globals) {
+      if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => true)))) continue;
       const found = yield* run("ssh-keygen", ["-F", alias, "-f", file], 10_000).pipe(
         Effect.mapError(() => unreadable(alias)),
       );
