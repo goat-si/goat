@@ -4,6 +4,8 @@ import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
+import "~/index.css";
+
 const state = vi.hoisted(() => ({
   projection: null as unknown,
   commandSucceeds: false,
@@ -302,4 +304,51 @@ it("groups completed remote agents and opens a verified secondary host alias", a
   await vi.waitFor(() =>
     expect(screen.router?.state.location.pathname).toBe("/remote-env/remote-thread"),
   );
+});
+
+it("keeps a remote lineage title at full width under a long environment name", async () => {
+  setup();
+  const projection = makeThreadProjectionFixture();
+  const title = "Inspect the queue drain path and report every stall";
+  state.projection = {
+    ...projection,
+    subagents: [
+      {
+        id: NodeId.make("remote-agent"),
+        threadId: projection.thread.id,
+        runId: null,
+        parentNodeId: NodeId.make("parent"),
+        origin: "app_owned",
+        createdBy: "agent",
+        driver: "codex",
+        providerInstanceId: projection.thread.providerInstanceId,
+        providerThreadId: null,
+        childThreadId: null,
+        nativeTaskRef: null,
+        remote: {
+          host: "builder-ssh-with-a-very-long-machine-name",
+          threadId: ThreadId.make("remote-thread"),
+          correlationId: "task",
+        },
+        prompt: "Inspect",
+        title,
+        model: null,
+        status: "completed",
+        result: null,
+        startedAt: null,
+        completedAt: projection.thread.updatedAt,
+        updatedAt: projection.thread.updatedAt,
+      },
+    ],
+  };
+  await using screen = await render(
+    <div style={{ width: 320 }}>
+      <ThreadRelationshipsPanel environmentId={environmentId} threadId={projection.thread.id} />
+    </div>,
+  );
+  await screen.getByRole("button", { name: /Previous agents/ }).click();
+  // The title has its own element, so the environment name cannot truncate it away.
+  expect(
+    page.getByText(title, { exact: true }).element().getBoundingClientRect().width,
+  ).toBeGreaterThan(0);
 });

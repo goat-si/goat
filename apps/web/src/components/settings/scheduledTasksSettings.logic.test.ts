@@ -170,6 +170,16 @@ describe("editing scheduled task branch settings", () => {
   });
 });
 
+describe("fixed-time scheduled tasks", () => {
+  it("pads a stored single-digit hour so the time input shows it", () => {
+    const draft = taskToDraft({
+      ...legacyTask,
+      schedule: { type: "fixed_time", timeOfDay: "9:05" },
+    });
+    expect(draft.timeOfDay).toBe("09:05");
+  });
+});
+
 describe("webhook scheduled tasks", () => {
   const signature = { header: "x-signature", encoding: "base64", prefix: "" } as const;
   const webhookTask: ScheduledTask = {
