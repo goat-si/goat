@@ -417,6 +417,7 @@ func (l *loginRun) install(s *mesh.Store) error {
 	} else if !errors.Is(err, daemon.ErrNotRunning) {
 		return err
 	}
+	s.Adopt()
 	if err := s.SaveFile(l.st, "mesh.json"); err != nil {
 		return err
 	}

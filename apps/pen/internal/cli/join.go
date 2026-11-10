@@ -96,6 +96,7 @@ func joinOffline(ctx context.Context, st *state.Store, id *ident.Identity, tok m
 	if err != nil {
 		return err
 	}
+	s.Adopt()
 	if err := s.Save(); err != nil {
 		return err
 	}
