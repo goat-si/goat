@@ -39,7 +39,9 @@ import {
 import {
   CODEX_TEST_MODEL_SELECTION,
   CODEX_TEST_RUNTIME_POLICY,
+  lastPublishedGoal,
   makeCodexTestTurnInput,
+  makeCodexThreadGoal,
   makeReplayServerConfig,
 } from "./CodexAdapterV2.testkit.ts";
 
@@ -102,6 +104,8 @@ const runScenario = (
       nativeThreadId: "native-thread",
       nativeTurnId: "native-turn",
     };
+    const goalFor = (status: "active" | "paused") =>
+      makeCodexThreadGoal({ threadId: binding.nativeThreadId, status });
     const transcript = makeCodexReplayTranscript({
       scenario,
       entries: codexReplayPreamble({
@@ -363,7 +367,9 @@ const runScenario = (
                     assert.equal((params as { status: string }).status, "paused");
                     order.push("pause");
                     goalStatus = "paused";
-                    return { goal: { status: "paused" } };
+                    for (const handler of notifications.get("thread/goal/updated") ?? [])
+                      yield* handler({ threadId: binding.nativeThreadId, goal: goalFor("paused") });
+                    return { goal: goalFor("paused") };
                   }
                   if (method === "thread/goal/get") {
                     goalReads++;
@@ -637,7 +643,7 @@ const runScenario = (
       for (const handler of notifications.get("thread/goal/updated") ?? []) {
         yield* handler({
           threadId: binding.nativeThreadId,
-          goal: { status: "active" },
+          goal: goalFor("active"),
           ...(mode === "goal-newer" ? { turnId: "other-turn" } : {}),
         });
       }
@@ -785,6 +791,9 @@ const runScenario = (
       assert.equal(terminal?.status, "completed");
       assert.deepEqual(order, ["goal", "pause"]);
       assert.notInclude(requests, "turn/interrupt");
+      const threadGoal = lastPublishedGoal(events);
+      assert.equal(threadGoal?.status, "paused");
+      assert.equal(threadGoal?.objective, "test");
       yield* Deferred.await(goalCleared);
       yield* service.ensureAdmission(threadId);
       return;
@@ -805,15 +814,7 @@ const runScenario = (
           "Codex started a goal on this thread while GOAT was waiting; the turn that ran across the restart was stopped.",
         );
       if (mode === "goal-release" || mode === "goal-cleared" || mode === "goal-burst") {
-        const goal = {
-          threadId: binding.nativeThreadId,
-          objective: "test",
-          status: "active",
-          tokensUsed: 0,
-          timeUsedSeconds: 0,
-          createdAt: 1,
-          updatedAt: 1,
-        };
+        const goal = goalFor("active");
         assert.isTrue(goalBlocked);
         if (mode === "goal-cleared") {
           goalStatus = "none";
