@@ -14,12 +14,13 @@ deployed, it always talks to Google. `DEVICE_TTL_MS`, `SOURCE_SESSION_CAP`, `SOU
 
 ## Deploy
 
-`pnpm run deploy:secrets <google-oauth-client.json>` deploys with three secrets in the same version:
-`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from Google's client file (its redirect URI must be
-`https://pen-login.pos090001.workers.dev/v1/auth/google/callback`), and `LOGIN_SIGNING_KEY`, a base64url Ed25519 seed
-generated only when the Worker has none, because a new login key orphans every mesh bound to the old one. It prints
-secret names only. Later code-only deploys can use `pnpm run deploy`. `GET /v1/keys` shows the login key's `kid`
-and public key.
+`pnpm run deploy:secrets <google-oauth-client.json> [--signing-key-file <path>]` deploys with the secrets in the
+same version: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from Google's client file (its redirect URI must be
+`https://pen-login.pos090001.workers.dev/v1/auth/google/callback`), and, only when the Worker has none,
+`LOGIN_SIGNING_KEY`, a base64url Ed25519 seed read from `--signing-key-file` or created there (0600, in a 0700
+directory outside the repository). The Worker secret cannot be read back and a new login key orphans every mesh bound
+to the old one, so that file is the key's only other copy. It prints secret names and the key's `kid` only. Later
+code-only deploys can use `pnpm run deploy`. `GET /v1/keys` shows the login key's `kid` and public key.
 
 ## What the service sees
 
