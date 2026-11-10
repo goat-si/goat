@@ -126,12 +126,11 @@ carry the inviting machine's list. `pen relay ls` shows the list; `pen relay add
 
 A relay run with `pen relay serve` keeps at most 16 MiB of undelivered data for each internet
 address, so machines behind one home or office connection share it: about four sessions whose
-receiving side has stopped reading for a while fill it. When that share, or the whole relay, is full,
-the relay ends sessions that have taken no data for a couple of seconds, longest first; a session
-that keeps reading is not ended for someone else, though data that finds no room is dropped and ends
-its own session. An ended session shows as a dropped connection or code 4408; open it again, and Pen
-picks a relay again. A machine whose relay connection was ended reconnects by itself and stays
-reachable through its other relays.
+receiving side has stopped reading fill it, and until those read again or are cut off (after 10
+seconds without progress), new data for that connection's other sessions is refused. A relay that
+cannot hold a message ends only the session that sent it, with code 4408; it never drops other
+sessions or a machine's own relay connection to make room. Open the session again, and Pen picks a
+relay again; the machine stays reachable through its other relays.
 
 You can run your own relay with `pen relay serve` on a machine with a public address; see
 `pen help`.

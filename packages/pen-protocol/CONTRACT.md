@@ -261,24 +261,24 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   128 bytes, all of them at most 192 MiB (`--max-queued-mib`) and one source address's at most 16 MiB
   (`--max-queued-per-source-mib`; a source is an IPv4 address or an IPv6 /64). Each socket reads a message of up to
   96 KiB (a ping, an ack or a whole Noise message) without a charge; a larger message being read draws on a separate
-  32 MiB pool, a source at most 4 MiB of it, and a socket whose message would pass that closes 4408. Queued memory is
-  charged to the source of the socket that will receive it. Data a client sends toward its uplink never ends another
-  queue: when it does not fit the uplink's source share or the total, only that client's session ends 4408 (CLOSE 4408 to
-  the node), and before the node has answered a session its client may send only its first message (4096 bytes); a
-  pending session that sends more ends 4408. Data a node sends its client may end stalled
-  queues to fit: a queue holding data that has finished no write for 2 s is stalled. When the client's source share is
-  full, the relay ends stalled queues of that source; when the total is full, stalled queues of that source and of
-  sources holding more than it, so a source never ends a smaller one's queues. It ends a client's queue before an
-  uplink's, then the longest stalled, one at a time until the data fits, rechecking each under its own lock, and never
-  one that is draining; when nothing stalled is left, or the client's own queue would go first, the data is refused and
-  that session ends 4408. An ended queue gives back what it had queued at once and its socket is closed in the
-  background (its peer sees 1006): a client's session ends and the node gets CLOSE 1000; an uplink's sessions all end
-  4404 and the node reconnects (from 0.5 s, doubling) while its other relays carry it. A message an ended socket was
-  in the middle of writing is given back only when that write fails, so data that needed that memory is refused
-  meanwhile. Ending a queue never makes a room wait. The relay reopens nothing; a new connection races every relay
-  again. One source holds at most its share (16 of 128 MiB on the reference unit), so it cannot fill the total alone,
-  and data it sends toward another source's uplink ends only its own sessions; many sources together can fill the
-  relay, and then sessions stalled for 2 s anywhere can end, draining ones only by refusal of their own data. Each connection
+  32 MiB pool, a source at most 4 MiB of it, and a socket whose message would pass that closes 4408. Queued session data
+  is charged before it is copied, to the socket's window (4 MiB), the share of the address of the socket that will
+  receive it (16 MiB) and the total (128 MiB on the reference unit). Data that does not fit any of the three ends the
+  session that offered it 4408 (the client is closed 4408 and the node gets CLOSE 4408); nothing else ends because of
+  memory: no other session, no other queue, never an uplink. A socket that stops reading is ended only when one write
+  stalls for 10 s (WriteTimeout). Control messages (the challenge, pongs, OPEN and CLOSE frames, close frames) are not
+  charged; per socket they stay within the relay-frame headroom (64 KiB past the window), 8 queued pongs and the queue
+  cap, so a full relay still answers an uplink and closes sessions cleanly. Before the node has sent DATA for a session,
+  its client may send one message of at most 4096 bytes (its first); a second message of any size, or a larger first
+  one, ends the session 4408. So one source cannot end another source's sessions or uplinks, and data between other
+  sources is not refused while the sources other than it together hold less than the total minus one share. Limits:
+  the sessions on one uplink share its 4 MiB window, so a peer the node has answered can fill it while the node reads
+  slowly, and other sessions' data toward that node is refused (4408) until the node reads; the node bounds such a peer
+  itself (a `tcp` stream past its 512 KiB credit window is closed 4408, an account session that sends no assertion is
+  closed after its wait). An address whose 16 MiB share is held by its sockets that do not read gets data for its other
+  sockets refused until those sockets read or their writes time out. Under a flood from many addresses the relay is
+  full for everyone and offered data is refused until stalled sockets time out. In each case the refused session ends
+  4408, nothing reopens by itself, and the node's other relay is unaffected. Each connection
   gets fixed 64 KiB kernel send and receive buffers and at most 8 KiB of request headers. It
   reads at most the 96-byte answer from an uplink before it authenticates, drops a socket whose write or closing
   handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, so a client
@@ -472,10 +472,10 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
   messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so one source alone cannot
   fill it. Relay implementation only; no wire change.
 - v1.1 (2026-11-11): `pen relay serve` reads a message of up to 96 KiB per socket without a charge and larger ones
-  from a separate 32 MiB pool, and a full source share or total ends stalled queues first (clients before uplinks)
-  for data toward clients, while data toward an uplink only ever ends its own session; a pending session sends at
-  most its first message. The "Relay text" section states that nothing confirms an uplink's authentication and
-  that a pong proves nothing about it. No wire change.
+  from a separate 32 MiB pool; data that does not fit the window, the receiving address's share or the total ends only
+  the session that offered it, and a session the node has not answered may send one message of at most 4096 bytes.
+  Control messages are not charged. The "Relay text" section states that nothing confirms an uplink's authentication
+  and that a pong proves nothing about it. No wire change.
 - v1.1 (2026-11-11): kind 0x04 `check`: a Google joiner that a listed node refused asks it to check the joiner's
   records against its own, so a node that left or has not heard of the joiner no longer fails the join while the
   joiner's admits reach a member it counts; a copy whose admits pass a key it revoked, plainly or as compromised,

@@ -161,20 +161,19 @@ user with a read-only system and no access to home directories (`systemd-analyze
 The unit passes 1024 connections, 64 per source address, and 128 MiB of queued data with 16 MiB per source; the unit's
 comment adds up what each part may hold at worst against `MemoryMax` and records the measured peaks. `GOMEMLIMIT`
 only makes the collector work harder near it; it is not a cap, so the margin under `MemoryMax` is headroom, not a
-proof. Change the caps, `GOMEMLIMIT` and `MemoryMax` together. A relay at its caps refuses new connections. Queued data counts against the address that will
-receive it. Data a client sends toward an uplink never ends anything else: if it does not fit, only that client's
-session ends 4408, and before the node has answered, a session can send only its 4 KiB first message. Data a node
-sends its client can end stalled queues (no finished write for 2 s), first of the client's own address when its
-16 MiB share is full, else of that address and of addresses holding more: client queues before uplinks, the longest
-stalled first, one at a time until the data fits, never a draining one. When none is left, the data is refused and
-its session ends 4408. In the nodes' logs an ended client session shows as a dropped connection (CLOSE 1000 to the
-node), an ended uplink as a reconnect (its sessions end 4404; its other relays carry it meanwhile). Ending a queue
-frees what it had queued at once and closes its socket in the background, so no room waits on it; a message that
-socket was writing comes back only when the write fails. Nothing reopens on its own; the next connection races every
-relay again. One address cannot fill the relay alone and cannot end another address's queues by sending toward its
-uplink; many addresses together can fill it, and then stalled sessions go first. Machines behind one NAT address
-share its 16 MiB: about four sessions whose clients stopped reading fill it, and the next data for that address ends
-the most stalled of them, so a session from that address whose client keeps reading keeps going. When every connection slot is taken, a Let's Encrypt validation connection
+proof. Change the caps, `GOMEMLIMIT` and `MemoryMax` together. A relay at its caps refuses new connections. Queued data is charged to the session's 4 MiB window, the
+16 MiB share of the address that will receive it, and the 128 MiB total; data that does not fit any of them ends the
+session that sent it with 4408, and nothing else ends because of memory: no other session and never an uplink. A
+socket that stops reading is closed only when one write stalls for 10 s. Pongs, OPEN and CLOSE frames and close
+frames are not charged, so a full relay still answers uplinks. Before a node answers a session, its client may send
+one message of at most 4 KiB; anything more ends that session. One address therefore cannot end another address's
+sessions, and data between other addresses fits while they hold less than the total minus one share (112 MiB). What
+can still happen, each time as 4408 on the refused session, with nothing reopened by itself and the node's other
+relay unaffected: a peer the node has answered can fill that node's 4 MiB uplink window while the node reads slowly,
+and other sessions' data toward the node is refused until it reads; machines behind one NAT address share its 16 MiB,
+so about four sessions whose clients stopped reading (each may queue its 4 MiB window) leave the address's other
+sessions refused until those clients read or their writes time out after 10 s; a flood from many addresses fills
+the relay for everyone until the stalled sockets time out. When every connection slot is taken, a Let's Encrypt validation connection
 is refused like any other; `autocert` renews 30 days before expiry and retries every 30 to 60 minutes, and
 `pen relay check` fails 14 days before expiry, so a renewal fails only if the relay stays full for weeks.
 `/etc/pen-relay.env` sets `PEN_RELAY_LISTEN=10.0.0.222:443`
