@@ -6,7 +6,7 @@ import type { CommandPaletteUiAction, SearchOverlayMode } from "./CommandPalette
  * WebKit reports the Escape that ends an IME composition with keyCode 229 and
  * isComposing already false, so the key that ends composing must not navigate.
  */
-export function isComposingEvent(event: {
+function isComposingEvent(event: {
   readonly isComposing: boolean;
   readonly keyCode: number;
 }): boolean {
@@ -48,6 +48,6 @@ export function childSearchEscape(
 }
 
 /** The same Escape goes back to the command view unless it only ended a composition. */
-export function returnsToCommand(details: { readonly event: Event }): boolean {
+function returnsToCommand(details: { readonly event: Event }): boolean {
   return !(details.event instanceof KeyboardEvent && isComposingEvent(details.event));
 }
