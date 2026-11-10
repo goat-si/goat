@@ -8,8 +8,6 @@ import type { ScopedThreadRef, ThreadId } from "@goat/contracts";
 import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { ExternalLinkIcon, RotateCcwIcon } from "~/components/solar";
-import { useComposerDraftStore } from "~/composerDraftStore";
-import { releaseComposerDraftUploads } from "~/lib/composerDraftUploads";
 import { newMessageId, newThreadId } from "~/lib/utils";
 import { useThreadShells } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
@@ -156,11 +154,6 @@ export function SideChatSurface({
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       setError(failureMessage(result, "Could not clear the side chat."));
       return;
-    }
-    if (result._tag === "Success") {
-      const sideRef = scopeThreadRef(environmentId, sideThreadId);
-      releaseComposerDraftUploads(sideRef);
-      useComposerDraftStore.getState().clearDraftThread(sideRef);
     }
     setStartedThreadId(null);
     setError(null);
