@@ -284,15 +284,18 @@ login key over `"pen-login/1 assertion" || SHA-256(body)`.
 
 Registry (Durable Object, SQLite): account `sub` -> one meshId and the nodes registered under it; nothing else long-lived.
 
-- `POST L/v1/mesh/register` `{"assertion","meshId"}` adds the asserting node (nodeId, keys, name) under the assertion's sub.
-  The assertion must verify under a current login key and be unexpired, and each assertion (by body hash) registers at
-  most once, so a kept or phished assertion cannot re-register after a reset. The first meshId registered for a sub is
+- `POST L/v1/mesh/register` `{"assertion","meshId","proof"}` adds the asserting node (nodeId, keys, name) under the
+  assertion's sub; proof is Ed25519 by the assertion's signPub over `"pen-login/1 register" || SHA-256(assertion body) || meshId`,
+  so only the node that owns the key can use its assertion. The assertion must verify under a current login key, be
+  unexpired, and be issued after the account's last reset, and each assertion (by body hash) registers at most once, so a kept or phished assertion cannot re-register after a reset. The first meshId registered for a sub is
   kept and another is refused 409.
 - `POST L/v1/mesh/forget` `{"nodeId","by","ts","proof"}` removes a node; `by` is the signPub of that node or of another node
   registered under the same sub, proof by `by` over `"pen-login/1 forget" || nodeId || ts (u64 BE, ms)`, ts within 2
   minutes. Members send it when they leave and for every key their view revokes.
 - Reset: from the verification page, after a Google sign-in, "reset" removes the account's meshId and nodes (a separate
-  confirm step with a CSRF token). The next machine to log in founds or binds again.
+  confirm step with a CSRF token), records the reset time, marks the account's approved but unpolled device codes denied,
+  and refuses assertions issued before it. The next machine to log in founds or binds again. At most 64 nodes are listed
+  per account.
 
 Sources are keyed by IPv4 address or IPv6 /64 of `cf-connecting-ip`. Limits per source: device/start 10 per minute,
 verification pages and confirms 20 per minute, token polls at `interval`, register/forget 30 per minute; refusals are
@@ -300,9 +303,10 @@ HTTP 429. One Durable Object holds all state; it is a single point of failure fo
 
 ### Mesh records
 
-v1.1 nodes store a record of an unknown `type`, or with members they do not know, when it is otherwise valid, forward it,
-and give it no effect. Every member must run v1.1 before a mesh is bound to an account (`pen login` checks the versions
-members announce in sync `hello` as `"pen":"1.1"` and refuses otherwise).
+v1.1 nodes store a record of an unknown `type`, or with top-level members they do not know, when it is otherwise valid,
+forward it, and give it no effect. Unknown members inside a nested object (a card, `loginKey`) are ignored. Every member
+must run v1.1 before any member signs an `account` or `lock` record (the signer checks the versions members announce
+in sync `hello` as `"pen":"1.1"` and refuses otherwise); v1.0 nodes reject those types and would stall.
 
 - `account`: `{"loginUrl","loginKey":{"kid","pub"},"sub"}` or `{"sub":null}` (unbind). The binding is the last `account`
   record in canonical order whose signer was not revoked as compromised (directly or as an admit of a compromised key);
@@ -324,7 +328,8 @@ once, a fifth evicts the oldest one that has not sent its assertion (4429), and 
 (`refused` then 4401) unless: the mesh is bound; the assertion's `kid` names the binding's login key and the signature
 verifies; `iss` equals `loginUrl`; `sub` equals the binding's `sub`; `iat` <= now + 60 s and now < `exp` + 60 s (a
 refusal for time says "clock skew" so a person can fix it); the assertion's signPub and noisePub equal the card's and the
-card's noisePub equals the session key; the key is not revoked. Then:
+card's noisePub equals the session key; the key is not revoked. The member takes the binding and lock state from one view
+when the card arrives and checks the assertion against that view again. Then:
 
 - unlocked: the member signs `admit` with `via` and the assertion hash, sends the records and `done` as in Join, and every
   member shows "<name> joined via Google <email>, fingerprint ..." for 7 days in `pen ls`.
@@ -339,8 +344,10 @@ card's noisePub equals the session key; the key is not revoked. Then:
 
 The joining side: `pen login` shows the returned email and, when the registry offers a mesh, its member names and
 fingerprints, and asks before founding or joining (`--yes` skips the question for scripts; `install.sh --login` does not
-pass it). After joining it syncs with at least two members, or warns that only one was reachable, before it serves
-`tcp` streams.
+pass it). After joining it syncs with at least two members, or warns that only one was reachable, checks that it is still
+a member after those syncs, and only then serves `tcp` streams and registers. When its assertion has expired by then
+(a slow approval), it stays a member and says registration waits for the next `pen login`. `pen login` on a member whose
+mesh is unbound, or bound to an older login key, offers to bind it again (same question).
 
 ## Close codes
 
