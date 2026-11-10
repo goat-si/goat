@@ -214,6 +214,19 @@ describe("pen-login contract (Accounts v1.1)", () => {
     expect(again.status).not.toBe(200);
   });
 
+  it("after approval the page confirms the sign-in only and says a locked mesh still needs pen approve", async () => {
+    // The service cannot see a mesh's lock state, so the page must not claim the machine joined.
+    const flow = await signIn(service, issuer);
+    const done = await flow.browser.post("/device/confirm", {
+      csrf: flow.callback.csrf ?? "",
+      action: "approve",
+    });
+    expect(done.status).toBe(200);
+    expect(done.body).toContain("Sign-in confirmed");
+    expect(done.body).toContain("pen approve");
+    expect(done.body).not.toContain("Machine added");
+  });
+
   it("the confirm page repeats the code, machine name, fingerprint, place and time with the full-access warning", async () => {
     const flow = await signIn(service, issuer, {}, "studio");
     const page = flow.callback.body;
