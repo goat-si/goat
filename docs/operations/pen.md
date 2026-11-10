@@ -171,7 +171,8 @@ its OPEN and CLOSE frames toward the node fit like data (and within 256 KiB of s
 is refused 4429, so clients that open and close faster than a slow node reads get refused instead of ending the
 node's uplink. Pongs, the challenge and close frames are not charged (about 1.4 KiB per socket at most), so a full
 relay still answers uplinks. Before a node answers a session, its client may send one message of at most 4 KiB;
-anything more ends that session, and one address holds at most 2 pending sessions per node. One address therefore cannot end another address's
+anything more ends that session. Past 8 pending sessions per node, the address holding the most loses its oldest
+(4429), so one address cannot push out another's. One address therefore cannot end another address's
 sessions, and data between other addresses fits while they hold less than the total minus one share (112 MiB). What
 can still happen, each time as 4408 on the refused session, with nothing reopened by itself and the node's other
 relay unaffected: a peer the node has answered can fill that node's 4 MiB uplink window while the node reads slowly,

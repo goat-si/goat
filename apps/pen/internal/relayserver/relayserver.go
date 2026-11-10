@@ -576,12 +576,10 @@ const (
 	sessionFrameWire = wire.HeaderLen + closeFrameWire
 )
 
-// PendingPerSource is how many pending sessions one source address may hold per node (Go relay).
-const PendingPerSource = 2
-
-// makePendingRoom makes room for a pending session from ip: past PendingPerSource the source's own
-// oldest pending session ends 4429, and past PendingMax the oldest pending session of the source
-// holding the most ends 4429, so one source cannot displace another's pending sessions.
+// makePendingRoom makes room for a pending session from ip: past PendingMax per node, the oldest
+// pending session of the address holding the most ends 4429 (ip's own on a tie), so one address
+// opening many sessions cannot displace another's, while one machine may still open several at
+// once (an SSH client or several forwarded connections).
 func (rm *room) makePendingRoom(ip string) {
 	for {
 		bySource := map[string][]*sock{}
@@ -592,16 +590,13 @@ func (rm *room) makePendingRoom(ip string) {
 				total++
 			}
 		}
+		if total < PendingMax {
+			return
+		}
 		victims := bySource[ip]
-		if len(victims) < PendingPerSource {
-			if total < PendingMax {
-				return
-			}
-			victims = nil
-			for _, list := range bySource {
-				if len(list) > len(victims) {
-					victims = list
-				}
+		for _, list := range bySource {
+			if len(list) > len(victims) {
+				victims = list
 			}
 		}
 		oldest := victims[0]

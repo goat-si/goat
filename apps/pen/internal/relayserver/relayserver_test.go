@@ -347,14 +347,11 @@ func TestNewerUplinkReplacesWith4409ClosesSessions4404AndNeverReusesASid(t *test
 	}
 }
 
-// The Go relay holds at most PendingPerSource pending sessions per node from one address: the next
-// from that address closes its own oldest pending one 4429 (all test clients share 127.0.0.1;
-// the node-wide cap across addresses is in limits_internal_test.go).
-func TestAThirdPendingSessionFromOneAddressClosesItsOldestPending4429(t *testing.T) {
+func TestNinthPendingSessionClosesTheOldestPending4429(t *testing.T) {
 	rs := defaults(t)
 	n := ready(t, rs, nodeOpts{})
 	var pending []session
-	for range relayserver.PendingPerSource {
+	for range relayserver.PendingMax {
 		pending = append(pending, open(t, rs, n, true))
 	}
 	client(t, rs, n.nodeID, true)

@@ -234,18 +234,33 @@ func unadmitted(t *testing.T, s *Server, rm *room, ip string) *sock {
 	return k
 }
 
-// M1: one source opening pending sessions to a node ends only its own, past two; past eight in
-// all, the source holding the most loses its oldest. An honest pending session stays.
+// M1: one source opening many pending sessions to a node ends only its own once the node has
+// eight: an honest pending session from another address stays, and one machine may open several
+// at once while nobody else is pending.
 func TestOneSourcesPendingSessionsDoNotDisplaceAnothersPendingSession(t *testing.T) {
 	s := New(DefaultLimits())
 	rm := &room{srv: s, clients: map[uint32]*sock{}}
 	testSock(s, rm, roleNode, 0, "192.0.2.1", stalled(t))
+	var burst []*sock
+	for range 3 {
+		c := unadmitted(t, s, rm, "203.0.113.7")
+		rm.acceptClient(c)
+		burst = append(burst, c)
+	}
+	rm.mu.Lock()
+	for i, c := range burst {
+		if c.closed {
+			rm.mu.Unlock()
+			t.Fatalf("session %d of one machine's burst of three ended", i)
+		}
+	}
+	rm.mu.Unlock()
 	honest := unadmitted(t, s, rm, "203.0.113.5")
 	if !rm.acceptClient(honest) {
 		t.Fatal("setup: the honest client was refused")
 	}
-	for i := range 4 {
-		for range 8 {
+	for i := range 2 {
+		for range 12 {
 			rm.acceptClient(unadmitted(t, s, rm, fmt.Sprintf("198.51.100.%d", i+1)))
 		}
 	}
@@ -253,17 +268,6 @@ func TestOneSourcesPendingSessionsDoNotDisplaceAnothersPendingSession(t *testing
 	defer rm.mu.Unlock()
 	if honest.closed {
 		t.Fatal("other sources' pending sessions ended the honest pending session")
-	}
-	per := map[string]int{}
-	for _, c := range rm.clients {
-		if c.pending {
-			per[c.ip]++
-		}
-	}
-	for ip, n := range per {
-		if n > PendingPerSource {
-			t.Fatalf("%s holds %d pending sessions, more than %d", ip, n, PendingPerSource)
-		}
 	}
 }
 
