@@ -440,6 +440,19 @@ it.effect("a device SSH cannot reach is reported unreachable, not as possibly Wi
   }),
 );
 
+it.effect(
+  "a join says why Pen's files could not be read, instead of calling the alias indirect",
+  () =>
+    Effect.gen(function* () {
+      const cap =
+        "Pen's ssh config is larger than the 4 MiB GOAT reads, so GOAT treats no pen-<name> alias as a Pen member.";
+      const hub = yield* setup({ directFailure: cap, pin: PINNED });
+      const result = yield* hub.membership.join(scope, { deviceAlias: "pen-box" });
+      expect(result.state).toBe("failed");
+      expect(result.message).toBe(cap);
+    }),
+);
+
 it.effect("a native Windows Child leaves on the role its own GOAT reports, without /healthz", () =>
   Effect.gen(function* () {
     const hub = yield* setup({

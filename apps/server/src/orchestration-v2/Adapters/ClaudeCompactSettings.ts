@@ -71,3 +71,11 @@ export const readToolSearchSetting = (fileSystem: FileSystem.FileSystem, filePat
     }),
     Effect.orElseSucceed(() => undefined),
   );
+
+/** The CLI reports a compaction it aborted for our interrupt as failed; callers pass that check in. */
+export const claudeCompactionOutcome = (succeeded: boolean, failed: boolean) =>
+  succeeded
+    ? ({ status: "completed", title: "Context compacted" } as const)
+    : failed
+      ? ({ status: "failed", title: "Context compaction failed" } as const)
+      : ({ status: "interrupted", title: "Context compaction stopped" } as const);

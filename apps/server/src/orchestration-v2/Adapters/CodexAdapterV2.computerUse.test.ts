@@ -379,7 +379,14 @@ describe("Codex computer use attachment", () => {
             { threadId: root, objective: "turn-1", status: "paused" },
             { goal: goal(0, "paused") },
           );
-          yield* f.turnStart(5, 1, true, false, root, "Start working toward this goal: turn-1");
+          yield* f.turnStart(
+            5,
+            1,
+            true,
+            false,
+            root,
+            "This thread's goal is already set. Do not call create_goal. Start working on it now: turn-1",
+          );
           request(6, "thread/goal/set", { threadId: root, status: "active" }, { goal: goal(0) });
           notice("thread/goal/updated", { threadId: root, turnId: "turn-1", goal: goal(0) });
           f.turnCompleted(1);

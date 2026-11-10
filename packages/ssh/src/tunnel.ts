@@ -53,6 +53,7 @@ import {
   type PreparationAdmission,
 } from "./ensureFlight.ts";
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
+import { waitForTunnelReady } from "./tunnelForwardReadiness.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
 import { admitLive } from "./tunnelAttachment.ts";
@@ -717,19 +718,18 @@ if ! goat_runtime_ready; then
   done
 fi
 if ! goat_runtime_ready; then
-  case "$(uname -s)" in
-    Darwin) GOAT_PLATFORM="darwin" ;;
-    Linux) GOAT_PLATFORM="linux" ;;
-    MINGW* | MSYS* | CYGWIN*) GOAT_PLATFORM="win32" ;;
-    *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -s)" >&2; exit 1 ;;
+  # Keep aligned with CLI_ARCHIVE_PLATFORM_KEYS in packages/shared/src/cliRelease.ts.
+  case "$(uname -s) $(uname -m)" in
+    "Darwin arm64") GOAT_PLATFORM_KEY="darwin-arm64" ;;
+    "Linux arm64" | "Linux aarch64") GOAT_PLATFORM_KEY="linux-arm64" ;;
+    "Linux x86_64" | "Linux amd64") GOAT_PLATFORM_KEY="linux-x64" ;;
+    MINGW*" arm64" | MSYS*" arm64" | CYGWIN*" arm64" | MINGW*" aarch64" | MSYS*" aarch64" | CYGWIN*" aarch64") GOAT_PLATFORM_KEY="win32-arm64" ;;
+    MINGW*" x86_64" | MSYS*" x86_64" | CYGWIN*" x86_64") GOAT_PLATFORM_KEY="win32-x64" ;;
+    MINGW*" amd64" | MSYS*" amd64" | CYGWIN*" amd64") GOAT_PLATFORM_KEY="win32-x64" ;;
+    *) printf 'Remote host %s %s has no GOAT release archive.\n' "$(uname -s)" "$(uname -m)" >&2; exit 1 ;;
   esac
-  case "$(uname -m)" in
-    arm64 | aarch64) GOAT_ARCH="arm64" ;;
-    x86_64 | amd64) GOAT_ARCH="x64" ;;
-    *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -m)" >&2; exit 1 ;;
-  esac
-  GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.tar.gz"
-  if [ "$GOAT_PLATFORM" = win32 ]; then GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.zip"; fi
+  GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.tar.gz"
+  case "$GOAT_PLATFORM_KEY" in win32-*) GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.zip" ;; esac
   GOAT_STAGING="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.staging-XXXXXX")"
   goat_fetch() {
     if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 30 --max-time "$3" "$1" -o "$2"
@@ -748,12 +748,10 @@ if ! goat_runtime_ready; then
   if [ -z "$GOAT_EXPECTED" ] || [ "$GOAT_ACTUAL" != "$GOAT_EXPECTED" ]; then
     printf 'Checksum mismatch for %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
   fi
-  if [ "$GOAT_PLATFORM" = win32 ]; then
-    # Git Bash's GNU tar cannot read zip; Windows ships bsdtar in System32.
-    "$(cygpath -S)/tar.exe" -xf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1
-  else
-    tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1
-  fi
+  case "$GOAT_PLATFORM_KEY" in
+    win32-*) "$(cygpath -S)/tar.exe" -xf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 ;; # GNU tar cannot read zip.
+    *) tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 ;;
+  esac
   rm -f "$GOAT_STAGING/$GOAT_ARCHIVE" "$GOAT_STAGING/SHA256SUMS"
   # Verify the executable and exact version before replacing a runtime,
   # including a same-version directory whose completion marker is broken.
@@ -2187,10 +2185,13 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
     }),
   );
   yield* Effect.raceFirst(
-    waitForHttpReady({
-      baseUrl: input.httpBaseUrl,
-      timeoutMs: input.readiness.timeoutMs,
-      probeTimeoutMs: input.readiness.probeTimeoutMs,
+    waitForTunnelReady({
+      alias: input.resolvedTarget.alias,
+      localPort: input.localPort,
+      // Matches the node-script launch command's whole ssh run against the same host.
+      connectTimeoutMs: REMOTE_LAUNCH_TIMEOUT_MS,
+      httpBaseUrl: input.httpBaseUrl,
+      readiness: input.readiness,
     }),
     exitFailure,
   ).pipe(

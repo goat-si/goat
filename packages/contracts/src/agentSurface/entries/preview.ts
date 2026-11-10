@@ -500,9 +500,9 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Evaluate JavaScript in preview",
     description:
-      "Evaluate only read-only JavaScript with a known exact selector; never read cookies, tokens, storage or site-internal APIs.",
+      "Evaluate JavaScript in the page. It can change page state. Page tools write only on user request, never to show results. Never read cookies, tokens, storage or site-internal APIs.",
     guide:
-      "Evaluation requires the same control as clicking even when the expression only reads. On server hosts the result must fit within 64,000 UTF-8 bytes after JSON serialization. The MCP result wraps the value as {value}; an absent value becomes null.",
+      "Evaluation requires the same control as clicking even when the expression only reads. On server hosts the result must fit within 64,000 UTF-8 bytes after JSON serialization. The MCP result wraps the value as {value}; an absent value becomes null. A page's own tools, such as WebMCP entries from document.modelContext, change the site only when the user asked for that change; show results with html_render.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",

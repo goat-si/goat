@@ -77,6 +77,8 @@ export interface Fixture {
   readonly pin?: string;
   readonly offered?: string;
   readonly direct?: boolean;
+  /** Why the direct-alias check could not decide, as when Pen's files cannot be read. */
+  readonly directFailure?: string;
   readonly running?: number;
   readonly linked?: ReadonlyArray<string>;
   readonly verdicts?: ReadonlyArray<HubParityResult>;
@@ -281,7 +283,12 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
             pinnedFingerprint: () => Effect.succeed(fixture.pin),
             ensureDeviceRuntime: () => Effect.die("unused"),
             syncDevice: () => Effect.die("unused"),
-            directAlias: () => Effect.succeed(fixture.direct ?? true),
+            directAlias: () =>
+              fixture.directFailure === undefined
+                ? Effect.succeed(fixture.direct ?? true)
+                : Effect.fail(
+                    new HubOcxError({ reason: "unreachable", message: fixture.directFailure }),
+                  ),
             penAliasRevision: () => Effect.succeed(undefined),
             runningTurns: () => Effect.succeed(fixture.running ?? 0),
             deviceHealth: (alias) =>

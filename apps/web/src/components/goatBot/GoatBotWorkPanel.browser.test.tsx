@@ -49,6 +49,10 @@ vi.mock("~/state/server", () => ({
   },
 }));
 vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
+vi.mock("./GoatBotTimeline", async () => ({
+  GoatBotActivityContext: (await import("react")).createContext(null),
+  GoatBotTimeline: () => <p>Task conversation</p>,
+}));
 vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => null }));
 vi.mock("./GoatBotComputer", () => ({ GoatBotComputer: () => <p>Machine list</p> }));
 vi.mock("~/state/use-atom-command", () => ({
@@ -99,32 +103,80 @@ const digest = {
   lastRunError: null,
 };
 
-it("shows the empty state for each work tab", async () => {
+it("Home shows work and routines on one scroll, and Library holds files and memory", async () => {
   setup([]);
   await using screen = await render(
     <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
   );
   await expect.element(screen.getByText("No tasks yet")).toBeVisible();
-  await userEvent.click(screen.getByRole("tab", { name: "Routines" }));
   await expect.element(screen.getByText("Ask GOAT Bot in chat to set up a routine.")).toBeVisible();
-  await userEvent.click(screen.getByRole("tab", { name: "Memory" }));
-  await expect.element(screen.getByText("Notes need a newer GOAT server.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
+  await expect.element(screen.getByText("Notes need a newer GOAT server.")).toBeVisible();
   await expect.element(screen.getByText("Files need a newer GOAT server.")).toBeVisible();
 });
 
-it("lists the machines running work under Tasks only while work runs", async () => {
-  setup([], [], [runningTask]);
+it("keeps the machines on Home whether or not work runs", async () => {
+  setup([]);
   await using screen = await render(
     <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
   );
   await expect.element(screen.getByRole("heading", { name: "Machines" })).toBeVisible();
   await expect.element(screen.getByText("Machine list")).toBeVisible();
+});
+
+it("peeks at a task in the panel with one link to its thread, and Back returns to its row", async () => {
+  setup([], [], [runningTask]);
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      peekRows={() => []}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  const back = screen.getByRole("button", { name: /Back to Home from Stop the port 3774 server/ });
+  await expect.element(back).toHaveFocus();
+  await expect
+    .element(screen.getByRole("link", { name: "Go to thread" }))
+    .toHaveAttribute("href", expect.stringContaining("task=task-a"));
+  await expect.element(screen.getByText("Working")).toBeVisible();
+  await expect.element(screen.getByRole("tab", { name: "Home" })).not.toBeInTheDocument();
+  await userEvent.click(back);
+  await expect
+    .element(screen.getByRole("button", { name: /Stop the port 3774 server/ }))
+    .toHaveFocus();
+});
+
+it("closes the peek when the task leaves the bot's work", async () => {
+  setup([], [], [runningTask]);
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      peekRows={() => []}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
   setup([]);
   await screen.rerender(
-    <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      peekRows={() => []}
+    />,
   );
-  await expect.element(screen.getByText("Machine list")).not.toBeInTheDocument();
+  await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
+  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  // The task coming back does not reopen a peek nobody asked for.
+  setup([], [], [runningTask]);
+  await screen.rerender(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      peekRows={() => []}
+    />,
+  );
+  await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
 });
 
 it("says the task list is loading, not empty, before the first read answers", async () => {
@@ -167,7 +219,6 @@ it("says routines are loading, not empty, before the first read answers", async 
   await using screen = await render(
     <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
   );
-  await userEvent.click(screen.getByRole("tab", { name: "Routines" }));
   await expect.element(screen.getByText("Loading routines…")).toBeVisible();
   await expect.element(screen.getByText("No routines yet")).not.toBeInTheDocument();
 });
@@ -178,7 +229,6 @@ it("a failed routine read offers a retry and keeps the routines it already knew"
   await using screen = await render(
     <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
   );
-  await userEvent.click(screen.getByRole("tab", { name: "Routines" }));
   await expect.element(screen.getByText("Couldn't load routines.")).toBeVisible();
   await expect.element(screen.getByText("Daily at 09:00 · Not scheduled")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Try again" }));
@@ -205,7 +255,6 @@ it("a refused pause keeps the routine's stored state and shows why", async () =>
   await using screen = await render(
     <GoatBotWorkPanel environmentId={environmentId} threadId={ThreadId.make("bot")} />,
   );
-  await userEvent.click(screen.getByRole("tab", { name: "Routines" }));
   await expect.element(screen.getByText("Daily at 09:00 · Not scheduled")).toBeVisible();
   const toggle = screen.getByRole("switch", { name: "Pause Daily digest" });
   await userEvent.click(toggle);

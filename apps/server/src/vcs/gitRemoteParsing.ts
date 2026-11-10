@@ -1,3 +1,26 @@
+export function parseGitRemoteVerboseOutput(
+  output: string,
+): Map<string, { url?: string; pushUrl?: string }> {
+  const remotes = new Map<string, { url?: string; pushUrl?: string }>();
+  for (const line of output.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    // Partial clones append the promisor filter, e.g. `(fetch) [blob:none]`.
+    const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)(?:\s+\[[^\]]+\])?$/.exec(trimmed);
+    if (!match) continue;
+    const [, name = "", url = "", direction = ""] = match;
+    if (name.length === 0 || url.length === 0 || direction.length === 0) continue;
+    const remote = remotes.get(name) ?? {};
+    if (direction === "fetch") {
+      remote.url = url;
+    } else {
+      remote.pushUrl = url;
+    }
+    remotes.set(name, remote);
+  }
+  return remotes;
+}
+
 export function parseRemoteFetchUrls(stdout: string): Map<string, string> {
   const remotes = new Map<string, string>();
   for (const line of stdout.split("\n")) {
