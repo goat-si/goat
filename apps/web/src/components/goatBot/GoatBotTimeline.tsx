@@ -348,24 +348,28 @@ export function GoatBotTimeline({
                       </blockquote>
                     ) : null}
                     {row.answer !== undefined ? (
-                      <details className="group w-fit max-w-[min(100%,34rem)] rounded-2xl bg-goat-bot-message">
-                        <summary className="flex min-h-10 cursor-default list-none items-center gap-2 rounded-2xl px-3.5 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [&::-webkit-details-marker]:hidden">
-                          <CheckIcon
-                            aria-hidden
-                            className="size-4 shrink-0 text-muted-foreground"
-                          />
-                          <span className="shrink-0 text-muted-foreground">Answered:</span>
-                          <span className="min-w-0 truncate font-medium">{row.answer}</span>
-                          <ChevronRightIcon
-                            aria-hidden
-                            className="ms-auto size-4 shrink-0 text-muted-foreground group-open:rotate-90"
-                          />
-                        </summary>
-                        <div className="goat-bot-prose flex gap-2 px-3.5 pb-3">{body}</div>
-                        <time id={timeId} dateTime={row.createdAt} className="sr-only">
-                          {time(row.createdAt)}
-                        </time>
-                      </details>
+                      <div className="flex w-full min-w-0 items-end gap-2">
+                        <details className="group w-fit max-w-[min(100%,34rem)] rounded-2xl bg-goat-bot-message">
+                          <summary className="flex min-h-10 cursor-default list-none items-center gap-2 rounded-2xl px-3.5 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [&::-webkit-details-marker]:hidden">
+                            <CheckIcon
+                              aria-hidden
+                              className="size-4 shrink-0 text-muted-foreground"
+                            />
+                            <span className="shrink-0 text-muted-foreground">Answered:</span>
+                            <span className="min-w-0 truncate font-medium">{row.answer}</span>
+                            <ChevronRightIcon
+                              aria-hidden
+                              className="ms-auto size-4 shrink-0 text-muted-foreground group-open:rotate-90"
+                            />
+                          </summary>
+                          <div className="goat-bot-prose flex gap-2 px-3.5 pb-3">{body}</div>
+                        </details>
+                        <GoatBotMessageTime
+                          id={timeId}
+                          createdAt={row.createdAt}
+                          time={time(row.createdAt)}
+                        />
+                      </div>
                     ) : row.options.length > 0 ? (
                       <>
                         {card}
