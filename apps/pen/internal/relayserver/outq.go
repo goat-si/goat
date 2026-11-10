@@ -210,8 +210,10 @@ type outq struct {
 	// closeTimer bounds the closing write; writerDone is set when run returns.
 	closeTimer *time.Timer
 	writerDone bool
-	// onWriteFail, when set, is called once a write fails or times out (tests).
+	// onWriteFail, when set, is called once a write fails or times out; failWrite, when set, can
+	// fail a write before it starts as a stalled peer would (tests).
 	onWriteFail func()
+	failWrite   func() error
 	bySID       map[uint32]int
 	pongs       int
 	done        bool
@@ -556,9 +558,15 @@ func (q *outq) run() {
 		if it.is(itemText) {
 			typ = websocket.MessageText
 		}
-		wctx, cancel := context.WithTimeout(ctx, q.timeout)
-		err := q.ws.Write(wctx, typ, it.data)
-		cancel()
+		var err error
+		if q.failWrite != nil {
+			err = q.failWrite()
+		}
+		if err == nil {
+			wctx, cancel := context.WithTimeout(ctx, q.timeout)
+			err = q.ws.Write(wctx, typ, it.data)
+			cancel()
+		}
 		q.written()
 		if err != nil {
 			q.ws.CloseNow()

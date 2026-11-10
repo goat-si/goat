@@ -3,11 +3,10 @@ package relayserver
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math"
 	mrand "math/rand/v2"
-	"net"
-	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
@@ -43,12 +42,30 @@ type live struct {
 	mu     sync.Mutex
 	opened int
 	conns  []*websocket.Conn
+	// stall names the client session whose next data write fails as a stalled peer's would;
+	// stalled receives once it did.
+	stallNode string
+	stallSID  uint32
+	stalled   chan struct{}
 }
 
 func newLive(t *testing.T, l Limits) *live {
 	s := New(l)
-	lv := &live{s: s, done: make(chan struct{}, 1<<16)}
+	lv := &live{s: s, done: make(chan struct{}, 1<<16), stalled: make(chan struct{}, 1)}
 	s.Hooks.OnSocketDone = func(string, string) { lv.done <- struct{}{} }
+	s.Hooks.FailWrite = func(nodeID, role string, sid uint32) error {
+		lv.mu.Lock()
+		hit := role == "client" && nodeID == lv.stallNode && sid == lv.stallSID
+		lv.mu.Unlock()
+		if !hit {
+			return nil
+		}
+		select {
+		case lv.stalled <- struct{}{}:
+		default:
+		}
+		return errors.New("stalled peer")
+	}
 	hs := httptest.NewServer(s)
 	t.Cleanup(hs.Close)
 	lv.url = hs.URL
@@ -71,29 +88,6 @@ func (lv *live) dial(path string) *websocket.Conn {
 }
 
 // liveNode is an uplink that reads and acks everything and remembers the sessions opened to it.
-// dialSmall dials with a 4 KiB receive buffer, so a socket that does not read stalls the relay's
-// writes at once instead of after the kernel took a few MiB.
-func (lv *live) dialSmall(path string) *websocket.Conn {
-	u, _ := wire.WebSocketURL(lv.url, path)
-	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
-		if err == nil {
-			c.(*net.TCPConn).SetReadBuffer(4096)
-		}
-		return c, err
-	}
-	hc := &http.Client{Transport: &http.Transport{DialContext: dial}}
-	ws, _, err := websocket.Dial(context.Background(), u, &websocket.DialOptions{HTTPClient: hc})
-	if err != nil {
-		return nil
-	}
-	lv.mu.Lock()
-	lv.opened++
-	lv.conns = append(lv.conns, ws)
-	lv.mu.Unlock()
-	return ws
-}
-
 type liveNode struct {
 	id    *ident.Identity
 	ws    *websocket.Conn
@@ -170,6 +164,8 @@ func TestCountersReturnToZeroAfterAnySequenceOfSocketLifecycles(t *testing.T) {
 	for seed := range uint64(6) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			l := DefaultLimits()
+			// Only how fast stalled random sockets end; no assertion depends on it (the prelude drives
+			// the write-failure path through Hooks.FailWrite).
 			l.WriteTimeout = 200 * time.Millisecond
 			lv := newLive(t, l)
 			lv.s.Hooks.OnEnd = func(role string, code uint16) { count(fmt.Sprintf("%s %d", role, code)) }
@@ -324,11 +320,14 @@ func prelude(t *testing.T, lv *live, ids []*ident.Identity) *liveNode {
 	if _, _, err := closed.Read(ctx); err == nil {
 		t.Fatal("prelude: the session the node closed is still open")
 	}
-	stalled := lv.dialSmall("/v1/client/" + ids[0].NodeID())
+	// A client whose write fails as a stalled one's would: the hook fails it, so no kernel buffer
+	// or timer decides whether this path is taken.
+	lv.dial("/v1/client/" + ids[0].NodeID())
 	sid = <-n.opened
-	_ = stalled
-	for range 8 { // a client that never reads: the writes stall past the write timeout
-		n.ws.Write(ctx, websocket.MessageBinary, wire.Frame{Type: wire.FrameData, SID: sid, Payload: make([]byte, 128<<10)}.Encode())
-	}
+	lv.mu.Lock()
+	lv.stallNode, lv.stallSID = ids[0].NodeID(), sid
+	lv.mu.Unlock()
+	n.ws.Write(ctx, websocket.MessageBinary, wire.Frame{Type: wire.FrameData, SID: sid, Payload: []byte("to a stalled client")}.Encode())
+	<-lv.stalled
 	return n
 }

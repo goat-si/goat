@@ -82,6 +82,9 @@ type Hooks struct {
 	// and OnWriteFailed when a socket's write failed or timed out (tests count exit paths).
 	OnEnd         func(role string, code uint16)
 	OnWriteFailed func(role string)
+	// FailWrite, when set, is asked before each data write to a socket (role, and for a client its
+	// node id and session id) and fails that write as a timed-out one when it returns an error.
+	FailWrite func(nodeID, role string, sid uint32) error
 }
 
 // Server is a relay. It is an http.Handler.
@@ -262,6 +265,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	k.ws, k.out = ws, newOutq(ws, s.Limits.WriteTimeout, k.budget)
 	if f := s.Hooks.OnWriteFailed; f != nil {
 		k.out.onWriteFail = func() { f(k.roleName()) }
+	}
+	if f := s.Hooks.FailWrite; f != nil {
+		k.out.failWrite = func() error { return f(nodeID, k.roleName(), k.sid) }
 	}
 	s.mu.Lock()
 	s.socks[k] = struct{}{}
