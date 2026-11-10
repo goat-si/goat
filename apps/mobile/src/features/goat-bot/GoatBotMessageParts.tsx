@@ -3,21 +3,18 @@ import {
   goatBotReceiptLabel,
   goatBotRejectionText,
   type GoatBotActivity,
+  type GoatBotFaceState,
   type GoatBotGroupPosition,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import { useCallback, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { GoatWordmark } from "../../components/GoatWordmark";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { GoatBotProgressFace } from "./GoatBotFace";
+import { GoatBotShimmerText } from "./GoatBotShimmerText";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
-
-/** The activity line also shows how long the followed work has run and, opened, what it is. */
-export type GoatBotTimelineActivity = GoatBotActivity & {
-  readonly since?: string;
-  readonly title?: string;
-};
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
@@ -190,98 +187,44 @@ export function GoatBotPersonCaption(props: {
   );
 }
 
-/** The web line's wording: "just now", "12s", "3m", "2h", "4d"; empty when unreadable. */
-export function goatBotElapsedLabel(since: string, nowMs: number): string {
-  const start = Date.parse(since);
-  if (Number.isNaN(start)) return "";
-  const seconds = Math.floor((nowMs - start) / 1000);
-  if (seconds < 5) return "just now";
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
-}
-
-const ELAPSED_TICK_MS = 1_000;
-
-/** Checked each second like the web line; the row re-renders only when the label changes. */
-function useElapsedLabel(since: string | null): string | null {
-  // Stable per start time, so a list re-render does not restart the interval.
-  const subscribe = useCallback(
-    (onChange: () => void) => {
-      if (since === null) return () => {};
-      const timer = setInterval(onChange, ELAPSED_TICK_MS);
-      return () => clearInterval(timer);
-    },
-    [since],
-  );
-  const read = () => (since === null ? null : goatBotElapsedLabel(since, Date.now()) || null);
-  return useSyncExternalStore(subscribe, read, read);
-}
+const PERSON_WAITS = /^(Waiting|Paused)/u;
 
 /**
- * One line for what the bot is doing: a still icon, what it says, and for how long. Work it
- * follows opens to show which task that is. Nothing here moves; the label is the progress.
+ * What the bot is doing now, under the last message: its face and one muted line. The words get the
+ * stepped highlight only while it reads or works and the line is in view; a wait on the person or on
+ * other work stays still, so the line never shows motion that is not happening.
  */
 export function GoatBotActivityLine(props: {
-  readonly activity: GoatBotTimelineActivity;
+  readonly activity: GoatBotActivity;
   readonly botName: string;
-  /** When the reading or the followed work began; the elapsed time counts from it. */
-  readonly since?: string | null;
+  /** The bot's profile avatar; an emoji replaces the drawn face. */
+  readonly emoji?: string | null | undefined;
+  /** Whether enough of the line shows on screen for its motion to run. */
+  readonly inView: boolean;
 }) {
   const label = useScaledTextRole("label");
-  const [open, setOpen] = useState(false);
   const { activity } = props;
-  const elapsed = useElapsedLabel(props.since ?? activity.since ?? null);
-  const waiting = activity.state === "working" && activity.text.startsWith("Waiting");
-  const title = activity.state === "working" ? (activity.title ?? null) : null;
-  const line = elapsed ? `${activity.text} · ${elapsed}` : activity.text;
+  const waits = activity.state === "working" && PERSON_WAITS.test(activity.text);
+  const face: GoatBotFaceState =
+    activity.state === "reading" ? "reading" : waits ? "waiting" : "working";
   return (
-    <View style={{ marginTop: 18 }}>
-      <View className="min-h-[32px] flex-row items-center gap-2">
-        <SymbolView
-          name={activity.state === "reading" ? "eye" : waiting ? "clock" : "circle.inset.filled"}
-          size={14}
-          tintColorClassName={waiting ? "accent-warning-foreground" : "accent-foreground"}
-        />
-        {/* The live region announces what changed, never the ticking time. */}
-        <Text
-          accessibilityRole="text"
-          accessibilityLiveRegion="polite"
-          accessibilityLabel={`${props.botName}: ${activity.text}`}
-          numberOfLines={1}
-          className="shrink text-foreground-muted"
-          style={label}
-        >
-          {line}
-        </Text>
-        {title !== null ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={open ? "Hide work details" : "Show work details"}
-            accessibilityState={{ expanded: open }}
-            hitSlop={8}
-            onPress={() => setOpen((value) => !value)}
-            className="h-8 w-8 items-center justify-center"
-          >
-            <SymbolView
-              name={open ? "chevron.up" : "chevron.down"}
-              size={12}
-              tintColorClassName="accent-icon-muted"
-            />
-          </Pressable>
-        ) : null}
+    <View className="min-h-[32px] flex-row items-center gap-2" style={{ marginTop: 10 }}>
+      <GoatBotProgressFace state={face} emoji={props.emoji} inView={props.inView} />
+      <View
+        accessible
+        accessibilityRole="text"
+        accessibilityLiveRegion="polite"
+        accessibilityLabel={`${props.botName}: ${activity.text}`}
+        className="min-w-0 flex-1"
+      >
+        {waits ? (
+          <Text numberOfLines={1} className="text-foreground-muted" style={label}>
+            {activity.text}
+          </Text>
+        ) : (
+          <GoatBotShimmerText label={activity.text} animate={props.inView} style={label} />
+        )}
       </View>
-      {open && title !== null ? (
-        <Text
-          selectable
-          className="pb-1 text-foreground-muted"
-          style={{ ...label, marginLeft: 22 }}
-        >
-          {title}
-        </Text>
-      ) : null}
     </View>
   );
 }

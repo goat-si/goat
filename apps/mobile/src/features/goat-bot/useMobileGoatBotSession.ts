@@ -67,7 +67,6 @@ import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useServerConfigs, useThreadShell } from "../../state/entities";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { useReplying } from "./useReplying";
-import type { GoatBotTimelineActivity } from "./GoatBotMessageParts";
 import { markMobileGoatBotMember, mobileGoatBotMemberActive } from "./mobileGoatBotMembers";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
@@ -710,7 +709,7 @@ export function useMobileGoatBotSession(
   );
   const workerShell = useThreadShell(workerRef);
   const workerProjection = useResidentThreadProjection(workerRef);
-  const current = visible
+  const activity = visible
     ? goatBotActivity({
         reading,
         task: activityTask,
@@ -720,17 +719,6 @@ export function useMobileGoatBotSession(
             : { shell: workerShell?.source ?? null, projection: workerProjection },
       })
     : null;
-  // Like the web line: reading counts from when it began, followed work from when its task began.
-  const activity: GoatBotTimelineActivity | null =
-    current === null
-      ? null
-      : current.state === "reading"
-        ? replyingSince === null
-          ? current
-          : { ...current, since: replyingSince }
-        : activityTask === null
-          ? current
-          : { ...current, since: activityTask.chip.createdAt, title: activityTask.chip.title };
   const resolved: GoatBotAvailability =
     !selection.supported && environment === null && home.botRef !== null
       ? { kind: "offline", environmentId: home.botRef.environmentId }

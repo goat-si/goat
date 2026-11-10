@@ -7,7 +7,6 @@ import {
 } from "@goat/client-runtime/goatBot";
 import { MessageId, type OrchestrationV2TurnItem, ThreadId, TurnItemId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
-import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createNativeMemoryHarness,
@@ -19,7 +18,23 @@ const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFo
 
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
-vi.mock("./GoatBotFace", () => ({ GoatBotHeaderFace: () => null }));
+vi.mock("./GoatBotFace", async () => {
+  const { Text } = await import("react-native");
+  return {
+    GoatBotHeaderFace: () => null,
+    GoatBotProgressFace: (props: { state: string; inView: boolean }) => (
+      <Text>{`face:${props.state}:${props.inView}|`}</Text>
+    ),
+  };
+});
+vi.mock("./GoatBotShimmerText", async () => {
+  const { Text } = await import("react-native");
+  return {
+    GoatBotShimmerText: (props: { label: string; animate: boolean }) => (
+      <Text>{`shimmer:${props.label}:${props.animate}`}</Text>
+    ),
+  };
+});
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
@@ -280,28 +295,62 @@ it("shows a bot event as a centered note line", async () => {
   expect(view.container.textContent).toBe("Routine Check in paused");
 });
 
-it("counts how long followed work has run a second at a time and opens to the work's title", async () => {
-  const since = "2026-10-12T09:40:00Z";
-  vi.useFakeTimers({ now: Date.parse(since) + 12_000, toFake: ["setInterval", "Date"] });
-  using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
-  h = createNativeMemoryHarness();
-  view = renderNative(
-    h,
-    <GoatBotActivityLine
-      botName="GOAT Bot"
-      activity={{ state: "working", text: "Copying files", title: "Check the disks" }}
-      since={since}
-    />,
-  );
-  await view.render();
-  expect(view.container.textContent).toContain("Copying files · 12s");
-  expect(view.container.textContent).not.toContain("Check the disks");
-  await act(async () => vi.advanceTimersByTime(60_000));
-  expect(view.container.textContent).toContain("Copying files · 1m");
-  await view.click("Show work details");
-  expect(view.container.textContent).toContain("Check the disks");
-  await view.click("Hide work details");
-  expect(view.container.textContent).not.toContain("Check the disks");
+describe("the progress line under the last message", () => {
+  it("shows the working step beside a moving face, with no timer or disclosure", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(
+      h,
+      <GoatBotActivityLine
+        botName="GOAT Bot"
+        activity={{ state: "working", text: "Copying files" }}
+        inView
+      />,
+    );
+    await view.render();
+    expect(view.container.textContent).toBe("face:working:true|shimmer:Copying files:true");
+  });
+
+  it("reads with the reading face and the sweep", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(
+      h,
+      <GoatBotActivityLine
+        botName="GOAT Bot"
+        activity={{ state: "reading", text: "Reading your message" }}
+        inView
+      />,
+    );
+    await view.render();
+    expect(view.container.textContent).toBe("face:reading:true|shimmer:Reading your message:true");
+  });
+
+  it("holds a wait on the person still: the waiting face and plain text", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(
+      h,
+      <GoatBotActivityLine
+        botName="GOAT Bot"
+        activity={{ state: "working", text: "Waiting for your answer" }}
+        inView
+      />,
+    );
+    await view.render();
+    expect(view.container.textContent).toBe("face:waiting:true|Waiting for your answer");
+  });
+
+  it("stops the face and the sweep when the line is out of view", async () => {
+    h = createNativeMemoryHarness();
+    view = renderNative(
+      h,
+      <GoatBotActivityLine
+        botName="GOAT Bot"
+        activity={{ state: "working", text: "Copying files" }}
+        inView={false}
+      />,
+    );
+    await view.render();
+    expect(view.container.textContent).toBe("face:working:false|shimmer:Copying files:false");
+  });
 });
 
 it("asks a question with answers as one card and sends the picked answer to its task", async () => {

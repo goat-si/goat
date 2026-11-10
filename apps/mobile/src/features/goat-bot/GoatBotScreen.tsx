@@ -54,6 +54,7 @@ import {
 } from "./GoatBotMessageParts";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
+import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { MobileBotWork } from "./MobileBotWork";
@@ -76,6 +77,7 @@ function availabilityCopy(mainName: string, openName: string) {
 }
 
 type TaskRow = Extract<GoatBotRow, { kind: "task" }>;
+type ListMetrics = Parameters<typeof goatBotFooterInView>[0];
 
 export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly row: GoatBotRow;
@@ -295,6 +297,19 @@ export function GoatBotScreen(props: {
       draftFiles.current.clear();
     };
   }, []);
+  // What the list last reported about its scroll, size and footer; the progress line moves only
+  // while enough of it shows. Kept in a ref so scroll events re-render only when that answer flips.
+  const listMetrics = useRef<ListMetrics>({
+    offsetY: 0,
+    viewportHeight: 0,
+    contentHeight: 0,
+    footerHeight: 0,
+  });
+  const [footerInView, setFooterInView] = useState(false);
+  const measureList = useCallback((next: Partial<ListMetrics>) => {
+    Object.assign(listMetrics.current, next);
+    setFooterInView(goatBotFooterInView(listMetrics.current));
+  }, []);
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
   const renderItem = useCallback(
@@ -462,7 +477,18 @@ export function GoatBotScreen(props: {
         // A manual contentInset would zero UIKit's header inset and its scroll-edge region.
         contentInsetAdjustmentBehavior="automatic"
         contentInsetStartAdjustment={listTopInset}
-        contentContainerStyle={{ padding: 16 }}
+        contentContainerStyle={{ padding: GOAT_BOT_LIST_PADDING }}
+        scrollEventThrottle={100}
+        onScroll={(event) => {
+          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+          measureList({
+            offsetY: contentOffset.y,
+            viewportHeight: layoutMeasurement.height,
+            contentHeight: contentSize.height,
+          });
+        }}
+        onContentSizeChange={(_width, height) => measureList({ contentHeight: height })}
+        onLayout={(event) => measureList({ viewportHeight: event.nativeEvent.layout.height })}
         ListEmptyComponent={
           <Text className="py-6 text-center text-foreground-muted">
             {taskId
@@ -472,7 +498,17 @@ export function GoatBotScreen(props: {
         }
         ListFooterComponent={
           !taskId && session.activity ? (
-            <GoatBotActivityLine activity={session.activity} botName={title} />
+            <View
+              testID="goat-bot-progress-line"
+              onLayout={(event) => measureList({ footerHeight: event.nativeEvent.layout.height })}
+            >
+              <GoatBotActivityLine
+                activity={session.activity}
+                botName={title}
+                emoji={botEmoji}
+                inView={footerInView}
+              />
+            </View>
           ) : null
         }
       />
