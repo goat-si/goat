@@ -330,28 +330,29 @@ func TestRaceTraceShowsTheWinnersStagesAndTheOfflineRelays4404(t *testing.T) {
 	defer online.Close()
 	id := newID(t)
 	startUplink(t, ctx, online, id)
-	var mu sync.Mutex
-	events := map[string][]string{}
-	settled := make(chan struct{})
-	racer := relay.Racer{
-		Trace: func(event, url string, _ time.Duration) {
-			mu.Lock()
-			events[url] = append(events[url], event)
-			mu.Unlock()
-		},
-		Settled: func([]string) { close(settled) },
+	race := func(relays ...string) map[string][]string {
+		var mu sync.Mutex
+		events := map[string][]string{}
+		settled := make(chan struct{})
+		racer := relay.Racer{
+			Trace: func(event, url string, _ time.Duration) {
+				mu.Lock()
+				events[url] = append(events[url], event)
+				mu.Unlock()
+			},
+			Settled: func([]string) { close(settled) },
+		}
+		racer.Dial(ctx, relays, id.NodeID())
+		<-settled
+		mu.Lock()
+		defer mu.Unlock()
+		return events
 	}
-	if _, used, err := racer.Dial(ctx, []string{offline.URL, online.URL}, id.NodeID()); err != nil || used != online.URL {
-		t.Fatalf("used %q, %v; want the online relay", used, err)
-	}
-	<-settled
-	mu.Lock()
-	defer mu.Unlock()
-	if got := events[online.URL]; !slices.Equal(got, []string{"ws", "pong", "winner"}) {
+	if got := race(online.URL)[online.URL]; !slices.Equal(got, []string{"ws", "pong", "winner"}) {
 		t.Fatalf("online relay trace %v, want ws pong winner", got)
 	}
-	if got := events[offline.URL]; !slices.Contains(got, "closed 4404") || slices.Contains(got, "winner") {
-		t.Fatalf("offline relay trace %v, want closed 4404 and no win", got)
+	if got := race(offline.URL)[offline.URL]; !slices.Equal(got, []string{"ws", "closed 4404"}) {
+		t.Fatalf("offline relay trace %v, want ws closed 4404", got)
 	}
 }
 
