@@ -53,7 +53,7 @@ import {
   goatBotTime,
 } from "./GoatBotMessageParts";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
-import { goatBotChatRows, goatBotTaskAnswer } from "./goatBotChatRows";
+import { goatBotChatRows } from "./goatBotChatRows";
 import { goatBotWithoutThreadLinks } from "./goatBotChatMarkdown";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
@@ -363,18 +363,13 @@ export function GoatBotScreen(props: {
     ? session.rows.find((row): row is TaskRow => row.kind === "task" && row.card.key === taskId)
     : undefined;
   const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
-  // A plain chatbot: work the bot starts is listed in its home sheet, not in the conversation,
-  // which keeps only what finished work says back. Servers without task threads have no such
-  // list, so their cards stay.
+  // A plain chatbot: work the bot starts is listed in its home sheet, not in the conversation.
+  // Servers without task threads have no such list, so their cards stay.
   const hidesTaskCards = taskId !== undefined || session.supportsTaskThreads;
   const visibleRows = useMemo(
     () =>
-      hidesTaskCards
-        ? goatBotChatRows(session.rows, (row) =>
-            row.kind !== "task" ? row : taskId === undefined ? goatBotTaskAnswer(row) : null,
-          )
-        : session.rows,
-    [hidesTaskCards, session.rows, taskId],
+      hidesTaskCards ? goatBotChatRows(session.rows, (row) => row.kind === "task") : session.rows,
+    [hidesTaskCards, session.rows],
   );
   const chatTasks = useMemo(
     () =>
