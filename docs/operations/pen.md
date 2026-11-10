@@ -156,7 +156,8 @@ fails until issuance succeeds. A failed first issuance does the same and the pro
 
 ## Incidents
 
-**A member was lost or stolen.** On any other member: `pen revoke <member> --compromised` (this also works for a
+**A member was lost or stolen.** On any other member: `pen revoke <member> --compromised` (by node id or fingerprint
+when a replacement joined under the stolen machine's name; the command refuses such a name and lists both; this also works for a
 machine that already left or was revoked plainly, and revokes every machine it admitted), then `pen lock on`. If the
 mesh is bound to a Google account, change that account's password and reset its machine list from the reset link on
 `https://pen-login.pos090001.workers.dev/device`. The revoke goes to every online member at once and reaches the others
