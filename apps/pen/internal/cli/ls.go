@@ -84,7 +84,7 @@ func printAccount(w io.Writer, ls daemon.LsReply) {
 	if ls.Account == nil {
 		fmt.Fprintln(w, "account  none (machines join by invite)")
 	} else {
-		fmt.Fprintf(w, "account  Google sub %s via %s\n", ls.Account.Sub, ls.Account.LoginURL)
+		fmt.Fprintf(w, "account  Google sub %s via %s, login key %s\n", ls.Account.Sub, ls.Account.LoginURL, ls.Account.LoginKey.Kid)
 	}
 	if ls.Locked {
 		fmt.Fprintf(w, "lock     on: new machines wait for pen approve (%d pending here)\n", ls.Pending)

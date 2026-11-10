@@ -68,17 +68,41 @@ it. `GET /` answers 303 to `/device`.
 Rollback: as for pen-relay. The `Login` Durable Object holds the account registry, device codes and rate-limit
 counters in SQLite; a rollback keeps that data, so roll back only to a version whose schema reads it.
 
-Rotate the Google client secret: create a new secret in the Google Cloud console, update the client file, run
-`deploy:secrets` again. Sign-ins in flight fail once; nothing else changes.
+Rotate the Google client secret: add a new secret to the OAuth client in the Google Cloud console, put it in the client
+file, run `deploy:secrets <client file>` (the Worker keeps its login key), check one sign-in, then disable the old
+secret in the console. Sign-ins in flight during the deploy fail once; nothing else changes.
 
 Moving the service or recovering a deleted Worker: `deploy:secrets` with `--signing-key-file` pointing at the kept
 file restores the same key, and bound meshes notice nothing.
 
-Rotate, or replace a lost or leaked `LOGIN_SIGNING_KEY`: delete the secret
-(`pnpm exec wrangler secret delete LOGIN_SIGNING_KEY`), run `deploy:secrets` with `--signing-key-file` naming a new
-file, and ask each person to run `pen login` on one member of their mesh, which binds the mesh to the new key. Until
-then new machines cannot sign in to those meshes; members and invites keep working. There is no overlap period:
-assertions live 10 minutes and members check them only against the key their mesh is bound to.
+### Rotate the login key and rebind
+
+Use this to rotate `LOGIN_SIGNING_KEY`, to replace a leaked one, or to create the operator copy for a key that has
+none. There is no overlap period: assertions live 10 minutes and members check them only against the key their mesh is
+bound to, so each mesh moves to the new key when one of its members signs in again.
+
+1. In `infra/pen-login` of the deployed commit, on the operator machine: `pnpm exec wrangler whoami` lists only the
+   Pen account, and `curl -s https://pen-login.pos090001.workers.dev/v1/keys` shows the old `kid`.
+2. `pnpm exec wrangler secret delete LOGIN_SIGNING_KEY`. That publishes a version without the key, so sign-ins fail
+   until the next step; run it at once.
+3. `pnpm run deploy:secrets ~/.pen-secrets/google-oauth-client.json --signing-key-file ~/.pen-secrets/login-signing-key`
+   with no file at that path yet (the directory must be 0700). It creates the key there and prints
+   `login key kid <new>`. Copy the file somewhere offline.
+4. `curl -s .../v1/keys` now shows `<new>`.
+
+While a mesh is still bound to the old key, members, invites, `pen pipe`, `pen forward` and SSH keep working, and
+`pen account` on a member still shows `login key <old>`. A new machine can sign in at `/device`, but every member
+refuses it and its `pen login` ends with `login: assertion is not signed by this login key`.
+
+5. On one member of each bound mesh, the person runs `pen login` and signs in with the mesh's Google account. It asks
+   `Mesh <id> is bound to an older login key (<old>). Bind it to the service's current key <new>?` and, after yes,
+   prints `mesh <id> is bound to <email> again`. Like any binding change this needs every member to have announced pen
+   1.1; a member that never did blocks it with a message naming that member.
+6. Confirm: `pen account` on that member, and on the others after their next sync (`pen ls` shows them online),
+   prints `login key <new>`. A test sign-in of a new machine now joins.
+
+For the operator's own mesh (mac-studio, `PEN_HOME=~/goat-research/pen-boxes-test/.penhome/state`), step 5 is
+`pen login` there with that `PEN_HOME`.
 
 ## Seoul relay
 

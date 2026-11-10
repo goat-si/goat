@@ -287,6 +287,11 @@ func TestLoginOnAMemberBindsAgainAfterAnUnbindOrAKeyRotation(t *testing.T) {
 	if acct := lsOf(t, a).Account; acct == nil || acct.LoginKey.Kid != rotated.Kid {
 		t.Fatalf("after a key rotation: account %+v, want key %s", acct, rotated.Kid)
 	}
+	// pen account names the bound key, so an operator can match it against the service's /v1/keys.
+	out.Reset()
+	if code := RunAccount(nil, &out, &errOut); code != 0 || !strings.Contains(out.String(), "login key "+rotated.Kid) {
+		t.Fatalf("pen account after the rebind: exit %d\n%s", code, out.String())
+	}
 }
 
 func TestApproveTakesOnlyARequestIDOrAFullFingerprint(t *testing.T) {
