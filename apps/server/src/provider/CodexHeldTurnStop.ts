@@ -55,7 +55,7 @@ export const stopHeldTurns = Effect.fn("CodexHeldTurnStop.stopHeldTurns")(functi
  * Pauses the turn's goal so Codex starts no continuation, interrupts the turn, and waits briefly
  * for Codex to report its end.
  */
-export const interruptHeldTurn = Effect.fn("CodexHeldTurnStop.interruptHeldTurn")(
+const interruptHeldTurn = Effect.fn("CodexHeldTurnStop.interruptHeldTurn")(
   function* (
     detached: Detached.CodexDetachedAppServers["Service"],
     record: CodexInstanceRecordKey,
