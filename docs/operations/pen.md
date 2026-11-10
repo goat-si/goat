@@ -163,7 +163,7 @@ comment adds up what each part may hold at worst against `MemoryMax` and records
 only makes the collector work harder near it; it is not a cap, so the margin under `MemoryMax` is headroom, not a
 proof. Change the caps, `GOMEMLIMIT` and `MemoryMax` together. A relay at its caps refuses new connections. Queued data counts against the address that will
 receive it. Data a client sends toward an uplink never ends anything else: if it does not fit, only that client's
-session ends 4408, and before the node has answered, a session can queue only its 4 KiB first message. Data a node
+session ends 4408, and before the node has answered, a session can send only its 4 KiB first message. Data a node
 sends its client can end stalled queues (no finished write for 2 s), first of the client's own address when its
 16 MiB share is full, else of that address and of addresses holding more: client queues before uplinks, the longest
 stalled first, one at a time until the data fits, never a draining one. When none is left, the data is refused and

@@ -77,24 +77,21 @@ func TestDataFromAnotherSourceNeverEndsTheDestinationSourcesQueues(t *testing.T)
 	}
 }
 
-// Before its node answers, a session may have queued toward the uplink only its first message,
-// so the eight pending sessions a node may have hold little of its address's share.
-func TestAPendingSessionQueuesAtMostItsFirstMessage(t *testing.T) {
+// Before its node answers, a session may send only its first message toward the uplink, so the
+// eight pending sessions a node may have hold little of its address's share.
+func TestAPendingSessionSendsAtMostItsFirstMessage(t *testing.T) {
 	s := New(DefaultLimits())
 	rm := &room{srv: s, clients: map[uint32]*sock{}}
-	up := testSock(s, rm, roleNode, 0, "192.0.2.1", stalled(t))
+	testSock(s, rm, roleNode, 0, "192.0.2.1", stalled(t))
 	c := testSock(s, rm, roleClient, 1, "203.0.113.9", stalled(t))
 	c.pending = true
 	rm.mu.Lock()
 	rm.onClientData(c, make([]byte, FirstMessageMax))
 	first := c.closed
-	rm.onClientData(c, make([]byte, FirstMessageMax))
+	rm.onClientData(c, make([]byte, 1))
 	rm.mu.Unlock()
-	if first {
-		t.Fatal("a pending session's first message did not fit")
-	}
-	if mine, _ := up.out.queued(c.sid); !c.closed || mine > pendingQueued {
-		t.Fatalf("a pending session queued %d bytes toward its uplink (closed %v); at most %d", mine, c.closed, pendingQueued)
+	if first || !c.closed {
+		t.Fatalf("a pending session's first message closed it %v; one byte more closed it %v", first, c.closed)
 	}
 }
 

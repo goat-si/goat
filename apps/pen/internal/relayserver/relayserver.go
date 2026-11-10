@@ -191,9 +191,6 @@ func (s *Server) maxReading() int64 { return int64(orDefault(s.MaxReading, Defau
 // Reading is what messages being read hold past their sockets' read allowance now.
 func (s *Server) Reading() int64 { return s.reading.Load() }
 
-// pendingQueued is what a pending session may have queued toward its uplink: one first message.
-var pendingQueued = itemOverhead + allocSize(wire.HeaderLen+FirstMessageMax)
-
 func (s *Server) now() time.Time {
 	if s.clock != nil {
 		return s.clock()
@@ -537,10 +534,12 @@ type sock struct {
 	origin    string
 	challenge []byte
 	// client
-	sid       uint32
-	pending   bool
-	upEnd     uint64
-	upUnacked uint64
+	sid     uint32
+	pending bool
+	// pendingSent is what the client sent toward the node before the node answered.
+	pendingSent int
+	upEnd       uint64
+	upUnacked   uint64
 }
 
 // room is one node's uplink and its sessions.
@@ -819,11 +818,13 @@ func (rm *room) onClientData(c *sock, payload []byte) {
 	if qMine+cost > LightSession {
 		qLimit = SocketWindow - LightSession*others
 	}
-	// Until the node answers, a client may only have sent its first message (contract "Sessions"):
-	// eight pending sessions then hold little of the node's source share.
-	if c.pending && qMine+cost > pendingQueued {
-		rm.endSession(c, wire.CodeTimeout)
-		return
+	// Until the node answers, a client may only send its first message (contract "Sessions"), so
+	// the eight pending sessions a node may have hold little of its source share.
+	if c.pending {
+		if c.pendingSent += len(payload); c.pendingSent > FirstMessageMax {
+			rm.endSession(c, wire.CodeTimeout)
+			return
+		}
 	}
 	// Data toward an uplink never ends another queue: when it does not fit, only its session ends.
 	if up.sent-up.acked+uint64(frameLen) > limit || qTotal+cost > qLimit || !up.out.offerFrame(c.sid, payload) {
