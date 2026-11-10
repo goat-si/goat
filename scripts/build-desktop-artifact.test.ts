@@ -21,6 +21,11 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
+  DESKTOP_FILE_EXCLUSIONS,
+  LINUX_FILE_EXCLUSIONS,
+  MAC_FILE_EXCLUSIONS,
+} from "./desktop-artifact-file-exclusions.ts";
+import {
   buildDesktopBundles,
   copyDesktopBuildArtifacts,
   DesktopBuildManifestRestoreError,
@@ -29,7 +34,6 @@ import {
   parseWslRuntimeArchiveMembers,
   readWorkspaceConfig,
   createBuildConfig,
-  DESKTOP_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   UnsupportedDesktopBuildArchitectureError,
@@ -65,8 +69,6 @@ import {
   DESKTOP_EXTRA_RESOURCES,
   LINUX_CAPTURE_EXTRA_RESOURCES,
   LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
-  LINUX_FILE_EXCLUSIONS,
-  MAC_FILE_EXCLUSIONS,
   resolveOptionalMacPasskeySigningConfiguration,
   resolveDesktopProductName,
   resolveResourceMonitorRustTargets,
@@ -307,6 +309,11 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     path.join(resourcesDir, "resource-monitor/goat-resource-monitor.exe"),
     "monitor",
   );
+  yield* fs.makeDirectory(path.join(resourcesDir, "computer-use-helper"), { recursive: true });
+  yield* fs.writeFileString(
+    path.join(resourcesDir, "computer-use-helper/GOAT Computer Use.exe"),
+    "helper",
+  );
   yield* fs.makeDirectory(path.join(resourcesDir, "screen-code"), { recursive: true });
   yield* fs.writeFile(path.join(resourcesDir, "screen-code/quickjs.wasm"), SCREEN_WASM_BYTES);
   const appExecutableName = "t3code.exe";
@@ -402,48 +409,41 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect.each(["linux", "win"] as const)(
-    "stages the Cua %s compressed release at the desktop host path",
-    (platform) =>
-      Effect.gen(function* () {
-        const h = yield* makeCuaStageFixture(platform);
-        yield* h.fs.writeFile(h.archivePath, h.archive);
-        const resources = yield* h.stage("release");
-        const destination = h.path.join(resources, "cua-driver");
-        assert.equal(h.requests(), 0);
-        const companions =
-          platform === "win"
-            ? ["cua-driver.exe", "cua-driver-uia.exe", "cua-cursor-theme.exe"]
-            : [
-                "cua-driver",
-                "cua-cursor-theme",
-                "wayland-helper/README.md",
-                "wayland-helper/install.sh",
-                "wayland-helper/winrects@cua/metadata.json",
-                "wayland-helper/winrects@cua/extension.js",
-              ];
-        assert.deepStrictEqual(
-          (yield* h.fs.readDirectory(destination)).sort(),
-          platform === "win"
-            ? [...companions].sort()
-            : ["cua-cursor-theme", "cua-driver", "wayland-helper"],
-        );
-        for (const member of companions) {
-          assert.equal(yield* h.fs.readFileString(h.path.join(destination, member)), member);
+  it.effect("stages the Cua Linux compressed release at the desktop host path", () =>
+    Effect.gen(function* () {
+      const h = yield* makeCuaStageFixture("linux");
+      yield* h.fs.writeFile(h.archivePath, h.archive);
+      const resources = yield* h.stage("release");
+      const destination = h.path.join(resources, "cua-driver");
+      assert.equal(h.requests(), 0);
+      const companions = [
+        "cua-driver",
+        "cua-cursor-theme",
+        "wayland-helper/README.md",
+        "wayland-helper/install.sh",
+        "wayland-helper/winrects@cua/metadata.json",
+        "wayland-helper/winrects@cua/extension.js",
+      ];
+      assert.deepStrictEqual((yield* h.fs.readDirectory(destination)).sort(), [
+        "cua-cursor-theme",
+        "cua-driver",
+        "wayland-helper",
+      ]);
+      for (const member of companions) {
+        assert.equal(yield* h.fs.readFileString(h.path.join(destination, member)), member);
+      }
+      if ((yield* HostProcess.Platform) !== "win32") {
+        for (const executable of [
+          h.path.join(destination, "cua-driver"),
+          h.path.join(destination, "cua-cursor-theme"),
+        ]) {
+          assert.equal((yield* h.fs.stat(executable)).mode & 0o777, 0o755);
         }
-        if ((yield* HostProcess.Platform) !== "win32" && platform !== "win") {
-          const executables = [
-            h.path.join(destination, "cua-driver"),
-            h.path.join(destination, "cua-cursor-theme"),
-          ];
-          for (const executable of executables) {
-            assert.equal((yield* h.fs.stat(executable)).mode & 0o777, 0o755);
-          }
-        }
-      }).pipe(Effect.scoped),
+      }
+    }).pipe(Effect.scoped),
   );
 
-  it.effect("Cua Windows SDK and driver fit the packaged 80 loose-file budget", () =>
+  it.effect("Cua Windows SDK and helper fit the packaged 80 loose-file budget", () =>
     Effect.gen(function* () {
       const h = yield* makeCuaStageFixture("win");
       const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: false });
@@ -483,9 +483,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           unpack: globs.length === 1 ? globs[0]! : `{${globs.join(",")}}`,
         }),
       );
-      yield* h.fs.writeFile(h.archivePath, h.archive);
-      const staged = yield* h.stage("driver");
-      yield* h.fs.copy(h.path.join(staged, "cua-driver"), h.path.join(resources, "cua-driver"));
       yield* h.fs.makeDirectory(h.path.join(resources, "screen-code"), { recursive: true });
       yield* h.fs.writeFile(h.path.join(resources, "screen-code/quickjs.wasm"), SCREEN_WASM_BYTES);
       const result = yield* validateWindowsPackagedPayload({
@@ -2235,12 +2232,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
       ]);
       assert.deepStrictEqual(win.extraResources, [
-        ...DESKTOP_EXTRA_RESOURCES,
+        ...DESKTOP_EXTRA_RESOURCES.filter((resource) => resource.to !== "cua-driver"),
+        { from: "apps/desktop/prod-resources/computer-use-helper", to: "computer-use-helper" },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
         ...WSL_RUNTIME_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(winWithoutWslRuntime.extraResources, [
-        ...DESKTOP_EXTRA_RESOURCES,
+        ...DESKTOP_EXTRA_RESOURCES.filter((resource) => resource.to !== "cua-driver"),
+        { from: "apps/desktop/prod-resources/computer-use-helper", to: "computer-use-helper" },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.nsis, {

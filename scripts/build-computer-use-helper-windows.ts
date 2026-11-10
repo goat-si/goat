@@ -56,6 +56,8 @@ export function renderWindowsBuildInfo(input: {
   readonly channel: HelperChannel;
   readonly version: string;
   readonly pins: ReadonlyArray<{ readonly file: string; readonly sha256: string }>;
+  /** Defaults to dev only; an unsigned release helper must opt in to serving any parent. */
+  readonly allowAnyParent?: boolean;
 }): string {
   for (const pin of input.pins)
     if (!/^[0-9a-f]{64}$/u.test(pin.sha256) || !/^[\w.-]+$/u.test(pin.file))
@@ -87,8 +89,11 @@ export function renderWindowsBuildInfo(input: {
       csharpString(computerUseHelperBundleIdForChannel(input.channel)) +
       ";",
     "    public const string Version = " + csharpString(input.version) + ";",
-    // A dev helper serves an unpackaged Electron or a terminal; release helpers check their parent.
-    "    public const bool AllowAnyParent = " + (input.channel === "dev" ? "true" : "false") + ";",
+    // A dev helper serves an unpackaged Electron or a terminal; signed release helpers check
+    // their parent. An unsigned channel (dev, nightly, preview) has no signature to check.
+    "    public const bool AllowAnyParent = " +
+      ((input.allowAnyParent ?? input.channel === "dev") ? "true" : "false") +
+      ";",
     "    public const string ParentExecutable = " +
       csharpString(CHANNEL_PARENTS[input.channel]) +
       ";",
@@ -102,26 +107,33 @@ export function renderWindowsBuildInfo(input: {
 }
 
 /**
- * A release helper verifies its parent by Authenticode publisher, so it must be signed itself.
- * Dev helpers may stay unsigned.
+ * A signed release helper verifies its parent by Authenticode publisher, so it must be signed
+ * itself. An unsigned one has no signature to check, so it is allowed only when it serves any
+ * parent: dev, nightly, or a stable helper a packaging job signs with Azure Trusted Signing
+ * (--deferred-signing).
  */
 export function windowsSigningPlan(input: {
   readonly channel: HelperChannel;
   readonly thumbprint: string | undefined;
   readonly timestampUrl: string | undefined;
+  readonly deferredSigning?: boolean;
+  readonly allowAnyParent?: boolean;
 }):
   | { readonly sign: false }
   | { readonly sign: true; readonly args: ReadonlyArray<string> }
   | { readonly error: string } {
   const thumbprint = input.thumbprint?.replaceAll(/\s/gu, "").toUpperCase();
   if (!thumbprint)
-    return input.channel === "dev"
+    return input.channel === "dev" ||
+      input.channel === "nightly" ||
+      input.allowAnyParent ||
+      input.deferredSigning
       ? { sign: false }
       : {
           error:
             "A " +
             input.channel +
-            " helper must be signed: pass --sign-thumbprint for a code signing certificate in this user's store.",
+            " helper must be signed: pass --sign-thumbprint for a code signing certificate in this user's store, --allow-any-parent for an unsigned helper, or --deferred-signing when the packaging job signs it.",
         };
   if (!/^[0-9A-F]{40}$/u.test(thumbprint))
     return { error: "--sign-thumbprint must be a 40 character SHA-1 thumbprint." };
@@ -148,6 +160,8 @@ export const buildWindowsComputerUseHelper = Effect.fn("buildWindowsComputerUseH
     readonly arch: "x64" | "arm64";
     readonly thumbprint: string | undefined;
     readonly timestampUrl: string | undefined;
+    readonly deferredSigning?: boolean;
+    readonly allowAnyParent?: boolean;
     readonly runner?: ReleaseCommandRunner;
   }) {
     const fs = yield* FileSystem.FileSystem;
@@ -156,7 +170,10 @@ export const buildWindowsComputerUseHelper = Effect.fn("buildWindowsComputerUseH
       requireReleaseCommand(input.runner ?? runReleaseCommand, program, args);
     if ((yield* HostProcess.Platform) !== "win32")
       return yield* fail("The Windows helper builds on Windows only.");
-    const signing = windowsSigningPlan(input);
+    const signing = windowsSigningPlan({
+      ...input,
+      allowAnyParent: input.allowAnyParent ?? input.channel === "dev",
+    });
     if ("error" in signing) return yield* fail(signing.error);
 
     const release = cuaDriverRelease("win32", input.arch);
@@ -216,7 +233,12 @@ export const buildWindowsComputerUseHelper = Effect.fn("buildWindowsComputerUseH
     const buildInfo = path.join(work, "BuildInfo.g.cs");
     yield* fs.writeFileString(
       buildInfo,
-      renderWindowsBuildInfo({ channel: input.channel, version: desktopPackageJson.version, pins }),
+      renderWindowsBuildInfo({
+        channel: input.channel,
+        version: desktopPackageJson.version,
+        pins,
+        ...(input.allowAnyParent === undefined ? {} : { allowAnyParent: input.allowAnyParent }),
+      }),
     );
     const framework = path.join(
       process.env.WINDIR ?? "C:\\Windows",
@@ -272,8 +294,18 @@ const command = Command.make(
       Flag.withDescription("RFC 3161 timestamp server for signtool."),
       Flag.optional,
     ),
+    deferredSigning: Flag.Boolean("deferred-signing").pipe(
+      Flag.withDescription("Build a stable helper that the packaging job signs."),
+      Flag.withDefault(false),
+    ),
+    allowAnyParent: Flag.Boolean("allow-any-parent").pipe(
+      Flag.withDescription(
+        "Build an unsigned helper, which has no signature to check a parent against.",
+      ),
+      Flag.withDefault(false),
+    ),
   },
-  ({ channel, arch, output, signThumbprint, timestampUrl }) =>
+  ({ channel, arch, output, signThumbprint, timestampUrl, deferredSigning, allowAnyParent }) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -286,6 +318,8 @@ const command = Command.make(
         ),
         thumbprint: Option.getOrUndefined(signThumbprint),
         timestampUrl: Option.getOrUndefined(timestampUrl),
+        deferredSigning,
+        allowAnyParent,
       });
       yield* Effect.log(
         "Built " + built.executable + (built.signed ? " (signed)." : " (unsigned dev build)."),

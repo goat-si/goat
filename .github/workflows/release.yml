@@ -692,6 +692,121 @@ jobs:
       cli_archive: true
       ssh_runtime_bundle: true
 
+  # GOAT Computer Use is C# compiled by the in-box csc.exe, so a Windows target
+  # builds its helper here, on Windows, and the Linux packaging job signs and
+  # embeds it (#1228).
+  computer_use_helper_win_x64:
+    name: Computer Use helper Windows x64
+    needs: [preflight]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' }}
+    runs-on: windows-2025
+    timeout-minutes: 25
+    env:
+      HELPER_CHANNEL: ${{ needs.preflight.outputs.release_channel == 'nightly' && 'nightly' || 'stable' }}
+      ALLOW_ANY_PARENT: ${{ needs.preflight.outputs.release_channel != 'stable' }}
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.ref }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --filter=@goat/scripts...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Build helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--channel "$HELPER_CHANNEL" --arch x64 --output win-helper)
+          if [[ "$ALLOW_ANY_PARENT" == "true" ]]; then
+            args+=(--allow-any-parent)
+          else
+            args+=(--deferred-signing)
+          fi
+          node scripts/build-computer-use-helper-windows.ts "${args[@]}"
+
+      - name: Upload helper
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: computer-use-helper-win-x64
+          path: win-helper/computer-use-helper
+          if-no-files-found: error
+          retention-days: 1
+
+  computer_use_helper_win_arm64:
+    name: Computer Use helper Windows arm64
+    needs: [preflight]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' }}
+    runs-on: windows-11-arm
+    timeout-minutes: 25
+    env:
+      HELPER_CHANNEL: ${{ needs.preflight.outputs.release_channel == 'nightly' && 'nightly' || 'stable' }}
+      ALLOW_ANY_PARENT: ${{ needs.preflight.outputs.release_channel != 'stable' }}
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.ref }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --filter=@goat/scripts...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Build helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--channel "$HELPER_CHANNEL" --arch arm64 --output win-helper)
+          if [[ "$ALLOW_ANY_PARENT" == "true" ]]; then
+            args+=(--allow-any-parent)
+          else
+            args+=(--deferred-signing)
+          fi
+          node scripts/build-computer-use-helper-windows.ts "${args[@]}"
+
+      - name: Upload helper
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: computer-use-helper-win-arm64
+          path: win-helper/computer-use-helper
+          if-no-files-found: error
+          retention-days: 1
+
   # The Windows jobs start with the other platforms and wait for the same-arch
   # Linux CLI archive after their other setup. Packaging is mostly CPU and
   # small-file work, which Linux runners do faster than Windows ones, so both
@@ -699,7 +814,7 @@ jobs:
   # Windows.
   desktop_win_x64:
     name: Desktop Windows x64
-    needs: [preflight, relay_public_config, build_bundle]
+    needs: [preflight, relay_public_config, build_bundle, computer_use_helper_win_x64]
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build_bundle.result == 'success' }}
     uses: ./.github/workflows/release-desktop.yml
     secrets: inherit
@@ -721,10 +836,11 @@ jobs:
       resource_key: win32-x64
       cli_archive: true
       ssh_runtime_bundle: true
+      computer_use_helper_artifact: computer-use-helper-win-x64
 
   desktop_win_arm64:
     name: Desktop Windows arm64
-    needs: [preflight, relay_public_config, build_bundle]
+    needs: [preflight, relay_public_config, build_bundle, computer_use_helper_win_arm64]
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build_bundle.result == 'success' }}
     uses: ./.github/workflows/release-desktop.yml
     secrets: inherit
@@ -746,6 +862,7 @@ jobs:
       resource_key: win32-arm64
       cli_archive: true
       ssh_runtime_bundle: true
+      computer_use_helper_artifact: computer-use-helper-win-arm64
 
   release:
     name: Publish GitHub Release

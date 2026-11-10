@@ -7,10 +7,12 @@ import { createBuildConfig } from "./build-desktop-artifact.ts";
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  CuaDriverArtifactError,
   computerUseHelperEnvironment,
   computerUseHelperRefusal,
   embeddedHelperProblems,
   signedComputerUseHelper,
+  stageWindowsComputerUseHelper,
   withComputerUseHelper,
 } from "./desktop-artifact-computer-use.ts";
 
@@ -90,6 +92,46 @@ describe("desktop computer use payload", () => {
           assert.isFalse(yield* fs.exists(path.join(`${asarPath}.unpacked`, file)));
         }
       }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("carries a Windows helper built on Windows in resources/computer-use-helper", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-win-helper-" });
+      const helperDir = path.join(root, "built");
+      yield* fs.makeDirectory(path.join(helperDir, "cua-driver"), { recursive: true });
+      yield* fs.writeFileString(path.join(helperDir, "GOAT Computer Use.exe"), "helper");
+      yield* fs.writeFileString(path.join(helperDir, "cua-driver", "cua-driver.exe"), "driver");
+
+      const staged = yield* stageWindowsComputerUseHelper({
+        repoRoot: root,
+        stageResourcesDir: path.join(root, "resources"),
+        channel: "nightly",
+        arch: "x64",
+        helperDir,
+        signed: false,
+      });
+      assert.equal(staged, path.join(root, "resources", "computer-use-helper"));
+      assert.equal(yield* fs.readFileString(path.join(staged, "GOAT Computer Use.exe")), "helper");
+      assert.equal(
+        yield* fs.readFileString(path.join(staged, "cua-driver", "cua-driver.exe")),
+        "driver",
+      );
+
+      const empty = path.join(root, "empty");
+      yield* fs.makeDirectory(empty, { recursive: true });
+      const error = yield* stageWindowsComputerUseHelper({
+        repoRoot: root,
+        stageResourcesDir: path.join(root, "other-resources"),
+        channel: "nightly",
+        arch: "x64",
+        helperDir: empty,
+        signed: false,
+      }).pipe(Effect.flip);
+      assert.instanceOf(error, CuaDriverArtifactError);
+      assert.match(error.message, /GOAT Computer Use\.exe is missing/);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

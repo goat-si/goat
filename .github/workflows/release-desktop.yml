@@ -73,6 +73,12 @@ on:
         required: false
         default: false
         type: boolean
+      # A Windows package carries this artifact's GOAT Computer Use helper,
+      # built on a Windows runner because csc.exe ships with Windows only.
+      computer_use_helper_artifact:
+        required: false
+        default: ""
+        type: string
       # A runner of the target's own platform and architecture, for a `runner`
       # that cannot execute the target. The build job skips everything that
       # runs the packaged binaries, and a second job runs it there.
@@ -498,6 +504,13 @@ jobs:
           name: cli-linux-${{ inputs.arch }}
           path: wsl-runtime
 
+      - name: Download computer use helper
+        if: inputs.platform == 'win' && inputs.computer_use_helper_artifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ inputs.computer_use_helper_artifact }}
+          path: computer-use-helper
+
       - name: Build desktop artifact
         shell: bash
         env:
@@ -575,6 +588,11 @@ jobs:
             # Embed the Linux CLI archive built by the same-arch Linux job as
             # the WSL runtime. Required for a working WSL backend on Windows.
             args+=(--wsl-runtime "$GITHUB_WORKSPACE"/wsl-runtime/goat-*-linux-${{ inputs.arch }}.tar.gz)
+            # The helper arrives built (csc.exe runs on Windows only); packaging
+            # signs it with the same Azure Trusted Signing identity as GOAT.exe.
+            if [[ -n "${{ inputs.computer_use_helper_artifact }}" ]]; then
+              args+=(--computer-use-helper-dir "$GITHUB_WORKSPACE/computer-use-helper")
+            fi
             if has_all \
               "$AZURE_TENANT_ID" \
               "$AZURE_CLIENT_ID" \

@@ -796,6 +796,10 @@ jobs:
           flags="$flags --remap-path-prefix=$(native "$GITHUB_WORKSPACE")=/goat-build"
           echo "RUSTFLAGS=$flags" >> "$GITHUB_ENV"
 
+      - name: Build Windows computer use helper
+        if: matrix.platform == 'win'
+        run: node scripts/build-computer-use-helper-windows.ts --channel nightly --arch "${{ matrix.arch }}" --output "$RUNNER_TEMP/goat-computer-use-helper" --allow-any-parent
+
       - name: Build desktop app (unsigned)
         run: |
           set -euo pipefail
@@ -805,6 +809,7 @@ jobs:
             --ssh-runtime-archive-dir "$GITHUB_WORKSPACE/ssh-runtime-archives" --require-all-ssh-runtimes)
           if [ "${{ matrix.platform }}" = win ]; then
             args+=(--wsl-runtime "$GITHUB_WORKSPACE"/ssh-runtime-archives/goat-*-linux-${{ matrix.arch }}.tar.gz)
+            args+=(--computer-use-helper-dir "$RUNNER_TEMP/goat-computer-use-helper/computer-use-helper")
           fi
           node scripts/build-desktop-artifact.ts "${args[@]}"
 

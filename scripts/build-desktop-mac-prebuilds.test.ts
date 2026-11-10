@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Node's glob matcher is the one electron-builder's file exclusions use.
 import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
-import { resolveMacFileExclusions } from "./build-desktop-artifact.ts";
+import { resolveMacFileExclusions } from "./desktop-artifact-file-exclusions.ts";
 
 it("drops the other architecture's Darwin prebuilds from single-architecture Mac builds", () => {
   const excludes = (arch: "arm64" | "x64" | "universal", file: string) =>
