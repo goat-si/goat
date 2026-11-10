@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
+	"github.com/goat-si/goat/apps/pen/internal/login"
 )
 
 // pipeEnd is one end of an in-memory Link.
@@ -188,6 +190,70 @@ func TestAGoogleJoinRacingTheMembersRevokeSignsAndQueuesNothing(t *testing.T) {
 		}
 		if queued != 0 || s.Len() != len(recs)+1 {
 			t.Fatalf("locked %v: queued %d; the store holds %d records, want %d", locked, queued, s.Len(), len(recs)+1)
+		}
+	}
+}
+
+// N2: a lock or an unbind merged after the first look but before the signature takes effect: the
+// decision is made again with the signature under the store's lock, so a lock queues the request
+// and an unbind refuses it, and no admit is signed.
+func TestALockOrUnbindMergedBeforeTheSignatureIsHonoured(t *testing.T) {
+	keyPub, _, _ := ed25519.GenerateKey(nil)
+	bind := &Account{LoginURL: "https://login.example", LoginKey: LoginKey{Kid: login.Kid(keyPub), Pub: ident.B64.EncodeToString(keyPub)}, Sub: "1"}
+	for _, c := range []struct {
+		name         string
+		change       Fields
+		typ          string
+		queued, sign bool
+	}{
+		{"lock", Fields{On: true}, TypeLock, true, false},
+		{"unbind", Fields{}, TypeAccount, false, false},
+	} {
+		f, y, j := detID(1), detID(2), detID(3)
+		b, found := newMesh(t, f)
+		ay := b.admit(f, y, found)
+		ac := b.sign(f, TypeAccount, []*Record{ay}, Fields{Bind: bind})
+		recs := []*Record{found, ay, ac}
+		s := NewStore(nil, b.meshID)
+		if _, err := s.Merge(recs); err != nil {
+			t.Fatal(err)
+		}
+		change := b.sign(f, c.typ, []*Record{ac}, c.change)
+		queued := 0
+		srv, cli := pipe()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		served := make(chan error, 1)
+		checks := 0
+		go func() {
+			_, err := ServeAccount(ctx, srv, j.NoisePub, AccountAdmission{ID: y, Store: s,
+				Now: func() time.Time {
+					if checks == 2 {
+						s.Merge([]*Record{change})
+					}
+					return time.Now()
+				},
+				Check: func(_ json.RawMessage, v *View) (Claim, error) {
+					checks++
+					if v.Account == nil {
+						return Claim{}, errors.New("this mesh is not bound to a Google account")
+					}
+					return Claim{SignPub: pub(j), NoisePub: ident.B64.EncodeToString(j.NoisePub), Email: "j@example.com", Hash: HashOf([]byte("assertion"))}, nil
+				},
+				Queue: func(*Card, Claim) (string, error) { queued++; return "q", nil },
+			})
+			served <- err
+		}()
+		out, err := AccountJoin(ctx, cli, j, "j", json.RawMessage(`{"a":1}`))
+		<-served
+		cancel()
+		if got := out.QueuedID != ""; got != c.queued || (queued == 1) != c.queued {
+			t.Fatalf("%s: queued %v (%d), want %v; joiner error %v", c.name, got, queued, c.queued, err)
+		}
+		if !c.queued && err == nil {
+			t.Fatalf("%s: the join went through", c.name)
+		}
+		if n := s.Len(); n != len(recs)+1 {
+			t.Fatalf("%s: the store holds %d records, want %d: an admit was signed", c.name, n, len(recs)+1)
 		}
 	}
 }

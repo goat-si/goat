@@ -99,7 +99,7 @@ func (d *Daemon) checkAssertion(raw json.RawMessage, v *mesh.View) (mesh.Claim, 
 	if d.pending.isDenied(a.A.SignPub, d.now()) {
 		return mesh.Claim{}, errors.New("a member denied this machine; it may ask again after 24 hours")
 	}
-	return mesh.Claim{SignPub: a.A.SignPub, NoisePub: a.A.NoisePub, Email: a.A.Email, Sub: a.A.Sub, Hash: a.Hash()}, nil
+	return mesh.Claim{SignPub: a.A.SignPub, NoisePub: a.A.NoisePub, Email: a.A.Email, Sub: a.A.Sub, Hash: a.Hash(), Kid: b.Key.Kid}, nil
 }
 
 // queueRequest keeps an account join while the mesh is locked.
@@ -110,7 +110,7 @@ func (d *Daemon) queueRequest(card *mesh.Card, c mesh.Claim) (string, error) {
 	}
 	fp := ident.Fingerprint(noise)
 	p := Pending{ID: fp[:9], Fingerprint: fp, Name: card.C.Name, NodeID: card.C.NodeID, SignPub: card.C.SignPub,
-		Email: c.Email, Sub: c.Sub, Assertion: c.Hash, At: d.now().UnixMilli(), Card: card}
+		Email: c.Email, Sub: c.Sub, Kid: c.Kid, Assertion: c.Hash, At: d.now().UnixMilli(), Card: card}
 	if err := d.pending.add(p, d.now()); err != nil {
 		return "", err
 	}
@@ -183,7 +183,17 @@ func (d *Daemon) approve(ctx context.Context, arg string) (ApproveResult, error)
 	if _, gone := v.Revoked[p.SignPub]; gone {
 		return ApproveResult{}, errors.New("this key was revoked")
 	}
-	m, err := mesh.AdmitAccount(d.id, d.mesh(), p.Card, mesh.Claim{SignPub: p.SignPub, NoisePub: p.Card.C.NoisePub, Email: p.Email, Hash: p.Assertion}, d.now())
+	// The binding is checked again with the signature, under the store's lock: an unbind or a
+	// rebind to another account or login key merged since the request was queued refuses it.
+	m, err := mesh.AdmitAccount(d.id, d.mesh(), p.Card, mesh.Claim{SignPub: p.SignPub, NoisePub: p.Card.C.NoisePub, Email: p.Email, Hash: p.Assertion}, d.now(), func(v *mesh.View) error {
+		if v.Account == nil || v.Account.Sub != p.Sub || p.Kid != "" && v.Account.LoginKey.Kid != p.Kid {
+			return errors.New("the mesh is no longer bound to the account and login key this request signed in with")
+		}
+		if _, gone := v.Revoked[p.SignPub]; gone {
+			return errors.New("this key was revoked")
+		}
+		return nil
+	})
 	if errors.Is(err, mesh.ErrNotMember) {
 		return ApproveResult{}, errors.New("this machine is not a member of the mesh, so its approval would not count; approve on a current member (pen ls there shows the request once the joiner asks it)")
 	}

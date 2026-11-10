@@ -331,7 +331,7 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 	// The membership check, the burn and the signature hold the store's lock together: an
 	// inviter that is no longer a member keeps the invite unused.
 	errBurn := errors.New("burn")
-	admit, err := a.Store.AppendAsMember(a.ID, TypeAdmit, now.UnixMilli(), Fields{Card: m.Card}, func() error {
+	admit, err := a.Store.AppendAsMember(a.ID, TypeAdmit, now.UnixMilli(), Fields{Card: m.Card}, func(*View) error {
 		if err := a.Invites.Burn(a.InviteID, now); err != nil {
 			return errBurn
 		}

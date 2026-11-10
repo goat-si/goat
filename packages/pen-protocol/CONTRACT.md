@@ -434,7 +434,9 @@ answers an `assertion`, at once and again after the refresh before deciding, and
 invite is used, with `{"t":"refused","reason":"this machine is not a member of the mesh","notMember":true}` and 4401,
 signing and queueing nothing; it still answers a `check`. The membership check and the admit's signature (with the
 invite's burn, or the queueing of a request) are one step under the node's store lock, so a revoke that arrives in
-between still stops them. A Google joiner leaves such a node out and races the other
+between still stops them. For a Google join that step also repeats the decision: the assertion against the binding
+then in effect, and the lock; a lock merged in the meantime queues the request, an unbind or rebind refuses it. An
+approval checks the request's account and login key against the binding at signing time. A Google joiner leaves such a node out and races the other
 listed nodes again in the same sign-in; an invited joiner is told the invite was not used and to ask a current member
 for a new one. An older joiner ignores `notMember` and reports the refusal as before. A refusal also stands when the check
 does not complete. A node older than the check (pen 0.2.6 and before) answers `refused` ("expected an assertion") and

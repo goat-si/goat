@@ -475,14 +475,14 @@ func (s *Store) Append(id *ident.Identity, typ string, at int64, f Fields) (*Rec
 // checks that id is a member of the current view, runs before (an invite's burn; nothing is
 // signed when it fails) and appends. Lock order: the store, then what before takes (the invite
 // book, then the state directory's lock); nothing takes them the other way round.
-func (s *Store) AppendAsMember(id *ident.Identity, typ string, at int64, f Fields, before func() error) (*Record, error) {
+func (s *Store) AppendAsMember(id *ident.Identity, typ string, at int64, f Fields, before func(v *View) error) (*Record, error) {
 	s.mu.Lock()
 	if !s.memberLocked(id) {
 		s.mu.Unlock()
 		return nil, ErrNotMember
 	}
 	if before != nil {
-		if err := before(); err != nil {
+		if err := before(s.view); err != nil {
 			s.mu.Unlock()
 			return nil, err
 		}
@@ -490,15 +490,15 @@ func (s *Store) AppendAsMember(id *ident.Identity, typ string, at int64, f Field
 	return s.appendLocked(id, typ, at, f)
 }
 
-// DoAsMember runs fn under the store's lock if id is a member of the current view (queueing a
-// request for approval); fn must not use the store.
-func (s *Store) DoAsMember(id *ident.Identity, fn func() error) error {
+// DoAsMember runs fn with the current view under the store's lock if id is a member of it
+// (queueing a request for approval); fn must not use the store.
+func (s *Store) DoAsMember(id *ident.Identity, fn func(v *View) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.memberLocked(id) {
 		return ErrNotMember
 	}
-	return fn()
+	return fn(s.view)
 }
 
 func (s *Store) memberLocked(id *ident.Identity) bool {

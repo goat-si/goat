@@ -26,7 +26,13 @@ type Claim struct {
 	Sub string
 	// Hash is base64url SHA-256 of the assertion body.
 	Hash string
+	// Kid is the login key the assertion was checked against.
+	Kid string
 }
+
+// errLockedNow is a decision's answer when the mesh was locked between the first look and the
+// signature: the request goes to the locked path.
+var errLockedNow = errors.New("mesh: locked")
 
 // AccountAdmission is what a member needs to serve one account join.
 type AccountAdmission struct {
@@ -143,9 +149,14 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 			return AccountResult{}, refuse(c, "already a member")
 		}
 	}
-	if v.Locked {
-		var id string
-		err := a.Store.DoAsMember(a.ID, func() (err error) {
+	queue := func() (AccountResult, error) {
+		var id, name string
+		err := a.Store.DoAsMember(a.ID, func(v *View) error {
+			claim, err := a.Check(assertion, v)
+			if err != nil {
+				return err
+			}
+			name = v.Members[ident.B64.EncodeToString(a.ID.SignPub)].Name
 			id, err = a.Queue(m.Card, claim)
 			return err
 		})
@@ -155,14 +166,37 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 		if err != nil {
 			return AccountResult{}, refuse(c, err.Error())
 		}
-		name := v.Members[ident.B64.EncodeToString(a.ID.SignPub)].Name
 		if err := c.Write(Msg{T: "queued", ID: id, Member: name}); err != nil {
 			return AccountResult{}, err
 		}
 		l.Close(wire.CodeNormal)
 		return AccountResult{QueuedID: id}, nil
 	}
-	member, err := AdmitAccount(a.ID, a.Store, m.Card, claim, a.Now())
+	if v.Locked {
+		return queue()
+	}
+	// The decision is made again on the view under the store's lock, with the signature: a lock,
+	// unbind or rebind merged since the look above takes effect.
+	member, err := AdmitAccount(a.ID, a.Store, m.Card, claim, a.Now(), func(v *View) error {
+		if _, err := a.Check(assertion, v); err != nil {
+			return err
+		}
+		if _, gone := v.Revoked[cb.SignPub]; gone {
+			return errors.New("this key was revoked")
+		}
+		for _, x := range v.Members {
+			if x.SignPub == cb.SignPub || x.NoisePub == cb.NoisePub || x.NodeID == cb.NodeID {
+				return errors.New("already a member")
+			}
+		}
+		if v.Locked {
+			return errLockedNow
+		}
+		return nil
+	})
+	if errors.Is(err, errLockedNow) {
+		return queue()
+	}
 	if errors.Is(err, ErrNotMember) {
 		return AccountResult{}, refuseNotMember(c)
 	}
@@ -187,8 +221,19 @@ type admitted struct {
 }
 
 // AdmitAccount signs an admit via google for card and checks it made the subject a member.
-func AdmitAccount(id *ident.Identity, s *Store, card *Card, c Claim, now time.Time) (admitted, error) {
-	admit, err := s.AppendAsMember(id, TypeAdmit, now.UnixMilli(), Fields{Card: card, Via: ViaGoogle, Email: c.Email, Assertion: c.Hash}, nil)
+// decide runs on the view under the store's lock right before the signature; its error stops it
+// and is returned as it is.
+func AdmitAccount(id *ident.Identity, s *Store, card *Card, c Claim, now time.Time, decide func(v *View) error) (admitted, error) {
+	var refused error
+	admit, err := s.AppendAsMember(id, TypeAdmit, now.UnixMilli(), Fields{Card: card, Via: ViaGoogle, Email: c.Email, Assertion: c.Hash}, func(v *View) error {
+		if decide != nil {
+			refused = decide(v)
+		}
+		return refused
+	})
+	if refused != nil {
+		return admitted{}, refused
+	}
 	if errors.Is(err, ErrNotMember) {
 		return admitted{}, err
 	}
