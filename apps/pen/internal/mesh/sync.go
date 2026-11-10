@@ -37,7 +37,18 @@ func (s *Store) missingFrom(have []string) []*Record {
 	return out
 }
 
-func (s *Store) take(m *Msg, onMerged Merged) error {
+// maxSessionRecords is the most records one mesh session may carry: everything an honest member
+// can hold, stored and waiting. More means the peer is replaying lines to keep this side busy.
+const maxSessionRecords = MaxRecords + MaxPool
+
+// take merges one records line, cutting the session once it has carried more than
+// maxSessionRecords; *received counts the records so far.
+func (s *Store) take(l Link, m *Msg, onMerged Merged, received *int) error {
+	*received += len(m.Records)
+	if *received > maxSessionRecords {
+		l.Close(errLine.Code)
+		return errLine
+	}
 	added, err := s.Merge(m.Records)
 	if len(added) > 0 && onMerged != nil {
 		onMerged(added)
@@ -61,6 +72,7 @@ func SyncInitiateAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHe
 		return err
 	}
 	sentDone := false
+	received := 0
 	for {
 		m, err := c.Read(ctx)
 		if err != nil {
@@ -83,7 +95,7 @@ func SyncInitiateAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHe
 			}
 			sentDone = true
 		case "records":
-			if err := s.take(m, onMerged); err != nil {
+			if err := s.take(l, m, onMerged, &received); err != nil {
 				return err
 			}
 		case "done":
@@ -109,6 +121,7 @@ func SyncRespondAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHel
 		return err
 	}
 	gotHello := false
+	received := 0
 	for {
 		m, err := c.Read(ctx)
 		if err != nil {
@@ -128,7 +141,7 @@ func SyncRespondAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHel
 				return err
 			}
 		case "records":
-			if err := s.take(m, onMerged); err != nil {
+			if err := s.take(l, m, onMerged, &received); err != nil {
 				return err
 			}
 		case "done":
