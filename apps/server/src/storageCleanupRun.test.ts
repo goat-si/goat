@@ -172,9 +172,11 @@ describe("worktree cleanup preview gate", () => {
         hooks.onEvaluate = Effect.void;
         return run.forgetPreview;
       });
-      yield* sweep(0);
+      const first = yield* sweep(0);
       const again = yield* sweep(1);
-      expect(calls.passes).toEqual([true, false, true]);
+      // The sweep whose approval was forgotten removes nothing; the next one asks again.
+      expect(calls.passes).toEqual([true, true]);
+      expect(first.preview).toBeNull();
       expect(calls.evaluate).toEqual([1, 1]);
       expect(again.preview).toEqual(preview);
     }).pipe(Effect.provide(layer));
