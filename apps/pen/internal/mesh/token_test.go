@@ -78,6 +78,9 @@ func buildTokenVectors() tokenFile {
 		tok.Relays = relays
 		f.Invalid = append(f.Invalid, badToken{Why: why, Token: rawV2(tok)})
 	}
+	v1 := base
+	v1.Relays = []string{"http://relay.example.com"}
+	f.Invalid = append(f.Invalid, badToken{Why: "version 1, plain http to a public host", Token: v1.String()})
 	sortBad(f.Invalid)
 	return f
 }

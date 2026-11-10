@@ -64,6 +64,9 @@ func ParseToken(s string) (Token, error) {
 	t := Token{SignPub: b[1:33], NoisePub: b[33:65], Secret: b[65:97]}
 	if b[0] == 1 {
 		t.Relays = []string{string(b[97:])}
+		if err := relayScheme(t.Relays[0]); err != nil {
+			return Token{}, fmt.Errorf("invite token relay: %w", err)
+		}
 		if _, err := wire.RelayOrigin(t.Relays[0]); err != nil {
 			return Token{}, fmt.Errorf("invite token relay: %w", err)
 		}
@@ -87,18 +90,8 @@ func ValidRelayList(relays []string) error {
 		if r == "" || len(r) > MaxTokenRelayLen {
 			return fmt.Errorf("relay URL empty or over %d bytes", MaxTokenRelayLen)
 		}
-		u, err := url.Parse(r)
-		if err != nil {
+		if err := relayScheme(r); err != nil {
 			return err
-		}
-		switch strings.ToLower(u.Scheme) {
-		case "https", "wss":
-		case "http", "ws":
-			if !loopback(u.Hostname()) {
-				return fmt.Errorf("relay %q: plain http only for loopback hosts", r)
-			}
-		default:
-			return fmt.Errorf("relay %q: scheme must be https or wss", r)
 		}
 		origin, err := wire.RelayOrigin(r)
 		if err != nil {
@@ -109,6 +102,25 @@ func ValidRelayList(relays []string) error {
 			return fmt.Errorf("duplicate relay %q", r)
 		}
 		seen[origin] = true
+	}
+	return nil
+}
+
+// relayScheme refuses a relay URL that is not https or wss, allowing http or ws only to a loopback
+// host, so neither token version can point a joiner at a plain-text relay on the network.
+func relayScheme(r string) error {
+	u, err := url.Parse(r)
+	if err != nil {
+		return err
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https", "wss":
+	case "http", "ws":
+		if !loopback(u.Hostname()) {
+			return fmt.Errorf("relay %q: plain http only for loopback hosts", r)
+		}
+	default:
+		return fmt.Errorf("relay %q: scheme must be https or wss", r)
 	}
 	return nil
 }
@@ -192,7 +204,12 @@ func (iv *Invites) Lookup(id string, now time.Time) (Invite, bool) {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
 	x, ok := iv.live[id]
-	if !ok || x.ExpiresAt <= now.UnixMilli() {
+	if !ok {
+		return Invite{}, false
+	}
+	if x.ExpiresAt <= now.UnixMilli() {
+		// The join is refused either way; a failed write leaves the secret for the next save.
+		_ = iv.saveLocked(now)
 		return Invite{}, false
 	}
 	return x, true
@@ -203,7 +220,13 @@ func (iv *Invites) Burn(id string, now time.Time) error {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
 	x, ok := iv.live[id]
-	if !ok || x.ExpiresAt <= now.UnixMilli() {
+	if !ok {
+		return errors.New("invite already used or expired")
+	}
+	if x.ExpiresAt <= now.UnixMilli() {
+		if err := iv.saveLocked(now); err != nil {
+			return err
+		}
 		return errors.New("invite already used or expired")
 	}
 	delete(iv.live, id)
