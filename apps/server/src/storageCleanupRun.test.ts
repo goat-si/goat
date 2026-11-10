@@ -38,14 +38,19 @@ const setup = (gate: ReadonlyArray<{ readonly apply: boolean }>) => {
     passes: [] as boolean[],
   };
   let next = 0;
+  const hooks = { onEvaluate: Effect.void as Effect.Effect<void> };
   const layer = Layer.mergeAll(
     Layer.succeed(WorktreeCleanupPreviewState, {
       evaluate: (input) =>
-        Effect.sync(() => {
-          calls.evaluate.push(input.plannedCount);
-          const apply = gate[Math.min(next++, gate.length - 1)]?.apply ?? false;
-          return { apply, preview: apply ? null : preview };
-        }),
+        Effect.suspend(() => hooks.onEvaluate).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              calls.evaluate.push(input.plannedCount);
+              const apply = gate[Math.min(next++, gate.length - 1)]?.apply ?? false;
+              return { apply, preview: apply ? null : preview };
+            }),
+          ),
+        ),
       respond: () => Effect.void,
       reset: Effect.sync(() => void calls.reset++),
     }),
@@ -66,7 +71,7 @@ const setup = (gate: ReadonlyArray<{ readonly apply: boolean }>) => {
       into.push(entry(dryRun), entry(false));
       return { waiting: false, kept: [] };
     });
-  return { calls, layer, clean };
+  return { calls, layer, clean, hooks };
 };
 
 describe("worktree cleanup preview gate", () => {
@@ -156,4 +161,22 @@ describe("worktree cleanup preview gate", () => {
       }).pipe(Effect.provide(layer));
     },
   );
+
+  it.effect("asks again when the preview is forgotten while a sweep is being approved", () => {
+    const { calls, layer, clean, hooks } = setup([{ apply: true }, { apply: false }]);
+    return Effect.gen(function* () {
+      const run = yield* makeWorktreeCleanupRun(Effect.succeed(false));
+      const sweep = (nowMs: number) =>
+        run({ nowMs, snapshotDays: null, preview: true, entries: [], clean });
+      hooks.onEvaluate = Effect.suspend(() => {
+        hooks.onEvaluate = Effect.void;
+        return run.forgetPreview;
+      });
+      yield* sweep(0);
+      const again = yield* sweep(1);
+      expect(calls.passes).toEqual([true, false, true]);
+      expect(calls.evaluate).toEqual([1, 1]);
+      expect(again.preview).toEqual(preview);
+    }).pipe(Effect.provide(layer));
+  });
 });
