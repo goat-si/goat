@@ -64,12 +64,17 @@ describe("partitionOnboardingProjects", () => {
     expect(partitionOnboardingProjects([recent, older], now, 90).recent).toEqual([recent, older]);
   });
 
-  it("keeps non-git folders and thin histories out of the default selection", () => {
+  it("selects non-git folders and short histories in the window", () => {
     const repo = candidate("/projects/repo");
     const folder = candidate("/projects/folder", { git: null });
     const thin = candidate("/projects/thin", { threadCount: 2 });
+    const empty = candidate("/projects/empty", { threadCount: 0 });
 
-    expect(partitionOnboardingProjects([repo, folder, thin], now).recent).toEqual([repo]);
+    expect(partitionOnboardingProjects([repo, folder, thin, empty], now).recent).toEqual([
+      repo,
+      folder,
+      thin,
+    ]);
   });
 
   it("selects candidates from servers that do not report git identity", () => {
