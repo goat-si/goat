@@ -6,7 +6,7 @@ import type {
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useContext, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowUpRightIcon,
   ChevronRightIcon,
@@ -26,6 +26,7 @@ import { useConnectedEnvironmentIds } from "~/state/environments";
 import { Button } from "../ui/button";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
+import { GoatBotTaskTargetHidden } from "./goatBotTaskTargetContext";
 
 const TONE_ICON = {
   neutral: CircleIcon,
@@ -168,8 +169,7 @@ function GoatBotTaskSummary({
 }
 
 function GoatBotTaskTarget({ target }: { readonly target: GoatBotCardTarget }) {
-  // An empty label means the card is shown where another control opens the work.
-  if (target.kind === "none" && target.label === "") return null;
+  if (useContext(GoatBotTaskTargetHidden)) return null;
   if (target.kind === "none") return <DisabledTarget label={target.label} />;
   return <GoatBotThreadTarget target={target} />;
 }

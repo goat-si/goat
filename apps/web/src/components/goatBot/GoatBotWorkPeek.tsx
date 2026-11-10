@@ -6,10 +6,10 @@ import { ChevronLeftIcon } from "~/components/solar";
 
 import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
+import { GoatBotTaskTargetHidden } from "./goatBotTaskTargetContext";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 
 const NO_RETRY = () => {};
-const NO_TARGET = { kind: "none", label: "" } as const;
 // Focus moves to Back when the peek opens, as the row that opened it is gone.
 const focusElement = (element: HTMLElement | null) => element?.focus();
 
@@ -35,10 +35,6 @@ export function GoatBotWorkPeek({
   readonly onBack: () => void;
 }) {
   const member = useGoatBotMember();
-  // The task's card keeps its result here, without its own link: the one way on is below.
-  const conversation = rows.map((row) =>
-    row.kind === "task" ? { ...row, card: { ...row.card, target: NO_TARGET } } : row,
-  );
   return (
     <section aria-label={title} className="flex min-h-0 min-w-0 flex-1 flex-col text-sm">
       <div className="flex min-w-0 flex-col items-start px-3 pt-14 pb-2">
@@ -55,20 +51,22 @@ export function GoatBotWorkPeek({
         </Button>
         <p className="px-3 text-xs text-muted-foreground">{statusLabel}</p>
       </div>
-      {/* The chat's activity line is the bot's, not this task's. */}
+      {/* The chat's activity line is the bot's, not this task's; the one way on is below. */}
       <GoatBotActivityContext value={null}>
-        {conversation.length > 0 ? (
-          <GoatBotTimeline
-            taskDetails
-            rows={conversation}
-            environmentId={environmentId}
-            onRetry={onRetry ?? NO_RETRY}
-          />
-        ) : (
-          <p className="flex-1 px-4 text-muted-foreground">
-            Nothing has been said in this task yet.
-          </p>
-        )}
+        <GoatBotTaskTargetHidden value>
+          {rows.length > 0 ? (
+            <GoatBotTimeline
+              taskDetails
+              rows={rows}
+              environmentId={environmentId}
+              onRetry={onRetry ?? NO_RETRY}
+            />
+          ) : (
+            <p className="flex-1 px-4 text-muted-foreground">
+              Nothing has been said in this task yet.
+            </p>
+          )}
+        </GoatBotTaskTargetHidden>
       </GoatBotActivityContext>
       <div className="p-3">
         <Button
