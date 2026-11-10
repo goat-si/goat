@@ -1,14 +1,27 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a stable hash of SSH settings and public host keys.
 import * as NodeCrypto from "node:crypto";
 
-/** Settings `ssh -G` prints, keyed by lowercase option name. */
+/** Settings `ssh -G` prints, keyed by lowercase option name, each value exactly as printed. */
 export const sshSettings = (output: string): ReadonlyMap<string, string> =>
   new Map(
     output.split(/\r?\n/u).map((line) => {
-      const [key = "", ...value] = line.trim().split(/\s+/u);
-      return [key.toLowerCase(), value.join(" ")] as const;
+      const [, key = "", value = ""] = /^\s*(\S+)(?: (.*))?$/u.exec(line) ?? [];
+      return [key.toLowerCase(), value] as const;
     }),
   );
+
+// OpenSSH's built-in GlobalKnownHostsFile, as ssh -G prints it.
+const DEFAULT_GLOBAL_KNOWN_HOSTS = ["/etc/ssh/ssh_known_hosts", "/etc/ssh/ssh_known_hosts2"];
+
+/**
+ * The global known_hosts files ssh reads for an alias, when they are certain: ssh's default list
+ * or none. ssh -G prints a custom setting unquoted, so its files cannot be named exactly.
+ */
+export const penGlobalFiles = (settings: ReadonlyMap<string, string>) => {
+  const value = settings.get("globalknownhostsfile");
+  if (value === undefined || value === "none") return [];
+  return value === DEFAULT_GLOBAL_KNOWN_HOSTS.join(" ") ? DEFAULT_GLOBAL_KNOWN_HOSTS : undefined;
+};
 
 const unset = (value: string | undefined) =>
   value === undefined || value === "" || value === "none";

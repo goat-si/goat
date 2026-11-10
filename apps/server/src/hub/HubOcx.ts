@@ -33,6 +33,7 @@ import {
   fingerprintOfType,
   isPlainRoute,
   penConfigHosts,
+  penGlobalFiles,
   penKnownHostsFile,
   penRevision,
   sshSettings,
@@ -552,16 +553,10 @@ const make = Effect.gen(function* () {
       settings.get("hostname") === alias &&
       ["", "none", undefined].includes(settings.get("hostkeyalias"));
     if (!keyedByAlias || penKnownHostsFile(settings) !== knownHosts) return undefined;
-    // ssh also accepts a key a global known_hosts file holds for the alias, so there must be none.
-    // ssh -G prints the files unquoted, so one with spaces is some run of these words; every run
-    // that exists is checked. A relative word cannot be resolved, and too many words is not
-    // checked at all: either way the alias is not trusted.
-    const words = (settings.get("globalknownhostsfile") ?? "").split(" ").filter((w) => w !== "");
-    if (words.length > 8 || words.some((word) => !word.startsWith("/"))) return undefined;
-    const runs = words.flatMap((_, start) =>
-      words.slice(start).map((__, length) => words.slice(start, start + length + 1).join(" ")),
-    );
-    for (const file of runs) {
+    // ssh also accepts a key its global known_hosts holds for the alias, so there must be none.
+    const globals = penGlobalFiles(settings);
+    if (globals === undefined) return undefined;
+    for (const file of globals) {
       if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => true)))) continue;
       const found = yield* run("ssh-keygen", ["-F", alias, "-f", file], 10_000).pipe(
         Effect.mapError(() => unreadable(alias)),

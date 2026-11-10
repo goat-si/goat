@@ -151,6 +151,8 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
   failSshG?: boolean;
   /** Lines a global known_hosts file holds for the alias. */
   globalKeys?: string;
+  /** Paths that exist besides the scratch home, such as ssh's global known_hosts. */
+  existing?: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-hub-pen-" });
@@ -165,7 +167,7 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
           Layer.mock(ProcessRunner.ProcessRunner)({
             run: (input) =>
               Effect.sync(() => {
-                const global = input.args.some((arg) => arg.endsWith("/global_known_hosts"));
+                const global = input.args.some((arg) => arg.startsWith("/etc/ssh/"));
                 const stdout =
                   input.args[0] === "-G"
                     ? machine.sshG(input.args[1] ?? "")
@@ -201,6 +203,18 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
         Layer.provide(Layer.mock(Inventory.OpenCodexInventory)({})),
         Layer.provide(Layer.mock(Dispatch.SshRemoteDispatch)({})),
         Layer.provide(Layer.succeed(HostProcess.HomeDirectory, home)),
+        Layer.provide(
+          Layer.effect(
+            FileSystem.FileSystem,
+            Effect.map(FileSystem.FileSystem, (real) => ({
+              ...real,
+              exists: (path: string) =>
+                machine.existing?.includes(path) === true
+                  ? Effect.succeed(true)
+                  : real.exists(path),
+            })),
+          ),
+        ),
         Layer.provide(NodeServices.layer),
       ),
     ),
@@ -414,26 +428,41 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("a Pen alias's revision changes with the global known_hosts files ssh also reads", () =>
+// ssh -G prints GlobalKnownHostsFile unquoted, so only settings whose files are certain count.
+it.effect("a Pen alias is trusted only under ssh's default global known_hosts files or none", () =>
   Effect.gen(function* () {
     const machine = {
       config: PEN_BLOCK("pen-box"),
       sshG: (_: string) => "",
       keys: keyLines("node1", "AAAA1"),
+      fingerprints: FINGERPRINTS,
     };
     const { ocx, home } = yield* penHome(machine);
+    for (const globalknownhostsfile of [
+      "known_hosts.global",
+      "/etc/ssh/ssh_known_hosts",
+      "/etc/ssh/ssh_known_hosts  /etc/ssh/ssh_known_hosts2",
+      "/tmp/a /tmp/b /tmp/c",
+      `${home}/my keys/known_hosts`,
+    ]) {
+      machine.sshG = penSshG(home, { globalknownhostsfile });
+      expect(yield* ocx.penAliasRevision("pen-box"), globalknownhostsfile).toBeUndefined();
+      expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+      expect(yield* ocx.directAlias("pen-box")).toBe(false);
+    }
     machine.sshG = penSshG(home);
-    const before = yield* ocx.penAliasRevision("pen-box");
-    machine.sshG = penSshG(home, { globalknownhostsfile: "/etc/ssh/other_known_hosts" });
-    const after = yield* ocx.penAliasRevision("pen-box");
-    expect(after).toEqual(expect.any(String));
-    expect(after).not.toBe(before);
+    const standard = yield* ocx.penAliasRevision("pen-box");
+    machine.sshG = penSshG(home, { globalknownhostsfile: "none" });
+    const none = yield* ocx.penAliasRevision("pen-box");
+    expect(standard).toEqual(expect.any(String));
+    expect(none).toEqual(expect.any(String));
+    expect(none).not.toBe(standard);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-// A key for the alias in a global known_hosts file is one ssh would also accept.
+// A key for the alias in ssh's own global known_hosts is one ssh would also accept.
 it.effect(
-  "a Pen alias that a global known_hosts file also names has no revision, pin or direct route",
+  "a Pen alias that ssh's global known_hosts also names has no revision, pin or direct route",
   () =>
     Effect.gen(function* () {
       const machine = {
@@ -442,62 +471,14 @@ it.effect(
         keys: keyLines("node1", "AAAA1"),
         fingerprints: FINGERPRINTS,
         globalKeys: "pen-box ssh-ed25519 AAAAOTHER\n",
+        existing: ["/etc/ssh/ssh_known_hosts2"],
       };
       const { ocx, home } = yield* penHome(machine);
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.writeFileString(`${home}/global_known_hosts`, "");
-      machine.sshG = penSshG(home, {
-        globalknownhostsfile: `${home}/global_known_hosts ${home}/missing_known_hosts`,
-      });
+      machine.sshG = penSshG(home);
       expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
       expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
       expect(yield* ocx.directAlias("pen-box")).toBe(false);
       machine.globalKeys = "";
       expect(yield* ocx.penAliasRevision("pen-box")).toEqual(expect.any(String));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-// ssh -G prints a relative path as written and a path with spaces unquoted; neither names one file.
-it.effect(
-  "a Pen alias whose global known_hosts setting is not plain absolute paths is not trusted",
-  () =>
-    Effect.gen(function* () {
-      const machine = {
-        config: PEN_BLOCK("pen-box"),
-        sshG: (_: string) => "",
-        keys: keyLines("node1", "AAAA1"),
-        fingerprints: FINGERPRINTS,
-      };
-      const { ocx, home } = yield* penHome(machine);
-      for (const globalknownhostsfile of ["known_hosts.global", `${home}/my keys/known_hosts`]) {
-        machine.sshG = penSshG(home, { globalknownhostsfile });
-        expect(
-          yield* ocx.penAliasRevision("pen-box").pipe(Effect.orElseSucceed(() => undefined)),
-        ).toBeUndefined();
-        expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
-        expect(yield* ocx.directAlias("pen-box")).toBe(false);
-      }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-// ssh -G prints GlobalKnownHostsFile="/x /y" /z as three words; the file ssh reads may be any run.
-it.effect("a Pen alias is not trusted when a global known_hosts path with spaces names it", () =>
-  Effect.gen(function* () {
-    const machine = {
-      config: PEN_BLOCK("pen-box"),
-      sshG: (_: string) => "",
-      keys: keyLines("node1", "AAAA1"),
-      fingerprints: FINGERPRINTS,
-      globalKeys: "pen-box ssh-ed25519 AAAAOTHER\n",
-    };
-    const { ocx, home } = yield* penHome(machine);
-    const fs = yield* FileSystem.FileSystem;
-    const grouped = `${home}/a ${home}/global_known_hosts`;
-    yield* fs.makeDirectory(grouped.slice(0, grouped.lastIndexOf("/")), { recursive: true });
-    yield* fs.writeFileString(grouped, "");
-    machine.sshG = penSshG(home, { globalknownhostsfile: `${grouped} ${home}/c` });
-    expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
-    expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
-    expect(yield* ocx.directAlias("pen-box")).toBe(false);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
