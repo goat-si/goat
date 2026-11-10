@@ -291,6 +291,9 @@ func (l *loginRun) join(ctx context.Context) error {
 	for _, m := range offer.Members {
 		fmt.Fprintf(l.stdout, "  %-20s %s\n", m.Name, fingerprintOf(m.NoisePub))
 	}
+	if len(offer.Members) == 0 {
+		return l.noMembers(offer.MeshID, "lists no machines (every one logged out)")
+	}
 	if !confirm(l.stdout, l.yes, fmt.Sprintf("Join it as %s? Every machine in it gets full access to this one, and this one to them.", l.name)) {
 		return errors.New("nothing changed")
 	}
@@ -335,7 +338,7 @@ func (l *loginRun) joinLoop(ctx context.Context, offer *login.OfferedMesh) (*mes
 		switch {
 		case errors.Is(err, daemon.ErrNoMemberOnline):
 			if time.Now().After(time.Unix(l.tok.Assertion.A.Exp, 0)) {
-				return nil, errors.New("no member came online before the sign-in expired; run pen login again")
+				return nil, l.noMembers(offer.MeshID, "had no machine online before the sign-in expired")
 			}
 			if !said {
 				fmt.Fprintln(l.stdout, "no member online yet, retrying every 5 s")
@@ -439,4 +442,11 @@ func RunLogout(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "signed out of %s; this node stays in mesh %s (pen leave leaves it)\n", ls.Email, ls.MeshID)
 	return 0
+}
+
+// noMembers explains the ways on when the account's mesh has no machine to join through: the
+// registry keeps one mesh per account, so founding another needs the account reset first.
+func (l *loginRun) noMembers(meshID, why string) error {
+	return fmt.Errorf("mesh %s %s. Run pen login on one of its machines to list it again and retry here, "+
+		"or reset the account at %s/device (after a Google sign-in) and run pen login here to found a new mesh", meshID, why, l.lc.URL)
 }

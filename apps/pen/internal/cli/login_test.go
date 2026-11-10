@@ -305,3 +305,35 @@ func TestApproveTakesOnlyARequestIDOrAFullFingerprint(t *testing.T) {
 		t.Fatalf("a 5-character prefix: exit %d\n%s%s", code, out.String(), errOut.String())
 	}
 }
+
+func TestLoginWhenEveryMachineOfTheAccountLoggedOutSaysHowToGoOn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := logintest.New()
+	f.MinPoll = 0
+	f.AutoApprove = &login.Account{Sub: "1001", Email: "me@example.com"}
+	f.Start()
+	defer f.Close()
+	loginSeams(t, ctx, rs)
+	flags := func(name string) []string {
+		return []string{"--login-url", f.URL, "--relay", rs.URL, "--name", name, "--yes", "--no-service"}
+	}
+	a := tmpStore(t)
+	t.Setenv("PEN_HOME", a.Dir)
+	var out, errOut strings.Builder
+	if code := RunLogin(flags("a"), &out, &errOut); code != 0 {
+		t.Fatalf("login: %s", errOut.String())
+	}
+	if code := RunLogout(nil, &out, &errOut); code != 0 {
+		t.Fatalf("logout: %s", errOut.String())
+	}
+	b := tmpStore(t)
+	t.Setenv("PEN_HOME", b.Dir)
+	out.Reset()
+	errOut.Reset()
+	if code := RunLogin(flags("b"), &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "reset") {
+		t.Fatalf("login with every machine logged out: exit %d\n%s%s", code, out.String(), errOut.String())
+	}
+}
