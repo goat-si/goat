@@ -38,6 +38,7 @@ const usage = `usage: pen <command> [flags]
   ssh-config [--write|--install|--uninstall]   ssh_config for pen-<name> hosts (--install puts it first in ~/.ssh/config)
   dashboard [--no-open] [--stop]          open this node's local management page, or close it
   relay add|rm <url>, relay ls            change or list this node's relays
+  relay check <url>                       check a relay end to end (healthz, certificate, a node and a client)
   relay serve [--listen :443] (--autocert <host> --cache <dir> | --cert f --key f | --plain) [--public-origin wss://host]
                                           run a relay
   version                                 print the version

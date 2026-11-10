@@ -27,12 +27,14 @@ import (
 // RunRelay dispatches pen relay serve|add|rm|ls|download.
 func RunRelay(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: pen relay serve|add|rm|ls|download")
+		fmt.Fprintln(stderr, "usage: pen relay serve|add|rm|ls|download|check")
 		return 2
 	}
 	switch args[0] {
 	case "serve":
 		return runRelayServe(args[1:], stdout, stderr)
+	case "check":
+		return runRelayCheck(args[1:], stdout, stderr)
 	case "add", "rm":
 		return runRelayEdit(args[0], args[1:], stdout, stderr)
 	case "ls":
