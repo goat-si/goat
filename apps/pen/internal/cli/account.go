@@ -81,7 +81,9 @@ func RunApprove(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	arg := strings.Join(pos, " ")
-	if len(normalize(arg)) != 40 {
+	switch len(normalize(arg)) {
+	case 40:
+	case 8:
 		ps, err := pendingList(stderr)
 		if err != nil {
 			return fail(stderr, err)
@@ -100,6 +102,8 @@ func RunApprove(args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, errors.New("not approved"))
 		}
 		arg = hits[0].Fingerprint
+	default:
+		return fail(stderr, fmt.Errorf("give the request id or the full fingerprint (8 or 40 hex characters), not %q", arg))
 	}
 	var r daemon.ApproveResult
 	if err := daemon.Call(st, daemon.Request{Op: "approve", Subject: arg}, &r); err != nil {

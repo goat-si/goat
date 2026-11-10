@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
+	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/login"
 	"github.com/goat-si/goat/apps/pen/internal/logintest"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
@@ -265,5 +266,42 @@ func TestLoginOnAMemberBindsAgainAfterAnUnbindOrAKeyRotation(t *testing.T) {
 	}
 	if acct := lsOf(t, a).Account; acct == nil || acct.LoginKey.Kid != rotated.Kid {
 		t.Fatalf("after a key rotation: account %+v, want key %s", acct, rotated.Kid)
+	}
+}
+
+func TestApproveTakesOnlyARequestIDOrAFullFingerprint(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := logintest.New()
+	f.MinPoll = 0
+	f.AutoApprove = &login.Account{Sub: "1001", Email: "me@example.com"}
+	f.Start()
+	defer f.Close()
+	loginSeams(t, ctx, rs)
+	a := tmpStore(t)
+	t.Setenv("PEN_HOME", a.Dir)
+	var out, errOut strings.Builder
+	if code := RunLogin([]string{"--login-url", f.URL, "--relay", rs.URL, "--name", "a", "--yes", "--no-service"}, &out, &errOut); code != 0 {
+		t.Fatalf("login: %s", errOut.String())
+	}
+	var lr map[string]any
+	daemon.Call(a, daemon.Request{Op: "lock", On: true}, &lr)
+	j, _ := ident.Generate(nil)
+	ls := lsOf(t, a)
+	var members []login.OfferedMember
+	for _, m := range ls.Members {
+		members = append(members, login.OfferedMember{NodeID: m.NodeID, SignPub: m.SignPub, NoisePub: m.NoisePub, Name: m.Name})
+	}
+	as := f.Issue("1001", "me@example.com", j.SignPub, j.NoisePub, time.Now())
+	if _, _, err := daemon.AccountJoin(ctx, []string{rs.URL}, j, "j", as, members); err != nil {
+		t.Fatal(err)
+	}
+	fp := ident.Fingerprint(j.NoisePub)
+	out.Reset()
+	errOut.Reset()
+	if code := RunApprove([]string{fp[:6]}, &out, &errOut); code == 0 || strings.Contains(out.String(), "request") || !strings.Contains(errOut.String(), "8 or 40") {
+		t.Fatalf("a 5-character prefix: exit %d\n%s%s", code, out.String(), errOut.String())
 	}
 }
