@@ -53,6 +53,7 @@ import {
   type PreparationAdmission,
 } from "./ensureFlight.ts";
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
+import { waitForTunnelReady } from "./tunnelForwardReadiness.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
 import { admitLive } from "./tunnelAttachment.ts";
@@ -2187,10 +2188,13 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
     }),
   );
   yield* Effect.raceFirst(
-    waitForHttpReady({
-      baseUrl: input.httpBaseUrl,
-      timeoutMs: input.readiness.timeoutMs,
-      probeTimeoutMs: input.readiness.probeTimeoutMs,
+    waitForTunnelReady({
+      alias: input.resolvedTarget.alias,
+      localPort: input.localPort,
+      // Matches the node-script launch command's whole ssh run against the same host.
+      connectTimeoutMs: REMOTE_LAUNCH_TIMEOUT_MS,
+      httpBaseUrl: input.httpBaseUrl,
+      readiness: input.readiness,
     }),
     exitFailure,
   ).pipe(
