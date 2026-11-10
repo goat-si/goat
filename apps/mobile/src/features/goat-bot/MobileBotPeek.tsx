@@ -10,7 +10,6 @@ import { Pressable, Text, View } from "react-native";
 import { Button } from "../../components/ui/Button";
 import { useThreadDetail, useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
-import { goatBotWithoutThreadLinks } from "./goatBotChatMarkdown";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 
@@ -172,7 +171,7 @@ function MobileBotPeekMessages(props: {
                 style={{ maxWidth: "88%", maxHeight: PEEK_CARD_MAX_HEIGHT }}
               >
                 <GoatBotMarkdown
-                  text={goatBotWithoutThreadLinks(item.text)}
+                  text={item.text}
                   environmentId={props.environmentId}
                   onSelectThread={() => {}}
                 />
