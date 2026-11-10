@@ -81,6 +81,12 @@ Socket attachments carry `{role, sid, sent, acked, at, deadline}`; client socket
 
 Any other text closes the socket 1003.
 
+A relay sends nothing when an uplink authenticates and answers `ping` on its own (the Worker even before it has
+handled the uplink's answer), so no message tells a node that clients now reach its uplink. A client that dials before
+the relay has handled the answer reaches the uplink being replaced, whose sessions close 4404 when it is replaced, or
+no uplink (4404). A node that needs a session on its new uplink at once (`pen relay check`) opens it again until its
+own side answers.
+
 ## Sessions
 
 The first message a client sends on a session starts with one kind byte:
@@ -251,13 +257,16 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   listens on loopback only (tests and local relays), where the origin follows the request. Beyond the contract it caps all
   connections (4096, `--max-sockets`) and one IPv4 address's or IPv6 /64's connections (64, `--max-per-ip`), counted
   from accept: one past a cap is closed before any request is read (HTTP 429 when a cap is reached between accept and
-  upgrade). Past one node id's unauthenticated uplinks (4, `--max-unauth-per-node`) a new uplink closes the oldest one 4429. It caps the memory that queued and partly read messages hold, each counted at its allocation size plus 128
-  bytes: all of it (192 MiB, `--max-queued-mib`) and one source address's part (16 MiB,
-  `--max-queued-per-source-mib`, the same IPv4 address or IPv6 /64). Data that would pass either ends the session whose
-  socket would hold it 4408: a client that stops reading ends its own session, and a socket whose message being read
-  would pass it closes 4408. So a full relay ends the sessions of the source that holds the memory, and sessions from
-  other sources go on until enough sources fill the total. Each connection gets fixed 64 KiB kernel send and receive
-  buffers and at most 8 KiB of request headers. It
+  upgrade). Past one node id's unauthenticated uplinks (4, `--max-unauth-per-node`) a new uplink closes the oldest one 4429. It counts the memory messages hold, charged before it is allocated: queued messages at their allocation size plus
+  128 bytes, all of them at most 192 MiB (`--max-queued-mib`) and one source address's at most 16 MiB
+  (`--max-queued-per-source-mib`; a source is an IPv4 address or an IPv6 /64). Each socket reads a message of up to
+  96 KiB (a ping, an ack or a whole Noise message) without a charge; a larger message being read draws on a separate
+  32 MiB pool, a source at most 4 MiB of it, and a socket whose message would pass that closes 4408. Data that would pass
+  its source's share ends the session whose socket would hold it 4408 (a client that stops reading ends its own session).
+  Data that would pass the total first ends the largest queue of the source holding the most queued memory, dropping
+  that socket, and is refused (4408 for its session) only when its own source holds the most. So when the relay is full,
+  the sources that hold its memory lose sessions, and an honest session from another source loses none. Each connection
+  gets fixed 64 KiB kernel send and receive buffers and at most 8 KiB of request headers. It
   reads at most the 96-byte answer from an uplink before it authenticates, drops a socket whose write or closing
   handshake stalls for 10 s, and applies the uplink fair share also to what it has queued for the uplink, so a client
   flooding empty DATA ends only its own session 4408. Session ids are never
@@ -433,6 +442,10 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
 - v1.1 (2026-11-11): `pen relay serve` counts connections against its caps from accept, counts queued and partly read
   messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so a
   full relay ends the sessions of the source holding the memory. Relay implementation only; no wire change.
+- v1.1 (2026-11-11): `pen relay serve` reads a message of up to 96 KiB per socket without a charge and larger ones
+  from a separate 32 MiB pool, and a full total first ends the largest queue of the source holding the most. The
+  "Relay text" section states that nothing confirms an uplink's authentication and that a pong proves nothing about
+  it. No wire change.
 - v1.1 (2026-11-11): kind 0x04 `check`: a Google joiner that a listed node refused asks it to check the joiner's
   records against its own, so a node that left or has not heard of the joiner no longer fails the join while a cut copy
   served by a revoked member still does. Nodes before this answer the check as an unexpected first line (4401), which

@@ -148,10 +148,17 @@ For the operator's own mesh (mac-studio, `PEN_HOME=~/goat-research/pen-boxes-tes
 The VM (`clisu-oracle`, Ubuntu on arm64) runs `/opt/pen-relay/pen relay serve` under the system unit
 `apps/pen/install/pen-relay.service`, installed as `/etc/systemd/system/pen-relay.service`. It runs as a dynamic
 user with a read-only system and no access to home directories (`systemd-analyze security pen-relay` rates it 1.6).
-Its memory ceiling is 768 MiB with `GOMEMLIMIT=224MiB`, sized for the caps the unit passes: 1024 connections, 64 per
-source address, 128 MiB of queued data with 16 MiB per source. The unit's comment carries the arithmetic and the
-measurement; change the caps, `GOMEMLIMIT` and `MemoryMax` together. A relay at its caps refuses new connections and
-ends the sessions of whichever source fills its share (4408 in the nodes' logs); it does not run out of memory.
+The unit passes 1024 connections, 64 per source address, and 128 MiB of queued data with 16 MiB per source; the unit's
+comment adds up what each part may hold at worst against `MemoryMax` and records the measured peaks. `GOMEMLIMIT`
+only makes the collector work harder near it; it is not a cap, so the margin under `MemoryMax` is headroom, not a
+proof. Change the caps, `GOMEMLIMIT` and `MemoryMax` together. A relay at its caps refuses new connections, and
+when its queued data is full it ends the queues of the source holding the most (4408 or a dropped socket in the
+nodes' logs). One address is one source, so machines behind one NAT share 16 MiB of queued data: about four sessions
+whose clients have stopped reading for a while (each may queue up to its 4 MiB window). A further such session from
+that address ends 4408; sessions whose clients keep reading queue little and are not affected, and an uplink loses
+no sessions to another source's queues. When every connection slot is taken, a Let's Encrypt validation connection
+is refused like any other; `autocert` renews 30 days before expiry and retries every 30 to 60 minutes, and
+`pen relay check` fails 14 days before expiry, so a renewal fails only if the relay stays full for weeks.
 `/etc/pen-relay.env` sets `PEN_RELAY_LISTEN=10.0.0.222:443`
 (the VCN's private address behind the public `158.180.76.7`) and `PEN_RELAY_HOST=158-180-76-7.sslip.io`. The
 Let's Encrypt account and certificate are cached in `/var/lib/pen-relay/acme` (systemd keeps it in

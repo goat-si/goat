@@ -124,6 +124,11 @@ relay going down does not cut the mesh. An install gets the relays the release l
 carry the inviting machine's list. `pen relay ls` shows the list; `pen relay add <url>` and
 `pen relay rm <url>` change it. Relays must use `https`.
 
+A relay run with `pen relay serve` keeps at most 16 MiB of undelivered data for each internet
+address, so machines behind one home or office connection share it: about four sessions whose
+receiving side has stopped reading for a while. A further such session ends with code 4408 and
+can be opened again; sessions that keep reading are not affected.
+
 You can run your own relay with `pen relay serve` on a machine with a public address; see
 `pen help`.
 
