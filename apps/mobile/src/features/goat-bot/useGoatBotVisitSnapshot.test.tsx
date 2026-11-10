@@ -22,15 +22,22 @@ async function mount(first: Input) {
   return { show, unmount: () => act(async () => root.unmount()) };
 }
 
-const base: Input = { focused: true, conversation: "env:bot", loaded: true, lastVisitedAt: "T1" };
+const base: Input = {
+  focused: true,
+  conversation: "env:bot",
+  loaded: true,
+  lastVisitedAt: "T1",
+  newestAt: "N1",
+};
 
 it("keeps the read position the visit began with after the visit is recorded", async () => {
   const view = await mount({ ...base, loaded: false, lastVisitedAt: null });
   expect(await view.show({ ...base, loaded: false, lastVisitedAt: null })).toBeNull();
   const first = await view.show(base);
   expect(first?.readUpTo).toBe("T1");
-  // The route records the visit, which moves the shell's lastVisitedAt.
-  expect(await view.show({ ...base, lastVisitedAt: "T2" })).toEqual(first);
+  expect(first?.newestAtOpen).toBe("N1");
+  // The route records the visit, which moves the shell's lastVisitedAt; a reply arrives.
+  expect(await view.show({ ...base, lastVisitedAt: "T2", newestAt: "N2" })).toEqual(first);
   await view.unmount();
 });
 

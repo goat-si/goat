@@ -331,7 +331,11 @@ it("marks what the bot said since the last read, and points up to it until the p
     reply("new-2", "2026-11-11T10:06:00Z"),
   ];
   screenSession.rows = opened;
-  const snapshot = { key: "env:bot:1", readUpTo: "2026-11-11T10:01:00Z" };
+  const snapshot = {
+    key: "env:bot:1",
+    readUpTo: "2026-11-11T10:01:00Z",
+    newestAtOpen: "2026-11-11T10:06:00Z",
+  };
   const ids = () => ((list.props?.data ?? []) as GoatBotRow[]).map((row) => row.id);
   const pill = (container: HTMLElement) =>
     container.querySelector<HTMLButtonElement>(

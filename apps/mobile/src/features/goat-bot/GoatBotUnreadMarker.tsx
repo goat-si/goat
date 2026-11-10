@@ -29,16 +29,13 @@ export function useGoatBotUnread(
   const [cleared, setCleared] = useState<string | null>(null);
   const [settled, setSettled] = useState<string | null>(null);
   const [above, setAbove] = useState(false);
-  // Taken once per visit, when the conversation has loaded: replies that arrive while the person
-  // is in the chat are read as they come and never move the line.
-  const [frozen, setFrozen] = useState<{
-    readonly visit: string;
-    readonly mark: ReturnType<typeof goatBotUnreadMark>;
-  } | null>(null);
-  if (snapshot && visit !== null && frozen?.visit !== visit && rows.length > 0) {
-    setFrozen({ visit, mark: goatBotUnreadMark(rows, snapshot.readUpTo) });
-  }
-  const mark = frozen !== null && frozen.visit === visit && cleared !== visit ? frozen.mark : null;
+  const mark = useMemo(
+    () =>
+      snapshot && cleared !== visit
+        ? goatBotUnreadMark(rows, snapshot.readUpTo, snapshot.newestAtOpen)
+        : null,
+    [rows, snapshot, cleared, visit],
+  );
   const items = useMemo((): ReadonlyArray<GoatBotChatItem> => {
     const at = mark === null ? -1 : rows.findIndex((row) => row.id === mark.firstId);
     if (mark === null || at < 0) return rows;

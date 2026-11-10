@@ -35,8 +35,9 @@ export function GoatBotRouteScreen({
   const readSnapshot = useGoatBotVisitSnapshot({
     focused: focused && mainChat,
     conversation: environmentId && threadId ? `${environmentId}:${threadId}` : null,
-    loaded: shell !== null,
+    loaded: shell !== null && preview !== null,
     lastVisitedAt: shell?.lastVisitedAt ?? null,
+    newestAt: preview?.at ?? null,
   });
   const visit = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   // oxlint-disable-next-line goat/react-effect-budget -- Persist the visit while the main conversation is visible.

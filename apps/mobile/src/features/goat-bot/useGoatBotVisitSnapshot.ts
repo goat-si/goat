@@ -5,6 +5,8 @@ export interface GoatBotVisitSnapshot {
   readonly key: string;
   /** When the person last read the chat before this visit; null when they never had. */
   readonly readUpTo: string | null;
+  /** The newest message there was when the visit began: later ones are read as they arrive. */
+  readonly newestAtOpen: string | null;
 }
 
 /**
@@ -15,9 +17,10 @@ export interface GoatBotVisitSnapshot {
 export function useGoatBotVisitSnapshot(input: {
   readonly focused: boolean;
   readonly conversation: string | null;
-  /** The conversation's shell has loaded; its lastVisitedAt may still be null. */
+  /** The conversation's shell and messages have loaded; lastVisitedAt may still be null. */
   readonly loaded: boolean;
   readonly lastVisitedAt: string | null;
+  readonly newestAt: string | null;
 }): GoatBotVisitSnapshot | null {
   const [focus, setFocus] = useState({ focused: false, visit: 0 });
   if (focus.focused !== input.focused) {
@@ -29,7 +32,7 @@ export function useGoatBotVisitSnapshot(input: {
       : null;
   const [snapshot, setSnapshot] = useState<GoatBotVisitSnapshot | null>(null);
   if (key !== null && snapshot?.key !== key && input.loaded) {
-    setSnapshot({ key, readUpTo: input.lastVisitedAt });
+    setSnapshot({ key, readUpTo: input.lastVisitedAt, newestAtOpen: input.newestAt });
   }
   return key !== null && snapshot?.key === key ? snapshot : null;
 }

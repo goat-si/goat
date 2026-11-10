@@ -59,16 +59,23 @@ describe("goatBotUnreadMark", () => {
       card("done", 2, 7),
       bot("new-2", 8),
     ];
-    expect(goatBotUnreadMark(rows, at(4))).toEqual({ firstId: "new-1", count: 3 });
+    expect(goatBotUnreadMark(rows, at(4), at(30))).toEqual({ firstId: "new-1", count: 3 });
+  });
+
+  it("reads replies newer than the chat's newest message at opening as they arrive", () => {
+    const rows = [bot("waiting", 6), bot("live", 12)];
+    expect(goatBotUnreadMark(rows, at(4), at(6))).toEqual({ firstId: "waiting", count: 1 });
+    expect(goatBotUnreadMark([bot("live", 12)], at(4), at(6))).toBeNull();
+    expect(goatBotUnreadMark(rows, at(4), null)).toBeNull();
   });
 
   it("does not count the person's own messages", () => {
-    expect(goatBotUnreadMark([bot("old", 1), user("mine", 6)], at(4))).toBeNull();
+    expect(goatBotUnreadMark([bot("old", 1), user("mine", 6)], at(4), at(30))).toBeNull();
   });
 
   it("marks nothing without a read position or when nothing is newer", () => {
     const rows = [bot("a", 1), bot("b", 2)];
-    expect(goatBotUnreadMark(rows, null)).toBeNull();
-    expect(goatBotUnreadMark(rows, at(3))).toBeNull();
+    expect(goatBotUnreadMark(rows, null, at(30))).toBeNull();
+    expect(goatBotUnreadMark(rows, at(3), at(30))).toBeNull();
   });
 });
