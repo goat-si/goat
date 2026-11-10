@@ -66,7 +66,7 @@ it("lists running work under the machine it runs on, GOAT Bot's own first", asyn
 it("says when nothing is running", async () => {
   setup({ tasks: [] });
   await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
-  await expect.element(screen.getByText("No work is running right now.")).toBeVisible();
+  await expect.element(screen.getByText("No work running")).toBeVisible();
 });
 
 it("says when more work runs than the list shows", async () => {

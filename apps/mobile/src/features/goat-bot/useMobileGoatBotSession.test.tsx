@@ -841,10 +841,15 @@ describe("mobile GOAT Bot activity", () => {
     harness.shellReads.length = 0;
   }
 
-  it("follows the acknowledged worker's shell without loading its detail", async () => {
+  it("follows the acknowledged worker's shell, with when the work began and what it is", async () => {
     setup({ environmentId: "env", threadId: "worker-1" });
     await render();
-    expect(session.activity).toEqual({ state: "working", text: "Copying files" });
+    expect(session.activity).toEqual({
+      state: "working",
+      text: "Copying files",
+      since: at,
+      title: "Check the disks",
+    });
     expect(harness.shellReads).toContain("worker-1");
     expect(registry.getNodes().has(detailAtom)).toBe(false);
   });

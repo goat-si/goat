@@ -1,9 +1,19 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
+import { ChannelChildWork } from "./channelChildWork.ts";
 import { ChannelListBotThreadsResult, ChannelUpdateTaskViewInput } from "./channelGateway.ts";
 
 const decodeRows = Schema.decodeUnknownSync(ChannelListBotThreadsResult);
 const decodeUpdate = Schema.decodeUnknownSync(ChannelUpdateTaskViewInput);
+const decodeChild = Schema.decodeUnknownSync(ChannelChildWork);
+const encodeChild = Schema.encodeSync(ChannelChildWork);
+// The result as clients before remoteWork decoded it.
+const decodeRowsBefore = Schema.decodeUnknownSync(
+  Schema.Struct({
+    rows: ChannelListBotThreadsResult.fields.rows,
+    mainMessageCount: ChannelListBotThreadsResult.fields.mainMessageCount,
+  }),
+);
 const at = "2026-11-04T10:00:00.000Z";
 
 describe("bot thread contracts", () => {
@@ -38,5 +48,63 @@ describe("bot thread contracts", () => {
   it("rejects malformed task views and negative message counts", () => {
     expect(() => decodeUpdate({ taskId: "task-1", readThrough: 42 })).toThrow();
     expect(() => decodeRows({ rows: [], mainMessageCount: -1 })).toThrow();
+  });
+  it("carries the bot's work on other machines beside its rows, which older clients ignore", () => {
+    const remoteWork = [
+      {
+        childWorkId: "cw-1",
+        taskId: "task-1",
+        callerThreadId: "channel-worker:task-1",
+        host: "box",
+        state: "bound",
+        lastActivityAt: at,
+        threadId: "thread-1",
+        environmentId: "env-box",
+        workKind: "chore",
+      },
+      {
+        childWorkId: "cw-2",
+        taskId: "task-1",
+        callerThreadId: "channel-worker:task-1",
+        host: "mac",
+        state: "unknown",
+        lastActivityAt: at,
+      },
+    ];
+    expect(decodeRows({ rows: [], mainMessageCount: 0, remoteWork }).remoteWork).toEqual(
+      remoteWork,
+    );
+    expect(decodeRows({ rows: [], mainMessageCount: 0 }).remoteWork).toBeUndefined();
+    expect(decodeRowsBefore({ rows: [], mainMessageCount: 0, remoteWork })).toEqual({
+      rows: [],
+      mainMessageCount: 0,
+    });
+  });
+  it("reads child work records stored before destinations kept a remote identity", () => {
+    const stored = {
+      childWorkId: "cw-1",
+      ownerId: "owner",
+      taskId: "task-1",
+      generation: 1,
+      surface: "ssh_thread_launch",
+      callerThreadId: "channel-worker:task-1",
+      requestKey: "key",
+      promptDigest: "digest",
+      state: "bound",
+      destination: { correlationId: "cw-corr", host: "box" },
+      createdAt: at,
+      updatedAt: at,
+    };
+    expect(decodeChild(stored).destination).toEqual({ correlationId: "cw-corr", host: "box" });
+    const bound = {
+      ...stored,
+      destination: {
+        ...stored.destination,
+        threadId: "thread-1",
+        environmentId: "env-box",
+        workKind: "chore",
+      },
+    };
+    expect(encodeChild(decodeChild(bound))).toEqual(bound);
   });
 });

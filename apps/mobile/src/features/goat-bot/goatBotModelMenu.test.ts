@@ -8,7 +8,12 @@ import {
 import { deriveGoatBotModelSettings } from "@goat/client-runtime/goatBot";
 import { describe, expect, it } from "vite-plus/test";
 
-import { goatBotModelMenu, goatBotModelMenuPatch } from "./goatBotModelMenu";
+import {
+  goatBotMemberModelChoice,
+  goatBotMemberModelMenu,
+  goatBotModelMenu,
+  goatBotModelMenuPatch,
+} from "./goatBotModelMenu";
 
 const codex = ProviderInstanceId.make("codex");
 const provider: ServerProvider = {
@@ -79,5 +84,51 @@ describe("goatBotModelMenuPatch", () => {
       goatBotModelMenuPatch(state({ instanceId: codex, model: "astra" }), "codex:astra"),
     ).toBeNull();
     expect(goatBotModelMenuPatch(state(null), "codex:gone")).toBeNull();
+  });
+});
+
+describe("a member bot's header model", () => {
+  const main = state({ instanceId: codex, model: "astra" });
+
+  it("shows the main bot's model while the member has none of its own", () => {
+    const menu = goatBotMemberModelMenu(
+      main,
+      { name: "Research", defaultModelSelection: null },
+      "Goaty",
+    );
+    expect(menu.label).toBe("GPT-6-Astra");
+    expect(menu.accessibilityLabel).toBe("Research model: GPT-6-Astra (same as Goaty)");
+    expect(menu.items.filter((item) => item.selected).map((item) => item.title)).toEqual([
+      "Same as Goaty",
+    ]);
+  });
+
+  it("shows the member's own model, and its slug when that model is not ready", () => {
+    const own = goatBotMemberModelMenu(
+      main,
+      { name: "Research", defaultModelSelection: { instanceId: codex, model: "luna" } },
+      "Goaty",
+    );
+    expect(own.label).toBe("GPT-6-Luna");
+    expect(own.accessibilityLabel).toBe("Research model: GPT-6-Luna");
+    expect(own.items.filter((item) => item.selected).map((item) => item.title)).toEqual([
+      "GPT-6-Luna",
+    ]);
+    const gone = goatBotMemberModelMenu(
+      main,
+      { name: "Research", defaultModelSelection: { instanceId: codex, model: "retired" } },
+      "Goaty",
+    );
+    expect(gone.label).toBe("retired");
+    expect(gone.items.some((item) => item.selected)).toBe(false);
+  });
+
+  it("sends a picked model, null to go back to the main bot's, and nothing for the current one", () => {
+    const luna = { instanceId: codex, model: "luna" };
+    expect(goatBotMemberModelChoice(main, null, "codex:luna")).toEqual(luna);
+    expect(goatBotMemberModelChoice(main, luna, "same")).toBeNull();
+    expect(goatBotMemberModelChoice(main, null, "same")).toBeUndefined();
+    expect(goatBotMemberModelChoice(main, luna, "codex:luna")).toBeUndefined();
+    expect(goatBotMemberModelChoice(main, null, "codex:gone")).toBeUndefined();
   });
 });

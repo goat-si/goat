@@ -294,12 +294,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --color-goat-avatar: color-mix(in oklab, var(--foreground) 6%, transparent);
   --color-goat-avatar-border: color-mix(in oklab, var(--foreground) 12%, transparent);
   --color-goat-avatar-foreground: color-mix(in oklab, var(--foreground) 82%, transparent);
-  /* GOAT Bot's Messages colors stay local to its conversation. */
-  --color-goat-bubble-out-top: var(--goat-bubble-out-top);
-  --color-goat-bubble-out: var(--goat-bubble-out);
-  --color-goat-bubble-out-foreground: var(--goat-bubble-out-foreground);
-  --color-goat-bubble-in: var(--goat-bubble-in);
-  --color-goat-bubble-in-foreground: var(--goat-bubble-in-foreground);
+  /* The person's messages in GOAT Bot's conversation; mobile keeps the same values. */
+  --color-goat-person-message: var(--goat-person-message);
+  --color-goat-person-message-foreground: var(--goat-person-message-foreground);
   --color-channel-dev: var(--channel-dev);
   --color-channel-nightly: var(--channel-nightly);
   --color-error-foreground: var(--error-foreground);
@@ -755,15 +752,32 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   }
 }
 
-@utility goat-bubble {
-  position: relative;
-  max-width: min(75%, 34rem);
-  padding: 8px 13px;
+/* A person's message: a tailless neutral pill. One line is fully round (40px tall, 20px radius). */
+@utility goat-person-pill {
+  padding: 9px 16px;
   border-radius: 20px;
+  background: var(--color-goat-person-message);
+  color: var(--color-goat-person-message-foreground);
   font-size: 1rem;
   line-height: 1.375rem;
   /* break-word, unlike anywhere, keeps whole words in the min-content width, so short
      messages never wrap mid-word. */
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+
+  @media (forced-colors: active) {
+    border: 1px solid CanvasText;
+  }
+
+  @media (max-width: 640px) {
+    font-size: 1.0625rem;
+  }
+}
+
+/* A bot reply: unboxed prose at a reading measure; code and tables take the column. */
+@utility goat-bot-prose {
+  font-size: 1rem;
+  line-height: 1.625rem;
   overflow-wrap: break-word;
   white-space: pre-wrap;
 
@@ -787,7 +801,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 @utility goat-message-row {
-  border-radius: 20px;
+  border-radius: 12px;
+  /* Room for the inset focus ring without moving the text off the column edge. */
+  margin-inline: -8px;
+  padding: 4px 8px;
 }
 
 @utility goat-task-title {
@@ -807,7 +824,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   box-shadow: inset 0 0 0 0.5px var(--goat-hairline);
 
   &:focus-within {
-    box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--color-goat-bubble-out) 40%, transparent);
+    box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 32%, transparent);
   }
 }
 
@@ -853,96 +870,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   @media (prefers-reduced-motion: reduce), (forced-colors: active) {
     animation: none;
   }
-}
-
-@utility goat-bubble-out-fill {
-  background-color: var(--color-goat-bubble-out);
-  background-image: linear-gradient(
-    to bottom,
-    var(--color-goat-bubble-out-top),
-    var(--color-goat-bubble-out)
-  );
-
-  @media (forced-colors: active) {
-    background-image: none;
-  }
-}
-
-/* The canvas-colored mask cuts a curved Messages tail from the last bubble in a group. */
-@utility goat-bubble-tail-out {
-  &::before {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    right: -7px;
-    height: 20px;
-    width: 20px;
-    background: var(--color-goat-bubble-out);
-    border-bottom-left-radius: 16px 14px;
-  }
-  &::after {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    right: -26px;
-    height: 20px;
-    width: 26px;
-    background: var(--background);
-    border-bottom-left-radius: 10px;
-  }
-}
-
-@utility goat-bubble-tail-in {
-  &::before {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    left: -7px;
-    height: 20px;
-    width: 20px;
-    background: var(--color-goat-bubble-in);
-    border-bottom-right-radius: 16px 14px;
-  }
-  &::after {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    left: -26px;
-    height: 20px;
-    width: 26px;
-    background: var(--background);
-    border-bottom-right-radius: 10px;
-  }
-}
-
-@utility goat-typing-tail {
-  &::before {
-    content: "";
-    position: absolute;
-    left: -2px;
-    bottom: -2px;
-    width: 10px;
-    height: 10px;
-    border-radius: 9999px;
-    background: var(--color-goat-bubble-in);
-  }
-  &::after {
-    content: "";
-    position: absolute;
-    left: -8px;
-    bottom: -8px;
-    width: 5px;
-    height: 5px;
-    border-radius: 9999px;
-    background: var(--color-goat-bubble-in);
-  }
-}
-
-@utility goat-reply-line {
-  border-left: 2px solid
-    color-mix(in oklab, var(--color-goat-bubble-in-foreground) 18%, transparent);
-  border-top: 0;
-  border-top-left-radius: 10px;
 }
 
 @utility visible-animate-spin {
@@ -1311,11 +1238,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 
 :root {
   color-scheme: light;
-  --goat-bubble-out-top: var(--blue);
-  --goat-bubble-out: var(--blue);
-  --goat-bubble-out-foreground: #fff;
-  --goat-bubble-in: #e9e9eb;
-  --goat-bubble-in-foreground: #000;
+  /* Ink on paper in light, paper on ink in dark: the same pair inverts with the theme. */
+  --goat-person-message: var(--foreground);
+  --goat-person-message-foreground: var(--background);
   --goat-composer-fill: #f3f3f3;
   --goat-hairline: rgb(0 0 0 / 8%);
   --radius: 0.5rem;
@@ -1406,10 +1331,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   @variant dark {
     color-scheme: dark;
     --blue: #339cff;
-    /* White on the lighter dark-mode blue falls under 3:1. */
-    --goat-bubble-out-foreground: #0d0d0d;
-    --goat-bubble-in: #3a3a3c;
-    --goat-bubble-in-foreground: #fff;
     --goat-composer-fill: #262626;
     --goat-hairline: rgb(255 255 255 / 10%);
     /* A near-black (not black) canvas with surfaces a visible step lighter.
@@ -2129,13 +2050,17 @@ code {
 
 /* Chat markdown rendering */
 
-/* GOAT Bot bubbles keep their own type and colour for the Markdown they show. */
-.goat-bubble .chat-markdown,
+/* GOAT Bot replies keep their own type and colour for the Markdown they show. */
+.goat-bot-prose .chat-markdown,
 .goat-task-summary .chat-markdown {
   font-size: inherit;
   line-height: inherit;
   color: inherit;
   white-space: normal;
+}
+
+.goat-bot-prose .chat-markdown > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, hr) {
+  max-width: 44rem;
 }
 
 .chat-markdown > :first-child {

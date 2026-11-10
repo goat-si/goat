@@ -261,6 +261,8 @@ function GoatBotConversationRow({
           ) : null}
         </span>
       </span>
+      {/* Room for the row's options button, which sits over the right edge. */}
+      <span aria-hidden className="w-5 shrink-0 group-data-[collapsible=icon]:hidden" />
     </SidebarMenuButton>
   );
 }

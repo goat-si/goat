@@ -164,6 +164,15 @@ describe("goatBotConversationPreview", () => {
     expect(preview([])).toBeNull();
   });
 
+  it("previews a Markdown reply or message as plain text", () => {
+    expect(
+      preview([bot("b", answer, "## Done\n\n**Merged** [#42](https://x.test/42)")])?.text,
+    ).toBe("Done Merged #42");
+    expect(preview([user("u", first, "fix `rows.ts`\n- please")])?.text).toBe(
+      "You: fix rows.ts please",
+    );
+  });
+
   it("shows the latest user message without making it unread", () => {
     expect(preview([user("u", first, "Hello")])).toEqual({
       text: "You: Hello",
@@ -568,18 +577,24 @@ describe("buildGoatBotTimeline", () => {
     ).toEqual(["u4"]);
   });
 
-  it("adds a time stamp at one hour while five-minute pauses only split bubbles", () => {
+  it("adds a time stamp after fifteen quiet minutes while five-minute pauses only split groups", () => {
     const rows = buildGoatBotTimeline({
       visibleTurnItems: rowsOf([
         user("u1", "2026-10-12T12:00:00Z", "a"),
         user("u2", "2026-10-12T12:06:00Z", "b"),
-        user("u3", "2026-10-12T13:06:00Z", "c"),
+        user("u3", "2026-10-12T12:20:59Z", "c"),
+        user("u4", "2026-10-12T12:35:59Z", "d"),
       ]),
       pendingInputs: [],
       readers: readers(),
     });
-    expect(rows.map((row) => row.kind)).toEqual(["day", "user", "user", "day", "user"]);
-    expect(content(rows).map((row) => row.groupPosition)).toEqual(["single", "single", "single"]);
+    expect(rows.map((row) => row.kind)).toEqual(["day", "user", "user", "user", "day", "user"]);
+    expect(content(rows).map((row) => row.groupPosition)).toEqual([
+      "single",
+      "single",
+      "single",
+      "single",
+    ]);
   });
 
   it("distinguishes queued and accepted pending sends from committed delivery", () => {

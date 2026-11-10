@@ -13,6 +13,7 @@ import {
   buildGoatBotTimeline,
   type GoatBotItemReaders,
   type GoatBotMessagePresentation,
+  type GoatBotPendingInput,
   type GoatBotRow,
   type GoatBotTaskCard,
 } from "./rows.ts";
@@ -327,5 +328,225 @@ describe("questions a task asks in the main chat", () => {
     expect(closed.some((row) => row.kind === "task")).toBe(false);
     expect(closed.find((row) => row.id === "b1")).toMatchObject({ options: [] });
     expect(closed.find((row) => row.id === "b1")).not.toHaveProperty("answerTaskId");
+  });
+});
+
+describe("a question the person answered", () => {
+  const which: GoatBotMessagePresentation = {
+    tone: "question",
+    readAt: null,
+    requestKey: null,
+    options: ["CI fix", "Release"],
+  };
+  const asked = [bot("b1", "2026-10-12T12:00:01Z", "Which one?")];
+  const questionRow = (
+    items: OrchestrationV2TurnItem[],
+    pendingInputs: GoatBotPendingInput[] = [],
+    messages: Record<string, GoatBotMessagePresentation> = { b1: which },
+    cards: Record<string, GoatBotTaskCard> = {},
+    taskId: string | null | undefined = undefined,
+  ) =>
+    content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf(items),
+        pendingInputs,
+        readers: readers(messages, cards),
+        ...(taskId === undefined ? {} : { taskId }),
+      }),
+    ).find((row) => row.id === "b1");
+  const pending = (
+    text: string,
+    state: GoatBotPendingInput["state"],
+    extra: Partial<GoatBotPendingInput> = {},
+  ): GoatBotPendingInput => ({
+    clientKey: "c1",
+    text,
+    createdAt: "2026-10-12T12:00:02Z",
+    state,
+    requestKey: null,
+    ...extra,
+  });
+
+  it("keeps the picked choice as the answer while it is on its way and after it lands", () => {
+    expect(questionRow(asked, [pending("CI fix", "sending")])).toMatchObject({
+      options: [],
+      answer: "CI fix",
+    });
+    expect(questionRow([...asked, user("u1", "2026-10-12T12:00:02Z", "CI fix")])).toMatchObject({
+      options: [],
+      answer: "CI fix",
+    });
+  });
+
+  it("takes a typed reply as the answer", () => {
+    expect(
+      questionRow([...asked, user("u1", "2026-10-12T12:00:02Z", "  Neither, wait for Monday ")]),
+    ).toMatchObject({ options: [], answer: "Neither, wait for Monday" });
+  });
+
+  it("takes a typed reply to a question without choices, sent to its task, as the answer", () => {
+    const open = { ...card("turn", 2), askInChat: true, openQuestionIds: [] };
+    const routed: GoatBotMessagePresentation = {
+      tone: "question",
+      readAt: null,
+      requestKey: null,
+      taskId: "turn",
+      questionId: "which-guide",
+    };
+    const reply = { tone: "reply" as const, readAt: null, requestKey: "in-2", taskId: "turn" };
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      bot("b1", "2026-10-12T12:00:01Z", "Which guide next?"),
+      user("u1", "2026-10-12T12:00:02Z", "README"),
+    ];
+    expect(questionRow(items, [], { b1: routed, u1: reply }, { n1: open }, null)).toMatchObject({
+      answer: "README",
+    });
+    // A status line is not a question, so a later message does not answer it.
+    expect(
+      questionRow(items, [], { b1: { ...routed, tone: "status" }, u1: reply }, { n1: open }, null),
+    ).not.toHaveProperty("answer");
+  });
+
+  it("keeps the choices open when the answer failed to send", () => {
+    const row = questionRow(asked, [pending("CI fix", "failed")]);
+    expect(row).toMatchObject({ options: ["CI fix", "Release"] });
+    expect(row).not.toHaveProperty("answer");
+  });
+
+  it("still shows the answer after a reload, once the task closed the question", () => {
+    const proposal = {
+      ...card("proposal", 2, "Working"),
+      askInChat: true,
+      openQuestionIds: [],
+    } satisfies GoatBotTaskCard;
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      ...asked,
+      user("u1", "2026-10-12T12:00:02Z", "Save"),
+    ];
+    const messages = {
+      b1: routed,
+      u1: {
+        tone: "reply" as const,
+        readAt: "2026-10-12T12:00:02Z",
+        requestKey: "in-1",
+        taskId: "proposal",
+      },
+    };
+    expect(questionRow(items, [], messages, { n1: proposal }, null)).toMatchObject({
+      options: [],
+      answer: "Save",
+    });
+  });
+
+  it("keeps a task's question open until its card closes it, though an answer was sent", () => {
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const items = [
+      notice("n1", "2026-10-12T12:00:00Z"),
+      ...asked,
+      user("u1", "2026-10-12T12:00:02Z", "Save"),
+    ];
+    const messages = {
+      b1: routed,
+      u1: { tone: "reply" as const, readAt: null, requestKey: "in-1", taskId: "proposal" },
+    };
+    const stillOpen = { ...card("proposal", 2), askInChat: true, openQuestionIds: ["q-save"] };
+    const row = questionRow(items, [], messages, { n1: stillOpen }, null);
+    expect(row).toMatchObject({ options: ["Save", "Skip"] });
+    expect(row).not.toHaveProperty("answer");
+  });
+
+  it("does not take a message about something else as the answer to a task's open question", () => {
+    const open = { ...card("proposal", 1), askInChat: true, openQuestionIds: ["q-save"] };
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const row = questionRow(
+      [notice("n1", "2026-10-12T12:00:00Z"), ...asked, user("u1", "2026-10-12T12:00:02Z", "hi")],
+      [],
+      { b1: routed },
+      { n1: open },
+      null,
+    );
+    expect(row).toMatchObject({ options: ["Save", "Skip"] });
+    expect(row).not.toHaveProperty("answer");
+  });
+});
+
+describe("a long chat of questions", () => {
+  it("gives each of hundreds of questions its own reply, in the chat and per task", () => {
+    const start = Date.parse("2026-10-12T12:00:00Z");
+    let clock = 0;
+    const at = () => DateTime.formatIso(DateTime.makeUnsafe(start + clock++ * 1_000));
+    const closed = (key: string): GoatBotTaskCard => ({
+      ...card(key, 1, "Waiting for your answer"),
+      askInChat: true,
+      openQuestionIds: [],
+    });
+    const question = (taskId: string | null, questionId: string): GoatBotMessagePresentation => ({
+      tone: "question",
+      readAt: null,
+      requestKey: null,
+      taskId,
+      questionId,
+      options: ["Yes", "No"],
+    });
+    const sentTo = (taskId: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      taskId,
+    });
+    const items: OrchestrationV2TurnItem[] = [notice("na", at()), notice("nb", at())];
+    const messages: Record<string, GoatBotMessagePresentation> = {};
+    const expected: Array<readonly [string, ReadonlyArray<string>, string | undefined]> = [];
+    const rounds = 200;
+    for (let round = 0; round < rounds; round++) {
+      // Two tasks ask, the chat asks, then the replies come back in another order.
+      items.push(bot(`qa${round}`, at(), `A asks ${round}`));
+      messages[`qa${round}`] = question("a", `qa${round}`);
+      items.push(bot(`qb${round}`, at(), `B asks ${round}`));
+      messages[`qb${round}`] = question("b", `qb${round}`);
+      items.push(bot(`qc${round}`, at(), `Chat asks ${round}`));
+      messages[`qc${round}`] = question(null, `qc${round}`);
+      if (round === rounds - 1) {
+        expected.push([`qa${round}`, [], undefined], [`qb${round}`, [], undefined]);
+        expected.push([`qc${round}`, ["Yes", "No"], undefined]);
+        continue;
+      }
+      items.push(user(`uc${round}`, at(), `chat ${round}`));
+      items.push(user(`ub${round}`, at(), `b ${round}`));
+      messages[`ub${round}`] = sentTo("b");
+      items.push(user(`ua${round}`, at(), `a ${round}`));
+      messages[`ua${round}`] = sentTo("a");
+      expected.push([`qa${round}`, [], `a ${round}`], [`qb${round}`, [], `b ${round}`]);
+      expected.push([`qc${round}`, [], `chat ${round}`]);
+    }
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf(items),
+        pendingInputs: [],
+        readers: readers(messages, { na: closed("a"), nb: closed("b") }),
+        taskId: null,
+      }),
+    );
+    expect(
+      rows.flatMap((row) => (row.kind === "bot" ? [[row.id, row.options, row.answer]] : [])),
+    ).toEqual(expected);
   });
 });

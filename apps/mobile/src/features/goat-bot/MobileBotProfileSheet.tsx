@@ -1,6 +1,14 @@
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
-import { useState, type ReactNode } from "react";
-import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useRef, useState, type ReactNode } from "react";
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  type TextInputInstance,
+  View,
+} from "react-native";
 
 const INPUT = "rounded-lg border border-border-subtle px-3 py-2 text-base text-foreground";
 
@@ -13,6 +21,8 @@ export function MobileBotProfileSheet(props: {
   readonly onClose: () => void;
   /** More fields after the profile, such as a new bot's model. */
   readonly children?: ReactNode;
+  /** One of those fields changed, so a save goes through with no profile change. */
+  readonly extraChanged?: boolean;
 }) {
   const [name, setName] = useState(props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
@@ -20,12 +30,21 @@ export function MobileBotProfileSheet(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const blankName = name.trim() === "";
-  const saveDisabled = busy || blankName || !props.canSubmit;
+  // A missing name is pointed out once the person leaves the field or saves, not while they start.
+  const [nameChecked, setNameChecked] = useState(false);
+  const nameMissing = blankName && nameChecked;
+  const nameRef = useRef<TextInputInstance>(null);
+  const saveDisabled = busy || !props.canSubmit;
 
   const save = async () => {
     if (saveDisabled) return;
+    if (blankName) {
+      setNameChecked(true);
+      nameRef.current?.focus();
+      return;
+    }
     const changes = botProfileChanges(props.mode, props.initial, { name, avatar, purpose });
-    if (Object.keys(changes).length === 0) return props.onClose();
+    if (Object.keys(changes).length === 0 && props.extraChanged !== true) return props.onClose();
     setBusy(true);
     setError(null);
     const failure = await props.onSubmit(changes);
@@ -77,14 +96,21 @@ export function MobileBotProfileSheet(props: {
           </Text>
           <Text className="text-foreground">Name</Text>
           <TextInput
+            ref={nameRef}
             accessibilityLabel="Name"
+            accessibilityHint={nameMissing ? "The bot needs a name." : undefined}
             value={name}
             maxLength={64}
             editable={!busy}
             onChangeText={setName}
+            onBlur={() => setNameChecked(true)}
             className={INPUT}
           />
-          {blankName ? <Text className="text-foreground-muted">The bot needs a name.</Text> : null}
+          {nameMissing ? (
+            <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
+              The bot needs a name.
+            </Text>
+          ) : null}
           <Text className="text-foreground">Avatar</Text>
           <TextInput
             accessibilityLabel="Avatar"

@@ -54,6 +54,7 @@ import * as ServerConfig from "../config.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import { AcpMcpBridgeError, callAcpMcpTool, listAcpMcpTools } from "../mcp/AcpMcpStdioBridge.ts";
 import { declaredRequest, HostRoutableDeclarationError } from "./declaredArguments.ts";
+import { declaredLaunchArguments, launcherForRemote } from "./remoteLaunchDeclarations.ts";
 import { readRemoteToolResult } from "./remoteToolResult.ts";
 export { readRemoteToolResult } from "./remoteToolResult.ts";
 import { remoteDeadlineMessage, remoteUnavailableMessage } from "./remoteFailureCopy.ts";
@@ -787,9 +788,7 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.timeout(LAUNCH_LINEAGE_PROBE_TIMEOUT)),
       );
       if (Exit.isFailure(listed)) return { capabilities: null, declared: launchArguments.get(key) };
-      const declared = new Set(
-        listed.value.find((tool) => tool.name === "goat_thread_launch")?.argumentNames ?? [],
-      );
+      const declared = declaredLaunchArguments(listed.value);
       const advertisesMemory = advertisesMemoryTools(listed.value);
       if (advertisesMemory && !declared.has("memoryGrantCeiling"))
         return yield* memoryRefusal("Remote memory tools require explicit task ceiling admission.");
@@ -1548,7 +1547,7 @@ const make = Effect.gen(function* () {
             ...(withLaunchedBy
               ? {
                   launchedBy: {
-                    ...input.launchedBy,
+                    ...launcherForRemote(input.launchedBy, declared),
                     via: input.launchedBy?.via ?? "ssh_thread_launch",
                   },
                 }

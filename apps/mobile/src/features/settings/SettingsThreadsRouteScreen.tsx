@@ -320,7 +320,7 @@ function ThreadListSettingsSection() {
       <SettingsSwitchRow
         icon="bubble.left.and.bubble.right"
         label="Show GOAT Bot threads"
-        subtitle="List the threads GOAT Bot runs to follow your work. Search finds them either way. Applies to this device."
+        subtitle="List bot conversations and the work bots keep under their tasks. Search finds them either way. Applies to this device."
         value={AsyncResult.isSuccess(preferences) && preferences.value.showGoatBotThreads === true}
         onValueChange={(value) => savePreferences({ showGoatBotThreads: value })}
       />

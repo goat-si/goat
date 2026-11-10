@@ -77,7 +77,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import { threadRuntimeCanArchive } from "@goat/client-runtime/state/models";
+import { threadOriginLabel, threadRuntimeCanArchive } from "@goat/client-runtime/state/models";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
   MAX_SIDEBAR_THREAD_PREVIEW_COUNT,
@@ -812,9 +812,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               <TooltipPopup side="top">{thread.title}</TooltipPopup>
             </Tooltip>
           )}
-          {thread.source.externalLauncher ? (
+          {threadOriginLabel(thread.source) ? (
             <span className="max-w-20 shrink-0 truncate text-xs text-muted-foreground">
-              via {thread.source.externalLauncher}
+              {threadOriginLabel(thread.source)}
             </span>
           ) : null}
           <ThreadHistoryArchiveHint

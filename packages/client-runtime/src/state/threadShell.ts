@@ -7,6 +7,7 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import {
+  isGoatBotConversationThreadId,
   isProviderNativeSubagentThread,
   isSideChatThread,
   OrchestrationV2ThreadShell,
@@ -17,7 +18,7 @@ import { Atom } from "effect/reactivity";
 import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
 import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
-import { goatBotObservationThreadKeys } from "../goatBot/visibility.ts";
+import { goatBotObservationThreadKeys, type GoatBotWorkRef } from "../goatBot/visibility.ts";
 import {
   arrayElementsEqual,
   parseProjectRefCollectionKey,
@@ -140,6 +141,14 @@ export function createEnvironmentThreadShellAtoms(input: {
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
+  /**
+   * The work GOAT Bot's rows list, read again for an environment when its signal changes:
+   * a bot launch or worker appeared, or a bot conversation recorded something.
+   */
+  readonly goatBotListedWork?: (source: {
+    readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
+    readonly signal: (environmentId: EnvironmentId) => Atom.Atom<string>;
+  }) => Atom.Atom<ReadonlyArray<GoatBotWorkRef>>;
 }) {
   // Point reads and aggregate lists share values without keeping an atom alive
   // for every listed thread. Replaced source objects can be collected.
@@ -421,10 +430,42 @@ export function createEnvironmentThreadShellAtoms(input: {
     return next;
   }).pipe(Atom.withLabel("environment-quiet-thread-shell-list"));
 
-  // Lists leave GOAT Bot's observation threads out. Reuse the set while its members stay the same.
+  const goatBotWorkSignalAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      const parts: string[] = [];
+      for (const thread of get(quietThreadShellsAtom)) {
+        // Work the bot launched on another machine changes this environment's rows too.
+        if (
+          thread.environmentId !== environmentId &&
+          thread.source.launchedBy?.environmentId !== environmentId
+        )
+          continue;
+        if (isGoatBotConversationThreadId(thread.id))
+          parts.push(thread.id + "@" + thread.updatedAt);
+        else if (
+          thread.source.launchedBy?.workKind !== undefined ||
+          thread.id.startsWith("channel-worker:")
+        )
+          parts.push(thread.id + ":" + (thread.runtime?.status ?? "idle"));
+      }
+      return parts.sort().join("|");
+    }).pipe(Atom.withLabel(`environment-goat-bot-work-signal:${environmentId}`)),
+  );
+  const goatBotEnvironmentIdsAtom = Atom.make((get) => [
+    ...enabledEnvironmentIds(get(input.catalogValueAtom)),
+  ]).pipe(Atom.withLabel("environment-goat-bot-environment-ids"));
+  const goatBotListedWorkAtom = input.goatBotListedWork?.({
+    environmentIdsAtom: goatBotEnvironmentIdsAtom,
+    signal: goatBotWorkSignalAtom,
+  });
+
+  // Lists leave GOAT Bot's threads out. Reuse the set while its members stay the same.
   let previousObservationKeys: ReadonlySet<string> = new Set();
   const goatBotObservationThreadKeysAtom = Atom.make((get) => {
-    const next = goatBotObservationThreadKeys({ threads: get(quietThreadShellsAtom) });
+    const next = goatBotObservationThreadKeys({
+      threads: get(quietThreadShellsAtom),
+      ...(goatBotListedWorkAtom === undefined ? {} : { listedWork: get(goatBotListedWorkAtom) }),
+    });
     if (
       next.size === previousObservationKeys.size &&
       [...next].every((key) => previousObservationKeys.has(key))

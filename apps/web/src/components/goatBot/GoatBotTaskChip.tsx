@@ -43,34 +43,25 @@ const TONE_TEXT = {
   danger: "text-destructive-foreground",
 } satisfies Record<GoatBotCardTone, string>;
 
-/** One piece of work GOAT Bot started. Its details live in the worker's own thread. */
+/** One piece of work GOAT Bot started, as a bordered row. Its details live in the worker's thread. */
 export function GoatBotTaskChip({
   card,
-  tail,
   retryEnvironmentId = null,
 }: {
   readonly card: GoatBotTaskCard;
-  readonly tail: boolean;
   /** Where this failed or stopped work can run again; null hides Retry. */
   readonly retryEnvironmentId?: EnvironmentId | null;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const Icon = TONE_ICON[card.tone];
   return (
-    <div
-      className={cn(
-        "relative w-72 max-w-full rounded-2xl bg-goat-bubble-in text-goat-bubble-in-foreground",
-        tail && "goat-bubble-tail-in",
-      )}
-    >
-      <div className="overflow-hidden rounded-2xl">
-        <div className="flex items-center gap-1.5 px-3 pt-2.5 text-2xs leading-4 font-medium">
+    <div className="w-full max-w-[44rem] min-w-0 rounded-xl border border-border bg-card text-card-foreground">
+      <div className="overflow-hidden rounded-xl">
+        <div className="flex items-center gap-1.5 px-3 pt-2.5 text-xs leading-4 font-medium">
           <Icon className={cn("size-3.5 shrink-0", TONE_TEXT[card.tone])} />
           <span className="truncate">{card.statusLabel}</span>
           {card.attemptLabel ? (
-            <span className="shrink-0 text-goat-bubble-in-foreground/65">
-              · {card.attemptLabel}
-            </span>
+            <span className="shrink-0 text-muted-foreground">· {card.attemptLabel}</span>
           ) : null}
           {card.attentionLabel ? (
             <span className="ml-auto shrink-0 text-warning-foreground">{card.attentionLabel}</span>
@@ -87,14 +78,10 @@ export function GoatBotTaskChip({
             />
           ) : null}
           {card.sourceLabel ? (
-            <div className="truncate text-xs text-goat-bubble-in-foreground/65">
-              {card.sourceLabel}
-            </div>
+            <div className="truncate text-xs text-muted-foreground">{card.sourceLabel}</div>
           ) : null}
           {card.continuationLabel ? (
-            <div className="truncate text-xs text-goat-bubble-in-foreground/65">
-              {card.continuationLabel}
-            </div>
+            <div className="truncate text-xs text-muted-foreground">{card.continuationLabel}</div>
           ) : null}
           {card.pullRequests.length > 0 ? (
             <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs">
@@ -114,14 +101,14 @@ export function GoatBotTaskChip({
           {card.evidenceLabels && card.evidenceLabels.length > 0 ? (
             <ul aria-label="Verification" className="space-y-0.5 text-xs break-words">
               {card.evidenceLabels.map((label) => (
-                <li key={label} className="text-goat-bubble-in-foreground/75">
+                <li key={label} className="text-muted-foreground">
                   {label}
                 </li>
               ))}
             </ul>
           ) : null}
         </div>
-        <div className="flex min-h-9 flex-wrap items-center justify-between gap-1 border-t border-black/10 px-3 py-1 text-xs text-muted-foreground dark:border-white/10">
+        <div className="flex min-h-9 flex-wrap items-center justify-between gap-1 border-t border-border px-3 py-1 text-xs text-muted-foreground">
           <time dateTime={card.updatedAt} className="shrink-0">
             Updated {formatShortTimestamp(card.updatedAt, timestampFormat)}
           </time>
@@ -160,7 +147,7 @@ function GoatBotTaskSummary({
       <div
         ref={ref}
         className={cn(
-          "goat-task-summary break-words whitespace-pre-wrap text-goat-bubble-in-foreground/80",
+          "goat-task-summary break-words whitespace-pre-wrap text-muted-foreground",
           !expanded && "line-clamp-4",
         )}
       >

@@ -83,7 +83,8 @@ it("lists running work under the machine it runs on, GOAT Bot's own first", asyn
 it("says when nothing runs, when the list is cut short, and offline", async () => {
   setup({ tasks: [] });
   await render();
-  expect(container.textContent).toContain("No work is running right now.");
+  expect(container.textContent).toContain("No work running");
+  expect(container.textContent).toContain("Machines GOAT Bot works on will appear here.");
   setup({ tasks: [task("a", "Fix the build", {})], nextCursor: "more" });
   await render();
   expect(container.textContent).toContain("More tasks are running than this list shows.");

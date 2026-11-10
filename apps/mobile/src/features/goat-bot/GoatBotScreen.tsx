@@ -2,9 +2,7 @@ import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
-  goatBotReceiptLabel,
   goatBotName,
-  goatBotRejectionText,
   goatBotNotesRefreshKey,
   hasGoatBotMarkdown,
   type GoatBotRow,
@@ -36,25 +34,32 @@ import {
   useSelectWorkspaceDetail,
 } from "../workspace/useSelectWorkspaceDetail";
 import { botThreadDetail, openBotThreadAction } from "./goatBotThreadNavigation";
-import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
-import { GoatBotBubble } from "./GoatBotBubble";
 import { GoatBotDayStamp } from "./GoatBotDayStamp";
 import { GoatBotHeaderFace } from "./GoatBotFace";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
-import { GOAT_BOT_BUBBLE_COLORS, goatBotBubbleLayout } from "./goatBotBubbleStyle";
+import {
+  GoatBotActivityLine,
+  GoatBotGroupHeader,
+  GoatBotPersonCaption,
+  GoatBotPersonPill,
+  GoatBotQuestionCard,
+  GoatBotReplyQuote,
+  goatBotRowGap,
+  goatBotTime,
+} from "./GoatBotMessageParts";
+import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { MobileBotWork } from "./MobileBotWork";
 import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
+import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const rowKey = (row: GoatBotRow) => row.id;
-const receiptTime = (iso: string) =>
-  new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(iso));
 function availabilityCopy(mainName: string, openName: string) {
   return {
     ready: "Answers here, works in its own threads",
@@ -68,141 +73,7 @@ function availabilityCopy(mainName: string, openName: string) {
   };
 }
 
-type GoatBotTaskRow = Extract<GoatBotRow, { kind: "task" }>;
-const SUMMARY_LINES = 4;
-/** About four lines of body text in a card at its narrowest. */
-const SUMMARY_CHARS = 160;
-
-/** A piece of work GOAT Bot started; remote work names its machine and waits for it to connect. */
-export function GoatBotTaskCard(props: {
-  readonly card: GoatBotTaskRow["card"];
-  readonly onSelectThread: (thread: ThreadSelection) => void;
-  readonly tail: boolean;
-}) {
-  const { card } = props;
-  const bodyText = useScaledTextRole("body");
-  const target = card.target;
-  const { connectedEnvironments } = useRemoteConnectionStatus();
-  const unreachableHost =
-    target.kind === "thread" &&
-    target.host !== undefined &&
-    !connectedEnvironments.some(
-      (environment) =>
-        environment.environmentId === target.environmentId &&
-        environment.connectionState === "connected",
-    )
-      ? target.host
-      : null;
-  const action =
-    target.kind !== "thread"
-      ? target.label
-      : unreachableHost !== null
-        ? `Connect ${unreachableHost} to open`
-        : "Open thread";
-  return (
-    <GoatBotBubble side="in" tail={props.tail} maxWidth="90%">
-      {(textColor) => (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`${card.title}. ${card.statusLabel}.${card.attemptLabel ? ` ${card.attemptLabel}.` : ""}${card.attentionLabel ? ` ${card.attentionLabel}.` : ""}${card.continuationLabel ? ` ${card.continuationLabel}.` : ""} ${(card.evidenceLabels ?? []).join(". ")} ${action}`}
-          disabled={target.kind !== "thread" || unreachableHost !== null}
-          onPress={() => {
-            if (target.kind === "thread" && unreachableHost === null)
-              props.onSelectThread({ environmentId: target.environmentId, id: target.threadId });
-          }}
-          className="gap-1"
-        >
-          <Text className="text-xs" style={{ color: textColor, opacity: 0.7 }}>
-            {card.statusLabel}
-            {card.attemptLabel ? ` · ${card.attemptLabel}` : ""}
-            {card.attentionLabel ? ` · ${card.attentionLabel}` : ""}
-          </Text>
-          <Text className="font-semibold" style={{ color: textColor, ...bodyText }}>
-            {card.title}
-          </Text>
-          {card.sourceLabel ? (
-            <Text className="text-xs" style={{ color: textColor, opacity: 0.7 }}>
-              {card.sourceLabel}
-            </Text>
-          ) : null}
-          {card.continuationLabel ? (
-            <Text className="text-xs" style={{ color: textColor, opacity: 0.7 }}>
-              {card.continuationLabel}
-            </Text>
-          ) : null}
-          {card.summary ? (
-            <GoatBotTaskSummary
-              summary={card.summary}
-              textColor={textColor}
-              environmentId={card.target.kind === "thread" ? card.target.environmentId : null}
-              onSelectThread={props.onSelectThread}
-            />
-          ) : null}
-          {card.pullRequests.length > 0 ? (
-            <Text className="text-xs" style={{ color: textColor, opacity: 0.7 }}>
-              {"Pull requests: " +
-                card.pullRequests.map((pullRequest) => pullRequest.label).join(", ")}
-            </Text>
-          ) : null}
-          {card.evidenceLabels?.map((label) => (
-            <Text key={label} className="text-xs" style={{ color: textColor, opacity: 0.8 }}>
-              {label}
-            </Text>
-          ))}
-          <Text className="text-xs" style={{ color: textColor, opacity: 0.7 }}>
-            {action === "Open thread" ? "Open thread ↗" : action}
-          </Text>
-        </Pressable>
-      )}
-    </GoatBotBubble>
-  );
-}
-
-/** The card is the task's result, so a long summary opens in place instead of staying cut off. */
-function GoatBotTaskSummary(props: {
-  readonly summary: string;
-  readonly textColor: string;
-  readonly environmentId: EnvironmentId | null;
-  readonly onSelectThread: (thread: ThreadSelection) => void;
-}) {
-  const bodyText = useScaledTextRole("body");
-  const [expanded, setExpanded] = useState(false);
-  // Counted from the text: line metrics under numberOfLines differ between iOS and Android.
-  const long =
-    props.summary.length > SUMMARY_CHARS || props.summary.split("\n").length > SUMMARY_LINES;
-  return (
-    <View className="gap-0.5">
-      {(expanded || !long) && hasGoatBotMarkdown(props.summary) ? (
-        <GoatBotMarkdown
-          text={props.summary}
-          textColor={props.textColor}
-          environmentId={props.environmentId}
-          onSelectThread={props.onSelectThread}
-        />
-      ) : (
-        // A collapsed long summary stays a bounded plain preview; the native renderer cannot clamp.
-        <Text
-          numberOfLines={expanded ? undefined : SUMMARY_LINES}
-          style={{ color: props.textColor, ...bodyText }}
-        >
-          <GoatBotLinkedText text={props.summary} />
-        </Text>
-      )}
-      {long ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ expanded }}
-          onPress={() => setExpanded((open) => !open)}
-          hitSlop={8}
-        >
-          <Text className="text-xs font-medium" style={{ color: props.textColor, opacity: 0.8 }}>
-            {expanded ? "Show less" : "Show more"}
-          </Text>
-        </Pressable>
-      ) : null}
-    </View>
-  );
-}
+type TaskRow = Extract<GoatBotRow, { kind: "task" }>;
 
 export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly row: GoatBotRow;
@@ -215,17 +86,17 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly onSelectTask?: (taskId: ChannelTaskId) => void;
   /** The environment whose bot history is shown; thread links in bot text open there. */
   readonly environmentId?: EnvironmentId | null;
-  /** Who the conversation belongs to; a member bot labels its own updates. */
+  /** Who the conversation belongs to; its name heads each run of bot messages. */
   readonly botName?: string;
+  /** The bot's profile avatar, shown beside its name. */
+  readonly botEmoji?: string | null | undefined;
 }) {
   const { row } = props;
-  const { themeAppearance } = useAppearancePreferences();
-  const outgoingColor = GOAT_BOT_BUBBLE_COLORS[themeAppearance].out;
+  const botName = props.botName ?? "GOAT Bot";
   const bodyText = useScaledTextRole("body");
-  const receiptText = useScaledTextRole("caption");
   const [nowMs] = useState(() => Date.now());
   if (row.kind === "day") {
-    return <GoatBotDayStamp at={row.at} nowMs={nowMs} formatTime={receiptTime} />;
+    return <GoatBotDayStamp at={row.at} nowMs={nowMs} formatTime={goatBotTime} />;
   }
   if (row.kind === "event") {
     return (
@@ -234,172 +105,116 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       </Text>
     );
   }
-  const layout = goatBotBubbleLayout(row.groupPosition);
+  const marginTop = goatBotRowGap(row.groupPosition);
   if (row.kind === "task") {
-    if (props.onSelectTask) {
-      return (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => props.onSelectTask?.(ChannelTaskId.make(row.card.key))}
-          className="min-h-[44px] self-start justify-center rounded-full border border-border px-3 py-2"
-        >
-          <Text className="text-foreground">
-            Task thread · {row.card.title} · {row.card.statusLabel}
-          </Text>
-        </Pressable>
-      );
-    }
+    const onSelectTask = props.onSelectTask;
     return (
-      <View style={{ marginTop: layout.marginTop, alignItems: "flex-start" }}>
-        <GoatBotTaskCard card={row.card} onSelectThread={props.onSelectThread} tail={layout.tail} />
+      <View className="gap-1.5" style={{ marginTop }}>
+        {row.firstInGroup ? (
+          <GoatBotGroupHeader at={row.createdAt} name={botName} emoji={props.botEmoji} />
+        ) : null}
+        <GoatBotTaskRow
+          card={row.card}
+          onSelectThread={props.onSelectThread}
+          onOpenTask={
+            onSelectTask ? () => onSelectTask(ChannelTaskId.make(row.card.key)) : undefined
+          }
+        />
       </View>
     );
   }
   if (row.kind === "user") {
-    const delivery = row.delivery;
-    const receipt = goatBotReceiptLabel(delivery, receiptTime, props.botName);
+    const time = goatBotTime(row.createdAt);
     return (
-      <View className="items-end gap-1" style={{ marginTop: layout.marginTop }}>
-        <GoatBotBubble side="out" tail={layout.tail}>
-          {(textColor) => (
-            <View className="gap-1">
-              {row.text ? (
-                <Text selectable style={{ color: textColor, ...bodyText }}>
-                  {row.text}
-                </Text>
-              ) : null}
-              {row.attachments?.map((file) => (
-                <Text
-                  key={file.id}
-                  numberOfLines={1}
-                  style={{ color: textColor, opacity: 0.85, ...bodyText }}
-                >
-                  {(file.type === "image" ? "Photo · " : "File · ") + file.name}
-                </Text>
-              ))}
-            </View>
-          )}
-        </GoatBotBubble>
-        {row.showReceipt || delivery.state === "failed" ? (
-          <View className="flex-row items-center gap-2">
-            <Text
-              className="text-foreground-muted"
-              style={receiptText}
-              accessibilityLabel={receipt?.accessibleText}
-            >
-              {delivery.state === "failed"
-                ? goatBotRejectionText(delivery.rejectionReason, props.botName ?? "GOAT Bot")
-                : receipt?.text}
-            </Text>
-            {delivery.state === "failed" && delivery.rejectionReason === undefined ? (
-              <Pressable
-                accessibilityRole="button"
-                disabled={!props.canSend}
-                onPress={() => props.onRetry(delivery.clientKey)}
-                className="p-2"
+      <View className="items-end gap-1" style={{ marginTop }}>
+        <GoatBotPersonPill>
+          <View className="gap-1">
+            {row.text ? (
+              <Text
+                selectable
+                accessibilityLabel={time ? `You, ${time}: ${row.text}` : `You: ${row.text}`}
+                className="text-prominent-action-foreground"
+                style={bodyText}
               >
-                <Text className="text-sm text-foreground">Retry</Text>
-              </Pressable>
+                {row.text}
+              </Text>
             ) : null}
-            {delivery.state === "failed" ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => props.onDiscard?.(delivery.clientKey)}
-                className="p-2"
+            {row.attachments?.map((file) => (
+              <Text
+                key={file.id}
+                numberOfLines={1}
+                className="text-prominent-action-foreground"
+                style={{ opacity: 0.85, ...bodyText }}
               >
-                <Text className="text-sm text-foreground">Discard</Text>
-              </Pressable>
-            ) : null}
+                {(file.type === "image" ? "Photo · " : "File · ") + file.name}
+              </Text>
+            ))}
           </View>
-        ) : null}
+        </GoatBotPersonPill>
+        <GoatBotPersonCaption
+          row={row}
+          botName={botName}
+          canSend={props.canSend}
+          onRetry={props.onRetry}
+          onDiscard={props.onDiscard}
+        />
       </View>
     );
   }
-  return (
-    <View className="items-start gap-1" style={{ marginTop: layout.marginTop }}>
-      {row.proactive && row.firstInGroup ? (
-        <Text className="text-xs text-foreground-muted">
-          {props.botName ?? "GOAT Bot"} · Update
-        </Text>
-      ) : null}
-      <GoatBotBubble side="in" tail={layout.tail}>
-        {(textColor) => (
-          <View className="gap-1">
-            {row.replyTo ? (
-              <Text
-                numberOfLines={2}
-                className="border-l-2 border-border pl-2 text-xs"
-                style={{ color: textColor, opacity: 0.7 }}
-              >
-                {row.replyTo}
-              </Text>
-            ) : null}
-            {hasGoatBotMarkdown(row.text) ? (
-              <GoatBotMarkdown
-                text={row.text}
-                textColor={textColor}
-                failed={row.tone === "failure"}
-                environmentId={props.environmentId ?? null}
-                onSelectThread={props.onSelectThread}
-              />
-            ) : (
-              <Text
-                selectable
-                className={row.tone === "failure" ? "text-danger-foreground" : undefined}
-                style={row.tone === "failure" ? bodyText : { color: textColor, ...bodyText }}
-                accessibilityLabel={row.tone === "failure" ? `Failed: ${row.text}` : undefined}
-              >
-                <GoatBotLinkedText text={row.text} />
-              </Text>
-            )}
-          </View>
-        )}
-      </GoatBotBubble>
-      {row.memory ? <MemoryReportLink reference={row.memory} /> : null}
-      {row.options.length > 0 ? (
-        <View
-          accessibilityLabel="Suggested answers"
-          className="max-w-[90%] flex-row flex-wrap gap-2"
+  const prose = (
+    <>
+      {hasGoatBotMarkdown(row.text) ? (
+        <GoatBotMarkdown
+          text={row.text}
+          failed={row.tone === "failure"}
+          environmentId={props.environmentId ?? null}
+          onSelectThread={props.onSelectThread}
+        />
+      ) : (
+        <Text
+          selectable
+          className={row.tone === "failure" ? "text-danger-foreground" : "text-foreground"}
+          style={bodyText}
+          accessibilityLabel={row.tone === "failure" ? `Failed: ${row.text}` : undefined}
         >
-          {row.options.map((answer) => (
-            <Pressable
-              key={answer}
-              accessibilityRole="button"
-              disabled={!props.canSend}
-              onPress={() =>
-                props.onSend(
-                  answer,
-                  row.answerTaskId === undefined ? undefined : ChannelTaskId.make(row.answerTaskId),
-                )
-              }
-              // 44pt touch target; min-h-11 is only 38.5pt at the app's 14pt rem.
-              className="min-h-[44px] justify-center rounded-full border px-3 py-2"
-              style={{ borderColor: outgoingColor }}
-            >
-              <Text className="text-sm" style={{ color: outgoingColor }}>
-                {answer}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+          <GoatBotLinkedText text={row.text} />
+        </Text>
+      )}
+      {row.memory ? <MemoryReportLink reference={row.memory} /> : null}
+    </>
+  );
+  return (
+    <View className="gap-1.5" style={{ marginTop }}>
+      {row.firstInGroup ? (
+        <GoatBotGroupHeader
+          at={row.createdAt}
+          name={botName}
+          emoji={props.botEmoji}
+          update={row.proactive}
+        />
       ) : null}
+      {row.replyTo ? <GoatBotReplyQuote text={row.replyTo} /> : null}
+      {/* The shared rows fold a question once it is answered: the card settles to the answer. */}
+      {row.options.length > 0 || row.answer !== undefined ? (
+        <GoatBotQuestionCard
+          options={row.options}
+          answered={row.answer}
+          canAnswer={props.canSend}
+          onPick={(answer) =>
+            props.onSend(
+              answer,
+              row.answerTaskId === undefined ? undefined : ChannelTaskId.make(row.answerTaskId),
+            )
+          }
+        >
+          {prose}
+        </GoatBotQuestionCard>
+      ) : (
+        prose
+      )}
     </View>
   );
 });
-
-/** What GOAT Bot is doing, in place of typing dots. Static, so the list repaints nothing. */
-function GoatBotActivityBubble({ text }: { readonly text: string }) {
-  const bodyText = useScaledTextRole("body");
-  return (
-    <View accessibilityRole="text" accessibilityLiveRegion="polite" className="self-start">
-      <GoatBotBubble side="in" tail>
-        {(textColor) => (
-          <Text style={{ color: textColor, opacity: 0.72, ...bodyText }}>{text}</Text>
-        )}
-      </GoatBotBubble>
-    </View>
-  );
-}
 
 export function GoatBotScreen(props: {
   readonly visible: boolean;
@@ -419,12 +234,12 @@ export function GoatBotScreen(props: {
   const session = useMobileGoatBotSession(props.visible, props.taskId ?? null, member);
   const title = goatBotName(member ?? props.main ?? null);
   const copy = availabilityCopy(mainName, title);
+  const botEmoji = member ? mobileGoatBotMemberPicture(member) : props.main?.avatar;
   const taskId = session.supportsTaskThreads ? props.taskId : undefined;
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
   const { themeAppearance } = useAppearancePreferences();
   const bodyText = useScaledTextRole("body");
-  const outgoingColor = GOAT_BOT_BUBBLE_COLORS[themeAppearance].out;
   const selectDetail = useSelectWorkspaceDetail();
   const navigation = useNavigation();
   const selectThread = useCallback(
@@ -498,6 +313,7 @@ export function GoatBotScreen(props: {
         onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
         environmentId={session.historyEnvironmentId}
         botName={title}
+        botEmoji={botEmoji}
       />
     ),
     [
@@ -511,6 +327,7 @@ export function GoatBotScreen(props: {
       session.supportsTaskThreads,
       session.historyEnvironmentId,
       title,
+      botEmoji,
     ],
   );
   const send = () => {
@@ -530,9 +347,7 @@ export function GoatBotScreen(props: {
     setAttachments((current) => current.filter((attachment) => attachment.id !== id));
   };
   const taskCard = taskId
-    ? session.rows.find(
-        (row): row is GoatBotTaskRow => row.kind === "task" && row.card.key === taskId,
-      )
+    ? session.rows.find((row): row is TaskRow => row.kind === "task" && row.card.key === taskId)
     : undefined;
   const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
   const visibleRows = useMemo(
@@ -545,7 +360,7 @@ export function GoatBotScreen(props: {
         <GoatBotHeaderFace
           activity={session.activity ?? null}
           title={title}
-          emoji={(member ?? props.main ?? null)?.avatar}
+          emoji={botEmoji}
           {...(member
             ? {
                 conversation: {
@@ -566,6 +381,7 @@ export function GoatBotScreen(props: {
             member
               ? {
                   botId: member.botId,
+                  environmentId: member.environmentId,
                   threadId: member.sessionThreadId,
                   name: member.name,
                   defaultModelSelection: member.defaultModelSelection,
@@ -579,7 +395,7 @@ export function GoatBotScreen(props: {
           notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
           taskCard={
             taskCard ? (
-              <GoatBotTaskCard card={taskCard.card} onSelectThread={onSelectThread} tail={false} />
+              <GoatBotTaskRow card={taskCard.card} onSelectThread={onSelectThread} />
             ) : null
           }
         />
@@ -659,7 +475,7 @@ export function GoatBotScreen(props: {
         }
         ListFooterComponent={
           !taskId && session.activity ? (
-            <GoatBotActivityBubble text={session.activity.text} />
+            <GoatBotActivityLine activity={session.activity} botName={title} />
           ) : null
         }
       />
@@ -734,8 +550,8 @@ export function GoatBotScreen(props: {
             }}
           >
             <View
-              className="items-center justify-center"
-              style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: outgoingColor }}
+              className="items-center justify-center bg-composer-send"
+              style={{ width: 28, height: 28, borderRadius: 14 }}
             >
               <Text className="text-xl font-semibold text-white">↑</Text>
             </View>

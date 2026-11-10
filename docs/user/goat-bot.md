@@ -11,9 +11,12 @@ The main bot is GOAT Bot. On servers that support it, **New bot** creates more b
 name, an emoji, a purpose and a model, and its own conversation and task list. A bot answers
 under its own name and purpose from its next conversation session.
 
-- Edit any bot, including the main one, from its row menu (long press on mobile) or **Settings →
-  GOAT Bot → Profile**. A new name also changes how the main bot introduces itself in Slack and
-  iMessage.
+- Edit any bot, including the main one, from its row menu (long press on mobile), its name at the
+  top of its chat, or **Settings → GOAT Bot → Profile**. A new name also changes how the main bot
+  introduces itself in Slack and iMessage.
+- An added bot's model can change in its edit dialog or from the model button at the top of its
+  chat; its next turn uses it. **Use GOAT Bot's model** makes it follow the main
+  bot's model again.
 - **Hide** moves a bot under **Hidden bots**; it still answers there. **Delete** archives its
   conversation and moves it under **Deleted bots**, where **Restore** brings it back with its
   history. A bot with open tasks can't be deleted until they finish or you stop them.

@@ -84,9 +84,34 @@ const state = vi.hoisted(() => ({
   runNow: vi.fn(),
   retry: vi.fn(),
   openThread: vi.fn(),
+  memberModel: null as null | Record<string, unknown>,
 }));
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
+// The header's trailing items render as buttons, so tests press Work where iOS shows it.
+vi.mock("../../native/StackHeader", () => ({
+  NativeStackScreenOptions: ({
+    options,
+  }: {
+    options: {
+      unstable_headerRightItems: () => {
+        label: string;
+        accessibilityLabel: string;
+        onPress: () => void;
+      }[];
+    };
+  }) =>
+    options.unstable_headerRightItems().map((item) => (
+      <button
+        key={item.label}
+        data-header-item
+        aria-label={item.accessibilityLabel}
+        onClick={item.onPress}
+      >
+        {item.label}
+      </button>
+    )),
+}));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
@@ -137,6 +162,11 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
 }));
 vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
+// The Android menu needs native modules; iOS builds the model into the header items below.
+vi.mock("./GoatBotMemberModelAndroidMenu", () => ({ GoatBotMemberModelAndroidMenu: () => null }));
+vi.mock("./useMobileGoatBotMemberModel", () => ({
+  useMobileGoatBotMemberModelMenu: () => state.memberModel,
+}));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (key: string | null) =>
     key === "task"
@@ -163,6 +193,7 @@ afterEach(async () => {
 
 function reset() {
   state.connected = true;
+  state.memberModel = null;
   for (const query of [state.task, state.routines])
     Object.assign(query, { data: null, error: null, isPending: true, isSuccess: false });
   state.task.refresh.mockClear();
@@ -207,6 +238,8 @@ it("distinguishes task and routine loading, empty, offline, and retry states", a
   expect(container.textContent).toContain("No tasks yet");
   Object.assign(state.task, { error: "failed", isSuccess: false });
   await render();
+  // The last read was empty, but a failed read says nothing about whether tasks exist now.
+  expect(container.textContent).not.toContain("No tasks yet");
   await press("Couldn't load tasks");
   expect(state.task.refresh).toHaveBeenCalledOnce();
   await press("Routines");
@@ -231,6 +264,32 @@ it("shows empty routines when live data is available while the subscription wait
   await press("Routines");
   expect(container.textContent).toContain("set up a routine");
   expect(container.textContent).not.toContain("Loading routines");
+});
+
+it("keeps known tasks in view while they refresh and after a refresh fails", async () => {
+  reset();
+  const at = "2026-11-07T10:00:00.000Z";
+  const rows = [
+    decodeRow({
+      kind: "task",
+      task: { taskId: "known", title: "Known task", status: "running", updatedAt: at },
+      view: { taskId: "known", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    }),
+  ];
+  // A refresh after Pin or Mark done waits on top of the rows already shown.
+  Object.assign(state.task, { isPending: true, isSuccess: true, data: { rows } });
+  await render();
+  await press("Work");
+  expect(container.textContent).toContain("Known task");
+  expect(container.textContent).not.toContain("Loading tasks");
+  Object.assign(state.task, { isPending: false, isSuccess: false, error: "failed" });
+  await render();
+  expect(container.textContent).toContain("Known task");
+  await press("Couldn't load tasks");
+  expect(state.task.refresh).toHaveBeenCalledOnce();
 });
 
 it("exposes work tabs as buttons and updates their selected state", async () => {
@@ -486,4 +545,20 @@ it("offers the Work sheet, and with it Open the chat, only on the chat screen", 
     [...container.querySelectorAll("button")].some((button) => button.textContent === "Work"),
   ).toBe(false);
   expect(container.textContent).not.toContain("waiting for your answer in the chat");
+});
+
+it("puts a member's model beside Work in its chat header", async () => {
+  reset();
+  state.memberModel = {
+    label: "GPT-6-Luna",
+    accessibilityLabel: "Research model: GPT-6-Luna",
+    title: "Research's model",
+    canChange: true,
+    items: [],
+    select: () => {},
+  };
+  await render();
+  const header = [...container.querySelectorAll("[data-header-item]")];
+  expect(header.map((item) => item.textContent)).toEqual(["Work", "GPT-6-Luna"]);
+  expect(header[1]?.getAttribute("aria-label")).toBe("Research model: GPT-6-Luna");
 });

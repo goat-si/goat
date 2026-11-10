@@ -18,6 +18,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { channelEnvironment } from "./channels";
 import {
   projectLaunchSubagentRows,
   type LaunchSubagentRow,
@@ -79,6 +80,7 @@ export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(creat
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
+  goatBotListedWork: channelEnvironment.listedBotWork,
 });
 export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
   childThreadInputsAtom: environmentThreadShells.childThreadInputsAtom,
