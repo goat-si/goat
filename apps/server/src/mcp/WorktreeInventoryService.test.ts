@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as GitManager from "../git/GitManager.ts";
@@ -312,6 +313,34 @@ describe("WorktreeInventoryService", () => {
       for (const path of [archived, finished, orphan]) expect(yield* fs.exists(path)).toBe(false);
       for (const path of [idle, unsaved, outside]) expect(yield* fs.exists(path)).toBe(true);
     }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect(
+    "a sweep whose removals outlast its budget returns what it removed and the count remaining",
+    () =>
+      Effect.gen(function* () {
+        const { service, fs, addWorktree, setThreads } = yield* fixture;
+        const paths = [yield* addWorktree("a"), yield* addWorktree("b"), yield* addWorktree("c")];
+        setThreads(paths.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+
+        const first = yield* service.cleanup({ dryRun: false });
+        expect(first.removed).toHaveLength(2);
+        expect(first.remaining).toBe(1);
+        expect(yield* service.cleanup({ dryRun: true })).toMatchObject({ remaining: 0 });
+        const second = yield* service.cleanup({ dryRun: false });
+        expect(second.removed).toHaveLength(1);
+        expect(second.remaining).toBe(0);
+        for (const path of paths) expect(yield* fs.exists(path)).toBe(false);
+      }).pipe(
+        // Each removal takes 40 s of a 60 s budget, as on a host with large checkouts.
+        Effect.updateService(GitVcsDriver.GitVcsDriver, (git) => ({
+          ...git,
+          removeWorktree: (input) =>
+            git.removeWorktree(input).pipe(Effect.tap(() => TestClock.adjust("40 seconds"))),
+        })),
+        Effect.provide(testLayer),
+        Effect.scoped,
+      ),
   );
 
   it.live("never deletes the default branch, even with force", () =>

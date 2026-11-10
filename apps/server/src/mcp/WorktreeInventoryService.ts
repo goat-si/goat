@@ -41,6 +41,13 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 type LocalInput<A> = Omit<A, "host">;
 
 /**
+ * How long a sweep keeps starting removals. Half the bound a caller on another machine waits
+ * (HostThreadsMcpService REMOTE_TIMEOUT_MS), so the removal in flight finishes and its result
+ * returns before that caller gives up.
+ */
+const CLEANUP_SWEEP_BUDGET_MS = 60_000;
+
+/**
  * Lists, removes, and sweeps the git worktrees of this environment's project
  * repositories. Dispatchers create a worktree per thread and nothing removes
  * it when the thread ends, so agents need a safe way to clean up after
@@ -818,9 +825,11 @@ const make = Effect.gen(function* () {
     "WorktreeInventory.cleanup",
   )(function* (input) {
     const dryRun = input.dryRun !== false;
+    const deadline = (yield* Clock.currentTimeMillis) + CLEANUP_SWEEP_BUDGET_MS;
     const facts = yield* scan(input.repo);
     const removed: Array<WorktreeMcpCleanupEntry> = [];
     const kept: Array<WorktreeMcpCleanupEntry> = [];
+    const eligible: Array<{ fact: WorktreeFacts; entry: WorktreeMcpCleanupEntry }> = [];
     for (const fact of facts) {
       if (fact.entry.main) continue;
       const entry = { path: fact.entry.path, branch: fact.entry.branch };
@@ -835,9 +844,15 @@ const make = Effect.gen(function* () {
         continue;
       }
       const reason = fact.entry.missing ? "its folder is already gone" : work.saved!;
-      if (dryRun) {
-        removed.push({ ...entry, reason });
-        continue;
+      if (dryRun) removed.push({ ...entry, reason });
+      else eligible.push({ fact, entry: { ...entry, reason } });
+    }
+    let remaining = 0;
+    for (const [index, { fact, entry }] of eligible.entries()) {
+      // Every sweep removes at least one, so a caller repeating it always gets closer to 0.
+      if (index > 0 && (yield* Clock.currentTimeMillis) >= deadline) {
+        remaining = eligible.length - index;
+        break;
       }
       yield* removeChecked(fact, {
         force: false,
@@ -846,11 +861,11 @@ const make = Effect.gen(function* () {
       }).pipe(
         Effect.match({
           onFailure: (error) => kept.push({ ...entry, reason: error.message }),
-          onSuccess: () => removed.push({ ...entry, reason }),
+          onSuccess: () => removed.push(entry),
         }),
       );
     }
-    return { dryRun, removed, kept };
+    return { dryRun, removed, kept, remaining };
   });
 
   const facts: WorktreeInventoryService["Service"]["facts"] = scan(undefined).pipe(
