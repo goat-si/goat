@@ -31,7 +31,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import { makeHubConsentGenerations } from "../hub/hubConsentGenerations.ts";
-import { type DevicePlatform, HubOcx } from "../hub/HubOcx.ts";
+import { type DevicePlatform, HubOcx, HubOcxError } from "../hub/HubOcx.ts";
 import { fleetSnapshot } from "../hub/parity.testkit.ts";
 import * as Settings from "../serverSettings.ts";
 import type { SshAliasEvent, SshAliasListener } from "../sshRemote/SshAliasEvents.ts";
@@ -81,6 +81,7 @@ export interface Machine {
   revisions: Map<string, string>;
   /** Pen members' aliases, by the revision of their Pen settings and recorded keys. */
   penRevisions: Map<string, string>;
+  penRevisionReadable: boolean;
   revisionReadable: boolean;
   /** Bumped by each Forget, as SshHostSetup does. */
   generations: Map<string, number>;
@@ -295,7 +296,10 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
             Effect.sync(() => (machine.nativeWindows ? undefined : machine.platform)),
           ensureDeviceRuntime: () =>
             Effect.suspend(() => machine.duringEnsure).pipe(Effect.as(machine.runtime)),
-          penAliasRevision: (alias) => Effect.sync(() => machine.penRevisions.get(alias)),
+          penAliasRevision: (alias) =>
+            machine.penRevisionReadable
+              ? Effect.sync(() => machine.penRevisions.get(alias))
+              : Effect.fail(new HubOcxError({ reason: "unreachable", message: "ssh -G failed" })),
         }),
       ),
       Layer.provide(
@@ -476,6 +480,7 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     autoJoin: true,
     revisions: new Map([["lidge-ts", "rev-1"]]),
     penRevisions: new Map(),
+    penRevisionReadable: true,
     revisionReadable: true,
     generations: new Map(),
     sessions: new Map([["person", ["orchestration:operate", "settings:write"]]]),

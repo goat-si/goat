@@ -376,6 +376,17 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
       }),
   );
 
+  it.effect("a Pen member whose settings cannot be read keeps its consent", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+      yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+      home.machine.penRevisionReadable = false;
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+      home.machine.penRevisionReadable = true;
+      expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(true);
+    }),
+  );
+
   it.effect("an opted-in SSH host joins on the person's consent now and after setups, once", () =>
     Effect.gen(function* () {
       const home = yield* setup();

@@ -12,14 +12,14 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import type * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import type * as SessionStore from "../auth/SessionStore.ts";
-import { SAFE_ALIAS } from "../hub/HubOcx.ts";
+import { type HubOcxError, SAFE_ALIAS } from "../hub/HubOcx.ts";
 import type { HubPerson } from "../hub/HubMembership.ts";
-import type { SshAliasRevision } from "../sshRemote/SshAliasEvents.ts";
 import { authorizeSshHost, type SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
 
 /**
@@ -55,7 +55,10 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
   readonly directory: string;
   readonly file: string;
   readonly sessions: SessionStore.SessionStore["Service"];
-  readonly revision: SshAliasRevision;
+  /** A failure leaves a grant in place; only a different answer voids it. */
+  readonly revision: (
+    alias: string,
+  ) => Effect.Effect<string | undefined, PlatformError.PlatformError | HubOcxError>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const stored = yield* fs.readFileString(options.file).pipe(
