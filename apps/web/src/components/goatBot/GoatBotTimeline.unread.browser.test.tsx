@@ -25,10 +25,17 @@ const rows: ReadonlyArray<GoatBotRow> = Array.from({ length: 40 }, (_, i) => ({
   groupPosition: "single",
 }));
 
-it("shows unread above the viewport, jumps to it, and dismisses the pill", async () => {
+it("shows unread above the viewport, jumps to it without moving the page, and dismisses the pill", async () => {
+  // The page clips a header above the transcript; the jump must not scroll it away.
+  const page = document.createElement("div");
+  page.style.cssText = "height:300px;width:360px;overflow:hidden";
+  const header = document.createElement("div");
+  header.style.cssText = "height:60px";
+  page.append(header);
   const host = document.createElement("div");
   host.style.cssText = "display:flex;flex-direction:column;height:300px;width:360px";
-  document.body.append(host);
+  page.append(host);
+  document.body.append(page);
   await using screen = await render(
     <GoatBotTimeline rows={rows} unreadSince="2026-01-02T00:00:00Z" onRetry={() => {}} />,
     {
@@ -53,11 +60,12 @@ it("shows unread above the viewport, jumps to it, and dismisses the pill", async
       scroll.getBoundingClientRect().bottom,
     );
   });
+  expect(page.scrollTop).toBe(0);
   scroll.scrollTop = scroll.scrollHeight;
   await expect.element(pill).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Dismiss new messages" }));
   await expect.element(pill).not.toBeInTheDocument();
-  host.remove();
+  page.remove();
 });
 
 it("shows no unread marker when all rows were visited", async () => {

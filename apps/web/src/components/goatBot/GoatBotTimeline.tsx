@@ -56,6 +56,7 @@ interface UnreadDivider {
   readonly firstInGroup: true;
 }
 const UNREAD_DIVIDER: UnreadDivider = { kind: "unread", id: "unread", firstInGroup: true };
+const UNREAD_JUMP_MARGIN_PX = 24;
 
 export function GoatBotTimeline({
   rows,
@@ -192,6 +193,14 @@ export function GoatBotTimeline({
     return () => observer.disconnect();
   }, [unread]);
   const unreadAt = unread ? rows.findIndex((row) => row.id === unread.rowId) : -1;
+  // Scrolls the transcript alone; scrollIntoView would also shift the page and hide the header.
+  const jumpToUnread = () => {
+    const divider = dividerRef.current;
+    const root = scrollRef.current;
+    if (divider === null || root === null) return;
+    const offset = divider.getBoundingClientRect().top - root.getBoundingClientRect().top;
+    root.scrollTo({ top: root.scrollTop + offset - UNREAD_JUMP_MARGIN_PX });
+  };
   const shownRows: ReadonlyArray<GoatBotRow | UnreadDivider> =
     unreadAt < 0 ? rows : [...rows.slice(0, unreadAt), UNREAD_DIVIDER, ...rows.slice(unreadAt)];
 
@@ -467,7 +476,7 @@ export function GoatBotTimeline({
       </div>
       {unread && dividerAbove && !pillDismissed ? (
         <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-primary text-primary-foreground shadow-sm">
-          <Button size="sm" onClick={() => dividerRef.current?.scrollIntoView({ block: "start" })}>
+          <Button size="sm" onClick={jumpToUnread}>
             {unread.count === 1 ? "1 new message" : `${unread.count} new messages`}
           </Button>
           <Button
