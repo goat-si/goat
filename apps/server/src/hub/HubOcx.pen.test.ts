@@ -149,6 +149,8 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
   keys: string;
   fingerprints?: string;
   failSshG?: boolean;
+  /** Lines a global known_hosts file holds for the alias. */
+  globalKeys?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-hub-pen-" });
@@ -162,25 +164,38 @@ const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
         Layer.provide(
           Layer.mock(ProcessRunner.ProcessRunner)({
             run: (input) =>
-              Effect.sync(() => ({
-                stdout:
+              Effect.sync(() => {
+                const global = input.args.some((arg) => arg.endsWith("/global_known_hosts"));
+                const stdout =
                   input.args[0] === "-G"
                     ? machine.sshG(input.args[1] ?? "")
                     : input.args.includes(`${home}/.ssh/pen/known_hosts`)
                       ? input.args.includes("-l")
                         ? (machine.fingerprints ?? "")
                         : machine.keys
-                      : "",
-                stderr: "",
-                code: ChildProcessSpawner.ExitCode(
-                  machine.failSshG === true && input.args[0] === "-G" ? 255 : 0,
-                ),
-                timedOut: false,
-                stdoutTruncated: false,
-                stderrTruncated: false,
-                stdoutInvalidUtf8: false,
-                stderrInvalidUtf8: false,
-              })),
+                      : global
+                        ? (machine.globalKeys ?? "")
+                        : "";
+                // ssh-keygen -F exits 1 when the file holds no key for the host.
+                const code =
+                  input.args[0] === "-G"
+                    ? machine.failSshG === true
+                      ? 255
+                      : 0
+                    : stdout === ""
+                      ? 1
+                      : 0;
+                return {
+                  stdout,
+                  stderr: "",
+                  code: ChildProcessSpawner.ExitCode(code),
+                  timedOut: false,
+                  stdoutTruncated: false,
+                  stderrTruncated: false,
+                  stdoutInvalidUtf8: false,
+                  stderrInvalidUtf8: false,
+                };
+              }),
           }),
         ),
         Layer.provide(Layer.mock(Inventory.OpenCodexInventory)({})),
@@ -414,4 +429,30 @@ it.effect("a Pen alias's revision changes with the global known_hosts files ssh 
     expect(after).toEqual(expect.any(String));
     expect(after).not.toBe(before);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// A key for the alias in a global known_hosts file is one ssh would also accept.
+it.effect(
+  "a Pen alias that a global known_hosts file also names has no revision, pin or direct route",
+  () =>
+    Effect.gen(function* () {
+      const machine = {
+        config: PEN_BLOCK("pen-box"),
+        sshG: (_: string) => "",
+        keys: keyLines("node1", "AAAA1"),
+        fingerprints: FINGERPRINTS,
+        globalKeys: "pen-box ssh-ed25519 AAAAOTHER\n",
+      };
+      const { ocx, home } = yield* penHome(machine);
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${home}/global_known_hosts`, "");
+      machine.sshG = penSshG(home, {
+        globalknownhostsfile: `${home}/global_known_hosts ${home}/missing_known_hosts`,
+      });
+      expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+      expect(yield* ocx.pinnedFingerprint("pen-box", "ED25519")).toBeUndefined();
+      expect(yield* ocx.directAlias("pen-box")).toBe(false);
+      machine.globalKeys = "";
+      expect(yield* ocx.penAliasRevision("pen-box")).toEqual(expect.any(String));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
