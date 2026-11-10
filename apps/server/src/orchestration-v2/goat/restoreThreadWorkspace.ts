@@ -28,8 +28,16 @@ export const verifyInterruptedRestore = Effect.fn("ThreadWorkspace.verifyInterru
       return yield* new RestoreSnapshotError({ detail: "snapshot" });
     const head = yield* Effect.tryPromise({
       try: async () => {
-        const head = (await git(input.worktreePath, ["rev-parse", "HEAD"])).toString().trim();
-        await git(input.worktreePath, ["merge-base", "--is-ancestor", input.state.headSha, head]);
+        // Status asks this too; a hung Git must not hold up the thread view for minutes.
+        const quick = { timeoutMs: 30_000 };
+        const head = (await git(input.worktreePath, ["rev-parse", "HEAD"], quick))
+          .toString()
+          .trim();
+        await git(
+          input.worktreePath,
+          ["merge-base", "--is-ancestor", input.state.headSha, head],
+          quick,
+        );
         return head;
       },
       catch: (cause) => new RestoreSnapshotError({ detail: "head", cause }),
