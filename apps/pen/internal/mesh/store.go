@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/state"
@@ -30,6 +31,7 @@ var ErrFull = errors.New("mesh: record set is full (3840 records, 4096 with revo
 var (
 	ErrReplaced = errors.New("mesh: the state folder now holds another mesh; this set is not saved")
 	ErrRemoved  = errors.New("mesh: the mesh file was removed; this set is not saved")
+	errRetired  = errors.New("mesh: retired")
 )
 
 // Store is a node's record set for one mesh. It is safe for concurrent use.
@@ -61,11 +63,13 @@ type Store struct {
 
 	// changes counts edits of the set and saved the count mesh.json last received, so a set
 	// holding records it could not write knows it (Unsaved). onDisk names the files this store
-	// read or wrote; adopt lets the next save replace a file holding another mesh; a retired
-	// store never writes. All under mu.
+	// read or wrote; adopt lets the next save replace a file holding another mesh (all under
+	// mu). A retired store never writes; retired is read under the state lock, where mu must not
+	// be taken (lock order: mu before the state lock, docs/internals/pen.md).
 	changes, saved uint64
 	onDisk         map[string]bool
-	adopt, retired bool
+	adopt          bool
+	retired        atomic.Bool
 }
 
 type pooled struct {
@@ -362,11 +366,7 @@ func (s *Store) Adopt() {
 }
 
 // Retire stops this store from writing again; the node has moved to another mesh.
-func (s *Store) Retire() {
-	s.mu.Lock()
-	s.retired = true
-	s.mu.Unlock()
-}
+func (s *Store) Retire() { s.retired.Store(true) }
 
 // Unsaved reports records this store holds that mesh.json has not received.
 func (s *Store) Unsaved() bool {
@@ -389,11 +389,10 @@ func (s *Store) SaveFile(st *state.Store, name string) error {
 		s.saveMu.Lock()
 	}
 	defer s.saveMu.Unlock()
-	s.mu.Lock()
-	if s.retired {
-		s.mu.Unlock()
+	if s.retired.Load() {
 		return nil
 	}
+	s.mu.Lock()
 	gen, adopt, known := s.changes, s.adopt, s.onDisk[name]
 	// The pool is not persisted (contract "Records").
 	recs := s.all()
@@ -406,12 +405,29 @@ func (s *Store) SaveFile(st *state.Store, name string) error {
 	if err != nil {
 		return err
 	}
-	defer unlock()
-	s.mu.Lock()
-	retired := s.retired
-	s.mu.Unlock()
-	if retired {
+	err = s.writeLocked(st, name, f, recs, adopt, known)
+	unlock()
+	if errors.Is(err, errRetired) {
 		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.onDisk[name] = true
+	s.adopt = false
+	if name == "mesh.json" && gen > s.saved {
+		s.saved = gen
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+// writeLocked writes f under the state lock unless the file says this save is stale; it does not
+// take s.mu.
+func (s *Store) writeLocked(st *state.Store, name string, f storeFile, recs []*Record, adopt, known bool) error {
+	if s.retired.Load() {
+		return errRetired
 	}
 	var disk storeFile
 	ok, err := st.ReadJSON(name, &disk)
@@ -436,17 +452,7 @@ func (s *Store) SaveFile(st *state.Store, name string) error {
 		f.SelfN = max(f.SelfN, disk.SelfN)
 	}
 	f.Records = CanonicalOrder(recs)
-	if err := st.WriteJSON(name, f, 0o600); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	s.onDisk[name] = true
-	s.adopt = false
-	if name == "mesh.json" && gen > s.saved {
-		s.saved = gen
-	}
-	s.mu.Unlock()
-	return nil
+	return st.WriteJSON(name, f, 0o600)
 }
 
 func (s *Store) all() []*Record {
