@@ -26,12 +26,7 @@ import {
 } from "react";
 
 import { usePrimarySettings } from "~/hooks/useSettings";
-import {
-  goatBotSearch,
-  useGoatBotAvatar,
-  useGoatBotMember,
-  useGoatBotName,
-} from "./goatBotMemberContext";
+import { goatBotSearch, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { cn } from "~/lib/utils";
 import { observeResize } from "~/lib/observeResize";
@@ -42,7 +37,8 @@ import { Button } from "../ui/button";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import {
   GoatBotActivityLine,
-  GoatBotMessageHeader,
+  GoatBotMessageTime,
+  GoatBotUpdateLabel,
   GoatBotSentAttachments,
   type GoatBotTimelineActivity,
 } from "./GoatBotMessageParts";
@@ -83,7 +79,6 @@ export function GoatBotTimeline({
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const member = useGoatBotMember();
   const botName = useGoatBotName();
-  const avatar = useGoatBotAvatar();
   const taskFocus = getTaskPaneFocus();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Messages sent while this view is mounted, by send key, and the server id each one received.
@@ -183,14 +178,14 @@ export function GoatBotTimeline({
           className="mx-auto flex w-full max-w-3xl flex-col px-4 py-4"
         >
           {rows.map((row, index) => {
-            const gap = index > 0 && row.kind !== "day" && (row.firstInGroup ? "mt-6" : "mt-3");
+            const gap = index > 0 && row.kind !== "day" && (row.firstInGroup ? "mt-4" : "mt-1.5");
             switch (row.kind) {
               case "day": {
                 const stamp = goatBotStampParts(row.at, nowMs, time);
                 return (
                   <li
                     key={row.id}
-                    className="mt-6 mb-1 text-center text-xs leading-4 text-muted-foreground first:mt-2"
+                    className="mt-6 mb-2 text-center text-xs leading-4 text-muted-foreground first:mt-2"
                   >
                     <span className="font-medium">{stamp.lead}</span>{" "}
                     <span className="font-normal">{stamp.time}</span>
@@ -226,9 +221,9 @@ export function GoatBotTimeline({
                     tabIndex={failed ? undefined : 0}
                     aria-describedby={failed ? undefined : timeId}
                     className={cn(
-                      "goat-message-row flex flex-col items-end gap-1 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                      "goat-message-row group/message flex flex-col items-end gap-1 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
                       arrives && "goat-arrive",
-                      index > 0 && (row.firstInGroup ? "mt-6" : "mt-1"),
+                      index > 0 && (row.firstInGroup ? "mt-4" : "mt-1.5"),
                     )}
                   >
                     <span className="sr-only">You</span>
@@ -240,6 +235,13 @@ export function GoatBotTimeline({
                     ) : null}
                     {row.text.trim().length > 0 || retryable ? (
                       <div className="flex w-full items-center justify-end gap-2">
+                        {!failed ? (
+                          <GoatBotMessageTime
+                            id={timeId}
+                            createdAt={row.createdAt}
+                            time={time(row.createdAt)}
+                          />
+                        ) : null}
                         {retryable ? (
                           <button
                             type="button"
@@ -252,13 +254,12 @@ export function GoatBotTimeline({
                           </button>
                         ) : null}
                         {row.text.trim().length > 0 ? (
-                          <div className="goat-person-pill w-fit max-w-[min(80%,35rem)]">
+                          <div className="goat-person-pill w-fit max-w-[min(80%,34rem)]">
                             {row.text}
                           </div>
                         ) : null}
                       </div>
-                    ) : null}
-                    {!failed ? (
+                    ) : !failed ? (
                       <time id={timeId} dateTime={row.createdAt} className="sr-only">
                         {time(row.createdAt)}
                       </time>
@@ -289,23 +290,22 @@ export function GoatBotTimeline({
               }
               case "bot": {
                 const timeId = `${timePrefix}-time-${row.id}`;
-                const header = row.firstInGroup || rows[index - 1]?.kind !== "bot";
                 const toneIcon =
                   row.tone === "failure" ? (
                     <CircleAlertIcon
                       aria-label="Failed"
-                      className="mt-1 size-4 shrink-0 text-destructive-foreground"
+                      className="mt-0.5 size-4 shrink-0 text-destructive-foreground"
                     />
                   ) : row.tone === "question" ? (
                     <MessageCircleQuestionIcon
                       aria-label="Question"
-                      className="mt-1 size-4 shrink-0 text-warning-foreground"
+                      className="mt-0.5 size-4 shrink-0 text-warning-foreground"
                     />
                   ) : null;
-                const prose = (
-                  <div className="flex min-w-0 gap-2">
+                const body = (
+                  <>
                     {toneIcon}
-                    <div className="goat-bot-prose min-w-0 flex-1">
+                    <div className="min-w-0 flex-1">
                       <GoatBotLinkedText text={row.text} environmentId={environmentId} />
                       {row.memory ? (
                         <MemorySettingsEntry
@@ -315,6 +315,18 @@ export function GoatBotTimeline({
                         />
                       ) : null}
                     </div>
+                  </>
+                );
+                const card = (
+                  <div className="flex w-full min-w-0 items-end gap-2">
+                    <div className="goat-bot-prose goat-bot-card flex w-fit max-w-[min(100%,34rem)] min-w-0 gap-2">
+                      {body}
+                    </div>
+                    <GoatBotMessageTime
+                      id={timeId}
+                      createdAt={row.createdAt}
+                      time={time(row.createdAt)}
+                    />
                   </div>
                 );
                 return (
@@ -323,32 +335,21 @@ export function GoatBotTimeline({
                     tabIndex={0}
                     aria-describedby={timeId}
                     className={cn(
-                      "goat-message-row flex flex-col items-stretch outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-                      index > 0 && (header ? "mt-6" : gap),
+                      "goat-message-row group/message flex flex-col items-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                      gap,
                     )}
                   >
-                    {header ? (
-                      <GoatBotMessageHeader
-                        name={botName}
-                        avatar={avatar}
-                        proactive={row.proactive}
-                        timeId={timeId}
-                        createdAt={row.createdAt}
-                        time={time(row.createdAt)}
-                      />
-                    ) : (
-                      <time id={timeId} dateTime={row.createdAt} className="sr-only">
-                        {time(row.createdAt)}
-                      </time>
-                    )}
+                    {row.proactive && row.firstInGroup ? (
+                      <GoatBotUpdateLabel name={botName} />
+                    ) : null}
                     {row.replyTo ? (
-                      <blockquote className="mb-2 max-w-[44rem] border-s-2 border-border ps-2 text-xs text-muted-foreground">
+                      <blockquote className="ms-3.5 mb-1 max-w-[min(100%,32rem)] border-s-2 border-border ps-2 text-xs leading-5 text-muted-foreground">
                         <span className="block truncate">{row.replyTo}</span>
                       </blockquote>
                     ) : null}
                     {row.answer !== undefined ? (
-                      <details className="group max-w-[44rem] rounded-xl border border-border">
-                        <summary className="flex min-h-9 cursor-default list-none items-center gap-2 px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [&::-webkit-details-marker]:hidden">
+                      <details className="group w-fit max-w-[min(100%,34rem)] rounded-2xl bg-goat-bot-message">
+                        <summary className="flex min-h-10 cursor-default list-none items-center gap-2 rounded-2xl px-3.5 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [&::-webkit-details-marker]:hidden">
                           <CheckIcon
                             aria-hidden
                             className="size-4 shrink-0 text-muted-foreground"
@@ -360,15 +361,18 @@ export function GoatBotTimeline({
                             className="ms-auto size-4 shrink-0 text-muted-foreground group-open:rotate-90"
                           />
                         </summary>
-                        <div className="border-t border-border px-3 py-3">{prose}</div>
+                        <div className="goat-bot-prose flex gap-2 px-3.5 pb-3">{body}</div>
+                        <time id={timeId} dateTime={row.createdAt} className="sr-only">
+                          {time(row.createdAt)}
+                        </time>
                       </details>
                     ) : row.options.length > 0 ? (
-                      <div className="max-w-[44rem] rounded-xl border border-border p-3">
-                        {prose}
+                      <>
+                        {card}
                         <div
                           role="group"
                           aria-label="Suggested answers"
-                          className="mt-3 flex flex-wrap gap-2"
+                          className="mt-2 flex max-w-[min(100%,34rem)] flex-wrap gap-2"
                         >
                           {row.options.map((option) => (
                             <Button
@@ -383,9 +387,9 @@ export function GoatBotTimeline({
                             </Button>
                           ))}
                         </div>
-                      </div>
+                      </>
                     ) : (
-                      prose
+                      card
                     )}
                   </li>
                 );

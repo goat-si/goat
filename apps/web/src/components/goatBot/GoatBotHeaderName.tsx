@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { BotProfile } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
-import { useContext, useState } from "react";
+import { type ReactNode, useContext, useState } from "react";
 
 import { ChevronRightIcon } from "~/components/solar";
 import { channelEnvironment } from "~/state/channels";
@@ -11,8 +11,14 @@ import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMember
 
 const NO_PERMISSION = Atom.make(false);
 
-/** The chat's name capsule; it opens the bot's profile where this connection may edit it. */
-export function GoatBotHeaderName({ title }: { readonly title: string }) {
+/** The chat's name chip with the bot's face; opens the profile where this connection may edit it. */
+export function GoatBotHeaderName({
+  title,
+  avatar,
+}: {
+  readonly title: string;
+  readonly avatar: ReactNode;
+}) {
   const member = useContext(GoatBotMemberContext);
   const main = useContext(GoatBotMainProfileContext);
   const bot = member ?? main;
@@ -26,6 +32,7 @@ export function GoatBotHeaderName({ title }: { readonly title: string }) {
   const [editing, setEditing] = useState<BotProfile | null>(null);
   const name = (
     <>
+      <span className="goat-name-avatar flex shrink-0">{avatar}</span>
       <span className="min-w-0 truncate">{title}</span>
       <ChevronRightIcon aria-hidden className="size-3 shrink-0" />
     </>
