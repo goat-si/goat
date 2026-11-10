@@ -230,7 +230,9 @@ at `/reset` and run `pen login` on one trusted member. A reset ends everything t
 the machine list and the account's mesh registration, sign-in codes approved but not yet collected, codes a browser
 signed in as that account was confirming, browser sign-ins waiting at their confirmation page, sign-ins that had left
 for Google before the reset and return after it, and sign-in results not yet registered. After it, only a new Google
-sign-in leads to a machine being registered, and the members of an existing mesh are not changed.
+sign-in leads to a machine being registered, and the members of an existing mesh are not changed. A device code is denied for every
+account whose browser was confirming it, so when browsers signed in to two accounts are at the confirmation page of
+the same code, a reset of one denies the code for both; the other account's registry and sessions are untouched.
 
 **One member filled the mesh's record space.** `pen ls` says `mesh full`. A mesh keeps at most 4096 records and no
 signer has a share of its own, so a hostile member can fill it with valid records; after that no member can record

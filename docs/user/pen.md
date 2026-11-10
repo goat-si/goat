@@ -138,15 +138,18 @@ on that member says why:
 
 ### Start over in a new mesh
 
-Use this when a mesh is full, or to split from a mesh you no longer trust. Each machine keeps its keys, name and
-relays; only its mesh is dropped, and that step needs no other machine, so it works on a machine that cannot reach
-any member.
+Use this when a mesh is full, or to split from a mesh you no longer trust. Each machine keeps its keys and name;
+only its mesh is dropped, and that step needs no other machine, so it works on a machine that cannot reach any
+member.
 
 1. On every machine: `pen down`, then delete these files from the state folder (`~/.pen`, or `PEN_HOME`):
    `mesh.json`, `offers.json`, `pending.json`, `forgets.json`, `versions.json`, `joined.json` and `login.json`.
    (`pen up` on a machine that still has `mesh.json` starts its old mesh again; it does not found a new one.)
 2. On the first machine: `pen up`. It founds a new mesh with this machine as its only member.
 3. On each other machine: `pen join <token>` with a token from `pen invite` on a machine already in the new mesh.
+   Joining replaces the machine's relay list with the inviting machine's. A machine that used other relays on
+   purpose puts them back with `pen relay add <url>` (and `pen relay rm <url>` for one it does not want); `pen relay
+   ls` then lists them with their uplink state.
 4. If the old mesh used Google sign-in: the new mesh is not bound to the account, and the account is still registered
    with the old mesh. Reset the account's machine list at the reset link on the sign-in page, then run `pen login`
    on one machine of the new mesh and answer yes to binding it; after that, new machines join it with `pen login`.
@@ -159,7 +162,8 @@ members; they are not reachable from the new one.
 
 Each machine keeps a connection to every relay in its list and uses whichever answers first, so one
 relay going down does not cut the mesh. An install gets the relays the release lists, and invites
-carry the inviting machine's list. `pen relay ls` shows the list; `pen relay add <url>` and
+carry the inviting machine's list: `pen join` replaces the joining machine's list with it, while `pen login` keeps
+the machine's own list (or the `--relay` URLs you pass). `pen relay ls` shows the list; `pen relay add <url>` and
 `pen relay rm <url>` change it. Relays must use `https`.
 
 A relay run with `pen relay serve` keeps at most 16 MiB of undelivered data for each internet
