@@ -145,16 +145,20 @@ func TestLoginFoundsAndBindsThenAMachineJoinsAndALockedMeshQueuesUntilApproved(t
 	}
 }
 
-func TestASlowApprovalLeavesAMemberWhoseRegistrationWaitsForTheNextLogin(t *testing.T) {
+// approvedLate runs a third machine's login into a locked mesh and has it approved when the
+// machine's clock reads exp + cli and the service's reads exp + service (relative to the assertion's
+// expiry). It returns the login's exit code and output, the machine's state and the service.
+func approvedLate(t *testing.T, cli, service time.Duration) (int, string, *state.Store, *logintest.Server) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 	rs := relaytest.New()
-	defer rs.Close()
+	t.Cleanup(rs.Close)
 	f := logintest.New()
 	f.MinPoll = 0
 	f.AutoApprove = &login.Account{Sub: "1001", Email: "me@example.com"}
 	f.Start()
-	defer f.Close()
+	t.Cleanup(f.Close)
 	tick := loginSeams(t, ctx, rs)
 	flags := func(name string) []string {
 		return []string{"--login-url", f.URL, "--relay", rs.URL, "--name", name, "--yes", "--no-service"}
@@ -173,7 +177,8 @@ func TestASlowApprovalLeavesAMemberWhoseRegistrationWaitsForTheNextLogin(t *test
 	t.Setenv("PEN_HOME", c.Dir)
 	pr, pw := io.Pipe()
 	done := make(chan int, 1)
-	var cOut, cErr strings.Builder
+	var cErr strings.Builder
+	issued := time.Now()
 	go func() { done <- RunLogin(flags("c"), pw, &cErr); pw.Close() }()
 	fp := ""
 	sc := bufio.NewScanner(pr)
@@ -195,23 +200,27 @@ func TestASlowApprovalLeavesAMemberWhoseRegistrationWaitsForTheNextLogin(t *test
 	if err := daemon.Call(a, daemon.Request{Op: "approve", Subject: fp}, &ar); err != nil {
 		t.Fatal(err)
 	}
-	// The approval came after the 10-minute assertion expired.
-	later := time.Now().Add(time.Hour)
-	f.SetNow(func() time.Time { return later })
+	exp := issued.Add(login.AssertionLifetime)
+	f.SetNow(func() time.Time { return exp.Add(service) })
 	oldNow := nowFn
-	nowFn = func() time.Time { return later }
-	defer func() { nowFn = oldNow }()
+	nowFn = func() time.Time { return exp.Add(cli) }
+	t.Cleanup(func() { nowFn = oldNow })
 	tick <- time.Time{}
-	if code := <-done; code != 0 {
-		t.Fatalf("slow-approved login: exit %d: %s", code, cErr.String())
-	}
+	code := <-done
 	pw.Close()
-	cOut.WriteString(<-rest)
+	return code, <-rest + cErr.String(), c, f
+}
+
+func TestASlowApprovalLeavesAMemberWhoseRegistrationWaitsForTheNextLogin(t *testing.T) {
+	code, out, c, f := approvedLate(t, time.Hour, time.Hour)
+	if code != 0 {
+		t.Fatalf("slow-approved login: exit %d: %s", code, out)
+	}
 	if memberCount(t, c) != 2 {
 		t.Fatal("c is not a member")
 	}
-	if !strings.Contains(cOut.String()+cErr.String(), "registration waits for the next pen login") {
-		t.Fatalf("output:\n%s%s", cOut.String(), cErr.String())
+	if !strings.Contains(out, "registration waits for the next pen login") {
+		t.Fatalf("output:\n%s", out)
 	}
 	var ls loginState
 	if ok, _ := c.ReadJSON(loginFile, &ls); !ok || ls.Email != "me@example.com" {
@@ -219,6 +228,17 @@ func TestASlowApprovalLeavesAMemberWhoseRegistrationWaitsForTheNextLogin(t *test
 	}
 	if _, nodes := f.Registry("1001"); len(nodes) != 1 {
 		t.Fatalf("registry lists %d nodes, want only a", len(nodes))
+	}
+}
+
+func TestAnApprovalWithinTheClockSkewAllowanceStillRegisters(t *testing.T) {
+	// This machine's clock runs 30 s past the assertion's expiry; the service's has not reached it.
+	code, out, c, f := approvedLate(t, 30*time.Second, -10*time.Second)
+	if code != 0 || memberCount(t, c) != 2 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	if _, nodes := f.Registry("1001"); len(nodes) != 2 {
+		t.Fatalf("registry lists %d nodes, want a and c; output:\n%s", len(nodes), out)
 	}
 }
 
@@ -335,5 +355,15 @@ func TestLoginWhenEveryMachineOfTheAccountLoggedOutSaysHowToGoOn(t *testing.T) {
 	errOut.Reset()
 	if code := RunLogin(flags("b"), &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "reset") {
 		t.Fatalf("login with every machine logged out: exit %d\n%s%s", code, out.String(), errOut.String())
+	}
+}
+
+func TestAnApprovalTheServiceFindsExpiredStillLeavesAMember(t *testing.T) {
+	code, out, c, f := approvedLate(t, 30*time.Second, 30*time.Second)
+	if code != 0 || memberCount(t, c) != 2 || !strings.Contains(out, "registration waits for the next pen login") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	if _, nodes := f.Registry("1001"); len(nodes) != 1 {
+		t.Fatalf("registry lists %d nodes, want only a", len(nodes))
 	}
 }

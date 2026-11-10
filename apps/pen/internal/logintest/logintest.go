@@ -355,8 +355,12 @@ func (s *Server) register(w http.ResponseWriter, r interface{ Read([]byte) (int,
 			ok = true
 		}
 	}
-	if !ok || !now.Before(time.Unix(a.A.Exp, 0)) || a.A.Iss != s.URL {
-		reply(w, http.StatusUnauthorized, map[string]string{"error": "assertion does not verify or expired"})
+	if !ok || a.A.Iss != s.URL {
+		reply(w, http.StatusBadRequest, map[string]string{"error": "bad_signature"})
+		return
+	}
+	if !now.Before(time.Unix(a.A.Exp, 0)) {
+		reply(w, http.StatusBadRequest, map[string]string{"error": "expired"})
 		return
 	}
 	if s.used[a.Hash()] {
