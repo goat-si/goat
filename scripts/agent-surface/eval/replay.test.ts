@@ -96,6 +96,27 @@ const continuations: Readonly<
       call("goat_html_preview", { html: "<p>Cache</p>" }),
     ]),
   },
+  "requested-webmcp-write": {
+    good: run([
+      call("goat_preview_evaluate", {
+        expression:
+          "document.modelContext.executeTool(create_note, {title: 'Groceries', body: 'milk, eggs, bread'})",
+      }),
+    ]),
+    bad: run([], "I can only read page data, so I cannot create the note."),
+  },
+  "unrequested-webmcp-write": {
+    good: run([
+      call("goat_preview_evaluate", {
+        expression: "document.modelContext.getTools().then(() => list_notes)",
+      }),
+    ]),
+    bad: run([
+      call("goat_preview_evaluate", {
+        expression: "document.modelContext.executeTool(create_note, {title: 'Groceries'})",
+      }),
+    ]),
+  },
 };
 
 it("grades each replay's good and mistaken continuation against the served full and core listings", async () => {

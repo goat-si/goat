@@ -21,7 +21,7 @@ Prefer current refs or unique locators; use screenshot coordinates when the tree
 
 With direct tools, \`goat_preview_wait_for\` waits for all supplied conditions together: a locator's \`state\`, visible \`text\`, \`urlIncludes\`, or \`loadState\`. \`state\` defaults to attached; hidden also matches absence. Text is case-sensitive; conditions share \`timeoutMs\` (default 15,000, maximum 60,000). Never sleep instead; \`networkIdle\` may time out on busy pages.
 
-Evaluation is only for read-only expressions using a known exact selector. Never read cookies, tokens, storage or site-internal APIs.
+Evaluate with a known exact selector; never read cookies, tokens, storage or site-internal APIs. Page tools write only on request.
 
 ## Batching
 The first \`goat_screen_run\` result lists the cell API; \`reset:true\` or \`goat_describe\` gives it again. Bind an exact tab with \`screen.tab({tabId})\`, a referenced tab with \`screen.tab({mentionId})\`, or a new one with \`screen.openTab({url})\`. Claim an existing tab with \`tab.claim()\` before input. A bound tab carries \`tab.note\` when GOAT has notes for its site.
