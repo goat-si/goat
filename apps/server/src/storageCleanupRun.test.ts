@@ -69,13 +69,29 @@ const setup = (gate: ReadonlyArray<{ readonly apply: boolean }>) => {
 
 describe("worktree cleanup preview gate", () => {
   it.effect(
+    "removes on the first sweep, with no dry pass or preview, when the preview is off",
+    () => {
+      const { calls, layer, clean } = setup([{ apply: false }]);
+      return Effect.gen(function* () {
+        const run = yield* makeWorktreeCleanupRun(Effect.succeed(true));
+        const entries: StorageCleanupReportEntry[] = [];
+        const result = yield* run({ nowMs: 0, snapshotDays: 30, preview: false, entries, clean });
+        expect(calls.passes).toEqual([false]);
+        expect(calls.evaluate).toEqual([]);
+        expect(result.preview).toBeNull();
+        expect(calls.expire).toEqual([30]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
     "removes nothing until the preview is approved, and reports what it would remove",
     () => {
       const { calls, layer, clean } = setup([{ apply: false }]);
       return Effect.gen(function* () {
         const run = yield* makeWorktreeCleanupRun(Effect.succeed(false));
         const entries: StorageCleanupReportEntry[] = [];
-        const result = yield* run({ nowMs: 0, snapshotDays: 30, entries, clean });
+        const result = yield* run({ nowMs: 0, snapshotDays: 30, preview: true, entries, clean });
         expect(calls.passes).toEqual([true]);
         expect(calls.evaluate).toEqual([1]);
         expect(result.preview).toEqual(preview);
@@ -92,10 +108,11 @@ describe("worktree cleanup preview gate", () => {
       const run = yield* makeWorktreeCleanupRun(Effect.succeed(false));
       const first: StorageCleanupReportEntry[] = [];
       expect(
-        (yield* run({ nowMs: 0, snapshotDays: null, entries: first, clean })).preview,
+        (yield* run({ nowMs: 0, snapshotDays: null, preview: true, entries: first, clean }))
+          .preview,
       ).toBeNull();
       expect(first.some((candidate) => candidate.planned === true)).toBe(false);
-      yield* run({ nowMs: 1, snapshotDays: null, entries: [], clean });
+      yield* run({ nowMs: 1, snapshotDays: null, preview: true, entries: [], clean });
       expect(calls.passes).toEqual([true, false, false]);
       expect(calls.evaluate).toEqual([1]);
       expect(calls.expire).toEqual([]);
@@ -109,6 +126,7 @@ describe("worktree cleanup preview gate", () => {
       const result = yield* run({
         nowMs: 0,
         snapshotDays: null,
+        preview: true,
         entries: [],
         clean: (_dryRun, into) =>
           Effect.sync(() => (into.push(entry(false)), { waiting: false, kept: [] })),
