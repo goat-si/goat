@@ -35,6 +35,7 @@ export function GoatBotQuestionCard({
             <button
               key={option}
               type="button"
+              aria-label={`${goatBotChoiceLetter(index)}. ${option}`}
               disabled={onPick === undefined}
               onClick={() => send(option)}
               className="flex min-h-9 items-center gap-2.5 rounded-lg px-1.5 py-1 text-start text-sm outline-none hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60"
@@ -77,7 +78,7 @@ export function GoatBotQuestionCard({
           <span aria-hidden data-chosen className="goat-choice-badge">
             {goatBotChoiceLetter(row.answerIndex)}
           </span>
-          <span className="sr-only">You answered:</span>
+          <span className="sr-only">You answered {goatBotChoiceLetter(row.answerIndex)}:</span>
           <span className="min-w-0 break-words">{picked}</span>
           {row.answerSending ? (
             <span className="text-xs text-muted-foreground">Sending…</span>

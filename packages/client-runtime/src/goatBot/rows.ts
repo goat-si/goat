@@ -168,6 +168,8 @@ export type GoatBotRow =
       readonly answerIndex?: number;
       /** The picked answer is still on its way; the question shows that in place of the pick's own message. */
       readonly answerSending?: boolean;
+      /** When the picked answer was sent, for previews that read it as the newest message. */
+      readonly answeredAt?: string;
       /** The task a picked answer goes to, so it answers this question wherever it is pressed. */
       readonly answerTaskId?: string;
       readonly memory?: MemoryReportReference;
@@ -206,6 +208,11 @@ export function goatBotConversationPreview(input: {
 }): GoatBotConversationPreview | null {
   const last = input.rows.findLast((row) => row.kind !== "day" && row.kind !== "event");
   if (!last) return null;
+  // A pick shown inside its question is still the person's newest message.
+  const picked =
+    last.kind === "bot" && last.answerIndex !== undefined && last.answeredAt !== undefined
+      ? { answer: last.answer ?? "", at: last.answeredAt }
+      : null;
   const visitedAt = input.lastVisitedAt
     ? Date.parse(input.lastVisitedAt)
     : Number.NEGATIVE_INFINITY;
@@ -218,12 +225,14 @@ export function goatBotConversationPreview(input: {
     );
   return {
     text:
-      last.kind === "user"
-        ? `You: ${goatBotPreviewText(last.text) || (last.attachments ?? []).map((file) => file.name).join(", ")}`
-        : last.kind === "bot"
-          ? goatBotPreviewText(last.text)
-          : `${last.card.statusLabel}: ${last.card.title}`,
-    at: last.kind === "task" ? last.card.updatedAt : last.createdAt,
+      picked !== null
+        ? `You: ${goatBotPreviewText(picked.answer)}`
+        : last.kind === "user"
+          ? `You: ${goatBotPreviewText(last.text) || (last.attachments ?? []).map((file) => file.name).join(", ")}`
+          : last.kind === "bot"
+            ? goatBotPreviewText(last.text)
+            : `${last.card.statusLabel}: ${last.card.title}`,
+    at: picked?.at ?? (last.kind === "task" ? last.card.updatedAt : last.createdAt),
     unread,
   };
 }
@@ -547,7 +556,40 @@ export function buildGoatBotTimeline(input: {
     }
     if (row.kind !== "bot" || !askedQuestions.has(row.id)) continue;
     const taskId = askedQuestions.get(row.id) ?? null;
-    if (!openOnCard.has(row.id)) {
+    if (openOnCard.has(row.id)) {
+      // The task's card still lists the question while a pick is on its way or not yet recorded:
+      // the person's next message to its task, one of its choices, is that pick until a newer card
+      // shows the task saw it and kept the question open.
+      const send = taskId === null ? undefined : nearestSendByTask.get(taskId);
+      const until = nearestQuestionByTask.get(taskId);
+      const candidate =
+        send !== undefined && send === nearestSend && (until === undefined || send < until)
+          ? ordered[send]
+          : undefined;
+      const cardAt = questionState(taskId)?.updatedAt;
+      const unseen =
+        candidate?.kind === "user" &&
+        (candidate.sendKey !== null ||
+          cardAt === undefined ||
+          Date.parse(cardAt) <= Date.parse(candidate.createdAt));
+      if (unseen && candidate?.kind === "user" && (candidate.attachments ?? []).length === 0) {
+        const answer = candidate.text.trim();
+        const answerIndex = (row.choices ?? []).indexOf(answer);
+        if (answerIndex >= 0) {
+          folded.add(candidate.id);
+          ordered[index] = {
+            ...row,
+            options: NO_OPTIONS,
+            answer,
+            answerIndex,
+            answeredAt: candidate.createdAt,
+            ...(candidate.delivery.state === "queued" || candidate.delivery.state === "sending"
+              ? { answerSending: true }
+              : {}),
+          };
+        }
+      }
+    } else {
       const decidedByCard = cardDecidesOptions.has(row.id);
       const send = decidedByCard
         ? taskId === null
@@ -580,7 +622,7 @@ export function buildGoatBotTimeline(input: {
           ...row,
           options: NO_OPTIONS,
           answer,
-          ...(picked ? { answerIndex } : {}),
+          ...(picked ? { answerIndex, answeredAt: answered.createdAt } : {}),
           ...(sending ? { answerSending: true } : {}),
         };
       } else if (!decidedByCard && send !== undefined) {

@@ -26,8 +26,8 @@ it("sends a lettered choice, or what the person types as something else, to the 
     <GoatBotQuestionCard row={question} body={question.text} onPick={onPick} />,
     { router: false }, // No links inside the card.
   );
-  await expect.element(screen.getByRole("button", { name: "Short summary" })).toBeVisible();
-  await screen.getByRole("button", { name: "Detailed summary" }).click();
+  await expect.element(screen.getByRole("button", { name: "A. Short summary" })).toBeVisible();
+  await screen.getByRole("button", { name: "B. Detailed summary" }).click();
   expect(onPick).toHaveBeenLastCalledWith("Detailed summary", "task-1");
   await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "Both{Enter}");
   expect(onPick).toHaveBeenLastCalledWith("Both", "task-1");
@@ -40,7 +40,7 @@ it("keeps only the picked row once the question is answered", async () => {
     <GoatBotQuestionCard row={answered} body={answered.text} onPick={() => {}} />,
     { router: false }, // No links inside the card.
   );
-  await expect.element(screen.getByText("You answered:")).toBeInTheDocument();
+  await expect.element(screen.getByText("You answered B:")).toBeInTheDocument();
   await expect.element(screen.getByText("Detailed summary")).toBeVisible();
   expect(screen.container.textContent).not.toContain("Short summary");
   expect(screen.container.querySelectorAll("button")).toHaveLength(0);

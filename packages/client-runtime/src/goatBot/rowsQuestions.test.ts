@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildGoatBotTimeline,
+  goatBotConversationPreview,
   type GoatBotItemReaders,
   type GoatBotMessagePresentation,
   type GoatBotPendingInput,
@@ -206,11 +207,7 @@ describe("questions a task asks in the main chat", () => {
           taskId: null,
         }),
       ).map((row) => (row.kind === "bot" ? [row.id, row.answerTaskId ?? row.answer] : [row.id]));
-    expect(answerTasks({ n1: proposal(1, ["q-save"]) })).toEqual([
-      ["n1"],
-      ["b1", "proposal"],
-      ["pending:c1"],
-    ]);
+    expect(answerTasks({ n1: proposal(1, ["q-save"]) })).toEqual([["n1"], ["b1", "proposal"]]);
     // A server that does not name open questions may not route an answer sent to a task, and the
     // send answers the question there, so the picked choice shows inside it.
     expect(answerTasks({ n1: proposal(1) })).toEqual([["n1"], ["b1", "Save"]]);
@@ -257,7 +254,8 @@ describe("questions a task asks in the main chat", () => {
       }),
     ).map((row) => row.id);
     expect(pending).toContain("b1");
-    expect(pending).toContain("pending:c1");
+    // The pick on its way shows inside the question rather than as a second message.
+    expect(pending).not.toContain("pending:c1");
   });
 
   it("keeps a pressed answer, inside its question, and the reply to it in the main chat", () => {
@@ -460,6 +458,35 @@ describe("a question the person answered", () => {
       answerSending: true,
     });
     expect(rows.filter((row) => row.kind === "user" && row.showReceipt)).toEqual([]);
+    // The roster still reads the pick as the person's newest message.
+    expect(goatBotConversationPreview({ rows, lastVisitedAt: null, active: true })).toMatchObject({
+      text: "You: Release",
+      at: "2026-10-12T12:00:02Z",
+    });
+  });
+
+  it("shows a pick sent to a task's open question inside it while the task has not seen it", () => {
+    const routed = {
+      ...which,
+      taskId: "proposal",
+      questionId: "q-save",
+      options: ["Save", "Skip"],
+    };
+    const open = { ...card("proposal", 1), askInChat: true, openQuestionIds: ["q-save"] };
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([notice("n1", "2026-10-12T12:00:00Z"), ...asked]),
+        pendingInputs: [pending("Skip", "sending", { taskId: "proposal" })],
+        readers: readers({ b1: routed }, { n1: open }),
+        taskId: null,
+      }),
+    );
+    expect(rows.filter((row) => row.kind === "user")).toEqual([]);
+    expect(rows.find((row) => row.id === "b1")).toMatchObject({
+      options: [],
+      answerIndex: 1,
+      answerSending: true,
+    });
   });
 
   it("keeps a later message that only matches a choice as the person's own message", () => {
