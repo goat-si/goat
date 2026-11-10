@@ -23,7 +23,11 @@ func TestLsSaysWhenThisMachineIsNotAMember(t *testing.T) {
 	} {
 		var w bytes.Buffer
 		printMembers(&w, c.ls)
-		if !strings.Contains(w.String(), "this machine is not a member of mesh m") || !strings.Contains(w.String(), c.want) {
+		c.ls.StateDir = "/home/u/.pen"
+		w.Reset()
+		printMembers(&w, c.ls)
+		advice := "To use it again: pen down, remove /home/u/.pen, then join with an invite or pen login through a current member."
+		if !strings.Contains(w.String(), "this machine is not a member of mesh m") || !strings.Contains(w.String(), c.want) || !strings.Contains(w.String(), advice) {
 			t.Fatalf("pen ls on a machine that is not a member printed:\n%s\nwant a line saying it %s", w.String(), c.want)
 		}
 	}

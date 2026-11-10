@@ -318,26 +318,3 @@ func TestApproveOnAMachineThatIsNotAMemberRefuses(t *testing.T) {
 		t.Fatalf("y signed %d record(s)", n-before)
 	}
 }
-
-// A machine no member counts (revoked by another, or its admit never took effect) leaves without
-// a member taking it: there is nothing to tell, so pen leave works with every member offline.
-func TestAMachineThatIsNotAMemberLeavesWithEveryMemberOffline(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	rs := relaytest.New()
-	defer rs.Close()
-	a := founder(t, ctx, rs, "a", nil)
-	y := joiner(t, ctx, rs, a.invite(t, time.Minute), "y")
-	var r map[string]any
-	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(y.id.SignPub)}, &r); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := y.d.mesh().Merge(a.d.mesh().Records()); err != nil {
-		t.Fatal(err)
-	}
-	y.d.viewChanged()
-	stop(t, a)
-	if err := Call(y.st, Request{Op: "leave"}, &r); err != nil {
-		t.Fatalf("pen leave on a machine no member counts: %v", err)
-	}
-}

@@ -78,13 +78,18 @@ func printNotAMember(w io.Writer, ls daemon.LsReply) {
 			return
 		}
 	}
+	why := "the admit that added it never took effect (the machine that admitted it was revoked first)"
 	for _, m := range ls.Revoked {
 		if m.NodeID == ls.Self {
-			fmt.Fprintf(w, "this machine is not a member of mesh %s: it was revoked. To use it again, run pen leave here, then join with an invite or pen login through a current member.\n", ls.MeshID)
-			return
+			why = "it was revoked"
 		}
 	}
-	fmt.Fprintf(w, "this machine is not a member of mesh %s: the admit that added it never took effect (the machine that admitted it was revoked first). Run pen leave here, then join with an invite or pen login through a current member.\n", ls.MeshID)
+	dir := ls.StateDir
+	if dir == "" {
+		dir = "the state folder (~/.pen, or PEN_HOME)"
+	}
+	// pen leave would need a member to take its revoke; this needs none.
+	fmt.Fprintf(w, "this machine is not a member of mesh %s: %s. To use it again: pen down, remove %s, then join with an invite or pen login through a current member.\n", ls.MeshID, why, dir)
 }
 
 func via(m mesh.Member) string {
@@ -155,6 +160,7 @@ func RunLs(args []string, stdout, stderr io.Writer) int {
 	} else if err != nil {
 		return fail(stderr, err)
 	}
+	ls.StateDir = st.Dir
 	if !*watch {
 		if *asJSON {
 			b, _ := json.MarshalIndent(ls, "", "  ")

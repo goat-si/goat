@@ -113,6 +113,12 @@ after Pen restarts. `pen dashboard --stop` closes the page and signs out every o
 | `pen revoke <member>`               | A machine should no longer be a member. Every member refuses it from then on.                                                                                                                                                                                                                                                                                                                                                                                         |
 | `pen revoke <member> --compromised` | A machine was lost or stolen, even if it already left. Also removes every machine it admitted, and its unlocks and account changes stop counting. It prints which machine it revokes; when a machine that left and a current one share the name, it stops and prints a command naming each by its fingerprint. A name, a node id (or its first 4 or more characters) and a fingerprint (or its first 8 or more digits) all work, as long as only one machine matches. |
 
+A removed machine that is still running shows it in `pen ls`: "this machine is not a member of
+mesh …". To use it again, run `pen down` there, delete the state folder `pen ls` names (usually
+`~/.pen`), and join again with an invite or `pen login`. A member that has not heard of the removal
+yet still lists the machine until it syncs with one that has; `pen revoke <name>` on that member
+removes it there at once.
+
 After `--compromised` on a mesh with Google sign-in, Pen tells you what else to do: turn on
 `pen lock on`, change your Google password, and clear your account's machine list from the reset
 link on the sign-in page.

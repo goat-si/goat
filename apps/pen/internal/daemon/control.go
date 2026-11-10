@@ -61,6 +61,8 @@ type LsReply struct {
 	// Unforgotten are revoked machines the login service still offers to new machines because it
 	// refused this node's forget (this node is not registered under the account).
 	Unforgotten []Unforgotten `json:"unforgotten,omitempty"`
+	// StateDir is this machine's state folder, filled in by the command line for its advice.
+	StateDir string `json:"-"`
 }
 
 // Unforgotten is a revoked machine the login service still lists.
