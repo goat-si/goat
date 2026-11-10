@@ -65,6 +65,7 @@ import {
   stageWindowsComputerUseHelper,
   verifyEmbeddedComputerUseHelper,
   WINDOWS_HELPER_DIR,
+  windowsHelperPayloadMissing,
   withComputerUseHelper,
 } from "./desktop-artifact-computer-use.ts";
 import {
@@ -3892,12 +3893,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
       missingFiles: ["resource-monitor/goat-resource-monitor.exe"],
     });
   }
-  const helperExecutable = path.join(resourcesDir, WINDOWS_HELPER_DIR, "GOAT Computer Use.exe");
-  if (!(yield* isFile(helperExecutable))) {
+  const missingHelperFiles = yield* windowsHelperPayloadMissing(resourcesDir);
+  if (missingHelperFiles.length > 0) {
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "computer-use-helper-missing",
       packagedAppDir,
-      missingFiles: [WINDOWS_HELPER_DIR + "/GOAT Computer Use.exe"],
+      missingFiles: missingHelperFiles,
     });
   }
   const screenWasm = yield* windowsScreenWasmProblem(resourcesDir);

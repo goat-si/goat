@@ -22,6 +22,7 @@ import { signWithJsign } from "./lib/windows-jsign.ts";
 import { buildComputerUseHelper } from "./build-computer-use-helper.ts";
 import {
   buildWindowsComputerUseHelper,
+  PINNED_DRIVER_FILES,
   type HelperChannel,
 } from "./build-computer-use-helper-windows.ts";
 import { runReleaseCommand } from "./lib/release-verify.ts";
@@ -164,6 +165,37 @@ export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(fu
 /** The helper folder a Windows package carries, relative to resources. */
 export const WINDOWS_HELPER_DIR = "computer-use-helper";
 
+/**
+ * What a packaged Windows app needs from its helper folder: the executable, the driver folder
+ * and the driver files the helper pins by hash (DriverService.PinDriverFiles). The paths of the
+ * files that are missing, relative to resources; empty when the payload is whole.
+ */
+export const windowsHelperPayloadMissing = Effect.fn("windowsHelperPayloadMissing")(function* (
+  resourcesDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const isFile = (file: string) =>
+    fs.stat(file).pipe(
+      Effect.map((stat) => stat.type === "File"),
+      Effect.orElseSucceed(() => false),
+    );
+  const helperDir = path.join(resourcesDir, WINDOWS_HELPER_DIR);
+  const driverDir = path.join(helperDir, "cua-driver");
+  const missing: string[] = [];
+  if (!(yield* isFile(path.join(helperDir, COMPUTER_USE_HELPER_NAME + ".exe"))))
+    missing.push(WINDOWS_HELPER_DIR + "/" + COMPUTER_USE_HELPER_NAME + ".exe");
+  const driver = yield* fs.stat(driverDir).pipe(
+    Effect.map((stat) => stat.type === "Directory"),
+    Effect.orElseSucceed(() => false),
+  );
+  if (!driver) missing.push(WINDOWS_HELPER_DIR + "/cua-driver");
+  for (const file of PINNED_DRIVER_FILES)
+    if (!(yield* isFile(path.join(driverDir, file))))
+      missing.push(WINDOWS_HELPER_DIR + "/cua-driver/" + file);
+  return missing;
+});
+
 const WindowsSigningConfig = Config.all({
   endpoint: Config.String("AZURE_TRUSTED_SIGNING_ENDPOINT"),
   accountName: Config.String("AZURE_TRUSTED_SIGNING_ACCOUNT_NAME"),
@@ -239,6 +271,11 @@ export const stageWindowsComputerUseHelper = Effect.fn("stageWindowsComputerUseH
         allowAnyParent: !input.signed,
       });
     }
+    const missing = yield* windowsHelperPayloadMissing(input.stageResourcesDir);
+    if (missing.length > 0)
+      return yield* new CuaDriverArtifactError({
+        message: `The ${COMPUTER_USE_HELPER_NAME} payload is incomplete: ${missing.join(", ")}.`,
+      });
     if (input.signed) yield* signWindowsComputerUseHelper(executable);
     return destination;
   },

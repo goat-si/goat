@@ -6,6 +6,7 @@ import * as Path from "effect/Path";
 import { createBuildConfig } from "./build-desktop-artifact.ts";
 import { assert, describe, it } from "@effect/vitest";
 
+import { PINNED_DRIVER_FILES } from "./build-computer-use-helper-windows.ts";
 import {
   CuaDriverArtifactError,
   computerUseHelperEnvironment,
@@ -13,6 +14,7 @@ import {
   embeddedHelperProblems,
   signedComputerUseHelper,
   stageWindowsComputerUseHelper,
+  windowsHelperPayloadMissing,
   withComputerUseHelper,
 } from "./desktop-artifact-computer-use.ts";
 
@@ -103,7 +105,8 @@ describe("desktop computer use payload", () => {
       const helperDir = path.join(root, "built");
       yield* fs.makeDirectory(path.join(helperDir, "cua-driver"), { recursive: true });
       yield* fs.writeFileString(path.join(helperDir, "GOAT Computer Use.exe"), "helper");
-      yield* fs.writeFileString(path.join(helperDir, "cua-driver", "cua-driver.exe"), "driver");
+      for (const file of PINNED_DRIVER_FILES)
+        yield* fs.writeFileString(path.join(helperDir, "cua-driver", file), file);
 
       const staged = yield* stageWindowsComputerUseHelper({
         repoRoot: root,
@@ -117,7 +120,7 @@ describe("desktop computer use payload", () => {
       assert.equal(yield* fs.readFileString(path.join(staged, "GOAT Computer Use.exe")), "helper");
       assert.equal(
         yield* fs.readFileString(path.join(staged, "cua-driver", "cua-driver.exe")),
-        "driver",
+        "cua-driver.exe",
       );
 
       const empty = path.join(root, "empty");
@@ -132,6 +135,66 @@ describe("desktop computer use payload", () => {
       }).pipe(Effect.flip);
       assert.instanceOf(error, CuaDriverArtifactError);
       assert.match(error.message, /GOAT Computer Use\.exe is missing/);
+
+      // A helper without the driver it pins cannot start either.
+      const withoutDriver = path.join(root, "without-driver");
+      yield* fs.makeDirectory(path.join(withoutDriver, "cua-driver"), { recursive: true });
+      yield* fs.writeFileString(path.join(withoutDriver, "GOAT Computer Use.exe"), "helper");
+      const incomplete = yield* stageWindowsComputerUseHelper({
+        repoRoot: root,
+        stageResourcesDir: path.join(root, "incomplete-resources"),
+        channel: "nightly",
+        arch: "x64",
+        helperDir: withoutDriver,
+        signed: false,
+      }).pipe(Effect.flip);
+      assert.instanceOf(incomplete, CuaDriverArtifactError);
+      assert.match(incomplete.message, /cua-driver\/cua-driver\.exe/);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("names every file a Windows helper needs to start", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-win-helper-payload-" });
+      const resourcesDir = path.join(root, "resources");
+      const helperDir = path.join(resourcesDir, "computer-use-helper");
+      const driverDir = path.join(helperDir, "cua-driver");
+      const write = () =>
+        Effect.gen(function* () {
+          yield* fs.makeDirectory(driverDir, { recursive: true });
+          yield* fs.writeFileString(path.join(helperDir, "GOAT Computer Use.exe"), "helper");
+          for (const file of PINNED_DRIVER_FILES)
+            yield* fs.writeFileString(path.join(driverDir, file), file);
+        });
+      yield* write();
+      assert.deepStrictEqual(yield* windowsHelperPayloadMissing(resourcesDir), []);
+
+      // The helper runs the driver it pins, so each of them has to travel with it.
+      for (const [missing, file] of [
+        ["computer-use-helper/GOAT Computer Use.exe", "GOAT Computer Use.exe"],
+        ["computer-use-helper/cua-driver/cua-driver.exe", "cua-driver/cua-driver.exe"],
+        ["computer-use-helper/cua-driver/cua-driver-uia.exe", "cua-driver/cua-driver-uia.exe"],
+        ["computer-use-helper/cua-driver/cua-cursor-theme.exe", "cua-driver/cua-cursor-theme.exe"],
+      ] as const) {
+        const target = path.join(helperDir, file);
+        const content = yield* fs.readFileString(target);
+        yield* fs.remove(target);
+        assert.deepStrictEqual(yield* windowsHelperPayloadMissing(resourcesDir), [missing]);
+        yield* fs.writeFileString(target, content);
+      }
+
+      // Without the driver folder none of the files in it can be found.
+      yield* fs.remove(driverDir, { recursive: true });
+      assert.deepStrictEqual(yield* windowsHelperPayloadMissing(resourcesDir), [
+        "computer-use-helper/cua-driver",
+        "computer-use-helper/cua-driver/cua-driver.exe",
+        "computer-use-helper/cua-driver/cua-driver-uia.exe",
+        "computer-use-helper/cua-driver/cua-cursor-theme.exe",
+      ]);
+      yield* write();
+      assert.deepStrictEqual(yield* windowsHelperPayloadMissing(resourcesDir), []);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
