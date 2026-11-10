@@ -17,21 +17,25 @@ export const sealedSessionLine = (text: string, streaming: boolean) => {
 export const sessionFinalText = Effect.fn("channel.sessionFinalText")(function* (
   sql: SqlClient.SqlClient,
   taskId: ChannelTaskId,
+  runId: string,
   turnItemId: string | undefined,
   text: string,
 ) {
   const rows = yield* sql<{
     readonly source: string;
+    readonly run_id: string | null;
     readonly turn_item_id: string | null;
     readonly text: string;
   }>`
-    SELECT source, turn_item_id, text FROM channel_session_receipts WHERE task_id = ${taskId}`;
+    SELECT source, run_id, turn_item_id, text FROM channel_session_receipts WHERE task_id = ${taskId}`;
   const receipt = rows[0];
+  // The person already read the session's first line, so a final message that opens with it,
+  // in the same item or a later one of the same run, sends only what follows.
   return receipt?.source === "session" &&
     turnItemId !== undefined &&
-    receipt.turn_item_id === turnItemId &&
-    text.startsWith(receipt.text)
-    ? text.slice(receipt.text.length).trim()
+    (receipt.turn_item_id === turnItemId || receipt.run_id === runId) &&
+    text.trimStart().startsWith(receipt.text.trim())
+    ? text.trimStart().slice(receipt.text.trim().length).trim()
     : text.trim();
 });
 
