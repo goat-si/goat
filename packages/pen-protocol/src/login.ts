@@ -172,6 +172,12 @@ const isKey = (value: unknown): value is string => {
   }
 };
 
+/** No C0 control characters or DEL: members print sub and email in their terminals. */
+const CONTROL = /[\u0000-\u001f\u007f]/;
+function printable(value: unknown): boolean {
+  return typeof value === "string" && !CONTROL.test(value);
+}
+
 function parseBody(bytes: Uint8Array): AssertionBody | null {
   let value: unknown;
   try {
@@ -182,7 +188,7 @@ function parseBody(bytes: Uint8Array): AssertionBody | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const body = value as Record<string, unknown>;
   const strings = ["iss", "kid", "sub", "email"].every(
-    (field) => typeof body[field] === "string" && body[field] !== "",
+    (field) => typeof body[field] === "string" && body[field] !== "" && printable(body[field]),
   );
   const times =
     Number.isSafeInteger(body.iat) &&

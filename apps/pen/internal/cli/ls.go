@@ -61,7 +61,7 @@ func printMembers(w io.Writer, ls daemon.LsReply) {
 	tw.Flush()
 	for _, m := range ls.Members {
 		if m.Via == mesh.ViaGoogle && time.Since(time.UnixMilli(m.Since)) < announceFor {
-			fmt.Fprintf(w, "%s joined via Google %s, fingerprint %s (%s)\n", m.Name, m.Email, m.Fingerprint, ago(m.Since))
+			fmt.Fprintf(w, "%s joined via Google %s, fingerprint %s (%s)\n", m.Name, safe(m.Email), m.Fingerprint, ago(m.Since))
 		}
 	}
 }
@@ -72,7 +72,7 @@ const announceFor = 7 * 24 * time.Hour
 func via(m mesh.Member) string {
 	switch {
 	case m.Via == mesh.ViaGoogle:
-		return "google " + m.Email
+		return "google " + safe(m.Email)
 	case m.AdmittedBy == "":
 		return "-"
 	}
@@ -84,7 +84,7 @@ func printAccount(w io.Writer, ls daemon.LsReply) {
 	if ls.Account == nil {
 		fmt.Fprintln(w, "account  none (machines join by invite)")
 	} else {
-		fmt.Fprintf(w, "account  Google sub %s via %s, login key %s\n", ls.Account.Sub, ls.Account.LoginURL, ls.Account.LoginKey.Kid)
+		fmt.Fprintf(w, "account  Google sub %s via %s, login key %s\n", safe(ls.Account.Sub), safe(ls.Account.LoginURL), ls.Account.LoginKey.Kid)
 	}
 	if ls.Locked {
 		fmt.Fprintf(w, "lock     on: new machines wait for pen approve (%d pending here)\n", ls.Pending)
@@ -93,6 +93,16 @@ func printAccount(w io.Writer, ls daemon.LsReply) {
 		fmt.Fprintf(w, "login    still offers removed %s (%s) to new machines; this machine is not registered with the account, so run pen login here or reset the machine list at %s/reset\n",
 			orDash(u.Name), short(u.NodeID), u.LoginURL)
 	}
+}
+
+// safe replaces control characters, so a record's text cannot redraw the terminal.
+func safe(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return '?'
+		}
+		return r
+	}, s)
 }
 
 func orDash(s string) string {

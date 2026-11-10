@@ -227,6 +227,40 @@
       },
       "ok": false,
       "reason": "malformed"
+    },
+    {
+      "name": "a control character in the email (it would redraw the approval prompt)",
+      "assertion": {
+        "body": "eyJ2IjoxLCJpc3MiOiJodHRwczovL3Blbi1sb2dpbi5wb3MwOTAwMDEud29ya2Vycy5kZXYiLCJraWQiOiJ3czZ6aWV4eCIsInN1YiI6IjExMjIzMzQ0NTU2Njc3ODg5OTAwMCIsImVtYWlsIjoicGVyc29uXHUwMDFiWzJKQGV4YW1wbGUuY29tIiwic2lnblB1YiI6IjI1bGY0bEZwMFVIS3VidTZrcnFnSDU4dUhzNTk5TXNxd0ZHUTgzX01INTAiLCJub2lzZVB1YiI6IkV5eEVLLUFRLTlWLWNtQXpLS3AyNXhfTXdWQTZyaUdUSjlGTm5KbVQ5SEkiLCJpYXQiOjE3OTQzMDAwMDAsImV4cCI6MTc5NDMwMDYwMH0",
+        "sig": "2USZSrvlRrAFON1gXQRH9uHiqIb04_YTMUOCFHfZcoI-Aw1mwYQe5-n32k5iJeP9ePH702B8y7WGeQ1YPQVsAw"
+      },
+      "context": {
+        "iss": "https://pen-login.pos090001.workers.dev",
+        "sub": "112233445566778899000",
+        "signPub": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83_MH50",
+        "noisePub": "EyxEK-AQ-9V-cmAzKKp25x_MwVA6riGTJ9FNnJmT9HI",
+        "skew": 60,
+        "now": 1794300000
+      },
+      "ok": false,
+      "reason": "malformed"
+    },
+    {
+      "name": "a control character in the sub",
+      "assertion": {
+        "body": "eyJ2IjoxLCJpc3MiOiJodHRwczovL3Blbi1sb2dpbi5wb3MwOTAwMDEud29ya2Vycy5kZXYiLCJraWQiOiJ3czZ6aWV4eCIsInN1YiI6IjExMjJ_MzMiLCJlbWFpbCI6InBlcnNvbkBleGFtcGxlLmNvbSIsInNpZ25QdWIiOiIyNWxmNGxGcDBVSEt1YnU2a3JxZ0g1OHVIczU5OU1zcXdGR1E4M19NSDUwIiwibm9pc2VQdWIiOiJFeXhFSy1BUS05Vi1jbUF6S0twMjV4X013VkE2cmlHVEo5Rk5uSm1UOUhJIiwiaWF0IjoxNzk0MzAwMDAwLCJleHAiOjE3OTQzMDA2MDB9",
+        "sig": "wYlGghrd5olWbdSvWPGBz_YO1Jwt4AEtO11ueSQGkix8N8eAWhh-iAllhoAIjvStWri0Pn0bOm8W-lQIOW0XBg"
+      },
+      "context": {
+        "iss": "https://pen-login.pos090001.workers.dev",
+        "sub": "112233",
+        "signPub": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83_MH50",
+        "noisePub": "EyxEK-AQ-9V-cmAzKKp25x_MwVA6riGTJ9FNnJmT9HI",
+        "skew": 60,
+        "now": 1794300000
+      },
+      "ok": false,
+      "reason": "malformed"
     }
   ]
 }

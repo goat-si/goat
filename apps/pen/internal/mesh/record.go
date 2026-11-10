@@ -462,7 +462,7 @@ func checkVia(b *Body) error {
 	if b.Via == nil || *b.Via != ViaGoogle || b.Email == nil || b.Assertion == nil {
 		return errors.New("mesh: an admit via google needs via, email and assertion")
 	}
-	if len(*b.Email) < 1 || len(*b.Email) > maxEmail || !validHash(*b.Assertion) {
+	if len(*b.Email) < 1 || len(*b.Email) > maxEmail || !login.Printable(*b.Email) || !validHash(*b.Assertion) {
 		return errors.New("mesh: admit email or assertion hash")
 	}
 	return nil
@@ -480,7 +480,7 @@ func accountOf(b *Body) (*Account, error) {
 		return nil, nil
 	}
 	var sub string
-	if err := json.Unmarshal(b.Sub, &sub); err != nil || sub == "" || len(sub) > maxSub {
+	if err := json.Unmarshal(b.Sub, &sub); err != nil || sub == "" || len(sub) > maxSub || !login.Printable(sub) {
 		return nil, errors.New("mesh: account sub")
 	}
 	if b.LoginURL == nil || b.LoginKey == nil || !validLoginURL(*b.LoginURL) {

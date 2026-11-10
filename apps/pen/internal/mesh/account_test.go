@@ -175,6 +175,14 @@ func TestAnAdmitViaGoogleShowsTheAccountAndRefusesALongEmail(t *testing.T) {
 	if _, err := Sign(a, b.meshID, TypeAdmit, 9, []string{found.Hash}, 1, Fields{Card: b.card(detID(4), a, "d"), Via: ViaGoogle, Email: long, Assertion: hash}); err == nil {
 		t.Fatal("an email over 254 bytes was signed")
 	}
+	// Control characters would redraw the terminal lines pen approve and pen ls print.
+	if _, err := Sign(a, b.meshID, TypeAdmit, 9, []string{found.Hash}, 1, Fields{Card: b.card(detID(4), a, "d"), Via: ViaGoogle, Email: "d\x1b[2J@e.co", Assertion: hash}); err == nil {
+		t.Fatal("an email with an escape character was signed")
+	}
+	k := LoginKey{Kid: login.Kid(a.NoisePub), Pub: ident.B64.EncodeToString(a.NoisePub)}
+	if _, err := Sign(a, b.meshID, TypeAccount, 9, []string{found.Hash}, 1, Fields{Bind: &Account{LoginURL: "https://login.example", LoginKey: k, Sub: "10\x7f01"}}); err == nil {
+		t.Fatal("a sub with DEL was signed")
+	}
 }
 
 func TestAnAccountAdmitNamesAtMostEightHeadsKeepingTheSignersOwn(t *testing.T) {

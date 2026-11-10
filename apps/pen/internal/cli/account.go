@@ -163,6 +163,6 @@ func RunAccount(args []string, stdout, stderr io.Writer) int {
 }
 
 func printPending(w io.Writer, p daemon.Pending) {
-	fmt.Fprintf(w, "request %s: %s (%s), signed in as %s at %s\n  fingerprint %s\n", p.ID, p.Name, short(p.NodeID), p.Email,
+	fmt.Fprintf(w, "request %s: %s (%s), signed in as %s at %s\n  fingerprint %s\n", p.ID, safe(p.Name), short(p.NodeID), safe(p.Email),
 		time.UnixMilli(p.At).Format(time.DateTime), p.Fingerprint)
 }

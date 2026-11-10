@@ -135,6 +135,20 @@ export async function buildLoginVector() {
       ok: false,
       reason: "malformed",
     },
+    {
+      name: "a control character in the email (it would redraw the approval prompt)",
+      assertion: await signAssertion({ ...body, email: "person\u001b[2J@example.com" }, loginKey),
+      context: at(IAT),
+      ok: false,
+      reason: "malformed",
+    },
+    {
+      name: "a control character in the sub",
+      assertion: await signAssertion({ ...body, sub: "1122\u007f33" }, loginKey),
+      context: { ...at(IAT), sub: "1122\u007f33" },
+      ok: false,
+      reason: "malformed",
+    },
   ];
 
   return {

@@ -38,6 +38,17 @@ const (
 
 var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 
+// Printable reports whether s has no C0 control character or DEL. An account's sub and email reach
+// terminals (pen approve, pen ls), so they must not carry escape sequences.
+func Printable(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // Kid is lowercase base32 of SHA-256(pub)[0..5]: 8 characters.
 func Kid(pub []byte) string {
 	sum := sha256.Sum256(pub)
@@ -189,7 +200,7 @@ func (a *Assertion) Verify(key Key) error {
 	if !ed25519.Verify(pub, assertionDigest(a.Body), a.Sig) {
 		return errors.New("login: assertion signature")
 	}
-	if b.Sub == "" || len(b.Email) > maxEmail || b.Exp-b.Iat != int64(AssertionLifetime/time.Second) {
+	if b.Sub == "" || len(b.Email) > maxEmail || !Printable(b.Sub) || !Printable(b.Email) || b.Exp-b.Iat != int64(AssertionLifetime/time.Second) {
 		return errors.New("login: assertion body")
 	}
 	if _, err := ident.DecodeKey(b.SignPub); err != nil {
