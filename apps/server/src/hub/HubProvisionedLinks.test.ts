@@ -117,6 +117,7 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
             ensureDeviceRuntime: () => Effect.die("unused"),
             syncDevice: () => Effect.die("unused"),
             directAlias: () => Effect.succeed(true),
+            penAliasRevision: () => Effect.succeed(undefined),
             runningTurns: () => Effect.succeed(0),
             deviceHealth: () => Effect.die("unused"),
             homeTunnels: (alias, port) =>

@@ -140,11 +140,19 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serviceScope = yield* Scope.Scope;
   const stateFile = path.join(config.stateDir, STATE_FILE);
+  // A Pen member is an SSH host whose alias Pen writes, not GOAT; consent binds to Pen's record.
+  const aliasRevision = (alias: string) =>
+    ssh.aliasRevision(alias).pipe(
+      Effect.filterOrElse(
+        (revision): revision is string => revision !== undefined,
+        () => ocx.penAliasRevision(alias),
+      ),
+    );
   const consents = yield* makeSshChildConsent({
     directory: config.stateDir,
     file: path.join(config.stateDir, CONSENT_FILE),
     sessions: yield* SessionStore.SessionStore,
-    revision: ssh.aliasRevision,
+    revision: aliasRevision,
   });
   const writing = yield* Semaphore.make(1);
   const jobs = new Map<string, Fiber.Fiber<Status | undefined>>();
@@ -746,7 +754,7 @@ const make = Effect.gen(function* () {
   )(function* (alias) {
     if (!SAFE_ALIAS.test(alias) || hasCloudMachineAliasPrefix(alias) || !(yield* hubEnabled))
       return undefined;
-    const revision = yield* ssh.aliasRevision(alias).pipe(Effect.orElseSucceed(() => undefined));
+    const revision = yield* aliasRevision(alias).pipe(Effect.orElseSucceed(() => undefined));
     if (revision === undefined) return undefined;
     if ((yield* consents.held(alias)) === undefined) return false;
     // Reconciled on every read, so a signed-out or expired session turns the switch off and the

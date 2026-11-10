@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
@@ -122,4 +123,143 @@ it.effect("a device SSH cannot reach is unreachable, not a device that answers n
     );
     expect(silent).toBeUndefined();
   }),
+);
+
+/** A hub whose ~/.ssh/pen is a scratch directory; ssh -G and ssh-keygen answer from `machine`. */
+const penHome = Effect.fn("HubOcxPenTest.penHome")(function* (machine: {
+  config: string;
+  sshG: (alias: string) => string;
+  keys: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-hub-pen-" });
+  yield* fs.makeDirectory(`${home}/.ssh/pen`, { recursive: true });
+  const write = (config: string) => fs.writeFileString(`${home}/.ssh/pen/config`, config);
+  yield* write(machine.config);
+  const ocx = yield* HubOcx.pipe(
+    Effect.provide(
+      hubOcxLayer.pipe(
+        Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+        Layer.provide(
+          Layer.mock(ProcessRunner.ProcessRunner)({
+            run: (input) =>
+              Effect.sync(() => ({
+                stdout:
+                  input.args[0] === "-G"
+                    ? machine.sshG(input.args[1] ?? "")
+                    : input.args.includes(`${home}/.ssh/pen/known_hosts`)
+                      ? machine.keys
+                      : "",
+                stderr: "",
+                code: ChildProcessSpawner.ExitCode(0),
+                timedOut: false,
+                stdoutTruncated: false,
+                stderrTruncated: false,
+                stdoutInvalidUtf8: false,
+                stderrInvalidUtf8: false,
+              })),
+          }),
+        ),
+        Layer.provide(Layer.mock(Inventory.OpenCodexInventory)({})),
+        Layer.provide(Layer.mock(Dispatch.SshRemoteDispatch)({})),
+        Layer.provide(Layer.succeed(HostProcess.HomeDirectory, home)),
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
+  );
+  return { ocx, home, write };
+});
+
+const PEN_BLOCK = (alias: string) =>
+  `Host ${alias}\n    User boxes\n    ProxyCommand '/home/u/.local/bin/pen' pipe %n 22\n`;
+const penSshG =
+  (home: string, overrides: Record<string, string> = {}) =>
+  (alias: string) =>
+    Object.entries({
+      hostname: alias,
+      user: "boxes",
+      port: "22",
+      proxycommand: "'/home/u/.local/bin/pen' pipe %n 22",
+      userknownhostsfile: `${home}/.ssh/pen/known_hosts`,
+      ...overrides,
+    })
+      .map(([key, value]) => `${key} ${value}`)
+      .join("\n");
+const keyLines = (node: string, key: string) =>
+  `# Host pen-box found: line 1 \npen-box,pen-${node} ssh-ed25519 ${key}\n`;
+
+it.effect(
+  "a Pen member's alias has a consent revision; a Pen alias with no recorded key has none",
+  () =>
+    Effect.gen(function* () {
+      const machine = {
+        config: PEN_BLOCK("pen-box"),
+        sshG: (_: string) => "",
+        keys: keyLines("node1", "AAAA1"),
+      };
+      const { ocx, home } = yield* penHome(machine);
+      machine.sshG = penSshG(home);
+      expect(yield* ocx.penAliasRevision("pen-box")).toEqual(expect.any(String));
+      machine.keys = "";
+      expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a Pen alias's revision changes with its host key, its node and its effective SSH settings",
+  () =>
+    Effect.gen(function* () {
+      const machine = {
+        config: PEN_BLOCK("pen-box"),
+        sshG: (_: string) => "",
+        keys: keyLines("node1", "AAAA1"),
+      };
+      const { ocx, home } = yield* penHome(machine);
+      machine.sshG = penSshG(home);
+      const first = yield* ocx.penAliasRevision("pen-box");
+      const seen = new Set([first]);
+      const changed = function* (label: string) {
+        const next = yield* ocx.penAliasRevision("pen-box");
+        expect(next, label).toEqual(expect.any(String));
+        expect(seen.has(next), label).toBe(false);
+        seen.add(next);
+      };
+      machine.keys = keyLines("node1", "AAAA2");
+      yield* changed("host key");
+      // A machine that joins later under the same name is another member.
+      machine.keys = keyLines("node2", "AAAA2");
+      yield* changed("node");
+      machine.sshG = penSshG(home, { user: "root" });
+      yield* changed("User");
+      machine.sshG = penSshG(home, { hostkeyalias: "other" });
+      yield* changed("HostKeyAlias");
+      machine.sshG = penSshG(home, {
+        proxycommand: "env PEN_HOME='/tmp/x' '/home/u/.local/bin/pen' pipe %n 22",
+      });
+      yield* changed("ProxyCommand");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a revoked member, or an alias Pen did not write, has no revision", () =>
+  Effect.gen(function* () {
+    const machine = {
+      config: PEN_BLOCK("pen-box"),
+      sshG: (_: string) => "",
+      keys: keyLines("node1", "AAAA1"),
+    };
+    const { ocx, home, write } = yield* penHome(machine);
+    machine.sshG = penSshG(home);
+    expect(yield* ocx.penAliasRevision("pen-box")).toEqual(expect.any(String));
+    // Another known_hosts file means ssh would not check Pen's recorded key.
+    machine.sshG = penSshG(home, { userknownhostsfile: "/home/u/.ssh/known_hosts" });
+    expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+    machine.sshG = penSshG(home, { proxycommand: "'/usr/bin/nc' %h %p" });
+    expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+    machine.sshG = penSshG(home);
+    // A hand-made Host pen-foo outside Pen's config, routed and keyed like Pen's, is still not Pen's.
+    expect(yield* ocx.penAliasRevision("pen-foo")).toBeUndefined();
+    // Revoked or left: Pen rewrites its config without the member's Host block.
+    yield* write("Host pen-*\n    ProxyCommand '/home/u/.local/bin/pen' pipe %n 22\n");
+    expect(yield* ocx.penAliasRevision("pen-box")).toBeUndefined();
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

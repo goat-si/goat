@@ -1,3 +1,6 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- a stable hash of SSH settings and public host keys.
+import * as NodeCrypto from "node:crypto";
+
 /** Settings `ssh -G` prints, keyed by lowercase option name. */
 export const sshSettings = (output: string): ReadonlyMap<string, string> =>
   new Map(
@@ -44,4 +47,33 @@ export const fingerprintOfType = (keygen: string, keyType: string) => {
     .map((line) => /^\S+ (\S+) (SHA256:[A-Za-z0-9+/]{43})$/u.exec(line.trim()))
     .filter((match) => match?.[1] === keyType);
   return matches.length === 1 ? matches[0]?.[2] : undefined;
+};
+
+/** The aliases of the Host blocks in Pen's own ssh config, without its pen-* fallback. */
+export const penConfigHosts = (config: string) =>
+  config
+    .split(/\r?\n/u)
+    .map((line) => /^Host\s+(\S+)\s*$/u.exec(line.trim())?.[1])
+    .filter((alias): alias is string => alias !== undefined && !alias.includes("*"));
+
+// The settings that decide which machine an alias reaches and which key ssh accepts for it.
+const BOUND = ["hostname", "user", "port", "proxycommand", "proxyjump", "hostkeyalias"] as const;
+
+/**
+ * Identifies a Pen member's alias for consent: its effective settings and the known_hosts lines Pen
+ * recorded for it, whose host names carry the member's node id. A changed key, a member that later
+ * takes the same name, or changed settings is another host. Undefined when Pen recorded no key.
+ */
+export const penRevision = (settings: ReadonlyMap<string, string>, keygen: string) => {
+  const knownHostsFile = penKnownHostsFile(settings);
+  const keys = keygen
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .toSorted();
+  if (knownHostsFile === undefined || keys.length === 0) return undefined;
+  const bound = BOUND.map((key) => `${key} ${settings.get(key) ?? ""}`);
+  return `pen:${NodeCrypto.createHash("sha256")
+    .update([...bound, `userknownhostsfile ${knownHostsFile}`, "", ...keys].join("\n"))
+    .digest("hex")}`;
 };

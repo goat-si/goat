@@ -282,6 +282,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
             ensureDeviceRuntime: () => Effect.die("unused"),
             syncDevice: () => Effect.die("unused"),
             directAlias: () => Effect.succeed(fixture.direct ?? true),
+            penAliasRevision: () => Effect.succeed(undefined),
             runningTurns: () => Effect.succeed(fixture.running ?? 0),
             deviceHealth: (alias) =>
               Effect.sync(() => {
