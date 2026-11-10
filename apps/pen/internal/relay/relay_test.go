@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -351,5 +352,99 @@ func TestRaceTraceShowsTheWinnersStagesAndTheOfflineRelays4404(t *testing.T) {
 	}
 	if got := events[offline.URL]; !slices.Contains(got, "closed 4404") || slices.Contains(got, "winner") {
 		t.Fatalf("offline relay trace %v, want closed 4404 and no win", got)
+	}
+}
+
+// freezer is a TCP proxy to a relay that can freeze the connections it holds: bytes stop moving
+// both ways and nothing closes, as when a network path dies silently (a laptop asleep, a NAT gone).
+type freezer struct {
+	URL    string
+	mu     sync.Mutex
+	frozen chan struct{}
+}
+
+func newFreezer(t *testing.T, target string) *freezer {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	f := &freezer{URL: "http://" + ln.Addr().String(), frozen: make(chan struct{})}
+	addr := strings.TrimPrefix(target, "http://")
+	pump := func(dst, src net.Conn, frozen chan struct{}) {
+		buf := make([]byte, 32<<10)
+		for {
+			n, err := src.Read(buf)
+			if err != nil {
+				dst.Close()
+				return
+			}
+			select {
+			case <-frozen:
+				return // keep both ends open and silent
+			default:
+			}
+			if _, err := dst.Write(buf[:n]); err != nil {
+				src.Close()
+				return
+			}
+		}
+	}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			up, err := net.Dial("tcp", addr)
+			if err != nil {
+				c.Close()
+				continue
+			}
+			t.Cleanup(func() { c.Close(); up.Close() })
+			f.mu.Lock()
+			frozen := f.frozen
+			f.mu.Unlock()
+			go pump(up, c, frozen)
+			go pump(c, up, frozen)
+		}
+	}()
+	return f
+}
+
+// freeze silences every connection made so far; later ones flow.
+func (f *freezer) freeze() {
+	f.mu.Lock()
+	close(f.frozen)
+	f.frozen = make(chan struct{})
+	f.mu.Unlock()
+}
+
+func TestAnUplinkThatHearsNothingForTwoPingIntervalsRedials(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	fz := newFreezer(t, rs.URL)
+	id := newID(t)
+	u := relay.NewUplink(fz.URL, id)
+	u.MinBackoff = time.Millisecond
+	u.PingInterval = 20 * time.Millisecond
+	ev := make(upEvents, 16)
+	u.OnState = func(up bool) { ev <- up }
+	go u.Run(ctx)
+	if !<-ev {
+		t.Fatal("uplink did not come up")
+	}
+	fz.freeze()
+	if up := <-ev; up {
+		t.Fatal("expected the silent uplink to go down")
+	}
+	if up := <-ev; !up {
+		t.Fatal("expected the uplink back on a fresh connection")
+	}
+	if err := rs.WaitOnline(ctx, id.NodeID()); err != nil {
+		t.Fatal(err)
 	}
 }

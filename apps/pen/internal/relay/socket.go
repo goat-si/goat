@@ -46,8 +46,8 @@ func (a *acker) add(n int) (string, bool) {
 	return "", false
 }
 
-func pinger(ctx context.Context, c *websocket.Conn) {
-	t := time.NewTicker(PingInterval)
+func pinger(ctx context.Context, c *websocket.Conn, every time.Duration) {
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
@@ -235,7 +235,7 @@ func Dial(ctx context.Context, relayURL, nodeID string) (Conn, error) {
 	lctx, cancel := context.WithCancel(context.Background())
 	c := &clientConn{ws: ws, in: newInbox(), ctx: lctx, cancel: cancel, done: make(chan struct{}), pong: make(chan struct{})}
 	go c.readLoop()
-	go pinger(lctx, ws)
+	go pinger(lctx, ws, PingInterval)
 	return c, nil
 }
 

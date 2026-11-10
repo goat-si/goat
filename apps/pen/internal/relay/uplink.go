@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -16,6 +17,10 @@ import (
 
 // ErrReplaced is returned by Uplink.Run when a newer uplink for this nodeId took over (4409).
 var ErrReplaced = errors.New("relay: uplink replaced by a newer one (4409)")
+
+// errSilent ends an uplink that received nothing for two ping intervals: the path died without a
+// close (sleep, a dropped NAT mapping), and writes alone would not notice for minutes.
+var errSilent = errors.New("relay sent nothing for two ping intervals")
 
 // AuthTimeout bounds the wait for the relay's challenge.
 const AuthTimeout = 10 * time.Second
@@ -30,6 +35,8 @@ type Uplink struct {
 
 	// MinBackoff and MaxBackoff bound the reconnect delay (0.5 s doubling to 30 s by default).
 	MinBackoff, MaxBackoff time.Duration
+	// PingInterval is the keepalive period (relay.PingInterval when zero).
+	PingInterval time.Duration
 
 	accept chan Conn
 }
@@ -128,13 +135,25 @@ func (u *Uplink) runOnce(ctx context.Context) error {
 		ws.CloseNow()
 		return err
 	}
-	m := &mux{ws: ws, ctx: lctx, sessions: map[uint32]*muxConn{}}
+	// Any message counts as life: the relay may hold a pong behind a slow write.
+	every := u.pingInterval()
+	var silent atomic.Bool
+	deadline := time.AfterFunc(2*every, func() {
+		silent.Store(true)
+		cancel()
+	})
+	defer deadline.Stop()
+	m := &mux{ws: ws, ctx: lctx, sessions: map[uint32]*muxConn{}, heard: func() { deadline.Reset(2 * every) }}
 	if u.OnState != nil {
 		u.OnState(true)
 		defer u.OnState(false)
 	}
-	go pinger(lctx, ws)
+	go pinger(lctx, ws, every)
 	err = m.readLoop(u.accept, len(challenge))
+	if silent.Load() && ctx.Err() == nil {
+		ws.CloseNow()
+		err = errSilent
+	}
 	code := statusCode(err)
 	m.failAll(&CloseError{Code: wire.CodeOffline})
 	if code == wire.CodeReplaced {
@@ -146,9 +165,18 @@ func (u *Uplink) runOnce(ctx context.Context) error {
 	return err
 }
 
+func (u *Uplink) pingInterval() time.Duration {
+	if u.PingInterval > 0 {
+		return u.PingInterval
+	}
+	return PingInterval
+}
+
 type mux struct {
 	ws  *websocket.Conn
 	ctx context.Context
+	// heard is called with every message the relay sends.
+	heard func()
 
 	mu       sync.Mutex
 	sessions map[uint32]*muxConn
@@ -169,6 +197,7 @@ func (m *mux) readLoop(accept chan Conn, received int) error {
 		if err != nil {
 			return err
 		}
+		m.heard()
 		if typ != websocket.MessageBinary {
 			continue
 		}
