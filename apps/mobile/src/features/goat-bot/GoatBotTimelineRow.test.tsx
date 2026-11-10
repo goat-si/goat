@@ -1,3 +1,4 @@
+import { act } from "react";
 import {
   buildGoatBotTimeline,
   type GoatBotMessagePresentation,
@@ -650,6 +651,32 @@ describe("a reply with a table", () => {
     await view.click("Copy table");
     expect(view.container.querySelector('[aria-label="Copy table"]')).not.toBeNull();
     expect(h.announcements).toEqual(["Couldn't copy the table"]);
+  });
+
+  it("says how the newest copy went, ignoring older or unmounted ones", async () => {
+    clipboard.copy.mockClear();
+    await render(bot({ text: table.join("\n") }));
+    await view.click("Copy table");
+    clipboard.copy.mockImplementationOnce(async () => false);
+    await view.click("Copied");
+    expect(view.container.querySelector('[aria-label="Copy table"]')).not.toBeNull();
+    expect(h.announcements).toEqual(["Table copied", "Couldn't copy the table"]);
+
+    const slow = Promise.withResolvers<boolean>();
+    clipboard.copy.mockImplementationOnce(() => slow.promise);
+    clipboard.copy.mockImplementationOnce(async () => false);
+    await view.click("Copy table");
+    await view.click("Copy table");
+    await act(async () => slow.resolve(true));
+    expect(view.container.querySelector('[aria-label="Copied"]')).toBeNull();
+    expect(h.announcements.slice(2)).toEqual(["Couldn't copy the table"]);
+
+    const pending = Promise.withResolvers<boolean>();
+    clipboard.copy.mockImplementationOnce(() => pending.promise);
+    await view.click("Copy table");
+    await view.unmount();
+    await act(async () => pending.resolve(true));
+    expect(h.announcements.slice(3)).toEqual([]);
   });
 
   it("gives every table its own card, and keeps a question in one card", async () => {

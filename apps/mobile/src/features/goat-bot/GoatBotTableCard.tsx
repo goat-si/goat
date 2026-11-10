@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AccessibilityInfo,
   Pressable,
@@ -33,12 +33,25 @@ export function GoatBotTableCard(props: {
   const width = Math.max(available - 28, props.columns * COLUMN_WIDTH);
   const [copied, setCopied] = useState(false);
   const reset = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Each press gets a number; only the newest press, while the card is shown, may say how it went.
+  const press = useRef(0);
+  // oxlint-disable-next-line goat/react-effect-budget -- Stop the "Copied" timer and drop pending copy results when the card leaves.
+  useEffect(
+    () => () => {
+      press.current = -1;
+      if (reset.current !== null) clearTimeout(reset.current);
+    },
+    [],
+  );
   const copy = async () => {
+    const current = ++press.current;
+    if (reset.current !== null) clearTimeout(reset.current);
+    setCopied(false);
     const done = await tryCopyTextWithHaptic(props.markdown, { target: "table" });
+    if (press.current !== current) return;
     AccessibilityInfo.announceForAccessibility(done ? "Table copied" : "Couldn't copy the table");
     if (!done) return;
     setCopied(true);
-    if (reset.current !== null) clearTimeout(reset.current);
     reset.current = setTimeout(() => setCopied(false), 2000);
   };
   return (

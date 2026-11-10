@@ -41,7 +41,7 @@ export function GoatBotReplyCards(props: {
       {parts.map((part, index) => {
         const last = index === parts.length - 1;
         return part.kind === "table" ? (
-          <GoatBotTableCard key={keys[index]} columns={part.header.length} markdown={part.markdown}>
+          <GoatBotTableCard key={keys[index]} columns={part.columns} markdown={part.markdown}>
             {props.renderText(part.markdown)}
           </GoatBotTableCard>
         ) : (
