@@ -71,15 +71,22 @@ import {
   childInputBannerItem,
   goalBannerItem,
   runStopBannerItem,
+  startHoldBannerItem,
 } from "./ThreadActivityBanners";
 import { useForceStopThread } from "./useForceStopThread";
 import { useAtomValue } from "@effect/atom-react";
-import type { RunStopPresentation } from "@goat/client-runtime/state/thread-execution";
+import type {
+  RunStartHoldPresentation,
+  RunStopPresentation,
+} from "@goat/client-runtime/state/thread-execution";
 import { Atom } from "effect/reactivity";
 import type { useLocalDispatchState } from "./useLocalDispatchState";
 const RELATED_THREAD_SHELL_WAIT_MS = 1_000;
 const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
   Atom.withLabel("web-thread-run-stop:empty"),
+);
+const NO_START_HOLD_ATOM = Atom.make<RunStartHoldPresentation | null>(null).pipe(
+  Atom.withLabel("web-thread-start-hold:empty"),
 );
 
 type PendingThreadRequests = ReturnType<typeof usePendingThreadRequests>;
@@ -612,6 +619,13 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
           onForceStop: () => void forceStop.forceStopThread(activeThread.id, runStop.runId),
         })
       : null;
+  const startHold = useAtomValue(
+    threadDetailRef ? environmentThreadDetails.startHoldAtom(threadDetailRef) : NO_START_HOLD_ATOM,
+  );
+  const startHoldBanner =
+    activeThread && startHold !== null
+      ? startHoldBannerItem({ threadId: activeThread.id, hold: startHold })
+      : null;
   const backgroundWorkBanner = activeThread
     ? backgroundWorkBannerItem({
         threadId: activeThread.id,
@@ -703,9 +717,13 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     shortcuts,
     acknowledgeActiveThreadWoke,
     activeBranchMismatchKey,
-    activityBanners: [runStopBanner, childInputBanner, goalBanner, backgroundWorkBanner].filter(
-      (item) => item !== null,
-    ),
+    activityBanners: [
+      runStopBanner,
+      startHoldBanner,
+      childInputBanner,
+      goalBanner,
+      backgroundWorkBanner,
+    ].filter((item) => item !== null),
     handleSwitchCheckoutToThread,
     handleSwitchCheckoutToThreadStable,
     isRestoringThreadBranch,

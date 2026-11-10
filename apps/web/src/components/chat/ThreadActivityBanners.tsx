@@ -10,10 +10,12 @@ import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   presentPendingBackgroundWork,
   presentProviderGoal,
+  type RunStartHoldPresentation,
   type RunStopPresentation,
 } from "@goat/client-runtime/state/thread-execution";
 import { childThreadInputsTitle } from "@goat/client-runtime/state/threads";
 import {
+  ClockIcon,
   GitBranchIcon,
   MessageCircleIcon,
   ShieldQuestionIcon,
@@ -124,6 +126,21 @@ export function goalBannerItem(input: {
         </Button>
       </>
     ),
+  };
+}
+
+/** A sent message that waits for another Codex turn to end, so it does not read as stuck. */
+export function startHoldBannerItem(input: {
+  readonly threadId: ThreadId;
+  readonly hold: RunStartHoldPresentation;
+}): ComposerBannerStackItem {
+  return {
+    id: `start-hold:${input.threadId}`,
+    variant: "info",
+    priority: "activity",
+    icon: <ClockIcon />,
+    title: input.hold.title,
+    description: input.hold.description,
   };
 }
 

@@ -1,10 +1,13 @@
+import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import {
   presentProviderGoal,
+  type RunStartHoldPresentation,
   type RunStopPresentation,
 } from "@goat/client-runtime/state/thread-execution";
 import * as Dialog from "../../components/ui/Dialog";
-import type { OrchestrationV2ProviderSession } from "@goat/contracts";
+import { environmentThreadDetails } from "../../state/threads";
+import type { OrchestrationV2ProviderSession, ScopedThreadRef } from "@goat/contracts";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 
 export interface FloatingStatusAction {
@@ -48,6 +51,12 @@ export type FloatingWorkingStatus =
   | { readonly kind: "extension"; readonly label: string; readonly onPress: () => void }
   | { readonly kind: "preparing"; readonly label: string }
   | {
+      readonly kind: "held";
+      readonly label: string;
+      readonly accessibilityLabel: string;
+      readonly onPress: () => void;
+    }
+  | {
       readonly kind: "connection";
       readonly tone: "reconnecting" | "unavailable";
       readonly label: string;
@@ -57,6 +66,29 @@ export type FloatingWorkingStatus =
 export const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
   Atom.withLabel("mobile-thread-run-stop:empty"),
 );
+const NO_START_HOLD_ATOM = Atom.make<RunStartHoldPresentation | null>(null).pipe(
+  Atom.withLabel("mobile-thread-start-hold:empty"),
+);
+
+/** The thread's unfinished Stop, and the Codex turn its newest message waits behind. */
+export function useRunStopAndStartHold(ref: ScopedThreadRef | null) {
+  const runStop = useAtomValue(
+    ref === null ? NO_RUN_STOP_ATOM : environmentThreadDetails.runStopAtom(ref),
+  );
+  const hold = useAtomValue(
+    ref === null ? NO_START_HOLD_ATOM : environmentThreadDetails.startHoldAtom(ref),
+  );
+  const startHold: FloatingWorkingStatus | null =
+    hold === null
+      ? null
+      : {
+          kind: "held",
+          label: hold.title,
+          accessibilityLabel: `${hold.title}. ${hold.description}`,
+          onPress: () => Dialog.alert(hold.title, hold.description),
+        };
+  return { runStop, startHold };
+}
 export function goalFloatingStatus(
   goal: Parameters<typeof presentProviderGoal>[0],
 ): FloatingWorkingStatus {

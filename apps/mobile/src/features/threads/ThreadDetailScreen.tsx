@@ -186,9 +186,9 @@ import {
 import {
   connectionFloatingStatus,
   goalFloatingStatus,
-  NO_RUN_STOP_ATOM,
   piExtensionStatus,
   piExtensionForControl,
+  useRunStopAndStartHold,
   type FloatingWorkingStatus,
 } from "./floating-working-status";
 import { workingFloatingStatus } from "./turn-settle";
@@ -536,11 +536,7 @@ function ThreadDetailBody(
   const unsettleThread = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata, { reportFailure: false });
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
-  const anyRunStop = useAtomValue(
-    props.selectedThreadDetailRef === null
-      ? NO_RUN_STOP_ATOM
-      : environmentThreadDetails.runStopAtom(props.selectedThreadDetailRef),
-  );
+  const { runStop: anyRunStop, startHold } = useRunStopAndStartHold(props.selectedThreadDetailRef);
   // A background Stop matters only while that work is still pending.
   const runStop =
     anyRunStop?.background && props.selectedThread.pendingBackgroundTasks.length === 0
@@ -729,6 +725,7 @@ function ThreadDetailBody(
     if (props.activePendingApproval !== null || props.activePendingUserInput !== null) {
       return null;
     }
+    if (startHold !== null && contentPresentationKind === "ready") return startHold;
     if (props.creationState?.kind === "preparing") {
       if (props.worktreeSetup) return null;
       return {
