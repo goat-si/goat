@@ -50,9 +50,10 @@ Upgrade it, or add the machine with an invite.
 `pen up` rewrites the service unit or plist; replacing the binary does not. A unit written by pen 0.2.6 or older runs
 `pen up --foreground` without `--service`, and a refused start (a stored relay list pen no longer accepts) then exits
 non-zero. pen recognises such a start by `SYSTEMD_EXEC_PID` (systemd 248 and later) or by `XPC_SERVICE_NAME` being
-`si.goat.pen` (launchd) and exits 0 as the new unit does. On systemd older than 248, run `pen up` once after
-upgrading; until then systemd restarts the unit every 2 s (`RestartSec=2`, no start limit of its own) until its default
-start limit (5 starts in 10 s) marks it failed. A shell or container that carries `XPC_SERVICE_NAME=si.goat.pen`, or
+`si.goat.pen` (launchd) and exits 0 as the new unit does. On systemd older than 248, an upgraded old unit keeps restarting every 2 s
+(`Restart=on-failure`, `RestartSec=2`; five starts take about 8 s, so the default limit of 5 starts in 10 s is not
+reached) until `pen up` is run once, which rewrites the unit; meanwhile `journalctl --user -u pen` shows the refusal
+(`pen: the relays in config.json cannot be used ...`) and a restart every 2 s. A shell or container that carries `XPC_SERVICE_NAME=si.goat.pen`, or
 the internal `--service` flag, likewise makes a refused `pen up --foreground` print the reason and exit 0.
 
 ## pen-relay Worker
