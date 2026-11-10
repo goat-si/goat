@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
+    "deploy:secrets": "node scripts/deploy.ts",
     "dev": "wrangler dev",
     "test": "vp test run --config ./vitest.config.ts",
     "typecheck": "tsc --noEmit"

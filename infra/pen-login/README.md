@@ -14,11 +14,12 @@ deployed, it always talks to Google. `DEVICE_TTL_MS`, `SOURCE_SESSION_CAP`, `SOU
 
 ## Deploy
 
-Set three secrets, reading each from a file or prompt so it never reaches a shell history or log:
-`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (the OAuth client whose redirect URI is
-`https://pen-login.pos090001.workers.dev/v1/auth/google/callback`), and `LOGIN_SIGNING_KEY`, a base64url
-Ed25519 seed (32 bytes) generated for this service. Then `pnpm run deploy`. `GET /v1/keys` shows the login key's
-`kid` and public key.
+`pnpm run deploy:secrets <google-oauth-client.json>` deploys with three secrets in the same version:
+`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from Google's client file (its redirect URI must be
+`https://pen-login.pos090001.workers.dev/v1/auth/google/callback`), and `LOGIN_SIGNING_KEY`, a base64url Ed25519 seed
+generated only when the Worker has none, because a new login key orphans every mesh bound to the old one. It prints
+secret names only. Later code-only deploys can use `pnpm run deploy`. `GET /v1/keys` shows the login key's `kid`
+and public key.
 
 ## What the service sees
 
