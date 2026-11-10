@@ -50,6 +50,7 @@ const EXAMPLES = [
 ] as const;
 
 export interface GoatBotChatViewProps {
+  readonly unreadSince?: string | null | undefined;
   /** The bot's server supports task threads, so task chips render as task-thread pills. */
   readonly supportsTaskThreads?: boolean | undefined;
   /** The bot's server runs failed or stopped work again when a person asks. */
@@ -95,6 +96,7 @@ export interface GoatBotChatViewProps {
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
 export function GoatBotChatView({
+  unreadSince,
   supportsTaskThreads = false,
   supportsTaskRetry = false,
   availability,
@@ -322,6 +324,7 @@ export function GoatBotChatView({
               // History stays readable while the bot is unavailable; only sending stops.
               <GoatBotTimeline
                 rows={rows}
+                unreadSince={unreadSince}
                 environmentId={environmentId}
                 taskThreads={supportsTaskThreads}
                 retryEnvironmentId={supportsTaskRetry ? environmentId : null}
