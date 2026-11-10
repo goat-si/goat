@@ -544,6 +544,7 @@ func (ds *dashboard) handleState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) dashState() DashState {
+	d.refreshPresence()
 	ls := d.ls()
 	v := d.view()
 	s := DashState{Self: d.status(), Uplink: ls.Uplink, Members: ls.Members, Locked: v.Locked, Relays: d.relayStates(),

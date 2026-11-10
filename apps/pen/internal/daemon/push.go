@@ -68,6 +68,9 @@ func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 		case wire.CodeNotAdmitted:
 			return "refused"
 		}
+		// A sleeping machine's uplink can stay registered at the relay, so its dials time out
+		// instead of closing 4404; a failed sync means it is not reachable now either way.
+		d.markSeen(noise, false, "")
 		return "error: " + err.Error()
 	}
 	sec, used, err := openMemberVia(ctx, d.relays(), d.id, m.NodeID, noise, session.Payload{V: 1, Stream: "mesh"})

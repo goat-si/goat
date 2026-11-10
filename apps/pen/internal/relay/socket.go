@@ -108,6 +108,15 @@ func ClosedEvent(err error) string {
 	return "failed"
 }
 
+// DialEvent names a dial that did not connect: "cancelled" when the race had already ended
+// (another relay won or the caller gave up), "failed" otherwise.
+func DialEvent(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return "cancelled"
+	}
+	return "failed"
+}
+
 // Racer holds one dialer's race options; the zero value uses the defaults.
 type Racer struct {
 	// Timeout bounds a whole race (DialRaceTimeout when zero).
@@ -156,7 +165,7 @@ func (rc Racer) Dial(ctx context.Context, relays []string, nodeID string) (Conn,
 		go func() {
 			c, err := Dial(rctx, u, nodeID)
 			if err != nil {
-				emit("failed", u)
+				emit(DialEvent(rctx), u)
 				results <- result{url: u, err: err}
 				return
 			}

@@ -67,7 +67,7 @@ func openSessionVia(ctx context.Context, relays []string, nodeID string, start f
 		go func() {
 			c, err := relay.Dial(dctx, u, nodeID)
 			if err != nil {
-				emit("failed", u)
+				emit(relay.DialEvent(dctx), u)
 				results <- result{url: u, err: err}
 				return
 			}

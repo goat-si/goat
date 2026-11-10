@@ -54,6 +54,10 @@ type Options struct {
 	Since func(time.Time) time.Duration
 	// WakeTicks paces the sleep check (every 5 s when nil); tests drive it.
 	WakeTicks <-chan time.Time
+	// PresenceEvery spaces the presence syncs a polled dashboard starts (30 s).
+	PresenceEvery time.Duration
+	// PresenceDone, when set, is told each finished presence sync (tests).
+	PresenceDone func()
 }
 
 // Daemon is one running node.
@@ -100,6 +104,11 @@ type Daemon struct {
 	dashMu     sync.Mutex
 	dash       *dashboard
 	dashClosed bool
+
+	// presence paces the syncs a polled dashboard starts so its online column stays true.
+	presenceMu      sync.Mutex
+	presenceAt      time.Time
+	presenceRunning bool
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -153,6 +162,9 @@ func New(opt Options) (*Daemon, error) {
 	}
 	if opt.HostKeysEvery == 0 {
 		opt.HostKeysEvery = time.Hour
+	}
+	if opt.PresenceEvery == 0 {
+		opt.PresenceEvery = 30 * time.Second
 	}
 	if opt.Now == nil {
 		opt.Now = time.Now
