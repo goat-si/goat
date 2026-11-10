@@ -13,22 +13,24 @@ ExecStart=/opt/pen-relay/pen relay serve --listen ${PEN_RELAY_LISTEN} --autocert
 # These are not a bound the kernel enforces: GOMEMLIMIT only makes the Go collector work harder near
 # it, so the margin under MemoryMax is headroom checked by measurement, not a proof.
 # - Go: queued messages at their allocation size, at most 128 MiB (--max-queued-mib; one IPv4
-#   address or IPv6 /64 at most 16 MiB); messages being read, up to 96 KiB per connection without a
-#   charge (96 MiB at 1024 connections, --max-sockets) and larger ones from a 32 MiB pool; about
-#   48 KiB per connection of TLS and bufio buffers, timers and goroutine stacks (27 KiB measured
-#   idle over 3000 TLS sockets), 48 MiB; about 10 MiB of runtime. About 314 MiB live at worst, under
-#   GOMEMLIMIT=384MiB with room for the collector.
+#   address or IPv6 /64 at most 16 MiB); messages being read, up to 108 KiB per connection without a
+#   charge (a 96 KiB message and its 4 KiB first buffer; 108 MiB at 1024 connections, --max-sockets)
+#   and larger ones from a 32 MiB pool; about 48 KiB per connection of TLS and bufio buffers, timers
+#   and goroutine stacks (27 KiB measured idle over 3000 TLS sockets), 48 MiB; about 10 MiB of
+#   runtime. About 326 MiB live at worst, under GOMEMLIMIT=384MiB with room for the collector.
 # - Kernel, outside GOMEMLIMIT but inside MemoryMax under cgroup v2: each connection's send and
 #   receive buffers are fixed at 64 KiB (Linux doubles them); a send queue may pass its buffer by
 #   about one segment (228 KiB measured per client that stops reading), the receive side stays near
 #   130 KiB, so about 360 KiB per connection, 360 MiB at 1024.
 # - The binary, slab and other kernel memory: about 32 MiB.
 # 384 + 360 + 32 = 776 MiB, with MemoryMax=1G leaving about 250 MiB of headroom. Measured on the
-# relay of commit 2f333668ed (before the read allowance; linux x86_64, 2026-11-11, these flags): 400
-# idle TLS uplinks plus 600 clients from 10 addresses that never read, each sent 320 KiB, peaked at
-# 296 MiB (Go 203 MiB, kernel sockets 82 MiB); 850 idle uplinks, 64 partly read 1 MiB messages and
-# clients from 12 addresses holding the 128 MiB budget peaked at 216 MiB. Change the flags,
-# GOMEMLIMIT and MemoryMax together.
+# relay of commit 7496c8239b (linux x86_64 under other load, 2026-11-11, these flags, TLS, sources
+# on loopback addresses): 400 uplinks with 600 clients from 10 addresses that never read, each sent
+# 320 KiB, peaked at 308 MiB (Go 218, kernel sockets 75); 856 uplinks, 64 partly sent 1 MiB
+# messages and 96 non-reading clients from 12 addresses filling the queue budget peaked at 395 MiB
+# (Go 359); 960 non-reading clients from 64 addresses each sent up to 4 MiB peaked at 408 MiB
+# (Go 341, sockets 56). No run reached MemoryMax. Not measured on arm64 (the Seoul VM). Change the
+# flags, GOMEMLIMIT and MemoryMax together.
 Environment=GOMEMLIMIT=384MiB
 DynamicUser=yes
 StateDirectory=pen-relay
