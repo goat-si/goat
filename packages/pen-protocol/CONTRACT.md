@@ -1,4 +1,4 @@
-# Pen transport contract v1.0
+# Pen transport contract v1.1
 
 The binding wire contract for every Pen component: the `pen` node (apps/pen, Go), the relay (infra/pen-relay,
 Cloudflare Worker + Durable Objects) and the shared constants and vectors (packages/pen-protocol). It is derived
@@ -89,6 +89,7 @@ The first message a client sends on a session starts with one kind byte:
 | ---- | ------- | ------------------------- | ------------------------------------- | ----------------------------- |
 | 0x01 | session | Noise message 1           | Noise_IK_25519_ChaChaPoly_BLAKE2s     | `pen/1` \|\| nodeId \|\| 0x01 |
 | 0x03 | join    | Noise message 1           | Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s | `pen/1` \|\| nodeId \|\| 0x03 |
+| 0x04 | account | Noise message 1           | Noise_IK_25519_ChaChaPoly_BLAKE2s     | `pen/1` \|\| nodeId \|\| 0x04 |
 
 nodeId is the responder's 26 ASCII characters. Any other kind byte, or a first message over 4096 bytes, closes 4400
 unanswered. Kind 0x02 (Doriterm's typed code) is not used.
@@ -239,11 +240,114 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   bytes per message on top of its size, so a client flooding empty DATA ends only its own session 4408. Session ids are never
   reused while the process runs (a restart starts at 1 again; uplinks reconnect then and see fresh sessions).
 
+## Accounts (v1.1)
+
+A login service lets a person add machines to their own mesh by signing in with Google instead of passing an invite token.
+It never holds a mesh signing key and keeps no Google tokens after a sign-in. What it asserts is narrow: "the node key
+`signPub` belongs to Google account `sub`". Admission is still an `admit` record signed by an existing member.
+
+Trust: whoever controls the login service key, or tricks the account owner into approving a code, can mint an assertion
+for that account. In auto mode such an assertion adds a machine to the account's mesh, and the registry decides which
+mesh a new machine is offered. Defences: the person types the code and sees where the request came from; a joining
+machine shows the account and the mesh's members and asks before it founds or joins; members announce every account
+admission; lock mode makes every new machine wait for a member's approval; a Google-authenticated reset clears the
+account's registry entry; `pen revoke --compromised` removes what got in.
+
+### Login service
+
+Base URL L (`https://pen-login.pos090001.workers.dev`). Ed25519 login keys with `kid` = lowercase base32 of
+SHA-256(pub)[0..5] (8 characters). `GET L/v1/keys` -> `{"keys":[{"kid","pub"}]}` (pub base64url).
+
+Device flow (RFC 8628 shaped):
+
+1. `POST L/v1/device/start` `{"signPub","noisePub","name","proof"}`; proof = Ed25519 by signPub over
+   `"pen-login/1 start" || signPub || noisePub || name` (UTF-8). Answer `{"deviceCode","userCode","verificationUri",
+   "interval":2,"expiresIn":600}`. deviceCode: 32 random bytes base64url. userCode: 8 Crockford base32 characters shown
+   as `XXXX-XXXX`. There is no URL with the code filled in: the person types it.
+2. The person opens the verification URL, types the code, and signs in with Google (authorization code + PKCE S256 + state
+   - nonce; scope `openid email`); the OIDC state names that user code. The service verifies the id_token: `iss` is
+     `https://accounts.google.com` or `accounts.google.com`, `aud` is its client id, `exp` in the future, the RS256
+     signature against Google's JWKS (fetched from discovery, cached, refetched at most once per 5 minutes for an unknown
+     `kid`), `nonce` matches, `email_verified` true. The account key is `sub`; the email is for display only. The confirm
+     page shows the code again, the machine name and fingerprint, when and from which country and city the request
+     started, and says the machine will get full access to every machine in the mesh. Confirm is a POST with a per-page CSRF
+     token. Five wrong codes from one source lock that source for 10 minutes.
+3. `POST L/v1/device/token` `{"deviceCode","proof"}`; proof = Ed25519 by the device's signPub over
+   `"pen-login/1 poll" || deviceCode`. Answers: 428 `{"status":"pending"}`, 429 `{"status":"slow_down"}` (polled faster than
+   interval), 410 `{"status":"expired"}`, 403 `{"status":"denied"}`, or 200
+   `{"assertion","account":{"sub","email"},"loginKey":{"kid","pub"},"mesh":{"meshId","members":[{"nodeId","signPub","noisePub","name"}]}|null}`.
+   A deviceCode yields at most one 200.
+
+Assertion: `{"body":"<base64url>","sig":"<base64url>"}`, body an I-JSON object
+`{"v":1,"iss":L,"kid","sub","email","signPub","noisePub","iat","exp"}` (seconds; exp = iat + 600), sig = Ed25519 by the
+login key over `"pen-login/1 assertion" || SHA-256(body)`.
+
+Registry (Durable Object, SQLite): account `sub` -> one meshId and the nodes registered under it; nothing else long-lived.
+
+- `POST L/v1/mesh/register` `{"assertion","meshId"}` adds the asserting node (nodeId, keys, name) under the assertion's sub.
+  The assertion must verify under a current login key and be unexpired, and each assertion (by body hash) registers at
+  most once, so a kept or phished assertion cannot re-register after a reset. The first meshId registered for a sub is
+  kept and another is refused 409.
+- `POST L/v1/mesh/forget` `{"nodeId","by","ts","proof"}` removes a node; `by` is the signPub of that node or of another node
+  registered under the same sub, proof by `by` over `"pen-login/1 forget" || nodeId || ts (u64 BE, ms)`, ts within 2
+  minutes. Members send it when they leave and for every key their view revokes.
+- Reset: from the verification page, after a Google sign-in, "reset" removes the account's meshId and nodes (a separate
+  confirm step with a CSRF token). The next machine to log in founds or binds again.
+
+Sources are keyed by IPv4 address or IPv6 /64 of `cf-connecting-ip`. Limits per source: device/start 10 per minute,
+verification pages and confirms 20 per minute, token polls at `interval`, register/forget 30 per minute; refusals are
+HTTP 429. One Durable Object holds all state; it is a single point of failure for new logins, not for meshes that exist.
+
+### Mesh records
+
+v1.1 nodes store a record of an unknown `type`, or with members they do not know, when it is otherwise valid, forward it,
+and give it no effect. Every member must run v1.1 before a mesh is bound to an account (`pen login` checks the versions
+members announce in sync `hello` as `"pen":"1.1"` and refuses otherwise).
+
+- `account`: `{"loginUrl","loginKey":{"kid","pub"},"sub"}` or `{"sub":null}` (unbind). The binding is the last `account`
+  record in canonical order whose signer was not revoked as compromised (directly or as an admit of a compromised key);
+  a plain `leave` or `revoke` keeps the signer's binding in effect. `{"sub":null}` means unbound.
+- `lock`: `{"on":true|false}`. The mesh is locked if some effective `lock` `on` record is not in the past of an effective
+  `lock` `off` record: an `off` counts only when every `on` is in its past. As for `account`, records of keys revoked as
+  compromised lose effect; a plain leave or revoke does not unlock the mesh.
+- `admit` may carry `"via":"google"`, `"email"` (copied from the assertion the admitting member verified) and `"assertion"`
+  (base64url SHA-256 of that assertion's body). Without `via` it was an invite. The admit's body stays within 2048 bytes;
+  an email longer than 254 bytes is refused, and an admitting member lists at most 8 heads in `prev`.
+
+### Account join
+
+Kind 0x04, `account`: `Noise_IK_25519_ChaChaPoly_BLAKE2s`, prologue `pen/1` || nodeId || 0x04, valid only with
+`{"v":1,"stream":"account","name"}`. The responder accepts any initiator key on this kind; at most 4 such sessions run at
+once, a fifth evicts the oldest one that has not sent its assertion (4429), and a session that sends no assertion within
+10 s after key confirmation, or no card within 10 s after the offer, closes 4408. The joiner sends `{"t":"assertion","assertion":{...}}`; the member sends
+`{"t":"offer","mesh","inviter","nonce"}` and the joiner answers `{"t":"card","card":{...}}` as in Join. The member refuses
+(`refused` then 4401) unless: the mesh is bound; the assertion's `kid` names the binding's login key and the signature
+verifies; `iss` equals `loginUrl`; `sub` equals the binding's `sub`; `iat` <= now + 60 s and now < `exp` + 60 s (a
+refusal for time says "clock skew" so a person can fix it); the assertion's signPub and noisePub equal the card's and the
+card's noisePub equals the session key; the key is not revoked. Then:
+
+- unlocked: the member signs `admit` with `via` and the assertion hash, sends the records and `done` as in Join, and every
+  member shows "<name> joined via Google <email>, fingerprint ..." for 7 days in `pen ls`.
+- locked: the member stores a pending request `{id, card, assertion, at}` where id is the first 8 characters of the
+  joiner's fingerprint (`XXXX XXXX`), at most 32 (oldest dropped), kept 24 hours, sends `{"t":"queued","id","member"}` and
+  closes 1000. The joiner prints the id, its full fingerprint (10 groups of 4) and the member's name: approval happens on
+  that member. `pen approve` takes the full fingerprint, or an id only when exactly one pending request matches it; given
+  an id it shows name, full fingerprint, email and request time and waits for an explicit yes before it signs (a full
+  fingerprint argument signs at once). `pen deny` drops the request and refuses that key for 24 hours. The joiner retries every 5 s with kind 0x01 `stream:"mesh"` and an empty `have`, applying Join step 4's
+  checks to what it receives; after 30 minutes without approval it stops and tells the person to run `pen login` again
+  (a dropped request is then queued again; a key approved meanwhile is already a member, and the new run only syncs).
+
+The joining side: `pen login` shows the returned email and, when the registry offers a mesh, its member names and
+fingerprints, and asks before founding or joining (`--yes` skips the question for scripts; `install.sh --login` does not
+pass it). After joining it syncs with at least two members, or warns that only one was reachable, before it serves
+`tcp` streams.
+
 ## Close codes
 
 Doriterm's codes, same meanings: 4400 crypto or framing failure; 4401 not admitted (unknown key, revoked member,
 no live invite, refused card); 4402 relay protocol error; 4403 relay auth failed; 4404 node offline or port refused;
-4408 idle, backpressure or handshake timeout; 4409 uplink replaced; 4429 caps. 4410 and 4412 are unused in v1.0.
+4408 idle, backpressure or handshake timeout; 4409 uplink replaced; 4429 caps. 4410 and 4412 are unused. Kind 0x04 uses 4429 for an evicted session without an assertion and 4408 for an assertion
+or card that did not arrive within 10 s.
 
 ## Vectors
 
@@ -252,10 +356,13 @@ keys; the uplink challenge message bytes and signature; mux frames (identity.jso
 the invite token, invite id and join psk; version 1 and 2 invite tokens with rejected v2 relay lists (token.json,
 generated by Go); Noise IK and IKpsk2 transcripts with fixed ephemerals and payloads; a card,
 a record and its hash; and a canonical-order view case (session.json, mesh.json: generated by Go with flynn/noise,
-verified by Go now and by later TS clients).
+verified by Go now and by later TS clients). login.json (generated by TS, verified by Go): the start, poll and forget
+proofs, an assertion body and signature under a fixed login key and its kid, and assertion checks that must fail.
 
 ## Change log
 
 - v1.0 (2026-11-09): first Pen contract, derived from Doriterm transport v1.10.
 - v1.0 (2026-11-09): "Several relays": an uplink per relay, the ping race with fallback, invite token v2, and
   `pen relay serve` parity.
+- v1.1 (2026-11-10): "Accounts": Google sign-in through a login service, session kind 0x04, `account` and `lock` records,
+  and unknown record types stored without effect.
