@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/login"
@@ -75,8 +74,7 @@ func binding(v *mesh.View) (login.Binding, bool) {
 }
 
 // checkAssertion is a member's decision on an account joiner's assertion (contract "Account join").
-func (d *Daemon) checkAssertion(raw json.RawMessage) (mesh.Claim, error) {
-	v := d.view()
+func (d *Daemon) checkAssertion(raw json.RawMessage, v *mesh.View) (mesh.Claim, error) {
 	b, ok := binding(v)
 	if !ok {
 		return mesh.Claim{}, errors.New("this mesh is not bound to a Google account")
@@ -94,7 +92,7 @@ func (d *Daemon) checkAssertion(raw json.RawMessage) (mesh.Claim, error) {
 	if d.pending.isDenied(a.A.SignPub, d.now()) {
 		return mesh.Claim{}, errors.New("a member denied this machine; it may ask again after 24 hours")
 	}
-	return mesh.Claim{SignPub: a.A.SignPub, NoisePub: a.A.NoisePub, Email: a.A.Email, Hash: a.Hash()}, nil
+	return mesh.Claim{SignPub: a.A.SignPub, NoisePub: a.A.NoisePub, Email: a.A.Email, Sub: a.A.Sub, Hash: a.Hash()}, nil
 }
 
 // queueRequest keeps an account join while the mesh is locked.
@@ -104,9 +102,8 @@ func (d *Daemon) queueRequest(card *mesh.Card, c mesh.Claim) (string, error) {
 		return "", err
 	}
 	fp := ident.Fingerprint(noise)
-	v := d.view()
 	p := Pending{ID: fp[:9], Fingerprint: fp, Name: card.C.Name, NodeID: card.C.NodeID, SignPub: card.C.SignPub,
-		Email: c.Email, Sub: v.Account.Sub, Assertion: c.Hash, At: d.now().UnixMilli(), Card: card}
+		Email: c.Email, Sub: c.Sub, Assertion: c.Hash, At: d.now().UnixMilli(), Card: card}
 	if err := d.pending.add(p, d.now()); err != nil {
 		return "", err
 	}
@@ -187,34 +184,37 @@ func (d *Daemon) deny(arg string) (Pending, error) {
 	return p, d.pending.remove(p, true, d.now())
 }
 
-// membersWithoutV11 names the other members that have not announced pen 1.1 in a sync hello.
-func (d *Daemon) membersWithoutV11() []string {
+// requireV11 syncs with every member and refuses unless each announced pen 1.1 in a hello of this
+// round: an announcement lasts only for its session, so a member that came back older counts as
+// older (contract "Mesh records": v1.0 nodes reject account and lock records and would stall).
+func (d *Daemon) requireV11(ctx context.Context, what string) error {
+	d.mu.Lock()
+	since := d.helloSeq
+	d.mu.Unlock()
+	d.pushAll(ctx)
 	v := d.view()
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	var out []string
+	var missing []string
 	for _, m := range v.SortedMembers() {
-		if m.NodeID != d.nodeID && d.versions[m.NoisePub] != mesh.Version {
-			out = append(out, m.Name)
+		if h := d.versions[m.NoisePub]; m.NodeID != d.nodeID && (h.seq <= since || h.pen != mesh.Version) {
+			missing = append(missing, m.Name)
 		}
 	}
-	return out
+	d.mu.Unlock()
+	if len(missing) > 0 {
+		return fmt.Errorf("every member must run pen 1.1 before %s; not confirmed now: %s (offline or older)", what, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
-// bindAccount signs an account record (nil unbinds) and pushes it. A bind waits until every member
-// has announced pen 1.1 (contract "Mesh records").
+// bindAccount signs an account record (nil unbinds) and pushes it, once every member runs pen 1.1.
 func (d *Daemon) bindAccount(ctx context.Context, acct *mesh.Account) ([]PushResult, error) {
 	cur := d.view().Account
 	if acct == nil && cur == nil || acct != nil && cur != nil && *acct == *cur {
 		return nil, nil
 	}
-	if acct != nil {
-		if missing := d.membersWithoutV11(); len(missing) > 0 {
-			d.pushAll(ctx)
-			if missing = d.membersWithoutV11(); len(missing) > 0 {
-				return nil, fmt.Errorf("every member must run pen 1.1 before the mesh is bound to an account; not confirmed: %s (offline or older)", strings.Join(missing, ", "))
-			}
-		}
+	if err := d.requireV11(ctx, "the mesh's account binding changes"); err != nil {
+		return nil, err
 	}
 	if _, err := d.mesh().Append(d.id, mesh.TypeAccount, d.now().UnixMilli(), mesh.Fields{Bind: acct}); err != nil {
 		return nil, err
@@ -223,10 +223,13 @@ func (d *Daemon) bindAccount(ctx context.Context, acct *mesh.Account) ([]PushRes
 	return d.pushAll(ctx), nil
 }
 
-// setLock signs a lock record and pushes it.
+// setLock signs a lock record and pushes it, once every member runs pen 1.1.
 func (d *Daemon) setLock(ctx context.Context, on bool) ([]PushResult, error) {
 	if d.view().Locked == on {
 		return nil, nil
+	}
+	if err := d.requireV11(ctx, "lock mode changes"); err != nil {
+		return nil, err
 	}
 	if _, err := d.mesh().Append(d.id, mesh.TypeLock, d.now().UnixMilli(), mesh.Fields{On: on}); err != nil {
 		return nil, err
@@ -254,16 +257,13 @@ func (d *Daemon) forgetRevoked(old, v *mesh.View) {
 	if len(gone) == 0 {
 		return
 	}
-	d.spawn(func() {
-		ctx, cancel := context.WithTimeout(d.runCtx, 30*time.Second)
-		defer cancel()
-		c := login.New(b.LoginURL)
-		for _, nodeID := range gone {
-			if err := c.Forget(ctx, d.id, nodeID, d.now()); err != nil {
-				d.opt.Logf("login forget %s: %v", nodeID, err)
-			}
-		}
-	})
+	var fs []PendingForget
+	for _, nodeID := range gone {
+		fs = append(fs, PendingForget{NodeID: nodeID, LoginURL: b.LoginURL})
+	}
+	if err := d.forgets.add(fs); err != nil {
+		d.opt.Logf("forgets.json: %v", err)
+	}
 }
 
 // ErrNoMemberOnline means none of the offered members answered.
@@ -362,6 +362,12 @@ func SyncApproved(ctx context.Context, relays []string, id *ident.Identity, memb
 // SyncWith syncs s with every other member it lists (kind 0x01 mesh) and reports how many of the
 // others took part (contract "Account join": a joiner syncs before it serves tcp streams).
 func SyncWith(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store) (taken, others int) {
+	taken, _, others = syncWith(ctx, relays, id, s)
+	return taken, others
+}
+
+// syncWith also counts the members that refused this node (4401).
+func syncWith(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store) (taken, refused, others int) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, m := range s.View().SortedMembers() {
@@ -381,17 +387,35 @@ func SyncWith(ctx context.Context, relays []string, id *ident.Identity, s *mesh.
 			sec, err := OpenAny(pctx, relays, m.NodeID, func(conn relay.Conn) (*session.Secure, error) {
 				return session.Initiate(pctx, conn, session.KindSession, m.NodeID, noise, id, nil, session.Payload{V: 1, Stream: "mesh"})
 			})
-			if err != nil {
-				return
+			if err == nil {
+				defer sec.Close(wire.CodeNormal)
+				err = mesh.SyncInitiate(pctx, sec, s, nil, nil)
 			}
-			defer sec.Close(wire.CodeNormal)
-			if mesh.SyncInitiate(pctx, sec, s, nil, nil) == nil {
-				mu.Lock()
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
 				taken++
-				mu.Unlock()
+			case relay.CodeOf(err) == wire.CodeNotAdmitted:
+				refused++
 			}
 		}()
 	}
 	wg.Wait()
-	return taken, others
+	return taken, refused, others
+}
+
+// FinishJoin syncs a freshly joined set with every reachable member, as a joiner must before it
+// serves tcp streams, and reports how many took part. It fails when a member refuses this node
+// (4401: it holds a revoke the admitting member had not heard of) or the synced view no longer
+// makes it a member.
+func FinishJoin(ctx context.Context, relays []string, id *ident.Identity, s *mesh.Store) (taken, others int, err error) {
+	taken, refused, others := syncWith(ctx, relays, id, s)
+	if refused > 0 {
+		return taken, others, fmt.Errorf("%d member(s) refuse this machine (revoked, or they have not heard of its admission yet); nothing was changed here, run pen login again later", refused)
+	}
+	if _, ok := s.View().Members[ident.B64.EncodeToString(id.SignPub)]; !ok {
+		return taken, others, errors.New("after syncing with the other members this machine is not a member (revoked); nothing was changed here")
+	}
+	return taken, others, nil
 }

@@ -103,18 +103,21 @@ func TestRegistryKeepsTheFirstMeshAndRefusesAnother(t *testing.T) {
 	a, b := newID(t), newID(t)
 	ta, tb := signIn(t, s, a, "a"), signIn(t, s, b, "b")
 	c := client(s)
-	if err := c.Register(ctx, ta.Assertion, "mesh-one"); err != nil {
+	if err := c.Register(ctx, a, ta.Assertion, "mesh-one"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Register(ctx, tb.Assertion, "mesh-two"); !errors.Is(err, login.ErrOtherMesh) {
+	if err := c.Register(ctx, a, tb.Assertion, "mesh-one"); err == nil {
+		t.Fatal("a node registered with another node's assertion")
+	}
+	if err := c.Register(ctx, b, tb.Assertion, "mesh-two"); !errors.Is(err, login.ErrOtherMesh) {
 		t.Fatalf("another mesh: %v, want 409", err)
 	}
-	if err := c.Register(ctx, tb.Assertion, "mesh-one"); err != nil {
+	if err := c.Register(ctx, b, tb.Assertion, "mesh-one"); err != nil {
 		t.Fatal(err)
 	}
 	// An assertion registers at most once, even after a reset.
 	s.Reset(alice.Sub)
-	if err := c.Register(ctx, ta.Assertion, "mesh-three"); err == nil {
+	if err := c.Register(ctx, a, ta.Assertion, "mesh-three"); err == nil {
 		t.Fatal("a used assertion registered again after a reset")
 	}
 }
@@ -125,7 +128,7 @@ func TestForgetBySameAccountNodeRemovesAndOutsiderIsRefused(t *testing.T) {
 	a, b, outsider := newID(t), newID(t), newID(t)
 	c := client(s)
 	for _, x := range []*ident.Identity{a, b} {
-		if err := c.Register(ctx, signIn(t, s, x, "n").Assertion, "m"); err != nil {
+		if err := c.Register(ctx, x, signIn(t, s, x, "n").Assertion, "m"); err != nil {
 			t.Fatal(err)
 		}
 	}

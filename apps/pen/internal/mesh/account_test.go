@@ -177,3 +177,47 @@ func TestAnAccountAdmitNamesAtMostEightHeadsKeepingTheSignersOwn(t *testing.T) {
 		t.Fatalf("admit n %d, member %v; the signer's own chain must stay in its past", got.admit.B.N, isMember(s.View(), x))
 	}
 }
+
+func TestUnknownMembersInsideACardOrLoginKeyAreIgnored(t *testing.T) {
+	a, x := detID(1), detID(2)
+	b, found := newMesh(t, a)
+	// x's card body and its wrapper carry a member this version does not know.
+	cardBody, _ := json.Marshal(map[string]any{"v": 1, "mesh": b.meshID, "inviter": a.NodeID(), "nonce": b.nextNonce(),
+		"nodeId": x.NodeID(), "signPub": pub(x), "noisePub": ident.B64.EncodeToString(x.NoisePub), "name": "x", "color": "blue"})
+	cardSig := ed25519.Sign(x.SignPriv, digest(cardPrefix, cardBody))
+	card := map[string]any{"body": ident.B64.EncodeToString(cardBody), "sig": ident.B64.EncodeToString(cardSig), "hint": 1}
+	admit := rawRecord(t, signer{a.SignPriv}, map[string]any{"v": 1, "mesh": b.meshID, "type": "admit", "by": pub(a),
+		"n": 2, "prev": []string{found.Hash}, "at": 2, "card": card})
+	key := map[string]any{"kid": login.Kid(a.NoisePub), "pub": ident.B64.EncodeToString(a.NoisePub), "alg": "ed25519"}
+	bind := rawRecord(t, signer{a.SignPriv}, map[string]any{"v": 1, "mesh": b.meshID, "type": "account", "by": pub(a),
+		"n": 3, "prev": []string{HashOf(admit.Body)}, "at": 3, "loginUrl": "https://login.example", "loginKey": key, "sub": "1001"})
+	s := NewStore(nil, b.meshID)
+	added, err := s.Merge([]*Record{found, admit, bind})
+	if err != nil || len(added) != 3 {
+		t.Fatalf("stored %d of 3 (%v); unknown nested members must not drop a record", len(added), err)
+	}
+	v := s.View()
+	if !isMember(v, x) || v.Account == nil || v.Account.Sub != "1001" {
+		t.Fatalf("member %v, account %+v; the records must take effect as without the extra members", isMember(v, x), v.Account)
+	}
+}
+
+func TestASignerRevokedOnlyAsAnAdmitOfACompromisedKeyLosesItsBindingAndLock(t *testing.T) {
+	a, c, d := detID(1), detID(2), detID(3)
+	b, found := newMesh(t, a)
+	ac := b.admit(a, c, found)
+	cd := b.admit(c, d, ac)
+	bind := b.bind(d, "1001", cd)
+	lock := b.lock(d, true, bind)
+	if v := b.view(); sub(v) != "1001" || !v.Locked {
+		t.Fatalf("before: sub %q locked %v", sub(v), v.Locked)
+	}
+	b.sign(a, TypeRevoke, []*Record{lock}, Fields{Subjects: []string{pub(c)}, Compromised: true})
+	v := b.view()
+	if isMember(v, d) {
+		t.Fatal("d, admitted by the compromised c, is still a member")
+	}
+	if v.Account != nil || v.Locked {
+		t.Fatalf("d's account %+v and lock %v kept effect after c was revoked as compromised", v.Account, v.Locked)
+	}
+}

@@ -51,8 +51,13 @@ func (s *Store) take(m *Msg, onMerged Merged) error {
 // SyncInitiate runs the dialing side of a mesh session. It returns once the peer's done arrived,
 // which the responder sends only after it stored everything this side sent (the push was taken).
 func SyncInitiate(ctx context.Context, l Link, s *Store, onMerged Merged, onHello Hello) error {
+	return SyncInitiateAs(ctx, l, s, onMerged, onHello, Version)
+}
+
+// SyncInitiateAs is SyncInitiate announcing pen in its hello ("" announces none, as v1.0 does).
+func SyncInitiateAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHello Hello, pen string) error {
 	c := &Lines{L: l}
-	if err := c.Write(Msg{T: "hello", Pen: Version, Have: s.hashes()}); err != nil {
+	if err := c.Write(Msg{T: "hello", Pen: pen, Have: s.hashes()}); err != nil {
 		return err
 	}
 	sentDone := false
@@ -94,8 +99,13 @@ func SyncInitiate(ctx context.Context, l Link, s *Store, onMerged Merged, onHell
 // SyncRespond runs the accepting side. It sends its done only after the initiator's done, so the
 // initiator learns its records were stored. The caller closes the link afterwards.
 func SyncRespond(ctx context.Context, l Link, s *Store, onMerged Merged, onHello Hello) error {
+	return SyncRespondAs(ctx, l, s, onMerged, onHello, Version)
+}
+
+// SyncRespondAs is SyncRespond announcing pen in its hello.
+func SyncRespondAs(ctx context.Context, l Link, s *Store, onMerged Merged, onHello Hello, pen string) error {
 	c := &Lines{L: l}
-	if err := c.Write(Msg{T: "hello", Pen: Version, Have: s.hashes()}); err != nil {
+	if err := c.Write(Msg{T: "hello", Pen: pen, Have: s.hashes()}); err != nil {
 		return err
 	}
 	gotHello := false

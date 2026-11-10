@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -313,11 +314,11 @@ func TestRevokingARegisteredMemberForgetsItAtTheLoginService(t *testing.T) {
 		t.Fatal(err)
 	}
 	cl := login.New(f.URL)
-	if err := cl.Register(ctx, as, out.MeshID); err != nil {
+	if err := cl.Register(ctx, b, as, out.MeshID); err != nil {
 		t.Fatal(err)
 	}
 	// The founder registered when it bound the mesh; only a node under the account may forget another.
-	if err := cl.Register(ctx, f.Issue(testSub, "me@example.com", a.id.SignPub, a.id.NoisePub, time.Now()), out.MeshID); err != nil {
+	if err := cl.Register(ctx, a.id, f.Issue(testSub, "me@example.com", a.id.SignPub, a.id.NoisePub, time.Now()), out.MeshID); err != nil {
 		t.Fatal(err)
 	}
 	var r map[string]any
@@ -345,7 +346,7 @@ func TestALeavingMemberForgetsItselfAtTheLoginService(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Only b is registered, so only b's own forget can succeed.
-	if err := login.New(f.URL).Register(ctx, as, out.MeshID); err != nil {
+	if err := login.New(f.URL).Register(ctx, bid, as, out.MeshID); err != nil {
 		t.Fatal(err)
 	}
 	s, err := mesh.CheckJoined(st, bid, out.MeshID, out.Records)
@@ -360,5 +361,234 @@ func TestALeavingMemberForgetsItselfAtTheLoginService(t *testing.T) {
 	}
 	if got := <-f.Forgotten(); got != bid.NodeID() {
 		t.Fatalf("forgot %s, want the leaving node %s", got, bid.NodeID())
+	}
+}
+
+func TestLockWaitsUntilEveryMemberAnnouncesPen11(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	st := shortDir(t)
+	tok := a.invite(t, time.Minute)
+	id := identity(t, st, tok.Relays[0], "old")
+	s, err := Join(ctx, st, id, tok, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Save()
+	startWith(t, ctx, rs, st, func(o *Options) { o.Announce = "-" }) // a v1.0 node
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "lock", On: true}, &r); err == nil || !strings.Contains(err.Error(), "old") {
+		t.Fatalf("lock with a v1.0 member: %v, want a refusal naming old", err)
+	}
+	if a.ls(t).Locked {
+		t.Fatal("a lock record was signed while a member runs v1.0")
+	}
+}
+
+func TestAVersionAnnouncedInAnEarlierSyncDoesNotCountAfterTheMemberDowngrades(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "lock", On: true}, &r); err != nil {
+		t.Fatalf("lock with every member on 1.1: %v", err)
+	}
+	if err := Call(a.st, Request{Op: "lock", On: false}, &r); err != nil {
+		t.Fatal(err)
+	}
+	b.d.Stop()
+	if err := <-b.done; err != nil {
+		t.Fatal(err)
+	}
+	b.done <- nil
+	startWith(t, ctx, rs, b.st, func(o *Options) { o.Announce = "-" })
+	if err := Call(a.st, Request{Op: "lock", On: true}, &r); err == nil || !strings.Contains(err.Error(), "b") {
+		t.Fatalf("lock after b came back as v1.0: %v, want a refusal naming b", err)
+	}
+}
+
+// toOffer plays an account joiner up to the member's offer; the caller sends the card when it chooses.
+func toOffer(t *testing.T, ctx context.Context, rs *relaytest.Server, to *node, id *ident.Identity, as *login.Assertion) (*mesh.Lines, *mesh.Msg) {
+	t.Helper()
+	sec, err := OpenAny(ctx, []string{rs.URL}, to.id.NodeID(), func(conn relay.Conn) (*session.Secure, error) {
+		return session.Initiate(ctx, conn, session.KindAccount, to.id.NodeID(), to.id.NoisePub, id, nil, session.Payload{V: 1, Stream: "account", Name: "j"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &mesh.Lines{L: sec}
+	raw, _ := json.Marshal(as)
+	if err := c.Write(mesh.Msg{T: "assertion", Assertion: raw}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := c.Read(ctx)
+	if err != nil || m.T != "offer" {
+		t.Fatalf("got %+v %v, want an offer", m, err)
+	}
+	return c, m
+}
+
+func sendCard(t *testing.T, ctx context.Context, c *mesh.Lines, id *ident.Identity, offer *mesh.Msg) *mesh.Msg {
+	t.Helper()
+	card, err := mesh.MakeCard(id, offer.Mesh, offer.Inviter, offer.Nonce, "j")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Write(mesh.Msg{T: "card", Card: card}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := c.Read(ctx)
+	if err != nil {
+		t.Fatalf("after the card: %v", err)
+	}
+	return m
+}
+
+func TestAnUnbindDuringTheCardWaitRefusesTheJoinerWithoutACrash(t *testing.T) {
+	for _, locked := range []bool{true, false} {
+		ctx, cancel := context.WithCancel(context.Background())
+		rs := relaytest.New()
+		f := loginFake(t)
+		a := founder(t, ctx, rs, "a", nil)
+		bindTo(t, a, f, f.Key())
+		var r map[string]any
+		if locked {
+			Call(a.st, Request{Op: "lock", On: true}, &r)
+		}
+		j := newcomer(t)
+		c, offer := toOffer(t, ctx, rs, a, j, f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now()))
+		if err := Call(a.st, Request{Op: "account-unbind"}, &r); err != nil {
+			t.Fatal(err)
+		}
+		if m := sendCard(t, ctx, c, j, offer); m.T != "refused" {
+			t.Fatalf("locked %v: after an unbind the card got %q, want refused", locked, m.T)
+		}
+		if n := len(a.ls(t).Members); n != 1 {
+			t.Fatalf("locked %v: %d members", locked, n)
+		}
+		cancel()
+		rs.Close()
+	}
+}
+
+func TestARebindToAnotherAccountDuringTheCardWaitRefusesTheJoiner(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	j := newcomer(t)
+	c, offer := toOffer(t, ctx, rs, a, j, f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now()))
+	var r map[string]any
+	other := &mesh.Account{LoginURL: f.URL, LoginKey: mesh.LoginKey(f.Key()), Sub: "2002"}
+	if err := Call(a.st, Request{Op: "login-bind", Account: other}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if m := sendCard(t, ctx, c, j, offer); m.T != "refused" || !strings.Contains(m.Reason, "another Google account") {
+		t.Fatalf("after a rebind to another account the card got %+v, want refused", m)
+	}
+}
+
+func TestAForgetTheServiceDidNotAnswerIsKeptAndSentAfterARestart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	b := newcomer(t)
+	as := f.Issue(testSub, "me@example.com", b.SignPub, b.NoisePub, time.Now())
+	out, _, err := AccountJoin(ctx, []string{rs.URL}, b, "b", as, offeredBy(t, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := login.New(f.URL)
+	for _, x := range []*ident.Identity{a.id, b} {
+		if err := cl.Register(ctx, x, f.Issue(testSub, "me@example.com", x.SignPub, x.NoisePub, time.Now()), out.MeshID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.ForgetDown.Store(true)
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(b.SignPub)}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-f.ForgetAttempts(); code != 503 {
+		t.Fatalf("attempt answered %d", code)
+	}
+	var saved []PendingForget
+	if ok, err := a.st.ReadJSON(ForgetsFile, &saved); err != nil || !ok || len(saved) != 1 || saved[0].NodeID != b.NodeID() {
+		t.Fatalf("pending forgets %+v (%v %v), want b kept for a retry", saved, ok, err)
+	}
+	a.d.Stop()
+	if err := <-a.done; err != nil {
+		t.Fatal(err)
+	}
+	a.done <- nil
+	f.ForgetDown.Store(false)
+	a2 := start(t, ctx, rs, a.st, nil)
+	if got := <-f.Forgotten(); got != b.NodeID() {
+		t.Fatalf("forgot %s, want b", got)
+	}
+	_ = a2
+}
+
+func TestAJoinerRevokedElsewhereLearnsItWhenItSyncsAfterJoining(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	bindTo(t, a, f, f.Key())
+	j := newcomer(t)
+	as := f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now())
+	out, _, err := AccountJoin(ctx, []string{rs.URL}, j, "j", as, offeredBy(t, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := mesh.CheckJoined(nil, j, out.MeshID, out.Records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// b heard of j's admit from a and revokes it; the joiner holds only a's set.
+	var r map[string]any
+	if err := Call(b.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(j.SignPub)}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := FinishJoin(ctx, []string{rs.URL}, j, s); err == nil {
+		t.Fatal("the joiner went on although a member it synced with had revoked it")
+	}
+}
+
+func TestWithFourAssertedAccountSessionsAFifthIsRefused4429(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	// Each of the four sends a valid assertion and holds the member waiting for its card.
+	for range MaxAccountSessions {
+		j := newcomer(t)
+		toOffer(t, ctx, rs, a, j, f.Issue(testSub, "me@example.com", j.SignPub, j.NoisePub, time.Now()))
+	}
+	j := newcomer(t)
+	_, err := OpenAny(ctx, []string{rs.URL}, a.id.NodeID(), func(conn relay.Conn) (*session.Secure, error) {
+		return session.Initiate(ctx, conn, session.KindAccount, a.id.NodeID(), a.id.NoisePub, j, nil, session.Payload{V: 1, Stream: "account", Name: "j"})
+	})
+	if relay.CodeOf(err) != wire.CodeCaps {
+		t.Fatalf("fifth session: %v, want 4429", err)
 	}
 }

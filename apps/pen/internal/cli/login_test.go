@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
+	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/login"
 	"github.com/goat-si/goat/apps/pen/internal/logintest"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
@@ -141,5 +142,198 @@ func TestLoginFoundsAndBindsThenAMachineJoinsAndALockedMeshQueuesUntilApproved(t
 	}
 	if _, nodes := f.Registry("1001"); len(nodes) != 3 {
 		t.Fatalf("registry lists %d nodes, want 3", len(nodes))
+	}
+}
+
+func TestASlowApprovalLeavesAMemberWhoseRegistrationWaitsForTheNextLogin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := logintest.New()
+	f.MinPoll = 0
+	f.AutoApprove = &login.Account{Sub: "1001", Email: "me@example.com"}
+	f.Start()
+	defer f.Close()
+	tick := loginSeams(t, ctx, rs)
+	flags := func(name string) []string {
+		return []string{"--login-url", f.URL, "--relay", rs.URL, "--name", name, "--yes", "--no-service"}
+	}
+	a := tmpStore(t)
+	t.Setenv("PEN_HOME", a.Dir)
+	var out, errOut strings.Builder
+	if code := RunLogin(flags("a"), &out, &errOut); code != 0 {
+		t.Fatalf("first login: %s", errOut.String())
+	}
+	var lr map[string]any
+	if err := daemon.Call(a, daemon.Request{Op: "lock", On: true}, &lr); err != nil {
+		t.Fatal(err)
+	}
+	c := tmpStore(t)
+	t.Setenv("PEN_HOME", c.Dir)
+	pr, pw := io.Pipe()
+	done := make(chan int, 1)
+	var cOut, cErr strings.Builder
+	go func() { done <- RunLogin(flags("c"), pw, &cErr); pw.Close() }()
+	fp := ""
+	sc := bufio.NewScanner(pr)
+	for sc.Scan() {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "this machine's fingerprint: "); ok {
+			fp = v
+			break
+		}
+	}
+	rest := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		for sc.Scan() {
+			b.WriteString(sc.Text() + "\n")
+		}
+		rest <- b.String()
+	}()
+	var ar daemon.ApproveResult
+	if err := daemon.Call(a, daemon.Request{Op: "approve", Subject: fp}, &ar); err != nil {
+		t.Fatal(err)
+	}
+	// The approval came after the 10-minute assertion expired.
+	later := time.Now().Add(time.Hour)
+	f.SetNow(func() time.Time { return later })
+	oldNow := nowFn
+	nowFn = func() time.Time { return later }
+	defer func() { nowFn = oldNow }()
+	tick <- time.Time{}
+	if code := <-done; code != 0 {
+		t.Fatalf("slow-approved login: exit %d: %s", code, cErr.String())
+	}
+	pw.Close()
+	cOut.WriteString(<-rest)
+	if memberCount(t, c) != 2 {
+		t.Fatal("c is not a member")
+	}
+	if !strings.Contains(cOut.String()+cErr.String(), "registration waits for the next pen login") {
+		t.Fatalf("output:\n%s%s", cOut.String(), cErr.String())
+	}
+	var ls loginState
+	if ok, _ := c.ReadJSON(loginFile, &ls); !ok || ls.Email != "me@example.com" {
+		t.Fatalf("login.json %+v (%v)", ls, ok)
+	}
+	if _, nodes := f.Registry("1001"); len(nodes) != 1 {
+		t.Fatalf("registry lists %d nodes, want only a", len(nodes))
+	}
+}
+
+func lsOf(t *testing.T, st *state.Store) daemon.LsReply {
+	t.Helper()
+	var ls daemon.LsReply
+	if err := daemon.Call(st, daemon.Request{Op: "ls"}, &ls); err != nil {
+		t.Fatal(err)
+	}
+	return ls
+}
+
+func TestLoginOnAMemberBindsAgainAfterAnUnbindOrAKeyRotation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := logintest.New()
+	f.MinPoll = 0
+	f.AutoApprove = &login.Account{Sub: "1001", Email: "me@example.com"}
+	f.Start()
+	defer f.Close()
+	loginSeams(t, ctx, rs)
+	args := []string{"--login-url", f.URL, "--relay", rs.URL, "--name", "a", "--yes", "--no-service"}
+	a := tmpStore(t)
+	t.Setenv("PEN_HOME", a.Dir)
+	var out, errOut strings.Builder
+	if code := RunLogin(args, &out, &errOut); code != 0 {
+		t.Fatalf("first login: %s", errOut.String())
+	}
+	if code := RunAccount([]string{"unbind"}, &out, &errOut); code != 0 || lsOf(t, a).Account != nil {
+		t.Fatalf("unbind: exit %d %s", code, errOut.String())
+	}
+	out.Reset()
+	if code := RunLogin(args, &out, &errOut); code != 0 {
+		t.Fatalf("login after unbind: %s", errOut.String())
+	}
+	if acct := lsOf(t, a).Account; acct == nil || acct.Sub != "1001" {
+		t.Fatalf("after pen login on the unbound member: account %+v; output:\n%s", acct, out.String())
+	}
+	rotated := f.Rotate()
+	out.Reset()
+	if code := RunLogin(args, &out, &errOut); code != 0 {
+		t.Fatalf("login after rotation: %s", errOut.String())
+	}
+	if acct := lsOf(t, a).Account; acct == nil || acct.LoginKey.Kid != rotated.Kid {
+		t.Fatalf("after a key rotation: account %+v, want key %s", acct, rotated.Kid)
+	}
+}
+
+func TestApproveTakesOnlyARequestIDOrAFullFingerprint(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := logintest.New()
+	f.MinPoll = 0
+	f.AutoApprove = &login.Account{Sub: "1001", Email: "me@example.com"}
+	f.Start()
+	defer f.Close()
+	loginSeams(t, ctx, rs)
+	a := tmpStore(t)
+	t.Setenv("PEN_HOME", a.Dir)
+	var out, errOut strings.Builder
+	if code := RunLogin([]string{"--login-url", f.URL, "--relay", rs.URL, "--name", "a", "--yes", "--no-service"}, &out, &errOut); code != 0 {
+		t.Fatalf("login: %s", errOut.String())
+	}
+	var lr map[string]any
+	daemon.Call(a, daemon.Request{Op: "lock", On: true}, &lr)
+	j, _ := ident.Generate(nil)
+	ls := lsOf(t, a)
+	var members []login.OfferedMember
+	for _, m := range ls.Members {
+		members = append(members, login.OfferedMember{NodeID: m.NodeID, SignPub: m.SignPub, NoisePub: m.NoisePub, Name: m.Name})
+	}
+	as := f.Issue("1001", "me@example.com", j.SignPub, j.NoisePub, time.Now())
+	if _, _, err := daemon.AccountJoin(ctx, []string{rs.URL}, j, "j", as, members); err != nil {
+		t.Fatal(err)
+	}
+	fp := ident.Fingerprint(j.NoisePub)
+	out.Reset()
+	errOut.Reset()
+	if code := RunApprove([]string{fp[:6]}, &out, &errOut); code == 0 || strings.Contains(out.String(), "request") || !strings.Contains(errOut.String(), "8 or 40") {
+		t.Fatalf("a 5-character prefix: exit %d\n%s%s", code, out.String(), errOut.String())
+	}
+}
+
+func TestLoginWhenEveryMachineOfTheAccountLoggedOutSaysHowToGoOn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := logintest.New()
+	f.MinPoll = 0
+	f.AutoApprove = &login.Account{Sub: "1001", Email: "me@example.com"}
+	f.Start()
+	defer f.Close()
+	loginSeams(t, ctx, rs)
+	flags := func(name string) []string {
+		return []string{"--login-url", f.URL, "--relay", rs.URL, "--name", name, "--yes", "--no-service"}
+	}
+	a := tmpStore(t)
+	t.Setenv("PEN_HOME", a.Dir)
+	var out, errOut strings.Builder
+	if code := RunLogin(flags("a"), &out, &errOut); code != 0 {
+		t.Fatalf("login: %s", errOut.String())
+	}
+	if code := RunLogout(nil, &out, &errOut); code != 0 {
+		t.Fatalf("logout: %s", errOut.String())
+	}
+	b := tmpStore(t)
+	t.Setenv("PEN_HOME", b.Dir)
+	out.Reset()
+	errOut.Reset()
+	if code := RunLogin(flags("b"), &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "reset") {
+		t.Fatalf("login with every machine logged out: exit %d\n%s%s", code, out.String(), errOut.String())
 	}
 }

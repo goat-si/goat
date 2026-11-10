@@ -22,6 +22,8 @@ type Claim struct {
 	SignPub  string
 	NoisePub string
 	Email    string
+	// Sub is the assertion's Google account.
+	Sub string
 	// Hash is base64url SHA-256 of the assertion body.
 	Hash string
 }
@@ -35,8 +37,8 @@ type AccountAdmission struct {
 	Wait time.Duration
 	// Asserted runs once the assertion arrived.
 	Asserted func()
-	// Check decides on the assertion; an error is the refusal reason.
-	Check func(raw json.RawMessage) (Claim, error)
+	// Check decides on the assertion against view v; an error is the refusal reason.
+	Check func(raw json.RawMessage, v *View) (Claim, error)
 	// Queue keeps a request while the mesh is locked and returns its id.
 	Queue func(card *Card, c Claim) (string, error)
 	// OnAdmit is called with the admit record after it is stored.
@@ -78,7 +80,8 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 	if a.Asserted != nil {
 		a.Asserted()
 	}
-	claim, err := a.Check(m.Assertion)
+	assertion := m.Assertion
+	claim, err := a.Check(assertion, a.Store.View())
 	if err != nil {
 		return AccountResult{}, refuse(c, err.Error())
 	}
@@ -109,7 +112,11 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 	if cb.SignPub != claim.SignPub || cb.NoisePub != claim.NoisePub {
 		return AccountResult{}, refuse(c, "the card's keys are not the assertion's")
 	}
+	// The binding may have changed while the card was on its way: decide on one view taken now.
 	v := a.Store.View()
+	if claim, err = a.Check(assertion, v); err != nil {
+		return AccountResult{}, refuse(c, err.Error())
+	}
 	if _, gone := v.Revoked[cb.SignPub]; gone {
 		return AccountResult{}, refuse(c, "this key was revoked")
 	}

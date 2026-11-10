@@ -40,6 +40,7 @@ var (
 	}
 	newLoginClient = login.New
 	retryAfter     = time.After
+	nowFn          = time.Now
 )
 
 // loginState is login.json: the account this node last signed in with.
@@ -177,6 +178,9 @@ func (l *loginRun) run(ctx context.Context) error {
 			if err := startDaemon(l.st, l.noService, l.stderr); err != nil {
 				return err
 			}
+			if err := l.bindAgain(ctx, cur.MeshID); err != nil {
+				return err
+			}
 			return l.register(ctx, cur.MeshID)
 		}
 	}
@@ -187,11 +191,55 @@ func (l *loginRun) run(ctx context.Context) error {
 	return l.join(ctx)
 }
 
+// account is the binding this sign-in vouches for.
+func (l *loginRun) account() mesh.Account {
+	return mesh.Account{LoginURL: l.lc.URL, LoginKey: mesh.LoginKey(l.tok.LoginKey), Sub: l.tok.Account.Sub}
+}
+
+// bindAgain offers to bind a member's mesh again when it is unbound, bound to an older login key or
+// bound to another account (contract "Account join": the way back after an unbind or a rotation).
+func (l *loginRun) bindAgain(ctx context.Context, meshID string) error {
+	var ls daemon.LsReply
+	if err := daemon.Call(l.st, daemon.Request{Op: "ls"}, &ls); err != nil {
+		return err
+	}
+	want := l.account()
+	var q string
+	switch cur := ls.Account; {
+	case cur != nil && *cur == want:
+		return nil
+	case cur == nil:
+		q = fmt.Sprintf("Mesh %s is not bound to a Google account. Bind it to %s again?", meshID, l.tok.Account.Email)
+	case cur.Sub == want.Sub:
+		q = fmt.Sprintf("Mesh %s is bound to an older login key (%s). Bind it to the service's current key %s?", meshID, cur.LoginKey.Kid, want.LoginKey.Kid)
+	default:
+		q = fmt.Sprintf("Mesh %s is bound to another Google account (sub %s). Bind it to %s instead?", meshID, cur.Sub, l.tok.Account.Email)
+	}
+	if !confirm(l.stdout, l.yes, q) {
+		fmt.Fprintln(l.stdout, "the mesh's binding is unchanged")
+		return nil
+	}
+	acct := want
+	var r map[string]any
+	if err := daemon.Call(l.st, daemon.Request{Op: "login-bind", Account: &acct}, &r); err != nil {
+		return err
+	}
+	fmt.Fprintf(l.stdout, "mesh %s is bound to %s again\n", meshID, l.tok.Account.Email)
+	return nil
+}
+
 // foundAndBind binds this node's mesh (founding one if there is none) to the account.
 func (l *loginRun) foundAndBind(ctx context.Context, cur *mesh.Store) error {
 	q := fmt.Sprintf("No mesh is registered for %s. Found a mesh with this machine and bind it to %s?", l.tok.Account.Email, l.tok.Account.Email)
-	if cur != nil && len(cur.View().Members) > 1 {
-		q = fmt.Sprintf("No mesh is registered for %s. Bind this machine's mesh %s (%d members) to %s?", l.tok.Account.Email, cur.MeshID, len(cur.View().Members), l.tok.Account.Email)
+	if cur != nil {
+		v := cur.View()
+		if n := len(v.Members); n > 1 {
+			fmt.Fprintf(l.stdout, "warning: mesh %s has %d other members; binding it lets every machine that signs in as %s join them\n", cur.MeshID, n-1, l.tok.Account.Email)
+			q = fmt.Sprintf("No mesh is registered for %s. Bind this machine's mesh %s (%d members) to %s?", l.tok.Account.Email, cur.MeshID, n, l.tok.Account.Email)
+		}
+		if v.Account != nil && v.Account.Sub != l.tok.Account.Sub {
+			fmt.Fprintf(l.stdout, "warning: mesh %s is bound to another Google account (sub %s); binding replaces it\n", cur.MeshID, v.Account.Sub)
+		}
 	}
 	if !confirm(l.stdout, l.yes, q) {
 		return errors.New("nothing changed")
@@ -204,11 +252,11 @@ func (l *loginRun) foundAndBind(ctx context.Context, cur *mesh.Store) error {
 	if err := startDaemon(l.st, l.noService, l.stderr); err != nil {
 		return err
 	}
-	acct := &mesh.Account{LoginURL: l.lc.URL, LoginKey: mesh.LoginKey(l.tok.LoginKey), Sub: l.tok.Account.Sub}
+	acct := l.account()
 	var r struct {
 		Status daemon.Status `json:"status"`
 	}
-	if err := daemon.Call(l.st, daemon.Request{Op: "login-bind", Account: acct}, &r); err != nil {
+	if err := daemon.Call(l.st, daemon.Request{Op: "login-bind", Account: &acct}, &r); err != nil {
 		return err
 	}
 	if err := l.register(ctx, r.Status.MeshID); err != nil {
@@ -219,12 +267,20 @@ func (l *loginRun) foundAndBind(ctx context.Context, cur *mesh.Store) error {
 }
 
 func (l *loginRun) register(ctx context.Context, meshID string) error {
-	if err := l.lc.Register(ctx, l.tok.Assertion, meshID); err != nil {
+	if err := l.lc.Register(ctx, l.id, l.tok.Assertion, meshID); err != nil {
 		if errors.Is(err, login.ErrOtherMesh) {
 			return fmt.Errorf("%w meanwhile; run pen login again", err)
 		}
-		return err
+		// The same node signing in again within a second gets a byte-identical assertion, which
+		// already registered it.
+		if !errors.Is(err, login.ErrAssertionUsed) {
+			return err
+		}
 	}
+	return l.saveLogin(meshID)
+}
+
+func (l *loginRun) saveLogin(meshID string) error {
 	return l.st.WriteJSON(loginFile, loginState{LoginURL: l.lc.URL, Sub: l.tok.Account.Sub, Email: l.tok.Account.Email, MeshID: meshID}, 0o600)
 }
 
@@ -235,6 +291,9 @@ func (l *loginRun) join(ctx context.Context) error {
 	for _, m := range offer.Members {
 		fmt.Fprintf(l.stdout, "  %-20s %s\n", m.Name, fingerprintOf(m.NoisePub))
 	}
+	if len(offer.Members) == 0 {
+		return l.noMembers(offer.MeshID, "lists no machines (every one logged out)")
+	}
 	if !confirm(l.stdout, l.yes, fmt.Sprintf("Join it as %s? Every machine in it gets full access to this one, and this one to them.", l.name)) {
 		return errors.New("nothing changed")
 	}
@@ -243,14 +302,24 @@ func (l *loginRun) join(ctx context.Context) error {
 		return err
 	}
 	self := ident.B64.EncodeToString(l.id.SignPub)
-	taken, others := daemon.SyncWith(ctx, l.relays, l.id, s)
-	if others >= 2 && taken < 2 {
-		fmt.Fprintf(l.stderr, "pen: warning: only %d of %d members were reachable to sync with\n", taken, others)
+	taken, others, err := daemon.FinishJoin(ctx, l.relays, l.id, s)
+	if err != nil {
+		return err
+	}
+	if taken < 2 {
+		fmt.Fprintf(l.stderr, "pen: warning: only %d of %d other members were reachable to sync with; this machine trusts what they told it\n", taken, others)
 	}
 	if err := l.install(s); err != nil {
 		return err
 	}
-	if err := l.register(ctx, s.MeshID); err != nil {
+	if !nowFn().Before(time.Unix(l.tok.Assertion.A.Exp, 0)) {
+		// A slow approval outlived the assertion: this node is a member, but the registry takes only a
+		// live assertion, so the next pen login registers it.
+		if err := l.saveLogin(s.MeshID); err != nil {
+			return err
+		}
+		fmt.Fprintf(l.stdout, "the sign-in expired before the approval, so registration waits for the next pen login\n")
+	} else if err := l.register(ctx, s.MeshID); err != nil {
 		return err
 	}
 	v := s.View()
@@ -269,7 +338,7 @@ func (l *loginRun) joinLoop(ctx context.Context, offer *login.OfferedMesh) (*mes
 		switch {
 		case errors.Is(err, daemon.ErrNoMemberOnline):
 			if time.Now().After(time.Unix(l.tok.Assertion.A.Exp, 0)) {
-				return nil, errors.New("no member came online before the sign-in expired; run pen login again")
+				return nil, l.noMembers(offer.MeshID, "had no machine online before the sign-in expired")
 			}
 			if !said {
 				fmt.Fprintln(l.stdout, "no member online yet, retrying every 5 s")
@@ -373,4 +442,11 @@ func RunLogout(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "signed out of %s; this node stays in mesh %s (pen leave leaves it)\n", ls.Email, ls.MeshID)
 	return 0
+}
+
+// noMembers explains the ways on when the account's mesh has no machine to join through: the
+// registry keeps one mesh per account, so founding another needs the account reset first.
+func (l *loginRun) noMembers(meshID, why string) error {
+	return fmt.Errorf("mesh %s %s. Run pen login on one of its machines to list it again and retry here, "+
+		"or reset the account at %s/device (after a Google sign-in) and run pen login here to found a new mesh", meshID, why, l.lc.URL)
 }
