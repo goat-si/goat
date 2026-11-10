@@ -10,10 +10,10 @@ export type GoatBotReplyPart =
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
 const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const DELIMITER_CELL = /^:?-+:?$/;
-// Lines that open another block, which ends a table. HTML means a tag or <! / <?; an autolink such
-// as <https://…> is inline and stays in its row.
+// Lines that open another block, which ends a table. HTML means GFM's block tags or <! / <?; inline
+// tags and autolinks such as <strong> or <https://…> stay in their row.
 const OTHER_BLOCK =
-  /^ {0,3}(?:>|#{1,6}(?:\s|$)|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|(?:[-*_] *){3,}$|`{3,}|~{3,}|<\/?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)|<[!?])/;
+  /^ {0,3}(?:>|#{1,6}(?:\s|$)|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|(?:[-*_] *){3,}$|`{3,}|~{3,}|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul|pre|script|style|textarea)(?:[\s/>]|$)|<[!?])/i;
 // HTML blocks that run past blank lines, with what ends each.
 const RAW_HTML: ReadonlyArray<readonly [RegExp, RegExp]> = [
   [/^ {0,3}<(?:pre|script|style|textarea)(?:\s|>|$)/i, /<\/(?:pre|script|style|textarea)>/i],
