@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
 )
 
@@ -23,7 +24,13 @@ func TestAMemberWhoseRelayStopsCarryingItIsShownOfflineAfterTheNextSync(t *testi
 	defer cancel()
 	rs := relaytest.New()
 	defer rs.Close()
-	a := founder(t, ctx, rs, "a", nil)
+	ast := shortDir(t)
+	aid := identity(t, ast, rs.URL, "a")
+	if _, err := mesh.Found(ast, aid, "a", 1); err != nil {
+		t.Fatal(err)
+	}
+	// The push's own time runs out here, as a dial to a sleeping machine does after 30 s.
+	a := startWith(t, ctx, rs, ast, func(o *Options) { o.PushTimeout = 300 * time.Millisecond })
 	b := joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
 	a.d.pushAll(ctx)
 	if !onlineIn(a.d.ls(), "b") {
@@ -34,9 +41,7 @@ func TestAMemberWhoseRelayStopsCarryingItIsShownOfflineAfterTheNextSync(t *testi
 	release := rs.HoldForwarding()
 	defer release()
 	m, _ := a.d.view().MemberByNoise(b.id.NoisePub)
-	pctx, pcancel := context.WithTimeout(ctx, 300*time.Millisecond)
-	defer pcancel()
-	if res := a.d.push(pctx, m); res == "ok" {
+	if res := a.d.push(ctx, m); res == "ok" {
 		t.Fatalf("push through a held relay answered %q", res)
 	}
 	if onlineIn(a.d.ls(), "b") {

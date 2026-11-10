@@ -30,6 +30,9 @@ type Options struct {
 	KnownHosts string
 	// SyncEvery is the periodic push interval (10 minutes).
 	SyncEvery time.Duration
+	// PushTimeout bounds one push to a member (30 s); a push that runs out of it marks the member
+	// offline.
+	PushTimeout time.Duration
 	// HostKeysEvery is the host key check interval (1 hour).
 	HostKeysEvery time.Duration
 	// SSHUser is the login name published in hostkeys records; "" reads it from os/user, "none"

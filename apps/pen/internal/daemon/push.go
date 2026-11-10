@@ -55,7 +55,11 @@ func (d *Daemon) pushTo(ctx context.Context, members []mesh.Member) []PushResult
 
 func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
 	caller := ctx
-	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
+	limit := pushTimeout
+	if d.opt.PushTimeout > 0 {
+		limit = d.opt.PushTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	noise, err := ident.DecodeKey(m.NoisePub)
 	if err != nil {
