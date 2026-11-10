@@ -327,17 +327,23 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 			return nil, refuse(c, "already a member")
 		}
 	}
-	// Before the invite is burned: an inviter that is no longer a member keeps it unused.
-	if !IsMember(a.Store, a.ID) {
-		return nil, refuseNotMember(c)
-	}
 	now := a.Now()
-	if err := a.Invites.Burn(a.InviteID, now); err != nil {
+	// The membership check, the burn and the signature hold the store's lock together: an
+	// inviter that is no longer a member keeps the invite unused.
+	errBurn := errors.New("burn")
+	admit, err := a.Store.AppendAsMember(a.ID, TypeAdmit, now.UnixMilli(), Fields{Card: m.Card}, func() error {
+		if err := a.Invites.Burn(a.InviteID, now); err != nil {
+			return errBurn
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, ErrNotMember):
+		return nil, refuseNotMember(c)
+	case errors.Is(err, errBurn):
 		l.Close(wire.CodeNotAdmitted)
 		return nil, &relay.CloseError{Code: wire.CodeNotAdmitted}
-	}
-	admit, err := a.Store.Append(a.ID, TypeAdmit, now.UnixMilli(), Fields{Card: m.Card})
-	if err != nil {
+	case err != nil:
 		return nil, refuse(c, "could not sign the admit")
 	}
 	member, ok := a.Store.View().Members[cb.SignPub]

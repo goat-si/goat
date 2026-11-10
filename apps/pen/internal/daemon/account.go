@@ -183,10 +183,10 @@ func (d *Daemon) approve(ctx context.Context, arg string) (ApproveResult, error)
 	if _, gone := v.Revoked[p.SignPub]; gone {
 		return ApproveResult{}, errors.New("this key was revoked")
 	}
-	if !mesh.IsMember(d.mesh(), d.id) {
+	m, err := mesh.AdmitAccount(d.id, d.mesh(), p.Card, mesh.Claim{SignPub: p.SignPub, NoisePub: p.Card.C.NoisePub, Email: p.Email, Hash: p.Assertion}, d.now())
+	if errors.Is(err, mesh.ErrNotMember) {
 		return ApproveResult{}, errors.New("this machine is not a member of the mesh, so its approval would not count; approve on a current member (pen ls there shows the request once the joiner asks it)")
 	}
-	m, err := mesh.AdmitAccount(d.id, d.mesh(), p.Card, mesh.Claim{SignPub: p.SignPub, NoisePub: p.Card.C.NoisePub, Email: p.Email, Hash: p.Assertion}, d.now())
 	if err != nil {
 		return ApproveResult{}, err
 	}

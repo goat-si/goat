@@ -131,9 +131,6 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 	if a.Refresh != nil {
 		a.Refresh()
 	}
-	if !IsMember(a.Store, a.ID) {
-		return AccountResult{}, refuseNotMember(c)
-	}
 	v := a.Store.View()
 	if claim, err = a.Check(assertion, v); err != nil {
 		return AccountResult{}, refuse(c, err.Error())
@@ -147,7 +144,14 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 		}
 	}
 	if v.Locked {
-		id, err := a.Queue(m.Card, claim)
+		var id string
+		err := a.Store.DoAsMember(a.ID, func() (err error) {
+			id, err = a.Queue(m.Card, claim)
+			return err
+		})
+		if errors.Is(err, ErrNotMember) {
+			return AccountResult{}, refuseNotMember(c)
+		}
 		if err != nil {
 			return AccountResult{}, refuse(c, err.Error())
 		}
@@ -159,6 +163,9 @@ func ServeAccount(ctx context.Context, l Link, remoteStatic []byte, a AccountAdm
 		return AccountResult{QueuedID: id}, nil
 	}
 	member, err := AdmitAccount(a.ID, a.Store, m.Card, claim, a.Now())
+	if errors.Is(err, ErrNotMember) {
+		return AccountResult{}, refuseNotMember(c)
+	}
 	if err != nil {
 		return AccountResult{}, refuse(c, err.Error())
 	}
@@ -181,7 +188,10 @@ type admitted struct {
 
 // AdmitAccount signs an admit via google for card and checks it made the subject a member.
 func AdmitAccount(id *ident.Identity, s *Store, card *Card, c Claim, now time.Time) (admitted, error) {
-	admit, err := s.Append(id, TypeAdmit, now.UnixMilli(), Fields{Card: card, Via: ViaGoogle, Email: c.Email, Assertion: c.Hash})
+	admit, err := s.AppendAsMember(id, TypeAdmit, now.UnixMilli(), Fields{Card: card, Via: ViaGoogle, Email: c.Email, Assertion: c.Hash}, nil)
+	if errors.Is(err, ErrNotMember) {
+		return admitted{}, err
+	}
 	if err != nil {
 		return admitted{}, fmt.Errorf("could not sign the admit: %w", err)
 	}

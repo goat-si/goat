@@ -444,14 +444,61 @@ func (s *Store) choosePrev(own string, limit int) []string {
 	return out
 }
 
+// ErrNotMember is AppendAsMember's and DoAsMember's refusal: the signer is not a member in the
+// current view, so what it signs would have no effect.
+var ErrNotMember = errors.New("mesh: this machine is not a member of the mesh")
+
 // Append signs the signer's next record over the current heads, stores it and saves.
 func (s *Store) Append(id *ident.Identity, typ string, at int64, f Fields) (*Record, error) {
+	s.mu.Lock()
+	return s.appendLocked(id, typ, at, f)
+}
+
+// AppendAsMember is Append for an admit: under the store's lock, so no merge comes between, it
+// checks that id is a member of the current view, runs before (an invite's burn; nothing is
+// signed when it fails) and appends. Lock order: the store, then what before takes (the invite
+// book, then the state directory's lock); nothing takes them the other way round.
+func (s *Store) AppendAsMember(id *ident.Identity, typ string, at int64, f Fields, before func() error) (*Record, error) {
+	s.mu.Lock()
+	if !s.memberLocked(id) {
+		s.mu.Unlock()
+		return nil, ErrNotMember
+	}
+	if before != nil {
+		if err := before(); err != nil {
+			s.mu.Unlock()
+			return nil, err
+		}
+	}
+	return s.appendLocked(id, typ, at, f)
+}
+
+// DoAsMember runs fn under the store's lock if id is a member of the current view (queueing a
+// request for approval); fn must not use the store.
+func (s *Store) DoAsMember(id *ident.Identity, fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.memberLocked(id) {
+		return ErrNotMember
+	}
+	return fn()
+}
+
+func (s *Store) memberLocked(id *ident.Identity) bool {
+	if s.view == nil {
+		s.view = Compute(s.MeshID, s.all())
+	}
+	_, ok := s.view.Members[ident.B64.EncodeToString(id.SignPub)]
+	return ok
+}
+
+// appendLocked signs and stores the record; s.mu is held and is released here.
+func (s *Store) appendLocked(id *ident.Identity, typ string, at int64, f Fields) (*Record, error) {
 	limit := maxPrev
 	if f.Via != "" {
 		// An admit for an account names at most 8 heads, so its body stays within 2048 bytes.
 		limit = maxAccountAdmitPrev
 	}
-	s.mu.Lock()
 	by := ident.B64.EncodeToString(id.SignPub)
 	n, own := s.selfN, ""
 	var ownN uint64
