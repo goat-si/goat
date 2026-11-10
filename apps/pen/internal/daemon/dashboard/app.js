@@ -41,12 +41,16 @@
   let timer = 0;
   let polling = false;
   let pollAgain = false;
+  let retried503 = false;
+  // owner is the daemon that answered first (node id and pid).
+  let owner = null;
   const fullFP = new Set();
 
   class ApiError extends Error {
-    constructor(kind, message) {
+    constructor(kind, message, status) {
       super(message || kind);
       this.kind = kind;
+      this.status = status || 0;
     }
   }
 
@@ -65,7 +69,9 @@
     try {
       r = await fetch(path, opts);
     } catch {
-      throw new ApiError("gone", "pen is not running");
+      // The dashboard never comes back on this port, and another program may take it: stop here.
+      stopForGood();
+      throw new ApiError("gone", "the dashboard stopped");
     }
     let data = null;
     try {
@@ -75,7 +81,7 @@
       dropSession();
       throw new ApiError("session", data && data.error);
     }
-    if (!r.ok) throw new ApiError("failed", (data && data.error) || "HTTP " + r.status);
+    if (!r.ok) throw new ApiError("failed", (data && data.error) || "HTTP " + r.status, r.status);
     return data;
   }
 
@@ -161,9 +167,9 @@
       "pen dashboard",
     ],
     gone: [
-      "pen이 실행 중이 아님 · pen is not running",
-      "pen up을 실행한 다음 pen dashboard를 실행하세요 (주소가 바뀝니다). · Run pen up, then pen dashboard (the address changes).",
-      "pen up && pen dashboard",
+      "대시보드가 멈췄습니다 · The dashboard stopped",
+      "pen dashboard를 다시 실행하세요 (주소가 바뀝니다). pen이 꺼져 있다면 먼저 pen up을 실행하세요. · Run pen dashboard again (the address changes). If pen is not running, run pen up first.",
+      "pen dashboard",
     ],
     out: [
       "로그아웃됨 · Logged out",
@@ -180,27 +186,12 @@
     $("gate").hidden = false;
     $("app").hidden = true;
     $("top").hidden = true;
-    $("notice").hidden = true;
     for (const d of document.querySelectorAll("dialog[open]")) d.close();
   }
-  function notice(kind) {
-    const n = $("notice");
-    const parts = [$("app"), $("top")];
-    if (!kind) {
-      n.hidden = true;
-      for (const p of parts) {
-        p.inert = false;
-        p.classList.remove("stale");
-      }
-      return;
-    }
-    const [title, body] = GATES[kind];
-    n.replaceChildren(h("strong", null, title), " ", h("span", null, body));
-    n.hidden = false;
-    for (const p of parts) {
-      p.inert = true;
-      p.classList.add("stale");
-    }
+  // stopForGood drops the session and gates the tab; only a new pen dashboard link opens it again.
+  function stopForGood() {
+    dropSession();
+    gate("gone");
   }
 
   async function poll() {
@@ -213,7 +204,12 @@
     polling = true;
     try {
       const s = await api("GET", "/api/state");
-      notice(null);
+      // The page belongs to one daemon: a state from another (a new pen, or a program on the
+      // freed port) is not this dashboard's.
+      if (owner && (s.self.nodeId !== owner.nodeId || s.self.pid !== owner.pid))
+        throw new ApiError("failed", "another daemon");
+      owner = { nodeId: s.self.nodeId, pid: s.self.pid };
+      retried503 = false;
       render(s);
     } catch (e) {
       if (e.kind === "session") {
@@ -221,7 +217,12 @@
         gate("none");
         return;
       }
-      if (e.kind === "gone") notice("gone");
+      if (!(e.status === 503 && !retried503)) {
+        polling = false;
+        stopForGood();
+        return;
+      }
+      retried503 = true;
     }
     polling = false;
     if (pollAgain) {

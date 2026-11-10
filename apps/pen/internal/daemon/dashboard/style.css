@@ -139,14 +139,6 @@ pre,
 .hd-spacer {
   flex: 1;
 }
-.notice {
-  margin: 10px 16px 0;
-  padding: 8px 12px;
-  border: 1px solid var(--line-strong);
-  background: var(--code-bg);
-  color: var(--text);
-  border-radius: 6px;
-}
 
 /* layout */
 main {
@@ -155,10 +147,6 @@ main {
   gap: 12px;
   padding: 12px 16px 24px;
   align-items: start;
-}
-main.stale,
-.top.stale {
-  opacity: 0.55;
 }
 .side {
   display: grid;
