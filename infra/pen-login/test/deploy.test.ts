@@ -18,11 +18,14 @@ const CLIENT = {
 
 function sandbox(
   existingSecrets: string[],
-  opts: { deployExit?: number; listError?: string } = {},
+  opts: { deployExit?: number; listError?: string; signal?: string; landsThenFails?: boolean } = {},
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pen-deploy-"));
   NodeFS.chmodSync(dir, 0o700);
+  const tmp = NodePath.join(dir, "tmp");
+  NodeFS.mkdirSync(tmp, { mode: 0o700 });
   const sent = NodePath.join(dir, "sent.json");
+  const landed = NodePath.join(dir, "landed");
   const wrangler = NodePath.join(dir, "wrangler");
   NodeFS.writeFileSync(
     wrangler,
@@ -31,8 +34,8 @@ function sandbox(
       "const fs = require('node:fs');",
       "const a = process.argv.slice(2);",
       `if (a[0] === 'secret' && a[1] === 'list' && ${JSON.stringify(opts.listError ?? "")}) { console.error(${JSON.stringify(opts.listError ?? "")}); process.exit(1); }`,
-      `if (a[0] === 'secret' && a[1] === 'list') { console.log(JSON.stringify(${JSON.stringify(existingSecrets.map((name) => ({ name })))})); process.exit(0); }`,
-      `if (a[0] === 'deploy') { fs.copyFileSync(a[a.indexOf('--secrets-file') + 1], ${JSON.stringify(sent)}); process.exit(${opts.deployExit ?? 0}); }`,
+      `if (a[0] === 'secret' && a[1] === 'list') { const names = ${JSON.stringify(existingSecrets)}; if (fs.existsSync(${JSON.stringify(landed)})) names.push(...Object.keys(JSON.parse(fs.readFileSync(${JSON.stringify(sent)}, 'utf8')))); console.log(JSON.stringify(names.map((name) => ({ name })))); process.exit(0); }`,
+      `if (a[0] === 'deploy') { fs.copyFileSync(a[a.indexOf('--secrets-file') + 1], ${JSON.stringify(sent)}); ${opts.landsThenFails ? `fs.writeFileSync(${JSON.stringify(landed)}, ''); process.exit(1);` : ""} ${opts.signal ? `process.kill(process.ppid, ${JSON.stringify(opts.signal)}); setTimeout(() => process.exit(130), 200); return;` : ""} process.exit(${opts.deployExit ?? 0}); }`,
       "process.exit(3);",
     ].join("\n"),
     { mode: 0o755 },
@@ -42,9 +45,9 @@ function sandbox(
   const run = (...args: string[]) => {
     const r = NodeChildProcess.spawnSync(process.execPath, [script, client, ...args], {
       encoding: "utf8",
-      env: { ...process.env, PEN_WRANGLER: wrangler },
+      env: { ...process.env, PEN_WRANGLER: wrangler, TMPDIR: tmp },
     });
-    return { status: r.status, out: r.stdout + r.stderr };
+    return { status: r.status, signal: r.signal, out: r.stdout + r.stderr };
   };
   const uploaded = () =>
     NodeFS.existsSync(sent)
@@ -54,6 +57,7 @@ function sandbox(
     dir,
     run,
     uploaded,
+    leftInTmp: () => NodeFS.readdirSync(tmp),
     cleanup: () => NodeFS.rmSync(dir, { recursive: true, force: true }),
   };
 }
@@ -168,6 +172,49 @@ describe("deploy:secrets and the login key", () => {
       expect(r.status).toBe(1);
       expect(NodeFS.existsSync(keyFile)).toBe(false);
       expect(s.uploaded()).toBeUndefined();
+    } finally {
+      s.cleanup();
+    }
+  });
+  it("removes the secrets file when a signal ends the deploy", () => {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]) {
+      const s = sandbox(["LOGIN_SIGNING_KEY"], { signal });
+      try {
+        const r = s.run();
+        expect(s.uploaded(), signal).toBeDefined();
+        expect(r.status, `${signal}: ${r.out}`).toBe(1);
+        expect(s.leftInTmp(), signal).toEqual([]);
+      } finally {
+        s.cleanup();
+      }
+    }
+  });
+
+  it("refuses a key file that is itself a symlink into the repository", () => {
+    const s = sandbox([]);
+    const target = NodePath.resolve(import.meta.dirname, "../node_modules/.pen-deploy-key-test");
+    try {
+      NodeFS.writeFileSync(target, Buffer.alloc(32, 9).toString("base64url"), { mode: 0o600 });
+      const link = NodePath.join(s.dir, "login-key");
+      NodeFS.symlinkSync(target, link);
+      const r = s.run("--signing-key-file", link);
+      expect(r.status).toBe(1);
+      expect(r.out).toContain("inside the repository");
+      expect(s.uploaded()).toBeUndefined();
+    } finally {
+      NodeFS.rmSync(target, { force: true });
+      s.cleanup();
+    }
+  });
+
+  it("says the deploy landed when wrangler fails after it", () => {
+    const s = sandbox([], { landsThenFails: true });
+    try {
+      const keyFile = NodePath.join(s.dir, "login-key");
+      const r = s.run("--signing-key-file", keyFile);
+      expect(r.status).toBe(1);
+      expect(r.out).not.toContain("run this again");
+      expect(r.out).toContain("LOGIN_SIGNING_KEY is set");
     } finally {
       s.cleanup();
     }
