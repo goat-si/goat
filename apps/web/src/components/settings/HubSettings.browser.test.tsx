@@ -696,7 +696,7 @@ it("Add device to hub joins a typed alias and shows why it failed", async () => 
       action: "join",
       state: "failed",
       message:
-        "new-mini does not resolve to a direct SSH host. Use a direct Tailscale alias without ProxyJump or ProxyCommand.",
+        "new-mini does not resolve to a direct SSH host. Use a direct alias, such as a Tailscale alias or a pen-<name> alias from pen ssh-config, without ProxyJump or another ProxyCommand.",
       steps: [],
     }),
   );

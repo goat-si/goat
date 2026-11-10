@@ -79,6 +79,8 @@ export interface Machine {
   autoJoin: boolean;
   /** SSH hosts GOAT set up, by the revision of their config and pinned key. */
   revisions: Map<string, string>;
+  /** Pen members' aliases, by the revision of their Pen settings and recorded keys. */
+  penRevisions: Map<string, string>;
   revisionReadable: boolean;
   /** Bumped by each Forget, as SshHostSetup does. */
   generations: Map<string, number>;
@@ -293,6 +295,7 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
             Effect.sync(() => (machine.nativeWindows ? undefined : machine.platform)),
           ensureDeviceRuntime: () =>
             Effect.suspend(() => machine.duringEnsure).pipe(Effect.as(machine.runtime)),
+          penAliasRevision: (alias) => Effect.sync(() => machine.penRevisions.get(alias)),
         }),
       ),
       Layer.provide(
@@ -472,6 +475,7 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     hubEvents: yield* Queue.unbounded<string>(),
     autoJoin: true,
     revisions: new Map([["lidge-ts", "rev-1"]]),
+    penRevisions: new Map(),
     revisionReadable: true,
     generations: new Map(),
     sessions: new Map([["person", ["orchestration:operate", "settings:write"]]]),

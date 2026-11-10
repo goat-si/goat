@@ -35,7 +35,7 @@ import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
 import * as HubMembership from "./HubMembership.ts";
-import { type DevicePlatform, HubOcx, HubOcxError, type OcxOutput } from "./HubOcx.ts";
+import { type DeviceAnswer, HubOcx, HubOcxError, type OcxOutput } from "./HubOcx.ts";
 import * as HubParity from "./HubParity.ts";
 
 /** The hub's OpenCodex, parity and inbox as doubles around a real HubMembership. */
@@ -85,7 +85,7 @@ export interface Fixture {
   readonly deviceExit?: Readonly<Record<string, number>>;
   readonly health?: { readonly service: string; readonly role?: string };
   readonly strayTunnel?: boolean;
-  readonly platform?: DevicePlatform;
+  readonly platform?: DeviceAnswer;
   /** A native Windows device answers no shell, so its platform reads as unknown. */
   readonly nativeWindows?: boolean;
   /** The role the device's GOAT reports after a connection change; absent as an older GOAT. */
@@ -282,6 +282,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
             ensureDeviceRuntime: () => Effect.die("unused"),
             syncDevice: () => Effect.die("unused"),
             directAlias: () => Effect.succeed(fixture.direct ?? true),
+            penAliasRevision: () => Effect.succeed(undefined),
             runningTurns: () => Effect.succeed(fixture.running ?? 0),
             deviceHealth: (alias) =>
               Effect.sync(() => {

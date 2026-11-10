@@ -430,6 +430,16 @@ it.effect.each([undefined, "hub-client"] as const)(
     }),
 );
 
+it.effect("a device SSH cannot reach is reported unreachable, not as possibly Windows", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ platform: "unreachable", pin: PINNED });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "pen-box" });
+    expect(result.state).toBe("failed");
+    expect(result.message).toContain("could not be reached over SSH");
+    expect(result.message).not.toContain("Windows");
+  }),
+);
+
 it.effect("a native Windows Child leaves on the role its own GOAT reports, without /healthz", () =>
   Effect.gen(function* () {
     const hub = yield* setup({

@@ -356,6 +356,26 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     }),
   );
 
+  it.effect(
+    "a Pen member's SSH host gets the switch, and consent ends when it becomes another member",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* setup({ penRevisions: new Map([["pen-box", "pen:node1"]]) });
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(false);
+        expect(yield* home.bootstrap.sshOptIn("pen-other")).toBeUndefined();
+        yield* home.bootstrap.setSshOptIn("pen-box", true, PERSON);
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(true);
+        expect((yield* home.bootstrap.ensure("pen-box"))?.state).toBe("child");
+        expect(home.calls).toEqual(["prepare pen-box 2.91.0", "join pen-box as person"]);
+        // The name now belongs to a machine that joined Pen later: the consent was not for it.
+        home.machine.penRevisions.set("pen-box", "pen:node2");
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBe(false);
+        // Revoked or left: the alias is gone, and so is the switch.
+        home.machine.penRevisions.delete("pen-box");
+        expect(yield* home.bootstrap.sshOptIn("pen-box")).toBeUndefined();
+      }),
+  );
+
   it.effect("an opted-in SSH host joins on the person's consent now and after setups, once", () =>
     Effect.gen(function* () {
       const home = yield* setup();
