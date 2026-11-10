@@ -8,6 +8,7 @@ import {
   type RuntimeMode,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { isSshHostUnreachable } from "@goat/shared/sshFailure";
 import { resolveSshCommand } from "@goat/ssh/command";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- operation ids are random identifiers.
 import * as NodeCrypto from "node:crypto";
@@ -28,6 +29,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { type OcxLayout, resolveOcx } from "../opencodex/childPrepare.ts";
 import { SAFE_LINK_ID } from "./opencodexSyncPlan.ts";
+import { fingerprintOfType, isDirectRoute, penKnownHostsFile, sshSettings } from "./penSshRoute.ts";
 
 const MAX_BYTES = 256 * 1024;
 const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
@@ -68,6 +70,8 @@ export class HubOcxError extends Data.TaggedError("HubOcxError")<{
 }> {}
 
 export type DevicePlatform = "windows" | "posix";
+/** A device's platform, or "unreachable" when SSH failed before the device could answer. */
+export type DeviceAnswer = DevicePlatform | "unreachable";
 
 /**
  * One membership operation's authority for the Child's goat_hub_child_connection. It lives only
@@ -136,7 +140,7 @@ export class HubOcx extends Context.Service<
       timeoutMs: number,
     ) => Effect.Effect<OcxOutput, HubOcxError>;
     /** `uname -s` on the device; undefined when it does not answer. */
-    readonly devicePlatform: (alias: string) => Effect.Effect<DevicePlatform | undefined>;
+    readonly devicePlatform: (alias: string) => Effect.Effect<DeviceAnswer | undefined>;
     /**
      * `ocx hub invite --json` here, then goat_hub_child_connection on the device, whose GOAT
      * feeds the code to `ocx connect --pairing-code-stdin`. The one-use code never comes back.
@@ -157,8 +161,14 @@ export class HubOcx extends Context.Service<
       timeoutMs: number,
       admission: HubChildConnectionAdmission,
     ) => Effect.Effect<OcxOutput, HubOcxError>;
-    /** SHA256 fingerprint of GOAT's pinned host key for the alias, if GOAT pins one. */
-    readonly pinnedFingerprint: (alias: string) => Effect.Effect<string | undefined>;
+    /**
+     * SHA256 fingerprint of GOAT's pinned host key for the alias, if GOAT pins one; for a Pen
+     * alias, Pen's recorded key of `keyType`.
+     */
+    readonly pinnedFingerprint: (
+      alias: string,
+      keyType?: string,
+    ) => Effect.Effect<string | undefined>;
     /**
      * Attaches to, or provisions, GOAT's runtime on the device the way SSH setup does, never
      * replacing a running one. False while it is pending or has no usable executable.
@@ -173,7 +183,10 @@ export class HubOcx extends Context.Service<
       options: { readonly linkId: string; readonly restartCodex: boolean },
       timeoutMs: number,
     ) => Effect.Effect<OcxOutput, HubOcxError>;
-    /** False when `ssh -G` shows a jump chain or proxy command, or cannot resolve the alias. */
+    /**
+     * False when `ssh -G` shows a jump chain or a proxy command other than Pen's pipe, or cannot
+     * resolve the alias.
+     */
     readonly directAlias: (alias: string) => Effect.Effect<boolean>;
     /** Running turns on the device, subagents included; undefined when it cannot be read. */
     readonly runningTurns: (
@@ -390,13 +403,20 @@ const make = Effect.gen(function* () {
 
   const devicePlatform = Effect.fn("HubOcx.devicePlatform")(
     function* (alias: string) {
-      const result = yield* dispatch.runHostScript({
-        host: alias,
-        script: platformScript,
-        timeoutMs: 30_000,
-      });
-      const output = parseDeviceOutput(result.stdout);
-      return output?.code === 0 ? platformOf(output.stdout) : undefined;
+      return yield* dispatch
+        .runHostScript({ host: alias, script: platformScript, timeoutMs: 30_000 })
+        .pipe(
+          Effect.map((result): DeviceAnswer | undefined => {
+            const output = parseDeviceOutput(result.stdout);
+            return output?.code === 0 ? platformOf(output.stdout) : undefined;
+          }),
+          // A connection that never reached the device says nothing about its shell.
+          Effect.catch((error) =>
+            Effect.succeed(
+              isSshHostUnreachable(error.message) ? ("unreachable" as const) : undefined,
+            ),
+          ),
+        );
     },
     Effect.orElseSucceed(() => undefined),
   );
@@ -544,7 +564,7 @@ const make = Effect.gen(function* () {
       };
     }),
     pinnedFingerprint: Effect.fn("HubOcx.pinnedFingerprint")(
-      function* (alias) {
+      function* (alias, keyType) {
         if (!SAFE_ALIAS.test(alias)) return undefined;
         // A cloud alias is only ever pinned by the cloud machine service, never by a person.
         const directories = hasCloudMachineAliasPrefix(alias)
@@ -559,7 +579,17 @@ const make = Effect.gen(function* () {
           // A pin file holding several keys does not name one key to expect.
           return output.code === 0 && lines.length === 1 ? fingerprint : undefined;
         }
-        return undefined;
+        if (keyType === undefined) return undefined;
+        const settings = yield* run(yield* resolveSshCommand, ["-G", alias], 10_000);
+        if (settings.code !== 0 || settings.timedOut) return undefined;
+        const penFile = penKnownHostsFile(sshSettings(settings.stdout));
+        if (penFile === undefined) return undefined;
+        const keys = yield* run(
+          "ssh-keygen",
+          ["-E", "sha256", "-l", "-F", alias, "-f", penFile],
+          10_000,
+        );
+        return keys.code === 0 ? fingerprintOfType(keys.stdout, keyType) : undefined;
       },
       Effect.orElseSucceed(() => undefined),
     ),
@@ -568,16 +598,7 @@ const make = Effect.gen(function* () {
         if (!SAFE_ALIAS.test(alias)) return false;
         const output = yield* run(yield* resolveSshCommand, ["-G", alias], 10_000);
         if (output.code !== 0 || output.timedOut) return false;
-        const settings = new Map(
-          output.stdout.split(/\r?\n/u).map((line) => {
-            const [key = "", ...value] = line.trim().split(/\s+/u);
-            return [key.toLowerCase(), value.join(" ")] as const;
-          }),
-        );
-        // A jump chain is what missed OpenCodex's 15-second link admission window.
-        return [settings.get("proxyjump"), settings.get("proxycommand")].every(
-          (value) => value === undefined || value === "" || value === "none",
-        );
+        return isDirectRoute(sshSettings(output.stdout));
       },
       Effect.orElseSucceed(() => false),
     ),
