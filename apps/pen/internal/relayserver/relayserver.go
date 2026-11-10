@@ -97,8 +97,11 @@ type Server struct {
 	// DefaultMaxQueuedPerSource, never more than MaxQueued).
 	MaxQueued          int
 	MaxQueuedPerSource int
+	// MaxReading caps what messages being read hold past each socket's read allowance (0 means
+	// DefaultMaxReading); one source holds at most an eighth of it.
+	MaxReading int
 
-	queued atomic.Int64
+	queued, reading atomic.Int64
 
 	mu     sync.Mutex
 	rooms  map[string]*room
@@ -117,6 +120,7 @@ const (
 	DefaultMaxUnauthPerNode   = 4
 	DefaultMaxQueued          = 192 << 20
 	DefaultMaxQueuedPerSource = 16 << 20
+	DefaultMaxReading         = 32 << 20
 )
 
 func orDefault(v, d int) int {
@@ -175,11 +179,41 @@ func (s *Server) maxPerSource() int64 {
 	return min(int64(orDefault(s.MaxQueuedPerSource, DefaultMaxQueuedPerSource)), s.maxQueued())
 }
 
+func (s *Server) maxReading() int64 { return int64(orDefault(s.MaxReading, DefaultMaxReading)) }
+
+// Reading is what messages being read hold past their sockets' read allowance now.
+func (s *Server) Reading() int64 { return s.reading.Load() }
+
+// makeRoom ends the largest queue of the source holding the most queued memory, when that source
+// holds more than src; it reports whether that gave anything back. A full relay so costs the
+// sources that hold it, and refuses src only when src holds the most.
+func (s *Server) makeRoom(src *source, n int64) bool {
+	s.mu.Lock()
+	var top *source
+	most := src.held.Load()
+	for _, x := range s.shares {
+		if h := x.held.Load(); x != src && h > most {
+			top, most = x, h
+		}
+	}
+	var victim *outq
+	if top != nil {
+		largest := 0
+		for q := range top.queues {
+			if size := q.size(); size > largest {
+				victim, largest = q, size
+			}
+		}
+	}
+	s.mu.Unlock()
+	return victim != nil && victim.abort()
+}
+
 // shareLocked is ip's part of the budget, held once more.
 func (s *Server) shareLocked(ip string) *source {
 	src := s.shares[ip]
 	if src == nil {
-		src = &source{}
+		src = &source{queues: map[*outq]struct{}{}}
 		s.shares[ip] = src
 	}
 	src.refs++
@@ -587,7 +621,7 @@ func (k *sock) readLoop() {
 			return
 		}
 		stop := k.handle(typ, data, preAuth)
-		k.budget.count(-cap(data))
+		k.budget.countRead(-readCharge(cap(data)))
 		if stop {
 			return
 		}

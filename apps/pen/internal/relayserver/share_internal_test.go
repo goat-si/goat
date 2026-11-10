@@ -1,8 +1,12 @@
 package relayserver
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
 
 // testBudget is the budget of a socket from address ip.
@@ -57,5 +61,43 @@ func TestClientsThatStopReadingFillOnlyTheirSourcesShareOfTheQueueBudget(t *test
 	other.mu.Unlock()
 	if honest.closed {
 		t.Fatalf("a session from another source ended once one source filled the relay (%d bytes queued)", s.Queued())
+	}
+}
+
+// A full relay costs the sources that hold its memory: with the total filled by other sources'
+// stalled queues, an honest uplink's ping is still read, and data from its node to its own session
+// is still queued, at the expense of the largest holder.
+func TestAFullRelayCostsTheSourcesHoldingItNotAnHonestUplink(t *testing.T) {
+	s := New(DefaultLimits())
+	s.MaxQueued = 4 << 20
+	s.MaxQueuedPerSource = 1 << 20
+	ws := &stalledWS{release: make(chan struct{})}
+	defer close(ws.release)
+	for i := range 4 {
+		ip := fmt.Sprintf("198.51.100.%d", i+1)
+		rm := &room{srv: s, clients: map[uint32]*sock{}}
+		testSock(s, rm, roleNode, 0, ip, ws)
+		c := testSock(s, rm, roleClient, 1, ip, ws)
+		rm.mu.Lock()
+		// Small frames, until the source's share or the total refuses one.
+		for !c.closed {
+			rm.toClient(c, make([]byte, 256))
+		}
+		rm.mu.Unlock()
+	}
+	if q := s.Queued(); q < s.maxQueued()-1024 {
+		t.Fatalf("setup: %d bytes queued, want the total of %d about full", q, s.maxQueued())
+	}
+	honest := &room{srv: s, clients: map[uint32]*sock{}}
+	up := testSock(s, honest, roleNode, 0, "203.0.113.1", ws)
+	c := testSock(s, honest, roleClient, 1, "203.0.113.2", ws)
+	if _, err := readMessage(strings.NewReader("ping"), MessageMax, up.budget); err != nil {
+		t.Fatalf("an honest uplink's ping on a full relay: %v", err)
+	}
+	honest.mu.Lock()
+	honest.onUplinkFrame(up, wire.Frame{Type: wire.FrameData, SID: 1, Payload: make([]byte, 1<<10)}.Encode())
+	honest.mu.Unlock()
+	if up.closed || c.closed {
+		t.Fatalf("on a full relay the honest uplink closed %v, its session closed %v", up.closed, c.closed)
 	}
 }
