@@ -1,4 +1,5 @@
 import type { ScopedThreadRef } from "@goat/contracts";
+import { useLiveRefresh } from "../../hooks/useLiveRefresh";
 import { useWorkspaceMutationRefresh } from "../../hooks/useWorkspaceMutationRefresh";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -22,6 +23,15 @@ export function useThreadWorkspaceStatus(
     mutationId: runKey,
     resourceKey: `thread-workspace:${threadRef?.environmentId}:${threadRef?.threadId}`,
     refresh: query.refresh,
+  });
+  // While the worktree needs attention, follow the server: a restore elsewhere or a repair on disk
+  // shows up on focus and every half minute, without waiting for the next run.
+  useLiveRefresh(query.refresh, {
+    enabled:
+      query.data?.state === "cleaned" ||
+      query.data?.state === "missing" ||
+      query.data?.setupIncomplete === true,
+    intervalMs: 30_000,
   });
   return query;
 }
