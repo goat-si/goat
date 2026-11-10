@@ -298,6 +298,10 @@ merging, or when they have no commits beyond the default branch. Set settled ret
 to remove a worktree at the next cleanup after settlement. In repositories without remotes,
 unchanged-worktree cleanup compares against the branch checked out in the project workspace;
 if that checkout has a detached HEAD, the worktree is kept. Only GOAT-managed worktrees are eligible.
+No rule except deleting the thread removes a worktree whose branch has commits that are not in the
+remote default branch (in repositories without remotes, the project's branch) unless a merged pull
+request names them, even when its files are unchanged. The cleanup results show how many such
+commits each kept worktree has. When GOAT cannot fetch the default branch, it keeps the worktree.
 Active sessions, open terminals and worktrees shared by independent threads prevent removal.
 Pinned threads are kept except when deleted. Before removing a worktree, GOAT saves a snapshot
 of tracked and non-ignored untracked changes. Turn off **Clean up worktrees with uncommitted

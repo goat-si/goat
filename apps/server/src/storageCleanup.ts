@@ -40,7 +40,7 @@ import { parse as parseYaml } from "yaml";
 
 import * as ServerConfig from "./config.ts";
 import { otherHomeReason, ownWorktreeRoots, readOtherHomeBindings } from "./otherGoatHomes.ts";
-import { storageCleanupPullRequestMerged } from "./storageCleanupPullRequest.ts";
+import { makeWorktreeShipping } from "./storageCleanupShipping.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -632,8 +632,7 @@ const make = Effect.gen(function* () {
       ),
     )).filter((thread) => thread.worktreePath !== null && thread.branch !== null);
     const snapshot = yield* readThreads();
-    const refreshedDefaultRefs = new Map<string, Set<string>>();
-    const defaultBranches = new Map<string, string | null>();
+    const shipped = makeWorktreeShipping(git, gitManager);
     const groups = Map.groupBy(
       snapshot.threads.filter((thread) => thread.worktreePath !== null),
       (thread) => path.resolve(thread.worktreePath!),
@@ -768,100 +767,35 @@ const make = Effect.gen(function* () {
           rank: ranks.get(worktreePath),
         });
         if (!eligible && retention !== null) [eligible, removalReason] = [true, retention];
-        if (!eligible && (settings.worktreeUnchanged || settings.worktreeOnMerge)) {
-          const repositoryCwd = path.resolve(project.workspaceRoot);
-          const remotes = yield* git.execute({
-            operation: "StorageCleanup.listRemotes",
-            cwd: repositoryCwd,
-            args: ["remote"],
+        // Only proof that the commits shipped lets any rule remove a worktree that has them.
+        if (!deleted && (eligible || settings.worktreeUnchanged || settings.worktreeOnMerge)) {
+          const shipping = yield* shipped({
+            repositoryCwd: path.resolve(project.workspaceRoot),
+            worktreePath,
+            branch: thread.branch,
+            headSha: head.commitSha,
+            pullRequest:
+              eligible || settings.worktreeOnMerge
+                ? !eligible && !settings.worktreeUnchanged
+                  ? "integrated"
+                  : "unshipped"
+                : "never",
           });
-          const remote =
-            remotes.stdout.trim() === ""
-              ? null
-              : yield* git.resolvePrimaryRemoteName(repositoryCwd);
-          let branch: string | null | undefined;
-          let defaultRef: string;
-          if (remote === null) {
-            if (!settings.worktreeUnchanged)
-              return keep("no remote is configured for merged-worktree cleanup");
-            const projectHead = yield* git.execute({
-              operation: "StorageCleanup.resolveProjectBranch",
-              cwd: repositoryCwd,
-              args: ["symbolic-ref", "--quiet", "HEAD"],
-              allowNonZeroExit: true,
-            });
-            if (projectHead.exitCode !== 0) return keep("project branch is unavailable");
-            defaultRef = projectHead.stdout.trim();
-            branch = defaultRef.slice("refs/heads/".length);
-          } else {
-            const defaultBranchKey = `${repositoryCwd}\0${remote}`;
-            branch = defaultBranches.get(defaultBranchKey);
-            if (branch === undefined) {
-              branch = yield* git.resolveDefaultBranchName(repositoryCwd, remote);
-              // Without a local HEAD ref, only the remote can identify its default;
-              // a conventional name may be a feature branch.
-              if (branch === null) {
-                branch = yield* git
-                  .execute({
-                    operation: "StorageCleanup.resolveDefaultBranch",
-                    cwd: repositoryCwd,
-                    args: ["ls-remote", "--symref", "--", remote, "HEAD"],
-                    timeoutMs: 20_000,
-                  })
-                  .pipe(
-                    Effect.map(
-                      (result) =>
-                        /^ref: refs\/heads\/(.+)\tHEAD\r?$/m.exec(result.stdout)?.[1] ?? null,
-                    ),
-                    Effect.orElseSucceed(() => null),
-                  );
-              }
-              defaultBranches.set(defaultBranchKey, branch);
-            }
-            if (branch === null) return keep("default branch is unavailable");
-            defaultRef = `refs/remotes/${remote}/${branch}`;
-            const refreshed = refreshedDefaultRefs.get(repositoryCwd) ?? new Set<string>();
-            if (!refreshed.has(defaultRef)) {
-              yield* git.fetchRemoteTrackingBranch({
-                cwd: repositoryCwd,
-                remoteName: remote,
-                remoteBranch: branch,
-              });
-              refreshed.add(defaultRef);
-              refreshedDefaultRefs.set(repositoryCwd, refreshed);
-            }
-          }
-          const base = yield* git.resolveCommit({
-            cwd: worktreePath,
-            revision: defaultRef,
-          });
-          const ancestor = yield* git.execute({
-            operation: "StorageCleanup.integratedBranch",
-            cwd: worktreePath,
-            args: ["merge-base", "--is-ancestor", head.commitSha, base.commitSha],
-            allowNonZeroExit: true,
-          });
-          const integrated = ancestor.exitCode === 0;
-          eligible = integrated && settings.worktreeUnchanged;
-          if (eligible)
-            removalReason =
-              remote === null
-                ? "no commits beyond the project branch"
-                : "no commits beyond the default branch";
-          if (!eligible && remote !== null && settings.worktreeOnMerge && thread.branch !== null) {
-            const pullRequest = yield* gitManager.branchPullRequest(
-              { cwd: worktreePath, branch: thread.branch },
-              { refresh: true },
-            );
-            eligible = storageCleanupPullRequestMerged(pullRequest, {
-              branch: thread.branch,
-              defaultBranch: branch,
-              headSha: head.commitSha,
-              integrated,
-            });
-            if (eligible) removalReason = "pull request was merged";
-          }
-          if (!eligible && remote === null) return keep("has commits beyond the project branch");
+          if (shipping._tag === "unshipped" || shipping._tag === "unknown")
+            return keep(shipping.reason);
+          if (!eligible && shipping._tag === "integrated" && settings.worktreeUnchanged) {
+            eligible = true;
+            removalReason = shipping.remote
+              ? "no commits beyond the default branch"
+              : "no commits beyond the project branch";
+          } else if (!eligible && shipping._tag === "integrated" && !shipping.remote)
+            return keep("no remote is configured for merged-worktree cleanup");
+          if (
+            !eligible &&
+            settings.worktreeOnMerge &&
+            (shipping._tag === "merged" || shipping.merged)
+          )
+            [eligible, removalReason] = [true, "pull request was merged"];
         }
         if (!eligible)
           return keep(
