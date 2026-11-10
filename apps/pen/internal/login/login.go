@@ -24,6 +24,7 @@ const (
 	startPrefix     = "pen-login/1 start"
 	pollPrefix      = "pen-login/1 poll"
 	forgetPrefix    = "pen-login/1 forget"
+	registerPrefix  = "pen-login/1 register"
 	assertionPrefix = "pen-login/1 assertion"
 	// AssertionLifetime is exp - iat.
 	AssertionLifetime = 600 * time.Second
@@ -83,6 +84,14 @@ func PollMessage(deviceCode string) []byte {
 func ForgetMessage(nodeID string, ts uint64) []byte {
 	m := append([]byte(forgetPrefix), nodeID...)
 	return binary.BigEndian.AppendUint64(m, ts)
+}
+
+// RegisterMessage is what a mesh/register proof signs: the prefix, SHA-256 of the assertion body
+// and the mesh id (ASCII), so only the asserted node can use its assertion.
+func RegisterMessage(assertionBody []byte, meshID string) []byte {
+	sum := sha256.Sum256(assertionBody)
+	m := append([]byte(registerPrefix), sum[:]...)
+	return append(m, meshID...)
 }
 
 // AssertionBody is an assertion's signed content.

@@ -314,11 +314,11 @@ func TestRevokingARegisteredMemberForgetsItAtTheLoginService(t *testing.T) {
 		t.Fatal(err)
 	}
 	cl := login.New(f.URL)
-	if err := cl.Register(ctx, as, out.MeshID); err != nil {
+	if err := cl.Register(ctx, b, as, out.MeshID); err != nil {
 		t.Fatal(err)
 	}
 	// The founder registered when it bound the mesh; only a node under the account may forget another.
-	if err := cl.Register(ctx, f.Issue(testSub, "me@example.com", a.id.SignPub, a.id.NoisePub, time.Now()), out.MeshID); err != nil {
+	if err := cl.Register(ctx, a.id, f.Issue(testSub, "me@example.com", a.id.SignPub, a.id.NoisePub, time.Now()), out.MeshID); err != nil {
 		t.Fatal(err)
 	}
 	var r map[string]any
@@ -346,7 +346,7 @@ func TestALeavingMemberForgetsItselfAtTheLoginService(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Only b is registered, so only b's own forget can succeed.
-	if err := login.New(f.URL).Register(ctx, as, out.MeshID); err != nil {
+	if err := login.New(f.URL).Register(ctx, bid, as, out.MeshID); err != nil {
 		t.Fatal(err)
 	}
 	s, err := mesh.CheckJoined(st, bid, out.MeshID, out.Records)
@@ -495,4 +495,49 @@ func TestARebindToAnotherAccountDuringTheCardWaitRefusesTheJoiner(t *testing.T) 
 	if m := sendCard(t, ctx, c, j, offer); m.T != "refused" || !strings.Contains(m.Reason, "another Google account") {
 		t.Fatalf("after a rebind to another account the card got %+v, want refused", m)
 	}
+}
+
+func TestAForgetTheServiceDidNotAnswerIsKeptAndSentAfterARestart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	f := loginFake(t)
+	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
+	b := newcomer(t)
+	as := f.Issue(testSub, "me@example.com", b.SignPub, b.NoisePub, time.Now())
+	out, _, err := AccountJoin(ctx, []string{rs.URL}, b, "b", as, offeredBy(t, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := login.New(f.URL)
+	for _, x := range []*ident.Identity{a.id, b} {
+		if err := cl.Register(ctx, x, f.Issue(testSub, "me@example.com", x.SignPub, x.NoisePub, time.Now()), out.MeshID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.ForgetDown.Store(true)
+	var r map[string]any
+	if err := Call(a.st, Request{Op: "revoke", Subject: ident.B64.EncodeToString(b.SignPub)}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-f.ForgetAttempts(); code != 503 {
+		t.Fatalf("attempt answered %d", code)
+	}
+	var saved []PendingForget
+	if ok, err := a.st.ReadJSON(ForgetsFile, &saved); err != nil || !ok || len(saved) != 1 || saved[0].NodeID != b.NodeID() {
+		t.Fatalf("pending forgets %+v (%v %v), want b kept for a retry", saved, ok, err)
+	}
+	a.d.Stop()
+	if err := <-a.done; err != nil {
+		t.Fatal(err)
+	}
+	a.done <- nil
+	f.ForgetDown.Store(false)
+	a2 := start(t, ctx, rs, a.st, nil)
+	if got := <-f.Forgotten(); got != b.NodeID() {
+		t.Fatalf("forgot %s, want b", got)
+	}
+	_ = a2
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/login"
@@ -258,16 +257,13 @@ func (d *Daemon) forgetRevoked(old, v *mesh.View) {
 	if len(gone) == 0 {
 		return
 	}
-	d.spawn(func() {
-		ctx, cancel := context.WithTimeout(d.runCtx, 30*time.Second)
-		defer cancel()
-		c := login.New(b.LoginURL)
-		for _, nodeID := range gone {
-			if err := c.Forget(ctx, d.id, nodeID, d.now()); err != nil {
-				d.opt.Logf("login forget %s: %v", nodeID, err)
-			}
-		}
-	})
+	var fs []PendingForget
+	for _, nodeID := range gone {
+		fs = append(fs, PendingForget{NodeID: nodeID, LoginURL: b.LoginURL})
+	}
+	if err := d.forgets.add(fs); err != nil {
+		d.opt.Logf("forgets.json: %v", err)
+	}
 }
 
 // ErrNoMemberOnline means none of the offered members answered.

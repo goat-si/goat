@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -48,6 +49,8 @@ type Server struct {
 	// AutoApprove, when set, approves every started device for this account at once.
 	AutoApprove *login.Account
 	Now         func() time.Time
+	// ForgetDown makes forgets answer 503, as a service that is down.
+	ForgetDown atomic.Bool
 
 	mu       sync.Mutex
 	keys     []ed25519.PrivateKey
@@ -58,6 +61,7 @@ type Server struct {
 	names    map[string]string // assertion hash -> device name
 	started  chan Device
 	forgot   chan string
+	attempts chan int
 	http     *httptest.Server
 }
 
@@ -66,7 +70,8 @@ func New() *Server {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	return &Server{MinPoll: 2 * time.Second, Now: time.Now, keys: []ed25519.PrivateKey{priv},
 		devices: map[string]*device{}, byUser: map[string]*device{}, registry: map[string]*entry{},
-		used: map[string]bool{}, names: map[string]string{}, started: make(chan Device, 64), forgot: make(chan string, 64)}
+		used: map[string]bool{}, names: map[string]string{}, started: make(chan Device, 64), forgot: make(chan string, 64),
+		attempts: make(chan int, 64)}
 }
 
 // Start serves on 127.0.0.1 and sets URL.
@@ -87,6 +92,9 @@ func (s *Server) Started() <-chan Device { return s.started }
 
 // Forgotten delivers the nodeId of each node a forget removed.
 func (s *Server) Forgotten() <-chan string { return s.forgot }
+
+// ForgetAttempts delivers the HTTP status of each forget request.
+func (s *Server) ForgetAttempts() <-chan int { return s.attempts }
 
 // Key is the current login key.
 func (s *Server) Key() login.Key {
@@ -196,6 +204,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v1/mesh/register":
 		s.register(w, body)
 	case "/v1/mesh/forget":
+		if s.ForgetDown.Load() {
+			s.attempt(http.StatusServiceUnavailable)
+			reply(w, http.StatusServiceUnavailable, map[string]string{"error": "down"})
+			return
+		}
 		s.forget(w, body)
 	default:
 		http.NotFound(w, r)
@@ -319,9 +332,16 @@ func (s *Server) register(w http.ResponseWriter, r interface{ Read([]byte) (int,
 	var in struct {
 		Assertion *login.Assertion `json:"assertion"`
 		MeshID    string           `json:"meshId"`
+		Proof     string           `json:"proof"`
 	}
 	if !decode(r, &in) || in.Assertion == nil || in.MeshID == "" {
 		reply(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
+		return
+	}
+	signPub, err1 := ident.DecodeKey(in.Assertion.A.SignPub)
+	proof, err2 := ident.B64.DecodeString(in.Proof)
+	if err1 != nil || err2 != nil || !ed25519.Verify(signPub, login.RegisterMessage(in.Assertion.Body, in.MeshID), proof) {
+		reply(w, http.StatusBadRequest, map[string]string{"error": "bad_proof"})
 		return
 	}
 	now := s.Now()
@@ -401,4 +421,11 @@ func (s *Server) forget(w http.ResponseWriter, r interface{ Read([]byte) (int, e
 func SplitAccount(s string) (login.Account, bool) {
 	sub, email, ok := strings.Cut(s, ",")
 	return login.Account{Sub: sub, Email: email}, ok && sub != ""
+}
+
+func (s *Server) attempt(code int) {
+	select {
+	case s.attempts <- code:
+	default:
+	}
 }

@@ -219,7 +219,7 @@ func (l *loginRun) foundAndBind(ctx context.Context, cur *mesh.Store) error {
 }
 
 func (l *loginRun) register(ctx context.Context, meshID string) error {
-	if err := l.lc.Register(ctx, l.tok.Assertion, meshID); err != nil {
+	if err := l.lc.Register(ctx, l.id, l.tok.Assertion, meshID); err != nil {
 		if errors.Is(err, login.ErrOtherMesh) {
 			return fmt.Errorf("%w meanwhile; run pen login again", err)
 		}

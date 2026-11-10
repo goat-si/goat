@@ -220,9 +220,11 @@ func (c *Client) Keys(ctx context.Context) ([]Key, error) {
 	return k.Keys, nil
 }
 
-// Register lists the asserting node under the assertion's account and meshID.
-func (c *Client) Register(ctx context.Context, a *Assertion, meshID string) error {
-	code, body, err := c.post(ctx, "/v1/mesh/register", map[string]any{"assertion": a, "meshId": meshID})
+// Register lists id, the asserted node, under the assertion's account and meshID; id signs the
+// register proof.
+func (c *Client) Register(ctx context.Context, id *ident.Identity, a *Assertion, meshID string) error {
+	proof := ed25519.Sign(id.SignPriv, RegisterMessage(a.Body, meshID))
+	code, body, err := c.post(ctx, "/v1/mesh/register", map[string]any{"assertion": a, "meshId": meshID, "proof": ident.B64.EncodeToString(proof)})
 	if err != nil {
 		return err
 	}

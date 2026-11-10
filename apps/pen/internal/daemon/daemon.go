@@ -41,6 +41,8 @@ type Options struct {
 	// Announce is the version this node announces in sync hellos (mesh.Version); tests set "-" to
 	// act as a v1.0 node, which announces none.
 	Announce string
+	// RetryAfter waits between registry forget retries (time.After); tests drive it.
+	RetryAfter func(time.Duration) <-chan time.Time
 	// Ready is called once the control socket accepts requests.
 	Ready func()
 	Now   func() time.Time
@@ -60,6 +62,7 @@ type Daemon struct {
 	store   *mesh.Store
 	invites *mesh.Invites
 	pending *pendingBook
+	forgets *forgetBook
 
 	// accept receives the sessions of every uplink; slots holds one uplink per relay.
 	accept chan relay.Conn
@@ -175,8 +178,12 @@ func New(opt Options) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
+	forgets, err := loadForgets(st)
+	if err != nil {
+		return nil, err
+	}
 	d := &Daemon{
-		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites, pending: pending,
+		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites, pending: pending, forgets: forgets,
 		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, seen: map[string]seenInfo{},
 		versions: map[string]heard{}, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
 	}
@@ -254,6 +261,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.spawn(func() { d.acceptLoop(ctx) })
 	d.spawn(func() { d.every(ctx, d.opt.SyncEvery, func() { d.pushAll(ctx) }) })
 	d.spawn(func() { d.hostKeysLoop(ctx) })
+	d.spawn(func() { d.forgetLoop(ctx) })
 	d.writeKnownHosts()
 	if d.opt.Ready != nil {
 		d.opt.Ready()
