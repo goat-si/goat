@@ -34,7 +34,7 @@ func startNode(t *testing.T, ctx context.Context, rs *relaytest.Server, st *stat
 }
 
 func tmpStore(t *testing.T) *state.Store {
-	dir, err := os.MkdirTemp("/tmp", "pen")
+	dir, err := os.MkdirTemp(tmpRoot(), "pen")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
 // DefaultKnownHosts is ~/.ssh/pen/known_hosts.
@@ -113,7 +114,7 @@ func (d *Daemon) writeKnownHosts() {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp.Name(), d.opt.KnownHosts)
+		err = state.Replace(tmp.Name(), d.opt.KnownHosts)
 	}
 	if err != nil {
 		os.Remove(tmp.Name())

@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"io"
-	"syscall"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
@@ -52,19 +51,4 @@ func RunDown(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "stopped pen")
 	return 0
-}
-
-// waitExit reports whether process pid is gone within d (a zombie counts as gone once its parent reaps it).
-func waitExit(pid int, d time.Duration) bool {
-	if pid <= 0 {
-		return true
-	}
-	deadline := time.Now().Add(d)
-	for syscall.Kill(pid, 0) == nil {
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return true
 }

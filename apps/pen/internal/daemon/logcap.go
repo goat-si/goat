@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"time"
+
+	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
 const (
@@ -45,7 +47,7 @@ func capLog(path string, limit int64) error {
 		os.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, path+".1"); err != nil {
+	if err := state.Replace(tmp, path+".1"); err != nil {
 		return err
 	}
 	return os.Truncate(path, 0)

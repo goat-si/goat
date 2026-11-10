@@ -5,10 +5,8 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
@@ -57,11 +55,7 @@ func TestNoServiceDaemonIsNotAChildOfTheCommandThatStartedIt(t *testing.T) {
 	if err := daemon.Call(st, daemon.Request{Op: "status"}, &s); err != nil {
 		t.Fatal(err)
 	}
-	ppid, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(s.PID)).Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.TrimSpace(string(ppid)); got == strconv.Itoa(os.Getpid()) {
+	if got := parentPID(s.PID); got == strconv.Itoa(os.Getpid()) {
 		t.Fatalf("daemon %d is still a child of the pen up that started it (ppid %s)", s.PID, got)
 	}
 }
@@ -88,8 +82,7 @@ func TestDownReturnsOnlyOnceTheDaemonHasExited(t *testing.T) {
 		t.Fatalf("pen down exit %d: %s", code, errOut.String())
 	}
 	// Scripts remove or replace the state directory and the binary right after pen down.
-	stat, _ := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(s.PID)).Output()
-	if st := strings.TrimSpace(string(stat)); st != "" && !strings.HasPrefix(st, "Z") {
-		t.Fatalf("pen down returned while daemon %d was still running (state %q)", s.PID, st)
+	if running(s.PID) {
+		t.Fatalf("pen down returned while daemon %d was still running", s.PID)
 	}
 }

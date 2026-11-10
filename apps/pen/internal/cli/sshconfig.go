@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
+	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
 // RunSSHConfig prints, writes or installs an ssh_config that reaches members as pen-<name>.
@@ -187,10 +188,10 @@ func writeSSHConfig(dir, text string) (string, error) {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Chmod(tmp.Name(), 0o600)
+		err = state.RestrictFile(tmp.Name())
 	}
 	if err == nil {
-		err = os.Rename(tmp.Name(), path)
+		err = state.Replace(tmp.Name(), path)
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
@@ -233,7 +234,7 @@ func replaceFile(path string, data []byte) error {
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return state.Replace(tmp, path)
 }
 
 // uninstallSSHConfig removes exactly the line installInclude added and the config pen wrote. The daemon's

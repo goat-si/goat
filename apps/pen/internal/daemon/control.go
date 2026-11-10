@@ -107,7 +107,7 @@ func (d *Daemon) listenControl() (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("control socket: %w", err)
 	}
-	if err := os.Chmod(p, 0o600); err != nil {
+	if err := state.RestrictFile(p); err != nil {
 		ln.Close()
 		return nil, err
 	}

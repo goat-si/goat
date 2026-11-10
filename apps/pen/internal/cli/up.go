@@ -142,14 +142,10 @@ func runForeground(st *state.Store, stderr io.Writer) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	opt := daemonOptions(st)
-	if fd := os.Getenv("PEN_READY_FD"); fd != "" {
-		n, _ := strconv.Atoi(fd)
-		ready := os.NewFile(uintptr(n), "ready")
+	if ready := readyFile(); ready != nil {
 		opt.Ready = func() {
-			if ready != nil {
-				ready.WriteString("ready\n")
-				ready.Close()
-			}
+			ready.WriteString("ready\n")
+			ready.Close()
 		}
 	}
 	d, err := daemon.New(opt)
@@ -162,9 +158,18 @@ func runForeground(st *state.Store, stderr io.Writer) int {
 	return 0
 }
 
+// readyFile is the ready pipe the starting pen up handed down (fd 3, or a handle on Windows).
+func readyFile() *os.File {
+	n, err := strconv.ParseUint(os.Getenv("PEN_READY_FD"), 10, 64)
+	if err != nil {
+		return nil
+	}
+	return os.NewFile(uintptr(n), "ready")
+}
+
 // startDetached starts the daemon through "pen up --spawn-daemon", which exits once the daemon runs, so the
 // daemon is owned by init from the start and a kill of this command's process tree does not reach it.
-// The ready pipe on fd 3 passes through to the daemon.
+// The ready pipe passes through to the daemon.
 func startDetached(st *state.Store) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -180,12 +185,16 @@ func startDetached(st *state.Store) error {
 		return err
 	}
 	defer r.Close()
-	cmd := exec.Command(exe, "up", "--spawn-daemon")
-	cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir, "PEN_READY_FD=3")
-	cmd.ExtraFiles = []*os.File{w}
-	cmd.Stderr = logf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	out, err := cmd.Output()
+	var out []byte
+	err = startDetachedCmd(func() *exec.Cmd {
+		cmd := exec.Command(exe, "up", "--spawn-daemon")
+		cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir)
+		cmd.Stderr = logf
+		return cmd
+	}, w, func(cmd *exec.Cmd) (err error) {
+		out, err = cmd.Output()
+		return err
+	})
 	w.Close()
 	if err != nil {
 		return fmt.Errorf("could not start the daemon (%v); see %s", err, st.Path("daemon.log"))
@@ -219,12 +228,18 @@ func spawnDetached(st *state.Store, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	defer logf.Close()
-	cmd := exec.Command(exe, "up", "--foreground")
-	cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir, "PEN_READY_FD=3")
-	cmd.ExtraFiles = []*os.File{os.NewFile(3, "ready")}
-	cmd.Stdout, cmd.Stderr = logf, logf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
+	ready := readyFile()
+	if ready == nil {
+		return fail(stderr, errors.New("--spawn-daemon needs the ready pipe pen up passes"))
+	}
+	var cmd *exec.Cmd
+	err = startDetachedCmd(func() *exec.Cmd {
+		cmd = exec.Command(exe, "up", "--foreground")
+		cmd.Env = append(os.Environ(), "PEN_HOME="+st.Dir)
+		cmd.Stdout, cmd.Stderr = logf, logf
+		return cmd
+	}, ready, (*exec.Cmd).Start)
+	if err != nil {
 		return fail(stderr, err)
 	}
 	fmt.Fprintln(stdout, cmd.Process.Pid)

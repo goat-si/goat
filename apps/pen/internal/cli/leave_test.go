@@ -20,12 +20,12 @@ type serviceCall struct {
 // fakeSystemd puts a pen.service unit under a scratch HOME and records service commands.
 func fakeSystemd(t *testing.T) (home string, calls *[]serviceCall) {
 	t.Helper()
-	home, err := os.MkdirTemp("/tmp", "penh")
+	home, err := os.MkdirTemp(tmpRoot(), "penh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(home) })
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("PEN_HOME", "")
 	if err := writeFile(unitPath(), "[Service]\nRestart=always\n"); err != nil {
 		t.Fatal(err)

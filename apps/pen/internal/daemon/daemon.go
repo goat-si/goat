@@ -10,7 +10,6 @@ import (
 	"maps"
 	"os"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -49,9 +48,9 @@ type Options struct {
 	// Ready is called once the control socket accepts requests.
 	Ready func()
 	Now   func() time.Time
-	// Since is the monotonic time elapsed since a Now reading (time.Since); a wall clock that ran
-	// ahead of it means the machine slept (wake.go).
-	Since func(time.Time) time.Duration
+	// Awake reads a clock that stops while the machine sleeps; a wall clock that ran ahead of it
+	// means the machine slept (wake.go). Tests drive it.
+	Awake func() time.Duration
 	// WakeTicks paces the sleep check (every 5 s when nil); tests drive it.
 	WakeTicks <-chan time.Time
 	// PresenceEvery spaces the presence syncs a polled dashboard starts (30 s).
@@ -155,7 +154,7 @@ func New(opt Options) (*Daemon, error) {
 		opt.Logf = log.Printf
 	}
 	if opt.HostKeyGlob == "" {
-		opt.HostKeyGlob = "/etc/ssh/ssh_host_*_key.pub"
+		opt.HostKeyGlob = defaultHostKeyGlob()
 	}
 	if opt.SyncEvery == 0 {
 		opt.SyncEvery = 10 * time.Minute
@@ -169,8 +168,8 @@ func New(opt Options) (*Daemon, error) {
 	if opt.Now == nil {
 		opt.Now = time.Now
 	}
-	if opt.Since == nil {
-		opt.Since = time.Since
+	if opt.Awake == nil {
+		opt.Awake = awakeClock()
 	}
 	if opt.KnownHosts == "" {
 		p, err := DefaultKnownHosts()
@@ -331,15 +330,11 @@ func (d *Daemon) Stop() { d.stopOnce.Do(func() { close(d.stopCh) }) }
 
 // lockDaemon holds daemon.lock for the daemon's lifetime so only one runs per state directory.
 func (d *Daemon) lockDaemon() (func(), error) {
-	f, err := os.OpenFile(d.st.Path("daemon.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
+	release, err := state.TryLock(d.st.Path("daemon.lock"))
+	if errors.Is(err, state.ErrLocked) {
 		return nil, errors.New("a pen daemon is already running for this state directory")
 	}
-	return func() { f.Close() }, nil
+	return release, err
 }
 
 type daemonJSON struct {

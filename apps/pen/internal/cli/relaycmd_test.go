@@ -269,15 +269,15 @@ func TestAutocertCacheIsAPrivateDirectory(t *testing.T) {
 	if err := prepareCache(loose); err != nil {
 		t.Fatal(err)
 	}
-	if fi, _ := os.Stat(loose); fi.Mode().Perm() != 0o700 {
-		t.Fatalf("cache mode %v, want 0700", fi.Mode().Perm())
+	if private, err := state.OwnerOnly(loose); err != nil || !private {
+		t.Fatalf("cache is not private to its owner: %v", err)
 	}
 	fresh := filepath.Join(t.TempDir(), "new", "acme")
 	if err := prepareCache(fresh); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(fresh); err != nil || fi.Mode().Perm() != 0o700 {
-		t.Fatalf("new cache: %v %v", fi, err)
+	if private, err := state.OwnerOnly(fresh); err != nil || !private {
+		t.Fatalf("new cache is not private to its owner: %v", err)
 	}
 	file := filepath.Join(t.TempDir(), "file")
 	os.WriteFile(file, nil, 0o600)
