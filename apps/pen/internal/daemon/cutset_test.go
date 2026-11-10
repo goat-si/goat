@@ -14,14 +14,17 @@ import (
 
 // A revoked machine x that the login service still lists can admit a new machine j and serve it a cut
 // copy of the mesh: x's own admit, x's revoke of the honest members and j's admit. FinishJoin dials every
-// machine the service listed, so the honest member that refuses j (it holds x's compromised revoke)
-// fails the join instead of j trusting x.
+// machine the service listed, so the honest member that refuses j fails the join instead of j trusting
+// x, also after j's check shows a its records: a holds x's compromised revoke, so they do not make j
+// a member there.
 func TestFinishJoinFailsWhenAListedMachineTheServedViewCallsRevokedRefusesThisOne(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rs := relaytest.New()
 	defer rs.Close()
+	f := loginFake(t)
 	a := founder(t, ctx, rs, "a", nil)
+	bindTo(t, a, f, f.Key())
 	x := joiner(t, ctx, rs, a.invite(t, time.Minute), "x")
 	aPub := ident.B64.EncodeToString(a.d.id.SignPub)
 	xPub := ident.B64.EncodeToString(x.d.id.SignPub)
@@ -45,7 +48,8 @@ func TestFinishJoinFailsWhenAListedMachineTheServedViewCallsRevokedRefusesThisOn
 		{NodeID: a.d.NodeID(), SignPub: aPub, NoisePub: ident.B64.EncodeToString(a.d.id.NoisePub), Name: "a"},
 		{NodeID: x.d.NodeID(), SignPub: xPub, NoisePub: ident.B64.EncodeToString(x.d.id.NoisePub), Name: "x"},
 	}
-	_, _, err = FinishJoin(ctx, []string{rs.URL}, jid, s, listed)
+	as := f.Issue(testSub, "me@example.com", jid.SignPub, jid.NoisePub, time.Now())
+	_, _, err = FinishJoin(ctx, []string{rs.URL}, jid, s, listed, as)
 	if err == nil || !strings.Contains(err.Error(), "a, listed for this account") {
 		t.Fatalf("FinishJoin on x's cut copy: %v, want a refusal naming a", err)
 	}

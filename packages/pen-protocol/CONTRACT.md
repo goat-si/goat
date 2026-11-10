@@ -379,9 +379,18 @@ The joining side: `pen login` shows the returned email and, when the registry of
 fingerprints, and asks before founding or joining (`--yes` skips the question for scripts; `install.sh --login` does not
 pass it). After joining it syncs with at least two members, or warns that only one was reachable, checks that it is still
 a member after those syncs, and only then serves `tcp` streams and registers. It also syncs with every node the registry
-offered that its copy of the mesh does not count as a member; one that refuses it (4401) holds records the admitting
-member left out (a revoked or stolen member can serve a cut copy), so the join fails with that node's name and nothing
-is installed. When its assertion has expired by then
+offered that its copy of the mesh does not count as a member. One that refuses it (4401) is asked again with a check on
+kind 0x04: the first line is `{"t":"check","assertion":{...}}` instead of `assertion`. The node runs the assertion
+checks above (a lock does not matter here) and then a sync as on kind 0x01, with the joiner as initiator, except that it
+sends its own records and `done` only after the joiner's `done`, and only if, with the joiner's records merged into a
+scratch copy of its own set, the joiner is a member whose admit and every admit before it back to the founder were signed
+by keys its own view does not count as revoked; otherwise it sends `refused` and closes 4401. It stores nothing the
+joiner sent. A node that already left the mesh, or has not heard of the joiner yet, so passes it its records, and the
+joiner applies them like any sync. A node that still refuses holds records the admitting member left out (a revoked or
+stolen member can serve a cut copy, and a stolen key can win a revoke race in the merged order, so the check does not
+rely on that order), so the join fails with that node's name and nothing is installed. A refusal also stands when the
+check does not complete; a node older than the check answers `refused` ("expected an assertion") and 4401, as before.
+When its assertion has expired by then
 (a slow approval), it stays a member and says registration waits for the next `pen login`. `pen login` on a member whose
 mesh is unbound, or bound to an older login key, offers to bind it again (same question).
 
@@ -421,3 +430,7 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
 - v1.1 (2026-11-11): `pen relay serve` counts connections against its caps from accept, counts queued and partly read
   messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so a
   full relay ends the sessions of the source holding the memory. Relay implementation only; no wire change.
+- v1.1 (2026-11-11): kind 0x04 `check`: a Google joiner that a listed node refused asks it to check the joiner's
+  records against its own, so a node that left or has not heard of the joiner no longer fails the join while a cut copy
+  served by a revoked member still does. Nodes before this answer the check as an unexpected first line (4401), which
+  the joiner counts as the refusal it was. No account-stream messages are in the shared vectors.
