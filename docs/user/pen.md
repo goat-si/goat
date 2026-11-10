@@ -138,6 +138,13 @@ cannot hold a message ends only the session that sent it, with code 4408; it nev
 sessions or a machine's own relay connection to make room. Open the session again, and Pen picks a
 relay again; the machine stays reachable through its other relays.
 
+Two other causes of 4408 on such a relay: all sessions to one machine share a 4 MiB window, so
+while that machine reads slowly (a busy or slow connection) and one session fills it, data on its
+other sessions is refused; and a flood from many addresses can fill the whole relay for everyone for
+a while. In both cases open the session again later; the machine's other relays are not affected. A
+new connection refused with 4429 means the machine is taking too many new sessions at once through
+that relay; retry, or it goes through another relay.
+
 You can run your own relay with `pen relay serve` on a machine with a public address; see
 `pen help`.
 

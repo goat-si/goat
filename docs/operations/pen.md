@@ -166,9 +166,12 @@ only makes the collector work harder near it; it is not a cap, so the margin und
 proof. Change the caps, `GOMEMLIMIT` and `MemoryMax` together. A relay at its caps refuses new connections. Queued data is charged to the session's 4 MiB window, the
 16 MiB share of the address that will receive it, and the 128 MiB total; data that does not fit any of them ends the
 session that sent it with 4408, and nothing else ends because of memory: no other session and never an uplink. A
-socket that stops reading is closed only when one write stalls for 10 s. Pongs, OPEN and CLOSE frames and close
-frames are not charged, so a full relay still answers uplinks. Before a node answers a session, its client may send
-one message of at most 4 KiB; anything more ends that session. One address therefore cannot end another address's
+socket that stops reading is closed only when one write stalls for 10 s. A new client session is admitted only if
+its OPEN and CLOSE frames toward the node fit like data (and within 256 KiB of such frames per uplink); otherwise it
+is refused 4429, so clients that open and close faster than a slow node reads get refused instead of ending the
+node's uplink. Pongs, the challenge and close frames are not charged (about 1.4 KiB per socket at most), so a full
+relay still answers uplinks. Before a node answers a session, its client may send one message of at most 4 KiB;
+anything more ends that session, and one address holds at most 2 pending sessions per node. One address therefore cannot end another address's
 sessions, and data between other addresses fits while they hold less than the total minus one share (112 MiB). What
 can still happen, each time as 4408 on the refused session, with nothing reopened by itself and the node's other
 relay unaffected: a peer the node has answered can fill that node's 4 MiB uplink window while the node reads slowly,
@@ -187,8 +190,8 @@ Install on a new VM: put the binary at `/opt/pen-relay/pen` (0755), write `/etc/
 then `sudo systemctl daemon-reload && sudo systemctl enable --now pen-relay`. To keep an existing certificate, copy its
 cache into `/var/lib/private/pen-relay/acme` before the first start; systemd hands it to the service user.
 
-Deploy a new binary: first install the same build of `pen` on every machine that runs `pen relay check` against
-this relay (your own machine, and any cron job or monitor), before or together with the relay. A check from pen 0.2.5
+Deploy a new binary in this order. First, before the relay, install the same build of `pen` on every machine that
+runs `pen relay check` against this relay (your own machine, and any cron job or monitor). A check from pen 0.2.5
 or 0.2.6 against a relay newer than 0.2.6 prints `ok: healthz …` and then `FAIL: client to node: closed 4408` and
 exits 1, although the relay works: that check sends 64 KiB before its node answers, which the relay now refuses.
 Nodes of those versions are not affected. Then copy `pen-linux-arm64` from the build (gunzip it) to the VM, `sudo cp /opt/pen-relay/pen

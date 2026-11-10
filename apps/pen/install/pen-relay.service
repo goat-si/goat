@@ -17,7 +17,10 @@ ExecStart=/opt/pen-relay/pen relay serve --listen ${PEN_RELAY_LISTEN} --autocert
 #   charge (a 96 KiB message and its 4 KiB first buffer; 108 MiB at 1024 connections, --max-sockets)
 #   and larger ones from a 32 MiB pool; about 48 KiB per connection of TLS and bufio buffers, timers
 #   and goroutine stacks (27 KiB measured idle over 3000 TLS sockets), 48 MiB; about 10 MiB of
-#   runtime. About 326 MiB live at worst, under GOMEMLIMIT=384MiB with room for the collector.
+#   runtime; what the relay queues without a charge is bounded per connection (the 32-byte
+#   challenge once, at most 8 pongs, one close frame: about 1.4 KiB with ring slots; session OPEN
+#   and CLOSE frames are charged when a client is admitted), 1.4 MiB at 1024. About 328 MiB live at
+#   worst, under GOMEMLIMIT=384MiB with room for the collector.
 # - Kernel, outside GOMEMLIMIT but inside MemoryMax under cgroup v2: each connection's send and
 #   receive buffers are fixed at 64 KiB (Linux doubles them); a send queue may pass its buffer by
 #   about one segment (228 KiB measured per client that stops reading), the receive side stays near

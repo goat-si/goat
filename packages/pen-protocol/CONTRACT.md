@@ -266,11 +266,16 @@ A node may use several relays at once. Each runs the contract in "Relay" on its 
   receive it (16 MiB) and the total (128 MiB on the reference unit). Data that does not fit any of the three ends the
   session that offered it 4408 (the client is closed 4408 and the node gets CLOSE 4408); nothing else ends because of
   memory: no other session, no other queue, never an uplink. A socket that stops reading is ended only when one write
-  stalls for 10 s (WriteTimeout). Control messages (the challenge, pongs, OPEN and CLOSE frames, close frames) are not
-  charged; per socket they stay within the relay-frame headroom (64 KiB past the window), 8 queued pongs and the queue
-  cap, so a full relay still answers an uplink and closes sessions cleanly. Before the node has sent DATA for a session,
-  its client may send one message of at most 4096 bytes (its first); a second message of any size, or a larger first
-  one, ends the session 4408. So one source cannot end another source's sessions or uplinks, and data between other
+  stalls for 10 s (WriteTimeout). A client session is admitted only if its OPEN and its
+  eventual CLOSE frame toward the uplink fit, charged like data (136 bytes each in the queue, 12 bytes of window) and
+  within 256 KiB of session frames per uplink queue; otherwise the new client is closed 4429 and nothing is queued,
+  so a CLOSE always fits and session frames never end an uplink. The rest of what the relay queues is not charged and
+  is bounded per socket by a constant: the 32-byte challenge once, at most 8 pongs, and one close frame, about 1.4 KiB.
+  So a full relay still answers an uplink and closes sessions cleanly. Before the node has sent DATA for a session, its
+  client may send one message of at most 4096 bytes (its first); a second message of any size, or a larger first one,
+  ends the session 4408. One address holds at most 2 pending sessions per node: a third from it closes that address's
+  own oldest pending session 4429, and past 8 pending sessions per node the oldest pending session of the address
+  holding the most closes 4429 (the Worker keeps the node-wide rule above). So one source cannot end another source's sessions or uplinks, and data between other
   sources is not refused while the sources other than it together hold less than the total minus one share. Limits:
   the sessions on one uplink share its 4 MiB window, so a peer the node has answered can fill it while the node reads
   slowly, and other sessions' data toward that node is refused (4408) until the node reads; the node bounds such a peer
@@ -477,6 +482,9 @@ proofs, an assertion body and signature under a fixed login key and its kid, and
 - v1.1 (2026-11-11): `pen relay serve` counts connections against its caps from accept, counts queued and partly read
   messages at their allocation size, and gives each source address a share of that budget (16 MiB by default), so one source alone cannot
   fill it. Relay implementation only; no wire change.
+- v1.1 (2026-11-11): `pen relay serve` admits a client session only when its OPEN and CLOSE toward the uplink fit
+  (else 4429), and one address holds at most 2 pending sessions per node (a third closes its own oldest 4429; past 8
+  the address holding the most loses its oldest). Go relay only; the Worker keeps the node-wide rule. No wire change.
 - v1.1 (2026-11-11): `refused` may carry `"notMember":true` from a node that is not a member of its own view; joiners
   try another node (Google join) or report that the invite was not used. Older joiners ignore the member. No vector.
 - v1.1 (2026-11-11): `pen relay serve` reads a message of up to 96 KiB per socket without a charge and larger ones
