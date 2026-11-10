@@ -59,6 +59,9 @@ type Options struct {
 	WakeTicks <-chan time.Time
 	// PresenceEvery spaces the presence syncs a polled dashboard starts (30 s).
 	PresenceEvery time.Duration
+	// PresenceTimeout bounds each push of a presence refresh (15 s); one that runs out of it marks the
+	// member offline.
+	PresenceTimeout time.Duration
 	// PresenceDone, when set, is told each finished presence sync (tests).
 	PresenceDone func()
 }
@@ -168,6 +171,9 @@ func New(opt Options) (*Daemon, error) {
 	}
 	if opt.PresenceEvery == 0 {
 		opt.PresenceEvery = 30 * time.Second
+	}
+	if opt.PresenceTimeout == 0 {
+		opt.PresenceTimeout = 15 * time.Second
 	}
 	if opt.Now == nil {
 		opt.Now = time.Now

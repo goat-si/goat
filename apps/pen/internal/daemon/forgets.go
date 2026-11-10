@@ -95,27 +95,27 @@ func (b *forgetBook) pending() []PendingForget {
 	return append([]PendingForget(nil), b.list...)
 }
 
-func (b *forgetBook) done(f PendingForget) {
+func (b *forgetBook) done(f PendingForget) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.list = slices.DeleteFunc(b.list, func(x PendingForget) bool { return x == f })
 	delete(b.refused, f)
-	b.saveLocked()
+	return b.saveLocked()
 }
 
 // markRefused records whether the service's last answer to f was 403.
-func (b *forgetBook) markRefused(f PendingForget, refused bool) {
+func (b *forgetBook) markRefused(f PendingForget, refused bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.refused[f] == refused {
-		return
+		return nil
 	}
 	if refused {
 		b.refused[f] = true
 	} else {
 		delete(b.refused, f)
 	}
-	b.saveLocked()
+	return b.saveLocked()
 }
 
 func (b *forgetBook) refusedList() []PendingForget {
@@ -162,12 +162,18 @@ func (d *Daemon) forgetLoop(ctx context.Context) {
 			cancel()
 			final := answered(err)
 			var h *login.HTTPError
-			d.forgets.markRefused(f, errors.As(err, &h) && h.Status == http.StatusForbidden)
+			// A failed save keeps the change in memory; after a restart the forget is sent again,
+			// which the service answers the same way.
+			if serr := d.forgets.markRefused(f, errors.As(err, &h) && h.Status == http.StatusForbidden); serr != nil {
+				d.opt.Logf("login forget %s: saving %s: %v", f.NodeID, ForgetsFile, serr)
+			}
 			if final {
 				if err != nil {
 					d.opt.Logf("login forget %s: %v", f.NodeID, err)
 				}
-				d.forgets.done(f)
+				if serr := d.forgets.done(f); serr != nil {
+					d.opt.Logf("login forget %s: saving %s: %v", f.NodeID, ForgetsFile, serr)
+				}
 			}
 			if d.opt.OnForget != nil {
 				d.opt.OnForget(f.NodeID, err, !final)

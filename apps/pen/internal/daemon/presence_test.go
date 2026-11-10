@@ -41,7 +41,7 @@ func TestAMemberWhoseRelayStopsCarryingItIsShownOfflineAfterTheNextSync(t *testi
 	release := rs.HoldForwarding()
 	defer release()
 	m, _ := a.d.view().MemberByNoise(b.id.NoisePub)
-	if res := a.d.push(ctx, m); res == "ok" {
+	if res := a.d.push(ctx, m, a.d.opt.PushTimeout); res == "ok" {
 		t.Fatalf("push through a held relay answered %q", res)
 	}
 	if onlineIn(a.d.ls(), "b") {
@@ -76,4 +76,36 @@ func TestTheDashboardRefreshesPresenceAtMostEvery30sWhileItIsPolled(t *testing.T
 	clk.advance(31 * time.Second)
 	want(t, "state after 31 s", d.get("/api/state", bearer), http.StatusOK)
 	<-refreshed
+}
+
+// A presence refresh gives each member less time than a push (15 s against 30 s). A sleeping
+// machine's dial gets no answer, so running out of the refresh's time must mark it offline.
+func TestAPresenceRefreshMarksAMemberThatDoesNotAnswerInTimeOffline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	ast := shortDir(t)
+	aid := identity(t, ast, rs.URL, "a")
+	if _, err := mesh.Found(ast, aid, "a", 1); err != nil {
+		t.Fatal(err)
+	}
+	a := startWith(t, ctx, rs, ast, func(o *Options) {
+		o.PushTimeout = time.Hour
+		o.PresenceTimeout = 300 * time.Millisecond
+	})
+	refreshed := make(chan struct{}, 4)
+	a.d.opt.PresenceDone = func() { refreshed <- struct{}{} }
+	joiner(t, ctx, rs, a.invite(t, time.Minute), "b")
+	a.d.pushAll(ctx)
+	if !onlineIn(a.d.ls(), "b") {
+		t.Fatal("b not online after a successful sync")
+	}
+	release := rs.HoldForwarding()
+	defer release()
+	a.d.refreshPresence()
+	<-refreshed
+	if onlineIn(a.d.ls(), "b") {
+		t.Fatal("b still shown online after a presence refresh it did not answer")
+	}
 }

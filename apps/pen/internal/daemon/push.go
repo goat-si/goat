@@ -32,6 +32,16 @@ func (d *Daemon) pushAll(ctx context.Context) []PushResult {
 }
 
 func (d *Daemon) pushTo(ctx context.Context, members []mesh.Member) []PushResult {
+	limit := pushTimeout
+	if d.opt.PushTimeout > 0 {
+		limit = d.opt.PushTimeout
+	}
+	return d.pushWithin(ctx, members, limit)
+}
+
+// pushWithin pushes to members, each within limit; a push that runs out of limit marks its member
+// offline, while one that ctx ends leaves it as it was.
+func (d *Daemon) pushWithin(ctx context.Context, members []mesh.Member, limit time.Duration) []PushResult {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var out []PushResult
@@ -42,7 +52,7 @@ func (d *Daemon) pushTo(ctx context.Context, members []mesh.Member) []PushResult
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res := d.push(ctx, m)
+			res := d.push(ctx, m, limit)
 			mu.Lock()
 			out = append(out, PushResult{NodeID: m.NodeID, Name: m.Name, Result: res})
 			mu.Unlock()
@@ -53,12 +63,8 @@ func (d *Daemon) pushTo(ctx context.Context, members []mesh.Member) []PushResult
 	return out
 }
 
-func (d *Daemon) push(ctx context.Context, m mesh.Member) string {
+func (d *Daemon) push(ctx context.Context, m mesh.Member, limit time.Duration) string {
 	caller := ctx
-	limit := pushTimeout
-	if d.opt.PushTimeout > 0 {
-		limit = d.opt.PushTimeout
-	}
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	noise, err := ident.DecodeKey(m.NoisePub)
