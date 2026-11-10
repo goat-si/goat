@@ -40,4 +40,3 @@ func TestAPushCutShortByItsCallersDeadlineLeavesTheMemberOnline(t *testing.T) {
 		t.Fatal("a push the caller gave up on marked b offline")
 	}
 }
-
