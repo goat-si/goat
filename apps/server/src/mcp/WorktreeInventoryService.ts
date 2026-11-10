@@ -41,9 +41,9 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 type LocalInput<A> = Omit<A, "host">;
 
 /**
- * How long a sweep keeps checking and starting removals: half the bound a caller on another
- * machine waits (HostThreadsMcpService REMOTE_TIMEOUT_MS), leaving the rest for the removal in
- * flight. That removal is never cut short, since an interrupted delete leaves a half-removed checkout.
+ * After its first removal attempt, a sweep starts checking no further worktrees once this has passed:
+ * half the bound a remote caller waits (HostThreadsMcpService REMOTE_TIMEOUT_MS), leaving the rest
+ * for work under way. Nothing is cut short; an interrupted delete leaves a half-removed checkout.
  */
 const CLEANUP_SWEEP_BUDGET_MS = 60_000;
 
@@ -839,7 +839,7 @@ const make = Effect.gen(function* () {
         kept.push({ ...entry, reason: blocker });
         continue;
       }
-      // Each sweep attempts at least one removal; a caller stops repeating when one removes nothing.
+      // The deadline never skips the first eligible removal, so a repeated sweep can make progress.
       if (!dryRun && attempted && (yield* Clock.currentTimeMillis) >= deadline) {
         remaining++;
         continue;
